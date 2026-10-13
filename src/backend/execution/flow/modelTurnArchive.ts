@@ -3,6 +3,11 @@ import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { gzip, gunzip } from 'zlib';
+import { projectArchiveSchema, isOwnedArchiveDescriptor, type ArchiveSchemaProjectionPolicy } from '@/backend/services/model/adapters/ownedArchiveSchema';
+import { types as utilTypes } from 'node:util';
+import { withArchiveWriteMemory, recheckArchiveWriteMemory, closeArchiveWriteHandle, readArchiveLocalMedia,
+  settleArchiveWrites, ModelTurnArchiveMemoryError, archiveOmission, isArchiveSchema, isArchivePlainObject,
+  getArchiveSchemaProjectionPolicy, type ArchiveWriteAdmissionOptions } from './modelTurnArchiveWriteBudget';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -21,11 +26,13 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { commitFlowDurableMutation, type FlowDurableMutationContext } from './executionAuthority';
 import {
   MODEL_TURN_ARCHIVE_READ_LIMITS,
-  ModelTurnArchiveReadError,
   readBoundedModelTurnFile,
   readBoundedModelTurnJson,
   withModelTurnArchiveRead,
+  withModelTurnArchiveResponse,
 } from './modelTurnArchiveReadBudget';
+import { rewriteLegacyModelTurnOutcome } from './legacyModelTurnOutcomeStream';
+import { closeModelTurnResponseDescriptor, prepareModelTurnSnapshotResponse } from './modelTurnSnapshotResponse';
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -113,12 +120,14 @@ function mimeFromDataUrl(value: string): { mimeType: string; data: Buffer } | un
 function inferredMime(parent: Record<string, unknown> | undefined): string | undefined {
   if (!parent) return undefined;
   for (const key of ['mimeType', 'mime_type', 'media_type']) {
-    if (typeof parent[key] === 'string' && String(parent[key]).includes('/')) {
-      return String(parent[key]);
+    const value = Object.getOwnPropertyDescriptor(parent, key)?.value;
+    if (typeof value === 'string' && value.includes('/')) {
+      return value;
     }
   }
-  if (typeof parent.format === 'string') {
-    const format = parent.format.toLowerCase();
+  const publicFormat = Object.getOwnPropertyDescriptor(parent, 'format')?.value;
+  if (typeof publicFormat === 'string') {
+    const format = publicFormat.toLowerCase();
     if (['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg'].includes(format)) return `audio/${format === 'mp3' ? 'mpeg' : format}`;
   }
   return undefined;
@@ -126,10 +135,11 @@ function inferredMime(parent: Record<string, unknown> | undefined): string | und
 
 function isNativeBase64Field(key: string, parent: Record<string, unknown> | undefined): boolean {
   if (!parent || !['data', 'file_data'].includes(key)) return false;
-  return parent.type === 'base64'
-    || parent.type === 'input_audio'
-    || parent.type === 'inline_data'
-    || parent.type === 'inlineData'
+  const type = Object.getOwnPropertyDescriptor(parent, 'type')?.value;
+  return type === 'base64'
+    || type === 'input_audio'
+    || type === 'inline_data'
+    || type === 'inlineData'
     || Boolean(inferredMime(parent));
 }
 
@@ -148,10 +158,6 @@ function redactRemoteUrl(value: string): string {
   } catch {
     return value;
   }
-}
-
-function isSecretKey(key: string): boolean {
-  return /(api[_-]?key|authorization|cookie|(?:^|[_-])(?:access[_-]?|refresh[_-]?|oauth[_-]?)?token$|secret|password|signature)/i.test(key);
 }
 
 interface SanitizeContext {
@@ -222,7 +228,8 @@ async function sanitizeValue(
       try {
         const bytes = Buffer.from(value.replace(/\s/g, ''), 'base64');
         if (bytes.byteLength > 0) {
-          const filename = typeof parent?.filename === 'string' ? parent.filename : undefined;
+          const filenameValue = parent ? Object.getOwnPropertyDescriptor(parent, 'filename')?.value : undefined;
+          const filename = typeof filenameValue === 'string' ? filenameValue : undefined;
           return archiveBinary(
             ctx,
             parameterPath,
@@ -241,54 +248,50 @@ async function sanitizeValue(
   if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'function') return '[function omitted]';
   if (typeof value !== 'object') return String(value);
+  if (isOwnedArchiveDescriptor(value as object)) {
+    recheckArchiveWriteMemory(value, true);
+    return value;
+  }
+  if (utilTypes.isProxy(value)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
   if (seen.has(value as object)) return '[circular]';
   seen.add(value as object);
+  try {
 
-  // Zod schemas are sometimes legitimate inputs to an agent SDK (notably the
-  // Claude Agent SDK's in-process MCP tools). Object.entries(schema) exposes
-  // Zod's large private implementation graph, however, and that graph is not
-  // what the SDK serializes for the model. Zod 4 exposes the public JSON-Schema
-  // projection on each schema; archive that provider-facing representation.
-  const maybeZodSchema = value as { toJSONSchema?: () => unknown };
-  if (typeof maybeZodSchema.toJSONSchema === 'function') {
+  // Preserve metered constructor-produced schema representation without
+  // traversing Zod internals or invoking a projector/default/lazy closure.
+  if (isArchiveSchema(value)) {
     try {
-      return await sanitizeValue(
-        maybeZodSchema.toJSONSchema(),
-        parameterPath,
-        ctx,
-        parent,
-        key,
-        seen,
-      );
-    } catch {
+      const projected = projectArchiveSchema(value, getArchiveSchemaProjectionPolicy());
+      recheckArchiveWriteMemory(projected, true);
+      if (isOwnedArchiveDescriptor(projected)) return projected;
+      return await sanitizeValue(projected, parameterPath, ctx, parent, key, seen);
+    } catch (error) {
+      if (error instanceof ModelTurnArchiveMemoryError) throw error;
       return '[schema could not be serialized]';
     }
   }
   if (Array.isArray(value)) {
     const out = [];
     for (let i = 0; i < value.length; i++) {
-      out.push(await sanitizeValue(value[i], `${parameterPath}[${i}]`, ctx, undefined, String(i), seen));
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+      if (descriptor && !('value' in descriptor)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      out.push(await sanitizeValue(descriptor?.value, `${parameterPath}[${i}]`, ctx, undefined, String(i), seen));
     }
     return out;
   }
+  if (!isArchivePlainObject(value as object)) return '[object omitted]';
   const source = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const [childKey, childValue] of Object.entries(source)) {
-    if (isSecretKey(childKey)) {
-      out[childKey] = '[redacted]';
-      continue;
-    }
-    if (childKey === 'env') {
-      out[childKey] = '[environment omitted]';
-      continue;
-    }
-    if (childKey === 'signal' || childKey === 'abortSignal' || childKey === 'abortController') {
-      out[childKey] = childKey === 'abortController' ? '[AbortController]' : '[AbortSignal]';
-      continue;
-    }
+  for (const childKey in source) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, childKey);
+    if (!descriptor) continue;
+    const omitted = archiveOmission(childKey);
+    if (omitted !== undefined) { out[childKey] = omitted; continue; }
+    if (!('value' in descriptor)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+    const childValue = descriptor.value;
     if (
       childKey === 'path'
-      && source.type === 'local_image'
+      && Object.getOwnPropertyDescriptor(source, 'type')?.value === 'local_image'
       && typeof childValue === 'string'
     ) {
       try {
@@ -296,12 +299,13 @@ async function sanitizeValue(
           ctx,
           `${parameterPath}.${childKey}`,
           mimeFromFilename(childValue),
-          await fs.readFile(childValue),
+          await readArchiveLocalMedia(childValue),
           'file',
           path.basename(childValue),
         );
         continue;
-      } catch {
+      } catch (error) {
+        if (error instanceof ModelTurnArchiveMemoryError) throw error;
         // Keep the sanitized path if an SDK-provided file is no longer readable.
       }
     }
@@ -315,31 +319,46 @@ async function sanitizeValue(
     );
   }
   return out;
+  } finally {
+    // Shared immutable constructor descriptors are serialized at each real
+    // occurrence. Only active recursion edges become circular markers.
+    seen.delete(value as object);
+  }
 }
 
 async function writeAtomic(file: string, data: Buffer, durable = false): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    if (durable) {
-      const handle = await fs.open(temp, 'wx', 0o600);
-      try { await handle.writeFile(data); await handle.sync(); }
-      finally { await handle.close(); }
-    } else {
-      await fs.writeFile(temp, data);
-    }
+    const handle = await fs.open(temp, 'wx', durable ? 0o600 : 0o666);
+    let primary: unknown;
+    try { await handle.writeFile(data); if (durable) await handle.sync(); }
+    catch (error) { primary = error; throw error; }
+    finally { await closeArchiveWriteHandle(handle, primary); }
     await fs.rename(temp, file);
   }
-  catch (error) { await fs.rm(temp, { force: true }).catch(() => undefined); throw error; }
+  catch (error) {
+    // A descriptor with uncertain close still owns this file; preserve it.
+    if (!(error instanceof ModelTurnArchiveMemoryError && error.code === 'MODEL_TURN_ARCHIVE_WRITE_CLEANUP')) {
+      await fs.rm(temp, { force: true }).catch(() => undefined);
+    }
+    throw error;
+  }
   if (durable) {
     try {
       const directory = await fs.open(path.dirname(file), 'r');
-      try { await directory.sync(); } finally { await directory.close(); }
-    } catch { /* directory fsync is unavailable on some Windows filesystems */ }
+      try { await directory.sync(); } finally { await closeArchiveWriteHandle(directory); }
+    } catch (error) {
+      if (error instanceof ModelTurnArchiveMemoryError) throw error;
+      /* directory fsync is unavailable on some Windows filesystems */
+    }
   }
 }
 
 export interface ArchiveModelDispatchInput {
+  writeAdmission?: ArchiveWriteAdmissionOptions;
+  /** Explicit strict opt-in; default preserves existing arbitrary-Zod compatibility. */
+  schemaProjectionPolicy?: ArchiveSchemaProjectionPolicy;
   /** Mandatory preallocated origin ID for a journalled native dispatch. */
   id?: string;
   durableContext?: FlowDurableMutationContext;
@@ -359,10 +378,21 @@ export interface ArchiveModelDispatchInput {
   visualCompaction?: VisualCompactionDiagnostic;
 }
 
-export function archiveModelDispatch(input: ArchiveModelDispatchInput): Promise<ModelTurnIndexEntry> {
-  return withWorkspaceMutation(() => commitFlowDurableMutation(
-    input.durableContext ?? {}, () => archiveModelDispatchWithinMutation(input),
-  ));
+export function archiveModelDispatch(
+  input: ArchiveModelDispatchInput, prepare?: () => ArchiveModelDispatchInput,
+): Promise<ModelTurnIndexEntry> {
+  const protectedDispatch = Boolean(input.id || input.durableContext?.executionAuthority
+    || input.durableContext?.executionExtensionContext || input.durableContext?.personaAttribution);
+  const writeAdmission = protectedDispatch ? undefined : input.writeAdmission;
+  const payload = { canonicalMessages: input.canonicalMessages, genericWire: input.genericWire,
+    sdkRequest: input.sdkRequest, modelInput: input.modelInput, visualCompaction: input.visualCompaction };
+  return withArchiveWriteMemory(payload, () => withWorkspaceMutation(() => commitFlowDurableMutation(
+    input.durableContext ?? {}, () => {
+      writeAdmission?.signal?.throwIfAborted();
+      recheckArchiveWriteMemory(payload);
+      return archiveModelDispatchWithinMutation(prepare ? prepare() : input);
+    },
+  )), input.schemaProjectionPolicy ?? 'legacy-unbounded', writeAdmission);
 }
 
 async function archiveModelDispatchWithinMutation(
@@ -383,7 +413,7 @@ async function archiveModelDispatchWithinMutation(
     media: [],
     writes: new Map(),
   };
-  const [canonicalMessages, genericWire, sdkRequest] = await Promise.all([
+  const [canonicalMessages, genericWire, sdkRequest] = await settleArchiveWrites([
     sanitizeValue(input.canonicalMessages, 'canonicalMessages', ctx),
     sanitizeValue(input.genericWire, 'genericWire', ctx),
     sanitizeValue(input.sdkRequest, 'sdkRequest', ctx),
@@ -419,8 +449,9 @@ async function archiveModelDispatchWithinMutation(
     visualCompaction: input.visualCompaction,
     contextCompaction: input.modelInput?.contextCompaction,
   };
+  recheckArchiveWriteMemory(snapshot, true);
 
-  await Promise.all([...ctx.writes.entries()].map(async ([sha256, bytes]) => {
+  await settleArchiveWrites([...ctx.writes.entries()].map(async ([sha256, bytes]) => {
     const target = mediaPath(input.conversationId, sha256);
     try {
       await fs.access(target);
@@ -467,30 +498,34 @@ async function updateModelDispatchOutcomeWithinMutation(
     await writeAtomic(outcomePath(conversationId, dispatchId), bytes);
     return;
   }
-  // Historical v1 outcomes require a transcript rewrite. Share the inspection
-  // allowance through replacement so concurrent reads and rewrites cannot each
-  // allocate a separate budget, and reject overload without retaining a queue.
+  // Legacy compatibility retains its JSON shape and complete historical bytes.
+  // Stream validation and the outcome edit instead of allocating a transcript
+  // buffer, UTF-16 source, parsed object, and serialization for every update.
   const file = snapshotPath(conversationId, dispatchId, 1);
-  await withModelTurnArchiveRead(async () => {
-    const snapshot = await readBoundedModelTurnJson<ModelTurnSnapshot>(file);
-    snapshot.entry.outcome = outcome;
-    const serialized = JSON.stringify(snapshot);
-    const limitError = () => new ModelTurnArchiveReadError(
-      'MODEL_TURN_ARCHIVE_READ_LIMIT',
-      'Legacy model-turn outcome exceeds archive inspection limits. The persisted archive is unchanged.',
-    );
-    if (Buffer.byteLength(serialized, 'utf8') > MODEL_TURN_ARCHIVE_READ_LIMITS.decodedSnapshotBytes) throw limitError();
-    let compressed: Buffer;
-    try {
-      compressed = await gzipAsync(Buffer.from(serialized, 'utf8'), {
-        maxOutputLength: MODEL_TURN_ARCHIVE_READ_LIMITS.compressedSnapshotBytes,
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') throw limitError();
-      throw error;
+  await withModelTurnArchiveRead(() => rewriteLegacyModelTurnOutcome(file, outcome));
+}
+
+export function readModelTurnSnapshotResponse(
+  conversationId: string, dispatchId: string, signal?: AbortSignal, framed = false,
+): Promise<ReadableStream<Uint8Array> | undefined> {
+  return withModelTurnArchiveResponse(async () => {
+    let source;
+    let version: 1 | 2 = 2;
+    try { source = await fs.open(snapshotPath(conversationId, dispatchId), constants.O_RDONLY | constants.O_NONBLOCK); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      version = 1;
+      try { source = await fs.open(snapshotPath(conversationId, dispatchId, 1), constants.O_RDONLY | constants.O_NONBLOCK); }
+      catch (legacyError) {
+        if ((legacyError as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw legacyError;
+      }
     }
-    await writeAtomic(file, compressed);
-  });
+    let outcome;
+    try { outcome = version === 2 ? await readOutcome(conversationId, dispatchId, signal) : undefined; }
+    catch (error) { await closeModelTurnResponseDescriptor(source, error); throw error; }
+    return prepareModelTurnSnapshotResponse(source, { version, conversationId, dispatchId }, outcome?.outcome, signal, framed);
+  }, signal);
 }
 
 export async function readModelTurnSnapshot(
@@ -578,19 +613,15 @@ export async function readNativeModelTurnSnapshot(
  * descriptor/path identity checks. No public inspection reader is substituted. */
 async function readNativeArchiveFile(file: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
   signal?.throwIfAborted();
-  const entry = await fs.lstat(file, { bigint: true });
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
-    || entry.size < BigInt(1) || entry.size > BigInt(maxBytes)) {
-    throw new Error('Native model-turn archive is missing or unsafe.');
-  }
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  // Open first with no-follow and validate the authoritative descriptor before
+  // reading any body bytes. A pathname check is not permission to open later.
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
   try {
     const stat = await handle.stat({ bigint: true });
     const current = await fs.lstat(file, { bigint: true });
-    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size !== entry.size
-      || stat.dev !== entry.dev || stat.ino !== entry.ino
+    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size < BigInt(1) || stat.size > BigInt(maxBytes)
       || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
-      || current.dev !== entry.dev || current.ino !== entry.ino) {
+      || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size) {
       throw new Error('Native model-turn archive changed.');
     }
     const bytes = Buffer.alloc(Number(stat.size) + 1);
@@ -608,7 +639,8 @@ async function readNativeArchiveFile(file: string, maxBytes: number, signal?: Ab
       || after.mtimeNs !== stat.mtimeNs || after.ctimeNs !== stat.ctimeNs
       || !finalPath.isFile() || finalPath.isSymbolicLink() || finalPath.nlink !== BigInt(1)
       || finalPath.dev !== stat.dev || finalPath.ino !== stat.ino
-      || finalPath.size !== stat.size) throw new Error('Native model-turn archive changed.');
+      || finalPath.size !== stat.size || finalPath.mtimeNs !== stat.mtimeNs
+      || finalPath.ctimeNs !== stat.ctimeNs) throw new Error('Native model-turn archive changed.');
     signal?.throwIfAborted();
     return bytes.subarray(0, read);
   } finally { await handle.close(); }

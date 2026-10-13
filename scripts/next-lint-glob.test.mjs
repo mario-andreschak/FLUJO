@@ -20,7 +20,7 @@ test('the locked graph has only the reviewed Next lint consumer of the private a
     .filter(([, metadata]) => metadata.dependencies?.['fast-glob'])
     .map(([location]) => location);
   assert.deepEqual(consumers, ['node_modules/@next/eslint-plugin-next']);
-  assert.equal(lock.packages[consumers[0]].version, '16.3.8');
+  assert.equal(lock.packages[consumers[0]].version, '16.4.0');
 });
 
 function fixture(t) {

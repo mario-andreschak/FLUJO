@@ -41,6 +41,8 @@ jest.mock('@/backend/services/model/cache', () => {
 });
 
 import { modelService } from '@/backend/services/model';
+jest.mock('@/backend/services/model/adapters/codexDiscovery', () => ({ fetchCodexModels: jest.fn() }));
+jest.mock('@/backend/services/model/adapters/antigravityCliDiscovery', () => ({ fetchAntigravityCliModels: jest.fn() }));
 
 const storageMock = jest.requireMock('@/utils/storage/backend') as {
   loadItem: jest.Mock;
@@ -61,6 +63,47 @@ const cacheMock = jest.requireMock('@/backend/services/model/cache') as {
 const discovered = [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }];
 
 describe('profile-aware provider model service', () => {
+  it('discovers Antigravity account and explicit API-key contexts through its separate native catalog', async () => {
+    const discovery = jest.requireMock('@/backend/services/model/adapters/antigravityCliDiscovery') as { fetchAntigravityCliModels: jest.Mock };
+    discovery.fetchAntigravityCliModels.mockResolvedValue(discovered);
+    await expect(modelService.fetchProviderModels('', undefined, undefined, undefined, 'antigravity-cli')).resolves.toEqual(discovered);
+    expect(discovery.fetchAntigravityCliModels).toHaveBeenLastCalledWith('');
+    encryptionMock.resolveAndDecryptApiKey.mockResolvedValue('resolved-gemini-key');
+    await modelService.fetchProviderModels('', undefined, undefined, 'direct-key', 'antigravity-cli');
+    expect(discovery.fetchAntigravityCliModels).toHaveBeenLastCalledWith('resolved-gemini-key');
+    expect(providerMock.fetchModelsFromProvider).not.toHaveBeenCalled();
+  });
+
+  it('honors a cleared Antigravity key, keeps saved keys on their provider and never falls back after key resolution fails', async () => {
+    const discovery = jest.requireMock('@/backend/services/model/adapters/antigravityCliDiscovery') as { fetchAntigravityCliModels: jest.Mock };
+    discovery.fetchAntigravityCliModels.mockResolvedValue(discovered);
+    storageMock.loadItem.mockResolvedValue([{ id: 'saved', provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: 'encrypted:saved-key', name: 'default' }]);
+    encryptionMock.resolveAndDecryptApiKey.mockResolvedValue('resolved-saved-key');
+    await modelService.fetchProviderModels('', 'saved', undefined, undefined, 'antigravity-cli');
+    expect(discovery.fetchAntigravityCliModels).toHaveBeenLastCalledWith('resolved-saved-key');
+    await modelService.fetchProviderModels('', 'saved', undefined, '', 'antigravity-cli');
+    expect(discovery.fetchAntigravityCliModels).toHaveBeenLastCalledWith('');
+    discovery.fetchAntigravityCliModels.mockClear();
+    encryptionMock.resolveAndDecryptApiKey.mockResolvedValue(null);
+    await expect(modelService.fetchProviderModels('', 'saved', undefined, 'unresolved-reference', 'antigravity-cli')).rejects.toThrow('Provider catalogue request failed');
+    expect(discovery.fetchAntigravityCliModels).not.toHaveBeenCalled();
+    encryptionMock.resolveAndDecryptApiKey.mockResolvedValue('${global:UNDEFINED_KEY}');
+    await expect(modelService.fetchProviderModels('', 'saved', undefined, '${global:UNDEFINED_KEY}', 'antigravity-cli')).rejects.toThrow('Provider catalogue request failed');
+    await expect(modelService.testModel({ name: 'default', provider: 'antigravity-cli', apiKey: '${global:UNDEFINED_KEY}' })).rejects.toThrow('Could not resolve the selected Antigravity API key.');
+    expect(discovery.fetchAntigravityCliModels).not.toHaveBeenCalled();
+    storageMock.loadItem.mockResolvedValue([{ id: 'saved', provider: 'openai', ApiKey: 'encrypted:foreign-key', name: 'foreign' }]);
+    expect(await modelService.fetchProviderModels('', 'saved', undefined, undefined, 'antigravity-cli')).toEqual([]);
+    expect(await modelService.fetchProviderModels('https://untrusted.example', 'saved', undefined, 'key', 'antigravity-cli')).toEqual([]);
+    expect(discovery.fetchAntigravityCliModels).not.toHaveBeenCalled();
+  });
+
+  it('discovers subscription Codex without a URL or API key', async () => {
+    const discovery = jest.requireMock('@/backend/services/model/adapters/codexDiscovery') as { fetchCodexModels: jest.Mock };
+    discovery.fetchCodexModels.mockResolvedValue([{ id: 'future-model', name: 'Future' }]);
+    expect(await modelService.fetchProviderModels('', undefined, undefined, undefined, 'codex')).toEqual([{ id: 'future-model', name: 'Future' }]);
+    expect(discovery.fetchCodexModels).toHaveBeenCalled();
+    expect(providerMock.fetchModelsFromProvider).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     const logger = jest.requireMock('@/utils/logger') as { createLogger: jest.Mock };
     logger.createLogger.mock.results.forEach(({ value }) => Object.values(value).forEach(fn => (fn as jest.Mock).mockClear()));

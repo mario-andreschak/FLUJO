@@ -63,7 +63,7 @@ test('one installed attached child gets its own opaque scope and logical identit
       expect(await executionExtensionSubflowCapacity(parent,'uninstalled-subflow')).toBe(0);
       FlowExecutor.conversationStates.set(claim.rootConversationId,{conversationId:claim.rootConversationId,logicalRunId:'parent-logical',
         executionExtensionContext:parent,flowSnapshot:e.installedFlow,runDepth:0,isCancelled:false,
-        subflowInvocations:{'owned-invocation':{version:1,parentConversationId:claim.rootConversationId,parentRunId:claim.rootConversationId,
+        subflowInvocations:{'owned-invocation':{id:'owned-invocation',version:1,parentConversationId:claim.rootConversationId,parentRunId:claim.rootConversationId,
           parentNodeId:lane.parentNodeId,status:'running',lanes:[{id:lane.laneId,conversationId:lane.conversationId,subflowId:e.childFlow.id,status:'running'}]}}} as unknown as SharedState);
       await expect(prepareExecutionSubflowInput({...input,flowId:'foreign-child'})).rejects.toThrow();
       const delegated=await prepareExecutionSubflowInput(input);child=delegated!.executionExtensionContext!;
@@ -83,6 +83,22 @@ test('one installed attached child gets its own opaque scope and logical identit
       const descriptor=await executionExtensionNativeWorkerDescendant(child,{conversationId:lane.conversationId,runId:'child-logical',
         workspace:claim.workspace,...e.children[0]});
       expect(descriptor.root.rootConversationId).toBe(claim.rootConversationId);expect(descriptor.parentNodeId).toBe(lane.parentNodeId);
+      const parentState=FlowExecutor.conversationStates.get(claim.rootConversationId)!;
+      const invocation=parentState.subflowInvocations![lane.invocationId];
+      const currentLane=invocation.lanes[0];
+      for(const drift of ['cancelled','plan','logical-run','folded','completed-lane'] as const){
+        const original={isCancelled:parentState.isCancelled,flowSnapshot:parentState.flowSnapshot,
+          logicalRunId:parentState.logicalRunId,status:invocation.status,laneStatus:currentLane.status};
+        if(drift==='cancelled')parentState.isCancelled=true;
+        else if(drift==='plan')parentState.flowSnapshot={...parentState.flowSnapshot!,name:'foreign graph'};
+        else if(drift==='logical-run')parentState.logicalRunId='foreign-parent-logical';
+        else if(drift==='folded')invocation.status='folded';
+        else currentLane.status='completed';
+        await expect(executionExtensionNativeWorkerDescendant(child,{conversationId:lane.conversationId,runId:'child-logical',
+          workspace:claim.workspace,...e.children[0]})).rejects.toThrow();
+        parentState.isCancelled=original.isCancelled;parentState.flowSnapshot=original.flowSnapshot;
+        parentState.logicalRunId=original.logicalRunId;invocation.status=original.status;currentLane.status=original.laneStatus;
+      }
       await expect(executionExtensionNativeWorkerRoot(child,{conversationId:lane.conversationId,runId:'child-logical',workspace:claim.workspace,...e.children[0]})).rejects.toThrow();
       await commitExecutionExtensionMutation(parent,()=>runWithExecutionInput(delegated!,()=>commitExecutionExtensionMutation(child!,async()=>expect(e.held()).toBe(true))));
       await expect(prepareExecutionSubflowInput({...input,conversationId:'another-child'})).rejects.toThrow();

@@ -67,7 +67,7 @@ export default function ChatErrorDetails({ error, fallbackMessage, compact }: Ch
         {message}
       </Typography>
       {hasChips && (
-        <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ mt: 0.5 }}>
+        <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap",  mt: 0.5 }}>
           {error?.code && (
             <Chip size="small" variant="outlined" label={t('chat.page.errorCode', { code: error.code })} />
           )}
@@ -88,7 +88,7 @@ export default function ChatErrorDetails({ error, fallbackMessage, compact }: Ch
       )}
       {!compact && error && (error.details || hasChips) && (
         <Box sx={{ mt: 0.5 }}>
-          <Stack direction="row" spacing={1.5} alignItems="center">
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
             <Link
               component="button"
               type="button"

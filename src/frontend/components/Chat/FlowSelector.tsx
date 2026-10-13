@@ -207,7 +207,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
             </Box>
           </Button>
           {!compact && (
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mt: 0.5 }}>
               {selectedFlowId
                 ? t('chat.selector.using', { agent: selectedFlowName })
                 : t('chat.selector.help')}

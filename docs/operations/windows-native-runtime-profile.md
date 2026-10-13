@@ -57,6 +57,20 @@ contents and entry order. Direct `npm start`/`npm run dev` launchers check the
 same policy before environment loading and instance preparation. No command
 line option or environment variable bypasses the check.
 
+Application launchers report the active Node version and executable without an
+exception stack. In an interactive terminal they offer an optional Node update;
+`--update-node` provides explicit consent for a non-interactive app launch. The
+bootstrap downloads the latest LTS release on the existing supported major
+(22 or 24; other majors migrate to 24), verifies the official archive SHA-256,
+installs it in the user's `~/.flujo/node-runtimes` directory, verifies the actual
+executable's version, and restarts the original command with that runtime and
+its tools first on PATH. A local receipt binds subsequent reuse to the installed
+executable's SHA-256. Application dependencies remain behind a synchronous
+preflight boundary throughout consent and installation. Declined or failed
+updates exit with manual installation, terminal reopening and PATH recovery
+steps. MCP entry points remain non-interactive and emit guidance only on stderr;
+their host must activate or explicitly select a supported executable.
+
 The Windows installer rejects an unsupported existing Node runtime before
 execution-policy changes or prerequisite installation. Install and activate a
 current patched 22.x or 24.x release, then re-run. It deliberately requires the

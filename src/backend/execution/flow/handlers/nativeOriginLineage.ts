@@ -12,6 +12,7 @@ import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import type { NativeInvocationReceipt } from './nativeToolJournal';
 import { nativeInvocationStatus } from './nativeToolJournal';
 import { readNativeHeldFile } from './nativeHeldFile';
+import { assertNativeHeldLineageRead, type NativeHeldLineageRead } from './nativeHeldLineageRead';
 import { assertNativeBrokerAuthority, nativeDigest, type NativeBrokerAuthority } from './nativeToolBroker';
 
 /** A Controller-resolved root is installed by trusted runtime code, never by a model tool. */
@@ -97,14 +98,15 @@ type StateSnapshot = Pick<SharedState,
   'currentNodeId' | 'runDepth' | 'subflowLane' | 'subflowInvocations' | 'launchedTaskIds' |
   'recovery' | 'createdAt'>;
 
-async function readState(id: string): Promise<StateSnapshot> {
-  return withExecutionParentConversationRead(id, () => readStateWithinScope(id));
+async function readState(id: string, heldRead?: NativeHeldLineageRead): Promise<StateSnapshot> {
+  return withExecutionParentConversationRead(id, () => readStateWithinScope(id, heldRead));
 }
 
-async function readStateWithinScope(id: string): Promise<StateSnapshot> {
+async function readStateWithinScope(id: string, heldRead?: NativeHeldLineageRead): Promise<StateSnapshot> {
   const safeId = requireId(id);
   const { loadConversationStateReadOnly } = await import('../loadConversationState');
-  const live = await loadConversationStateReadOnly(safeId);
+  if (heldRead) assertNativeHeldLineageRead(heldRead);
+  const live = await loadConversationStateReadOnly(safeId, heldRead?.assertGuardEligibility);
   const state = await loadItemBackend<SharedState | undefined>(`conversations/${safeId}` as StorageKey, undefined);
   if (!live || !state || state.conversationId !== id || live.conversationId !== id
     || state.ephemeral || live.ephemeral || state.isCancelled || live.isCancelled
@@ -113,7 +115,10 @@ async function readStateWithinScope(id: string): Promise<StateSnapshot> {
     || ['cancelled', 'interrupted'].includes(live.recovery?.classification ?? '')
     || (live.executionExtensionOwned && !live.executionExtensionContext)) return held();
   live.executionAuthority?.signal.throwIfAborted();
-  await assertFlowExecutionCurrent(live);
+  if (heldRead) {
+    assertNativeHeldLineageRead(heldRead);
+    await heldRead.assertFlowCurrent(live);
+  } else await assertFlowExecutionCurrent(live);
   // A live turn may be ahead of its disk snapshot. Hold until the two agree on
   // the identity being proved; saved lineage is mandatory, never inferred from
   // a public summary or an uncommitted memory-only state.
@@ -244,6 +249,7 @@ export async function readNativeOriginLineage(input: {
   authority: NativeBrokerAuthority;
   root: NativeLineageRootBinding;
   signal: AbortSignal;
+  heldRead?: NativeHeldLineageRead;
 }): Promise<NativeOriginLineageEvidence> {
   try {
     assertNativeBrokerAuthority(input.authority);
@@ -279,7 +285,7 @@ export async function readNativeOriginLineage(input: {
       await assertCurrent();
       const edges: NativeLineageEdge[] = [];
       const seen = new Set<string>();
-      let current = await readState(receipt.owner.conversationId);
+      let current = await readState(receipt.owner.conversationId, input.heldRead);
       if (current.logicalRunId !== receipt.owner.runId
         || current.currentNodeId !== receipt.owner.nodeId || current.status !== 'running') return held();
       while (current.conversationId !== root.rootConversationId) {
@@ -290,7 +296,7 @@ export async function readNativeOriginLineage(input: {
           || !current.parentRunId || current.parentRunId !== current.parentConversationId
           || !current.parentLogicalRunId) return held();
         seen.add(current.conversationId);
-        const parent = await readState(current.parentRunId);
+        const parent = await readState(current.parentRunId, input.heldRead);
         if (!parent.conversationId || seen.has(parent.conversationId)
           || parent.logicalRunId !== current.parentLogicalRunId
           || !parent.logicalRunId || !parent.flowId

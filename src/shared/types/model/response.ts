@@ -115,6 +115,8 @@ export interface ModelTestResult {
   adapter?: ModelTestAttempt;
   /** Synthetic FLUJO tool using the production schema/adapter conversion path. */
   tool?: ModelTestAttempt;
+  /** Package-owned runtime status; no executable or credential paths. */
+  antigravityRuntime?: { configuredVersion: string; installed: boolean; verified: boolean; actualVersion: string | null };
 }
 
 /**
@@ -123,6 +125,8 @@ export interface ModelTestResult {
 export interface NormalizedModel {
   id: string;
   name: string;
+  /** Account/client-advertised reasoning options. */
+  reasoningEfforts?: string[];
   description?: string;
   /** Provider-advertised input context limit, in tokens. */
   contextWindow?: number;

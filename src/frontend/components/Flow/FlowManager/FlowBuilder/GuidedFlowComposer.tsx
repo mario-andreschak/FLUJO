@@ -241,7 +241,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     <Button variant="outlined" onClick={() => onChooseAssistance('manual')}>{t('flows.guided.manual')}</Button>
                   </Stack>
                 ) : (
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
                     <Chip
                       color={aiAssistance === 'assisted' ? 'primary' : 'default'}
                       label={aiAssistance === 'assisted' ? t('flows.guided.aiOn') : t('flows.guided.manualSetup')}
@@ -282,7 +282,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
               bgcolor: 'background.paper',
             }}
           >
-            <Stack direction="row" spacing={1.5} alignItems="flex-start">
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
               <StepNumber complete={steps.length > 0}>1</StepNumber>
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography variant="h6">{steps.length ? t('flows.guided.addAnother') : t('flows.guided.goalQuestion')}</Typography>
@@ -319,10 +319,10 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                       borderColor: 'divider',
                     }}
                   >
-                    <Typography variant="caption" fontWeight={800} color="primary.main">
+                    <Typography variant="caption" sx={{ fontWeight: 800 }} color="primary.main">
                       {t('flows.guided.when').toLocaleUpperCase()}
                     </Typography>
-                    <Typography variant="body2" fontWeight={700}>{t('flows.guided.someoneAsks')}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>{t('flows.guided.someoneAsks')}</Typography>
                   </Box>
 
                   {steps.map((node, index) => (
@@ -353,7 +353,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                           onDoubleClick={() => onOpenNode?.(node)}
                           sx={{ display: 'block', width: '100%', p: 1.5, textAlign: 'left' }}
                         >
-                          <Stack direction="row" spacing={1.25} alignItems="flex-start">
+                          <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
                             <Box
                               sx={{
                                 display: 'grid',
@@ -373,7 +373,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                               <Typography variant="overline" color="primary.main">
                                 {friendlyType(node.data.type as NodeType, t)}
                               </Typography>
-                              <Typography variant="subtitle1" fontWeight={800}>
+                              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
                                 {friendlyTitle(node, t)}
                               </Typography>
                               <Typography
@@ -423,7 +423,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     </React.Fragment>
                   ))}
 
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: "stretch" }}>
                     <TextField
                       fullWidth
                       multiline
@@ -468,10 +468,10 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                       borderColor: 'divider',
                     }}
                   >
-                    <Typography variant="caption" fontWeight={800} color="success.main">
+                    <Typography variant="caption" sx={{ fontWeight: 800 }} color="success.main">
                       {t('flows.guided.then').toLocaleUpperCase()}
                     </Typography>
-                    <Typography variant="body2" fontWeight={700}>{t('flows.guided.sendAnswer')}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>{t('flows.guided.sendAnswer')}</Typography>
                   </Box>
                 </Stack>
               </Box>
@@ -488,7 +488,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
               bgcolor: 'background.paper',
             }}
           >
-            <Stack direction="row" spacing={1.5} alignItems="flex-start">
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
               <StepNumber complete={hasUsefulName}>2</StepNumber>
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography variant="h6">{t('flows.guided.nameTitle')}</Typography>
@@ -526,7 +526,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                 bgcolor: (theme) => alpha(theme.palette.primary.main, canTry ? 0.075 : 0.025),
               }}
             >
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
                 <StepNumber>3</StepNumber>
                 <Box sx={{ flex: 1 }}>
                   <Typography variant="h6">{t('flows.guided.tryTitle')}</Typography>

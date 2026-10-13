@@ -113,7 +113,7 @@ export default function ConvertProcessToSubflowDialog({
           <Stack spacing={2}>
             {draft.errors.length > 0 && (
               <Alert severity="error">
-                <Typography fontWeight={600}>{t('flows.convert.invalid')}</Typography>
+                <Typography sx={{ fontWeight: 600 }}>{t('flows.convert.invalid')}</Typography>
                 <List dense disablePadding>
                   {draft.errors.map((error, index) => (
                     <ListItem key={`${error.code}-${index}`} disableGutters>
@@ -129,8 +129,8 @@ export default function ConvertProcessToSubflowDialog({
             ))}
 
             <Box>
-              <Typography variant="subtitle1" fontWeight={600}>{t('flows.convert.included', { name: name.trim() })}</Typography>
-              <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{t('flows.convert.included', { name: name.trim() })}</Typography>
+              <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap",  mt: 1 }}>
                 {draft.preview.includedNodes.map(node => (
                   <Chip key={node.id} label={`${node.label} · ${node.type}`} size="small" />
                 ))}
@@ -147,7 +147,7 @@ export default function ConvertProcessToSubflowDialog({
             <Divider />
 
             <Box>
-              <Typography variant="subtitle1" fontWeight={600}>{t('flows.convert.boundary')}</Typography>
+              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{t('flows.convert.boundary')}</Typography>
               <List dense>
                 {draft.preview.rewires.map(rewire => (
                   <ListItem key={rewire} disableGutters><ListItemText primary={rewire} /></ListItem>

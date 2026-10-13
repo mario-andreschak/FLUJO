@@ -16,7 +16,7 @@
  * Results stay on the remote server and are re-fetched through `tasks/result`.
  */
 
-import type { McpTaskStatus } from './tasks';
+import type { McpTaskStatus, McpTaskGeneration } from './tasks';
 
 export const MCP_REMOTE_TASK_RECORD_VERSION = 1;
 
@@ -28,6 +28,7 @@ export type McpRemoteTaskDiagnostic =
   | 'server-missing'
   | 'server-disconnected'
   | 'identity-mismatch'
+  | 'generation-mismatch'
   | 'expired'
   | 'protocol-invalid'
   | 'transport-error'
@@ -57,6 +58,8 @@ export interface McpRemoteTaskRecord {
   serverName: string;
   /** Fingerprint of the server config/auth identity (see remoteTaskStore). */
   serverIdentity: string;
+  /** Immutable wire protocol. Missing on historical records means 2025-11-25. */
+  generation?: McpTaskGeneration;
 
   /** Originating operation. */
   toolName: string;

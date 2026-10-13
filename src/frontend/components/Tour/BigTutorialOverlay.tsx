@@ -287,7 +287,7 @@ export default function BigTutorialOverlay() {
           <CloseIcon fontSize="small" />
         </IconButton>
 
-        <Typography variant="overline" color="primary.main" fontWeight={800}>
+        <Typography variant="overline" color="primary.main" sx={{ fontWeight: 800 }}>
           {step.nested
             ? `Stage 1  ›  ${step.nested === 'install-web-app' ? 'Add a web app' : 'Turn on a web app'}`
             : 'Big tutorial · Stage 1'}

@@ -12,6 +12,7 @@ jest.mock('@/backend/services/model/openaiClient', () => ({
   ...jest.requireActual('@/backend/services/model/openaiClient'),
   createOpenAIClient: jest.fn(() => ({
     chat: { completions: { create: sdkCreate } },
+    responses: { create: sdkCreate },
   })),
 }));
 
@@ -47,6 +48,23 @@ beforeEach(() => {
 });
 
 describe('testModelConnection (litellm)', () => {
+  it('tests a new LiteLLM connection through stateless Responses', async () => {
+    const response = {
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'pong' }] }],
+      usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+    };
+    sdkCreate.mockResolvedValue(response);
+    axiosPost.mockResolvedValue({ status: 200, data: response, headers: {} });
+    const result = await testModelConnection({ ...litellmParams, adapter: 'openai-responses' });
+    expect(result.adapterRoute).toMatchObject({ adapterId: 'openai-responses', endpoint: '/responses' });
+    expect(axiosPost).toHaveBeenCalledWith('http://localhost:4000/v1/responses', expect.objectContaining({ store: false }), expect.any(Object));
+  });
+  it('keeps legacy saved LiteLLM connections without an adapter on Chat Completions', async () => {
+    sdkCreate.mockResolvedValue(okCompletion);
+    axiosPost.mockResolvedValue(okAxios);
+    const result = await testModelConnection({ ...litellmParams, adapter: undefined });
+    expect(result.adapterRoute).toMatchObject({ adapterId: 'openai', endpoint: '/chat/completions' });
+  });
   it('reports success when both SDK and axios reach the LiteLLM proxy', async () => {
     sdkCreate.mockResolvedValue(okCompletion);
     axiosPost.mockResolvedValue(okAxios);

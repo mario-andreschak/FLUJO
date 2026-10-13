@@ -1,6 +1,8 @@
 # MCP execution consent contract
 
-This Source layer addresses #568's missing default host-launch consent. At its predecessor, a stdio configuration without an isolation policy or private approval file can launch on the host. A server's stored trust checkbox, installation assessment, imported configuration, or browser login does not constitute a runtime grant. Source guards below are implemented; exact-graph whole-suite, installed-artifact and complete #568 qualification remain pending.
+Native localhost installations without a selected private owner, trusted-host or isolation policy retain their existing local MCP launch behavior. Their installed and bundled servers run with the local account's permissions; runtime-home directories and MCP roots do not provide OS confinement. This compatibility path is unavailable in worker mode or network/public exposure. Selecting any private approval file (including an empty or unavailable one), or an explicit server execution profile, requires the protected checks below. An invalid protected profile never falls back to compatibility mode.
+
+This Source layer provides #568's opt-in protected execution profiles. A server's stored trust checkbox, installation assessment, imported configuration, or browser login does not constitute a protected runtime grant. Source guards below are implemented; exact-graph whole-suite, installed-artifact and complete #568 qualification remain pending.
 
 Two execution profiles remain distinct:
 
@@ -9,11 +11,45 @@ Two execution profiles remain distinct:
 | Isolated Linux container | Existing immutable image digest, separately protected owner approval, named read-only mounts and environment, no network, resource limits, generation-bound cleanup. An unavailable local Linux Docker daemon refuses execution. |
 | Explicitly trusted host | Separately protected, expiring owner approval for this workspace, server, executable, package revision and capabilities. This authorizes the host account's filesystem, network and child-process privileges; it provides no OS confinement or isolation claim. |
 
-Missing, malformed, expired, revoked, foreign-owner or stale approvals refuse launch and dispatch. There is no default host fallback, including for bundled terminal servers. An isolation grant cannot be bypassed by deleting the isolation field from an imported configuration. Remote servers retain their external-data/trust boundary and do not acquire a local execution profile.
+For protected profiles, missing, malformed, expired, revoked, foreign-owner or stale approvals refuse launch and dispatch. There is no host fallback from a protected profile, including for bundled terminal servers. An isolation grant cannot be bypassed by deleting the isolation field from an imported configuration. Remote servers retain their external-data/trust boundary and do not acquire a local execution profile. Compatibility-mode launches are bound to the actual transport, workspace and launch configuration; configuration changes or later selection of a private profile deny dispatch from the previous transport. Approval failures are reported as an actionable `requires_approval` state, with one concise warning per server/error code and no automatic retry or stack trace.
 
 Trusted host configuration describes the requested profile; effective authority resides in `FLUJO_MCP_TRUSTED_HOST_FILE`, independently protected outside workspace data and matched to `FLUJO_OWNER_AUTH_FILE`. Approval binds the workspace/server, exact absolute executable and arguments, working directory, source-tree and executable digests, named environment injection, and requested host broker capabilities. Changing package bytes, command, arguments or capabilities requires renewed consent. An imported profile never imports approval.
 
-Package fingerprinting reads a bounded regular-file tree without executing inspected code. Symlinks, hard links, reparse paths, unstable file identities and over-limit trees refuse admission. Executable identity is checked separately. Dynamic package runners and unresolved relative executables cannot establish a pinned package/executable identity: install and inspect a fixed package first, or use an approved immutable container image.
+Package fingerprinting reads a bounded regular-file tree without executing inspected code. Symlinks, hard links, reparse paths, unstable file identities and over-limit trees refuse admission. Executable identity is checked separately. Unresolved relative executables and unmaterialized or floating package-runner code refuse admission. A protected `npx` profile can authorize an exact, already materialized local package closure as described below; an immutable approved container remains a separate execution profile.
+
+## Protected package runners
+
+The `npx` trusted-host profile binds the exact Node executable, copied npm CLI
+and dependencies, selected package and dependency tree, regular binary shims,
+shell executable, npm configuration files, arguments, environment, capabilities
+and working directory to the protected owner grant. It invokes the genuine
+`npx-cli.js` with `-y package@exact-version`; it does not replace package-runner
+execution with a direct package entrypoint. Installation and materialization
+happen before review. Launch uses offline resolution and ignored install
+scripts, without an installation fallback or permission to download code.
+
+Use the existing owner host-consent preview and approval transaction to inspect
+and authorize the stored proposal. Importing that proposal transfers no grant.
+Changed source, npm or package revision, shell, arguments, environment, cwd or
+capabilities require a fresh proposal and approval; expiry and durable revocation
+continue to deny the captured transport. The source digest includes the npm
+closure, package dependencies and shims. Npm's actual default binary selection
+must match the declared binary. Because npm prepends cwd and ancestor
+`node_modules/.bin` directories ahead of PATH even with an explicit prefix,
+unreviewed binary-resolution directories there refuse admission.
+
+Runtime-home selection follows global override, then server setting, then
+workspace default, then host mode. The effective mode must match the grant.
+Isolated mode uses the deterministic private per-server cwd outside the managed
+source root and separate workspace/server HOME, configuration, cache and temp
+paths. These paths redirect application state; the approved process still runs
+with the owner's account privileges and can access the host filesystem, network
+and child processes. Runtime-home isolation provides no OS containment.
+
+The [package-runner operator guide](protected-package-runner.md) describes the
+materialized layout and review steps. Both SDK transport factories use the same
+launch and fresh-authority checks. Fixed-source profiles retain their source cwd
+and existing bundled provenance requirements.
 
 Approval is checked before launch, immediately before transport start, after awaited SDK startup, before tool discovery/argument preparation, and again before tool dispatch. Trusted-host launch performs no shipped-package readiness, installation or build execution. Both SDK generations suppress unapproved inherited environment defaults; a trusted-host profile does not implicitly receive every host environment value. Scope-specific runtime credentials remain separate from persisted configuration and cannot become a blanket host grant.
 

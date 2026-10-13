@@ -27,7 +27,6 @@ export interface CodexToolBridge {
   /** Streamable-HTTP MCP endpoint URL for the codex subprocess. */
   url: string;
   close(): Promise<void>;
-  /** Bind an owned app-server thread before its first model prompt. */
   bindNativeThread(threadId: string): void;
 }
 
@@ -50,6 +49,7 @@ export async function startCodexToolBridge(
   tools: BridgeTool[],
   instructions?: string,
   requireStableToolIds = false,
+  requireOwnedThread = false,
 ): Promise<CodexToolBridge> {
   const token = randomBytes(16).toString('hex');
   const path = `/mcp/${token}`;
@@ -84,7 +84,7 @@ export async function startCodexToolBridge(
           ? meta.callId
           : undefined;
         if (requireStableToolIds && semanticId) {
-          if (boundNativeThreadId && boundNativeThreadId !== meta!.threadId) semanticId = undefined;
+          if ((requireOwnedThread && !boundNativeThreadId) || (boundNativeThreadId && boundNativeThreadId !== meta!.threadId)) semanticId = undefined;
           else boundNativeThreadId = meta!.threadId as string;
         }
         return await tool.handler((req.params.arguments ?? {}) as Record<string, unknown>,
@@ -157,10 +157,10 @@ export async function startCodexToolBridge(
 
   return {
     url,
-    bindNativeThread(threadId) {
-      if(!requireStableToolIds || !threadId || threadId.length>256 || /[\x00-\x1f]/.test(threadId)
-        || boundNativeThreadId && boundNativeThreadId!==threadId)throw new Error('Native Codex bridge thread binding is unavailable or changed.');
-      boundNativeThreadId=threadId;
+    bindNativeThread: threadId => {
+      if (!requireStableToolIds || typeof threadId !== 'string' || !threadId.trim() || threadId.length > 256
+        || (boundNativeThreadId && boundNativeThreadId !== threadId)) throw new Error('Native Codex thread binding is unavailable.');
+      boundNativeThreadId = threadId;
     },
     close: () =>
       new Promise<void>((resolve) => {

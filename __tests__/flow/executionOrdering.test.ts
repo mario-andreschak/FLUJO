@@ -89,6 +89,7 @@ jest.setTimeout(30_000);
 type Observation = { conversationId: string; operation: string };
 type Dispatch = { conversationId: string; nodeId: string; id: string };
 const observations: Observation[] = [];
+const timings: Array<Observation & { elapsedMs: number }> = [];
 let dispatch: Dispatch | undefined;
 let server: Server;
 let unsubscribe: () => void;
@@ -96,6 +97,7 @@ let respond: (response: ServerResponse, body: Record<string, unknown>) => void;
 let toolConversationId = '';
 let actualToolCalls = 0;
 let profile = '';
+let observationStart = 0;
 const httpBodies: Record<string, unknown>[] = [];
 const toolChildren: ChildProcess[] = [];
 let toolProfile: ReturnType<typeof installTrustedHostProfile> | undefined;
@@ -103,6 +105,7 @@ const realStep = FlowExecutor.executeStep;
 
 function record(conversationId: string, operation: string) {
   observations.push({ conversationId, operation });
+  timings.push({ conversationId, operation, elapsedMs: Math.round(performance.now() - observationStart) });
 }
 
 function eventOperation(event: ExecutionEvent): string {
@@ -148,7 +151,8 @@ function answer(response: ServerResponse, body: Record<string, unknown>, content
   }
 }
 
-async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
+async function stageToolConfig() {
+  record('ordering-fixture', 'fixture:stage:start');
   const source = fs.readFileSync(path.resolve('__tests__/mcp/fixtures/processBoundaryServer.mjs'), 'utf8')
     .replace(/from '(@modelcontextprotocol\/[^']+)'/g, (_match, moduleName: string) =>
       `from ${JSON.stringify(pathToFileURL(require.resolve(moduleName)).href)}`);
@@ -165,6 +169,13 @@ async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
     executableDigest: fingerprintTrustedHostExecutable(process.execPath) });
   toolProfile.approve();
   expect(await saveConfig(new Map([[config.name, config]]))).toMatchObject({ success: true });
+  expect(await mcpService.connectServer(config.name)).toMatchObject({ success: true });
+  record('ordering-fixture', 'fixture:stage:done');
+}
+
+async function toolFlow(id: string, maxTurns = 3): Promise<Flow> {
+  if (!toolProfile) await stageToolConfig();
+  const config = toolProfile!.config;
   const definition = flow(id, { maxTurns });
   definition.nodes.push(node('mcp-fixture', 'mcp', { boundServer: config.name, enabledTools: ['identity'] }));
   definition.edges.push({ id: 'process-mcp', source: 'process', target: 'mcp-fixture', data: { edgeType: 'mcp' } });
@@ -218,7 +229,9 @@ function expectOrdered(conversationId: string, expected: string[]) {
 }
 
 beforeEach(async () => {
+  observationStart = performance.now();
   observations.length = 0;
+  timings.length = 0;
   httpBodies.length = 0;
   toolChildren.length = 0;
   dispatch = undefined;
@@ -253,6 +266,9 @@ beforeEach(async () => {
     record(state.conversationId!, `step-return:${nextNodeId}:${result.action}`);
     return result;
   });
+  if (profile.includes('holds a real stdio tool behind approval') || profile.includes('answers capped calls synthetically')) {
+    await stageToolConfig();
+  }
 });
 
 afterEach(async () => {
@@ -266,7 +282,7 @@ afterEach(async () => {
   jest.restoreAllMocks();
   FlowExecutor.conversationStates.clear();
   FlowExecutor.clearFlowCache();
-  console.info('CODE_HEALTH_EXECUTION_TRACE', JSON.stringify({ profile, observations, actualToolCalls,
+  console.info('CODE_HEALTH_EXECUTION_TRACE', JSON.stringify({ profile, observations, timings, actualToolCalls,
     shutdownReceipts: teardown.shutdownReceipts,
     childExits: toolChildren.map(child => ({ pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode })),
   }));

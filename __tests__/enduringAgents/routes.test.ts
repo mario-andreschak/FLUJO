@@ -1,6 +1,7 @@
 const listPersonasMock = jest.fn();
 const createPersonaFromRoleMock = jest.fn();
 const listPersonaFlowDispatchesMock = jest.fn();
+const listPersonaRuntimeRecordsStrictMock = jest.fn();
 const readPersonaRuntimeSnapshotMock = jest.fn();
 const pumpPersonaFlowDispatchesMock = jest.fn();
 const projectPersonaPresentationMock = jest.fn();
@@ -46,6 +47,7 @@ jest.mock('@/backend/services/enduringAgents', () => {
     listPersonas: (...args: unknown[]) => listPersonasMock(...args),
     createPersonaFromRole: (...args: unknown[]) => createPersonaFromRoleMock(...args),
     listPersonaFlowDispatches: (...args: unknown[]) => listPersonaFlowDispatchesMock(...args),
+    listPersonaRuntimeRecordsStrict: (...args: unknown[]) => listPersonaRuntimeRecordsStrictMock(...args),
     readPersonaRuntimeSnapshot: (...args: unknown[]) => readPersonaRuntimeSnapshotMock(...args),
     pumpPersonaFlowDispatches: (...args: unknown[]) => pumpPersonaFlowDispatchesMock(...args),
     projectPersonaPresentation: (...args: unknown[]) => projectPersonaPresentationMock(...args),
@@ -99,6 +101,7 @@ beforeEach(() => {
   assertUnlockedMock.mockResolvedValue(null);
   listPersonasMock.mockResolvedValue([]);
   listPersonaFlowDispatchesMock.mockResolvedValue([]);
+  listPersonaRuntimeRecordsStrictMock.mockResolvedValue({ activities: [], mailboxItems: [] });
   listRoleDefinitionsMock.mockResolvedValue([]);
   listRoleVersionsMock.mockResolvedValue([]);
   listPublicRolesMock.mockResolvedValue([]);
@@ -182,7 +185,14 @@ describe('/v1/personas', () => {
 
 describe('/v1/personas/[personaId]', () => {
   it('returns a complete inspectable bundle or 404', async () => {
-    const bundle = { persona: { id: 'jim' }, memoryItems: [], workItems: [] };
+    const bundle = {
+      persona: { id: 'jim' }, memoryItems: [], workItems: [],
+      activities: [{ id: 'activity_old', status: 'completed',
+        source: { kind: 'api', sourceId: 'request_old' }, updatedAt: 12 }],
+      mailboxItems: [{ id: 'mailbox_waiting', status: 'queued', sequence: 2,
+        source: { kind: 'api', sourceId: 'request_waiting' }, createdAt: 10, updatedAt: 11 }],
+      lease: null,
+    };
     const runtime = { projection: { stuck: false, active: null }, recentEvents: [] };
     const presentation = {
       conversations: [],
@@ -192,13 +202,36 @@ describe('/v1/personas/[personaId]', () => {
       queuedInputCount: 0,
     };
     readPersonaRuntimeSnapshotMock.mockResolvedValueOnce({ bundle, runtime });
+    listPersonaRuntimeRecordsStrictMock.mockResolvedValueOnce({
+      activities: bundle.activities, mailboxItems: bundle.mailboxItems,
+    });
     projectPersonaPresentationMock.mockReturnValueOnce(presentation);
+    listPersonaFlowDispatchesMock.mockResolvedValueOnce([{
+      id: 'dispatch_waiting', state: 'queued',
+      admission: { source: { kind: 'api', sourceId: 'request_waiting' } },
+      mailboxItemId: 'mailbox_waiting', createdAt: 10, updatedAt: 11,
+      flowInput: { secret: 'must-not-leak' },
+    }]);
     let response = await getPersona(
       request('/v1/personas/jim') as never,
       { params: Promise.resolve({ personaId: 'jim' }) } as never,
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ...bundle, runtime, presentation });
+    expect(await response.json()).toEqual({ ...bundle, runtime, presentation,
+      runtimeRecords: {
+        complete: true,
+        readConsistency: 'non_atomic',
+        dispatches: [{ id: 'dispatch_waiting', state: 'queued',
+          source: { kind: 'api', sourceId: 'request_waiting' },
+          mailboxItemId: 'mailbox_waiting', createdAt: 10, updatedAt: 11 }],
+        mailboxQueue: [{ id: 'mailbox_waiting', status: 'queued', sequence: 2,
+          source: { kind: 'api', sourceId: 'request_waiting' },
+          createdAt: 10, updatedAt: 11 }],
+        activities: [{ id: 'activity_old', status: 'completed',
+          source: { kind: 'api', sourceId: 'request_old' }, updatedAt: 12 }],
+        lease: null,
+      },
+    });
     expect(readPersonaRuntimeSnapshotMock).toHaveBeenCalledWith('jim');
     expect(listPersonaFlowDispatchesMock).toHaveBeenCalledWith('jim');
     // With no dispatches there are no per-Activity results, and the route omits

@@ -2,13 +2,12 @@ name: Verify Cloud Worker Image
 
 # Local candidate execution; registry provenance and promotion stay main-only.
 on:
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: worker-image-candidate-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   worker-snapshot-image:
@@ -17,11 +16,11 @@ jobs:
     env:
       SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.3'
       - name: Verify exact official Node runtime
@@ -39,9 +38,9 @@ jobs:
           assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
           NODE
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build exact Linux candidate without publishing
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
@@ -92,7 +91,7 @@ jobs:
           NODE
       - name: Retain candidate inspection and actual smoke results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: worker-image-candidate-${{ env.SOURCE_REVISION }}
           if-no-files-found: ignore

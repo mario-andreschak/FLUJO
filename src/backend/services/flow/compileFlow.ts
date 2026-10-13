@@ -1,3 +1,4 @@
+import { assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/security/bundledFlujoWorkload';
 /**
  * Deterministic FlowSpec compilation as a public authoring operation (#14 follow-up).
  *
@@ -128,6 +129,7 @@ export async function compileSpec(
     // Descendants first (compiled.flows is dependency-ordered), then the root, so a
     // subflowId is always resolvable by the time its parent lands.
     for (const f of compiled.flows) {
+      await assertBundledFlujoWorkloadEffectCurrent();
       await flowService.saveFlow(f);
     }
     saved = true;

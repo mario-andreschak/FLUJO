@@ -61,7 +61,7 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
       content: (
         <Card variant="outlined" sx={{ height: '100%', borderColor: selected ? 'primary.main' : 'divider' }}>
           <CardContent>
-            <Typography variant="subtitle1" fontWeight={600}>{server.name}</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{server.name}</Typography>
             <Typography variant="body2" color="text.secondary">
               {server.error ?? (server.apps.length > 0
                 ? t('roles.apps.available', { count: server.apps.length })
@@ -97,7 +97,7 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
     }
   }
 
-  if (loading) return <Stack alignItems="center" sx={{ p: 6 }}><CircularProgress /></Stack>;
+  if (loading) return <Stack sx={{ alignItems: "center",  p: 6 }}><CircularProgress /></Stack>;
 
   return (
     <Box sx={{
@@ -113,7 +113,7 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
             required
             label={t('roles.name')}
             value={name}
-            inputProps={{ maxLength: 160 }}
+            slotProps={{ htmlInput: { maxLength: 160 } }}
             onChange={(event) => { setName(event.target.value); setDirty(true); }}
           />
           <TextField
@@ -123,13 +123,13 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
             label={t('roles.prompt')}
             helperText={t('roles.promptHelper')}
             value={prompt}
-            inputProps={{ maxLength: 20000 }}
+            slotProps={{ htmlInput: { maxLength: 20000 } }}
             onChange={(event) => { setPrompt(event.target.value); setDirty(true); }}
           />
           <Box>
             <Typography variant="subtitle1" component="h2">{t('roles.suggestedApps')}</Typography>
             <Typography variant="body2" color="text.secondary">{t('roles.appsHelper')}</Typography>
-            <Stack direction="row" gap={1} flexWrap="wrap" sx={{ my: 1.5 }}>
+            <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap",  my: 1.5 }}>
               {selectedApps.map((app) => <Chip key={app} label={app} onDelete={() => { setSelectedApps((current) => current.filter((name) => name !== app)); setDirty(true); }} />)}
             </Stack>
             <Button variant="outlined" startIcon={<AppsRounded />} onClick={() => setPickerOpen(true)}>
@@ -137,7 +137,7 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
             </Button>
           </Box>
           {mode === 'edit' && <Alert severity="info">{t('roles.saveCreatesVersion')}</Alert>}
-          <Stack direction="row" justifyContent="flex-end" gap={1}>
+          <Stack direction="row" sx={{ justifyContent: "flex-end", gap: 1 }}>
             <Button onClick={() => router.back()}>{t('roles.cancel')}</Button>
             <Button type="submit" variant="contained" disabled={saving || !name.trim() || !prompt.trim()}>
               {saving ? t('roles.saving') : t('roles.save')}

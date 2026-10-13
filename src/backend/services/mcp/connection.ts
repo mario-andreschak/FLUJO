@@ -1,8 +1,10 @@
+import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { McpIsolationError } from '../security/isolatedMcp';
 import { resolveTrustedHostLaunch, trustedHostBrokerEnvironment, attachTrustedHost } from './trustedHost';
 import { trustedHostMcpApproval, TrustedHostMcpError } from '../security/trustedHostMcp';
+import { attachLocalHostLaunch } from './localHost';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
   type ManagedMcpIsolation,
@@ -125,8 +127,71 @@ export interface TransportWithConfigKey {
   __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
   /** Capability lease for one managed MCP Apps stdio process generation. */
   __flujoRuntimeBrokerLeaseId?: string;
+  /** Opaque pending capability for this bundled FLUJO process generation. */
+  __flujoBundledWorkload?: PendingBundledFlujoWorkload;
+  /** Retires only the authority captured by this transport constructor. */
+  __flujoRetireRuntimeAuthority?: () => void;
   /** Inner SDK transport when FLUJO applies a protocol decorator. */
   __flujoInnerTransport?: unknown;
+}
+
+/** Process-wide authority uncertainty survives another service/module instance. */
+const retirementErrorKey = Symbol.for('FLUJO:mcp-authority-retirement-errors:v1');
+const retirementErrorDescriptor = Object.getOwnPropertyDescriptor(globalThis, retirementErrorKey);
+if (retirementErrorDescriptor && (!('value' in retirementErrorDescriptor)
+    || retirementErrorDescriptor.configurable || retirementErrorDescriptor.writable
+    || !(retirementErrorDescriptor.value instanceof WeakSet))) {
+  throw new Error('MCP retirement error provenance refused.');
+}
+const retirementErrorProvenance: WeakSet<object> = retirementErrorDescriptor?.value ?? new WeakSet<object>();
+if (!retirementErrorDescriptor) Object.defineProperty(globalThis, retirementErrorKey, {
+  value: retirementErrorProvenance, writable: false, configurable: false, enumerable: false,
+});
+export class McpRuntimeAuthorityRetirementError extends AggregateError {
+  constructor(errors: Iterable<unknown>, message?: string, options?: ErrorOptions) {
+    super(errors, message, options);
+    WeakSet.prototype.add.call(retirementErrorProvenance, this);
+  }
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return !!value && typeof value === 'object' && WeakSet.prototype.has.call(retirementErrorProvenance, value);
+  }
+}
+interface AuthorityRetirementQuarantine {
+  owner: unknown;
+  error: McpRuntimeAuthorityRetirementError;
+}
+declare global {
+  var __flujo_mcp_authority_retirement_quarantines: Map<string, AuthorityRetirementQuarantine> | undefined;
+}
+function authorityRetirementQuarantines() {
+  return globalThis.__flujo_mcp_authority_retirement_quarantines ??= new Map<string, AuthorityRetirementQuarantine>();
+}
+function authorityRetirementKey(serverName: string, workspace = getCurrentWorkspace()) {
+  return `${workspace}\u0000${serverName}`;
+}
+export function assertMcpRuntimeAuthorityRetired(serverName: string): void {
+  const failed = authorityRetirementQuarantines().get(authorityRetirementKey(serverName));
+  if (failed) throw failed.error;
+}
+function noteAuthorityRetirement(serverName: string, workspace: string, owner: unknown, error?: McpRuntimeAuthorityRetirementError) {
+  const failures = authorityRetirementQuarantines();
+  const key = authorityRetirementKey(serverName, workspace);
+  if (error) failures.set(key, { owner, error });
+  else if (failures.get(key)?.owner === owner) failures.delete(key);
+}
+
+export function retireMcpRuntimeAuthority(serverName: string, workspace: string,
+  workload: PendingBundledFlujoWorkload | undefined,
+  runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined): void {
+    const errors: unknown[] = [];
+    try { if (workload) revokePendingWorkload(workload); } catch (error) { errors.push(error); }
+    try { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); } catch (error) { errors.push(error); }
+    if (errors.length) {
+      const failure = new McpRuntimeAuthorityRetirementError(errors, 'MCP runtime authority retirement failed.', { cause: errors[0] });
+      noteAuthorityRetirement(serverName, workspace, workload ?? runtimeBroker, failure);
+      throw failure;
+    }
+    noteAuthorityRetirement(serverName, workspace, workload ?? runtimeBroker);
 }
 
 /** Resolve through FLUJO-owned transport decorators without relying on SDK privates. */
@@ -541,6 +606,7 @@ export function createTransport(
 
       // Always set the OAuth provider - let the transport handle the OAuth flow
       transportoptions.authProvider = oauthProvider;
+      transportoptions.fetch = oauthProvider.oauthFetch;
 
       // Check if we have stored tokens, for logging purposes only - actual freshness/expiry
       // is resolved async by oauthProvider.tokens() when the transport uses it.
@@ -659,7 +725,7 @@ interface IsolatedStdioRuntime {
   env: Record<string, string>;
 }
 
-function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
+export function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
   const workspaceRoot = getWorkspaceDataDir();
   const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
 
@@ -716,6 +782,9 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
     NPM_CONFIG_CACHE: directories.npm,
     PIP_CACHE_DIR: directories.pip,
     UV_CACHE_DIR: directories.uv,
+    FLUJO_PARENT_DATA_DIR: getDataDir(),
+    FLUJO_DATA_DIR: workspaceRoot,
+    FLUJO_WORKSPACE: getCurrentWorkspace(),
   };
   if (process.platform === 'win32') {
     const parsed = path.parse(home);
@@ -793,13 +862,23 @@ export function resolveStdioLaunch(
     if (isolateHome !== (authority.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     if (isolateHome) {
       const runtime = isolatedStdioRuntime(config.name);
+      if (authority.policy.packageRunner && path.resolve(config.cwd!) !== path.resolve(runtime.cwd)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
       for (const [name, value] of Object.entries(runtime.env)) {
         if (!authority.policy.environmentNames.includes(name)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+        if (authority.policy.packageRunner) {
+          const declared = Object.entries(launch.env).find(([key]) => key.toUpperCase() === name.toUpperCase())?.[1];
+          if (declared && declared !== value) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+        }
         launch.env[name] = value;
       }
+      if (authority.policy.packageRunner) {
+        const cacheIndex = launch.args.findIndex(argument => argument.startsWith('--cache='));
+        if (cacheIndex < 0) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+        launch.args[cacheIndex] = `--cache=${runtime.env.NPM_CONFIG_CACHE}`;
+      }
     }
-    // Fixed native/Node entries retain their approved source cwd. The private
-    // runtime cwd is for package runners, which this profile never authorizes.
+    // Fixed entries retain their source cwd; reviewed package runners retain
+    // their separately bound private working directory outside that source.
     log.debug('Transformed environment variable names', Object.keys(launch.env));
     return launch;
   }
@@ -1016,9 +1095,10 @@ export function createStdioTransport(
   }
 
   const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
-  const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
-    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
-    : undefined;
+  let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
+  let workload: PendingBundledFlujoWorkload | undefined;
+  const workloadWorkspace = getCurrentWorkspace();
+  const retireRuntimeAuthority = () => retireMcpRuntimeAuthority(config.name, workloadWorkspace, workload, runtimeBroker);
 
   // Create the transport with stderr capture
   log.info(
@@ -1027,10 +1107,15 @@ export function createStdioTransport(
 
   let transport: StdioClientTransport;
   try {
+    assertMcpRuntimeAuthorityRetired(config.name);
+    workload = prepareBundledFlujoWorkload(config);
+    runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+      ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
+    const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
     const transportoptions: StdioServerParameters = {
       command: command,
       args: args,
-      env: runtimeBroker ? { ...env, ...(isolation ? runtimeBroker.env : trustedHostBrokerEnvironment(config, runtimeBroker.env)) } : env,
+      env: { ...env, ...(runtimeBroker ? (config.trustedHost ? trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {}), ...workloadEnv },
       cwd: cwd,
       stderr: isolation ? 'ignore' : 'pipe',
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -1042,17 +1127,28 @@ export function createStdioTransport(
     }
 
     transport = new StdioClientTransport(transportoptions);
-    if (isolation) attachMcpIsolation(transport, config, isolation, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
-    else attachTrustedHost(transport, config, () => revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId));
+    if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
+    else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else {
+      attachShippedWorkspaceReadiness(transport, config, cwd);
+      attachLocalHostLaunch(transport, config, current => JSON.stringify([
+        stdioConfigKey(current, options?.isolateRuntimeHome === true), capabilityKey(current),
+      ]));
+    }
   } catch (error) {
-    isolation?.close();
-    revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
+    const cleanupErrors: unknown[] = [];
+    try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    if (cleanupErrors.length) throw new McpRuntimeAuthorityRetirementError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
   if (runtimeBroker) {
     (transport as unknown as TransportWithConfigKey).__flujoRuntimeBrokerLeaseId =
       runtimeBroker.leaseId;
   }
+
+  (transport as unknown as TransportWithConfigKey).__flujoBundledWorkload = workload;
+  (transport as unknown as TransportWithConfigKey).__flujoRetireRuntimeAuthority = retireRuntimeAuthority;
 
   // Key the transport with the RAW config so shouldRecreateClient can tell whether a
   // later config is byte-identical, independent of the command/args rewrites above.
@@ -1367,6 +1463,8 @@ export async function safelyCloseClient(
     child && typeof child.kill === "function" ? 'owned'
       : config && config.transport !== 'stdio' ? 'external' : 'unknown';
   let errorClassification: MCPShutdownObservation['errorClassification'] = 'none';
+  let primaryCloseError: unknown;
+  const retirementErrors: unknown[] = [];
   try {
     // Check if the transport is stdio. Duck-typed on the private _process field
     // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
@@ -1425,13 +1523,23 @@ export async function safelyCloseClient(
     log.info(`Client closed successfully for ${serverName}`);
   } catch (error) {
     errorClassification = 'close_failed';
+    primaryCloseError = error;
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
   } finally {
-    isolationCleanup = isolation?.close();
-    revokeMcpAppRuntimeBrokerLease(
-      (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
-    );
+    try { isolationCleanup = isolation?.close(); } catch (error) { retirementErrors.push(error); }
+    const retire = (rawTransport as TransportWithConfigKey | undefined)?.__flujoRetireRuntimeAuthority;
+    if (retire) {
+      try { retire(); } catch (error) { retirementErrors.push(error); }
+    } else {
+      try {
+        const workload = (rawTransport as TransportWithConfigKey | undefined)?.__flujoBundledWorkload;
+        if (workload) revokePendingWorkload(workload);
+      } catch (error) { retirementErrors.push(error); }
+      try {
+        revokeMcpAppRuntimeBrokerLease((rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId);
+      } catch (error) { retirementErrors.push(error); }
+    }
   }
   // SDK close can itself observe exit after the bounded tree-kill wait ended.
   if (processOwnership === 'owned' && child) {
@@ -1443,9 +1551,15 @@ export async function safelyCloseClient(
   if (exitOutcome === 'unknown' && errorClassification === 'none') {
     errorClassification = 'exit_unobserved';
   }
-  return { exited, forced, durationMs: Date.now() - startedAt,
+  const observation: SafeCloseResult = { exited, forced, durationMs: Date.now() - startedAt,
     processOwnership, exitOutcome, errorClassification,
     ...(isolation && isolationCleanup ? { isolation: { schemaVersion: 1 as const,
       generation: isolation.launch.generation, cleanupOutcome: isolationCleanup.outcome } } : {}),
   };
+  if (retirementErrors.length) {
+    const errors = primaryCloseError === undefined ? retirementErrors : [primaryCloseError, ...retirementErrors];
+    const failure = new McpRuntimeAuthorityRetirementError(errors, 'MCP shutdown authority retirement failed.', { cause: errors[0] });
+    throw Object.assign(failure, { shutdownObservation: observation });
+  }
+  return observation;
 }

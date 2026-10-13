@@ -56,9 +56,9 @@ invalid, expired, wrong-owner, wrong-workspace, or absent approval denies launch
 
 A private approval also prevents a config import/edit from omitting its profile
 and silently launching that server on the host. If the approval file is explicitly
-configured but unreadable, host stdio launch does not silently bypass it. Legacy
-configs remain host launches when no isolation file/profile is configured; this is
-an opt-in migration slice, not default isolation for every untrusted MCP server.
+configured but unreadable, host stdio launch does not silently bypass it. Host
+stdio launches require separately approved trusted-host consent even when no
+isolation file/profile is configured. Private HOME alone does not authorize them.
 
 ## Runtime and lifecycle behavior
 

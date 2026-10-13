@@ -12,6 +12,8 @@ import type { TranslationKey } from '@/frontend/i18n';
 import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
 import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
 import WorkspaceBootstrap from './WorkspaceBootstrap';
+import { AllowanceProvider } from '@/frontend/contexts/AllowanceContext';
+import PhoneHostBoundary from './PhoneHostBoundary';
 import AvatarPanelBridge from './AvatarWorld/AvatarPanelBridge';
 import './AvatarWorld/embed.css';
 
@@ -167,9 +169,10 @@ function AppErrorFallback() {
 
 interface AppWrapperProps {
   children: React.ReactNode;
+  phoneHost?: boolean;
 }
 
-export default function AppWrapper({ children }: AppWrapperProps) {
+export default function AppWrapper({ children, phoneHost = false }: AppWrapperProps) {
   const pathname = usePathname();
   // Sign-in must render before workspace/storage providers make protected requests.
   if (pathname === '/owner/login') return <>{children}</>;
@@ -178,9 +181,11 @@ export default function AppWrapper({ children }: AppWrapperProps) {
     <I18nProvider>
       <ErrorBoundary>
         <Suspense fallback={<AppLoading />}>
+          <PhoneHostBoundary enabled={phoneHost} fallback={<AppLoading message="shell.loading.workspace" />}>
           <WorkspaceBootstrap fallback={<AppLoading message="shell.loading.workspace" />}>
             <ThemeProvider>
               <StorageProvider>
+                <AllowanceProvider>
                 <AskFlujoProvider>
                   <TourProvider>
                     <LocalizedAppShell>
@@ -188,9 +193,11 @@ export default function AppWrapper({ children }: AppWrapperProps) {
                     </LocalizedAppShell>
                   </TourProvider>
                 </AskFlujoProvider>
+                </AllowanceProvider>
               </StorageProvider>
             </ThemeProvider>
           </WorkspaceBootstrap>
+          </PhoneHostBoundary>
         </Suspense>
       </ErrorBoundary>
     </I18nProvider>

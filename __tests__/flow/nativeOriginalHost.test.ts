@@ -13,14 +13,19 @@ const modelFixture: Model = { id: 'model-test', name: 'offline-native', displayN
 let selectedModel = { ...modelFixture };
 const queryMock = jest.fn();
 jest.mock('@/backend/services/model', () => ({ modelService: {
-  getModel: async () => selectedModel, resolveAndDecryptApiKey: async () => selectedModel.adapter==='codex-cli'?'':'offline-fixture-token',
+  getModel: async () => selectedModel, resolveAndDecryptApiKey: async () => selectedModel.ApiKey ? 'offline-fixture-token' : '',
   loadModels: async () => [selectedModel],
 } }));
-jest.mock('@/backend/services/model/adapters', () => ({ getCompletionAdapter: () => selectedModel.adapter==='codex-cli'
-  ? new (jest.requireActual<typeof import('@/backend/services/model/adapters/codexAdapter')>('@/backend/services/model/adapters/codexAdapter').CodexAdapter)()
-  : new (jest.requireActual<typeof import('@/backend/services/model/adapters/claudeSubscriptionAdapter')>(
-    '@/backend/services/model/adapters/claudeSubscriptionAdapter').ClaudeSubscriptionAdapter)() }));
-jest.mock('@openai/codex-sdk',()=>({Codex:class {constructor(){throw new Error('Offline owned Original must not use SDK exec');}}}),{virtual:true});
+jest.mock('@/backend/services/model/adapters', () => ({ getCompletionAdapter: () =>
+  selectedModel.adapter === 'codex-cli'
+    ? new (jest.requireActual<typeof import('@/backend/services/model/adapters/codexAdapter')>(
+      '@/backend/services/model/adapters/codexAdapter').CodexAdapter)()
+    : new (jest.requireActual<typeof import('@/backend/services/model/adapters/claudeSubscriptionAdapter')>(
+      '@/backend/services/model/adapters/claudeSubscriptionAdapter').ClaudeSubscriptionAdapter)() }));
+jest.mock('@openai/codex-sdk', () => ({ Codex: class {
+  constructor() { throw new Error('Native ownership must not use the unowned SDK constructor'); }
+} }), { virtual: true });
+
 // Only the model edge is deterministic. Production Original, Persona lease,
 // journal, thread wrapper, MCP bridge and born-child registration remain real.
 // The separate opt-in live qualification suite proves the real profile mint.
@@ -30,57 +35,72 @@ jest.mock('@/backend/services/model/adapters/codexNativeQualification',()=>{
   return {qualifyNativeCodex:async()=>profile,assertNativeCodexQualification:(value:unknown)=>{
     if(value!==profile)throw new Error('Fixture qualification capability mismatch');}};
 });
+
 jest.mock('@/backend/services/model/adapters/codexRestrictedProfile',()=>{
   const actual=jest.requireActual<typeof import('@/backend/services/model/adapters/codexRestrictedProfile')>('@/backend/services/model/adapters/codexRestrictedProfile');
   return {...actual,assertRestrictedCodexProfile:async()=>process.execPath,prepareRestrictedCodexRuntimeEnvironment:async()=>({
     home:directory,workingDirectory:directory,env:Object.fromEntries(Object.entries(process.env).filter(([key,value])=>value!==undefined&&/^(path|systemroot|windir|comspec|pathext)$/i.test(key))),
-    configOverrides:[],modelCatalogPath:'offline-fixture-catalog',cleanup:async()=>{},
+    configOverrides:[],modelCatalogPath:path.join(directory,'model-catalog.json'),cleanup:async()=>{},
   })};
 });
-const codexFixture=`
-const rl=require('node:readline'),bridge=process.argv[1],handoff=process.argv[2]==='true';
-setInterval(()=>{},1000);process.stdin.on('end',()=>process.exit(0));
-const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
-rl.createInterface({input:process.stdin}).on('line',async line=>{
- const request=JSON.parse(line);if(request.id===undefined)return;
- if(request.method==='thread/start'){send({id:request.id,result:{thread:{id:'thread-offline-owned'},model:request.params.model}});return;}
- if(request.method!=='turn/start'){send({id:request.id,result:{}});return;}
- const threadId='thread-offline-owned',turnId='turn-offline-owned';send({id:request.id,result:{turn:{id:turnId}}});
- const emit=(method,extra)=>send({method,params:{threadId,turnId,...extra}});
- if(handoff){
-   const call=async(method,params)=>{const response=await fetch(bridge,{method:'POST',headers:{'content-type':'application/json',Accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});return response.json();};
-   await call('initialize',{protocolVersion:'2025-03-26',clientInfo:{name:'offline-fixture',version:'1'},capabilities:{}});
-   const listed=await call('tools/list',{});const tool=listed.result.tools.find(value=>value.name.startsWith('handoff_to_'));
-   if(!tool){process.exitCode=1;process.stdin.destroy();return;}
-   // Exit and pipe close are independently observable even with inherited
-   // fixture stdout held briefly by another actual process.
-   require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},700)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
-   emit('item/started',{item:{type:'mcpToolCall',id:'offline-code-call-1',server:'flujo',tool:tool.name,status:'inProgress',arguments:{}}});
-   await call('tools/call',{name:tool.name,arguments:{},_meta:{callId:'offline-code-call-1',threadId}});return;
- }
- emit('item/completed',{item:{type:'agentMessage',id:'offline-code-message',text:'done'}});
- emit('thread/tokenUsage/updated',{tokenUsage:{last:{inputTokens:7,cachedInputTokens:2,outputTokens:4,reasoningOutputTokens:1}}});
- emit('turn/completed',{turn:{id:turnId,status:'completed'}});
-});`;
-jest.mock('@/backend/services/model/adapters/codexAppServerProcess',()=>{
-  const actual=jest.requireActual<typeof import('@/backend/services/model/adapters/codexAppServerProcess')>('@/backend/services/model/adapters/codexAppServerProcess');
-  return {...actual,startOwnedCodexAppServer:async(input:Parameters<typeof actual.startOwnedCodexAppServer>[0])=>{
-    const arg=input.args?.find(value=>value.startsWith('mcp_servers.flujo.url='));
-    const bridge=arg?JSON.parse(arg.slice(arg.indexOf('=')+1)):'';
-    const transport=await actual.startOwnedCodexAppServer({...input,executable:process.execPath,args:['-e',codexFixture,bridge,String(emitHandoff)],
-      register:async process=>{await input.register(process);await beforePrompt?.();}});
-    return {...transport,request:async(method:string,params:unknown,timeout?:number)=>{
-      const result=await transport.request(method,params,timeout);
-      if(method==='turn/start'){promptCount++;await afterPrompt?.();}
-      return result;
-    }};
-  }};
+jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
+  const actual = jest.requireActual<typeof import('@/backend/services/model/adapters/codexAppServerProcess')>(
+    '@/backend/services/model/adapters/codexAppServerProcess');
+  return { ...actual, startOwnedCodexAppServer: async (input: Parameters<typeof actual.startOwnedCodexAppServer>[0]) => {
+    codexLaunchArguments.push([...(input.args ?? [])]);
+    const wire = path.join(directory, 'codex-wire.jsonl');
+    let resolveOffered: (() => void) | undefined;
+    const offered = new Promise<void>(resolve => { resolveOffered = resolve; });
+    phase('Codex transport launch started');
+    const transport = await actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
+      args: ['-e', codexChildFixture, wire, codexForeignScope, emitHandoff ? 'handoff' : ''],
+      register: async registration => { phase('Codex registration started'); codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
+        let closeObserved = false;
+        codexCloseDelays.push(registration.exit.then(async () => {
+          phase('Codex original exited');
+          const atExit = performance.now(); await registration.close; phase('Codex pipes closed'); return performance.now() - atExit;
+        }));
+        void registration.close.then(() => { closeObserved = true; });
+        codexExitWitnesses.push(registration.exit.then(async () => {
+          const pipeCloseObservedAtExit = closeObserved;
+          if (emitHandoff) await afterHandoffStop?.();
+          const reservation = (await ledger()).reservations[0];
+          return { pipeCloseObservedAtExit, stateAtExit: reservation.state };
+        }));
+        await input.register(registration); phase('Codex registration completed'); await beforePrompt?.(); },
+      onNotification: message => {
+        phase(`Codex notification ${message.method}`);
+        codexFrames.push(message);
+        input.onNotification(message);
+        if (message.method === 'item/completed') resolveOffered?.();
+        if (!codexAfterResponseBarrier && message.method === 'turn/started') {
+          void (async () => { await afterPrompt?.(); await fs.writeFile(`${wire}.events`, 'ready'); })();
+        }
+      },
+    });
+    phase('Codex transport admitted');
+    return Object.freeze({ ...transport, request: async (...args: Parameters<typeof transport.request>) => {
+      const response = await transport.request(...args);
+      if (args[0] === 'turn/start') promptCount++;
+      if (args[0] === 'turn/start' && codexAfterResponseBarrier) {
+        phase('Codex accepted turn response barrier started');
+        await afterPrompt?.();
+        phase('Codex after-prompt mutation completed');
+        await fs.writeFile(`${wire}.events`, 'ready');
+        await Promise.race([offered, transport.registration.close.then(() => {
+          throw new Error('Offline producer closed before offering the late item.');
+        })]);
+        phase('Codex real late item offered before response release');
+      }
+      return response;
+    } });
+  } };
 });
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: (...args: unknown[]) => queryMock(...args),
   createSdkMcpServer: (value: unknown) => value,
   tool: (name: string, _description: unknown, _schema: unknown, handler: unknown) => ({ name, handler }) }));
 
-import { PersonaFlowDispatcher, personaFlowDispatchId } from '@/backend/services/enduringAgents/personaDispatcher';
+import { PersonaFlowDispatcher, personaFlowDispatchId, readWithPersonaFlowAuthority } from '@/backend/services/enduringAgents/personaDispatcher';
 import { createPersonaWorkItem } from '@/backend/services/enduringAgents/workItems';
 import { createRoleVersion, getPersonaWorkItem, savePersonaWorkItem } from '@/backend/services/enduringAgents/store';
 import { stopPersonaGoalRuntime } from '@/backend/services/enduringAgents/goalRuntime';
@@ -89,16 +109,16 @@ import { runWithWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
+import { createOwnedCodexThread } from '@/backend/services/model/adapters/codexOwnedThread';
+import { createExecutionExtensionContext, registerExecutionExtension, runWithExecutionInput, type ExecutionExtensionAdapter, type ExecutionNativeWorkerRoot } from '@/backend/execution/extensions';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
-import { createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, assertNativeOriginalExecutionContext,
-  nativeOriginalSourceReader } from '@/backend/execution/flow/handlers/nativeOriginalHost';
-import { createExecutionExtensionContext, registerExecutionExtension, runWithExecutionInput,
-  type ExecutionExtensionAdapter, type ExecutionNativeWorkerRoot } from '@/backend/execution/extensions';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from '@/backend/execution/flow/handlers/nativeInvocationSession';
 import { nativeDigest, createNativeToolPort, createNativeBrokerAuthority, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
+import { createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, assertNativeOriginalExecutionContext, nativeOriginalSourceReader } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { flowService } from '@/backend/services/flow';
 
 let directory: string;
 let previousData: string | undefined;
@@ -112,6 +132,57 @@ let afterPrompt: (() => Promise<void>) | undefined;
 let transcriptText = 'done';
 let lateResultFirst = false;
 let offeredLateUsage: unknown;
+let codexLaunchArguments: string[][] = [];
+let codexRegistrations: import('@/backend/services/model/adapters/codexAppServerProcess').CodexOwnedProcessRegistration[] = [];
+let codexFrames: unknown[] = [];
+let codexForeignScope = '';
+let codexAfterResponseBarrier = false;
+let codexOwners: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost[] = [];
+let codexCloseDelays: Array<Promise<number>> = [];
+let codexExitWitnesses: Array<Promise<{ pipeCloseObservedAtExit: boolean; stateAtExit: string }>> = [];
+const codexChildFixture = `
+const fs=require('node:fs'), readline=require('node:readline'), wire=process.argv[1];
+let bridgeURL;
+process.stdin.on('end',()=>{
+ require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},700)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
+ process.exit(0);
+});
+fs.writeFileSync(wire+'.environment',JSON.stringify({names:Object.keys(process.env), selectedKey:process.env.CODEX_API_KEY==='offline-fixture-token', managedHome:process.env.CODEX_HOME===process.env.HOME}));
+const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{
+ fs.appendFileSync(wire,line+'\\n');const m=JSON.parse(line);if(!m.id)return;
+ if(m.method==='initialize')send({id:m.id,result:{userAgent:'offline'}});
+ else if(m.method==='thread/start'){bridgeURL=m.params.config.mcp_servers?.flujo?.url;send({id:m.id,result:{model:m.params.model,thread:{id:'native_codex_thread'}}});}
+ else if(m.method==='turn/start'){
+  let threadId=m.params.threadId,turnId='native_codex_turn';
+  send({id:m.id,result:{turn:{id:turnId}}});send({method:'turn/started',params:{threadId,turn:{id:turnId}}});
+  const tick=setInterval(async()=>{if(!fs.existsSync(wire+'.events'))return;clearInterval(tick);
+   if(process.argv[3]==='handoff'){
+    const rpc=async(method,params)=>{
+     const response=await fetch(bridgeURL,{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
+     const raw=await response.text();const data=raw.split('\\n').find(line=>line.startsWith('data: '));return JSON.parse(data?data.slice(6):raw);
+    };
+    const tools=await rpc('tools/list',{});const tool=tools.result.tools.find(t=>t.name.startsWith('handoff_to_'));
+    const keeperScript='const parent='+process.pid+';const tick=setInterval(()=>{try{process.kill(parent,0)}catch{clearInterval(tick);setTimeout(()=>process.exit(0),700)}},10);setTimeout(()=>process.exit(0),15000);';
+    const keeper=require('node:child_process').spawn(process.execPath,['-e',keeperScript],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true,detached:true});
+    await new Promise(resolve=>keeper.once('spawn',resolve));
+    fs.writeFileSync(wire+'.mcp',JSON.stringify({name:tool.name,callId:'codex-handoff-1',threadId}));
+    await rpc('tools/call',{name:tool.name,arguments:{},_meta:{callId:'codex-handoff-1',threadId}});return;
+   }
+   if(process.argv[2]==='thread')threadId='foreign_thread';
+   if(process.argv[2]==='turn')turnId='foreign_turn';
+   send({method:'item/completed',params:{threadId,turnId,item:{id:'native_codex_item',type:'agentMessage',text:'offline codex done'}}});
+   send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{total:{inputTokens:7,outputTokens:4,cachedInputTokens:0,cacheWriteInputTokens:0,reasoningOutputTokens:0}}}});
+   send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
+  },5);
+ }
+});`;
+let observedPrompt: unknown;
+let phaseStart: number | undefined;
+function phase(name: string) {
+  if (phaseStart !== undefined) console.info(JSON.stringify({ nativeOriginalHostPhase: name,
+    elapsedMs: Math.round(performance.now() - phaseStart) }));
+}
 
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-original-host-'));
@@ -121,6 +192,9 @@ beforeEach(async () => {
   promptCount = 0; children = []; beforePrompt = undefined; emitHandoff = false; afterHandoffStop = undefined;
   afterPrompt = undefined; transcriptText = 'done';
   lateResultFirst = false; offeredLateUsage = undefined;
+  observedPrompt = undefined;
+  phaseStart = undefined;
+  codexLaunchArguments = []; codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = []; codexOwners = []; codexAfterResponseBarrier = false;
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -133,11 +207,13 @@ beforeEach(async () => {
       args: ['-e', childScript],
       env: options.env, signal: forwarded.signal });
     children.push(child);
+    phase('child spawned');
     const close = () => child.stdin.end();
     options.abortController.signal.addEventListener('abort', close, { once: true });
     const stream = (async function* () {
       await beforePrompt?.();
-      await prompt[Symbol.asyncIterator]().next();
+      observedPrompt = (await prompt[Symbol.asyncIterator]().next()).value;
+      phase('prompt received');
       expect((await ledger()).reservations[0].state).toBe('registered');
       expect(child.exitCode).toBeNull();
       promptCount++;
@@ -178,17 +254,20 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   for (const child of children) child.kill('SIGKILL');
+  for (const registration of codexRegistrations) { registration.requestStop(); await registration.close; }
   stopPersonaGoalRuntime();
   if (previousData === undefined) delete process.env.FLUJO_DATA_DIR; else process.env.FLUJO_DATA_DIR = previousData;
   await fs.rm(directory, { recursive: true, force: true });
 });
 
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
-  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' = false) {
+  after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' | 'child-refusal' | 'no-handoff-refusal' = false,
+  authorityRevoked = false) {
   await runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
+    phase('claim setup started');
     stopPersonaGoalRuntime();
     let roleVersionId: string | undefined;
-    if (production === 'no-handoff') {
+    if (production === 'no-handoff' || production === 'no-handoff-refusal' || production === 'child' || production === 'child-refusal') {
       await ensureTestRole();
       const version = buildTestRoleVersion();
       version.id = 'rolever_native_no_handoff_v2';
@@ -198,11 +277,25 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       const core = version.coreFlowTemplate!;
       core.nodes = core.nodes.filter(node => node.data.type !== 'finish');
       core.edges = core.edges.filter(edge => edge.target !== 'test_core_finish');
+      if (production === 'child' || production === 'child-refusal') {
+        const child = structuredClone(core);
+        child.id = 'native_pinned_child';
+        child.name = 'Pinned native child';
+        child.nodes.find(node => node.data.type === 'process')!.data.properties!.boundModel = 'model-test';
+        expect((await flowService.saveFlow(child)).success).toBe(true);
+        const call = core.nodes.find(node => node.data.type === 'process')!;
+        call.type = 'subflow';
+        call.data.type = 'subflow';
+        call.data.properties = { subflowId: child.id, inputMode: 'isolated', promptTemplate: 'Offline child task' };
+      }
       roleVersionId = (await createRoleVersion(version)).id;
+      phase('role authored');
     }
     const { persona } = await createPersonaFromRole({ name: 'Native host fixture', idempotencyKey: 'native-host-persona', autonomyLevel: 'locked', roleVersionId });
+    phase('persona created');
     const goal = await createPersonaWorkItem({ personaId: persona.id, title: 'Offline host contract',
       goal: { successCriteria: 'Offline lifecycle proof', continuationIntervalMs: 10000 } });
+    phase('goal created');
     const dispatchId = personaFlowDispatchId(persona.id, 'native-host-round');
     await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, rounds: 1, roundsInWindow: 1,
       pendingTaskId: goal.id, pendingDispatchId: dispatchId, pendingAttemptKey: 'native-host-round',
@@ -210,12 +303,19 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
     let observed = false;
     let failure: unknown;
     const dispatcher = new PersonaFlowDispatcher({ dependencies: { runFlow: async input => {
+      phase('dispatcher entered');
       observed = true;
       try {
         await task(input, goal.id);
+        phase('task assertions completed');
         if (production) {
+          phase('production flow started');
           const result = await runFlow(input);
-          expect(result.status).toBe(production === 'handoff-refusal' ? 'error' : 'completed');
+          phase('production flow completed');
+          if (production === 'child' && result.status === 'error') {
+            throw new Error(`Unexpected owned child flow failure: ${JSON.stringify(result.error)}`);
+          }
+          expect(result.status).toBe(production === 'handoff-refusal' || production === 'child-refusal' || production === 'no-handoff-refusal' ? 'error' : 'completed');
           return result;
         }
       } catch (error) { failure = error; }
@@ -226,17 +326,19 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       await dispatcher.submit({ personaId: persona.id, idempotencyKey: 'native-host-round', kind: 'assignment',
         source: { kind: 'assignment', sourceId: goal.id }, flowInput: { source: 'internal', prompt: 'offline fixture', mode: 'conversation', requireApproval: false, onApprovalRequired: 'fail' } },
       { startPump: false });
-      if (production === 'handoff-refusal') {
+      phase('dispatch submitted');
+      if (authorityRevoked || production === 'handoff-refusal' || production === 'no-handoff-refusal') {
         try { await dispatcher.pump(persona.id); }
         catch (error) { expect(error).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' }); }
       } else await dispatcher.pump(persona.id);
+      phase('dispatcher pump completed');
       expect(observed).toBe(true);
       if (failure) {
-        if (production === 'handoff-refusal') expect(failure).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
+        if (production === 'handoff-refusal' || production === 'no-handoff-refusal') expect(failure).toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
         else throw failure;
       }
       await after?.(persona.id, goal.id);
-    } finally { await dispatcher.quiesce(persona.id); }
+    } finally { await dispatcher.quiesce(persona.id); phase('dispatcher quiesced'); }
   });
 }
 
@@ -263,10 +365,16 @@ async function prepare(input: FlowRunInput, observeSession?: (session: NativeInv
   return { host: host!, invoke, node, state };
 }
 async function ledger() {
-  const folder = path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', 'host-ledger');
-  const files = await fs.readdir(folder);
-  return JSON.parse(await fs.readFile(path.join(folder, files.find(file => file.endsWith('.json'))!), 'utf8'));
+  for (const folder of ['host-ledger', 'worker-host-ledger']) {
+    const directory = path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', folder);
+    const files = await fs.readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+    if (files.length === 1) return JSON.parse(await fs.readFile(path.join(directory, files[0]), 'utf8'));
+    if (files.length > 1) throw new Error('Ambiguous fixture Original ledger');
+  }
+  throw new Error('Fixture Original ledger is unavailable');
 }
+
+
 
 /** Deterministic trusted-adapter enrollment records; no cloud Worker, account
  * or live provider is present. Source context, journals and child are real. */
@@ -339,6 +447,7 @@ async function withWorkerClaim(task: (input: {
   });
 }
 
+
 describe('Worker roots from trusted Source execution contexts / offline model edge', () => {
   it('forwards the actual Worker context from its Original broker into MCP dispatch', async () => {
     await withWorkerClaim(async ({ host, context, state }) => {
@@ -410,112 +519,364 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
     });
   }, 30000);
 });
-
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
-  function selectCodex(){selectedModel={...modelFixture,name:'gpt-6-luna',provider:'codex',adapter:'codex-cli',ApiKey:'',reasoningEffort:'medium'};}
-  it('does not recover private Source readers from serialized or caller-owned hosts', () => {
-    for (const value of [{}, { readOrigin: async () => ({}) }, JSON.parse('{"identity":{"pid":1}}')]) {
-      expect(() => nativeOriginalSourceReader(value)).toThrow('held');
-    }
-  });
-  it.each(['codex', 'claude'] as const)('retains the exact %s Original child and rereads durable terminal evidence', async adapter => {
-    if (adapter === 'codex') selectCodex();
-    await withClaim(async input => {
+  function selectCodex() {
+    selectedModel = { ...modelFixture, name: 'gpt-6-luna', provider: 'codex', adapter: 'codex-cli', ApiKey: '', reasoningEffort: 'medium' };
+  }
+  it.each(['goal', 'model', 'model-before-retention'])('refuses a retained live child after %s authority changes', async drift => {
+    await withClaim(async (input, goalId) => {
       let original!: NativeInvocationSession;
-      const prepared = await prepare(input, async value => {
-        original = value;
-        const source = nativeOriginalSourceReader(prepared.host.process);
-        const descriptor = value.descriptor;
-        expect(await source.readOrigin(descriptor.receipt.invocationId)).toEqual(descriptor);
-        expect((await source.readPayload(descriptor.payloadRef)).invocationId).toBe(descriptor.receipt.invocationId);
-        await expect(source.readPayload({ ...descriptor.payloadRef, sha256: '0'.repeat(64) })).rejects.toThrow('held');
-        await expect(source.readOrigin('foreign-original')).rejects.toThrow('held');
-        expect(await source.assertPublishable({ session: value, descriptor,
-          invocationId: descriptor.receipt.invocationId, stage: 'grant', signal: input.executionAuthority!.signal,
-          deadlineAt: Date.now() + 120000, actor: descriptor.lineage })).toBe(true);
-      });
+      const prepared = await prepare(input, async value => { original = value; });
       const source = nativeOriginalSourceReader(prepared.host.process);
-      jest.isolateModules(() => {
-        const isolated = require('@/backend/execution/flow/handlers/nativeOriginalHost') as typeof import('@/backend/execution/flow/handlers/nativeOriginalHost');
-        expect(isolated.nativeOriginalSourceReader(prepared.host.process)).toBe(source);
-        expect(() => isolated.nativeOriginalSourceReader({ ...prepared.host.process })).toThrow('held');
-      });
-      const hostGeneration = Object.freeze({ nonce: 'offline-controller-generation' });
-      let handle!: object;
-      let owner!: Record<string, unknown>;
-      let expected!: Parameters<typeof source.readTerminal>[1];
       afterPrompt = async () => {
         const descriptor = original.descriptor;
-        owner = { invocationId: descriptor.receipt.invocationId, workerId: descriptor.lineage.workerId,
+        const owner = { invocationId: descriptor.receipt.invocationId, workerId: descriptor.lineage.workerId,
           goalId: descriptor.lineage.goalId, fleetRunId: descriptor.lineage.fleetRunId,
           rootConversationId: descriptor.lineage.rootConversationId, workspace: descriptor.lineage.workspace,
           conversationId: descriptor.receipt.owner.conversationId, logicalRunId: descriptor.receipt.owner.runId,
           nodeId: descriptor.receipt.owner.nodeId,
           generation: `source-${nativeDigest([descriptor.lineage.installationId, descriptor.receipt.owner.leaseEpoch])}` };
-        expected = { expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
-          expectedDescriptorDigest: nativeDigest(descriptor), expectedWorkspace: descriptor.lineage.workspace };
-        await expect(source.retainLive(original, { ...owner, workerId: 'foreign-worker' }, hostGeneration)).rejects.toThrow('held');
-        handle = (await source.retainLive(original, owner, hostGeneration)).handle;
-        expect(await source.probeLive(handle, { ...owner }, hostGeneration)).toBe(handle);
-        expect(await source.probeLive(JSON.parse(JSON.stringify(handle)), owner, hostGeneration)).toBeNull();
-        expect(await source.probeLive(handle, { ...owner, nodeId: 'foreign-node' }, hostGeneration)).toBeNull();
-        expect(await source.probeLive(handle, owner, { ...hostGeneration })).toBeNull();
-        await expect(source.retainLive(original, owner, { ...hostGeneration })).rejects.toThrow('held');
-        await expect(source.readTerminal(descriptor.receipt.invocationId, expected)).rejects.toThrow('held');
+        const generation = Object.freeze({ nonce: 'source-revocation-fixture' });
+        if (drift === 'model-before-retention') {
+          selectedModel = { ...selectedModel, maxTurns: 4 };
+          await expect(source.retainLive(original, owner, generation)).rejects.toThrow('held');
+          return;
+        }
+        const { handle } = await source.retainLive(original, owner, generation);
+        expect(await source.probeLive(handle, owner, generation)).toBe(handle);
+        if (drift === 'goal') {
+          const goal = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+          await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'paused' } });
+        } else selectedModel = { ...selectedModel, maxTurns: 4 };
+        expect(await source.probeLive(handle, owner, generation)).toBeNull();
       };
       try {
-        expect((await prepared.invoke()).success).toBe(true);
-        expect(handle).toBeDefined();
-        expect(await source.probeLive(handle, owner, hostGeneration)).toBeNull();
-        expect(await source.readTerminal(original.descriptor.receipt.invocationId, expected))
-          .toMatchObject({ receipt: { state: 'terminal', outcome: 'completed' }, holdAbsent: true,
-            effectsResolved: true, cancelResolved: true });
-        await expect(source.readTerminal(original.descriptor.receipt.invocationId,
-          { ...expected, expectedWorkspace: 'foreign-workspace' })).rejects.toThrow('held');
-      } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
-    });
-  }, 60000);
-  it('keeps a cancelled Codex Original held instead of inferring terminal from process teardown', async () => {
-    selectCodex();
-    await withClaim(async input => {
-      let original!: NativeInvocationSession;
-      const prepared = await prepare(input, async value => { original = value; });
-      const source = nativeOriginalSourceReader(prepared.host.process);
-      afterPrompt = async () => { original.cancel(); };
-      try {
         expect((await prepared.invoke()).success).toBe(false);
-        const descriptor = original.descriptor;
         expect((await ledger()).reservations[0].state).not.toBe('released');
-        await expect(source.readTerminal(descriptor.receipt.invocationId, {
-          expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
-          expectedDescriptorDigest: nativeDigest(descriptor), expectedWorkspace: descriptor.lineage.workspace,
-        })).rejects.toThrow();
       } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
+    }, undefined, false, drift === 'goal');
+  }, 60000);
+  it.each(['pause', 'dispatch-drift'])('refuses actual %s while an additional held Native goal guard is awaiting', async mode => {
+    await withClaim(async (input, goalId) => {
+      const personaId = input.personaAttribution!.personaId;
+      let reached!: () => void;
+      let resume!: () => void;
+      const started = new Promise<void>(resolve => { reached = resolve; });
+      const continuation = new Promise<void>(resolve => { resume = resolve; });
+      const attempt = readWithPersonaFlowAuthority(input.executionAuthority!, assertCurrent => assertCurrent(async () => {
+        const observed = await getPersonaWorkItem(personaId, goalId);
+        expect(observed?.goal?.state).toBe('active');
+        reached();
+        await continuation;
+      }));
+      const refused = expect(attempt).rejects.toMatchObject({ code: 'PERSONA_GOAL_NOT_CURRENT' });
+      await started;
+      try {
+        const goal = (await getPersonaWorkItem(personaId, goalId))!;
+        await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!,
+          ...(mode === 'pause' ? { state: 'paused' as const } : { pendingDispatchId: 'foreign-dispatch' }) } });
+      } finally { resume(); }
+      await refused;
+    }, async () => {
+      expect(children).toHaveLength(0);
+      expect(codexRegistrations).toHaveLength(0);
+    }, 'no-handoff-refusal');
+  }, 30000);
+
+  it('runs a genuine Codex Original through its owned public app-server and releases only after exit and pipe close', async () => {
+    selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
+    const canaries = ['FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_PRIVATE_OWNER_GRANT', 'MCP_SECRET',
+      'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NODE_OPTIONS', 'NODE_PATH'];
+    const previous = canaries.map(name => process.env[name]);
+    for (const name of canaries) process.env[name] = 'offline-private-env-canary';
+    // NODE_OPTIONS is deliberately syntactically valid: it must still be absent in the child.
+    process.env.NODE_OPTIONS = '--no-warnings';
+    try {
+    await withClaim(async () => {
+      afterPrompt = async () => {
+        const replay = createOwnedCodexThread({ host: codexOwners[0], env: { NODE_ENV: 'production' }, config: {},
+          options: { model: selectedModel.name, workingDirectory: directory }, maxTurns: 3 });
+        const attempt = await replay.runStreamed('unauthorized successor', {});
+        await expect(attempt.events.next()).rejects.toThrow('held');
+        expect(codexRegistrations).toHaveLength(1);
+        expect((await ledger()).reservations[0].codexBudget)
+          .toMatchObject({ scope: 'outer-turn', admittedTurns: 1, maxTurns: 3 });
+      };
+    }, async (_personaId, goalId) => {
+      const environment = JSON.parse(await fs.readFile(path.join(directory, 'codex-wire.jsonl.environment'), 'utf8'));
+      expect(environment).toMatchObject({ selectedKey: true, managedHome: true });
+      for (const name of canaries) expect(environment.names).not.toContain(name);
+      expect(queryMock).not.toHaveBeenCalled();
+      expect(codexRegistrations).toHaveLength(1);
+      expect(codexFrames).toEqual(expect.arrayContaining([expect.objectContaining({ method: 'turn/completed' })]));
+      const saved = await ledger();
+      expect(saved.goalId).toBe(goalId);
+      expect(saved.reservations).toHaveLength(1);
+      expect(saved.reservations[0]).toMatchObject({ state: 'released', sdkOutcome: 'completed',
+        sdkUsage: { source: 'codex-app-server-turn', outerTurns: 1, inputTokens: 7, outputTokens: 4 },
+        exit: { code: 0, signal: null } });
+      expect(saved.reservations[0].codexBudget).toMatchObject({ scope: 'outer-turn', admittedTurns: 1, completedTurns: 1, maxTurns: 3 });
+      expect(saved.reservations[0].identity.processBirthMarkerV2).toBeTruthy();
+      expect(await codexExitWitnesses[0]).toMatchObject({ pipeCloseObservedAtExit: false });
+      expect((await codexExitWitnesses[0]).stateAtExit).not.toBe('released');
+      const wire = (await fs.readFile(path.join(directory, 'codex-wire.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(wire.map(message => message.method)).toEqual(['initialize', 'initialized', 'thread/start', 'turn/start']);
+      const args = codexLaunchArguments[0];
+      expect(args).toContain('features.code_mode_host=false');
+      expect(args).toContain('project_root_markers=[]');
+      expect(args.some(value => value.startsWith('projects.') && value.endsWith('.trust_level="untrusted"'))).toBe(true);
+      expect(args.some(value => value.startsWith('forced_login_method='))).toBe(false);
+      const threadConfig = wire.find(message => message.method === 'thread/start').params.config;
+      expect(threadConfig).not.toHaveProperty('forced_login_method');
+      expect(args.some(value => value.startsWith('mcp_servers.'))).toBe(false);
+      if (threadConfig.mcp_servers?.flujo?.url) {
+        expect(args.some(value => value.includes(threadConfig.mcp_servers.flujo.url))).toBe(false);
+      }
+    }, 'no-handoff');
+    } finally { canaries.forEach((name, index) => {
+      if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index];
+    }); }
+  }, 30000);
+  it.each(['before-prompt', 'after-prompt', 'foreign-thread', 'foreign-turn'])(
+    'holds a real Codex Original for %s without accepting transcript, usage or release', async mode => {
+      if (mode === 'after-prompt') { phaseStart = performance.now(); phase('Codex after-prompt control started'); }
+      codexAfterResponseBarrier = mode === 'after-prompt';
+      selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
+      codexForeignScope = mode === 'foreign-thread' ? 'thread' : mode === 'foreign-turn' ? 'turn' : '';
+      const events: string[] = [];
+      const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => events.push(JSON.stringify(event)));
+      try {
+        await withClaim(async (input, goalId) => {
+          const revoke = async () => {
+            expect((await ledger()).reservations[0].state).toBe('registered');
+            const goal = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+            await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'paused' } });
+          };
+          if (mode === 'before-prompt') beforePrompt = revoke;
+          if (mode === 'after-prompt') afterPrompt = revoke;
+        }, async () => {
+          expect(queryMock).not.toHaveBeenCalled();
+          expect(codexRegistrations).toHaveLength(1);
+          const reservation = (await ledger()).reservations[0];
+          expect(reservation.state).not.toBe('released');
+          expect(reservation.sdkUsage).toBeUndefined();
+          expect(events.join('\n')).not.toContain('offline codex done');
+          const saved = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+          expect(JSON.stringify(saved?.messages)).not.toContain('offline codex done');
+          if (mode === 'before-prompt') {
+            await expect(fs.access(path.join(directory, 'codex-wire.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+          } else {
+            expect(codexFrames).toEqual(expect.arrayContaining([expect.objectContaining({ method: 'item/completed',
+              params: expect.objectContaining({ item: expect.objectContaining({ text: 'offline codex done' }) }) })]));
+            const wire = await fs.readFile(path.join(directory, 'codex-wire.jsonl'), 'utf8');
+            expect(wire).toContain('turn/start');
+          }
+        }, 'no-handoff-refusal');
+      } finally { unsubscribe(); }
+    }, 30000);
+  it.each([false, true])('confirms Codex handoff only after owned exit and pipe close (revoke=%s)', async revoked => {
+    selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' };
+    emitHandoff = true;
+    await withClaim(async (input, goalId) => {
+      afterHandoffStop = async () => {
+        expect((await ledger()).reservations[0].handoff.state).toBe('requested');
+        if (revoked) {
+          const goal = (await getPersonaWorkItem(input.personaAttribution!.personaId, goalId))!;
+          await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'paused' } });
+        }
+      };
+    }, async () => {
+      expect(codexRegistrations).toHaveLength(1);
+      const witness = await codexExitWitnesses[0];
+      expect(witness.pipeCloseObservedAtExit).toBe(false);
+      expect(await codexCloseDelays[0]).toBeGreaterThan(400);
+      expect(witness.stateAtExit).not.toBe('released');
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.handoff).toMatchObject({ protocol: 'owned-codex-app-server-exit-close-v1',
+        state: revoked ? 'requested' : 'confirmed', toolInvocationIds: ['codex-handoff-1'] });
+      expect(reservation.state).toBe(revoked ? 'exited' : 'released');
+      if (!revoked) expect(reservation.sdkOutcome).toBe('completed');
+      expect(reservation.sdkUsage).toBeUndefined();
+      const tools = path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal', 'tools', reservation.invocationId);
+      const records = await fs.readdir(tools);
+      expect(records).toHaveLength(1);
+      expect(JSON.parse(await fs.readFile(path.join(tools, records[0]), 'utf8')).state)
+        .toBe(revoked ? 'effect-unknown' : 'terminal');
+      expect(JSON.parse(await fs.readFile(path.join(directory, 'codex-wire.jsonl.mcp'), 'utf8')))
+        .toMatchObject({ callId: 'codex-handoff-1', threadId: 'native_codex_thread' });
+    }, revoked ? 'handoff-refusal' : 'handoff');
+  }, 30000);
+  it.each([false, true])('owns a Codex descendant under the root budget and fences parent drift (drift=%s)', async drift => {
+    phaseStart = performance.now();
+    phase(`Codex descendant test started drift=${drift}`);
+    codexAfterResponseBarrier = drift;
+    selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' };
+    let rootConversation: string | undefined, rootRun: string | undefined;
+    const events: string[] = [];
+    const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => events.push(JSON.stringify(event)));
+    try {
+      await withClaim(async input => {
+        rootConversation = input.conversationId; rootRun = input.runId;
+        if (drift) afterPrompt = async () => {
+          const reservation = (await ledger()).reservations[0];
+          const child = (await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined))!;
+          expect(child.parentLogicalRunId).toBe(rootRun);
+          await saveCollectionItem('conversations', child.conversationId!, { ...child, parentLogicalRunId: 'foreign_codex_parent' });
+        };
+      }, async (_personaId, goalId) => {
+        expect(codexRegistrations).toHaveLength(1);
+        const saved = await ledger(); expect(saved.goalId).toBe(goalId);
+        expect(saved.reservations).toHaveLength(1);
+        const reservation = saved.reservations[0];
+        expect(reservation.owner.conversationId).not.toBe(rootConversation);
+        expect(reservation.owner.runId).not.toBe(rootRun);
+        expect(reservation.codexBudget).toMatchObject({ scope: 'outer-turn', admittedTurns: 1, maxTurns: 3 });
+        const child = (await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined))!;
+        expect(child).toMatchObject({ parentConversationId: rootConversation, rootConversationId: rootConversation,
+          flowId: 'native_pinned_child', runDepth: 1 });
+        if (drift) {
+          expect(reservation.state).not.toBe('released'); expect(reservation.sdkUsage).toBeUndefined();
+          expect(codexFrames).toEqual(expect.arrayContaining([expect.objectContaining({ method: 'item/completed' })]));
+          expect(events.join('\n')).not.toContain('offline codex done');
+          expect(JSON.stringify(child.messages)).not.toContain('offline codex done');
+        } else {
+          expect(child.parentLogicalRunId).toBe(rootRun);
+          expect(reservation).toMatchObject({ state: 'released', sdkOutcome: 'completed',
+            sdkUsage: { source: 'codex-app-server-turn', outerTurns: 1, inputTokens: 7, outputTokens: 4 } });
+        }
+      }, drift ? 'child-refusal' : 'child');
+    } finally { unsubscribe(); }
+  }, 30000);
+  it('admits a real attached child from the pinned root plan under the root goal and releases only after owned exit and close', async () => {
+    let rootConversation: string | undefined;
+    let rootRun: string | undefined;
+    await withClaim(async input => {
+      rootConversation = input.conversationId;
+      rootRun = input.runId;
+      expect(input.flowDefinition!.executionDependencies!.flows.map(entry => entry.flowId)).toContain('native_pinned_child');
+      // A mutable saved child edit cannot revise the already captured round.
+      const changed = structuredClone(input.flowDefinition!.executionDependencies!.flows[0].flowSnapshot);
+      changed.nodes.find(node => node.data.type === 'process')!.data.properties!.promptTemplate = 'MUTABLE_CHILD_REVISION';
+      expect((await flowService.saveFlow(changed)).success).toBe(true);
+    }, async (_personaId, goalId) => {
+      expect(promptCount).toBe(1);
+      expect(JSON.stringify(observedPrompt)).not.toContain('MUTABLE_CHILD_REVISION');
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      expect(children).toHaveLength(1);
+      expect(children[0].exitCode).toBe(0);
+      const saved = await ledger();
+      expect(saved.goalId).toBe(goalId);
+      expect(saved.reservations).toHaveLength(1);
+      const reservation = saved.reservations[0];
+      expect(reservation.owner.conversationId).not.toBe(rootConversation);
+      expect(reservation.owner.runId).not.toBe(rootRun);
+      expect(reservation).toMatchObject({ state: 'released', sdkOutcome: 'completed',
+        sdkUsage: { source: 'claude-sdk-result', inputTokens: 7, outputTokens: 4 }, exit: { code: 0, signal: null } });
+      expect(reservation.identity.processBirthMarkerV2).toBeTruthy();
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      expect(child).toMatchObject({ parentConversationId: rootConversation, parentLogicalRunId: rootRun,
+        rootConversationId: rootConversation, flowId: 'native_pinned_child', runDepth: 1 });
+    }, 'child');
+  }, 30000);
+  it('refuses missing, unlisted, and changed descendant plans before the actual child executes', async () => {
+    phaseStart = performance.now();
+    await withClaim(async input => {
+      const child = input.flowDefinition!.executionDependencies!.flows[0].flowSnapshot;
+      const common = { authority: subflowExecutionAuthority(input.executionAuthority),
+        conversationId: 'unissued_child', runId: 'unissued_child_run',
+        nodeId: 'test_core_process', modelId: 'model-test', flowId: child.id };
+      await expect(createPersonaNativeOriginalHost(common)).rejects.toThrow('held');
+      phase('missing plan refused');
+      await expect(createPersonaNativeOriginalHost({ ...common, flowId: 'unlisted_child', flowSnapshot: child })).rejects.toThrow('held');
+      phase('unlisted plan refused');
+      const changed = structuredClone(child);
+      changed.nodes.find(node => node.data.type === 'process')!.data.properties!.promptTemplate = 'forged plan';
+      await expect(createPersonaNativeOriginalHost({ ...common, flowSnapshot: changed })).rejects.toThrow('held');
+      phase('changed plan refused');
+      expect(queryMock).not.toHaveBeenCalled();
+    }, async () => {
+      expect(promptCount).toBe(1);
+      expect((await ledger()).reservations[0].state).toBe('released');
+    }, 'child');
+  }, 30000);
+  it('holds an issued descendant when its saved lineage changes before the first prompt', async () => {
+    beforePrompt = async () => {
+      const reservation = (await ledger()).reservations[0];
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      expect(child!.parentLogicalRunId).toBeTruthy();
+      await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
+    };
+    await withClaim(async () => {}, async () => {
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      expect(children).toHaveLength(1);
+      expect(promptCount).toBe(0);
+      expect(observedPrompt).toBeUndefined();
+      const reservation = (await ledger()).reservations[0];
+      expect(reservation.state).not.toBe('released');
+      expect(reservation.sdkUsage).toBeUndefined();
+      expect(reservation.sdkOutcome).not.toBe('completed');
+    }, 'child-refusal');
+  }, 30000);
+  it('discards a descendant SDK result and transcript after its saved parent lineage changes', async () => {
+    lateResultFirst = true;
+    transcriptText = 'stale-descendant-private-output';
+    afterPrompt = async () => {
+      const reservation = (await ledger()).reservations[0];
+      const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+      await saveCollectionItem('conversations', child!.conversationId!, { ...child!, parentLogicalRunId: 'foreign_parent_run' });
+    };
+    const observed: unknown[] = [];
+    const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => observed.push(event));
+    try {
+      await withClaim(async () => {}, async () => {
+        expect(promptCount).toBe(1);
+        expect(offeredLateUsage).toMatchObject({ type: 'result', usage: { input_tokens: 7, output_tokens: 4 } });
+        const reservation = (await ledger()).reservations[0];
+        expect(reservation.state).not.toBe('released');
+        expect(reservation.sdkUsage).toBeUndefined();
+        const child = await loadCollectionItem<SharedState | undefined>('conversations', reservation.owner.conversationId, undefined);
+        expect(JSON.stringify(child!.messages)).not.toContain(transcriptText);
+        expect(JSON.stringify(observed)).not.toContain(transcriptText);
+      }, 'child-refusal');
+    } finally { unsubscribe(); }
+  }, 30000);
+  it('refuses a ledger parent replaced after the last awaited temporary check and preserves the foreign directory', async () => {
+    await withClaim(async input => {
+      const { invoke, state } = await prepare(input);
+      const lstat = fs.lstat.bind(fs);
+      let replaced: string | undefined;
+      let osRefusal: string | undefined;
+      const spy = jest.spyOn(fs, 'lstat').mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+        const stat = await lstat(...args);
+        const filename = String(args[0]);
+        if (!replaced && filename.includes('host-ledger') && filename.endsWith('.tmp')) {
+          replaced = path.dirname(filename);
+          try { await fs.rename(replaced, `${replaced}.displaced`); }
+          catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (process.platform === 'win32' && ['EBUSY', 'EPERM', 'EACCES'].includes(code ?? '')) osRefusal = code;
+            throw error;
+          }
+          await fs.mkdir(replaced, { mode: 0o700 });
+          await fs.writeFile(path.join(replaced, 'foreign.json'), 'foreign sentinel', { mode: 0o600 });
+        }
+        return stat;
+      });
+      try {
+        expect((await invoke()).success).toBe(false);
+        expect(replaced).toBeDefined();
+        expect(queryMock).not.toHaveBeenCalled();
+        if (osRefusal) {
+          expect(process.platform).toBe('win32');
+          expect(['EBUSY', 'EPERM', 'EACCES']).toContain(osRefusal);
+          expect(await fs.readdir(replaced!)).toEqual([]);
+        } else {
+          expect(await fs.readFile(path.join(replaced!, 'foreign.json'), 'utf8')).toBe('foreign sentinel');
+          expect(await fs.readdir(replaced!)).toEqual(['foreign.json']);
+        }
+      } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
   }, 30000);
-  it('runs a Codex Core through its saved Original, owned app-server child, actual usage and terminal release',async()=>{
-    selectCodex();await withClaim(async()=>{},async()=>{
-      expect(promptCount).toBe(1);const reservation=(await ledger()).reservations[0];
-      expect(reservation).toMatchObject({state:'released',sdkOutcome:'completed',exit:{code:0,signal:null},
-        sdkUsage:{source:'codex-app-server-usage',appServerTurns:1,inputTokens:7,outputTokens:4,cacheReadTokens:2}});
-      expect(reservation.sdkUsage.totalCostUsd).toBeUndefined();expect(reservation.identity.processBirthMarkerV2).toBeDefined();
-      expect(reservation.sdkUsage.cacheCreationTokens).toBeUndefined();
-    },'no-handoff');
-  },30000);
-  it('confirms Codex routing only after the Original child exits and its inherited output pipe closes',async()=>{
-    selectCodex();emitHandoff=true;await withClaim(async()=>{},async()=>{
-      expect(promptCount).toBe(1);expect((await ledger()).reservations[0]).toMatchObject({state:'released',sdkOutcome:'completed',
-        handoff:{protocol:'owned-codex-app-server-exit-close-v1',state:'confirmed',toolInvocationIds:['offline-code-call-1']}});
-    },'handoff');
-  },30000);
-  it('holds a Codex Original and rejects late provider output after its genuine Persona goal pauses',async()=>{
-    selectCodex();await withClaim(async(input,goalId)=>{
-      afterPrompt=async()=>{const goal=(await getPersonaWorkItem(input.personaAttribution!.personaId,goalId))!;
-        await savePersonaWorkItem({...goal,goal:{...goal.goal!,state:'paused'}});};
-    },async()=>{const reservation=(await ledger()).reservations[0];expect(promptCount).toBe(1);
-      expect(reservation.state).not.toBe('released');expect(reservation.sdkUsage).toBeUndefined();
-    },'handoff-refusal');
-  },30000);
   it('discards late SDK transcript and usage after a genuine Persona goal loses authority', async () => {
     transcriptText = 'late-private-persona-transcript';
     lateResultFirst = true;
@@ -624,6 +985,89 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     }, 'handoff-refusal');
   }, 30000);
 
+
+  it('does not recover private Source readers from serialized or caller-owned hosts', () => {
+    for (const value of [{}, { readOrigin: async () => ({}) }, JSON.parse('{"identity":{"pid":1}}')]) {
+      expect(() => nativeOriginalSourceReader(value)).toThrow('held');
+    }
+  });
+
+  it.each(['codex', 'claude'] as const)('retains the exact %s Original child and rereads durable terminal evidence', async adapter => {
+    if (adapter === 'codex') selectCodex();
+    await withClaim(async input => {
+      let original!: NativeInvocationSession;
+      const prepared = await prepare(input, async value => {
+        original = value;
+        const source = nativeOriginalSourceReader(prepared.host.process);
+        const descriptor = value.descriptor;
+        expect(await source.readOrigin(descriptor.receipt.invocationId)).toEqual(descriptor);
+        expect((await source.readPayload(descriptor.payloadRef)).invocationId).toBe(descriptor.receipt.invocationId);
+        await expect(source.readPayload({ ...descriptor.payloadRef, sha256: '0'.repeat(64) })).rejects.toThrow('held');
+        await expect(source.readOrigin('foreign-original')).rejects.toThrow('held');
+        expect(await source.assertPublishable({ session: value, descriptor,
+          invocationId: descriptor.receipt.invocationId, stage: 'grant', signal: input.executionAuthority!.signal,
+          deadlineAt: Date.now() + 120000, actor: descriptor.lineage })).toBe(true);
+      });
+      const source = nativeOriginalSourceReader(prepared.host.process);
+      jest.isolateModules(() => {
+        const isolated = require('@/backend/execution/flow/handlers/nativeOriginalHost') as typeof import('@/backend/execution/flow/handlers/nativeOriginalHost');
+        expect(isolated.nativeOriginalSourceReader(prepared.host.process)).toBe(source);
+        expect(() => isolated.nativeOriginalSourceReader({ ...prepared.host.process })).toThrow('held');
+      });
+      const hostGeneration = Object.freeze({ nonce: 'offline-controller-generation' });
+      let handle!: object;
+      let owner!: Record<string, unknown>;
+      let expected!: Parameters<typeof source.readTerminal>[1];
+      afterPrompt = async () => {
+        const descriptor = original.descriptor;
+        owner = { invocationId: descriptor.receipt.invocationId, workerId: descriptor.lineage.workerId,
+          goalId: descriptor.lineage.goalId, fleetRunId: descriptor.lineage.fleetRunId,
+          rootConversationId: descriptor.lineage.rootConversationId, workspace: descriptor.lineage.workspace,
+          conversationId: descriptor.receipt.owner.conversationId, logicalRunId: descriptor.receipt.owner.runId,
+          nodeId: descriptor.receipt.owner.nodeId,
+          generation: `source-${nativeDigest([descriptor.lineage.installationId, descriptor.receipt.owner.leaseEpoch])}` };
+        expected = { expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
+          expectedDescriptorDigest: nativeDigest(descriptor), expectedWorkspace: descriptor.lineage.workspace };
+        await expect(source.retainLive(original, { ...owner, workerId: 'foreign-worker' }, hostGeneration)).rejects.toThrow('held');
+        handle = (await source.retainLive(original, owner, hostGeneration)).handle;
+        expect(await source.probeLive(handle, { ...owner }, hostGeneration)).toBe(handle);
+        expect(await source.probeLive(JSON.parse(JSON.stringify(handle)), owner, hostGeneration)).toBeNull();
+        expect(await source.probeLive(handle, { ...owner, nodeId: 'foreign-node' }, hostGeneration)).toBeNull();
+        expect(await source.probeLive(handle, owner, { ...hostGeneration })).toBeNull();
+        await expect(source.retainLive(original, owner, { ...hostGeneration })).rejects.toThrow('held');
+        await expect(source.readTerminal(descriptor.receipt.invocationId, expected)).rejects.toThrow('held');
+      };
+      try {
+        expect((await prepared.invoke()).success).toBe(true);
+        expect(handle).toBeDefined();
+        expect(await source.probeLive(handle, owner, hostGeneration)).toBeNull();
+        expect(await source.readTerminal(original.descriptor.receipt.invocationId, expected))
+          .toMatchObject({ receipt: { state: 'terminal', outcome: 'completed' }, holdAbsent: true,
+            effectsResolved: true, cancelResolved: true });
+        await expect(source.readTerminal(original.descriptor.receipt.invocationId,
+          { ...expected, expectedWorkspace: 'foreign-workspace' })).rejects.toThrow('held');
+      } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
+    });
+  }, 60000);
+
+  it('keeps a cancelled Codex Original held instead of inferring terminal from process teardown', async () => {
+    selectCodex();
+    await withClaim(async input => {
+      let original!: NativeInvocationSession;
+      const prepared = await prepare(input, async value => { original = value; });
+      const source = nativeOriginalSourceReader(prepared.host.process);
+      afterPrompt = async () => { original.cancel(); };
+      try {
+        expect((await prepared.invoke()).success).toBe(false);
+        const descriptor = original.descriptor;
+        expect((await ledger()).reservations[0].state).not.toBe('released');
+        await expect(source.readTerminal(descriptor.receipt.invocationId, {
+          expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
+          expectedDescriptorDigest: nativeDigest(descriptor), expectedWorkspace: descriptor.lineage.workspace,
+        })).rejects.toThrow();
+      } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
+    });
+  }, 30000);
   it('durably binds acceptance and bounded turn reservation; waits for actual exit/close before release', async () => {
     await withClaim(async input => {
       const { host, invoke, state } = await prepare(input);
@@ -686,16 +1130,15 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     });
   }, 30000);
 
-  it('holds unqualified Codex credentials and rejects changed model budget before launch', async () => {
+  it.each(['claude-cli', 'codex-cli'] as const)('rejects changed %s model budget before child launch', async adapter => {
+    selectedModel = { ...modelFixture, adapter, ...(adapter === 'codex-cli' ? { provider: 'codex' } : {}) };
     await withClaim(async input => {
-      const { invoke, node, state } = await prepare(input);
+      const { invoke, state } = await prepare(input);
       try {
-        selectedModel = { ...selectedModel, adapter: 'codex-cli' };
-        await expect(createPersonaNativeOriginalHost({ authority: input.executionAuthority, conversationId: input.conversationId,
-          runId: input.runId, nodeId: node.id, modelId: 'model-test' })).rejects.toThrow('held');
-        selectedModel = { ...modelFixture, maxTurns: 4 };
+        selectedModel = { ...selectedModel, maxTurns: 4 };
         expect((await invoke()).success).toBe(false);
         expect(queryMock).not.toHaveBeenCalled();
+        expect(codexRegistrations).toHaveLength(0);
         expect((await ledger()).reservations[0].state).toBe('accepted');
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });

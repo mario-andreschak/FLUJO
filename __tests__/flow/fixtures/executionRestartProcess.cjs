@@ -75,6 +75,19 @@ require.extensions['.ts'] = (module, filename) => {
   } }).outputText;
   module._compile(output, filename);
 };
+(async () => {
+// Source transpilation emits require. Retain the real public Tasks namespaces
+// through native imports, while preserving the existing catalogue seam.
+const nativeTasks = new Map(await Promise.all([
+  '@modelcontextprotocol/ext-tasks/core',
+  '@modelcontextprotocol/ext-tasks/core/v2',
+  '@modelcontextprotocol/ext-tasks/client',
+].map(async name => [name, await import(name)])));
+const catalogueLoad = Module._load;
+Module._load = function loadNativeTasks(request, parent, isMain) {
+  return nativeTasks.has(request) ? nativeTasks.get(request) : catalogueLoad.call(this, request, parent, isMain);
+};
+
 const fromSource = file => require(path.join(repository, 'src', file));
 const journal = fromSource('backend/execution/flow/conversationLog.ts');
 const persistence = fromSource('backend/execution/flow/persistConversationState.ts');
@@ -114,7 +127,6 @@ const { loadItem } = fromSource('utils/storage/backend.ts');
 const { mcpService } = fromSource('backend/services/mcp/index.ts');
 const input = { conversationId, flowDefinition: definition, source: 'api', mode: 'conversation',
   executionAuthority: { signal: new AbortController().signal, assertCurrent: async () => record('authority:current') } };
-(async () => {
   if (phase === 'pause') {
     const initial = await runFlow({ ...input, prompt: 'Test restart ordering.', debug: true, userTurn: true });
     assert.equal(initial.status, 'paused_debug');

@@ -108,7 +108,7 @@ export default function MeetingControlRail({ meeting, onPrivateNote, onSteer, on
           bgcolor: alpha(theme.palette.primary.main, 0.025),
         }}
       >
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'flex-end' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'flex-end' } }}>
           <TextField
             fullWidth
             multiline
@@ -118,9 +118,9 @@ export default function MeetingControlRail({ meeting, onPrivateNote, onSteer, on
             onChange={(event) => setMessage(event.target.value)}
             label={terminal ? steerLabel : t('meetings.control.composer')}
             placeholder={t(terminal ? 'meetings.control.continuePlaceholder' : 'meetings.control.placeholder')}
-            inputProps={{ maxLength: 12_000 }}
+            slotProps={{ htmlInput: { maxLength: 12_000 } }}
           />
-          <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+          <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
             <Tooltip title={t('meetings.control.privateNote')}>
               <span>
                 <IconButton color="secondary" disabled={!message.trim() || Boolean(busyAction)} onClick={() => void submit('note')} aria-label={t('meetings.control.privateNote')}>
@@ -170,7 +170,7 @@ export default function MeetingControlRail({ meeting, onPrivateNote, onSteer, on
               label={t('meetings.control.proposal')}
               value={proposal}
               onChange={(event) => setProposal(event.target.value)}
-              inputProps={{ maxLength: 500 }}
+              slotProps={{ htmlInput: { maxLength: 500 } }}
             />
             <Box sx={{ height: 210 }}>
               <Typography variant="subtitle2" sx={{ mb: 0.7 }}>{t('meetings.control.rationale')}</Typography>

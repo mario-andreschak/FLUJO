@@ -2,6 +2,11 @@ const runFlowMock = jest.fn(async (..._args: any[]): Promise<any> => undefined);
 const persistConversationStateMock = jest.fn(async (..._args: unknown[]) => undefined);
 const listCollectionItemsMock = jest.fn(async (..._args: unknown[]) => []);
 const loadCollectionItemMock = jest.fn(async (..._args: unknown[]) => undefined);
+const listConversationSummariesMock = jest.fn(async (..._args: unknown[]): Promise<any[]> => []);
+
+jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({
+  listConversationSummaries: (...args: unknown[]) => listConversationSummariesMock(...args),
+}));
 
 jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: (...args: unknown[]) => runFlowMock(...args),
@@ -12,6 +17,7 @@ jest.mock('@/backend/execution/flow/persistConversationState', () => ({
 jest.mock('@/utils/storage/backend', () => ({
   listCollectionItems: (...args: unknown[]) => listCollectionItemsMock(...args),
   loadCollectionItem: (...args: unknown[]) => loadCollectionItemMock(...args),
+  withConversationSnapshot: async (id: string, consume: (state: unknown) => Promise<unknown>) => consume(await loadCollectionItemMock('conversations', id, undefined)),
 }));
 
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -46,6 +52,30 @@ describe('subflow recovery coordinator', () => {
     persistConversationStateMock.mockClear();
     listCollectionItemsMock.mockClear();
     loadCollectionItemMock.mockClear();
+    listConversationSummariesMock.mockReset().mockResolvedValue([]);
+  });
+
+  it('does not hydrate unrelated histories when an ordinary failed chat opens recovery', async () => {
+    FlowExecutor.conversationStates.set('ordinary', {
+      conversationId: 'ordinary', status: 'error', messages: [],
+    } as unknown as SharedState);
+    listConversationSummariesMock.mockResolvedValue([
+      { id: 'unrelated-root', status: 'error' },
+      { id: 'unrelated-child', parentConversationId: 'unrelated-root', rootConversationId: 'unrelated-root', status: 'error' },
+    ]);
+    await expect(getSubflowRecoveryOptions('ordinary')).resolves.toMatchObject({
+      hasRecoverableFamily: false, canRetryBranch: true, deepestFailedCount: 1,
+    });
+    expect(listCollectionItemsMock).not.toHaveBeenCalled();
+    expect(loadCollectionItemMock).not.toHaveBeenCalled();
+  });
+
+  it('stops an obsolete recovery read before hydrating conversation state', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('View changed'));
+    await expect(getSubflowRecoveryOptions('ordinary', controller.signal)).rejects.toThrow('View changed');
+    expect(loadCollectionItemMock).not.toHaveBeenCalled();
+    expect(listConversationSummariesMock).not.toHaveBeenCalled();
   });
 
   it('records a recovered child result and resumes its parked parent exactly once', async () => {

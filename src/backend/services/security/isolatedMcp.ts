@@ -160,7 +160,10 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
     if (volumes !== null && (typeof volumes !== 'object' || Array.isArray(volumes) || Object.keys(volumes).length !== 0)) {
       throw new McpIsolationError('ISOLATION_POLICY_INVALID');
     }
-    const args = ['container', 'create', '--interactive', '--pull=never',
+    // Keep the managed MCP server out of PID 1: Docker's init adopts and reaps
+    // exited grandchildren while the server continues serving tool requests.
+    // Mandatory lifecycle plumbing, never a configurable isolation capability.
+    const args = ['container', 'create', '--interactive', '--init', '--pull=never',
       '--name', name, '--label', `co.flujo.mcp-generation=${generation}`,
       '--read-only', '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges:true',
       '--user=65534:65534', '--no-healthcheck', '--memory', `${policy.memoryMiB}m`,

@@ -81,7 +81,7 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
   const containerBytes = readFileSync(new URL(manifest.containerBase.metadataFile, root));
   assert.equal(sha(containerBytes), manifest.containerBase.metadataSha256);
   const metadata = JSON.parse(containerBytes.toString().replace(/^\uFEFF/, ''));
-  assert.equal(manifest.containerBase.reference, `node:${metadata.name}@${metadata.digest}`);
+  assert.equal(manifest.containerBase.reference, `public.ecr.aws/docker/library/node:${metadata.name}@${metadata.digest}`);
   assert.deepEqual(Object.keys(manifest.runtimes), Object.values(CI_NODE_PROFILES));
   const packet = new URL('./', new URL(manifest.evidence, root));
   for (const item of receipt.inventory.filter((item) => !item.file.endsWith('.tar.gz'))) {

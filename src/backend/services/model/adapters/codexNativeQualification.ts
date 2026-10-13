@@ -9,7 +9,8 @@ import { userCodexHome } from './codexAuth';
 import { assertRestrictedCodexProfile, bundledCodexExecutable, prepareRestrictedCodexRuntimeEnvironment,
   RESTRICTED_CODEX_CONFIG, type RestrictedCodexProfile } from './codexRestrictedProfile';
 import { startCodexToolBridge } from './codexToolBridge';
-import { createOwnedCodexThread } from './codexOwnedThread';
+import { createQualificationCodexThread } from './codexQualificationThread';
+import { NATIVE_CODEX_STARTUP_POLICY_VERSION } from './codexNativeStartup';
 import { qualifyCodexNativeInventory } from './codexNativeInventory';
 import { assertCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from './codexAppServerProcess';
 
@@ -26,9 +27,10 @@ export function assertNativeCodexQualification(value:unknown): asserts value is 
  * process-local capability. JSON receipts cannot enable a native Original.
  */
 export async function qualifyNativeCodex(model:string,effort:string|undefined,signal:AbortSignal,
-  assertCurrent:()=>Promise<void>,options:{catalogPath?:string}={}):Promise<Readonly<RestrictedCodexProfile>> {
+  assertCurrent:()=>Promise<void>,options:{catalogPath?:string;executable?:string}={}):Promise<Readonly<RestrictedCodexProfile>> {
   signal.throwIfAborted();await assertCurrent();
-  const binary=bundledCodexExecutable();
+  const binary=options.executable??bundledCodexExecutable();
+  if(!path.isAbsolute(binary))throw new Error('Native Codex qualification requires an absolute executable.');
   const binaryDigest=fingerprintTrustedHostExecutable(binary);
   const source=JSON.parse((await readStableFile(options.catalogPath??path.join(userCodexHome(),'models_cache.json'),16*1024*1024,{allowSymbolicLink:true})).toString('utf8'));
   if(!Array.isArray(source.models))throw new Error('Native Codex requires a local model catalogue.');
@@ -49,20 +51,22 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
     verifiedModelCatalogPath:catalogPath,verifiedModelCatalogSha256:digest});
   await assertRestrictedCodexProfile(profile,model);
   await assertCurrent();signal.throwIfAborted();
-  const policyDigest=createHash('sha256').update(JSON.stringify([RESTRICTED_CODEX_CONFIG,'owned-codex-app-server-exit-close-v1'])).digest('hex');
+  const policyDigest=createHash('sha256').update(JSON.stringify([RESTRICTED_CODEX_CONFIG,
+    NATIVE_CODEX_STARTUP_POLICY_VERSION,'owned-codex-app-server-exit-close-v1'])).digest('hex');
   const key=JSON.stringify([directory,model,effort,binaryDigest,digest,policyDigest]);
   const previous=cache.get(key);
   if(previous){assertNativeCodexQualification(previous);return previous;}
   const runtime=await prepareRestrictedCodexRuntimeEnvironment(profile);
   let bridge:Awaited<ReturnType<typeof startCodexToolBridge>>|undefined;
-  let thread:ReturnType<typeof createOwnedCodexThread>|undefined;
-  let denialThread:ReturnType<typeof createOwnedCodexThread>|undefined;
+  let thread:ReturnType<typeof createQualificationCodexThread>|undefined;
+  let denialThread:ReturnType<typeof createQualificationCodexThread>|undefined;
   let calls=0,callbackId:string|undefined,answer='';
   let observedUsage:unknown, registration:CodexOwnedProcessRegistration|undefined;
   const owner={};const startedAt=new Date().toISOString();
   const nonce=randomBytes(16).toString('hex');
   const timeout=new AbortController();const timer=setTimeout(()=>timeout.abort(),90000);
   const combined=AbortSignal.any([signal,timeout.signal]);
+  let primaryFailure: unknown;
   try {
     const effectiveInventory=await qualifyCodexNativeInventory({executable:binary,catalogPath:runtime.modelCatalogPath!,model,
       signal:combined,assertCurrent});
@@ -71,7 +75,7 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
       handler:async(args,id)=>{combined.throwIfAborted();await assertCurrent();
         if(args.nonce!==nonce || !id || calls)throw new Error('Native Codex qualification callback mismatch.');
         calls++;callbackId=id;return {content:[{type:'text',text:nonce}]};}}],undefined,true);
-    thread=createOwnedCodexThread({executable:binary,env:runtime.env as NodeJS.ProcessEnv,cwd:runtime.workingDirectory,
+    thread=createQualificationCodexThread({executable:binary,env:runtime.env as NodeJS.ProcessEnv,cwd:runtime.workingDirectory,
       owner,model,effort,signal:combined,register:async process=>{assertCodexOwnedProcessRegistration(process,owner);
         registration=process;await assertCurrent();combined.throwIfAborted();},
       beforePrompt:async threadId=>{bridge!.bindNativeThread(threadId);await assertCurrent();combined.throwIfAborted();},
@@ -93,7 +97,7 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
     const denialOwner={};let denialRegistration:CodexOwnedProcessRegistration|undefined;
     let denialAnswer='',denialCompleted=false,denialUsage:unknown;
     const sentinel=path.join(runtime.workingDirectory,'qualification-'+nonce+'.txt');
-    denialThread=createOwnedCodexThread({executable:binary,env:runtime.env as NodeJS.ProcessEnv,cwd:runtime.workingDirectory,
+    denialThread=createQualificationCodexThread({executable:binary,env:runtime.env as NodeJS.ProcessEnv,cwd:runtime.workingDirectory,
       owner:denialOwner,model,effort,signal:combined,register:async process=>{
         assertCodexOwnedProcessRegistration(process,denialOwner);denialRegistration=process;await assertCurrent();combined.throwIfAborted();},
       beforePrompt:async()=>{await assertCurrent();combined.throwIfAborted();},
@@ -139,7 +143,19 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
     }),guard);
     profiles.add(profile);if(cache.size>=64)cache.delete(cache.keys().next().value!);cache.set(key,profile);
     return profile;
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
   } finally {
-    clearTimeout(timer);await thread?.close();await denialThread?.close();await bridge?.close();await runtime.cleanup();
+    clearTimeout(timer);
+    const closures = await Promise.allSettled([thread?.close(), denialThread?.close()]);
+    const failures = closures.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);
+    try { await bridge?.close(); } catch (error) { failures.push(error); }
+    // Keep the private runtime when actual child closure is uncertain.
+    if (closures.every(result => result.status === 'fulfilled')) {
+      try { await runtime.cleanup(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(primaryFailure === undefined ? failures : [primaryFailure, ...failures],
+      'Codex qualification cleanup could not be confirmed.');
   }
 }

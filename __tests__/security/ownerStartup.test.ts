@@ -42,7 +42,7 @@ test.each(['network', 'public'])('refuses unauthenticated %s startup before layo
   process.env.FLUJO_EXPOSURE_MODE = mode;
   await expect(initializeNodeRuntime()).rejects.toThrow('Restart with FLUJO_EXPOSURE_MODE=localhost');
   expect(mockLayout).not.toHaveBeenCalled();
-  const response = proxy(new NextRequest('http://localhost:4200/v1/models', { headers: { host: 'localhost:4200' } }));
+  const response = (await proxy(new NextRequest('http://localhost:4200/v1/models', { headers: { host: 'localhost:4200' } })));
   expect(response.status).toBe(503);
 });
 test.each(['network', 'public'])('admits %s with an active scoped policy at startup', mode => {

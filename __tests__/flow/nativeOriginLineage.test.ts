@@ -11,6 +11,7 @@ import { _setNativeToolJournalRootForTests, prepareNativeInvocation } from '@/ba
 import {
   createNativeLineageRootBinding, readNativeOriginLineage, NativeLineageHeldError,
 } from '@/backend/execution/flow/handlers/nativeOriginLineage';
+import { readWithNativeHeldLineageFallback } from '@/backend/execution/flow/handlers/nativeHeldLineageRead';
 
 const rootId = 'lead-root';
 const rootRun = 'lead-logical-run';
@@ -74,6 +75,27 @@ afterEach(async () => {
 });
 
 describe('saved native origin lineage', () => {
+  it('keeps unknown issuers on the actual original reader and retains its live guards', async () => {
+    let revoked = false;
+    const assertCurrent = jest.fn(async () => { if (revoked) throw new Error('original guard revoked'); });
+    const unknown = Object.freeze({ signal, assertCurrent });
+    FlowExecutor.conversationStates.set(rootId, { ...rootState(), executionAuthority: unknown });
+    const receipt = await receiptFor(rootId, rootRun, 'lead-process');
+    const held = jest.fn(async () => { throw new Error('unknown issuer must never enter held callback'); });
+    const original = jest.fn(() => readNativeOriginLineage({ receipt,
+      authority: authority(), root: rootBinding(), signal }));
+    const read = () => readWithNativeHeldLineageFallback(unknown, rootId, rootId, held, original);
+    await expect(read()).resolves.toMatchObject({ rootConversationId: rootId, edges: [] });
+    expect(held).not.toHaveBeenCalled();
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    revoked = true;
+    await expect(read()).rejects.toBeInstanceOf(NativeLineageHeldError);
+    expect(original).toHaveBeenCalledTimes(2);
+    expect(held).not.toHaveBeenCalled();
+    expect(assertCurrent).toHaveBeenCalledTimes(3);
+  });
+
   it('binds the actual root invocation and four distinct detached child origins to one selected root', async () => {
     const root = rootState();
     const binding = rootBinding();

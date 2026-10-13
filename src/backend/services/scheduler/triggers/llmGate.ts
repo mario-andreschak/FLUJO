@@ -123,12 +123,14 @@ async function askModel(modelId: string, task: string): Promise<string> {
   const { modelService } = await import('@/backend/services/model');
   const { getCompletionAdapter } = await import('@/backend/services/model/adapters');
   const { normalizeMaxTokens } = await import('@/shared/types/model');
+  const { resolveModelAdapter, supportsLocalModelAuth } = await import('@/shared/types/model/provider');
 
   const model = await modelService.getModel(modelId);
   if (!model) {
     throw new Error(`config: The AI-check model no longer exists (${modelId})`);
   }
-  const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey) ?? (model.fallbackPolicy ? '' : null);
+  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) {
     throw new Error('config: Could not resolve the AI-check model API key');
   }

@@ -12,6 +12,7 @@ jest.mock('fs', () => ({ promises: {
 jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn() }));
 jest.mock('@/utils/readStableFile', () => ({ readStableFile: jest.fn() }));
 jest.mock('@/utils/workspace', () => ({ getWorkspaceDataDir: () => jest.requireActual('path').resolve('fixture-workspace') }));
+jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({ readOrdinaryCodexVersion: jest.fn(async () => '0.153.3') }));
 const warnMock = jest.fn();
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ warn: (...args: unknown[]) => warnMock(...args) }) }));
 
@@ -19,7 +20,7 @@ const homedirMock = os.homedir as jest.MockedFunction<typeof os.homedir>;
 const loadItemMock = loadItem as jest.MockedFunction<typeof loadItem>;
 const readMock = readStableFile as jest.MockedFunction<typeof readStableFile>;
 const mockFs = fs as unknown as Record<'mkdir' | 'mkdtemp' | 'chmod' | 'writeFile' | 'rm', jest.Mock>;
-const compatibleCatalog = Buffer.from(' {"client_version":"0.157.1","models":[{"slug":"gpt-5","model_messages":{}}]}\n');
+const compatibleCatalog = Buffer.from(' {"client_version":"0.153.0","models":[{"slug":"gpt-5","model_messages":{}}]}\n');
 const parent = path.resolve('fixture-workspace', 'db');
 const directory = path.join(parent, 'codex-model-catalog-fixture');
 const snapshotPath = path.join(directory, 'models_cache.json');

@@ -73,6 +73,15 @@ beneath the private origin directory; existing Persona V1 paths and locks remain
 unchanged. Qualification, saved dispatch, actual born process registration,
 exit/close and terminal reconciliation use the same Original lifecycle.
 
-This contract does not implement the adapter's Controller authentication or
-Worker transport. Root admission cannot relabel a child conversation; child
-Original lineage and the deployed gateway/image still require integration.
+The optional Controller adapter implements admission through a privately
+authenticated requester. Its transport must independently resolve the current
+run, installed plan and parent lane, and fence mutations under the actual parent
+authority. It can admit exactly one installed attached child with its own opaque
+context and logical run. Source rereads that child's saved immediate-parent
+lineage before output; caller-selected, detached and additional children remain
+refused.
+
+Product Source has no configured Controller transport. These internal contracts
+do not establish deployed fleet, remote Worker tools, image eligibility or a live
+UI swarm. Those journeys require qualification of the actual owner, gateway,
+image and provider route.

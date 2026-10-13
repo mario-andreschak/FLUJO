@@ -107,8 +107,9 @@ function gitDirFor(root: string): string {
  * `--git-dir` / `--work-tree` prefix is applied per-call via raw().
  */
 function clientFor(root: string): SimpleGit {
-  // gitArgs supplies the store-owned gitdir and validated confinement root.
-  // Other command/configuration guards retain their defaults.
+  // Every raw call below prefixes the computed shadow gitdir and the
+  // confinement root. v4 blocks these Git path switches unless this client
+  // explicitly permits them; do not use this option for general Git clients.
   return simpleGit({ baseDir: path.resolve(root), unsafe: { allowUnsafeConfigPaths: true } });
 }
 

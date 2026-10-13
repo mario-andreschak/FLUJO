@@ -33,6 +33,15 @@ function input(args?: Record<string, unknown>): CreateRemoteTaskInput {
     ownership: { conversationId: 'public-conversation' }, status: 'working', pollIntervalMs: 1000 };
 }
 
+it('persists immutable protocol generation and leaves historical missing generation legacy', async () => {
+  const modern = (await createRemoteTaskRecord({ ...input(), generation: '2026-07-28' }))!;
+  const forged = await patchRemoteTaskRecord(modern.recordId, { generation: '2025-11-25' } as unknown as RemoteTaskPatch);
+  expect(forged?.generation).toBe('2026-07-28');
+  const legacy = (await createRemoteTaskRecord(input()))!;
+  const patched = await patchRemoteTaskRecord(legacy.recordId, { generation: '2026-07-28', pollCount: 1 } as unknown as RemoteTaskPatch);
+  expect(patched?.generation).toBeUndefined();
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   records.clear();
@@ -83,12 +92,13 @@ it('does not traverse a cyclic or hostile argument object while persisting task 
 it('keeps new tags immutable through polling patches and reloaded records', async () => {
   const created = (await createRemoteTaskRecord(input({ password: 'synthetic-new-secret' })))!;
   const patched = await patchRemoteTaskRecord(created.recordId, {
-    status: 'working', pollCount: 1, requestFingerprint: 'forged-request', serverIdentity: 'forged-server',
+    status: 'working', pollCount: 1, requestFingerprint: 'forged-request', serverIdentity: 'forged-server', generation: '2026-07-28',
   } as unknown as RemoteTaskPatch);
   const reloaded = await getRemoteTaskRecord(created.recordId);
   expect(patched?.requestFingerprint).toBe(created.requestFingerprint);
   expect(reloaded?.requestFingerprint).toBe(created.requestFingerprint);
   expect(reloaded?.serverIdentity).toBe(created.serverIdentity);
+  expect(reloaded?.generation).toBe(created.generation);
   expect(reloaded?.pollCount).toBe(1);
 });
 

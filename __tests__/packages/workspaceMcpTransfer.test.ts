@@ -351,6 +351,7 @@ it('pins an unchanged workspace package and rejects source edits instead of sile
   const plan = buildWorkspaceMcpTransferPlan([config], mockWorkspace);
   const pinned = await pinWorkspaceMcpTransferPlan(plan);
   expect(pinned.servers[0].bundledRuntimeSha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(pinned.servers[0].bundledPortableRuntimeSha256).toMatch(/^[a-f0-9]{64}$/);
   await fs.writeFile(path.join(mockWorkspace, 'mcp-servers/filesystem/local-customization.ts'), '// custom source');
   await expect(pinWorkspaceMcpTransferPlan(plan)).rejects.toThrow('local changes');
 });
@@ -359,7 +360,7 @@ it('refuses to replace a pinned workspace runtime with a different worker build'
   await ensureShippedWorkspacePackages(mockWorkspace, undefined, ['filesystem']);
   const config = createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'filesystem')!);
   const plan = await pinWorkspaceMcpTransferPlan(buildWorkspaceMcpTransferPlan([config], mockWorkspace));
-  plan.servers[0].bundledRuntimeSha256 = '0'.repeat(64);
+  plan.servers[0].bundledPortableRuntimeSha256 = '0'.repeat(64);
   loadConfigs.mockResolvedValue([config]);
   const result = await reinstallWorkspaceMcpServers(plan);
   expect(result.ok).toBe(false);
@@ -368,10 +369,6 @@ it('refuses to replace a pinned workspace runtime with a different worker build'
 });
 
 it('preserves genuine bundled approval on retry and refuses a revoked grant without saving', async () => {
-  const started = Date.now();
-  const phase = (name: string) => {
-    if (process.env.FLUJO_MCP_PHASE_DIAGNOSTIC === '1') console.error(JSON.stringify({ mcpRetryPhase: name, elapsedMs: Date.now() - started }));
-  };
   const descriptor = SHIPPED_MCP_SERVERS.find(value => value.packageDirectory === 'filesystem')!;
   await ensureShippedWorkspacePackages(mockWorkspace, undefined, [descriptor.packageDirectory]);
   const config = { ...createShippedServerConfig(descriptor), roots: [mockWorkspace], env: { FLUJO_FS_ROOTS: mockWorkspace } };
@@ -379,32 +376,26 @@ it('preserves genuine bundled approval on retry and refuses a revoked grant with
   await saveConfig(new Map([[config.name, { ...config, disabled: false }]]));
   const owner = installBundledFixtureOwner();
   try {
-    phase('setup');
     const { previewBundledHostConsent, approveBundledHostConsent, revokeBundledHostConsent } = await import('@/backend/services/security/bundledMcpConsent');
     const preview = await previewBundledHostConsent(config.name, { runtimeHome: 'host' });
-    phase('preview');
     await approveBundledHostConsent(owner.request(config.name), config.name, {
       runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
     });
-    phase('approved');
     const loaded = await loadServerConfigs();
     if (!Array.isArray(loaded)) throw new Error('Could not load the genuine approved fixture.');
     const approved = loaded.find(value => value.name === config.name)!;
     loadConfigs.mockResolvedValue([approved]);
     expect(await reinstallWorkspaceMcpServers(plan)).toEqual({ ok: true, servers: [{ name: config.name, status: 'ready' }] });
-    phase('retry');
     expect(updateConfig.mock.calls[0][1]).toEqual(approved);
     expect(updateConfig.mock.calls[0][1].command).toBe(process.execPath);
     expect(await loadServerConfigs()).toEqual(loaded);
     await revokeBundledHostConsent(owner.request(config.name), config.name);
-    phase('revoked');
     updateConfig.mockClear();
     connect.mockClear();
     expect(await reinstallWorkspaceMcpServers(plan)).toMatchObject({ ok: false, servers: [{ name: config.name, status: 'failed' }] });
     expect(updateConfig).not.toHaveBeenCalled();
     expect(connect).not.toHaveBeenCalled();
     expect(await loadServerConfigs()).toEqual(loaded);
-    phase('refused');
   } finally { owner.restore(); }
 }, 30_000);
 

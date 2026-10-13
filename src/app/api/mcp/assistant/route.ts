@@ -13,6 +13,7 @@ import type {
 } from '@/shared/types/mcp/assistant';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { readBoundedBody } from '@/utils/http/boundedBody';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -23,19 +24,23 @@ async function POST_handler(request: NextRequest) {
   if (notLocal) return notLocal;
   const lock = await assertUnlocked({ openai: true });
   if (lock) return lock;
-  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-  if (!body) return json({ error: 'Request body must be a JSON object.' }, 400);
+  const parsed: unknown = await readBoundedBody(request, 64 * 1024)
+    .then(bytes => JSON.parse(bytes.toString('utf8'))).catch(() => null);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return json({ error: 'Request body must be a JSON object.' }, 400);
+  const body = parsed as Record<string, unknown>;
   const action = typeof body.action === 'string' ? body.action : '';
 
   if (action === 'research') {
-    if (typeof body.query !== 'string' || !body.query.trim() || typeof body.modelId !== 'string' || !body.modelId) {
+    if (typeof body.query !== 'string' || !body.query.trim() || body.query.length > 400
+      || typeof body.modelId !== 'string' || (body.modelId.length > 0 && !body.modelId.trim()) || body.modelId.length > 256) {
       return json({ error: 'query and modelId are required.' }, 400);
     }
     return createJsonEventStreamResponse<McpAssistantResearchEvent>(
-      async (emit) => {
+      async (emit, signal) => {
         const result = await researchMcpServers({
           query: body.query as string,
           modelId: body.modelId as string,
+          signal,
           onProgress: emit,
         });
         await emit({ type: 'complete', result });

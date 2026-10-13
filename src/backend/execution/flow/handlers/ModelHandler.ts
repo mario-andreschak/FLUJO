@@ -1,5 +1,7 @@
+import { reserveArchiveSnapshot, estimateArchivePayload,
+  ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
@@ -23,9 +25,8 @@ import { assertNativeInvocationSessionHook, createNativeInvocationSession,
   type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
 import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
-import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, createPersonaNativeOriginalHost,
-  createWorkerNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
-import { CODEX_HANDOFF_PROTOCOL, NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { NATIVE_HANDOFF_PROTOCOL, CODEX_NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -51,11 +52,12 @@ import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import {
   compactHistory,
+  splitHistoryForCompaction,
   COMPACTION_SUMMARY_MARKER,
-  estimateTokens,
   type CompactHistoryResult,
 } from './summarizingCompaction';
 import { digestProjectedMessages, digestProjectionIdentity } from '../compaction/digest';
+import { retainSummaryArtifacts } from '../compaction/state';
 import {
   COMPACTION_ARTIFACT_SCHEMA_VERSION,
   COMPACTION_POLICY_VERSION,
@@ -63,7 +65,7 @@ import {
   type CompactionProjectionIdentity,
 } from '../compaction/types';
 import { normalizeMaxTokens, type Model } from '@/shared/types/model';
-import { normalizeModelTemperature } from '@/shared/types/model/provider';
+import { isSelfOrchestratingAdapter, normalizeModelTemperature, resolveModelAdapter, supportsLocalModelAuth, type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
   refitCodexMessagesForInputLimit,
@@ -511,6 +513,7 @@ export class ModelHandler {
     compactionEnabled?: boolean;
     compactionBufferTokens?: number;
     compactionKeepTokens?: number;
+    compactionThresholdPercent?: number;
     visualCompactionEnabled?: boolean;
     visualCompactionToolResultsOnly?: boolean;
     visualCompactionEvaluationMode?: boolean;
@@ -522,13 +525,14 @@ export class ModelHandler {
         compactionEnabled: exp?.compactionEnabled,
         compactionBufferTokens: exp?.compactionBufferTokens,
         compactionKeepTokens: exp?.compactionKeepTokens,
+        compactionThresholdPercent: exp?.compactionThresholdPercent,
         visualCompactionEnabled: exp?.visualCompactionEnabled,
         visualCompactionToolResultsOnly: exp?.visualCompactionToolResultsOnly,
         visualCompactionEvaluationMode: exp?.visualCompactionEvaluationMode,
       };
     } catch (err) {
       log.warn('Failed to read compaction settings; defaulting to disabled', { err });
-      return {};
+      return { compactionEnabled: false, visualCompactionEnabled: false };
     }
   }
 
@@ -544,10 +548,11 @@ export class ModelHandler {
     conversationId: string | undefined,
     nodeId: string | undefined,
     projectionView: CompactionProjectionIdentity['view'],
-    model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
+    model: { id: string; name?: string; adapter?: ModelAdapter; provider?: ModelProvider; contextWindow?: number; compactionThreshold?: number; compactionThresholdPercent?: number },
     effectiveMaxTokens: number | undefined,
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
     durableContext: FlowDurableMutationContext = {},
+    tools?: OpenAI.ChatCompletionFunctionTool[],
   ): Promise<CompactHistoryResult | null> {
     try {
       if (!conversationId || source.length < 4) return null;
@@ -556,21 +561,10 @@ export class ModelHandler {
       const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
       if (!eff.enabled) return null;
 
-      let lastPromptTokens: number | undefined;
-      for (let i = source.length - 1; i >= 0; i--) {
-        const message = source[i];
-        const promptTokens = message.contextUsage !== undefined
-          ? message.contextUsage?.promptTokens
-          : model.adapter === 'codex-cli' || model.adapter === 'claude-cli'
-            ? undefined
-            : message.usage?.promptTokens;
-        if (typeof promptTokens === 'number' && promptTokens > 0) {
-          lastPromptTokens = promptTokens;
-          break;
-        }
-        if (message.contextUsage !== undefined || message.usage) break;
-      }
-      const estimate = lastPromptTokens ?? estimateTokens(source);
+      // Previous usage excludes newly appended observations, instructions and
+      // tool schemas. Budget the current provider projection every time.
+      const estimate = ModelHandler.estimateOutgoingInputTokens(toApiMessages(source), tools,
+        model.provider ? { provider: model.provider, adapter: model.adapter, name: model.name ?? '' } : undefined);
       // Some CLI/provider catalogues do not publish a context window. The
       // opt-in summarizer must still be useful for them, so use a conservative
       // provider-neutral trigger instead of silently disabling compaction.
@@ -588,8 +582,14 @@ export class ModelHandler {
         view: projectionView,
         handoffPolicy: 'strip-v1',
         version: COMPACTION_PROJECTION_VERSION,
+        configDigest: createHash('sha256').update(JSON.stringify({ model, eff, effectiveMaxTokens, tools })).digest('hex'),
       };
-      const sourceDigest = digestProjectedMessages(source);
+      // Only an unchanged archived prefix needs the same summary. Appending to
+      // the verbatim recent tail must not regenerate that prefix or add another
+      // retained anchor. Check the complete projection again after generation.
+      const fullSourceDigest = digestProjectedMessages(source);
+      const split = splitHistoryForCompaction(source, eff.keepTokens);
+      const sourceDigest = digestProjectedMessages([...split.leadingSystem, ...split.toSummarize]);
       const projectionDigest = digestProjectionIdentity(projection);
 
       const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
@@ -619,7 +619,9 @@ export class ModelHandler {
           durableContext,
         });
         await assertFlowExecutionCurrent(durableContext);
-        return response.success ? (response.value.content ?? '') : '';
+        if (!response.success) return '';
+        const finishReason = response.value.fullResponse?.choices?.[0]?.finish_reason;
+        return !finishReason || finishReason === 'stop' ? (response.value.content ?? '') : '';
       };
 
       const writeAnchor = async (
@@ -657,7 +659,7 @@ export class ModelHandler {
       if (!result) return null;
 
       await assertFlowExecutionCurrent(durableContext);
-      if (digestProjectedMessages(source) !== sourceDigest) {
+      if (digestProjectedMessages(source) !== fullSourceDigest) {
         log.warn('Projected compaction source changed during generation; discarding artifact', { conversationId, nodeId });
         return null;
       }
@@ -666,7 +668,7 @@ export class ModelHandler {
         const previous = state.compactionState;
         state.compactionState = {
           schemaVersion: COMPACTION_ARTIFACT_SCHEMA_VERSION,
-          artifacts: [...(previous?.artifacts ?? []), result.artifact],
+          artifacts: retainSummaryArtifacts(previous?.artifacts ?? [], result.artifact),
         };
         try {
           const { persistConversationState } = await import('@/backend/execution/flow/persistConversationState');
@@ -884,16 +886,23 @@ export class ModelHandler {
     const budget = Math.floor(
       (contextWindow as number) - outputReserve - ModelHandler.OUTGOING_INPUT_SAFETY_TOKENS
     );
-    return budget > 0 ? budget : undefined;
+    // A configured window is a hard bound. An impossible output reservation
+    // must fail closed, never turn into the "unknown/unbounded" fast path.
+    return Math.max(0, budget);
   }
 
   /** Estimate the complete provider payload using the same conservative
    * character-based convention as summarizing compaction. */
   private static estimateOutgoingInputTokens(
     messages: readonly OpenAI.ChatCompletionMessageParam[],
-    tools?: OpenAI.ChatCompletionFunctionTool[]
+    tools?: OpenAI.ChatCompletionFunctionTool[],
+    model?: Pick<Model, 'provider' | 'adapter' | 'name'>
   ): number {
-    return Math.ceil(JSON.stringify({ messages, tools: tools ?? [] }).length / 4);
+    const json = JSON.stringify({ messages, tools: tools ?? [] });
+    // Escaped MCP JSON was measured at far more tokens than chars/4 on Claude
+    // through OpenRouter. Use a conservative byte bound before paid dispatch.
+    return (model?.provider === 'openrouter' || model?.adapter === 'openrouter-agent') && model?.name.startsWith('anthropic/')
+      ? Buffer.byteLength(json, 'utf8') : Math.ceil(json.length / 4);
   }
 
   /**
@@ -1052,6 +1061,11 @@ export class ModelHandler {
       };
     }
 
+    if (error instanceof ModelTurnArchiveMemoryError) {
+      return { success: false, error: createModelError(error.code, error.message, modelId,
+        undefined, { status: error.status }) };
+    }
+
     // Error diagnostics are deliberately metadata-only. Provider bodies,
     // messages, request URLs, headers, and stacks may contain credentials or
     // execution content and must never be passed to the logger.
@@ -1154,9 +1168,11 @@ export class ModelHandler {
     let modelMaxTurns: number | undefined;
     let modelMaxTokens: number | undefined;
     let modelIsFallbackPolicy = false;
-    let modelAdapter: string | undefined;
+    let modelAdapter: ModelAdapter | undefined;
     let modelContextWindow: number | undefined;
     let modelCompactionThreshold: number | undefined;
+    let modelCompactionThresholdPercent: number | undefined;
+    let modelCompactionProvider: ModelProvider | undefined;
     const nodeDisplayName = nodeName;
     try {
       const model = await modelService.getModel(modelId);
@@ -1166,9 +1182,11 @@ export class ModelHandler {
         modelMaxTurns = model.maxTurns;
         modelMaxTokens = model.maxTokens;
         modelIsFallbackPolicy = Boolean(model.fallbackPolicy);
-        modelAdapter = model.adapter;
+        modelAdapter = resolveModelAdapter(model.provider, model.adapter);
         modelContextWindow = model.contextWindow;
         modelCompactionThreshold = model.compactionThreshold;
+        modelCompactionThresholdPercent = model.compactionThresholdPercent;
+        modelCompactionProvider = model.provider;
       }
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
@@ -1357,7 +1375,7 @@ export class ModelHandler {
     // then acknowledge acceptance or return it to the inbox on rejection.
     const steeringWorkspace = getCurrentWorkspace();
     const steering: ModelSteering | undefined = conversationId &&
-      (modelAdapter === 'claude-cli' || modelAdapter === 'codex-cli')
+      isSelfOrchestratingAdapter(modelAdapter)
       ? {
         take: () => runWithWorkspace(steeringWorkspace, async () => {
           await assertFlowExecutionCurrent(durableContext);
@@ -1618,10 +1636,12 @@ export class ModelHandler {
       conversationId,
       nodeId,
       wireMessages ? 'node-projected' : 'full-history',
-      { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
+      { id: modelId, name: modelTechnicalName, provider: modelCompactionProvider, adapter: modelAdapter, contextWindow: modelContextWindow,
+        compactionThreshold: modelCompactionThreshold, compactionThresholdPercent: modelCompactionThresholdPercent },
       effectiveMaxTokens,
       { compactionMode, compactionKeepTokens },
       durableContext,
+      tools,
     );
     const effectiveMessages = compaction?.wireMessages ?? projectedMessages;
     const effectiveModelInput = cloneModelInputSnapshot(input.modelInputForArchive);
@@ -1990,7 +2010,12 @@ export class ModelHandler {
     // provider call is in flight and fires this controller, which every adapter
     // forwards to its SDK's abort mechanism. Declared outside the try so the
     // catch can distinguish a user cancellation from a genuine provider error.
-    const abortController = new AbortController();
+    // Use the same global, workspace-scoped registry that Stop wakes directly.
+    // The polling guard remains for ancestry and non-conversation callers.
+    const completionScope = opts?.conversationId ?? opts?.runId;
+    const completionCallId = `model-${randomUUID()}`;
+    const abortController = completionScope
+      ? registerToolCall(completionScope, completionCallId) : new AbortController();
     let cancelWatch: ReturnType<typeof setInterval> | undefined;
     const stopCancelWatch = () => {
       if (cancelWatch) {
@@ -2008,6 +2033,7 @@ export class ModelHandler {
     let attemptProducedOutput = false;
     let automaticRetriesUsed = 0;
     let singlePhysicalAttempt = false;
+    let archiveSnapshotReservation: ArchiveMemoryReservation | undefined;
 
     try {
       if (opts?.executionExtensionContext) {
@@ -2020,9 +2046,10 @@ export class ModelHandler {
       const model = await modelService.getModel(modelId);
       await assertFlowExecutionCurrent(opts?.durableContext ?? {});
       // Native adapters require a trusted, verified restriction profile. Claude
-      // remains excluded until its native capabilities can be equivalently gated.
-      if (opts?.executionExtensionContext && !opts.nativeOriginalProcessHost) {
-        if (model?.adapter === 'claude-cli' || (model?.adapter === 'codex-cli'
+      // and Antigravity remain excluded from authenticated private execution.
+      if (opts?.executionExtensionContext) {
+        const restrictedAdapter = resolveModelAdapter(model?.provider, model?.adapter);
+        if (restrictedAdapter === 'claude-cli' || restrictedAdapter === 'antigravity-cli' || (restrictedAdapter === 'codex-cli' && !opts.nativeOriginalProcessHost
           && !await executionExtensionCodexProfile(opts.executionExtensionContext))) {
           throw new ExecutionExtensionError('execution_model_adapter_forbidden');
         }
@@ -2061,12 +2088,11 @@ export class ModelHandler {
         model.name,
       ) ?? (configuredTemperature === undefined || configuredTemperature === '' ? 0.0 : undefined);
 
-      // Resolve and decrypt the API key. Codex may run keyless: an empty key
-      // means "use the machine's ChatGPT plan login from `codex login`" (the
-      // adapter then omits the apiKey and the CLI falls back to its own auth).
+      // Resolve and decrypt the API key. Local-auth adapters accept an empty
+      // key to use the host CLI's supported login; each adapter owns that auth.
       const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey =
-        resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
+        resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {
         return {
           success: false,
@@ -2099,10 +2125,13 @@ export class ModelHandler {
         );
         return media === message.media ? message : { ...message, media };
       }));
-      let apiMessages: OpenAI.ChatCompletionMessageParam[] = filterUnsupportedMediaInputs(
-        toApiMessages(messagesWithMaterializedMedia),
-        model.inputModalities,
-      );
+      const projectedMessages = toApiMessages(messagesWithMaterializedMedia);
+      // Antigravity CLI rejects unsupported attachments explicitly in its preflight.
+      // Filtering them here would turn an image request into text before that
+      // check and allow a response from a model that never received the image.
+      let apiMessages: OpenAI.ChatCompletionMessageParam[] = resolveModelAdapter(model.provider, model.adapter) === 'antigravity-cli'
+        ? projectedMessages
+        : filterUnsupportedMediaInputs(projectedMessages, model.inputModalities);
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
       const modelInputForArchive = cloneModelInputSnapshot(opts?.modelInputForArchive);
       let apiSourceIds: Array<string | undefined> = (opts?.wireMessageIds?.length === apiMessages.length
@@ -2184,8 +2213,9 @@ export class ModelHandler {
         const compactedMessages = compactForWire(apiMessages, {
           keepRecentMessages,
           resourceMarkers: opts?.runResourceMarkers,
-          // Without an offered tool there is no usable read_resource path.
-          canUseTools: (effectiveTools?.length ?? 0) > 0,
+          // This caller arms read_resource immediately after shortening, even
+          // when this step originally offered no other tools.
+          canUseTools: true,
         });
         const changedIndexes = compactedMessages
           .map((message, index) => JSON.stringify(message) === JSON.stringify(beforeLosslessRefit[index]) ? -1 : index)
@@ -2225,6 +2255,11 @@ export class ModelHandler {
           resourceMarkers: opts?.runResourceMarkers,
           keepRecentMessages,
         });
+        if (codexRefit.capacityExceeded) {
+          return { success: false, error: createModelError('context_budget_exceeded',
+            'Your instructions and unrecoverable tool state exceed the Codex input limit. Choose a larger supported input window or shorten the instructions explicitly.',
+            modelId, undefined, { inputCharacters: codexRefit.finalCharacters }) };
+        }
         if (codexRefit.compacted) {
           const priorSourceIds = apiSourceIds;
           markModelInputMessages(
@@ -2314,7 +2349,12 @@ export class ModelHandler {
         opts?.maxTokens
       );
       if (inputBudget !== undefined) {
-        let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
+        if (inputBudget === 0) return {
+          success: false,
+          error: createModelError('context_budget_exceeded',
+            'The configured output limit leaves no room for input in the context window. Lower the output-token limit.', modelId),
+        };
+        let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model);
         if (estimatedInputTokens > inputBudget) {
           // A constrained private run cannot introduce resource tools or persist
           // model content while recovering from an oversized provider request.
@@ -2331,7 +2371,8 @@ export class ModelHandler {
               opts.conversationId,
               apiMessages,
               budgetMarkers,
-              opts?.nodeId
+              opts?.nodeId,
+              opts?.durableContext,
             );
           }
           const refittedMessages = compactForWire(apiMessages, {
@@ -2365,7 +2406,7 @@ export class ModelHandler {
             });
           }
           const refittedTools = ModelHandler.ensureReadResourceArmed(refittedMessages, sanitizedTools);
-          estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools);
+          estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools, model);
 
           if (estimatedInputTokens <= inputBudget) {
             log.warn('Refitted outgoing model request to its advertised input budget', {
@@ -2379,20 +2420,21 @@ export class ModelHandler {
             const priorSourceIds = apiSourceIds;
             let emergency = emergencyRefitMessages(refittedMessages, {
               target: inputBudget,
-              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools),
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools, model),
               keepRecentMessages,
+              resourceMarkers: budgetMarkers,
             });
             let emergencyTools = refittedTools;
 
-            // A pathological tool-definition block can exceed the budget even
-            // after the message history is minimized. A text-only turn is still
-            // useful and recoverable; a terminal client error is not.
+            // Shed bulky optional schemas while retaining the resource reader
+            // needed to recover every archived observation on this wire.
             if (emergency.after > inputBudget && (emergencyTools?.length ?? 0) > 0) {
-              emergencyTools = undefined;
+              emergencyTools = ModelHandler.ensureReadResourceArmed(emergency.messages, undefined);
               emergency = emergencyRefitMessages(refittedMessages, {
                 target: inputBudget,
-                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined),
+                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, emergencyTools, model),
                 keepRecentMessages,
+                resourceMarkers: budgetMarkers,
               });
             }
 
@@ -2439,7 +2481,7 @@ export class ModelHandler {
                 success: false,
                 error: createModelError(
                   'context_budget_exceeded',
-                  `FLUJO could not produce a valid request inside the model's advertised ${inputBudget}-token input budget.`,
+                  `Your instructions and unrecoverable tool state cannot fit inside the model's ${inputBudget}-token input budget.`,
                   modelId,
                   undefined,
                   { estimatedInputTokens: emergency.after, inputBudget, contextWindow: model.contextWindow }
@@ -2525,6 +2567,9 @@ export class ModelHandler {
       // completion. Track streamed transcript/steering messages so each later
       // dispatch archive captures the canonical conversation as it existed at
       // that exact request boundary, not the call's initial static array.
+      if (opts?.archiveModelTurns) {
+        archiveSnapshotReservation = reserveArchiveSnapshot(opts.canonicalMessages ?? messages);
+      }
       const archiveCanonicalMessages = opts?.archiveModelTurns
         ? structuredClone(opts.canonicalMessages ?? messages)
         : undefined;
@@ -2658,6 +2703,7 @@ export class ModelHandler {
           attemptProducedOutput = true;
           if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
           if (archiveCanonicalMessages) {
+            archiveSnapshotReservation?.grow(estimateArchivePayload(message) * 2);
             upsertMessageById(archiveCanonicalMessages, structuredClone(message));
           }
           opts?.onTranscriptMessage?.(message);
@@ -2680,15 +2726,32 @@ export class ModelHandler {
               opts.onToolProgress!(progress);
             }
           : undefined;
-        const localToolExecutors = opts?.localToolExecutors
+        // A resource reader can be armed by wire compaction after callModel
+        // built its initial virtual-tool map. Give ordinary native SDK loops
+        // the same scoped executor; sealed native/private inventories retain
+        // their own admitted ports and are never expanded here.
+        const recoveryExecutors = opts?.conversationId && !opts.nativeBrokerAuthority && !opts.executionExtensionContext
+          && attemptTools?.some(tool => tool.function.name === READ_RESOURCE_TOOL_NAME)
+          && !opts.localToolExecutors?.[READ_RESOURCE_TOOL_NAME]
+          ? { ...opts.localToolExecutors, [READ_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
+              const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, args, {
+                conversationId: opts.conversationId,
+                node: opts.nodeId ? { nodeId: opts.nodeId, nodeType: 'process' } : undefined,
+                ...opts.durableContext,
+              });
+              if (!outcome.success) throw new Error(outcome.error ?? 'read_resource failed');
+              return outcome.data;
+            } }
+          : opts?.localToolExecutors;
+        const localToolExecutors = recoveryExecutors
           ? Object.fromEntries(
-              Object.entries(opts.localToolExecutors).map(([toolName, executor]) => [
+              Object.entries(recoveryExecutors).map(([toolName, executor]) => [
                 toolName,
                 async (args: Record<string, unknown>): Promise<unknown> => {
-                  await opts.beforeToolDispatch?.();
+                  await opts?.beforeToolDispatch?.();
                   attemptProducedOutput = true;
                   const result = await executor(args);
-                  await assertFlowExecutionCurrent(opts.durableContext ?? {});
+                  await assertFlowExecutionCurrent(opts?.durableContext ?? {});
                   return result;
                 },
               ])
@@ -2740,10 +2803,12 @@ export class ModelHandler {
                     const hasHandoff = nativeTools.some(tool => tool.type === 'function'
                       && (tool.function.name === 'handoff' || tool.function.name.startsWith('handoff_to_')));
                     const terminationProtocol = hasHandoff && opts.nativeOriginalProcessHost
-                      ? opts.nativeOriginalProcessHost.terminationProtocol : undefined;
+                      ? model.adapter === 'claude-cli' ? NATIVE_HANDOFF_PROTOCOL
+                        : model.adapter === 'codex-cli' ? CODEX_NATIVE_HANDOFF_PROTOCOL : undefined
+                      : undefined;
                     if (terminationProtocol) {
                       assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
-                      if(terminationProtocol!==(model.adapter==='codex-cli'?CODEX_HANDOFF_PROTOCOL:NATIVE_HANDOFF_PROTOCOL))throw new Error('Native Original adapter/termination protocol mismatch.');
+                      if (opts.nativeOriginalProcessHost.terminationProtocol !== terminationProtocol) throw new Error('Native Original adapter/termination protocol mismatch.');
                     }
                     const inventoryDigest = nativeToolInventoryDigest(nativeTools, nativeBindings, nativeExecutors, terminationProtocol);
                     nativeInventory = { digest: inventoryDigest, tools: nativeTools,
@@ -2806,28 +2871,29 @@ export class ModelHandler {
                       throw new NativeInvocationHeldError(nativeReceipt.invocationId);
                     }
                     try {
-                      const entry = await archiveModelDispatch({
+                      const archiveInput = {
                         ...(nativeReceipt ? { id: nativeReceipt.invocationId } : {}),
                         durableContext: opts?.durableContext,
-                        conversationId: opts!.conversationId!,
-                        runId: opts?.runId,
-                        nodeId: opts!.nodeId!,
-                        nodeName: opts?.nodeName,
-                        modelId: routingModel.id,
-                        modelName: routingModel.displayName || routingModel.name,
-                        adapter: snapshot.adapter,
-                        operation: snapshot.operation,
+                        ...(!nativeReceipt && !opts?.durableContext?.executionAuthority
+                          && !opts?.durableContext?.executionExtensionContext && !opts?.durableContext?.personaAttribution
+                          ? { writeAdmission: { wait: true, signal: abortController.signal } } : {}),
+                        conversationId: opts!.conversationId!, runId: opts?.runId,
+                        nodeId: opts!.nodeId!, nodeName: opts?.nodeName,
+                        modelId: routingModel.id, modelName: routingModel.displayName || routingModel.name,
+                        adapter: snapshot.adapter, operation: snapshot.operation,
                         attempt: ++sdkDispatchOrdinal,
-                        canonicalMessages: archiveCanonicalMessages
-                          ? structuredClone(archiveCanonicalMessages)
-                          : opts?.canonicalMessages ?? messages,
-                        genericWire: snapshot.wireMessages !== undefined
-                          ? structuredClone(snapshot.wireMessages)
-                          : hydratedMessages,
-                        sdkRequest: snapshot.request,
-                        modelInput: modelInputForArchive,
+                        canonicalMessages: archiveCanonicalMessages ?? opts?.canonicalMessages ?? messages,
+                        genericWire: snapshot.wireMessages ?? hydratedMessages,
+                        sdkRequest: snapshot.request, modelInput: modelInputForArchive,
                         visualCompaction: visualDiagnostic,
-                      });
+                      };
+                      const entry = await archiveModelDispatch(archiveInput, () => ({
+                        ...archiveInput,
+                        canonicalMessages: archiveCanonicalMessages
+                          ? structuredClone(archiveCanonicalMessages) : archiveInput.canonicalMessages,
+                        genericWire: snapshot.wireMessages !== undefined
+                          ? structuredClone(snapshot.wireMessages) : archiveInput.genericWire,
+                      }));
                       executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch',
                         turn: entry,
@@ -2918,6 +2984,7 @@ export class ModelHandler {
                       }
                       return entry.id;
                     } catch (error) {
+                      if (error instanceof ModelTurnArchiveMemoryError) throw error;
                       if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
@@ -3297,7 +3364,7 @@ export class ModelHandler {
           // An outer rate-limit replay must not restart that decision (including
           // a disabled trigger or steering/approval activity observed inside it).
           if (model.fallbackPolicy) return attemptResult;
-          if (model.adapter === 'codex-cli') return attemptResult;
+          if (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter))) return attemptResult;
           if (automaticRetriesUsed >= MAX_AUTOMATIC_MODEL_RETRIES) {
             log.warn('Automatic session-limit retries exhausted; returning the provider error', {
               modelId,
@@ -3441,7 +3508,7 @@ export class ModelHandler {
           // tools the original request carried (#338).
           canUseTools: true,
           compactRecentToolResults: true,
-          allowLossyTruncation: true,
+          allowLossyTruncation: false,
           toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
         });
         const reactiveChangedIndexes = refitMessages
@@ -3457,7 +3524,7 @@ export class ModelHandler {
           recordContextCompaction(modelInputForArchive, {
             kind: 'content-truncation',
             reason: 'One automatic retry after provider context rejection.',
-            before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools),
+            before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model),
             unit: 'tokens',
             truncatedMessages: reactiveChangedIndexes.length,
             injectedMarker: '[truncated',
@@ -3467,23 +3534,25 @@ export class ModelHandler {
         let retryTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
         const retryTarget = inputBudget ?? Math.max(
           1_024,
-          Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools) * 0.7),
+          Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model) * 0.7),
         );
-        let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools);
+        let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools, model);
         const priorSourceIds = apiSourceIds;
         let retrySourceIds = apiSourceIds;
         if (retryEstimate > retryTarget) {
           let emergency = emergencyRefitMessages(retryMessages, {
             target: retryTarget,
-            measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools),
+            measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
             keepRecentMessages,
+            resourceMarkers: refitMarkers,
           });
           if (emergency.after > retryTarget && (retryTools?.length ?? 0) > 0) {
-            retryTools = undefined;
+            retryTools = ModelHandler.ensureReadResourceArmed(emergency.messages, undefined);
             emergency = emergencyRefitMessages(retryMessages, {
               target: retryTarget,
-              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined),
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
               keepRecentMessages,
+              resourceMarkers: refitMarkers,
             });
           }
           if (emergency.after <= retryTarget) {
@@ -3548,6 +3617,8 @@ export class ModelHandler {
       // A native attempt keeps Stop polling through terminal persistence. Every
       // outer return path, including a held invocation, must then release it.
       stopCancelWatch();
+      if (completionScope) releaseToolCall(completionScope, completionCallId);
+      archiveSnapshotReservation?.release();
     }
   }
 

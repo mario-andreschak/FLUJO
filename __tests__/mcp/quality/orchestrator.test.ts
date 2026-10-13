@@ -117,4 +117,37 @@ describe('enrichAndRank', () => {
     expect(ranked[0].score).toBe(0);
     expect(ranked[0].signals).toEqual([]);
   });
+
+  it('cancels active provider IO and never starts the next provider or candidate lookup', async () => {
+    const controller = new AbortController();
+    const requests: string[] = [];
+    const fetch = jest.spyOn(global, 'fetch').mockImplementation(async (input, options) => {
+      requests.push(String(input));
+      return new Promise<Response>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+        controller.abort(new DOMException('Research cancelled', 'AbortError'));
+      });
+    });
+    const first = candidate('io.x/cancel-first', 'x/cancel-first', '@x/cancel-first');
+    const second = candidate('io.x/cancel-second', 'x/cancel-second', '@x/cancel-second');
+    await expect(enrichAndRank('cancel', [first, second], { now: NOW, settings, signal: controller.signal })).rejects.toThrow('Research cancelled');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain('/search/repositories');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps cancellation attached through provider response-body consumption', async () => {
+    const controller = new AbortController();
+    const fetch = jest.spyOn(global, 'fetch').mockImplementation(async (_input, options) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+        controller.abort(new DOMException('Body cancelled', 'AbortError'));
+      }),
+    } as unknown as Response));
+    await expect(enrichAndRank('body-cancel', [candidate('io.x/body-cancel', 'x/body-cancel', '@x/body-cancel')], { now: NOW, settings, signal: controller.signal })).rejects.toThrow('Body cancelled');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 });

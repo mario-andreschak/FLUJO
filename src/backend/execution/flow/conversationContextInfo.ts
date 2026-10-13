@@ -4,6 +4,7 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { contextUsageFromCompletion } from '@/backend/services/model/adapters/contextUsage';
 import { resolveOpenRouterMediaRoute } from '@/backend/services/model/adapters/openrouterMediaRouting';
+import { isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
 
 /** Last reported context is a snapshot, never a sum of agent-run token usage. */
 export async function buildContextInfo(state: SharedState): Promise<ConversationContextInfo | undefined> {
@@ -26,8 +27,8 @@ export async function buildContextInfo(state: SharedState): Promise<Conversation
   }
   // Historical SDK records contain aggregate run usage. Do not reinterpret it
   // as context, even when it happens to be below the configured window.
-  if (!model || model.adapter === 'codex-cli' || model.provider === 'codex'
-    || model.adapter === 'claude-cli' || model.provider === 'claude-subscription') return info;
+  if (!model || isSelfOrchestratingAdapter(model.adapter) || model.provider === 'codex'
+    || model.provider === 'claude-subscription' || model.provider === 'antigravity-cli') return info;
   if (message.usage && !resolveOpenRouterMediaRoute(model).useMediaRoute) {
     Object.assign(info, contextUsageFromCompletion({
       prompt_tokens: message.usage.promptTokens,

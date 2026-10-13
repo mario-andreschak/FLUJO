@@ -1,0 +1,547 @@
+{
+  "schemaVersion": 1,
+  "status": "final",
+  "scope": "Act 2 reviewed stills: import a public GitHub tool, configure its local launch, test it and add the connected server after recovery from an entry error. Final status refers to this still collection, not the completed walkthrough film.",
+  "runtime": {
+    "package": "flujo-ai",
+    "version": "3.46.2",
+    "repository": "https://github.com/wonderwhy-er/DesktopCommanderMCP"
+  },
+  "captureMethod": "Actual application UI operated and captured through the ai-computer MCP. PNGs are the original returned pixels, copied unchanged through the flujo-bash MCP.",
+  "timestampMeaning": "Each asset's UTC interval comes from the capture call's beforeUtc and afterUtc in the private action log. capturedAtUtc is the call completion time, not a separately measured exposure time. Action times and click points are the recorded tool-call values, not an invented cursor trace.",
+  "coordinateSystem": {
+    "width": 1600,
+    "height": 1000,
+    "pointFormat": "[x, y]",
+    "rectangleFormat": "[x, y, width, height]",
+    "targetRectangleSource": "Control bounds read from the reviewed UI images. Rectangles identify controls; they do not assert additional clicks."
+  },
+  "stillReview": {
+    "status": "reviewed",
+    "reviewedAssetCount": 13,
+    "result": "No visible credentials, personal host paths or private account details in the selected PNGs. Generic container runtime paths and localhost addresses are visible in the app UI. Installation and test views contain the app's own output.",
+    "edits": "No crops, redraws, synthetic UI, cursor additions or pixel changes."
+  },
+  "observedOutcome": {
+    "repositoryParsed": true,
+    "cloneStarted": true,
+    "installationSuccessVerified": true,
+    "connectionSuccessVerified": true,
+    "connectionTest": "passed-after-recovery",
+    "mcpHandshake": "successful",
+    "toolsDiscovered": 26,
+    "serverName": "DesktopCommanderMCP",
+    "savedCardStatus": "Connected",
+    "visibleServerCount": 6,
+    "evidenceImages": [
+      "act2-recovery-test-passed.png",
+      "act2-desktop-commander-connected.png"
+    ],
+    "note": "The final test and connected-server list establish the working connection. The earlier setup and failure stills are retained to show the actual sequence."
+  },
+  "publicFootage": {
+    "status": "not-reviewed-or-finalized",
+    "rawPublicationAllowed": false,
+    "note": "This manifest approves only the listed still images. It does not approve continuous raw video intervals."
+  },
+  "targets": {
+    "connect-app": {
+      "label": "Connect App",
+      "rect": [
+        1344,
+        101,
+        139,
+        41
+      ]
+    },
+    "connection-details": {
+      "label": "I have connection details",
+      "rect": [
+        940,
+        417,
+        267,
+        186
+      ]
+    },
+    "github-repository": {
+      "label": "In a GitHub repository",
+      "rect": [
+        662,
+        420,
+        266,
+        187
+      ]
+    },
+    "github-url": {
+      "label": "GitHub repository URL",
+      "rect": [
+        65,
+        537,
+        1470,
+        42
+      ]
+    },
+    "parse": {
+      "label": "Parse",
+      "rect": [
+        1451,
+        611,
+        84,
+        40
+      ]
+    },
+    "clone": {
+      "label": "Clone repository",
+      "rect": [
+        1376,
+        653,
+        159,
+        40
+      ]
+    },
+    "first-test-run": {
+      "label": "Test run in the first local configuration",
+      "rect": [
+        906,
+        234,
+        102,
+        40
+      ]
+    },
+    "root-path-repair": {
+      "label": "MCP server root path",
+      "rect": [
+        90,
+        513,
+        918,
+        42
+      ]
+    },
+    "recovery-test-run": {
+      "label": "Test run after the path correction",
+      "rect": [
+        906,
+        593,
+        102,
+        40
+      ]
+    },
+    "add-server": {
+      "label": "Add server",
+      "rect": [
+        1420,
+        910,
+        105,
+        40
+      ]
+    }
+  },
+  "actions": [
+    {
+      "id": "act2-action-01",
+      "label": "Open Connect App",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:40:21.458Z",
+      "completedAtUtc": "2026-10-11T15:40:21.788Z",
+      "recordedPoint": [
+        1414,
+        121
+      ],
+      "targetId": "connect-app",
+      "targetRect": [
+        1344,
+        101,
+        139,
+        41
+      ],
+      "beforeImage": "act2-connected-apps.png",
+      "afterImage": "act2-connect-options.png"
+    },
+    {
+      "id": "act2-action-02",
+      "label": "Choose I have connection details",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:40:56.704Z",
+      "completedAtUtc": "2026-10-11T15:40:56.999Z",
+      "recordedPoint": [
+        1054,
+        508
+      ],
+      "targetId": "connection-details",
+      "targetRect": [
+        940,
+        417,
+        267,
+        186
+      ],
+      "beforeImage": "act2-connect-options.png",
+      "afterImage": "act2-source-options.png"
+    },
+    {
+      "id": "act2-action-03",
+      "label": "Choose In a GitHub repository",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:41:21.465Z",
+      "completedAtUtc": "2026-10-11T15:41:21.746Z",
+      "recordedPoint": [
+        789,
+        516
+      ],
+      "targetId": "github-repository",
+      "targetRect": [
+        662,
+        420,
+        266,
+        187
+      ],
+      "beforeImage": "act2-source-options.png",
+      "afterImage": "act2-github-form.png"
+    },
+    {
+      "id": "act2-action-04",
+      "label": "Focus the repository URL field",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:41:43.934Z",
+      "completedAtUtc": "2026-10-11T15:41:44.212Z",
+      "recordedPoint": [
+        539,
+        558
+      ],
+      "targetId": "github-url",
+      "targetRect": [
+        65,
+        537,
+        1470,
+        42
+      ],
+      "beforeImage": "act2-github-form.png",
+      "afterImage": "act2-github-url.png"
+    },
+    {
+      "id": "act2-action-05",
+      "label": "Enter the public DesktopCommanderMCP repository URL",
+      "kind": "text-entry",
+      "startedAtUtc": "2026-10-11T15:41:45.037Z",
+      "completedAtUtc": "2026-10-11T15:41:45.300Z",
+      "recordedPoint": null,
+      "targetId": "github-url",
+      "targetRect": [
+        65,
+        537,
+        1470,
+        42
+      ],
+      "beforeImage": "act2-github-form.png",
+      "afterImage": "act2-github-url.png"
+    },
+    {
+      "id": "act2-action-06",
+      "label": "Parse the repository URL",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:42:03.788Z",
+      "completedAtUtc": "2026-10-11T15:42:04.152Z",
+      "recordedPoint": [
+        1492,
+        631
+      ],
+      "targetId": "parse",
+      "targetRect": [
+        1451,
+        611,
+        84,
+        40
+      ],
+      "beforeImage": "act2-github-url.png",
+      "afterImage": "act2-github-parsed.png"
+    },
+    {
+      "id": "act2-action-07",
+      "label": "Clone the repository",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:42:27.119Z",
+      "completedAtUtc": "2026-10-11T15:42:27.399Z",
+      "recordedPoint": [
+        1450,
+        674
+      ],
+      "targetId": "clone",
+      "targetRect": [
+        1376,
+        653,
+        159,
+        40
+      ],
+      "beforeImage": "act2-github-parsed.png",
+      "afterImage": "act2-cloning.png"
+    },
+    {
+      "id": "act2-action-08",
+      "label": "Run the first local server test",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T15:50:36.556Z",
+      "completedAtUtc": "2026-10-11T15:50:36.857Z",
+      "recordedPoint": [
+        955,
+        253
+      ],
+      "targetId": "first-test-run",
+      "targetRect": [
+        906,
+        234,
+        102,
+        40
+      ],
+      "beforeImage": "act2-run-configuration.png",
+      "afterImage": "act2-first-test-passed.png"
+    },
+    {
+      "id": "act2-action-09",
+      "label": "Correct the root path through the actual UI",
+      "kind": "ui-entry-recovery",
+      "startedAtUtc": "2026-10-11T16:03:26.792Z",
+      "completedAtUtc": "2026-10-11T16:03:34.066Z",
+      "recordedPoint": null,
+      "targetId": "root-path-repair",
+      "targetRect": [
+        90,
+        513,
+        918,
+        42
+      ],
+      "timingMeaning": "The recorded repair-operation interval includes preparation and UI paste; it is not an individual keystroke trace.",
+      "beforeImage": "act2-path-entry-error.png",
+      "evidenceImage": "act2-recovery-test-passed.png"
+    },
+    {
+      "id": "act2-action-10",
+      "label": "Test the corrected configuration",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T16:05:11.211Z",
+      "completedAtUtc": "2026-10-11T16:05:11.491Z",
+      "recordedPoint": [
+        954,
+        613
+      ],
+      "targetId": "recovery-test-run",
+      "targetRect": [
+        906,
+        593,
+        102,
+        40
+      ],
+      "afterImage": "act2-recovery-test-passed.png"
+    },
+    {
+      "id": "act2-action-11",
+      "label": "Add the tested server",
+      "kind": "click",
+      "startedAtUtc": "2026-10-11T16:06:02.335Z",
+      "completedAtUtc": "2026-10-11T16:06:02.618Z",
+      "recordedPoint": [
+        1470,
+        930
+      ],
+      "targetId": "add-server",
+      "targetRect": [
+        1420,
+        910,
+        105,
+        40
+      ],
+      "beforeImage": "act2-recovery-test-passed.png",
+      "afterImage": "act2-desktop-commander-connected.png"
+    }
+  ],
+  "assets": [
+    {
+      "file": "githubpages/film/media/walkthrough/act2-connected-apps.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 762102,
+      "sha256": "c4becb6d14c9f2e12e806d14282929972706dba827791db8099de7b023dcdd19",
+      "captureCallStartedAtUtc": "2026-10-11T15:40:04.684Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:40:05.111Z",
+      "capturedAtUtc": "2026-10-11T15:40:05.111Z",
+      "caption": "Connected Apps shows the five existing MCP servers before adding another app."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-connect-options.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 583232,
+      "sha256": "65c99c3182ab29f885583eed43c01a8fae80e7023d22e37823949d04fb7816e1",
+      "captureCallStartedAtUtc": "2026-10-11T15:40:39.320Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:40:39.707Z",
+      "capturedAtUtc": "2026-10-11T15:40:39.707Z",
+      "caption": "Connect App offers AI-assisted setup, help choosing an app, connection details and expert setup."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-source-options.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 582729,
+      "sha256": "7dae355a634e89dbb344871c344daebf55706157832672dd6374ec48cfb30177",
+      "captureCallStartedAtUtc": "2026-10-11T15:40:58.709Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:40:59.113Z",
+      "capturedAtUtc": "2026-10-11T15:40:59.113Z",
+      "caption": "The guided setup offers a remote URL, a GitHub repository or a command on this computer."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-github-form.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 420339,
+      "sha256": "d3484d0a330c8735d4f4f5e9d937e2e684929bd69cf7c9ceebc4bc5d6df1f56a",
+      "captureCallStartedAtUtc": "2026-10-11T15:41:23.471Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:41:23.836Z",
+      "capturedAtUtc": "2026-10-11T15:41:23.836Z",
+      "caption": "The GitHub import tab is open with an empty repository URL field."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-github-url.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 425922,
+      "sha256": "048ee972e6751dbf91b22db39342940b03617edebb967832c9ef36bb58638139",
+      "captureCallStartedAtUtc": "2026-10-11T15:41:46.842Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:41:47.240Z",
+      "capturedAtUtc": "2026-10-11T15:41:47.240Z",
+      "caption": "The public DesktopCommanderMCP repository URL is entered, ready to parse."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-github-parsed.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 359729,
+      "sha256": "3f7eea0395c8ca416d34b5e4d2af0fef9c95eaf2e9db6576453be203fd6cb878",
+      "captureCallStartedAtUtc": "2026-10-11T15:42:05.794Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:42:06.174Z",
+      "capturedAtUtc": "2026-10-11T15:42:06.174Z",
+      "caption": "FLUJO recognizes the public DesktopCommanderMCP repository and shows the destination and Clone repository control."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-cloning.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 348678,
+      "sha256": "32911760476440e0edea645cb81b8ec1d77b3c9178a5909d54985f585e4a60b7",
+      "captureCallStartedAtUtc": "2026-10-11T15:42:30.226Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:42:30.544Z",
+      "capturedAtUtc": "2026-10-11T15:42:30.544Z",
+      "caption": "The import is processing and reports Cloning repository; completion is not shown."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-installing.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 229407,
+      "sha256": "e7d26f8b416b652e0524654242944b45a7f849c48884257e7286a1db5bb09d69",
+      "captureCallStartedAtUtc": "2026-10-11T15:44:10.837Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:44:11.124Z",
+      "capturedAtUtc": "2026-10-11T15:44:11.124Z",
+      "caption": "Configure & Test displays dependency-installation output and warnings. The installation and connection are not yet shown as successful."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-run-configuration.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 183391,
+      "sha256": "3c5bd7d7867aee26a5db47a3b1a8d6749225f29b4b13b23ed980aa712bc0beda",
+      "captureCallStartedAtUtc": "2026-10-11T15:50:17.800Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:50:18.062Z",
+      "capturedAtUtc": "2026-10-11T15:50:18.062Z",
+      "caption": "The local run configuration uses node with dist/index.js and --no-onboarding."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-first-test-passed.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 227498,
+      "sha256": "fe63c24c1a43e318eae728518b070a1d11c9e6055ea21c219563c022ff42ce28",
+      "captureCallStartedAtUtc": "2026-10-11T15:50:39.161Z",
+      "captureCallCompletedAtUtc": "2026-10-11T15:50:39.429Z",
+      "capturedAtUtc": "2026-10-11T15:50:39.429Z",
+      "caption": "The first local server test completes the MCP handshake and discovers 26 tools. This test alone does not establish that the card was saved."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-path-entry-error.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 237376,
+      "sha256": "4342ca46646457fed44c266cae58a31f5d942a29e64cf01c8ddd82571b46954a",
+      "captureCallStartedAtUtc": "2026-10-11T16:01:01.689Z",
+      "captureCallCompletedAtUtc": "2026-10-11T16:01:01.969Z",
+      "capturedAtUtc": "2026-10-11T16:01:01.969Z",
+      "caption": "A later manual setup attempt has a root-path entry error and the connection test reports a transport failure. This is preserved as recovery evidence."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-recovery-test-passed.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 217699,
+      "sha256": "7b53804d7179493528f7489ea7d311daa2e195a0872f1868311e05899534ef20",
+      "captureCallStartedAtUtc": "2026-10-11T16:05:15.816Z",
+      "captureCallCompletedAtUtc": "2026-10-11T16:05:16.092Z",
+      "capturedAtUtc": "2026-10-11T16:05:16.092Z",
+      "caption": "After the root path is corrected through the actual UI, the server connection test passes and discovers 26 tools; Add server is available."
+    },
+    {
+      "file": "githubpages/film/media/walkthrough/act2-desktop-commander-connected.png",
+      "kind": "screenshot",
+      "publicUse": "reviewed",
+      "width": 1600,
+      "height": 1000,
+      "bytes": 824458,
+      "sha256": "893235a789146ed19ebbc763bed91eb22b41ab8e26a11989dabc0921046f4738",
+      "captureCallStartedAtUtc": "2026-10-11T16:06:06.442Z",
+      "captureCallCompletedAtUtc": "2026-10-11T16:06:06.934Z",
+      "capturedAtUtc": "2026-10-11T16:06:06.934Z",
+      "caption": "Connected Apps now shows six servers, including DesktopCommanderMCP with Connected status."
+    }
+  ],
+  "recovery": {
+    "firstTest": {
+      "result": "passed",
+      "mcpHandshake": "successful",
+      "toolsDiscovered": 26,
+      "evidenceImage": "act2-first-test-passed.png",
+      "note": "The first test passed, but the later list did not show a saved server card. The save interaction is not established by these stills; no application save defect is inferred."
+    },
+    "entryFailure": {
+      "result": "failed",
+      "evidenceImage": "act2-path-entry-error.png",
+      "visibleError": "Transport error; connection test failed.",
+      "cause": "The manually entered root path had mcpservers where the existing directory was mcp-servers.",
+      "basis": "The capture operator confirmed the non-secret field value through the actual UI clipboard. The incorrect segment is also visible in the failure still."
+    },
+    "resolution": "The root path was corrected by pasting into the actual UI. Retesting completed the MCP handshake and discovered 26 tools. Add server then produced a Connected card.",
+    "pathCorrectionStartedAtUtc": "2026-10-11T16:03:26.792Z",
+    "pathCorrectionCompletedAtUtc": "2026-10-11T16:03:34.066Z",
+    "applicationCodeChange": false,
+    "note": "This was an operator entry error and recovery in real software, not an application code fix."
+  }
+}

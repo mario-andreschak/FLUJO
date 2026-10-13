@@ -6,7 +6,6 @@ import {
 } from '@/backend/execution/flow/executionAuthority';
 import {
   writeRunResource,
-  readRunResource,
   readRunResourceBounded,
   parseRunResourceUri,
   getRunResourceLocalPath,
@@ -77,7 +76,12 @@ export function buildReadResourceTool(): ToolDefinition {
           type: 'integer',
           minimum: 1,
           maximum: 200000,
-          description: 'Optional bounded text limit. Visual archives default to 50,000 characters.',
+          description: 'Text range size, at most 200,000 UTF-16 characters. Default: 50,000.',
+        },
+        start_char: {
+          type: 'integer',
+          minimum: 0,
+          description: 'Zero-based UTF-16 offset for a stored flujo://run/... resource. Use range.nextChar to continue.',
         },
         expected_sha256: {
           type: 'string',
@@ -264,16 +268,19 @@ async function executeReadResource(
       const expectedSha256 = typeof args?.expected_sha256 === 'string'
         ? args.expected_sha256.trim()
         : undefined;
+      const startChar = args?.start_char === undefined ? 0 : args.start_char;
+      if (typeof startChar !== 'number' || !Number.isSafeInteger(startChar) || startChar < 0) {
+        return { success: false, error: 'start_char must be a non-negative safe integer.' };
+      }
       const access = { at: Date.now(), source: 'tool-read' as const, nodeId: ctx.node?.nodeId };
-      const bounded = maxChars !== undefined || expectedSha256
-        ? await readRunResourceBounded(uri, { maxChars, expectedSha256, access })
-        : null;
-      const read = bounded ? null : await readRunResource(uri, access);
-      if (!bounded && !read) {
+      const bounded = await readRunResourceBounded(uri, { maxChars, startChar, expectedSha256, access });
+      if (!bounded) {
         return { success: false, error: `Run resource not found: ${uri}` };
       }
-      const entry = bounded?.entry ?? read!.entry;
-      const contents = read?.contents;
+      if (bounded.verification?.ok === false) {
+        return { success: false, error: 'The resource SHA-256 does not match the expected archived payload.' };
+      }
+      const entry = bounded.entry;
       ctx.emit?.({
         type: 'resource:read',
         node: ctx.node,
@@ -286,12 +293,7 @@ async function executeReadResource(
       });
       // Prefer text content; for binary/link kinds return a compact note rather
       // than re-inlining base64 (which would defeat the point of the marker).
-      const textParts = (contents?.contents ?? [])
-        .map((c) => (typeof (c as { text?: unknown }).text === 'string' ? (c as { text: string }).text : ''))
-        .filter((t) => t.length > 0);
-      const content = bounded?.content ?? (textParts.length > 0
-        ? textParts.join('\n')
-        : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`);
+      const content = bounded.content;
       const localPath = entry.kind !== 'text' && entry.kind !== 'link'
         ? await getRunResourceLocalPath(entry.uri)
         : null;
@@ -303,9 +305,10 @@ async function executeReadResource(
           name: entry.name,
           mimeType: entry.mimeType,
           content,
-          truncated: bounded?.truncated ?? false,
+          truncated: bounded.truncated,
           sha256: entry.sha256,
-          verification: bounded?.verification,
+          verification: bounded.verification,
+          range: bounded.range,
           ...(localPath ? { localPath } : {}),
         },
       };

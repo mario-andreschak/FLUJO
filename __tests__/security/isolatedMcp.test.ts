@@ -73,7 +73,7 @@ test('creates a stopped container with OS restrictions, then attaches by its exa
   const createCall = execute.mock.calls.find(([, args]) => args?.includes('create'))!;
   const args = createCall[1] as string[];
   expect(args).toEqual(expect.arrayContaining([
-    '--pull=never', '--read-only', '--network=none', '--cap-drop=ALL',
+    '--init', '--pull=never', '--read-only', '--network=none', '--cap-drop=ALL',
     '--security-opt=no-new-privileges:true', '--user=65534:65534', '--no-healthcheck',
     '--log-driver=none',
     '--memory', '128m', '--memory-swap', '--cpus', '0.5', '--pids-limit', '32',

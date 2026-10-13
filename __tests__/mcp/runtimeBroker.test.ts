@@ -143,8 +143,6 @@ describe('MCP App sidecar runtime broker', () => {
     const profile = installTrustedHostProfile({ name: 'runtime-broker-factory-test' });
     const config = profile.config;
     config.enableMcpApps = true;
-    // Read the proposed policy before approving the changed capabilities.
-    // The previous approval intentionally cannot authorize enableMcpApps.
     const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
     config.trustedHost = { ...policy, environmentNames: [...policy.environmentNames,
       MCP_APP_RUNTIME_REGISTER_URL_ENV, MCP_APP_RUNTIME_REGISTER_TOKEN_ENV] };

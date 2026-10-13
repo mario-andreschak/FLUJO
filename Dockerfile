@@ -11,7 +11,7 @@
 # which is why HOME points at a writable, owned directory.
 
 # ---- Builder --------------------------------------------------------------
-FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS builder
+FROM public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS builder
 WORKDIR /app
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
@@ -22,16 +22,19 @@ COPY mcp-servers ./mcp-servers
 # The locked lint dependency is a private local adapter, so npm ci needs its
 # package metadata before the later full source copy.
 COPY tooling/next-lint-glob ./tooling/next-lint-glob
+COPY packages/antigravity-cli ./packages/antigravity-cli
+COPY packages/avatar-sdk ./packages/avatar-sdk
 RUN npm ci --include=dev
 
 # Build the Next.js production output.
 COPY . .
 RUN node scripts/verify-ci-node.mjs 22.23.3 --binary-only
+RUN node scripts/build-smoke-owner-issuer.mjs
 ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
 RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
-FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
+FROM public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
 WORKDIR /app
 COPY --from=builder /app/bin ./bin
 COPY --from=builder /app/scripts/verify-ci-node.mjs /app/scripts/ci-node-binaries.json ./scripts/
@@ -82,6 +85,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         ripgrep \
+        tini \
     && rm -rf /var/lib/apt/lists/*
 # Debian refuses bare `pip install` into system site-packages (PEP 668). MCP
 # server configs run exactly that, and inside a disposable container the
@@ -107,6 +111,8 @@ RUN if [ -n "$FLUJO_APPLICATION_VERSION" ]; then \
 COPY --from=builder /app/mcp-servers ./mcp-servers
 # Keep local lockfile targets available during the production install.
 COPY --from=builder /app/tooling/next-lint-glob ./tooling/next-lint-glob
+COPY --from=builder /app/packages/antigravity-cli ./packages/antigravity-cli
+COPY --from=builder /app/packages/avatar-sdk ./packages/avatar-sdk
 # Reuse the browser payload downloaded by the workspace install lifecycle in the
 # builder. The following npm ci sees the version marker and does not download it again.
 COPY --from=builder /home/node/.cache/ms-playwright /home/node/.cache/ms-playwright
@@ -145,6 +151,10 @@ RUN mkdir -p \
     && chown -R node:node /app/data /home/node
 
 USER node
+
+# Reap adopted tool descendants and forward signals to the existing launcher.
+# Subreaper mode also works when a managed runner supplies an outer init.
+ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
 
 # Port 4200: main HTTPS proxy
 # Port 4201: shared MCP Apps transport listener (`*.localhost` browser origins)

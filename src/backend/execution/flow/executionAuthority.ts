@@ -28,6 +28,20 @@ export interface FlowDurableMutationContext {
 }
 
 /** Causal children inherit fencing and audit attribution, never Persona abilities. */
+const forwardingAuthorityParents = new WeakMap<FlowExecutionAuthority, FlowExecutionAuthority>();
+
+/** Only wrappers constructed here prove exact assertion forwarding. */
+export function flowAssertionRoot(authority: FlowExecutionAuthority): FlowExecutionAuthority {
+  let current = authority;
+  const seen = new Set<FlowExecutionAuthority>();
+  while (forwardingAuthorityParents.has(current)) {
+    if (seen.has(current) || seen.size >= 256) throw new FlowExecutionAuthorityError('Invalid authority forwarding chain.');
+    seen.add(current);
+    current = forwardingAuthorityParents.get(current)!;
+  }
+  return current;
+}
+
 export function subflowExecutionAuthority(authority?: FlowExecutionAuthority): FlowExecutionAuthority | undefined {
   if (!authority) return undefined;
   const child = {
@@ -36,7 +50,9 @@ export function subflowExecutionAuthority(authority?: FlowExecutionAuthority): F
     ...(authority.commitWhileCurrent ? { commitWhileCurrent: authority.commitWhileCurrent.bind(authority) } : {}),
   };
   inheritNativeOriginalAuthority(authority, child);
-  return Object.freeze(child);
+  const frozen = Object.freeze(child);
+  forwardingAuthorityParents.set(frozen, authority);
+  return frozen;
 }
 
 export function isFlowExecutionAuthorityError(

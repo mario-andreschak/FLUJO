@@ -83,6 +83,7 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
 
 import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import {
   enqueueSteeringMessage,
   peekSteeringMessages,
@@ -133,7 +134,9 @@ describe('mid-run steering', () => {
       return finalStep('done')(s);
     });
 
-    const result = await runFlow({ flowId: FLOW_ID, prompt: 'do the thing', conversationId: convId, mode: 'conversation' });
+    const events: any[] = [];
+    const result = await runFlow({ flowId: FLOW_ID, prompt: 'do the thing', conversationId: convId,
+      mode: 'conversation', emit: event => events.push(event) });
 
     expect(result.status).toBe('completed');
     // The correction was already in context when the step ran — the whole point.
@@ -141,6 +144,30 @@ describe('mid-run steering', () => {
     expect(peekSteeringMessages(convId)).toHaveLength(0);
     // ...and it was recorded in the append-only log, not just held in memory.
     expect(loggedMessages.map((m) => m.id)).toContain('s1');
+    expect(events.find(event => event.type === 'message' && event.message.id === 's1').messageOrigin).toBe('input');
+    const rawMessages = (appendRawForState as jest.Mock).mock.calls.flatMap(call => call[1]);
+    expect(rawMessages.find(event => event.type === 'message' && event.message.id === 's1').messageOrigin).toBe('input');
+  });
+
+  it('attests only the admitted steering ids when an internal message is waiting for emission', async () => {
+    const convId = 'conv-steer-origins';
+    clearSteeringInbox(convId);
+    enqueueSteeringMessage(convId, { ...steering('use Python', 'steer-input'), executionOrigin: 'internal' });
+    enqueueSteeringMessage(convId, { ...steering('and test it', ''), executionOrigin: 'internal' });
+    script.push(finalStep('done'));
+    const events: any[] = [];
+    const result = await runFlow({ flowId: FLOW_ID, prompt: 'do the thing', conversationId: convId,
+      mode: 'conversation', emit: event => {
+        events.push(event);
+        if (event.type === 'run:start') conversationStates.get(convId)!.messages.push(steering('internal context', 'internal-pending'));
+      } });
+    expect(result.status).toBe('completed');
+    expect(events.find(event => event.type === 'message' && event.message.id === 'steer-input').messageOrigin).toBe('input');
+    expect(events.find(event => event.type === 'message' && event.message.id === 'internal-pending').messageOrigin).toBe('internal');
+    const normalized = events.find(event => event.type === 'message' && event.message.content === 'and test it');
+    expect(normalized.message.id).toBeTruthy();
+    expect(normalized.messageOrigin).toBe('input');
+    expect(result.messages.find(message => message.id === 'steer-input')?.executionOrigin).toBeUndefined();
   });
 
   it('delivers a message that arrives MID-run on the very next step', async () => {

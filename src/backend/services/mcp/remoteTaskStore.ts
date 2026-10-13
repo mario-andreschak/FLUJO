@@ -46,6 +46,7 @@ import {
   boundStatusMessage,
   isTerminalMcpTaskStatus,
   type McpTaskStatus,
+  type McpTaskGeneration,
 } from '@/shared/types/mcp/tasks';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
@@ -165,6 +166,7 @@ export async function resolveServerIdentity(serverName: string): Promise<string>
 // ---------------------------------------------------------------------------
 
 export interface CreateRemoteTaskInput {
+  generation?: McpTaskGeneration;
   remoteTaskId: string;
   serverName: string;
   serverIdentity: string;
@@ -192,6 +194,7 @@ export async function createRemoteTaskRecord(
       remoteTaskId: input.remoteTaskId,
       serverName: input.serverName,
       serverIdentity: input.serverIdentity,
+      ...(input.generation ? { generation: input.generation } : {}),
       toolName: input.toolName,
       requestFingerprint: requestFingerprint(),
       ownership: input.ownership,
@@ -288,6 +291,7 @@ export type RemoteTaskPatch = Partial<
     | 'remoteTaskId'
     | 'serverName'
     | 'serverIdentity'
+    | 'generation'
     | 'toolName'
     | 'requestFingerprint'
     | 'createdAt'
@@ -332,6 +336,7 @@ export async function patchRemoteTaskRecord(
         remoteTaskId: current.remoteTaskId,
         serverName: current.serverName,
         serverIdentity: current.serverIdentity,
+        generation: current.generation,
         toolName: current.toolName,
         requestFingerprint: current.requestFingerprint,
         createdAt: current.createdAt,

@@ -5,8 +5,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES } from '@/backend/services/security/trustedHostMcp';
 
-/** Synthetic private owner grant/files. Optional Node source is supplied by the
- * test; the helper itself never starts a child or imports user credentials. */
+/** Real private grant/files for tests that model SDK effects; no code is executed. */
 export function installTrustedHostProfile(options: {
   name?: string; roots?: string[]; environment?: Record<string, string>;
   nodeSource?: string; args?: string[]; runtimeHome?: 'host' | 'isolated'; environmentNames?: string[];

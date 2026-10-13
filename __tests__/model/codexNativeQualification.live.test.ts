@@ -9,7 +9,8 @@ live('qualifies exact Luna/medium through the restrictive Source catalogue and t
   const relative=path.relative(process.cwd(),output!);
   if(!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative))throw new Error('Live receipts must stay outside the checkout');
   const controller=new AbortController();let checks=0;
-  const profile=await qualifyNativeCodex('gpt-6-luna','medium',controller.signal,async()=>{checks++;controller.signal.throwIfAborted();},{catalogPath});
+  const profile=await qualifyNativeCodex('gpt-6-luna','medium',controller.signal,async()=>{checks++;controller.signal.throwIfAborted();},
+    {catalogPath,executable:process.env.FLUJO_LIVE_CODEX_PATH});
   assertNativeCodexQualification(profile);
   expect(()=>assertNativeCodexQualification({...profile})).toThrow('unavailable');
   expect(checks).toBeGreaterThan(3);

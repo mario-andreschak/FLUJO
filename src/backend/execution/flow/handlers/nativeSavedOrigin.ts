@@ -6,6 +6,7 @@ import { readNativeModelTurnSnapshot } from '../modelTurnArchive';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { assertSafeCollectionId } from '@/utils/storage/backend';
 import { readNativeOriginLineage, type NativeLineageRootBinding } from './nativeOriginLineage';
+import type { NativeHeldLineageRead } from './nativeHeldLineageRead';
 import { nativeDigest, nativeToolInventoryDigest, type NativeBrokerAuthority } from './nativeToolBroker';
 import { nativeInvocationStatus, readNativeInvocationTerminalEvidence,
   type NativeInvocationOwner } from './nativeToolJournal';
@@ -79,6 +80,7 @@ export async function saveNativeSessionOrigin(descriptor: NativeInvocationSessio
 /** Live, trusted source read for the host's preissue acceptance. */
 export async function readSavedNativeOrigin(input: { invocationId: string;
   authority: NativeBrokerAuthority; root: NativeLineageRootBinding; signal: AbortSignal;
+  heldRead?: NativeHeldLineageRead;
 }): Promise<NativeInvocationSessionDescriptor> {
   const saved = await readSaved(input.invocationId, input.root.workspace);
   if (saved.processGeneration !== processGeneration) return held();
@@ -86,7 +88,7 @@ export async function readSavedNativeOrigin(input: { invocationId: string;
   const receipt = await nativeInvocationStatus(input.invocationId, descriptor.receipt.owner);
   if (receipt.state !== 'begin-may-have-been-sent' || !same(receipt.owner, descriptor.receipt.owner)) return held();
   const lineage = await readNativeOriginLineage({ receipt, authority: input.authority,
-    root: input.root, signal: input.signal });
+    root: input.root, signal: input.signal, heldRead: input.heldRead });
   if (!same(lineage, descriptor.lineage)) return held();
   const archived = await readNativeModelTurnSnapshot(receipt.owner.conversationId, input.invocationId,
     input.root.workspace, input.signal);

@@ -79,9 +79,27 @@ describe('Persona runtime observability', () => {
           duplicate: false,
         })),
       );
-      expect(results.map(({ event }) => event.seq)).toEqual(
+      // Independent workspace-writer checks can reach the journal in a different
+      // order from these calls. The durable frames define the admission order.
+      const persisted = await readPersonaRuntimeEvents(personaId);
+      const file = activeEventFile(personaId);
+      const journalBytes = await fs.readFile(file, 'utf8');
+      expect(persisted.map(({ seq }) => seq)).toEqual(
         Array.from({ length: 20 }, (_, index) => index),
       );
+      expect(journalBytes).toBe(persisted.map(event => `${JSON.stringify(event)}\n`).join(''));
+      results.forEach(({ appended, event }, index) => {
+        expect(appended).toBe(true);
+        expect(event).toMatchObject({
+          eventId: `admission:${index}`,
+          type: 'mailbox:admitted',
+          mailboxItemId: `mailbox_${index}`,
+          kind: 'assignment',
+          priority: 'normal',
+          duplicate: false,
+        });
+        expect(persisted[event.seq]).toEqual(event);
+      });
 
       const retry = await appendPersonaRuntimeEvent(personaId, {
         eventId: 'admission:0',
@@ -91,10 +109,10 @@ describe('Persona runtime observability', () => {
         priority: 'urgent',
         duplicate: true,
       });
-      expect(retry).toMatchObject({ appended: false, event: { seq: 0 } });
+      expect(retry).toEqual({ appended: false, event: results[0].event });
       expect(await latestPersonaRuntimeEventSequence(personaId)).toBe(19);
-      expect((await readPersonaRuntimeEvents(personaId)).map(({ seq }) => seq))
-        .toEqual(Array.from({ length: 20 }, (_, index) => index));
+      expect(await readPersonaRuntimeEvents(personaId)).toEqual(persisted);
+      expect(await fs.readFile(file, 'utf8')).toBe(journalBytes);
     });
   });
 

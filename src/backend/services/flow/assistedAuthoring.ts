@@ -11,6 +11,7 @@ import type {
   StepToolSuggestionResult,
 } from '@/shared/types/flow/assistance';
 import { normalizeMaxTokens } from '@/shared/types/model';
+import { resolveModelAdapter, supportsLocalModelAuth } from '@/shared/types/model/provider';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { modelService } from '@/backend/services/model';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -81,7 +82,7 @@ async function authoringCompletion(
   const model = await modelService.getModel(modelId);
   if (!model) throw new FlowAuthoringValidationError(`AI model not found: ${modelId}`);
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-  const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new FlowAuthoringValidationError('Could not resolve the selected AI model credentials.');
   const adapter = getCompletionAdapter(model);
   const { completion } = await adapter.createCompletion({

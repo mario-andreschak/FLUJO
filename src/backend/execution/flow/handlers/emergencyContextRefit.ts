@@ -1,4 +1,5 @@
 import type OpenAI from 'openai';
+import type { ToolResourceMarker } from '@/backend/services/model/adapters/types';
 
 export const EMERGENCY_CONTEXT_REFIT_MARKER = '[FLUJO emergency context compaction]';
 
@@ -12,6 +13,8 @@ export interface EmergencyContextRefitResult {
   omittedMessageIndexes: number[];
   truncatedMessageIndexes: number[];
   omitted: { assistant: number; tool: number; user: number; other: number };
+  /** Protected instructions/receipts cannot fit; the caller must refuse dispatch. */
+  capacityExceeded: boolean;
 }
 
 interface CandidateChunk {
@@ -32,7 +35,10 @@ function countOmitted(
   return counts;
 }
 
-function notice(counts: EmergencyContextRefitResult['omitted']): OpenAI.ChatCompletionAssistantMessageParam {
+function notice(
+  counts: EmergencyContextRefitResult['omitted'],
+  receipts: string[],
+): OpenAI.ChatCompletionAssistantMessageParam {
   const total = counts.assistant + counts.tool + counts.user + counts.other;
   return {
     role: 'assistant',
@@ -42,6 +48,7 @@ function notice(counts: EmergencyContextRefitResult['omitted']): OpenAI.ChatComp
       `Omitted: ${counts.tool} tool results, ${counts.assistant} assistant messages, ${counts.user} user messages, ${counts.other} other messages.`,
       'The canonical FLUJO conversation remains intact. This is a deterministic last-resort refit, not an AI-generated summary.',
       'Continue from the retained recent context.',
+      ...receipts,
     ].join('\n'),
   };
 }
@@ -49,17 +56,18 @@ function notice(counts: EmergencyContextRefitResult['omitted']): OpenAI.ChatComp
 function materialize(
   messages: readonly OpenAI.ChatCompletionMessageParam[],
   omitted: ReadonlySet<number>,
+  resourceMarkers?: Map<string, ToolResourceMarker>,
 ): OpenAI.ChatCompletionMessageParam[] {
   if (omitted.size === 0) return messages.slice();
   const leadingSystem: OpenAI.ChatCompletionMessageParam[] = [];
   let index = 0;
-  while (index < messages.length && messages[index].role === 'system') {
+  while (index < messages.length && (messages[index].role === 'system' || messages[index].role === 'developer')) {
     leadingSystem.push(messages[index]);
     index += 1;
   }
   return [
     ...leadingSystem,
-    notice(countOmitted(messages, omitted)),
+    notice(countOmitted(messages, omitted), omittedReceipts(messages, omitted, resourceMarkers)),
     ...messages.slice(index).filter((_message, messageIndex) => !omitted.has(messageIndex + index)),
   ];
 }
@@ -70,7 +78,7 @@ function materializeSourceIndexes(
 ): Array<number | undefined> {
   if (omitted.size === 0) return messages.map((_message, index) => index);
   let leadingSystemCount = 0;
-  while (leadingSystemCount < messages.length && messages[leadingSystemCount].role === 'system') {
+  while (leadingSystemCount < messages.length && (messages[leadingSystemCount].role === 'system' || messages[leadingSystemCount].role === 'developer')) {
     leadingSystemCount += 1;
   }
   return [
@@ -83,10 +91,61 @@ function materializeSourceIndexes(
   ];
 }
 
+/** Exact execution identifiers come from actual call/result messages, never
+ * from the summarizer. Only resource-backed completed groups may leave the
+ * wire; unresolved calls and observations without an archive remain intact. */
+function resourceUris(message: OpenAI.ChatCompletionMessageParam): string[] {
+  const texts = typeof message.content === 'string' ? [message.content]
+    : Array.isArray(message.content) ? message.content.flatMap(part => part && typeof part === 'object'
+      && 'text' in part && typeof part.text === 'string' ? [part.text] : []) : [];
+  return [...new Set(texts.flatMap(text => text.match(/flujo:\/\/run\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+/g) ?? []))];
+}
+
+export function isRecoveryAnchor(message: OpenAI.ChatCompletionMessageParam): boolean {
+  const content = message.content;
+  return resourceUris(message).length > 0 || (typeof content === 'string'
+    && [EMERGENCY_CONTEXT_REFIT_MARKER, '[FLUJO conversation summary]', '[Visual context archive']
+      .some(marker => content.startsWith(marker)));
+}
+
+function capturedResultUri(message: OpenAI.ChatCompletionMessageParam, markers?: Map<string, ToolResourceMarker>): string | undefined {
+  if (message.role !== 'tool') return undefined;
+  const entry = markers?.get(message.tool_call_id)?.result;
+  return entry?.producedBy?.toolCallId === message.tool_call_id ? entry.uri : undefined;
+}
+
+function omittedReceipts(
+  messages: readonly OpenAI.ChatCompletionMessageParam[],
+  omitted: ReadonlySet<number>,
+  resourceMarkers?: Map<string, ToolResourceMarker>,
+): string[] {
+  const receipts: string[] = [];
+  for (const index of omitted) {
+    const message = messages[index];
+    if (message.role !== 'assistant') continue;
+    for (const call of message.tool_calls ?? []) {
+      const tool = call.type === 'function' ? call.function.name : call.custom.name;
+      const args = call.type === 'function' ? call.function.arguments : call.custom.input;
+      const results = messages.filter((result, resultIndex) => omitted.has(resultIndex)
+        && result.role === 'tool' && result.tool_call_id === call.id);
+      const argsEntry = resourceMarkers?.get(call.id)?.args;
+      const argsResource = argsEntry?.producedBy?.toolCallId === call.id ? argsEntry.uri : undefined;
+      receipts.push(JSON.stringify({ call_id: call.id, tool, state: 'result-observed',
+        ...(argsResource ? { arguments_resource: argsResource } : { arguments: args }),
+        resources: results.map(result => capturedResultUri(result, resourceMarkers)) }));
+    }
+  }
+  return receipts.length ? [
+    'Recorded tool calls below already have observed results. This does not assert that a side effect succeeded. Read the archived result before deciding how to recover; do not repeat a call because its detail was compacted.',
+    ...receipts,
+  ] : [];
+}
+
 function completeToolChunk(
   messages: readonly OpenAI.ChatCompletionMessageParam[],
   start: number,
   eligibleEnd: number,
+  resourceMarkers?: Map<string, ToolResourceMarker>,
 ): number[] | undefined {
   const message = messages[start];
   if (message.role !== 'assistant' || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
@@ -102,12 +161,19 @@ function completeToolChunk(
     if (ids.has(result.tool_call_id)) found.add(result.tool_call_id);
     index += 1;
   }
-  return [...ids].every(id => found.has(id)) ? indexes : undefined;
+  return [...ids].every(id => found.has(id))
+    && indexes.length === ids.size + 1
+    && indexes.slice(1).every(index => {
+      const result = messages[index];
+      return result.role === 'tool' && ids.has(result.tool_call_id) && Boolean(capturedResultUri(result, resourceMarkers));
+    })
+    ? indexes : undefined;
 }
 
 function candidatesFor(
   messages: readonly OpenAI.ChatCompletionMessageParam[],
   keepRecentMessages: number,
+  resourceMarkers?: Map<string, ToolResourceMarker>,
 ): CandidateChunk[] {
   const eligibleEnd = Math.max(0, messages.length - keepRecentMessages);
   const chunks: CandidateChunk[] = [];
@@ -115,7 +181,7 @@ function candidatesFor(
 
   // Complete old tool-call/result groups are the safest and highest-value units.
   for (let index = 0; index < eligibleEnd; index += 1) {
-    const group = completeToolChunk(messages, index, eligibleEnd);
+    const group = completeToolChunk(messages, index, eligibleEnd, resourceMarkers);
     if (!group) continue;
     chunks.push({ indexes: group, priority: 0 });
     group.forEach(value => consumed.add(value));
@@ -125,61 +191,15 @@ function candidatesFor(
   for (let index = 0; index < eligibleEnd; index += 1) {
     if (consumed.has(index)) continue;
     const message = messages[index];
-    if (message.role === 'assistant' && (!Array.isArray(message.tool_calls) || message.tool_calls.length === 0)) {
+    if (message.role === 'assistant' && !isRecoveryAnchor(message)
+      && (!Array.isArray(message.tool_calls) || message.tool_calls.length === 0)) {
       chunks.push({ indexes: [index], priority: 1 });
       consumed.add(index);
     }
   }
-  // Finally old user/other messages, preserving the most recent user task.
-  let latestUser = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'user') { latestUser = index; break; }
-  }
-  for (let index = 0; index < eligibleEnd; index += 1) {
-    if (consumed.has(index) || index === latestUser || messages[index].role === 'system' || messages[index].role === 'tool') continue;
-    chunks.push({ indexes: [index], priority: 2 });
-  }
+  // User corrections and system/developer instructions remain verbatim, even
+  // when old. Relevance or age cannot decide whether they are still binding.
   return chunks.sort((left, right) => left.priority - right.priority || left.indexes[0] - right.indexes[0]);
-}
-
-function textLength(message: OpenAI.ChatCompletionMessageParam): number {
-  if (typeof message.content === 'string') return Array.from(message.content).length;
-  if (!Array.isArray(message.content)) return 0;
-  return message.content.reduce((sum, part) => sum + (
-    part && typeof part === 'object' && 'text' in part && typeof part.text === 'string'
-      ? Array.from(part.text).length
-      : 0
-  ), 0);
-}
-
-function truncateText(text: string, target: number): string {
-  const points = Array.from(text);
-  if (points.length <= target) return text;
-  const removed = points.length - target;
-  const marker = Array.from(`\n…[FLUJO truncated ${removed} characters during emergency context refit]…\n`);
-  const payload = Math.max(0, target - marker.length);
-  const head = Math.ceil(payload * 0.7);
-  return [...points.slice(0, head), ...marker, ...points.slice(points.length - (payload - head))].join('');
-}
-
-function truncateMessage(
-  message: OpenAI.ChatCompletionMessageParam,
-  target: number,
-): OpenAI.ChatCompletionMessageParam {
-  if (typeof message.content === 'string') {
-    return { ...message, content: truncateText(message.content, target) } as OpenAI.ChatCompletionMessageParam;
-  }
-  if (!Array.isArray(message.content)) return message;
-  let remaining = target;
-  return {
-    ...message,
-    content: message.content.map(part => {
-      if (!part || typeof part !== 'object' || !('text' in part) || typeof part.text !== 'string') return part;
-      const text = truncateText(part.text, Math.max(128, remaining));
-      remaining = Math.max(0, remaining - Array.from(text).length);
-      return { ...part, text };
-    }),
-  } as OpenAI.ChatCompletionMessageParam;
 }
 
 /**
@@ -193,6 +213,7 @@ export function emergencyRefitMessages(
     target: number;
     measure: (messages: readonly OpenAI.ChatCompletionMessageParam[]) => number;
     keepRecentMessages?: number;
+    resourceMarkers?: Map<string, ToolResourceMarker>;
   },
 ): EmergencyContextRefitResult {
   const target = Math.max(1, options.target);
@@ -203,74 +224,32 @@ export function emergencyRefitMessages(
       sourceMessageIndexes: messages.map((_message, index) => index),
       omittedMessageIndexes: [], truncatedMessageIndexes: [],
       omitted: { assistant: 0, tool: 0, user: 0, other: 0 },
+      capacityExceeded: false,
     };
   }
-  const chunks = candidatesFor(messages, Math.max(2, Math.floor(options.keepRecentMessages ?? 6)));
-  let omitted = new Set<number>();
+  const chunks = candidatesFor(messages, Math.max(2, Math.floor(options.keepRecentMessages ?? 6)), options.resourceMarkers);
+  const omitted = new Set<number>();
   let fitted = messages.slice();
   for (const chunk of chunks) {
     chunk.indexes.forEach(index => omitted.add(index));
-    fitted = materialize(messages, omitted);
+    fitted = materialize(messages, omitted, options.resourceMarkers);
     if (options.measure(fitted) <= target) break;
   }
 
-  const truncated = new Set<number>();
-  for (let pass = 0; options.measure(fitted) > target && pass < 24; pass += 1) {
-    const over = options.measure(fitted) - target;
-    let largest = -1;
-    let length = 0;
-    for (let index = 0; index < fitted.length; index += 1) {
-      const candidateLength = textLength(fitted[index]);
-      if (candidateLength > length) { largest = index; length = candidateLength; }
-    }
-    if (largest < 0 || length <= 128) break;
-    const source = fitted[largest];
-    const originalIndex = messages.findIndex((message, index) => !omitted.has(index) && message === source);
-    if (originalIndex >= 0) truncated.add(originalIndex);
-    fitted[largest] = truncateMessage(source, Math.max(128, length - Math.max(over * 4 + 2_048, Math.ceil(length / 3))));
-  }
-
-  // Absolute message-side guard for malformed wires (or an enormous current
-  // user/system message). Keep the system contract and latest user task, mark
-  // every other non-system message omitted, then bound retained text. A caller
-  // may still have to shed an oversized tool-definition block, which is not
-  // part of this message-only function.
-  if (options.measure(fitted) > target) {
-    let latestUser = -1;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index].role === 'user') { latestUser = index; break; }
-    }
-    omitted = new Set(messages
-      .map((_message, index) => index)
-      .filter(index => messages[index].role !== 'system' && index !== latestUser));
-    fitted = materialize(messages, omitted);
-    for (let pass = 0; options.measure(fitted) > target && pass < 32; pass += 1) {
-      const over = options.measure(fitted) - target;
-      let largest = -1;
-      let length = 0;
-      for (let index = 0; index < fitted.length; index += 1) {
-        const candidateLength = textLength(fitted[index]);
-        if (candidateLength > length) { largest = index; length = candidateLength; }
-      }
-      if (largest < 0 || length <= 128) break;
-      const source = fitted[largest];
-      const originalIndex = messages.findIndex((message, index) => !omitted.has(index) && message === source);
-      if (originalIndex >= 0) truncated.add(originalIndex);
-      fitted[largest] = truncateMessage(
-        source,
-        Math.max(128, length - Math.max(over * 4 + 2_048, Math.ceil(length / 2))),
-      );
-    }
-  }
+  // No text truncation or absolute guard may weaken the protected contract.
+  // A caller can withhold tool schemas and retry this calculation, or surface
+  // an actionable capacity error. It must not dispatch an infeasible request.
+  const after = options.measure(fitted);
 
   return {
     messages: fitted,
     sourceMessageIndexes: materializeSourceIndexes(messages, omitted),
-    compacted: fitted.length !== messages.length || truncated.size > 0,
+    compacted: omitted.size > 0,
     before,
-    after: options.measure(fitted),
+    after,
     omittedMessageIndexes: [...omitted].sort((left, right) => left - right),
-    truncatedMessageIndexes: [...truncated].sort((left, right) => left - right),
+    truncatedMessageIndexes: [],
     omitted: countOmitted(messages, omitted),
+    capacityExceeded: after > target,
   };
 }

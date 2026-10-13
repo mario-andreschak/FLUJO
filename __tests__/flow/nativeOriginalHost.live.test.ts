@@ -56,7 +56,7 @@ live('completes actual Luna/medium under a genuine Persona lease and saved Origi
       const reservations=ledgers.flatMap(ledger=>ledger.reservations).filter(value=>value.owner.modelId===modelId);
       const reservation=reservations.at(-1);
       expect(reservation).toMatchObject({state:'released',sdkOutcome:'completed',exit:{code:0,signal:null},
-        sdkUsage:{source:'codex-app-server-usage',appServerTurns:1}});
+        sdkUsage:{source:'codex-app-server-turn',outerTurns:1}});
       await fs.writeFile(output!,JSON.stringify({kind:'live-source-persona-original-qualification',startedAt,
         observedAt:new Date().toISOString(),model:'gpt-6-luna',effort:'medium',reservation,
         output:'READY',billedCostUsd:null,countsAsRequestedSwarm:false,countsAsBusinessWork:false},null,2),{mode:0o600});

@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 216.
+Route files: 222.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ Route files: 216.
 | `/api/approvals/{id}` | POST | [source](../../src/app/api/approvals/[id]/route.ts) |
 | `/api/automation-map` | GET | [source](../../src/app/api/automation-map/route.ts) |
 | `/api/avatar/connections` | GET | [source](../../src/app/api/avatar/connections/route.ts) |
+| `/api/avatar/local-speech` | GET, POST | [source](../../src/app/api/avatar/local-speech/route.ts) |
 | `/api/avatar/remote/availability` | GET | [source](../../src/app/api/avatar/remote/availability/route.ts) |
 | `/api/avatar/remote/{voiceAction}` | POST | [source](../../src/app/api/avatar/remote/[voiceAction]/route.ts) |
 | `/api/avatar/voice` | GET | [source](../../src/app/api/avatar/voice/route.ts) |
@@ -28,6 +29,7 @@ Route files: 216.
 | `/api/cwd` | GET | [source](../../src/app/api/cwd/route.ts) |
 | `/api/encryption/secure` | POST | [source](../../src/app/api/encryption/secure/route.ts) |
 | `/api/env` | GET, POST | [source](../../src/app/api/env/route.ts) |
+| `/api/factory-observatory` | GET | [source](../../src/app/api/factory-observatory/route.ts) |
 | `/api/flow` | GET, POST | [source](../../src/app/api/flow/route.ts) |
 | `/api/flow/assist` | POST | [source](../../src/app/api/flow/assist/route.ts) |
 | `/api/flow/compile` | POST | [source](../../src/app/api/flow/compile/route.ts) |
@@ -63,7 +65,9 @@ Route files: 216.
 | `/api/mcp/flujo/skills` | GET, POST | [source](../../src/app/api/mcp/flujo/skills/route.ts) |
 | `/api/mcp/flujo/state` | POST | [source](../../src/app/api/mcp/flujo/state/route.ts) |
 | `/api/mcp/flujo/tools` | GET | [source](../../src/app/api/mcp/flujo/tools/route.ts) |
+| `/api/mcp/model-risk-assessment` | POST | [source](../../src/app/api/mcp/model-risk-assessment/route.ts) |
 | `/api/mcp/oauth-capability` | POST | [source](../../src/app/api/mcp/oauth-capability/route.ts) |
+| `/api/mcp/security-review` | POST | [source](../../src/app/api/mcp/security-review/route.ts) |
 | `/api/mcp/servers` | GET, POST | [source](../../src/app/api/mcp/servers/route.ts) |
 | `/api/mcp/servers/{name}` | DELETE, GET, PUT | [source](../../src/app/api/mcp/servers/[name]/route.ts) |
 | `/api/mcp/servers/{name}/host-consent` | DELETE, GET, POST | [source](../../src/app/api/mcp/servers/[name]/host-consent/route.ts) |
@@ -84,6 +88,7 @@ Route files: 216.
 | `/api/mcp/test-connection` | POST | [source](../../src/app/api/mcp/test-connection/route.ts) |
 | `/api/mcp/test-connection/stream` | POST | [source](../../src/app/api/mcp/test-connection/stream/route.ts) |
 | `/api/model` | GET, POST | [source](../../src/app/api/model/route.ts) |
+| `/api/model/allowance` | GET, POST | [source](../../src/app/api/model/allowance/route.ts) |
 | `/api/model/provider` | POST | [source](../../src/app/api/model/provider/route.ts) |
 | `/api/model/test` | POST | [source](../../src/app/api/model/test/route.ts) |
 | `/api/model/{id}` | DELETE, GET, PUT | [source](../../src/app/api/model/[id]/route.ts) |
@@ -194,6 +199,7 @@ Route files: 216.
 | `/v1/personas/{personaId}/composition` | GET, PATCH | [source](../../src/app/v1/personas/[personaId]/composition/route.ts) |
 | `/v1/personas/{personaId}/composition/behaviors` | POST | [source](../../src/app/v1/personas/[personaId]/composition/behaviors/route.ts) |
 | `/v1/personas/{personaId}/composition/copy` | POST | [source](../../src/app/v1/personas/[personaId]/composition/copy/route.ts) |
+| `/v1/personas/{personaId}/core/reconcile` | POST | [source](../../src/app/v1/personas/[personaId]/core/reconcile/route.ts) |
 | `/v1/personas/{personaId}/deletion-preview` | GET | [source](../../src/app/v1/personas/[personaId]/deletion-preview/route.ts) |
 | `/v1/personas/{personaId}/execution-preview` | GET | [source](../../src/app/v1/personas/[personaId]/execution-preview/route.ts) |
 | `/v1/personas/{personaId}/export` | POST | [source](../../src/app/v1/personas/[personaId]/export/route.ts) |

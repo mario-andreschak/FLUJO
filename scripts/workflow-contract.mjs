@@ -1,6 +1,26 @@
-import { REQUIRED_JOB_IDS, REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
+import { assertRequiredCheckWorkflow } from './required-check-workflow.mjs';
+import { FULL_JOB_IDS as REQUIRED_JOB_IDS, FULL_CHECK_NAMES as REQUIRED_CHECK_NAMES, REQUIRED_CHECK_NAMES as MAIN_CHECK_NAMES } from './verification-contract.mjs';
 import { CI_NODE_PROFILES } from './verify-ci-node.mjs';
 import { assertScannerWorkflowContract } from './scanner-workflow-contract.mjs';
+
+const APPLICATION_CHANGED = "steps.application-change.outputs.changed == 'true'";
+const isApplicationSelection = (file, id, condition) => file === 'verify.yml' && id === 'production-build' && condition === APPLICATION_CHANGED;
+
+const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
+
+function assertVerificationRunners(workflow) {
+  for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
+    if (['production-build', 'release-safety'].includes(id)) {
+      const matrix = job.strategy?.matrix;
+      if (job['runs-on'] !== VERIFICATION_MATRIX_RUNNER
+          || !matrix || Object.keys(matrix).length !== 1 || !Array.isArray(matrix.os)) {
+        throw new Error(`${id} must pin Linux to Ubuntu 24.04, preserve Windows selection and retain its exact OS matrix.`);
+      }
+    } else if (job['runs-on'] !== 'ubuntu-24.04') {
+      throw new Error(`${id} must run verification on the qualified Ubuntu 24.04 image.`);
+    }
+  }
+}
 
 export function assertNodeRuntimeWorkflowContract(workflows) {
   const profiles = Object.values(CI_NODE_PROFILES);
@@ -12,15 +32,15 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
         throw new Error(`${file}/${id} executes Node commands without an exact verified runtime.`);
       }
       const versions = setups.map((index) => steps[index].with?.['node-version']);
-      const expected = file === 'verify.yml' && id === 'production-build' ? profiles
+      const expected = file === 'verify.yml' && id === 'production-build' ? [CI_NODE_PROFILES.current24, ...profiles.slice(1)]
         : setups.map(() => file === 'publish-npm.yml' ? CI_NODE_PROFILES.current24 : CI_NODE_PROFILES.current22);
       if (JSON.stringify(versions) !== JSON.stringify(expected)) throw new Error(`${file}/${id} has a missing or unpinned CI runtime profile.`);
       for (const [position, index] of setups.entries()) {
         const version = versions[position];
-        const historical = file === 'verify.yml' && id === 'production-build' && position === 0;
         const guard = steps[index + 1];
-        const command = `node scripts/verify-ci-node.mjs ${version}${historical ? ' --historical-build' : ''} --record`;
-        if (steps[index].if !== undefined || steps[index]['continue-on-error'] || guard?.run !== command || guard.if !== undefined || guard['continue-on-error']) {
+        const command = `node scripts/verify-ci-node.mjs ${version} --record`;
+        const selected = isApplicationSelection(file, id, steps[index].if) && guard?.if === steps[index].if;
+        if ((!selected && (steps[index].if !== undefined || guard?.if !== undefined)) || steps[index]['continue-on-error'] || guard?.run !== command || guard['continue-on-error']) {
           throw new Error(`${file}/${id} must verify official binary identity immediately after every runtime selection.`);
         }
       }
@@ -50,15 +70,19 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
     throw new Error('Production qualification commands must preserve ordinary Node options and default heap.');
   }
   if (!steps.some((step) => step.name === 'Build with the ordinary command and default Node heap' && step.run === 'npm run build')) {
-    throw new Error('The historical ordinary default-heap build must remain mandatory.');
+    throw new Error('The ordinary default-heap build must remain mandatory.');
   }
-  const command = 'set -euo pipefail\nnpm ci --include=dev\nnpm run build\nnpm run typecheck:mcp\nnpm run validate:mcp-release\nnpm run smoke:mcp-artifacts\n';
+  if (steps.flatMap(step => (step.run ?? '').split('\n')).filter(line => line === 'npm run build').length !== 1
+      || steps.flatMap(step => (step.run ?? '').split('\n')).filter(line => line === 'npm ci --include=dev').length !== 1) {
+    throw new Error('Production qualification must install and build once per operating system.');
+  }
+  const command = 'set -euo pipefail\nnpm run smoke:mcp-artifacts\n';
   for (const version of profiles.slice(1)) {
-    const index = steps.findIndex((step) => step.run === `node scripts/verify-ci-node.mjs ${version} --record`);
+    const index = steps.findIndex((step) => step.run === `node scripts/verify-ci-node.mjs ${version} --record` && step.if === APPLICATION_CHANGED);
     const qualification = steps[index + 1];
     if (index < 0 || qualification?.shell !== 'bash' || qualification.run !== command
-        || qualification.if !== undefined || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
-      throw new Error(`Node ${version} must enforce build, types and actual packed-process acceptance with shell failure propagation.`);
+        || (qualification.if !== undefined && qualification.if !== APPLICATION_CHANGED) || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
+      throw new Error(`Node ${version} must enforce actual packed-process acceptance of the built artifacts with shell failure propagation.`);
     }
   }
   if (!steps.some((step) => step.uses?.startsWith('actions/upload-artifact@') && step.if === 'always()'
@@ -68,11 +92,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
 }
 
 function assertInstallerProvenance(workflow) {
-  const paths = workflow?.on?.pull_request?.paths;
-  if (!Array.isArray(paths) || paths.some((file) => file.startsWith('!'))
-      || !['scripts/installer-release.mjs', 'scripts/installer-release.test.mjs'].every((file) => paths.includes(file))) {
-    throw new Error('Installer helper changes must trigger hosted installer validation.');
-  }
+  if (!Object.hasOwn(workflow?.on ?? {}, 'workflow_dispatch') || Object.hasOwn(workflow.on, 'pull_request')) throw new Error('Installer validation must remain manual/release-only.');
   const tagOnly = "${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}";
   const build = workflow?.jobs?.['installer-build'];
   const attest = workflow?.jobs?.['installer-attest'];
@@ -124,15 +144,38 @@ function assertInstallerProvenance(workflow) {
   }
 }
 
-export function assertWorkflowContract(workflows) {
+function assertCodexUpdateSelection(workflow) {
+  const job = workflow?.jobs?.enable;
+  const steps = job?.steps ?? [];
+  const select = steps.find(step => step.id === 'qualification');
+  const merges = steps.filter(step => /gh pr merge/.test(step.run ?? ''));
+  if (JSON.stringify(workflow?.on?.workflow_run) !== JSON.stringify({ workflows: ['verify'], types: ['completed'] })
+      || job?.if !== "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.actor.login == 'dependabot[bot]' && github.event.workflow_run.pull_requests[0].number"
+      || !steps.some(step => step.uses?.startsWith('actions/checkout@') && step.with?.ref === 'main')
+      || !select || select.if !== undefined || select['continue-on-error'] || select.shell !== 'bash'
+      || !select.run?.startsWith('set -euo pipefail\n') || !select.run.includes('fs.appendFileSync(GITHUB_OUTPUT, `eligible=${eligible}\\n`);')
+      || merges.length !== 1 || steps.indexOf(merges[0]) <= steps.indexOf(select)
+      || merges[0].if !== "steps.qualification.outputs.eligible == 'true'" || merges[0]['continue-on-error']
+      || merges[0].shell !== 'bash' || merges[0].run !== 'set -euo pipefail\ngh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --auto --squash --match-head-commit "$HEAD_SHA"\n') {
+    throw new Error('Codex update automation must select trusted evidence and merge only the exact eligible head after normal required checks.');
+  }
+  for (const step of [select, merges[0]]) {
+    if (JSON.stringify(step.env) !== JSON.stringify({ GH_TOKEN: '${{ github.token }}', REPOSITORY: '${{ github.repository }}', PR_NUMBER: '${{ github.event.workflow_run.pull_requests[0].number }}', HEAD_SHA: '${{ github.event.workflow_run.head_sha }}' })) {
+      throw new Error('Codex update selection and merge must bind identical trusted workflow inputs.');
+    }
+  }
+}
+
+export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
+  assertCodexUpdateSelection(workflows['codex-sdk-auto-merge.yml']);
   assertNodeRuntimeWorkflowContract(workflows);
   assertScannerWorkflowContract(workflows['verify.yml']);
   const docsWorkflow = workflows['scorecard-source.yml'];
   const docs = docsWorkflow?.jobs?.['scorecard-source'];
   const docsSteps = docs?.steps ?? [];
   const capture = docsSteps.findIndex(step => step.run === 'node scripts/check-scorecard-ci.mjs "${{ runner.temp }}/scorecard-source-checks"');
-  if (!docsWorkflow?.on || !Object.hasOwn(docsWorkflow.on, 'pull_request') || docsWorkflow.on.pull_request?.paths || docsWorkflow.on.pull_request?.['paths-ignore']
+  if (!docsWorkflow?.on || !Object.hasOwn(docsWorkflow.on, 'workflow_dispatch') || Object.hasOwn(docsWorkflow.on, 'pull_request') || Object.hasOwn(docsWorkflow.on, 'push')
       || docs?.if !== undefined || docs?.['continue-on-error'] || docs?.strategy?.['fail-fast'] !== false
       || JSON.stringify(docs?.strategy?.matrix?.os) !== JSON.stringify(['ubuntu-latest', 'windows-latest'])
       || docsWorkflow.env?.NODE_OPTIONS || docs.env?.NODE_OPTIONS
@@ -181,25 +224,24 @@ export function assertWorkflowContract(workflows) {
     throw new Error('Selected-release journeys must verify ancestry from the workflow checkout before detaching or installing, without shared caches.');
   }
   const workflow = workflows['verify.yml'];
-  if (!workflow || !Object.hasOwn(workflow.on, 'pull_request')
-      || workflow.on.pull_request != null
-      || !workflow.on.push?.branches?.includes('main') || workflow.on.push.paths || workflow.on.push['paths-ignore']) {
-    throw new Error('Verification must run for every pull request and main push without path filters.');
+  assertVerificationRunners(workflow);
+  if (!workflow || !Object.hasOwn(workflow.on, 'workflow_dispatch') || (!mainIntegration && (Object.hasOwn(workflow.on, 'pull_request') || Object.hasOwn(workflow.on, 'push')))) {
+    throw new Error('Broad qualification must be explicitly dispatched; it cannot run on every PR or push.');
   }
   for (const id of REQUIRED_JOB_IDS) {
     const job = workflow.jobs[id];
     if (!job || job.if !== undefined || job['continue-on-error']) throw new Error(`Required job ${id} cannot be conditional or optional.`);
     for (const step of job.steps ?? []) {
       if (!step.run) continue;
-      if (step.if !== undefined) throw new Error(`Required command in ${id} cannot be conditional.`);
+      if (step.if !== undefined && !isApplicationSelection('verify.yml', id, step.if)) throw new Error(`Required command in ${id} cannot be conditional.`);
       if (step['continue-on-error'] && !['npm run test:ci', 'npm run test:isolated'].includes(step.run)) {
         throw new Error(`Unapproved optional command in ${id}.`);
       }
     }
   }
   for (const id of ['production-build', 'release-safety']) {
-    if (JSON.stringify(workflow.jobs[id].strategy?.matrix?.os) !== JSON.stringify(['ubuntu-latest', 'windows-latest'])) {
-      throw new Error(`${id} must cover Ubuntu and Windows.`);
+    if (JSON.stringify(workflow.jobs[id].strategy?.matrix?.os) !== JSON.stringify(mainIntegration && id === 'production-build' ? ['ubuntu-latest'] : ['ubuntu-latest', 'windows-latest'])) {
+      throw new Error(`${id} has an unexpected platform matrix.`);
     }
   }
   const names = [...REQUIRED_JOB_IDS, 'verification'].flatMap((id) => {
@@ -210,8 +252,20 @@ export function assertWorkflowContract(workflows) {
         ? job.strategy.matrix.language.map((language) => job.name.replace('${{ matrix.language }}', language))
         : [job.name];
   });
-  if (JSON.stringify(names) !== JSON.stringify(REQUIRED_CHECK_NAMES)) throw new Error('Required check names drifted from the publication contract.');
+  if (JSON.stringify(names) !== JSON.stringify(mainIntegration ? MAIN_CHECK_NAMES : REQUIRED_CHECK_NAMES)) throw new Error('Required check names drifted from the publication contract.');
   const build = workflow.jobs['production-build'].steps;
+  if (build.some(step => step.if === APPLICATION_CHANGED)) {
+    const selection = build.find(step => step.id === 'application-change');
+    const syntax = build.find(step => step.name === 'Validate Worker publisher shell syntax');
+    if (!build.some(step => step.uses?.startsWith('actions/checkout@') && step.with?.['fetch-depth'] === 0)
+        || !selection || selection.if !== undefined || selection['continue-on-error'] || selection.shell !== 'bash'
+        || selection.env?.BASE_REVISION !== '${{ github.event.pull_request.base.sha }}'
+        || selection.env?.HEAD_REVISION !== '${{ github.event.pull_request.head.sha }}'
+        || !selection.run?.includes("['diff', '--name-only', '-z', base, head]")
+        || !syntax || syntax.if !== undefined || syntax['continue-on-error'] || !syntax.run?.includes('bash -n')) {
+      throw new Error('Workflow-only qualification requires the exact Git revision comparison and mandatory publisher shell syntax validation.');
+    }
+  }
   for (const command of ['npm run build', 'npm run typecheck:mcp', 'npm run validate:mcp-release', 'npm run smoke:mcp-artifacts']) {
     if (!build.some((step) => step.run?.split('\n').includes(command))) throw new Error(`Production checks omitted ${command}.`);
   }
@@ -234,10 +288,31 @@ export function assertWorkflowContract(workflows) {
       || mainTests[suite].env?.FLUJO_RUN_ISOLATION_SOURCE_PROBE !== '1') {
     throw new Error('Main CI must prepare a real Linux Docker image and execute both MCP isolation probes.');
   }
+  const preparation = mainTests[isolation].run;
+  if (!preparation.includes("digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'")
+      || !preparation.includes('for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do')
+      || !preparation.includes('for attempt in 1 2; do')
+      || !preparation.includes('pull "$registry@$digest"')
+      || !preparation.includes('test -n "$image_ref"')
+      || !preparation.includes('image inspect "$image_ref"')
+      || !preparation.includes('[[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]')) {
+    throw new Error('Isolation pulls must retry bounded identical-digest mirrors and fail closed before publishing the inspected image identity.');
+  }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
       || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)
-      || gate['continue-on-error'] || !gate.steps.some((step) => step.run?.includes('assertDependencyResults') && step.if === undefined && !step['continue-on-error'])) {
+      || gate['continue-on-error'] || !gate.steps.some((step) => step.run?.includes('assertFullDependencyResults') && step.if === undefined && !step['continue-on-error'])) {
     throw new Error('The required verification check must evaluate every prerequisite even after failures.');
   }
+}
+
+export function assertWorkflowContract(workflows) {
+  assertRequiredCheckWorkflow(workflows['verify.yml']);
+  for (const [name, workflow] of Object.entries(workflows)) {
+    if (name !== 'verify.yml' && (Object.hasOwn(workflow.on ?? {}, 'pull_request') || Object.hasOwn(workflow.on ?? {}, 'pull_request_target'))) throw new Error('Only main integration verification may run on pull requests: ' + name);
+  }
+  const { 'verify-full.yml': full, ...other } = workflows;
+  if (!full) throw new Error('Manual broad qualification is missing.');
+  assertFullWorkflowContract(other, { mainIntegration: true });
+  assertFullWorkflowContract({ ...other, 'verify.yml': full });
 }

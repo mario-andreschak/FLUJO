@@ -13,6 +13,7 @@ import type { ConversationChainsResponse } from '@/shared/types/conversationChai
 import type { WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { readModelTurnInspection, type ModelTurnInspection } from './modelTurnInspection';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
@@ -288,6 +289,18 @@ class ChatService {
     return parse<ModelTurnSnapshot>(response);
   }
 
+  /** Inspect complete archived bytes without materializing a large SDK graph. */
+  async getModelTurnInspection(conversationId: string, dispatchId: string,
+    options: { signal?: AbortSignal } = {}): Promise<ModelTurnInspection> {
+    const response = await fetch(withWorkspaceUrl(
+      `${BASE}/${encodeURIComponent(conversationId)}/model-turns/${encodeURIComponent(dispatchId)}?format=chunks`,
+    ), { cache: 'no-store', signal: options.signal });
+    if (!response.ok) return parse<ModelTurnInspection>(response);
+    const inspection = await readModelTurnInspection(response, options.signal);
+    if (inspection.entry.id !== dispatchId || inspection.entry.conversationId !== conversationId) throw new Error('Model-turn inspection identity does not match the selected dispatch.');
+    return inspection;
+  }
+
   modelTurnMediaUrl(conversationId: string, dispatchId: string, mediaId: string): string {
     return withWorkspaceUrl(
       `${BASE}/${encodeURIComponent(conversationId)}/model-turns/${encodeURIComponent(dispatchId)}/media/${encodeURIComponent(mediaId)}`,
@@ -492,7 +505,8 @@ class ChatService {
 
   /**
    * POST /api/flow/quick-chat — synthesize an ephemeral quick-chat flow (issue
-   * #61) from selections (one model + optional MCP servers/tools). Returns the
+   * #61) from one model, with automatic tool/flow discovery and optional extra
+   * integrations for specialized callers. Returns the
    * flow (with its namespaced quickchat-<id> id); the caller then creates a
    * conversation seeded with it as `flowSnapshot`.
    */
@@ -596,8 +610,8 @@ class ChatService {
     return items;
   }
 
-  async getSubflowRecoveryOptions(id: string): Promise<SubflowRecoveryOptions> {
-    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/recovery`);
+  async getSubflowRecoveryOptions(id: string, signal?: AbortSignal): Promise<SubflowRecoveryOptions> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/recovery`, { signal });
     return parse<SubflowRecoveryOptions>(response);
   }
 

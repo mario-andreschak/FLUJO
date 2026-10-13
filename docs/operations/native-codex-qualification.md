@@ -33,3 +33,19 @@ cannot mint a Source capability or establish Worker ownership, image deployment,
 tool gateway, child Original inheritance, multiworker execution or swarm work.
 Provider usage is separate from billed spend, which remains unknown unless
 independently supplied by the provider.
+
+The qualification path still admits the tested 0.157.1 binary. Current main's
+ordinary SDK/runtime stays at its own locked version. The explicit
+`FLUJO_LIVE_CODEX_PATH` is used for the restricted catalog qualification as well
+as the app-server check; a different bundled version cannot stand in for it.
+An admitted Worker can use its trusted adapter's separately pinned restrictive
+profile. Its binary and catalog are reread before Source's own qualification.
+Persona Originals keep their existing Source host and owned-thread behavior.
+
+Qualification and Original execution share the bounded startup projection for
+restricted capabilities, the verified catalog and neutral project trust. These
+controls are set before app-server initialization. Bridge URLs, headers and
+instructions remain in the private thread-start message. Persona API-key auth
+is preserved; the admitted Worker path remains keyless. Changing this projection
+changes the qualification policy digest, so earlier cached qualification cannot
+stand in for the updated launch.

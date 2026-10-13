@@ -6,6 +6,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { SUPPORTED_NODE_RANGE } from '../bin/node-runtime.mjs';
+import { verifyCodexBuiltImport, verifyClaudeBuiltImport } from './verify-codex-built-import.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -117,9 +118,12 @@ for (const required of [
   'bin/flujo.mjs',
   'bin/node-runtime.mjs',
   'bin/node-runtime-preflight.mjs',
+  'bin/app-node-runtime-preflight.mjs',
+  'bin/node-runtime-update.mjs',
   'scripts/launch-next.mjs',
   'scripts/bootstrap-directory.mjs',
   'scripts/exposure-mode.mjs',
+  'scripts/subscription-allowance.mjs',
   'mcp-servers/browser/scripts/install-browser.mjs',
   '.next/BUILD_ID',
   '.next/routes-manifest.json',
@@ -139,4 +143,6 @@ for (const entry of packages) {
   }
 }
 
-console.log(`Validated flujo-ai and four standalone MCP packages at ${rootPackage.version}.`);
+const codexFactories = await verifyCodexBuiltImport(root);
+const claudeFactories = await verifyClaudeBuiltImport(root);
+console.log(`Validated flujo-ai and four standalone MCP packages at ${rootPackage.version}; ${codexFactories} relocated Codex and ${claudeFactories} Claude import variants passed.`);

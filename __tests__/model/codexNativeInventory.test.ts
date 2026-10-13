@@ -2,10 +2,11 @@ import { qualifyCodexNativeInventory } from '@/backend/services/model/adapters/c
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 let mode='valid',directory:string,previousData:string|undefined;
 const fixture=`
 const rl=require('node:readline'),url=process.argv[1],mode=process.argv[2];
-setInterval(()=>{},1000);process.stdin.on('end',()=>process.exit(0));
+setInterval(()=>{},1000);process.stdin.on('end',()=>process.exit(mode==='nonzero-exit'?1:0));
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
 rl.createInterface({input:process.stdin}).on('line',async line=>{
  const request=JSON.parse(line);if(request.id===undefined)return;
@@ -47,4 +48,10 @@ it('requires actual outbound empty inventory and exact unsupported outputs for e
 });
 it.each(['exposed','wrong-denial'])('refuses %s and closes its owned child without minting a receipt',async value=>{
   mode=value;await expect(qualifyCodexNativeInventory(input())).rejects.toThrow();
+});
+it('refuses successful inventory frames followed by exit1 and removes the closed runtime',async()=>{
+  mode='nonzero-exit';
+  await expect(qualifyCodexNativeInventory(input())).rejects.toThrow('qualification or cleanup failed');
+  const files=await fs.readdir(path.join(getWorkspaceDataDir(),'db'));
+  expect(files.filter(name=>name.startsWith('codex-private-inventory-'))).toEqual([]);
 });

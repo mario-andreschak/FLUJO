@@ -12,6 +12,7 @@ jest.mock('@/utils/mcp/oauthProbe', () => ({ probeOAuthSupport: jest.fn(async ()
 jest.mock('@/backend/services/mcp/connection', () => {
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   return {
+    ...jest.requireActual('@/backend/services/mcp/connection'),
     createNewClient: jest.fn(), createTransport: jest.fn(() => new StdioClientTransport()),
     resolveConfigHeaders: jest.fn(), safelyCloseClient: jest.fn(async () => undefined),
     shouldRecreateClient: jest.fn(() => ({ needsNewClient: false })),

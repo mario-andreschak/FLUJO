@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 2,
+  "inspectionDate": "2026-10-12",
+  "projectRoot": "<PROJECT_ROOT>",
+  "candidate": "<PROJECT_ROOT>\\out\\flujo-promo-candidate.mp4",
+  "verdict": "PASS_WITH_ADVISORIES",
+  "deliverable": true,
+  "mediaModified": false,
+  "tolerances": {
+    "durationToleranceSeconds": 0.5,
+    "fpsTolerance": 0.15,
+    "frameTolerance": 2,
+    "audioVideoEndToleranceSeconds": 0.12,
+    "loudnessToleranceLufs": 2,
+    "maxRepairRounds": 1
+  },
+  "measurements": {
+    "width": 1920,
+    "height": 1080,
+    "aspect": "16:9",
+    "videoCodec": "h264",
+    "pixelFormat": "yuv420p",
+    "fps": 30,
+    "decodedFrames": 900,
+    "durationSeconds": 30,
+    "audioCodec": "aac",
+    "sampleRate": 48000,
+    "channels": 2,
+    "audioStartSeconds": 0,
+    "videoStartSeconds": 0,
+    "audioDurationSeconds": 30,
+    "avEndDriftSeconds": 0,
+    "decodedAudioTailSeconds": 0.009313,
+    "integratedLufs": -14.8,
+    "truePeakDbtp": -3.9,
+    "loudnessRangeLu": 4,
+    "sizeBytes": 6520625
+  },
+  "checks": {
+    "playback": "PASS: ffprobe read/count and full ffmpeg -xerror decode exit 0; all 900 frames decoded.",
+    "timing": "PASS: fresh duration/fps/frame count and A/V start/end match lock; regular frame intervals are retained prior evidence.",
+    "audio": "PASS: audible measured program level, no clipping; below -50 dB only from 27.928s during ending decay. No material container sync error. CTA placement 25.84–26.72s supported by SRT and edit filter, within final CTA scene 25.5–30s.",
+    "visual": "PASS: freshly extracted ten-frame contact sheet inspected; eight scenes intact, readable primary headlines and exact CTA, consistent navy/cyan/violet brand treatment, labeled illustrations, no sampled blank/loading/broken visuals. Fresh blackdetect through last frame found no interval >=0.15s.",
+    "claims": "PASS: visible headlines and supplied narration/SRT match brief and captured homepage evidence: open-source MCP workflows; models/tools/chat; branching/loops/subflows; MCP discovery and tool inspection; breakpoints/human approvals; schedules/webhooks. Hero retains cloud/connected-app privacy qualification. No clearly unsupported promotional claim found.",
+    "cta": "PASS: exact View on GitHub CTA matches supplied current-run visit 2 evidence and confirmed repository destination.",
+    "provenance": "Source URLs, capture timestamps and recorded hashes present for three first-party screenshots; narration/music provider and generation method documented. Abstract scenes identified as illustrations."
+  },
+  "advisories": [
+    "Screenshot, logo and third-party visual reuse rights remain unverified; rights clearance is a caveat, not a producer repair.",
+    "Generated audio is documented as ElevenLabs output; applicable account terms were not independently verified and no separate license certificate is supplied.",
+    "1280x720 source screenshots contain small body/gallery text; large added headlines and CTA are legible. Gallery functions as context, not a detailed UI tutorial.",
+    "Loudness is 0.8 LU below target, within ±2 LU tolerance. Ending decays below -50 dB for approximately the last 2.07 seconds while the CTA holds."
+  ],
+  "limitations": [
+    "Visual QC used representative decoded frames plus black detection, not continuous subjective playback.",
+    "No subjective listening or independent transcription of the final mix; speech content and editorial sync cross-checked against supplied narration, SRT, alignment-related production evidence and edit filter. Stream alignment alone cannot prove perceptual sync.",
+    "Factual QC compares existing first-party research evidence; product functionality was not independently tested. Recorded asset hashes were not recomputed."
+  ],
+  "releaseBlockingFindings": [],
+  "repair": {
+    "maxRounds": 1,
+    "roundsUsed": 0,
+    "requested": false,
+    "reason": "No release-blocking producer-correctable findings."
+  },
+  "evidence": [
+    "project-lock.json",
+    "production-state.json",
+    "blueprint.json",
+    "assets/research/brief.md",
+    "assets/research/homepage-evidence.json",
+    "assets/research/cta-evidence.json",
+    "assets/research/asset-manifest.json",
+    "assets/audio/audio-manifest.json",
+    "out/flujo-promo-candidate.srt",
+    "out/edit-filter.txt",
+    "qc/inspection-contact.jpg",
+    "assets/research/verification-visit-1.json",
+    "qc/current-inspection-contact.jpg"
+  ],
+  "artifacts": [
+    "<PROJECT_ROOT>\\out\\flujo-promo-candidate.mp4",
+    "<PROJECT_ROOT>\\qc\\inspection.json",
+    "<PROJECT_ROOT>\\qc\\inspection-report.md",
+    "<PROJECT_ROOT>\\qc\\current-inspection-contact.jpg",
+    "<PROJECT_ROOT>\\production-state.json"
+  ],
+  "inspectedAt": "2026-10-12T16:43:00Z",
+  "evidenceScope": "Fresh technical decode, level analysis and sampled visual inspection of retained candidate; factual comparison uses supplied current-run research, not a new research visit.",
+  "retainedMeasurements": {
+    "frameIntervalMinSeconds": 0.033333,
+    "frameIntervalMaxSeconds": 0.033334
+  },
+  "freshChecks": [
+    "ffprobe -count_frames: exit 0, 900 decoded video frames",
+    "ffmpeg -xerror full audiovisual decode: exit 0",
+    "EBU R128: -14.8 LUFS, -3.9 dBTP, LRA 4 LU",
+    "A/V container start 0s and end 30s; decoded audio tail 0.009313s",
+    "Fresh sampled frames 0,45,140,255,365,480,610,710,830,899; blackdetect through last frame: no interval >=0.15s at pixel threshold 0.02"
+  ],
+  "retainedEvidence": [
+    "Prior timestamp interval analysis (not recomputed this inspection)",
+    "Supplied current-run research visits 1 and 2, refreshed brief and CTA evidence",
+    "Narration, SRT and edit filter support speech timing; no independent final-mix transcription"
+  ]
+}

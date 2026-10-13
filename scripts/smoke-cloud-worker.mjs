@@ -14,7 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { checkHealth } from './healthcheck.mjs';
 import { createPrivateSmokeProfile } from './smoke-cloud-worker-profile.mjs';
-import { approveSmokeServer, createSmokeOperator } from './smoke-bundled-operator.mjs';
+import { createSmokeOperator, approveSmokeServer } from './smoke-bundled-operator.mjs';
 
 // Recovery equipment is loaded only by the explicit opt-in profile.
 if (!process.argv.includes('--worker-recovery')) {
@@ -84,7 +84,6 @@ async function stopChild() {
   if (!child) return;
   const stopped = child;
   const closed = childClosed;
-  child = undefined;
   if (stopped.exitCode === null) {
     if (process.platform === 'win32') {
       await new Promise(resolve => {
@@ -98,7 +97,9 @@ async function stopChild() {
       if (!exited) { try { process.kill(-stopped.pid, 'SIGKILL'); } catch { /* already stopped */ } }
     }
   }
-  await Promise.race([closed, delay(5_000)]);
+  const fullyClosed = await Promise.race([closed.then(() => true), delay(5_000).then(() => false)]);
+  if (!fullyClosed) throw new Error('Owned worker did not close before restart or cleanup.');
+  child = undefined;
 }
 
 function safeEnvironment() {
@@ -113,9 +114,8 @@ function safeEnvironment() {
     TMP: path.join(root, 'temp'), TEMP: path.join(root, 'temp'), TMPDIR: path.join(root, 'temp') };
 }
 
-async function startWorker(port, archivePath, archiveHash, harness) {
+async function startWorker(port, archivePath, archiveHash, harness, phase = 'ready') {
   childLog = '';
-  const callsAtLaunch = providerCalls;
   const sandboxPort = await unusedPort();
   const args = production
     ? [path.join(application, 'scripts', 'launch-next.mjs'), 'start', '-p', String(port), '-H', '127.0.0.1']
@@ -130,13 +130,11 @@ async function startWorker(port, archivePath, archiveHash, harness) {
       FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort), FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1',
       FLUJO_EXPOSURE_MODE: 'localhost', SMOKE_PORT: String(port) },
   });
-  childClosed = new Promise(resolve => child.once('exit', resolve));
+  childClosed = new Promise(resolve => child.once('close', resolve));
   child.on('error', error => { childLog += `\n${error.message}`; });
   for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { childLog = (childLog + data.toString()).slice(-80_000); });
   const started = Date.now();
   let lastState;
-  let consentPrepared = false;
-  let consentInProgress = false;
   while (Date.now() - started < 240_000) {
     if (child.exitCode !== null) throw new Error(`Worker exited during startup (${child.exitCode}).`);
     try {
@@ -144,28 +142,15 @@ async function startWorker(port, archivePath, archiveHash, harness) {
       if (result.status === 404) throw new Error('Worker status route unavailable in the smoke application.');
       const state = await result.json();
       lastState = state;
-      if (state.state === 'error' && !consentPrepared && state.workspace === workspace
-          && state.error === 'Worker MCP dependency preparation failed. Check the worker server status.') {
-        assert.deepEqual(state.servers, [{ name: 'filesystem', status: 'failed', error: 'MCP dependency could not be prepared.' }]);
-        assert.equal(providerCalls, callsAtLaunch, 'Unapproved bootstrap must not execute a flow.');
-        // An explicit disposable owner approves the current installed package;
-        // imported snapshot/config/control authority never grants host consent.
-        consentPrepared = true;
-        consentInProgress = true;
-        const baseUrl = `http://127.0.0.1:${port}`;
-        await approveSmokeServer(baseUrl, 'filesystem', operator.token, 90_000, { workspace, expiresAt: operator.expiresAt });
-        const retry = await fetch(`${baseUrl}/api/init?workspace=${workspace}`, {
-          headers: { authorization: `Bearer ${controlToken}` }, signal: AbortSignal.timeout(90_000),
-        });
-        if (!retry.ok || (await retry.json()).success !== true) throw new Error('Worker consent provisioning failed to reinitialize.');
-        consentInProgress = false;
-        continue;
-      }
+      if (phase === 'consent' && state.state === 'error'
+          && state.error === 'Worker MCP dependency preparation failed. Check the worker server status.') return state;
       if (state.state === 'error') throw new Error(`Worker reported bootstrap failure: ${state.error}`);
-      if (result.ok && state.state === 'ready') return state;
+      if (result.ok && state.state === 'ready') {
+        if (phase === 'consent') throw new Error('Worker became ready without the required cold owner consent.');
+        return state;
+      }
     } catch (error) {
-      if (consentInProgress) throw error;
-      if (/bootstrap failure|status route unavailable|consent|Unapproved|MCP dependency/.test(String(error.message))) throw error;
+      if (/bootstrap failure|status route unavailable|required cold owner consent/.test(String(error.message))) throw error;
     }
     await delay(500);
   }
@@ -173,8 +158,10 @@ async function startWorker(port, archivePath, archiveHash, harness) {
 }
 
 try {
-  operator = await createSmokeOperator();
   for (const name of ['home', 'temp']) await fs.mkdir(path.join(root, name));
+  operator = await createSmokeOperator();
+  console.log(JSON.stringify({ smokeOwnerIssuerSourceSha256: operator.issuerSourceSha256,
+    smokeOwnerIssuerCompiledSha256: operator.issuerCompiledSha256, smokeOwnerIssuerEquipment: operator.issuerEquipment }));
   // Next's programmatic custom server ignores conf.distDir in dev startup.
   // A private app overlay keeps its cache/lock/config writes away from any
   // concurrently running user server, without copying dependencies or secrets.
@@ -247,7 +234,19 @@ const server=http.createServer((req,res)=>handler(req,res));
 server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
 `);
   console.log(`Starting ${production ? 'packaged production' : 'isolated development'} worker with an encrypted synthetic snapshot...`);
+  const refused = await startWorker(workerPort, archivePath, archiveHash, harness, 'consent');
+  assert.equal(refused.state, 'error', 'The original cold bootstrap must refuse unapproved host execution.');
+  const consentUrl = new URL(`/api/mcp/servers/filesystem/host-consent?workspace=${workspace}`, `http://127.0.0.1:${workerPort}`);
+  const snapshotOnly = await fetch(consentUrl, { headers: { authorization: `Bearer ${controlToken}` }, signal: AbortSignal.timeout(15_000) });
+  assert.ok([401, 403].includes(snapshotOnly.status), 'Snapshot authority must not approve host execution.');
+  await approveSmokeServer(`http://127.0.0.1:${workerPort}`, 'filesystem', operator.token, 15_000, workspace);
+  const configFile = path.join(root, 'data', 'workspaces', workspace, 'db', 'mcp_servers.json');
+  const approvedConfig = await fs.readFile(configFile);
+  const approvedLedger = await fs.readFile(operator.env.FLUJO_MCP_TRUSTED_HOST_FILE);
+  await stopChild();
   const ready = await startWorker(workerPort, archivePath, archiveHash, harness);
+  assert.deepEqual(await fs.readFile(configFile), approvedConfig, 'Snapshot restart must preserve the freshly approved runtime configuration.');
+  assert.deepEqual(await fs.readFile(operator.env.FLUJO_MCP_TRUSTED_HOST_FILE), approvedLedger, 'Snapshot restart must preserve private owner consent outside its data namespace.');
   assert.equal(ready.workspace, workspace);
   assert.deepEqual(ready.servers, [{ name: 'filesystem', status: 'ready' }]);
   assert.equal(await checkHealth({ env: { FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: controlToken, FLUJO_PORT: String(workerPort) } }), true);
@@ -303,6 +302,7 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   assert.ok(saved.includes(answer), 'The conversation must contain the engine result.');
   const callsBeforeRestart = providerCalls;
   console.log('HTTP auth, real flow execution, and conversation persistence passed; restarting worker...');
+  await approveSmokeServer(`http://127.0.0.1:${workerPort}`, 'filesystem', operator.token, 15_000, workspace);
   await stopChild();
   await startWorker(workerPort, archivePath, archiveHash, harness);
   assert.equal(await fs.readFile(conversationFile, 'utf8'), saved, 'Restart must preserve worker results.');
@@ -314,18 +314,28 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   if (childLog) console.error(childLog.slice(-16_000));
   process.exitCode = 1;
 } finally {
-  await stopChild();
-  await operator?.restore();
-  modelServer.closeAllConnections();
-  await new Promise(resolve => modelServer.close(resolve));
-  const expectedPrefix = path.join(os.tmpdir(), 'flujo-cloud-worker-smoke-');
-  if (!path.resolve(root).startsWith(path.resolve(expectedPrefix))) throw new Error('Refusing unsafe smoke cleanup path.');
-  for (const name of production ? [] : overlayLinks) {
-    const link = path.join(runtimeApplication, name);
-    const stat = await fs.lstat(link).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-    if (stat?.isSymbolicLink()) await fs.unlink(link);
-  }
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 300 });
+  const cleanupErrors = [];
+  const attemptCleanup = async action => {
+    try { await action(); } catch (error) { cleanupErrors.push(error); }
+  };
+  await attemptCleanup(stopChild);
+  await attemptCleanup(async () => { await operator?.restore(); });
+  await attemptCleanup(async () => {
+    modelServer.closeAllConnections();
+    await new Promise((resolve, reject) => modelServer.close(error => error ? reject(error) : resolve()));
+  });
+  await attemptCleanup(async () => {
+    if (child) throw new Error('Refusing root cleanup while the owned worker remains open.');
+    const expectedPrefix = path.join(os.tmpdir(), 'flujo-cloud-worker-smoke-');
+    if (!path.resolve(root).startsWith(path.resolve(expectedPrefix))) throw new Error('Refusing unsafe smoke cleanup path.');
+    for (const name of production ? [] : overlayLinks) {
+      const link = path.join(runtimeApplication, name);
+      const stat = await fs.lstat(link).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (stat?.isSymbolicLink()) await fs.unlink(link);
+    }
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 300 });
+  });
+  if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Worker smoke cleanup failed.');
 }
 } else {
   const { fork } = await import('node:child_process');

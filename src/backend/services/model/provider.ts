@@ -102,6 +102,8 @@ export function getProviderFromBaseUrl(baseUrl: string): ModelProvider {
     return 'azure';
   } else if (belongsTo('openrouter.ai')) {
     return 'openrouter';
+  } else if (hostname === 'api.orcarouter.ai') {
+    return 'orcarouter';
   } else if (belongsTo('requesty.ai')) {
     return 'requesty';
   } else if (hostname === 'api.x.ai') {

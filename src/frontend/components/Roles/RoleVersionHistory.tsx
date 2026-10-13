@@ -64,7 +64,7 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
         <Typography>{t('roles.history')}</Typography>
       </AccordionSummary>
       <AccordionDetails>
-        {loading && <Stack alignItems="center"><CircularProgress size={24} /></Stack>}
+        {loading && <Stack sx={{ alignItems: "center" }}><CircularProgress size={24} /></Stack>}
         {error && <Alert severity="error">{error}</Alert>}
         <List>
           {versions.map((version) => (
@@ -78,7 +78,7 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
               <ListItemText
                 primary={t('roles.version', { version: version.version })}
                 secondary={(
-                  <Stack component="span" gap={0.5} sx={{ mt: 0.5 }}>
+                  <Stack component="span" sx={{ gap: 0.5,  mt: 0.5 }}>
                     <Typography component="span" variant="body2" color="text.secondary">
                       {version.prompt}
                     </Typography>
@@ -89,7 +89,7 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
                     </Typography>
                   </Stack>
                 )}
-                secondaryTypographyProps={{ component: 'div' }}
+                slotProps={{ secondary: { component: 'div' } }}
               />
             </ListItem>
           ))}

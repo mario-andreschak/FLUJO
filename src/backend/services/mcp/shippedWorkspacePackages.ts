@@ -70,12 +70,16 @@ async function readPackageAsset(file: string, expected: BigIntStats): Promise<Bu
   }
 }
 
-async function packageDigests(root: string, distributedOnly = false): Promise<{ assetSha256: string; runtimeSha256: string }> {
+async function packageDigests(root: string, distributedOnly = false): Promise<{ assetSha256: string; runtimeSha256: string; portableRuntimeSha256: string }> {
   const hash = createHash('sha256');
   const runtimeHash = createHash('sha256');
-  const update = (entry: string, runtime: boolean) => {
+  const portableRuntimeHash = createHash('sha256');
+  const update = (entry: string, runtime: boolean, portableEntry = entry, portable = true) => {
     hash.update(entry);
-    if (runtime) runtimeHash.update(entry);
+    if (runtime) {
+      runtimeHash.update(entry);
+      if (portable) portableRuntimeHash.update(portableEntry);
+    }
   };
   const walk = async (directory: string, prefix: string, parentRuntime: boolean) => {
     for (const name of (await fs.readdir(directory)).sort()) {
@@ -92,12 +96,27 @@ async function packageDigests(root: string, distributedOnly = false): Promise<{ 
       } else if (stat.isFile()) {
         // Both digests must describe these same bytes. A second runtime walk
         // could hash edits that were never checked against template provenance.
-        update(`file:${relative}\0${createHash('sha256').update(await readPackageAsset(file, stat)).digest('hex')}\0`, runtime);
+        const bytes = await readPackageAsset(file, stat);
+        const rawDigest = createHash('sha256').update(bytes).digest('hex');
+        // Windows checkouts may use CRLF for text files shipped as LF in the
+        // Linux image. Keep the raw digest for template provenance, and compare
+        // only newline-normalized text for cross-platform runtime identity.
+        const textAsset = /\.(?:cjs|cts|js|json|map|mjs|mts|sh|ts)$/i.test(relative);
+        // Latin-1 is byte-preserving here: unlike UTF-8 decoding, malformed
+        // bytes cannot collapse to the same replacement character.
+        const portableBytes = runtime && textAsset
+          ? Buffer.from(bytes.toString('latin1').replace(/\r\n/g, '\n'), 'latin1') : bytes;
+        const portableDigest = createHash('sha256').update(portableBytes).digest('hex');
+        // npm omits test scripts from the packed Source while the OCI image
+        // retains them. They cannot be launched as a bundled server runtime.
+        const portable = !/^scripts\/.*\.test\.[cm]?[jt]s$/i.test(relative);
+        update(`file:${relative}\0${rawDigest}\0`, runtime, `file:${relative}\0${portableDigest}\0`, portable);
       } else throw new Error('A copied package contains an unsupported asset.');
     }
   };
   await walk(root, '', false);
-  return { assetSha256: hash.digest('hex'), runtimeSha256: runtimeHash.digest('hex') };
+  return { assetSha256: hash.digest('hex'), runtimeSha256: runtimeHash.digest('hex'),
+    portableRuntimeSha256: portableRuntimeHash.digest('hex') };
 }
 
 async function validatePackage(root: string, name: string): Promise<{ name: string; version?: string }> {
@@ -253,6 +272,21 @@ async function ensureDependencies(root: string, appRoot: string, name: string): 
 
 /** Snapshot recipes cannot silently discard edits to workspace-owned package code. */
 export async function shippedWorkspacePackageRuntimeDigest(root: string): Promise<string> {
+  return (await validatedWorkspacePackageDigests(root)).runtimeSha256;
+}
+
+/** Both identities come from the same verified read of the source package. */
+export async function shippedWorkspacePackageRuntimeDigests(root: string) {
+  const { runtimeSha256, portableRuntimeSha256 } = await validatedWorkspacePackageDigests(root);
+  return { runtimeSha256, portableRuntimeSha256 };
+}
+
+/** Runtime identity that tolerates only checkout newline conversion in text assets. */
+export async function shippedWorkspacePackagePortableRuntimeDigest(root: string): Promise<string> {
+  return (await validatedWorkspacePackageDigests(root)).portableRuntimeSha256;
+}
+
+async function validatedWorkspacePackageDigests(root: string) {
   await realDirectory(root);
   const markerPath = path.join(root, TEMPLATE_MARKER);
   const stat = await optionalStat(markerPath);
@@ -266,7 +300,7 @@ export async function shippedWorkspacePackageRuntimeDigest(root: string): Promis
   if (!digests || marker.assetSha256 !== digests.assetSha256) {
     throw new Error('This copied MCP package has local changes. Export it as a pinned GitHub package; a workspace snapshot will not discard those edits.');
   }
-  return digests.runtimeSha256;
+  return digests;
 }
 
 async function clonePackage(root: string, appRoot: string, name: string): Promise<void> {

@@ -264,6 +264,8 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   /** Workspace which created oauthState; defense-in-depth beyond workspace-local storage. */
   oauthStateWorkspace?: string;
   oauthStateCreatedAt?: number;
+  /** Discovery snapshot for this single authorization transaction, cleared with its nonce. */
+  oauthStateDiscovery?: import('@modelcontextprotocol/sdk/client/auth.js').OAuthDiscoveryState;
   authorizationUrl?: string; // OAuth authorization URL when authentication is required
   /** Optional launch-and-connect spec (#392). Not spawned by FLUJO yet. */
   launch?: MCPLaunchSpec;
@@ -319,9 +321,15 @@ export interface MCPServiceResponse<T = unknown> {
     shutdownReceipt?: MCPShutdownReceipt;
   data?: T;
   error?: string;
+  /** Validated modern Tasks failure; never persisted in the remote-task ledger. */
+  taskError?: { code: number; message: string; data?: unknown };
+  /** Original downstream JSON-RPC error; operational tool results still use isError. */
+  protocolError?: { code: number; data?: unknown };
   statusCode?: number;
   progressToken?: string;
   errorType?: string;
+  errorCode?: string;
+  requiresApproval?: boolean;
   toolName?: string;
   timeout?: number;
   requiresAuthentication?: boolean;
@@ -374,7 +382,7 @@ export interface MCPStdioOAuthStatus {
 }
 
 type WithMCPServerState<T extends MCPServerConfig> = T extends MCPServerConfig ? Omit<T, 'env'> & {
-  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication';
+  status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication' | 'requires_approval';
   tools: Array<{
     name: string;
     description: string;

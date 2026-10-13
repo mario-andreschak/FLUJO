@@ -1,6 +1,8 @@
+import { assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/security/bundledFlujoWorkload';
 import { promises as fs, type BigIntStats } from 'fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
+import { withConversationLogReadAdmission, type ConversationReadReservation } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { readPlainFile } from '@/utils/readPlainFile';
 import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
 import { StorageKey } from '../../shared/types/storage';
@@ -142,12 +144,18 @@ async function renameWithRetry(tmpPath: string, filePath: string, validate: () =
   }
 }
 
-export async function writeFileAtomic(filePath: string, data: string): Promise<void> {
+export async function writeFileAtomic(filePath: string, data: string, assertCurrent?: () => Promise<void>): Promise<void> {
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     await assertCredentialStoreReady(filePath);
     await assertWorkspaceMutationOwned();
     const dirPath = path.dirname(filePath);
+    await assertBundledFlujoWorkloadEffectCurrent();
+    if (assertCurrent) {
+      await assertCurrent();
+      await assertWorkspaceMutationOwned();
+      await assertBundledFlujoWorkloadEffectCurrent();
+    }
     await fs.mkdir(dirPath, { recursive: true });
     const directory = await fs.lstat(dirPath, { bigint: true });
     const canonicalDirectory = await fs.realpath(dirPath);
@@ -158,11 +166,23 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
     let owned: BigIntStats | undefined;
     try {
       await assertWorkspaceMutationOwned();
+      await assertBundledFlujoWorkloadEffectCurrent();
+      if (assertCurrent) {
+        await assertCurrent();
+        await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
+      }
       const handle = await fs.open(tmpPath, 'wx', 0o600);
       created = true;
       try {
         owned = await handle.stat({ bigint: true });
         await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
+        if (assertCurrent) {
+          await assertCurrent();
+          await assertWorkspaceMutationOwned();
+          await assertBundledFlujoWorkloadEffectCurrent();
+        }
         await handle.writeFile(data);
         await assertWorkspaceMutationOwned();
         await handle.sync();
@@ -170,7 +190,18 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
         owned = await handle.stat({ bigint: true });
       } finally { await handle.close(); }
       await renameWithRetry(tmpPath, filePath, async () => {
-        const [current, parent, canonicalParent] = await Promise.all([fs.lstat(tmpPath, { bigint: true }), fs.lstat(dirPath, { bigint: true }), fs.realpath(dirPath)]);
+        const witnesses = await Promise.allSettled([
+          fs.lstat(tmpPath, { bigint: true }),
+          fs.lstat(dirPath, { bigint: true }),
+          fs.realpath(dirPath),
+        ]);
+        const [fileWitness, parentWitness, canonicalWitness] = witnesses;
+        if (fileWitness.status === 'rejected') throw fileWitness.reason;
+        if (parentWitness.status === 'rejected') throw parentWitness.reason;
+        if (canonicalWitness.status === 'rejected') throw canonicalWitness.reason;
+        const current = fileWitness.value;
+        const parent = parentWitness.value;
+        const canonicalParent = canonicalWitness.value;
         if (!owned || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
             || current.dev !== owned.dev || current.ino !== owned.ino || current.size !== owned.size
             || current.mtimeNs !== owned.mtimeNs || current.ctimeNs !== owned.ctimeNs
@@ -181,6 +212,12 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
           throw new Error('Atomic write file or parent changed');
         }
         await assertWorkspaceMutationOwned();
+        await assertBundledFlujoWorkloadEffectCurrent();
+        if (assertCurrent) {
+          await assertCurrent();
+          await assertWorkspaceMutationOwned();
+          await assertBundledFlujoWorkloadEffectCurrent();
+        }
       });
       created = false;
       await assertWorkspaceMutationOwned();
@@ -197,7 +234,7 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
   });
 }
 
-export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
+export async function saveItem<T>(key: StorageKey, value: T, assertCurrent?: () => Promise<void>): Promise<void> {
   const filePath = getFilePath(key);
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
@@ -210,7 +247,7 @@ export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
     const previous = writeChains.get(chainKey) ?? Promise.resolve();
     const run = previous
       .catch(() => { /* prior write's error is surfaced to its own caller */ })
-      .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2)));
+      .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2), assertCurrent));
     writeChains.set(chainKey, run);
 
     try {
@@ -228,7 +265,27 @@ export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
   });
 }
 
+/** Authoritative ordinary-backup read: absent files are empty; interrupted or corrupt files fail. */
+export async function loadItemForBackup<T>(key: StorageKey, defaultValue: T): Promise<T> {
+  const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
+  await ensureStorageDir();
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaultValue;
+    throw error;
+  }
+  if (!content.trim()) throw new Error('Backup storage item is empty');
+  return JSON.parse(content) as T;
+}
+
 export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> {
+  // Returned conversation values become caller-owned once this read scope ends.
+  if (key.startsWith('conversations/')) {
+    return withConversationSnapshot<T, T>(key.slice('conversations/'.length), async state => state === undefined ? defaultValue : state);
+  }
   // Outside tolerant recovery: a pending migration must never look like empty data.
   await assertCredentialStoreReady(getFilePath(key));
   try {
@@ -277,6 +334,44 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
     log.error(`CRITICAL: Error loading item with key "${key}" from ${getFilePath(key)}:`, error);
     throw error; // Re-throw the error instead of returning default
   }
+}
+
+/** Opt-in conversation hydration: reserve before materialization and retain through adoption.
+ * The descriptor is closed before parsing/consumer work so recovery writes can rename on Windows.
+ */
+export async function withConversationSnapshot<T, R>(conversationId: string,
+  consume: (state: T | undefined, reservation: ConversationReadReservation) => Promise<R>,
+  options: { signal?: AbortSignal } = {}): Promise<R> {
+  options.signal?.throwIfAborted();
+  assertSafeCollectionId(conversationId);
+  const key = `conversations/${conversationId}` as StorageKey;
+  const filePath = getFilePath(key);
+  await assertCredentialStoreReady(filePath);
+  await ensureStorageDir();
+  let expected: BigIntStats;
+  try { expected = await fs.lstat(filePath, { bigint: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return withConversationLogReadAdmission(0, reservation => consume(undefined, reservation));
+    }
+    throw error;
+  }
+  const size = Number(expected.size);
+  return withConversationLogReadAdmission(size, async reservation => {
+    const content = (await readPlainFile(filePath, { expected, signal: options.signal })).toString('utf8');
+    options.signal?.throwIfAborted();
+    if (!content.trim()) return consume(undefined, reservation);
+    let state: T;
+    try { state = JSON.parse(content) as T; }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      const backupPath = `${filePath}.corrupted.${Date.now()}.bak`;
+      try { await fs.writeFile(backupPath, content); }
+      catch (backupError) { log.error('Failed to back up corrupted conversation snapshot:', backupError); }
+      throw new Error(`Failed to parse JSON from ${filePath}. A backup has been created at ${backupPath}. Original error: ${error.message}`);
+    }
+    return consume(state, reservation);
+  });
 }
 
 export async function clearItem(key: StorageKey): Promise<void> {
@@ -558,6 +653,7 @@ export async function saveShardedCollectionItem<T extends { id: string; personaI
     }
     await writeFileAtomic(shardedPath, JSON.stringify(value, null, 2));
     try {
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(legacyPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -722,6 +818,7 @@ export async function migrateLegacyCollectionItem(
           throw new Error(`Could not verify migrated Persona record ${JSON.stringify(recordId)}.`);
         }
       }
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(legacyPath);
       return 'migrated';
     },
@@ -795,6 +892,10 @@ export async function saveCollectionItem<T>(collection: string, id: string, valu
 
 export async function loadCollectionItem<T>(collection: string, id: string, defaultValue: T): Promise<T> {
   assertSafeCollectionId(id);
+  // Other collections retain their existing read policy and parsing behavior.
+  if (collection === 'conversations') {
+    return withConversationSnapshot<T, T>(id, async state => state === undefined ? defaultValue : state);
+  }
   const filePath = getCollectionItemPath(collection, id);
   try {
     const content = await fs.readFile(filePath, 'utf-8');
@@ -838,6 +939,7 @@ export async function deleteCollectionItem(collection: string, id: string): Prom
   // the same item.
   await runInWriteChain(`${collection}/${id}`, async () => {
     try {
+      await assertBundledFlujoWorkloadEffectCurrent();
       await fs.unlink(filePath);
       log.verbose(`Successfully deleted collection item: ${filePath}`);
     } catch (error) {
@@ -1003,6 +1105,7 @@ export async function migrateArrayFileToCollection<T>(
 
   if (content.trim().length === 0) {
     // Empty legacy file: just archive it out of the way.
+    await assertBundledFlujoWorkloadEffectCurrent();
     await fs.rename(legacyPath, `${legacyPath}.migrated-${Date.now()}.bak`);
     return 0;
   }
@@ -1042,6 +1145,7 @@ export async function migrateArrayFileToCollection<T>(
   }
 
   // Archive the legacy file only after every item has been (re)written.
+  await assertBundledFlujoWorkloadEffectCurrent();
   await fs.rename(legacyPath, `${legacyPath}.migrated-${Date.now()}.bak`);
   log.info(`Migration: moved ${items.length} ${collection} item(s) from ${key}.json to per-item storage.`);
   return items.length;

@@ -62,13 +62,13 @@ describe('owner credentials at real proxy and handler admission', () => {
     });
   });
   it.each([null, '', 'not-a-token', `flo_v1_${'a'.repeat(43)}`])('denies a missing/invalid credential (%s)', async bearer => {
-    const response = proxy(request('/v1/models', bearer));
+    const response = (await proxy(request('/v1/models', bearer)));
     expect(response.status).toBe(401);
     expect(response.headers.get('www-authenticate')).toBe('Bearer');
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.json()).toEqual({ error: 'Unauthorized' });
   });
-  it('denies expiration at the exact boundary and not-yet-valid grants', () => {
+  it('denies expiration at the exact boundary and not-yet-valid grants', async () => {
     const record = policy.credentials[0];
     expect(authenticateOwnerBearer(request(), policy, record.expiresAt - 1)).not.toBeNull();
     expect(authenticateOwnerBearer(request(), policy, record.expiresAt)).toBeNull();
@@ -76,13 +76,13 @@ describe('owner credentials at real proxy and handler admission', () => {
     record.issuedAt = Date.now() - 100;
     record.expiresAt = Date.now() - 1;
     persist();
-    expect(proxy(request()).status).toBe(401);
+    expect((await proxy(request())).status).toBe(401);
   });
-  it('observes revocation and reconnect credentials without a process-global cache', () => {
-    expect(proxy(request()).status).toBe(200);
+  it('observes revocation and reconnect credentials without a process-global cache', async () => {
+    expect((await proxy(request())).status).toBe(200);
     policy.credentials[0].revokedAt = Date.now();
     persist();
-    expect(proxy(request()).status).toBe(401);
+    expect((await proxy(request())).status).toBe(401);
     expect(assertOwnerRequest(request())?.status).toBe(401);
   });
   it('retains validity from durable policy in a fresh module runtime', () => {
@@ -120,91 +120,91 @@ describe('owner credentials at real proxy and handler admission', () => {
     '/api/not-yet-implemented', '/v1/chat/conversations',
     '/v1/chat/conversations/id/respond', '/mcp-proxy/server', '/mcp-flows',
     '/v1/models-evil', '/v1/chat/completions-evil',
-  ])('execution/read scopes cannot reach %s', route => {
-    expect(proxy(request(route)).status).toBe(403);
+  ])('execution/read scopes cannot reach %s', async route => {
+    expect((await proxy(request(route))).status).toBe(403);
   });
-  it('permits OpenAI execution and treats explicit control/secret/MCP grants independently', () => {
-    expect(proxy(request('/v1/chat/completions', token, {}, 'POST')).status).toBe(200);
+  it('permits OpenAI execution and treats explicit control/secret/MCP grants independently', async () => {
+    expect((await proxy(request('/v1/chat/completions', token, {}, 'POST'))).status).toBe(200);
     const admin = issueOwnerCredential(['control:admin'], Date.now() + 60_000);
     policy.credentials.push(admin.record);
     persist();
-    expect(proxy(request('/api/env', admin.token)).status).toBe(403);
+    expect((await proxy(request('/api/env', admin.token))).status).toBe(403);
     const owner = issueOwnerCredential(OWNER_SCOPES, Date.now() + 60_000);
     policy.credentials.push(owner.record);
     persist();
-    expect(proxy(request('/api/env', owner.token)).status).toBe(200);
-    expect(proxy(request('/mcp-proxy/server', owner.token)).status).toBe(200);
-    expect(proxy(request('/mcp-flows', owner.token)).status).toBe(200);
+    expect((await proxy(request('/api/env', owner.token))).status).toBe(200);
+    expect((await proxy(request('/mcp-proxy/server', owner.token))).status).toBe(200);
+    expect((await proxy(request('/mcp-flows', owner.token))).status).toBe(200);
   });
-  it('does not derive identity from URLs, cookies, or forwarding/owner headers', () => {
-    expect(proxy(request(`/v1/models?token=${token}`, null, {
+  it('does not derive identity from URLs, cookies, or forwarding/owner headers', async () => {
+    expect((await proxy(request(`/v1/models?token=${token}`, null, {
       cookie: `owner=${token}`, 'x-flujo-owner': 'synthetic-owner',
       'x-forwarded-host': 'localhost:4200', 'x-forwarded-for': '127.0.0.1',
-    })).status).toBe(401);
+    }))).status).toBe(401);
   });
-  it('retains Host/Origin defenses after owner authorization', () => {
+  it('retains Host/Origin defenses after owner authorization', async () => {
     const owner = issueOwnerCredential(OWNER_SCOPES, Date.now() + 60_000);
     policy.credentials.push(owner.record);
     persist();
-    expect(proxy(request('/api/env', owner.token, { origin: 'http://attacker.invalid' })).status).toBe(403);
-    expect(proxy(request('/v1/models', token, { host: 'attacker.invalid' })).status).toBe(403);
+    expect((await proxy(request('/api/env', owner.token, { origin: 'http://attacker.invalid' }))).status).toBe(403);
+    expect((await proxy(request('/v1/models', token, { host: 'attacker.invalid' }))).status).toBe(403);
   });
-  it('admits only private remote voice with explicit workspace authority and approved Origin', () => {
+  it('admits only private remote voice with explicit workspace authority and approved Origin', async () => {
     const voice = issueOwnerCredential(['avatar:voice'], Date.now() + 60_000, Date.now(), { workspaceId: 'voice-workspace' });
     policy.credentials.push(voice.record);
     persist();
     process.env.FLUJO_AVATAR_REMOTE_ORIGIN = 'https://private-bff.example';
     const approved = { origin: 'https://private-bff.example' };
-    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, approved, 'POST')).status).toBe(200);
-    expect(proxy(request('/api/avatar/remote/availability', voice.token, approved)).status).toBe(200);
-    expect(proxy(request('/api/avatar/remote/native-turn', null, approved, 'POST')).status).toBe(401);
-    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, {}, 'POST')).status).toBe(403);
-    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, { origin: 'https://attacker.invalid' }, 'POST')).status).toBe(403);
-    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, { ...approved, host: 'attacker.invalid' }, 'POST')).status).toBe(403);
-    expect(proxy(request('/api/env', voice.token, approved)).status).toBe(403);
-    expect(proxy(request('/api/avatar/remote/native-turn-evil', voice.token, approved, 'POST')).status).toBe(403);
+    expect((await proxy(request('/api/avatar/remote/native-turn', voice.token, approved, 'POST'))).status).toBe(200);
+    expect((await proxy(request('/api/avatar/remote/availability', voice.token, approved))).status).toBe(200);
+    expect((await proxy(request('/api/avatar/remote/native-turn', null, approved, 'POST'))).status).toBe(401);
+    expect((await proxy(request('/api/avatar/remote/native-turn', voice.token, {}, 'POST'))).status).toBe(403);
+    expect((await proxy(request('/api/avatar/remote/native-turn', voice.token, { origin: 'https://attacker.invalid' }, 'POST'))).status).toBe(403);
+    expect((await proxy(request('/api/avatar/remote/native-turn', voice.token, { ...approved, host: 'attacker.invalid' }, 'POST'))).status).toBe(403);
+    expect((await proxy(request('/api/env', voice.token, approved))).status).toBe(403);
+    expect((await proxy(request('/api/avatar/remote/native-turn-evil', voice.token, approved, 'POST'))).status).toBe(403);
     delete process.env.FLUJO_OWNER_AUTH_FILE;
-    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, approved, 'POST')).status).toBe(503);
+    expect((await proxy(request('/api/avatar/remote/native-turn', voice.token, approved, 'POST'))).status).toBe(503);
   });
-  it('rejects absent or noncanonical BFF Origin configuration', () => {
+  it('rejects absent or noncanonical BFF Origin configuration', async () => {
     const voice = issueOwnerCredential(['avatar:voice'], Date.now() + 60_000, Date.now(), { workspaceId: 'voice-workspace' });
     policy.credentials.push(voice.record);
     persist();
     for (const configured of [undefined, '', 'https://private-bff.example/path', 'https://private-bff.example/', 'file:///private', 'https://user:password@private-bff.example']) {
       if (configured === undefined) delete process.env.FLUJO_AVATAR_REMOTE_ORIGIN;
       else process.env.FLUJO_AVATAR_REMOTE_ORIGIN = configured;
-      expect(proxy(request('/api/avatar/remote/native-turn', voice.token, { origin: 'https://private-bff.example' }, 'POST')).status).toBe(503);
+      expect((await proxy(request('/api/avatar/remote/native-turn', voice.token, { origin: 'https://private-bff.example' }, 'POST'))).status).toBe(503);
     }
   });
-  it.each(['/api/oauth/callback', '/api/registry/oauth/callback'])('keeps only existing exact callback exceptions for %s', route => {
-    expect(proxy(request(route, null)).status).toBe(200);
-    expect(proxy(request(`${route}-evil`, null)).status).toBe(401);
-    expect(proxy(request(route, null, {}, 'POST')).status).toBe(route === '/api/oauth/callback' ? 200 : 401);
-    expect(proxy(request(route, null, {}, 'DELETE')).status).toBe(401);
+  it.each(['/api/oauth/callback', '/api/registry/oauth/callback'])('keeps only existing exact callback exceptions for %s', async route => {
+    expect((await proxy(request(route, null))).status).toBe(200);
+    expect((await proxy(request(`${route}-evil`, null))).status).toBe(401);
+    expect((await proxy(request(route, null, {}, 'POST'))).status).toBe(route === '/api/oauth/callback' ? 200 : 401);
+    expect((await proxy(request(route, null, {}, 'DELETE'))).status).toBe(401);
   });
-  it.each(['/api/oauth/initiate', '/api/oauth/reset'])('requires owner credentials on %s', route => {
-    expect(proxy(request(route, null)).status).toBe(401);
+  it.each(['/api/oauth/initiate', '/api/oauth/reset'])('requires owner credentials on %s', async route => {
+    expect((await proxy(request(route, null))).status).toBe(401);
   });
-  it('preserves a POST webhook exception without opening reads or nested routes', () => {
-    expect(proxy(request('/api/webhooks/id', null, {}, 'POST')).status).toBe(200);
-    expect(proxy(request('/api/webhooks/id', null)).status).toBe(401);
-    expect(proxy(request('/api/webhooks/id/extra', null, {}, 'POST')).status).toBe(401);
+  it('preserves a POST webhook exception without opening reads or nested routes', async () => {
+    expect((await proxy(request('/api/webhooks/id', null, {}, 'POST'))).status).toBe(200);
+    expect((await proxy(request('/api/webhooks/id', null))).status).toBe(401);
+    expect((await proxy(request('/api/webhooks/id/extra', null, {}, 'POST'))).status).toBe(401);
   });
-  it('keeps snapshot bearer routes independent from the owner token', () => {
+  it('keeps snapshot bearer routes independent from the owner token', async () => {
     process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'synthetic-worker-bearer';
     const snapshot = request('/api/snapshot/begin', 'synthetic-worker-bearer', {}, 'POST');
-    expect(proxy(snapshot).status).toBe(200);
+    expect((await proxy(snapshot)).status).toBe(200);
     expect(assertSnapshotBearer(snapshot)).toBeNull();
     expect(assertSnapshotBearer(request('/api/snapshot/begin', token))?.status).toBe(401);
-    expect(proxy(request('/api/snapshot/begin-evil', null)).status).toBe(401);
-    expect(proxy(request('/api/snapshot/begin', null)).status).toBe(401);
+    expect((await proxy(request('/api/snapshot/begin-evil', null))).status).toBe(401);
+    expect((await proxy(request('/api/snapshot/begin', null))).status).toBe(401);
   });
-  it('keeps worker bearer authentication separate even when the owner policy is broken', () => {
+  it('keeps worker bearer authentication separate even when the owner policy is broken', async () => {
     process.env.FLUJO_WORKER_MODE = '1';
     process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'synthetic-worker-bearer';
     fs.writeFileSync(filename, 'not JSON');
-    expect(proxy(request('/api/env', token)).status).toBe(401);
-    expect(proxy(request('/api/env', 'synthetic-worker-bearer')).status).toBe(200);
+    expect((await proxy(request('/api/env', token))).status).toBe(401);
+    expect((await proxy(request('/api/env', 'synthetic-worker-bearer'))).status).toBe(200);
   });
   it('preserves narrow trusted-adapter admission and repeats it at the handler', async () => {
     const handler = jest.fn(async (_request: Request) => Response.json({ accepted: true }));
@@ -217,10 +217,10 @@ describe('owner credentials at real proxy and handler admission', () => {
     } as unknown as ExecutionExtensionAdapter);
     try {
       const admitted = request('/v1/chat/completions', 'synthetic-adapter-bearer', {}, 'POST');
-      expect(proxy(admitted).status).toBe(200);
+      expect((await proxy(admitted)).status).toBe(200);
       expect((await withWorkspaceRoute(handler)(admitted)).status).toBe(200);
       expect(withRoute).toHaveBeenCalledTimes(1);
-      expect(proxy(request('/api/env', 'synthetic-adapter-bearer')).status).toBe(401);
+      expect((await proxy(request('/api/env', 'synthetic-adapter-bearer'))).status).toBe(401);
       expect(handler).not.toHaveBeenCalled();
     } finally { remove(); }
   });
@@ -237,18 +237,18 @@ describe('owner credentials at real proxy and handler admission', () => {
   it('fails closed on malformed/unreadable/oversized policy without revealing it', async () => {
     for (const content of ['bad JSON including synthetic-private-data', ' '.repeat(MAX_OWNER_POLICY_BYTES + 1)]) {
       fs.writeFileSync(filename, content);
-      const response = proxy(request());
+      const response = (await proxy(request()));
       expect(response.status).toBe(503);
       expect(await response.text()).not.toContain('synthetic-private-data');
     }
     process.env.FLUJO_OWNER_AUTH_FILE = path.join(directory, 'absent.json');
-    expect(proxy(request()).status).toBe(503);
+    expect((await proxy(request())).status).toBe(503);
     process.env.FLUJO_OWNER_AUTH_FILE = 'relative.json';
-    expect(proxy(request()).status).toBe(503);
+    expect((await proxy(request())).status).toBe(503);
     process.env.FLUJO_OWNER_AUTH_FILE = '';
-    expect(proxy(request()).status).toBe(503);
+    expect((await proxy(request())).status).toBe(503);
   });
-  it('rejects unknown schema/scopes, duplicate identity and invalid timestamps', () => {
+  it('rejects unknown schema/scopes, duplicate identity and invalid timestamps', async () => {
     for (const value of [
       { ...policy, schemaVersion: 2 },
       { ...policy, extra: 'unexpected' },
@@ -258,12 +258,12 @@ describe('owner credentials at real proxy and handler admission', () => {
     ]) {
       expect(ownerPolicySchema.safeParse(value).success).toBe(false);
       fs.writeFileSync(filename, JSON.stringify(value));
-      expect(proxy(request()).status).toBe(503);
+      expect((await proxy(request())).status).toBe(503);
     }
   });
-  it('retains anonymous local compatibility only when owner auth is unconfigured', () => {
+  it('retains anonymous local compatibility only when owner auth is unconfigured', async () => {
     delete process.env.FLUJO_OWNER_AUTH_FILE;
-    expect(proxy(request('/api/storage', null)).status).toBe(200);
-    expect(proxy(request('/api/storage', null, { origin: 'http://attacker.invalid' })).status).toBe(403);
+    expect((await proxy(request('/api/storage', null))).status).toBe(200);
+    expect((await proxy(request('/api/storage', null, { origin: 'http://attacker.invalid' }))).status).toBe(403);
   });
 });

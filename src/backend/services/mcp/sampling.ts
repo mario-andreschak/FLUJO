@@ -11,6 +11,9 @@ import { MCPServerConfig, MCPSamplingPolicy } from '@/shared/types/mcp';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { normalizeMaxTokens } from '@/shared/types/model';
+import { resolveModelAdapter, supportsLocalModelAuth, getModelConfigurationCapabilities } from '@/shared/types/model/provider';
+
+import { registerTaskInputHandler, assertTaskInputCurrent, type TaskInputOptions } from './taskInputHandlers';
 
 const log = createLogger('backend/services/mcp/sampling');
 
@@ -76,7 +79,9 @@ function toOpenAiMessages(params: {
  * sampling capability.
  */
 export function registerSamplingHandler(client: Client, config: MCPServerConfig): void {
-  client.setRequestHandler(CreateMessageRequestSchema, createSamplingHandler(config));
+  const handler = createSamplingHandler(config);
+  registerTaskInputHandler(client, 'sampling/createMessage', handler);
+  client.setRequestHandler(CreateMessageRequestSchema, handler);
 }
 
 /**
@@ -87,11 +92,12 @@ export function registerSamplingHandler(client: Client, config: MCPServerConfig)
  */
 export function createSamplingHandler(
   config: MCPServerConfig
-): (request: { params?: unknown }) => Promise<CreateMessageResult> {
+): (request: { params?: unknown }, options?: TaskInputOptions) => Promise<CreateMessageResult> {
   // Timestamps of recent sampling calls, for the rolling-window rate limit.
   const recentCalls: number[] = [];
 
-  return async (request): Promise<CreateMessageResult> => {
+  return async (request, options = {}): Promise<CreateMessageResult> => {
+    await assertTaskInputCurrent(options);
     const policy = policyOf(config);
     if (!policy?.enabled || !policy.modelId) {
       throw new McpError(ErrorCode.InvalidRequest, 'Sampling is not enabled for this server');
@@ -109,10 +115,16 @@ export function createSamplingHandler(
     recentCalls.push(now);
 
     const model = await modelService.getModel(policy.modelId);
+    await assertTaskInputCurrent(options);
     if (!model) {
       throw new McpError(ErrorCode.InternalError, `Sampling model not found: ${policy.modelId}`);
     }
-    const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey) ?? (model.fallbackPolicy ? '' : null);
+    if (model.fallbackPolicy || !getModelConfigurationCapabilities(model.provider, model.adapter, model.name).maxOutputTokens) {
+      throw new McpError(ErrorCode.InvalidRequest, 'Sampling requires a model that supports an output-token limit');
+    }
+    const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+    await assertTaskInputCurrent(options);
+    const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
     if (apiKey === null) {
       throw new McpError(ErrorCode.InternalError, 'Could not resolve the sampling model API key');
     }
@@ -120,16 +132,23 @@ export function createSamplingHandler(
     const params = request.params as {
       systemPrompt?: string;
       temperature?: number;
+      maxTokens?: number;
       messages?: Array<{ role: 'user' | 'assistant'; content: unknown }>;
     };
+    if (!Number.isSafeInteger(params?.maxTokens) || params.maxTokens! <= 0) {
+      throw new McpError(ErrorCode.InvalidParams, 'Sampling maxTokens must be a positive integer');
+    }
     const messages = toOpenAiMessages(params);
     const temperature = typeof params.temperature === 'number' ? params.temperature : DEFAULT_TEMPERATURE;
 
     log.info(`Sampling for ${config.name} via model ${model.name} (${messages.length} messages)`);
     const adapter = getCompletionAdapter(model);
-    // Prefer the per-policy token cap; fall back to the model's own default.
-    const maxTokens = policy.maxTokens ?? normalizeMaxTokens(model.maxTokens);
-    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, temperatureOverride: temperature, maxTokens });
+    const caps = [params.maxTokens!, normalizeMaxTokens(policy.maxTokens), normalizeMaxTokens(model.maxTokens)]
+      .filter((cap): cap is number => cap !== undefined);
+    const maxTokens = Math.min(...caps);
+    await assertTaskInputCurrent(options);
+    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, temperatureOverride: temperature, maxTokens, signal: options.signal });
+    await assertTaskInputCurrent(options);
 
     const raw = completion.choices?.[0]?.message?.content;
     const text = typeof raw === 'string' ? raw : '';
@@ -137,7 +156,7 @@ export function createSamplingHandler(
       role: 'assistant',
       content: { type: 'text', text },
       model: model.name,
-      stopReason: 'endTurn',
+      stopReason: completion.choices?.[0]?.finish_reason === 'length' ? 'maxTokens' : 'endTurn',
     };
   };
 }

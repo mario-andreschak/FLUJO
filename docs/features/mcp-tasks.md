@@ -1,20 +1,36 @@
-# MCP Tasks extension (issue #404)
+# MCP Tasks legacy adapter notes (issue #404)
 
-FLUJO can consume the official MCP **Tasks** extension as a *client*: a
+These notes record the original SDK1 client baseline. For the current modern
+extension, deployment switches, authorized server operation, migration,
+durability and qualification, see [MCP Tasks 2026](mcp-tasks-2026.md).
+The table below describes the legacy wire contract; the lifecycle notes cover
+both generations.
+
+FLUJO can consume both MCP **Tasks** generations as a *client*: a
 long-running tool call may return a task handle immediately, and FLUJO then
 polls the task to completion, durably, across restarts.
 
-Everything below is implemented behind feature flags and defaults to **off**.
+The delivered client lifecycle is behind a feature flag and defaults to **off**.
+Modern server Tasks are separately enabled at `/mcp-flows`; see the linked
+deployment and authorization requirements. The legacy endpoint stays synchronous.
 
 ## Pinned protocol contract
 
 Implemented against the repository's resolved
-`@modelcontextprotocol/sdk` **1.30.0** (`dist/esm/experimental/tasks/*`), which
-is the only Tasks implementation FLUJO can interoperate with today. All
+`@modelcontextprotocol/sdk` **1.32.1** (`dist/esm/experimental/tasks/*`), which
+provides the legacy contract; an isolated adapter also validates the newer extension. All
 unstable SDK surface is isolated in
 [`src/backend/services/mcp/tasksProtocol.ts`](../../src/backend/services/mcp/tasksProtocol.ts);
 the wire types and validators live in
 [`src/shared/types/mcp/tasks.ts`](../../src/shared/types/mcp/tasks.ts).
+
+This is the 2025-11-25 core Tasks generation. The
+[2026-07-28 Tasks extension](https://modelcontextprotocol.github.io/ext-tasks/specification/2026-07-28/tasks.html)
+uses per-request extension capabilities, `resultType: "task"`, `ttlMs`,
+`pollIntervalMs`, keyed `tasks/update` inputs and inline terminal `tasks/get`
+results. FLUJO discovers and translates that generation independently, retaining
+the original generation on each durable task record. Historical records without
+a generation remain legacy. The table below describes the legacy contract.
 
 | Concern | Contract |
 | --- | --- |
@@ -27,7 +43,7 @@ the wire types and validators live in
 | Baseline methods | `tasks/get`, `tasks/result`, `tasks/cancel` (`tasks/list` unused) |
 | Deferred | `notifications/tasks/status`, `subscriptions/listen` |
 
-### Deviations from the original planning note
+### Legacy differences from the original planning note
 
 The plan was written against an earlier draft. Three of its assumptions do not
 exist in the resolved SDK/spec and were implemented per the real contract:
@@ -52,7 +68,8 @@ and advertising it would claim partial support.
 ## Client lifecycle
 
 1. `callTool()` asks `decideTaskAugmentation()` whether to request task
-   augmentation. It says yes only when the flag is on **and** the live server
+   augmentation. Modern extension discovery is bounded and cached per live client.
+   For legacy servers it says yes only when the flag is on **and** the live server
    advertised `tasks.requests.tools.call` **and** the tool declares
    `execution.taskSupport` as `required`/`optional`. Classic servers never see
    Tasks metadata.
@@ -62,8 +79,10 @@ and advertising it would claim partial support.
 3. Polling uses the clamped `pollInterval`, bounded by the caller timeout, the
    abort signal, the task TTL and a bounded exponential backoff (max 5
    consecutive transient failures) for transport errors/reconnects.
-4. Terminal mapping: `completed` → payload fetched with `tasks/result`;
-   `failed` → the server's `statusMessage`; `cancelled` → FLUJO's distinct
+4. Terminal mapping: legacy `completed` → payload fetched with `tasks/result`;
+   modern `completed` → validated inline `tasks/get` result; modern `failed` →
+   bounded JSON-RPC code, message and optional data (returned, never persisted);
+   legacy `failed` → the server's `statusMessage`; `cancelled` → FLUJO's distinct
    `cancelled` response.
 5. Cancellation is cooperative and sent **at most once** (`tasks/cancel`) on
    abort, timeout, expiry, protocol violation or a poll-limit refusal. Terminal
@@ -81,6 +100,19 @@ call fails with `task-input-required-unattended` instead of polling forever. A
 task that stays in `input_required` longer than `inputRequiredTimeoutMs`
 (default 5 min) is abandoned the same way.
 
+Modern keyed requests use the same registered per-client elicitation, sampling and roots
+handlers and policy checks as ordinary requests. The attended conversation must
+match the task owner. At most 32 distinct input keys are handled per lifecycle;
+answers are sent through `tasks/update` and are never written to task records.
+Unknown or unregistered handlers are denied. Input waits are bounded by the
+input window, caller deadline, TTL and abort signal. A modern cancellation
+acknowledgement does not prove that the server has reached a terminal state.
+
+Each follow-up request rechecks live client, caller authority and server identity.
+Restarted tasks retain their original wire generation; changed generations or
+connection identities are refused. Ownerless input after restart is cancelled
+instead of being presented to another conversation.
+
 Correlation between the two channels lives in
 [`taskInputRegistry.ts`](../../src/backend/services/mcp/taskInputRegistry.ts).
 It stores **elicitation ids only** — never the prompt, the schema or the user's
@@ -94,16 +126,18 @@ Records live in the workspace-owned collection `db/mcp-remote-tasks/<recordId>.j
 - The local `recordId` is a UUID; the remote task id is just a field. **A task id
   alone never authorizes access**: lookups require the server name *and* the
   server identity fingerprint.
-- `serverIdentity` is a SHA-256 fingerprint of non-secret connection structure
+- `serverIdentity` is the existing SHA-256 connection fingerprint
   (transport, command/args/url, env/header *names*, whether OAuth is
-  configured) — never a secret value.
+  configured). Command arguments and URLs can contain secrets, so this unkeyed
+  fingerprint is not a confidentiality guarantee or an authorization token.
 - Identity fields (`recordId`, `remoteTaskId`, `serverName`, `serverIdentity`,
-  `toolName`, `requestFingerprint`, `createdAt`) are immutable after creation.
+  `generation`, `toolName`, `requestFingerprint`, `createdAt`) are immutable after creation.
 - Every transition goes through a per-record write chain and a legality check;
   terminal states are immutable.
 - **Not persisted:** tool arguments, credentials, headers, elicited input, and
-  terminal result payloads. Arguments are represented by a truncated SHA-256
-  fingerprint; results stay on the server and are re-fetched via `tasks/result`;
+  terminal result payloads. New request tags contain independent randomness;
+  historical argument-derived fingerprints remain historical. Legacy results
+  use `tasks/result`; modern results arrive inline without durable payload storage;
   error/status text is bounded to 500 characters.
 
 ### Restart and reconnect
@@ -115,8 +149,9 @@ exists and its identity fingerprint still matches. Mismatches fail closed with a
 non-secret diagnostic (`server-missing`, `identity-mismatch`); a disconnected
 server is left for a later sweep (`server-disconnected`). Because the
 originating run is gone, a resumed task is polled for observability only: its
-terminal state is recorded with the `owner-unavailable` diagnostic and the
-payload is deliberately **not** fetched or stored.
+terminal state is recorded with the `owner-unavailable` diagnostic. Legacy
+payload retrieval is skipped; modern inline status payloads are discarded and
+never stored or delivered to another conversation.
 
 ## Limits and settings
 
@@ -149,20 +184,16 @@ creating a poll storm. An hourly cron sweeps expiry and retention per workspace.
   result), just without durable-compliance claims.
 - `ENABLE_MCP_TASKS_SERVER` (default `false`) — see below.
 
-## Server-side status (deliberately not shipped)
+## Server-side status
 
-FLUJO's own MCP endpoints (`/mcp-proxy/[server]`, `/mcp-flows`) do **not**
-advertise or implement Tasks. Both build a fresh `Server` per request on a
-stateless Streamable HTTP transport and have no authenticated caller identity:
-`/mcp-proxy` only enforces localhost + explicit exposure, and `/mcp-flows` has
-no caller boundary at all. Since task `get`/`result`/`cancel` would then be
-reachable by task id alone, enabling server-side Tasks before a caller-bound
-ownership mechanism exists would be an authorization hole.
-
-Per the plan's security review gate, server-side Tasks therefore stay disabled
-until (a) a stable caller identity can be bound to each task record, and (b) one
-specific long-running FLUJO operation is approved as the first exposed task.
-The durable store here is already endpoint-agnostic and can back that work.
+The modern `/mcp-flows` handler supports caller/workspace-bound durable Tasks
+for saved flows when `FLUJO_MCP_TASKS_SERVER=true`. It requires the configured
+owner policy and an explicit authorized bearer, rechecks authority before
+execution and each lifecycle operation, and retains encrypted results across
+restart without replaying interrupted work. Task IDs alone grant no access.
+The feature defaults to off. The legacy `/mcp-flows` handler and `/mcp-proxy`
+remain synchronous. See [MCP Tasks 2026](mcp-tasks-2026.md) for supported profiles,
+bounds, protocol migration and the production smoke command.
 
 ## Observability
 
@@ -173,7 +204,7 @@ inputs and results are not.
 
 ## Interoperability
 
-The pinned reference is `@modelcontextprotocol/sdk` 1.30.0's experimental Tasks
+The resolved reference is `@modelcontextprotocol/sdk` 1.32.1's experimental Tasks
 implementation (`experimental/tasks/server.ts` +
 `experimental/tasks/stores/in-memory.ts`), which is what an end-to-end
 interoperability suite should be run against. Classic (non-Tasks) servers over

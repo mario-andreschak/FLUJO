@@ -23,12 +23,14 @@ describe('OpenAI GPT-5.6 explicit prompt-cache wire', () => {
     expect(supportsExplicitOpenAiPromptCaching(model('gpt-5.6'))).toBe(true);
     expect(supportsExplicitOpenAiPromptCaching(model('gpt-5.6-mini'))).toBe(true);
     expect(supportsExplicitOpenAiPromptCaching(model('gpt-6'))).toBe(true);
+    expect(supportsExplicitOpenAiPromptCaching({ ...model('openai/gpt-5.6', 'litellm'), adapter: 'openai' })).toBe(true);
+    expect(supportsExplicitOpenAiPromptCaching({ ...model('flujo/gateway', 'litellm'), adapter: 'openai' })).toBe(false);
     expect(supportsExplicitOpenAiPromptCaching(model('gpt-5.5'))).toBe(false);
     expect(supportsExplicitOpenAiPromptCaching(model('gpt-5.6', 'openrouter'))).toBe(false);
     expect(supportsExplicitOpenAiPromptCaching({
       ...model('gpt-5.6'),
       adapter: 'openai-responses',
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('moves the node instruction after history and marks the latest four reusable boundaries', () => {

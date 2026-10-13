@@ -1,5 +1,6 @@
 import { createLogger } from '@/utils/logger';
-import { loadCollectionItem, listCollectionItems } from '@/utils/storage/backend';
+import { withConversationSnapshot } from '@/utils/storage/backend';
+import { listConversationSummaries } from './conversationSummaryStore';
 import type { StorageKey } from '@/shared/types/storage';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { FlowExecutor } from './FlowExecutor';
@@ -66,9 +67,10 @@ function storageKey(conversationId: string): StorageKey {
 export async function loadConversationState(conversationId: string): Promise<SharedState | undefined> {
   const live = FlowExecutor.conversationStates.get(conversationId);
   if (live) return live;
-  const stored = await loadCollectionItem<SharedState | undefined>('conversations', conversationId, undefined);
-  if (stored) FlowExecutor.conversationStates.set(conversationId, stored);
-  return stored;
+  return withConversationSnapshot<SharedState, SharedState | undefined>(conversationId, async stored => {
+    if (stored) FlowExecutor.conversationStates.set(conversationId, stored);
+    return stored;
+  });
 }
 
 export async function persistSubflowParent(state: SharedState): Promise<void> {
@@ -183,39 +185,41 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
   const leaseKey = workspaceCacheKey(invocation.id);
   if (leases.has(leaseKey)) return;
   leases.add(leaseKey);
-  invocation.status = 'ready';
-  invocation.resumeRequestedAt = Date.now();
-  invocation.updatedAt = Date.now();
-  await persistSubflowParent(parent);
-
   try {
-    const { runFlow } = await import('./runFlow');
-    log.info('Resuming parent after recovered subflow join became ready', {
-      parentConversationId: parentId,
-      invocationId: invocation.id,
-      nodeId: invocation.parentNodeId,
-    });
-    const result = await runFlow({
-      conversationId: parentId,
-      mode: 'conversation',
-      source,
-      flujo: true,
-      requireApproval: parent.requireApproval ?? false,
-      debug: parent.debugMode ?? false,
-      userTurn: false,
-      depth: parent.runDepth,
-      chainDepth: parent.chainDepth,
-      onApprovalRequired: parent.onApprovalRequired,
-    });
-    // Awaiting this propagation makes nested recovery deterministic. runFlow's
-    // background notification is intentionally redundant and idempotent.
-    await reportSubflowRunOutcome(result);
-  } catch (error) {
-    log.error('Automatic parent continuation after subflow recovery failed', {
-      parentConversationId: parentId,
-      invocationId: invocation.id,
-      error,
-    });
+    invocation.status = 'ready';
+    invocation.resumeRequestedAt = Date.now();
+    invocation.updatedAt = Date.now();
+    await persistSubflowParent(parent);
+
+    try {
+      const { runFlow } = await import('./runFlow');
+      log.info('Resuming parent after recovered subflow join became ready', {
+        parentConversationId: parentId,
+        invocationId: invocation.id,
+        nodeId: invocation.parentNodeId,
+      });
+      const result = await runFlow({
+        conversationId: parentId,
+        mode: 'conversation',
+        source,
+        flujo: true,
+        requireApproval: parent.requireApproval ?? false,
+        debug: parent.debugMode ?? false,
+        userTurn: false,
+        depth: parent.runDepth,
+        chainDepth: parent.chainDepth,
+        onApprovalRequired: parent.onApprovalRequired,
+      });
+      // Awaiting this propagation makes nested recovery deterministic. runFlow's
+      // background notification is intentionally redundant and idempotent.
+      await reportSubflowRunOutcome(result);
+    } catch (error) {
+      log.error('Automatic parent continuation after subflow recovery failed', {
+        parentConversationId: parentId,
+        invocationId: invocation.id,
+        error,
+      });
+    }
   } finally {
     leases.delete(leaseKey);
   }
@@ -262,7 +266,35 @@ export function queueSubflowRunOutcome(result: SubflowRunOutcome): void {
   }));
 }
 
-function isFailedState(state: SharedState): boolean {
+type RecoveryInvocation = Pick<SubflowInvocation, 'id' | 'parentNodeId' | 'status'> & {
+  lanes: Array<Pick<SubflowInvocationLane, 'id' | 'conversationId' | 'status'>>;
+};
+type RecoveryConversation = Pick<SharedState,
+  'conversationId' | 'status' | 'source' | 'parentRunId' | 'parentConversationId' | 'rootConversationId' | 'subflowLane'
+> & {
+  recovery?: Pick<NonNullable<SharedState['recovery']>, 'classification' | 'lane'>;
+  subflowInvocations?: Record<string, RecoveryInvocation>;
+  activeSubflowInvocationByNode?: SharedState['activeSubflowInvocationByNode'];
+  personaOwned: boolean;
+};
+
+/** Recovery decisions need identities and lane status, never transcripts or lane outputs. */
+function recoveryProjection(state: SharedState): RecoveryConversation {
+  return {
+    conversationId: state.conversationId, status: state.status, source: state.source,
+    parentRunId: state.parentRunId, parentConversationId: state.parentConversationId,
+    rootConversationId: state.rootConversationId, subflowLane: state.subflowLane,
+    recovery: state.recovery ? { classification: state.recovery.classification, lane: state.recovery.lane } : undefined,
+    personaOwned: isPersonaOwnedConversationState(state),
+    activeSubflowInvocationByNode: state.activeSubflowInvocationByNode,
+    subflowInvocations: state.subflowInvocations && Object.fromEntries(Object.entries(state.subflowInvocations).map(([id, invocation]) => [id, {
+      id: invocation.id, parentNodeId: invocation.parentNodeId, status: invocation.status,
+      lanes: invocation.lanes.map(lane => ({ id: lane.id, conversationId: lane.conversationId, status: lane.status })),
+    }])),
+  };
+}
+
+function isFailedState(state: RecoveryConversation): boolean {
   return state.status === 'error' ||
     state.recovery?.classification === 'cancelled' ||
     state.recovery?.classification === 'interrupted' ||
@@ -271,9 +303,9 @@ function isFailedState(state: SharedState): boolean {
 }
 
 function activeInvocationForChild(
-  state: SharedState,
-  byId: Map<string, SharedState>,
-): { parent: SharedState; invocation: SubflowInvocation; lane: SubflowInvocationLane } | undefined {
+  state: RecoveryConversation,
+  byId: Map<string, RecoveryConversation>,
+): { parent: RecoveryConversation; invocation: RecoveryInvocation; lane: RecoveryInvocation['lanes'][number] } | undefined {
   const laneRef = state.subflowLane ?? state.recovery?.lane;
   const parentId = state.parentRunId ?? state.parentConversationId;
   if (!parentId || !laneRef?.invocationId || !laneRef.laneId || !state.conversationId) return undefined;
@@ -288,31 +320,66 @@ function activeInvocationForChild(
   return { parent, invocation, lane };
 }
 
-function activeInvocationOwnedBy(state: SharedState): SubflowInvocation | undefined {
+function activeInvocationOwnedBy(state: RecoveryConversation): RecoveryInvocation | undefined {
   const activeIds = Object.values(state.activeSubflowInvocationByNode ?? {});
   return activeIds
     .map((id) => state.subflowInvocations?.[id])
-    .find((invocation): invocation is SubflowInvocation => !!invocation && invocation.status !== 'folded');
+    .find((invocation): invocation is RecoveryInvocation => !!invocation && invocation.status !== 'folded');
 }
 
-async function allConversationStates(): Promise<SharedState[]> {
-  const stored = await listCollectionItems<SharedState>('conversations');
-  const byId = new Map<string, SharedState>();
-  for (const state of stored) {
-    if (!state.conversationId) continue;
-    // A direct recovery API call may be the first request after process restart,
-    // before the sidebar/list route has reconciled abandoned `running` records.
-    // Never reconcile a currently resident state: it may genuinely be running.
-    if (!FlowExecutor.conversationStates.has(state.conversationId)) {
-      await reconcileInterruptedRecovery(storageKey(state.conversationId), state);
+async function familyConversationStates(conversationId: string, signal?: AbortSignal): Promise<RecoveryConversation[]> {
+  signal?.throwIfAborted();
+  const byId = new Map<string, RecoveryConversation>();
+  const read = async (id: string) => {
+    signal?.throwIfAborted();
+    if (byId.has(id)) return byId.get(id);
+    const live = FlowExecutor.conversationStates.get(id);
+    const projected = live ? recoveryProjection(live) : await withConversationSnapshot<SharedState, RecoveryConversation | undefined>(id, async state => {
+      signal?.throwIfAborted();
+      if (!state) return undefined;
+      await reconcileInterruptedRecovery(storageKey(id), state);
+      signal?.throwIfAborted();
+      return recoveryProjection(state);
+    }, { signal });
+    if (projected) byId.set(id, projected);
+    return projected;
+  };
+  const current = await read(conversationId);
+  if (!current) return [];
+  const summaries = await listConversationSummaries();
+  signal?.throwIfAborted();
+  const rootId = current.rootConversationId ?? conversationId;
+  const wanted = new Set([conversationId, rootId]);
+  if (current.parentRunId ?? current.parentConversationId) wanted.add((current.parentRunId ?? current.parentConversationId)!);
+  // Discover family identities from compact sidecars, including legacy parent links.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const summary of summaries) {
+      if (wanted.has(summary.id) || summary.rootConversationId === rootId || (summary.parentConversationId && wanted.has(summary.parentConversationId))) {
+        for (const id of [summary.id, summary.parentConversationId, summary.rootConversationId]) {
+          if (id && !wanted.has(id)) { wanted.add(id); changed = true; }
+        }
+      }
     }
-    byId.set(state.conversationId, state);
   }
-  for (const [id, state] of FlowExecutor.conversationStates) byId.set(id, state);
+  for (const [id, state] of FlowExecutor.conversationStates) {
+    if (state.rootConversationId === rootId || state.parentConversationId === conversationId) wanted.add(id);
+  }
+  // Materialize one admitted snapshot at a time and retain only its small projection.
+  // Active lane identities also cover children not yet visible in a persisted sidecar.
+  for (const id of wanted) {
+    const state = await read(id);
+    if (!state) continue;
+    if (state.parentRunId ?? state.parentConversationId) wanted.add((state.parentRunId ?? state.parentConversationId)!);
+    for (const invocation of Object.values(state.subflowInvocations ?? {})) {
+      if (invocation.status !== 'folded') for (const lane of invocation.lanes) wanted.add(lane.conversationId);
+    }
+  }
   return Array.from(byId.values());
 }
 
-function deepestFailedStates(states: SharedState[], rootId: string): SharedState[] {
+function deepestFailedStates(states: RecoveryConversation[], rootId: string): RecoveryConversation[] {
   const byId = new Map(states.flatMap((state) =>
     state.conversationId ? [[state.conversationId, state] as const] : [],
   ));
@@ -359,8 +426,8 @@ function deepestFailedStates(states: SharedState[], rootId: string): SharedState
 }
 
 function belongsToMeetingFamily(
-  state: SharedState | undefined,
-  byId: Map<string, SharedState>,
+  state: RecoveryConversation | undefined,
+  byId: Map<string, RecoveryConversation>,
 ): boolean {
   if (!state) return false;
   if (state.source === 'meeting') return true;
@@ -368,8 +435,8 @@ function belongsToMeetingFamily(
   return Boolean(rootId && byId.get(rootId)?.source === 'meeting');
 }
 
-export async function getSubflowRecoveryOptions(conversationId: string): Promise<SubflowRecoveryOptions> {
-  const states = await allConversationStates();
+export async function getSubflowRecoveryOptions(conversationId: string, signal?: AbortSignal): Promise<SubflowRecoveryOptions> {
+  const states = await familyConversationStates(conversationId, signal);
   const byId = new Map(states.flatMap((state) =>
     state.conversationId ? [[state.conversationId, state] as const] : [],
   ));
@@ -402,7 +469,7 @@ export async function getSubflowRecoveryOptions(conversationId: string): Promise
   };
 }
 
-async function runRecoveryConversation(state: SharedState): Promise<SubflowRunOutcome> {
+async function runRecoveryConversation(state: RecoveryConversation): Promise<SubflowRunOutcome> {
   if (!state.conversationId) throw new Error('Conversation has no id.');
   const leaseKey = `conversation:${state.conversationId}`;
   const leases = resumeLeases();
@@ -411,7 +478,8 @@ async function runRecoveryConversation(state: SharedState): Promise<SubflowRunOu
   try {
     // Re-read after taking the lease so two recovery requests cannot both act
     // on the stale error snapshot returned by the family scan.
-    const current = await loadConversationState(state.conversationId) ?? state;
+    const current = await loadConversationState(state.conversationId);
+    if (!current) throw new Error('Conversation not found.');
     if (current.status === 'running') throw new Error('Conversation is already running.');
     if (current.source === 'meeting') {
       throw new Error('Meeting participant recovery must be coordinated by MeetingEngine.');
@@ -445,7 +513,7 @@ export async function retrySubflowRecoveryScope(
   conversationId: string,
   scope: SubflowRecoveryScope,
 ): Promise<SubflowRecoveryResult> {
-  const states = await allConversationStates();
+  const states = await familyConversationStates(conversationId);
   const current = states.find((state) => state.conversationId === conversationId);
   if (!current) throw new Error('Conversation not found.');
   const byId = new Map(states.flatMap((state) =>
@@ -458,7 +526,7 @@ export async function retrySubflowRecoveryScope(
     throw new Error('Persona-owned recovery must be coordinated by the Persona dispatcher.');
   }
 
-  let targets: SharedState[] = [];
+  let targets: RecoveryConversation[] = [];
   if (scope === 'branch') {
     targets = [current];
   } else if (scope === 'siblings') {

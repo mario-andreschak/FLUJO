@@ -64,7 +64,7 @@ export async function isServerExposed(serverName: string): Promise<boolean> {
  * connected first (mirrors ToolHandler.processMCPNodes), then lists. Throws on
  * a genuine failure so the MCP SDK surfaces a proper JSON-RPC error.
  */
-export async function proxyListTools(serverName: string): Promise<{ tools: Tool[] }> {
+export async function proxyListTools(serverName: string, cursor?: string): Promise<{ tools: Tool[]; nextCursor?: string }> {
   if (await isLocked()) {
     throw new Error(LOCKED_MESSAGE);
   }
@@ -74,11 +74,11 @@ export async function proxyListTools(serverName: string): Promise<{ tools: Tool[
   }
   // A transparent MCP relay must preserve app-only definitions. The outer
   // host owns model/app visibility enforcement for its own caller.
-  const result = await mcpService.listServerTools(serverName, 'all');
+  const result = await mcpService.listServerTools(serverName, 'all', cursor);
   if (result.error) {
     throw new Error(`Failed to list tools for '${serverName}': ${result.error}`);
   }
-  return { tools: (result.tools ?? []) as Tool[] };
+  return { tools: (result.tools ?? []) as Tool[], ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }) };
 }
 
 /**
@@ -89,7 +89,8 @@ export async function proxyListTools(serverName: string): Promise<{ tools: Tool[
 export async function proxyCallTool(
   serverName: string,
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  options?: { signal?: AbortSignal; onProgress?: (progress: { progress: number; total?: number; message?: string }) => void },
 ): Promise<CallToolResult> {
   if (await isLocked()) {
     return {
@@ -109,9 +110,9 @@ export async function proxyCallTool(
     toolName,
     args,
     undefined,
+    options?.onProgress,
     undefined,
-    undefined,
-    undefined,
+    options?.signal,
     // The proxy cannot infer whether an inbound tools/call came from the outer
     // host's model or its MCP App iframe. That host has already authorized the
     // call, so forward through FLUJO's neutral host path without filtering it a
@@ -121,6 +122,8 @@ export async function proxyCallTool(
   if (result.success) {
     return result.data as CallToolResult;
   }
+  if (options?.signal?.aborted) options.signal.throwIfAborted();
+  if (result.protocolError) throw new McpError(result.protocolError.code, result.error ?? 'Downstream MCP request failed', result.protocolError.data);
   return {
     content: [{ type: 'text', text: `Error: ${result.error ?? 'Unknown error'}` }],
     isError: true,
@@ -132,7 +135,7 @@ export async function proxyCallTool(
  * "flujo" server this surfaces the run-scoped resources to external clients).
  * Same lock gate → connect → list → throw-on-error shape as proxyListTools.
  */
-export async function proxyListResources(serverName: string): Promise<{ resources: Resource[] }> {
+export async function proxyListResources(serverName: string, cursor?: string): Promise<{ resources: Resource[]; nextCursor?: string }> {
   if (await isLocked()) {
     throw new Error(LOCKED_MESSAGE);
   }
@@ -140,15 +143,15 @@ export async function proxyListResources(serverName: string): Promise<{ resource
   if (!connect.success) {
     throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
   }
-  const result = await mcpService.listServerResources(serverName);
+  const result = await mcpService.listServerResources(serverName, cursor);
   if (result.error) {
     throw new Error(`Failed to list resources for '${serverName}': ${result.error}`);
   }
-  return { resources: (result.resources ?? []) as Resource[] };
+  return { resources: (result.resources ?? []) as Resource[], ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }) };
 }
 
 /** Forward a `resources/templates/list` to the downstream server. */
-export async function proxyListResourceTemplates(serverName: string): Promise<{ resourceTemplates: ResourceTemplate[] }> {
+export async function proxyListResourceTemplates(serverName: string, cursor?: string): Promise<{ resourceTemplates: ResourceTemplate[]; nextCursor?: string }> {
   if (await isLocked()) {
     throw new Error(LOCKED_MESSAGE);
   }
@@ -156,11 +159,11 @@ export async function proxyListResourceTemplates(serverName: string): Promise<{ 
   if (!connect.success) {
     throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
   }
-  const result = await mcpService.listServerResourceTemplates(serverName);
+  const result = await mcpService.listServerResourceTemplates(serverName, cursor);
   if (result.error) {
     throw new Error(`Failed to list resource templates for '${serverName}': ${result.error}`);
   }
-  return { resourceTemplates: (result.resourceTemplates ?? []) as ResourceTemplate[] };
+  return { resourceTemplates: (result.resourceTemplates ?? []) as ResourceTemplate[], ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }) };
 }
 
 /**
@@ -173,6 +176,14 @@ export async function proxyListResourceTemplates(serverName: string): Promise<{ 
  *   and is closer to the MCP 2026-07-28 spec intent (which introduces -32002 ResourceNotFound;
  *   update when that code is exported by whichever SDK version is in use).
  */
+export async function getProxyCapabilities(serverName: string): Promise<{
+  skillsCapability?: McpSkillsExtensionCapability;
+  appsCapability?: Record<string, unknown>;
+}> {
+  if (await isLocked()) return {};
+  return mcpService.getServerProxyCapabilities(serverName);
+}
+
 export async function getProxySkillsCapability(
   serverName: string,
 ): Promise<McpSkillsExtensionCapability | undefined> {

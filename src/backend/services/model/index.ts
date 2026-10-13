@@ -3,6 +3,8 @@ import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
+import { fetchCodexModels } from './adapters/codexDiscovery';
+import { fetchAntigravityCliModels } from './adapters/antigravityCliDiscovery';
 import { 
   ModelServiceResponse, 
   ModelOperationResponse, 
@@ -15,6 +17,8 @@ import {
   ModelAdapter,
   getProviderProfileById,
   isSelfOrchestratingAdapter,
+  supportsLocalModelAuth,
+  resolveModelAdapter,
   normalizeModelTemperature,
   validateModelConfiguration,
 } from '@/shared/types/model/provider';
@@ -444,6 +448,31 @@ class ModelService {
       const adapter: ModelAdapter =
         profile?.adapter ?? storedModel?.adapter ?? 'openai';
       const usesNativeGemini = provider === 'gemini' && adapter === 'gemini';
+      const usesCodex = provider === 'codex' && adapter === 'codex-cli';
+
+      if (provider === 'antigravity-cli' && adapter === 'antigravity-cli') {
+        if (baseUrl.trim()) return [];
+        const supplied = apiKey !== undefined && apiKey !== MASKED_API_KEY;
+        if (!supplied && storedModel && storedModel.provider !== 'antigravity-cli') return [];
+        const selected = supplied ? apiKey : storedModel?.ApiKey;
+        const key = selected?.trim() ? await resolveAndDecryptApiKey(selected) : '';
+        if (selected?.trim() && (!key?.trim() || key.includes('${global:'))) throw new Error('Could not resolve the selected Antigravity API key.');
+        const models = await fetchAntigravityCliModels(key || '');
+        return searchTerm?.trim() ? filterModels(models, searchTerm) : models;
+      }
+
+      if (usesCodex) {
+        // Subscription discovery cannot send a stored key to an edited endpoint.
+        if (baseUrl.trim()) return [];
+        const suppliedKey = apiKey && apiKey !== MASKED_API_KEY ? await resolveAndDecryptApiKey(apiKey) : null;
+        const savedKey = !suppliedKey && storedModel?.provider === 'codex'
+          ? await resolveAndDecryptApiKey(storedModel.ApiKey) : null;
+        // Explicit API-billed connections use their API catalogue, never the subscription login.
+        const models = suppliedKey || savedKey
+          ? await fetchModelsFromProvider('openai', 'https://api.openai.com/v1', suppliedKey || savedKey, 'openai')
+          : await fetchCodexModels();
+        return searchTerm?.trim() ? filterModels(models, searchTerm) : models;
+      }
 
       if (!baseUrl.trim() && !usesNativeGemini) {
         log.warn('Provider catalogue discovery requires a base URL', {
@@ -576,7 +605,7 @@ class ModelService {
         baseUrl = baseUrl || storedModel.baseUrl;
         provider = provider || storedModel.provider;
         adapter = adapter || storedModel.adapter;
-        if (!resolvedApiKey) {
+        if (apiKey === undefined || apiKey === MASKED_API_KEY) {
           resolvedApiKey = await resolveAndDecryptApiKey(storedModel.ApiKey);
         }
       }
@@ -585,9 +614,15 @@ class ModelService {
     if (!modelName) {
       throw new Error('Model name is required to run a test');
     }
+    adapter = resolveModelAdapter(provider, adapter);
+    if (adapter === 'antigravity-cli' && resolvedApiKey?.includes('${global:')) {
+      throw new Error('Could not resolve the selected Antigravity API key.');
+    }
     if (!resolvedApiKey) {
-      // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
-      if (adapter === 'codex-cli') {
+      const configuredKey = apiKey !== undefined && apiKey !== MASKED_API_KEY ? apiKey : storedModel?.ApiKey;
+      // Empty-key CLI models use the operator's local login. A failed key
+      // binding/decryption must still fail rather than selecting another account.
+      if (supportsLocalModelAuth(adapter) && !configuredKey?.trim()) {
         resolvedApiKey = '';
       } else {
         throw new Error('Could not resolve an API key for this model');
@@ -703,7 +738,7 @@ class ModelService {
       // agentic loop when given tools, which diverges from standard OpenAI tool
       // semantics (the CLIENT is supposed to execute its own tools). Reject
       // rather than silently diverge.
-      if (!model.fallbackPolicy && isSelfOrchestratingAdapter(model.adapter) && tools && tools.length > 0) {
+      if (!model.fallbackPolicy && isSelfOrchestratingAdapter(resolveModelAdapter(model.provider, model.adapter)) && tools && tools.length > 0) {
         return {
           success: false,
           error: {
@@ -717,11 +752,11 @@ class ModelService {
       }
 
       // --- Resolve + decrypt the API key (never logged, never returned) ---
-      // Codex may run keyless: an empty key means "use the machine's ChatGPT
-      // plan login from `codex login`" (the adapter then omits the apiKey).
+      // Local-auth CLI connections use their host login only when the saved
+      // key is empty. Failed nonempty credentials must never select that path.
       const resolvedKey = await resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey =
-        resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
+        resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {
         return {
           success: false,

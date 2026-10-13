@@ -100,6 +100,45 @@ describe('portable workspace capture', () => {
     }
   });
 
+  it.each([false, true])('preserves captured ZIP dates and plaintext digests across later writes (encrypted: %s)', async (encrypted) => {
+    await put('userdata/member.txt', 'captured generation');
+    if (encrypted) process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    const dates = Object.fromEntries(Object.entries(captured.zip.files).map(([name, file], index) => {
+      file.date = new Date(Date.UTC(2025, 0, 1, 0, 0, index * 2));
+      return [name, file.date.getTime()];
+    }));
+    jest.useFakeTimers({
+      now: new Date('2025-02-01T00:00:00Z'),
+      doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate', 'clearImmediate', 'setTimeout', 'clearTimeout',
+        'setInterval', 'clearInterval', 'hrtime', 'performance'],
+    });
+    const archives: Awaited<ReturnType<typeof writeWorkspaceSnapshotArchive>>[] = [];
+    try {
+      const first = await writeWorkspaceSnapshotArchive(captured);
+      archives.push(first);
+      const generatedFirst = await captured.zip.generateAsync({ type: 'nodebuffer' });
+      jest.setSystemTime(new Date('2025-03-01T00:00:00Z'));
+      const second = await writeWorkspaceSnapshotArchive(captured);
+      archives.push(second);
+      expect(second.plaintextSha256).toBe(first.plaintextSha256);
+      expect(await captured.zip.generateAsync({ type: 'nodebuffer' })).toEqual(generatedFirst);
+      if (encrypted) expect(second.sha256).not.toBe(first.sha256);
+      else expect(second.sha256).toBe(first.sha256);
+      for (const archive of archives) {
+        const wire = await fs.readFile(archive.archivePath);
+        const restored = await JSZip.loadAsync(encrypted ? decryptArchive(wire) : wire);
+        expect(Object.fromEntries(Object.entries(restored.files).map(([name, file]) => [name, file.date.getTime()])))
+          .toEqual(dates);
+        expect(await restored.file('userdata/member.txt')!.async('string')).toBe('captured generation');
+        expect(JSON.parse(await restored.file('snapshot-manifest.json')!.async('string'))).toEqual(captured.manifest);
+      }
+    } finally {
+      jest.useRealTimers();
+      for (const archive of archives) await fs.rm(archive.stagingDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects SQLite state disguised as workspace metadata', async () => {
     await put('.workspace.json', Buffer.from('SQLite format 3\0extra'));
     await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'UNSAFE_ENTRY' });
@@ -279,6 +318,30 @@ describe('portable workspace capture', () => {
     captured.manifest.runtime.codexAuth = 'none';
     captured.zip.file('db/codex-private-stale/auth.json', 'synthetic secret');
     await expect(writeWorkspaceSnapshotArchive(captured)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
+  });
+
+  it('keeps Antigravity model configurations portable without exporting private authentication or CLI sessions', async () => {
+    const model = '[{"id":"antigravity","provider":"antigravity-cli","adapter":"antigravity-cli","name":"gemini-3.1-pro-high","ApiKey":""}]';
+    const authPath = 'db/antigravity-cli-runtime/invocation-one/.gemini/antigravity-cli/antigravity-oauth-token';
+    const credentials = '{"token":{"access_token":"private-google-access","refresh_token":"private-google-refresh"}}';
+    await put('db/models.json', model);
+    await put(authPath, credentials);
+    await put('db/antigravity-cli-runtime/invocation-one/.gemini/antigravity-cli/settings.json', '{"private":"host-settings"}');
+    await put('db/antigravity-cli-runtime/invocation-one/.gemini/antigravity-cli/brain/session/transcript.jsonl', '{"private":"cli-transcript"}');
+    await put('db/antigravity-cli-runtime-metadata.json', '{"description":"ordinary workspace record"}');
+
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    const archive = await writeWorkspaceSnapshotArchive(captured);
+    try {
+      const unpacked = await JSZip.loadAsync(await fs.readFile(archive.archivePath));
+      expect(await unpacked.file('db/models.json')!.async('string')).toBe(model);
+      expect(unpacked.file('db/antigravity-cli-runtime-metadata.json')).not.toBeNull();
+      expect(Object.keys(unpacked.files).some(name => name.startsWith('db/antigravity-cli-runtime/'))).toBe(false);
+      expect(captured.manifest.files.some(file => file.path.startsWith('db/antigravity-cli-runtime/'))).toBe(false);
+      expect(await fs.readFile(path.join(workspace, authPath), 'utf8')).toBe(credentials);
+    } finally {
+      await fs.rm(archive.stagingDir, { recursive: true, force: true });
+    }
   });
 
   it('fails before producing a clone when subscription credentials are unavailable', async () => {

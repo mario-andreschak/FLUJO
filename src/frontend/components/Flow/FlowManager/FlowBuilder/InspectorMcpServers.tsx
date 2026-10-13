@@ -154,7 +154,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
       >
         <HubRoundedIcon color="primary" sx={{ mr: 1.25 }} />
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="body2" fontWeight={800} noWrap>
+          <Typography variant="body2" sx={{ fontWeight: 800 }} noWrap>
             {server.name}
           </Typography>
           <Typography variant="caption" color="text.secondary">
@@ -197,8 +197,8 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
         overflow: 'hidden',
       })}
     >
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.25, py: 0.75 }}>
-        <Typography variant="caption" fontWeight={800}>
+      <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between",  px: 1.25, py: 0.75 }}>
+        <Typography variant="caption" sx={{ fontWeight: 800 }}>
           {heading}
         </Typography>
         <Tooltip title={addLabel}>
@@ -216,7 +216,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
       </Stack>
 
       {connections.length === 0 ? (
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ px: 1.25, pb: 1.25 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block",  px: 1.25, pb: 1.25 }}>
           {emptyMessage}
         </Typography>
       ) : (
@@ -225,9 +225,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
             <Stack
               key={connection.nodeId}
               direction="row"
-              alignItems="center"
-              gap={0.75}
-              sx={{
+              sx={{ alignItems: "center", gap: 0.75,
                 minHeight: 42,
                 px: 1,
                 borderTop: index === 0 ? 0 : 1,

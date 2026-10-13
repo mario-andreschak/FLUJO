@@ -1,6 +1,12 @@
 import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
 let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
-afterEach(async () => { await privateFixture?.restore(); });
+afterEach(async () => {
+  // fire() queues statistics independently of its result. Finish those writes
+  // while the private profile and data root still belong to this test.
+  const { flushStatisticsEvents } = await import('@/backend/services/statistics');
+  await flushStatisticsEvents();
+  await privateFixture?.restore();
+});
 /**
  * Tests for the SchedulerService (Planned Executions #10).
  *

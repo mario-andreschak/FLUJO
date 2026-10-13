@@ -125,11 +125,24 @@ describe('portable Codex authentication', () => {
     '# cli_auth_credentials_store = "keyring"\nmodel = "example"',
     "notes = '''\ncli_auth_credentials_store = \"keyring\"\n'''\ncli_auth_credentials_store = 'file'",
     'cli_auth_credentials_store = "file"\n[profiles.legacy]\ncli_auth_credentials_store = "keyring"',
+    'cli_auth_credentials_store = "file"\nretry_delay = 3e+20',
+    'cli_auth_credentials_store = "file"\nretry_delay = 3e-2',
   ])('parses quoted keys, comments and multiline strings without inventing credential settings: %s', async config => {
     await fs.writeFile(path.join(host, 'auth.json'), auth('host'));
     await fs.writeFile(path.join(host, 'config.toml'), config);
     await prepareCodexRuntimeEnvironment(true);
     expect((await readCodexAuthForTransfer()).toString()).toBe(auth('host'));
+  });
+
+  it.each(['3e++20', '3e--20'])('rejects malformed exponents before importing a saved login: %s', async exponent => {
+    await fs.writeFile(path.join(host, 'auth.json'), auth('host'));
+    await fs.writeFile(path.join(host, 'config.toml'), `cli_auth_credentials_store = "file"\nprivate_token = "synthetic-private-token"\nretry_delay = ${exponent}`);
+    expect(await inspectCodexLogin()).toEqual({ authentication: 'unknown', reasonCode: 'credential-store-unreadable' });
+    await expect(readCodexAuthForTransfer()).rejects.toThrow('Could not verify');
+    const preparation = prepareCodexRuntimeEnvironment(true);
+    await expect(preparation).rejects.toThrow('Could not verify');
+    await expect(preparation).rejects.not.toThrow('synthetic-private-token');
+    await expect(fs.stat(path.join(home, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rejects malformed and unreadable host configuration without exposing source contents', async () => {

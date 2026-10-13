@@ -139,6 +139,7 @@ export const DispatchAdmissionSchema = z.object({
   relatedAction: z.enum(['steer', 'coalesce']).optional(),
   summary: z.string().trim().max(20_000).optional(),
   notBefore: z.number().int().nonnegative().optional(),
+  assignmentExpectedUpdatedAt: z.number().int().nonnegative().optional(),
 }).strict().superRefine((input, ctx) => {
   if (input.relatedAction && !input.relationKey) {
     ctx.addIssue({

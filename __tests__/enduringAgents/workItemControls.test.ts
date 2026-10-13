@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
+
 const submitPersonaFlowDispatchMock = jest.fn();
+const getPersonaFlowDispatchMock = jest.fn();
 const listPersonaFlowDispatchesMock = jest.fn();
 const cancelPersonaFlowDispatchByIdMock = jest.fn();
 const reprioritizePersonaWorkItemDispatchesMock = jest.fn();
@@ -6,6 +9,8 @@ const movePersonaWorkItemDispatchMock = jest.fn();
 
 jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
   submitPersonaFlowDispatch: (...args: unknown[]) => submitPersonaFlowDispatchMock(...args),
+  getPersonaFlowDispatch: (...args: unknown[]) => getPersonaFlowDispatchMock(...args),
+  personaFlowDispatchId: (personaId: string, key: string) => 'dispatch_' + personaId + '_' + key,
   listPersonaFlowDispatches: (...args: unknown[]) => listPersonaFlowDispatchesMock(...args),
   cancelPersonaFlowDispatchById: (...args: unknown[]) => cancelPersonaFlowDispatchByIdMock(...args),
   reprioritizePersonaWorkItemDispatches: (...args: unknown[]) => (
@@ -15,6 +20,7 @@ jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
 }));
 
 import {
+  assignPersonaWorkItem,
   controlPersonaWorkItem,
   createPersonaWorkItem,
   deletePersonaWorkItem,
@@ -80,6 +86,7 @@ async function createTask(label: string): Promise<{ personaId: string; task: Per
 describe('Persona Task work controls', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    getPersonaFlowDispatchMock.mockResolvedValue(null);
     listPersonaFlowDispatchesMock.mockResolvedValue([]);
     reprioritizePersonaWorkItemDispatchesMock.mockResolvedValue([]);
     movePersonaWorkItemDispatchMock.mockResolvedValue({ found: true, moved: true });
@@ -89,6 +96,59 @@ describe('Persona Task work controls', () => {
     ) => {
       await options?.validateAdmission?.();
       return { dispatch: { id: 'dispatch_submitted' }, decision: 'queued', duplicate: false, input };
+    });
+  });
+
+  it('returns the durable caller attempt receipt after a lost ACK or stale retry', async () => {
+    await inFreshWorkspace(async () => {
+      const { personaId, task } = await createTask('caller-attempt');
+      const saved = new Map<string, unknown>();
+      getPersonaFlowDispatchMock.mockImplementation(async (id: string) => saved.get(id) ?? null);
+      submitPersonaFlowDispatchMock.mockImplementationOnce(async (
+        input: { idempotencyKey: string; assignmentExpectedUpdatedAt?: number },
+        options: { validateAdmission?: () => Promise<void> },
+      ) => {
+        await options.validateAdmission?.();
+        const id = 'dispatch_' + personaId + '_' + input.idempotencyKey;
+        saved.set(id, {
+          id, workspaceId: 'work-item-controls-' + process.pid + '-' + workspaceSequence,
+          personaId,
+          idempotencyDigest: createHash('sha256').update(input.idempotencyKey).digest('hex'),
+          admission: { kind: 'assignment', source: { kind: 'assignment', sourceId: task.id },
+            relationKey: 'persona-task:' + task.id,
+            assignmentExpectedUpdatedAt: input.assignmentExpectedUpdatedAt },
+          state: 'queued', mailboxItemId: 'mailbox_saved',
+        });
+        throw new Error('ACK lost after dispatch save');
+      });
+
+      const input = { expectedUpdatedAt: task.updatedAt, idempotencyKey: 'caller-1' };
+      const recovered = await assignPersonaWorkItem(personaId, task.id, input);
+      expect(recovered).toMatchObject({ admission: 'already_queued', dispatchId: expect.any(String) });
+      expect(submitPersonaFlowDispatchMock).toHaveBeenCalledTimes(1);
+
+      const changed = await updatePersonaWorkItem(personaId, task.id, {
+        title: 'Review changed work', nextAction: 'Inspect the receipt', status: 'in_progress',
+      });
+      const retry = await assignPersonaWorkItem(personaId, task.id, input);
+      expect(retry.dispatchId).toBe(recovered.dispatchId);
+      expect(retry.workItem).toMatchObject({ id: task.id, updatedAt: changed.updatedAt });
+      expect(submitPersonaFlowDispatchMock).toHaveBeenCalledTimes(1);
+      await expect(assignPersonaWorkItem(personaId, task.id, {
+        ...input, expectedUpdatedAt: changed.updatedAt,
+      })).rejects.toMatchObject({ code: 'PERSONA_DOMAIN_CONFLICT' });
+      expect(submitPersonaFlowDispatchMock).toHaveBeenCalledTimes(1);
+      await expect(assignPersonaWorkItem(personaId, task.id, {
+        ...input, idempotencyKey: 'caller-2',
+      })).rejects.toMatchObject({ code: 'PERSONA_WORK_ITEM_STALE' });
+
+      const routed = saved.get(recovered.dispatchId!) as Record<string, unknown>;
+      saved.set(recovered.dispatchId!, { ...routed, mailboxItemId: undefined });
+      await expect(assignPersonaWorkItem(personaId, task.id, input)).rejects.toMatchObject({
+        code: 'PERSONA_WORK_ITEM_ADMISSION_UNCONFIRMED',
+        details: { dispatchId: recovered.dispatchId },
+      });
+      expect(submitPersonaFlowDispatchMock).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -6,12 +6,13 @@ export interface CodexUsageLike {
   cached_input_tokens?: number;
   cache_write_input_tokens?: number;
   output_tokens?: number;
+  reasoning_output_tokens?: number;
 }
 
 /** Native rollout totals are cumulative across resumed turns. Count only this invocation. */
 export function subtractCodexUsage(total: CodexUsageLike, baseline: CodexUsageLike): CodexUsageLike {
   return Object.fromEntries(
-    (['input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_write_input_tokens'] as const)
+    (['input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'reasoning_output_tokens'] as const)
       .filter(field => total[field] != null)
       .map(field => [field, Math.max(0, total[field]! - (baseline[field] ?? 0))]),
   );
@@ -25,6 +26,7 @@ export function mapCodexUsage(usage: CodexUsageLike | undefined): MappedOpenAiUs
     promptTokens,
     completionTokens,
     totalTokens: promptTokens + completionTokens,
+    ...(usage?.reasoning_output_tokens != null ? { reasoningTokens: usage.reasoning_output_tokens } : {}),
     ...(usage?.cached_input_tokens != null
       ? { cacheReadTokens: usage.cached_input_tokens }
       : {}),

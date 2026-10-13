@@ -106,6 +106,8 @@ export interface Model {
      * Only consulted when the experimental `compactionEnabled` setting is on.
      */
     compactionThreshold?: number;
+    /** Optional 1–100 percent threshold; an absolute threshold takes precedence. */
+    compactionThresholdPercent?: number;
     /**
      * Optional, user-assigned folder for organizing model cards (#71). Absent/empty
      * means "Ungrouped". Frontend-only organization — has no effect on the model.

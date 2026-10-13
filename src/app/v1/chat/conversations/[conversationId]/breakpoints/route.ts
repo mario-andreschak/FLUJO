@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -65,6 +66,7 @@ async function PUT_handler(
     log.info('Updated breakpoints', { conversationId, count: breakpoints.length });
     return NextResponse.json({ success: true, breakpoints });
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.error('Error updating breakpoints', { conversationId, error });
     return NextResponse.json({ error: 'Internal server error updating breakpoints' }, { status: 500 });
   }

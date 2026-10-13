@@ -1,4 +1,5 @@
 import fs, { constants } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import * as nodeModule from 'node:module';
@@ -31,6 +32,28 @@ async function settledBatch<T>(operations: Promise<T>[]): Promise<T[]> {
   });
 }
 
+/** Drain independent metadata reads before reporting the original ordered refusal. */
+async function checkpoint(filename: string, identity: fs.BigIntStats, handle?: FileHandle, length?: number,
+  refusal = 'Dependency asset changed.'): Promise<void> {
+  const results = await Promise.allSettled([
+    linkFree(filename),
+    ...(handle ? [handle.stat({ bigint: true })] : []),
+    fs.promises.lstat(filename, { bigint: true }),
+  ]);
+  const canonical = results[0];
+  if (canonical.status === 'rejected') throw canonical.reason;
+  if (length !== undefined && BigInt(length) !== identity.size) throw new Error(refusal);
+  for (const result of results.slice(1)) {
+    if (result.status === 'rejected') throw result.reason;
+    if (!result.value || !same(identity, result.value)) throw new Error(refusal);
+  }
+  // Parallel observations may precede the final canonical-path yield. Reread
+  // every identity after all operations settle. This restores post-canonical
+  // witness ordering; subsequent caller awaits still require their own checks.
+  if (handle && !same(identity, fs.fstatSync(handle.fd, { bigint: true }))) throw new Error(refusal);
+  if (!same(identity, fs.lstatSync(filename, { bigint: true }))) throw new Error(refusal);
+}
+
 /** Declared dependency inspection only: never loads package code or conveys consent. */
 export async function inspectBundledMcpDependencyGraph(installationRoot: string, initialDirectories: readonly string[], signal?: AbortSignal) {
   const installation = await fs.promises.realpath(installationRoot);
@@ -53,8 +76,7 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
       if (!before.isFile() || before.nlink !== BigInt(1) || before.size > BigInt(maximum)) throw new Error('Dependency asset exceeds its bounds.');
       const previous = identities.get(filename);
       if (previous && !same(previous, before)) throw new Error('Dependency asset changed between reads.');
-      await linkFree(filename);
-      if (!same(before, await fs.promises.lstat(filename, { bigint: true }))) throw new Error('Dependency asset changed.');
+      await checkpoint(filename, before);
       let length = 0;
       while (true) {
         live();
@@ -65,9 +87,7 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
         hash.update(buffer.subarray(0, result.bytesRead));
         if (!hashOnly) chunks.push(Buffer.from(buffer.subarray(0, result.bytesRead)));
       }
-      await linkFree(filename);
-      if (BigInt(length) !== before.size || !same(before, await handle.stat({ bigint: true }))
-          || !same(before, await fs.promises.lstat(filename, { bigint: true }))) throw new Error('Dependency asset changed.');
+      await checkpoint(filename, before, handle, length);
       identities.set(filename, before);
       return { content: hashOnly ? undefined : Buffer.concat(chunks), digest: hash.digest('hex') };
     } finally { buffer.fill(0); for (const chunk of chunks) chunk.fill(0); await handle.close(); }
@@ -152,8 +172,7 @@ export async function inspectBundledMcpDependencyGraph(installationRoot: string,
   const observed = [...identities];
   for (let offset = 0; offset < observed.length; offset += 32) {
     await settledBatch(observed.slice(offset, offset + 32).map(async ([filename, identity]) => {
-      live(); await linkFree(filename);
-      if (!same(identity, await fs.promises.lstat(filename, { bigint: true }))) throw new Error('Installation changed during dependency inspection.');
+      live(); await checkpoint(filename, identity, undefined, undefined, 'Installation changed during dependency inspection.');
     }));
   }
   packages.sort((a, b) => a.directory.localeCompare(b.directory));

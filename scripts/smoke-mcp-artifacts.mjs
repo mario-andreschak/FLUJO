@@ -26,7 +26,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { validateCandidate } from './npm-release.mjs';
 import { cleanupSmokeSandbox, observeSmokeChild, stopSmokeChild, withSmokeCleanup, withTimeout } from './mcp-smoke-cleanup.mjs';
-import { approveSmokeServer, createSmokeOperator, createSmokeMetadataBff } from './smoke-bundled-operator.mjs';
+import { approveSmokeServer, createSmokeOperator } from './smoke-bundled-operator.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -166,7 +166,7 @@ async function connectProxy(baseUrl, serverName, ownerToken) {
   if (ownerToken) await approveSmokeServer(baseUrl, serverName, ownerToken, timeoutMs);
   await client.connect(new StreamableHTTPClientTransport(new URL(`/mcp-proxy/${serverName}`, baseUrl), {
     requestInit: { headers: ownerToken ? { authorization: `Bearer ${ownerToken}` } : {} },
-  }));
+  }), { timeout: 240_000 });
   return client;
 }
 
@@ -193,12 +193,19 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
 
   const filesystem = await connectProxy(baseUrl, 'filesystem', ownerToken);
   try {
-    const listed = await filesystem.listTools();
+    const listed = await filesystem.listTools(undefined, { timeout: 240_000 });
     const names = listed.tools.map((tool) => tool.name);
     if (!names.includes('read_file') || !names.includes('get_allowed_directories')) {
       throw new Error(`Installed filesystem proxy returned unexpected tools: ${names.join(', ')}`);
     }
-    const roots = await filesystem.callTool({ name: 'get_allowed_directories', arguments: {} });
+    const roots = await filesystem.callTool({ name: 'get_allowed_directories', arguments: {} }, undefined, { timeout: 240_000 });
+    if (roots.isError === true) {
+      const refusalCodes = ['HOST_CONSENT_REQUIRED', 'HOST_SOURCE_CHANGED', 'MCP_RUNTIME_AUTHORITY_RETIRED'];
+      const code = refusalCodes.find((candidate) => Array.isArray(roots.content) && roots.content.some((item) =>
+        item.type === 'text' && typeof item.text === 'string' && item.text.slice(0, 8192).includes(candidate)
+      )) ?? 'UNCLASSIFIED_TOOL_ERROR';
+      throw new Error(`Filesystem proxy get_allowed_directories returned an error result (${code}).`);
+    }
     const directories = roots.structuredContent?.directories;
     const resolvedExpectedRoot = expectedRoot ? path.resolve(expectedRoot) : undefined;
     if (
@@ -218,7 +225,7 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
 
   const bash = await connectProxy(baseUrl, 'bash', ownerToken);
   try {
-    const names = (await bash.listTools()).tools.map((tool) => tool.name);
+    const names = (await bash.listTools(undefined, { timeout: 240_000 })).tools.map((tool) => tool.name);
     if (!names.includes('run') || !names.includes('list_sessions')) {
       throw new Error(`Installed bash proxy returned unexpected tools: ${names.join(', ')}`);
     }
@@ -228,18 +235,27 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
 
   const flujo = await connectProxy(baseUrl, 'flujo', ownerToken);
   try {
-    const names = (await flujo.listTools()).tools.map((tool) => tool.name);
+    const names = (await flujo.listTools(undefined, { timeout: 240_000 })).tools.map((tool) => tool.name);
     if (!names.includes('list_flows') || !names.includes('list_mcp_servers')) {
       throw new Error(`Installed flujo proxy returned unexpected tools: ${names.join(', ')}`);
     }
-    const resources = await flujo.listResources();
+    const resources = await flujo.listResources(undefined, { timeout: 240_000 });
     if (!Array.isArray(resources.resources)) throw new Error('Flujo proxy did not return an MCP resource list.');
-    const templates = await flujo.listResourceTemplates();
+  } finally {
+    await flujo.close();
+  }
+  // The bundled control token is deliberately short lived. On slower Windows
+  // runners, exercise a fresh server generation before the final protocol read.
+  await updateBuiltIn(baseUrl, 'flujo', { disabled: true }, ownerToken);
+  await updateBuiltIn(baseUrl, 'flujo', { disabled: false }, ownerToken);
+  const renewedFlujo = await connectProxy(baseUrl, 'flujo', ownerToken);
+  try {
+    const templates = await renewedFlujo.listResourceTemplates(undefined, { timeout: 240_000 });
     if (!templates.resourceTemplates.some((entry) => entry.uriTemplate === 'flujo://run/{conversationId}/{resourceId}')) {
       throw new Error('Flujo proxy omitted the run-resource template.');
     }
   } finally {
-    await flujo.close();
+    await renewedFlujo.close();
   }
 
   await updateBuiltIn(baseUrl, 'bash', { disabled: true }, ownerToken);
@@ -267,7 +283,7 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
   await updateBuiltIn(baseUrl, 'bash', { disabled: false }, ownerToken);
   const restarted = await connectProxy(baseUrl, 'bash', ownerToken);
   try {
-    if (!(await restarted.listTools()).tools.some((tool) => tool.name === 'run')) {
+    if (!(await restarted.listTools(undefined, { timeout: 240_000 })).tools.some((tool) => tool.name === 'run')) {
       throw new Error('Re-enabled bash proxy did not establish a fresh connection.');
     }
   } finally {
@@ -346,7 +362,6 @@ async function smokePackedArtifacts(candidateDirectory) {
   let appChild;
   let appObservation;
   let operator;
-  let metadataBff;
   const appLogs = [];
   await withSmokeCleanup(async () => {
     let tarballs;
@@ -446,7 +461,6 @@ async function smokePackedArtifacts(candidateDirectory) {
     while (sandboxPort === port) sandboxPort = await reservePort();
     const baseUrl = `http://127.0.0.1:${port}`;
     operator = await createSmokeOperator();
-    metadataBff = await createSmokeMetadataBff(baseUrl, operator.token);
     appChild = spawn(process.execPath, [appEntrypoint, '--no-open', '--port', String(port)], {
       cwd: appRoot,
       env: { ...await createPrivateSmokeEnv(sandbox, dataDir, {
@@ -454,8 +468,8 @@ async function smokePackedArtifacts(candidateDirectory) {
         FLUJO_FS_ROOTS: rootsDir,
         FLUJO_BASH_ROOTS: rootsDir,
         FLUJO_PORT: String(port),
-        FLUJO_BASE_URL: metadataBff.url,
         FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort),
+        FLUJO_MCP_WORKLOAD_TRACE: '1',
       }), ...operator.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -471,8 +485,7 @@ async function smokePackedArtifacts(candidateDirectory) {
     await probeProxy(baseUrl, rootsDir, operator.token);
   }, () => withSmokeCleanup(() => cleanupSmokeSandbox({
     stop: async () => {
-      try { if (appObservation) await stopSmokeChild(appObservation, 'installed flujo CLI'); }
-      finally { await metadataBff?.close(); }
+      if (appObservation) await stopSmokeChild(appObservation, 'installed flujo CLI');
     },
     remove: fs.rm,
     sandbox,

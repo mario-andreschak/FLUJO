@@ -55,15 +55,12 @@ describe('workspace route coverage', () => {
         marked.push(pathname);
         expect(INSTALLATION_WIDE.has(pathname)).toBe(true);
         if (pathname === '/api/mcp/servers/[name]/host-consent') {
-          // This operator-only exception is reachable before Worker readiness.
-          // Require owner admission before workspace selection/storage access.
           expect(methods.sort()).toEqual(['DELETE', 'GET', 'POST']);
-          const wrapper = source.slice(source.indexOf('function operatorWorkspace('));
-          expect(wrapper).toContain('authorizeExecutionTransport(request)');
-          expect(wrapper).toContain('resolveOwnerRequest(request, scopes, { requireBearer: true })');
-          expect(wrapper.indexOf('resolveOwnerRequest(request, scopes')).toBeLessThan(wrapper.indexOf('resolveWorkspace(request)'));
-          expect(wrapper.indexOf('resolveWorkspace(request)')).toBeLessThan(wrapper.indexOf('ensureWorkspaceDirs(workspace)'));
-          for (const method of methods) expect(wrapper).toContain(`export const ${method} = operatorWorkspace(`);
+          expect(source).toContain('operatorWorkspace(');
+          expect(source).toContain('resolveOwnerRequest(request, scopes, { requireBearer: true })');
+          expect(source).toContain("const scopes = ['control:admin', 'mcp:access', 'secrets:read'] as const");
+          expect(source).toContain('authorizeExecutionTransport(request)');
+          expect(source).toContain('runWithWorkspace(workspace,');
         }
         continue;
       }

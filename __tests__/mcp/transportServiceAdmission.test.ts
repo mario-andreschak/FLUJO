@@ -8,6 +8,8 @@ const mockResolveHeaders = jest.fn();
 const mockFactory = jest.fn();
 const mockReuse = jest.fn();
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   resolveConfigHeaders: (...args: unknown[]) => mockResolveHeaders(...args),
   createTransport: (...args: unknown[]) => mockFactory(...args),
   createNewClient: (...args: unknown[]) => mockFactory(...args),

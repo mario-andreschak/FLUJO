@@ -7,11 +7,14 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { createClaudeOwnedProcessSpawner } from './claudeOwnedProcess';
 import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
+import { collectClaudeAllowance, claudeAllowanceSnapshot } from '@/backend/services/model/allowance/claude';
+import { allowanceAccountKey, recordAllowanceSnapshot } from '@/backend/services/model/allowance/store';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
@@ -35,7 +38,8 @@ import {
   toAnthropicImageMediaType,
 } from './messageUtils';
 import { normalizeMessageInput, isMalformedToolCallProse } from './messageNormalization';
-import { buildToolInputShape, embedSchemaInDescription } from './jsonSchemaToZod';
+import { embedSchemaInDescription } from './jsonSchemaToZod';
+import { createOwnedToolSchemaBuilder } from './ownedArchiveSchema';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import { ClaudeUsageTracker } from './claudeUsageTracker';
 import {
@@ -563,6 +567,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // tools (e.g. the flow generator's marketplace search/install) dispatch to the
     // executor supplied via localToolExecutors. Anything else is omitted from an
     // agentic run.
+    const buildToolInputShape = createOwnedToolSchemaBuilder();
+    const hostToolShapes: Array<{ name: string; properties: Readonly<Record<string, unknown>> }> = [];
+    const nativeToolShapes: Array<{ name: string; properties: Readonly<Record<string, unknown>> }> = [];
     const sdkTools = (tools ?? [])
       .filter(t => t.type === 'function')
       .map(t => {
@@ -575,7 +582,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // Build the Zod raw shape and, when a composed/ref schema couldn't be
         // faithfully translated, surface the original JSON Schema in the
         // description so the model still sees the real contract (issue #232).
-        const { shape: schemaShape, fallbackSchema } = buildToolInputShape(t.function.parameters);
+        const { shape: schemaShape, fallbackSchema, archiveShape } = buildToolInputShape(t.function.parameters);
+        hostToolShapes.push({ name: fnName, properties: archiveShape });
         const description = embedSchemaInDescription(t.function.description ?? '', fallbackSchema);
 
         if (handoff) {
@@ -817,7 +825,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       .filter((t): t is NonNullable<typeof t> => t !== null);
     const effectiveSdkTools = nativeToolPort
       ? nativeToolPort.advertised.map(advertised => {
-          const { shape, fallbackSchema } = buildToolInputShape(advertised.inputSchema);
+          const { shape, fallbackSchema, archiveShape } = buildToolInputShape(advertised.inputSchema);
+          nativeToolShapes.push({ name: advertised.name, properties: archiveShape });
           return tool(advertised.name,
             embedSchemaInDescription(advertised.description, fallbackSchema), shape,
             async (args: Record<string, unknown>): Promise<CallToolResult> => {
@@ -1067,13 +1076,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       dispatchId = await onSdkRequest?.({
         adapter: 'claude-cli',
         operation: 'query',
-        request: { prompt: sdkPromptMessage, options: queryOptions },
+        request: { prompt: sdkPromptMessage, options: queryOptions,
+          ownedToolShapes: nativeToolPort ? nativeToolShapes : hostToolShapes },
       });
       if (nativeToolPort && dispatchId !== nativeToolPort.invocationId) {
         throw new Error('Native Claude SDK dispatch receipt differs from its broker origin.');
       }
     } catch (archiveError) {
-      if (nativeToolPort) {
+      if (nativeToolPort || archiveError instanceof ModelTurnArchiveMemoryError) {
         closeInput();
         signal?.removeEventListener('abort', onExternalAbort);
         throw archiveError;
@@ -1188,8 +1198,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // from partial text. Racing the loop against the signal both surfaces the
     // cancellation AND returns within the cancel-poll cadence instead of
     // waiting out the subprocess teardown.
+    let allowanceObservation: ReturnType<typeof collectClaudeAllowance> | undefined;
+    const allowanceKey = allowanceAccountKey('claude', apiKey);
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        // An issued descendant can lose saved lineage while its SDK still
+        // yields messages. Fence every frame before live/transcript/usage callbacks.
+        await nativeOriginalProcessHost?.assertOutputCurrent();
+        // Observe the existing initialized query only; this never starts another model turn.
+        if (!allowanceObservation && !signal?.aborted) {
+          allowanceObservation = collectClaudeAllowance(response, allowanceKey);
+        }
         const streamType = message.type === 'stream_event'
           ? (message as SDKPartialAssistantMessage).event.type : undefined;
         const liveProgress = message.type === 'assistant'
@@ -1415,6 +1434,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw err;
       }
     } finally {
+      if (allowanceObservation && !signal?.aborted && !abortController.signal.aborted) {
+        const observation = await allowanceObservation;
+        recordAllowanceSnapshot(allowanceKey, claudeAllowanceSnapshot(observation));
+      }
       if (nativeOriginalProcessHost) {
         closeInput();
         response.close();

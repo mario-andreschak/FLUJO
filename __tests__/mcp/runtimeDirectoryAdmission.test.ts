@@ -3,16 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { RuntimeDirectoryAdmission } from '@/backend/services/mcp/runtimeDirectoryAdmission';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
-import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
+import { ensureWorkspaceDirs, getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
-
-// These directory tests exercise the legacy resolver after authorization and
-// never start its transport. Real consent/approved launch is covered separately
-// by trustedHostMcpTransport and trustedHostRuntimeHome; keep that gate real there.
-jest.mock('@/backend/services/mcp/isolation', () => ({
-  ...jest.requireActual('@/backend/services/mcp/isolation'),
-  assertHostMcpLaunchAllowed: jest.fn(),
-}));
+import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
 
 const denied = { name: 'RuntimeDirectoryAdmissionError', code: 'UNSAFE_MCP_RUNTIME_DIRECTORY',
   message: 'Isolated MCP runtime directory is unavailable or unsafe.' };
@@ -24,6 +18,7 @@ describe('isolated MCP runtime directory admission', () => {
   let container: string;
   let anchor: string;
   let home: string;
+  let approved: ReturnType<typeof installTrustedHostProfile> | undefined;
   const processDescriptors = new Map<string, PropertyDescriptor | undefined>();
   const oldEnvironment = new Map<string, string | undefined>();
 
@@ -39,6 +34,8 @@ describe('isolated MCP runtime directory admission', () => {
   });
   afterEach(() => {
     jest.restoreAllMocks();
+    approved?.restore();
+    approved = undefined;
     for (const [field, descriptor] of processDescriptors) {
       if (descriptor) Object.defineProperty(process, field, descriptor);
       else Reflect.deleteProperty(process, field);
@@ -317,13 +314,20 @@ describe('isolated MCP runtime directory admission', () => {
     expect(mkdir).not.toHaveBeenCalled();
   });
 
-  const config = (): MCPStdioConfig => ({ name: 'same/user-controlled-server', transport: 'stdio', command: 'npx',
-    args: ['-y', '@example/fixture'], env: { HOME: '/old-host-home', XDG_CONFIG_HOME: '/old-host-config' },
-    rootPath: '.', disabled: false, _buildCommand: '', _installCommand: '' });
-  async function workspaceFixture(): Promise<string> {
-    process.env.FLUJO_DATA_DIR = root;
-    process.env.FLUJO_PARENT_DATA_DIR = root;
+  const config = (): MCPStdioConfig => approved!.config;
+  async function workspaceFixture(runtimeHome: 'host' | 'isolated' = 'isolated'): Promise<string> {
+    approved = installTrustedHostProfile({ name: 'same/user-controlled-server', runtimeHome,
+      args: ['-y', '@example/fixture'], environment: { HOME: '/old-host-home', XDG_CONFIG_HOME: '/old-host-config' } });
+    process.env.FLUJO_PARENT_DATA_DIR = process.env.FLUJO_DATA_DIR;
     await ensureWorkspaceDirs();
+    // The privileged profile explicitly grants its workspace context values;
+    // they are not inherited implicitly from the parent account.
+    approved.config.env.FLUJO_DATA_DIR = getWorkspaceDataDir();
+    approved.config.env.FLUJO_PARENT_DATA_DIR = process.env.FLUJO_PARENT_DATA_DIR!;
+    approved.config.env.FLUJO_WORKSPACE = getCurrentWorkspace();
+    const policy = trustedHostMcpPolicySchema.parse(approved.config.trustedHost);
+    approved.config.trustedHost = { ...policy, environmentNames: [...new Set([...policy.environmentNames, 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKSPACE'])] };
+    approved.approve();
     return getWorkspaceDataDir();
   }
 
@@ -336,14 +340,16 @@ describe('isolated MCP runtime directory admission', () => {
     fs.writeFileSync(marker, 'marker-identity');
     const launch = resolveStdioLaunch(config(), { isolateRuntimeHome: true });
     const legacyRoot = path.join(runtimeContainer, legacyServerKey);
-    expect(launch.cwd).toBe(path.join(legacyRoot, 'cwd'));
+    // Fixed approved entries keep their consented source cwd; the home identity
+    // and sibling clone markers remain the existing server-name identity.
+    expect(launch.cwd).toBe(config().cwd);
     expect(launch.env.HOME).toBe(path.join(legacyRoot, 'home'));
     expect(launch.env.USERPROFILE).toBe(launch.env.HOME);
     expect(launch.env.XDG_CONFIG_HOME).toBe(path.join(launch.env.HOME, '.config'));
     expect(launch.env.NPM_CONFIG_CACHE).toBe(path.join(launch.env.HOME, '.npm'));
     expect(launch.env.TMP).toBe(path.join(launch.env.HOME, 'tmp'));
     expect(launch.env.FLUJO_DATA_DIR).toBe(workspace);
-    expect(launch.env.FLUJO_PARENT_DATA_DIR).toBe(root);
+    expect(launch.env.FLUJO_PARENT_DATA_DIR).toBe(process.env.FLUJO_PARENT_DATA_DIR);
     expect(launch.command).toBeTruthy();
     expect(launch.args).toEqual(config().args);
     const again = resolveStdioLaunch(config(), { isolateRuntimeHome: true });
@@ -362,7 +368,7 @@ describe('isolated MCP runtime directory admission', () => {
   });
 
   it('keeps an opted-out launch independent of a denied isolated-runtime anchor', async () => {
-    const workspace = await workspaceFixture();
+    const workspace = await workspaceFixture('host');
     const runtimeContainer = path.join(workspace, 'userdata', 'mcp-runtime');
     fs.mkdirSync(runtimeContainer);
     const occupied = path.join(runtimeContainer, legacyServerKey);
@@ -370,5 +376,11 @@ describe('isolated MCP runtime directory admission', () => {
     const launch = resolveStdioLaunch(config(), { isolateRuntimeHome: false });
     expect(launch.env.HOME).toBe(config().env.HOME);
     expect(fs.readFileSync(occupied, 'utf8')).toBe('occupied-anchor');
+  });
+
+  it('refuses a legacy dynamic package runner without a private execution grant', async () => {
+    await workspaceFixture();
+    expect(() => resolveStdioLaunch({ ...config(), command: 'npx', args: ['-y', '@example/fixture'], trustedHost: undefined },
+      { isolateRuntimeHome: true })).toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 });

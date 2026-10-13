@@ -64,7 +64,7 @@ export default function BackupSettings() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // UI state
-  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info' | 'warning'; text: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   
@@ -147,9 +147,10 @@ export default function BackupSettings() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       
+      const partial = response.headers.get('X-Flujo-Backup-Status') === 'partial';
       setMessage({
-        type: 'success',
-        text: t('settings.backup.created'),
+        type: partial ? 'warning' : 'success',
+        text: t(partial ? 'settings.backup.partial' : 'settings.backup.created'),
       });
     } catch (error) {
       log.error('Error creating backup:', error);
@@ -273,7 +274,7 @@ export default function BackupSettings() {
 
       {/* Backup Section */}
       <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="subtitle1" component="h3" gutterBottom fontWeight="bold">
+        <Typography variant="subtitle1" component="h3" gutterBottom sx={{ fontWeight: "bold" }}>
           {t('settings.backup.create')}
         </Typography>
         
@@ -333,7 +334,7 @@ export default function BackupSettings() {
 
       {/* Restore Section */}
       <Paper sx={{ p: 3 }}>
-        <Typography variant="subtitle1" component="h3" gutterBottom fontWeight="bold">
+        <Typography variant="subtitle1" component="h3" gutterBottom sx={{ fontWeight: "bold" }}>
           {t('settings.backup.restore')}
         </Typography>
         

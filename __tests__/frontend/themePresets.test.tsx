@@ -72,7 +72,8 @@ describe('four visual theme presets', () => {
       expect(getContrastRatio(primary.contrastText, primary.dark)).toBeGreaterThanOrEqual(4.5);
       return;
     }
-    const button = theme.components!.MuiButton!.styleOverrides!.containedPrimary as CSSObject;
+    const root = theme.components!.MuiButton!.styleOverrides!.root as CSSObject;
+    const button = root['&.MuiButton-contained.MuiButton-colorPrimary'] as CSSObject;
     const hover = button['&:hover'] as CSSObject;
     for (const state of [button, hover]) {
       expect(getContrastRatio(String(button.color), String(state.backgroundColor))).toBeGreaterThanOrEqual(4.5);

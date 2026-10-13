@@ -1,5 +1,7 @@
 import { constants, promises as fs, readFileSync } from 'fs';
 import path from 'path';
+import { StringDecoder } from 'node:string_decoder';
+import { withConversationLogReadAdmission, ConversationLogReadPressureError, type ConversationReadReservation } from './conversationLogReadAdmission';
 import {
   ExecutionEvent,
   ExecutionEventType,
@@ -431,29 +433,66 @@ export async function replaceConversationTranscript(
  * lines — e.g. a tail truncated by a crash mid-append — are skipped.
  */
 export async function readConversationLog(conversationId: string): Promise<ExecutionEvent[] | undefined> {
-  if (!SAFE_ID.test(conversationId)) return undefined;
-  let content: string;
+  // Compatibility API: callers own returned events after admission ends. Prefer callback-scoped projection.
+  return withConversationLogEvents(conversationId, async events => events);
+}
+
+/** Keeps read/projection admission until the consumer has adopted or discarded the complete history. */
+export async function withConversationLogEvents<T>(conversationId: string,
+  consume: (events: ExecutionEvent[] | undefined) => Promise<T>, reservation?: ConversationReadReservation): Promise<T> {
+  if (!SAFE_ID.test(conversationId)) return consume(undefined);
+  let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
-    content = await fs.readFile(logFilePath(conversationId), 'utf-8');
+    handle = await fs.open(logFilePath(conversationId), constants.O_RDONLY | constants.O_NONBLOCK);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return consume(undefined);
     log.error(`Error reading conversation log ${conversationId}:`, error);
-    return undefined;
+    return consume(undefined);
   }
-  const events: ExecutionEvent[] = [];
-  let skipped = 0;
-  for (const line of content.split('\n')) {
-    if (line.trim().length === 0) continue;
-    try {
-      events.push(JSON.parse(line) as ExecutionEvent);
-    } catch {
-      skipped++;
+  let consuming = false;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) { consuming = true; return await consume(undefined); }
+    return await withConversationLogReadAdmission(stat.size, async () => {
+      const events: ExecutionEvent[] = [];
+      const buffer = Buffer.alloc(64 * 1024);
+      const decoder = new StringDecoder('utf8');
+      let fragments: string[] = [];
+      let skipped = 0;
+      const parse = (line: string) => {
+        if (!line.trim()) return;
+        try { events.push(JSON.parse(line) as ExecutionEvent); } catch { skipped++; }
+      };
+      const accept = (text: string) => {
+        let start = 0;
+        for (;;) {
+          const end = text.indexOf('\n', start);
+          if (end < 0) { if (start < text.length) fragments.push(text.slice(start)); break; }
+          fragments.push(text.slice(start, end));
+          parse(fragments.join('')); fragments = []; start = end + 1;
+        }
+      };
+      let offset = 0;
+      while (offset < stat.size) {
+        const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, stat.size - offset), offset);
+        if (!bytesRead) throw new Error('Conversation history changed during reading. Retry the read.');
+        offset += bytesRead; accept(decoder.write(buffer.subarray(0, bytesRead)));
+      }
+      accept(decoder.end());
+      if (fragments.length) parse(fragments.join(''));
+      if (skipped) log.warn(`Skipped ${skipped} unparseable line(s) in conversation log ${conversationId} (truncated append?)`);
+      consuming = true;
+      return consume(events);
+    }, reservation);
+  } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
+    // Retain legacy storage-I/O fallback, but never swallow consumer or changed-history errors.
+    if (!consuming && (error as NodeJS.ErrnoException).code) {
+      log.error(`Error reading conversation log ${conversationId}:`, error);
+      return consume(undefined);
     }
-  }
-  if (skipped > 0) {
-    log.warn(`Skipped ${skipped} unparseable line(s) in conversation log ${conversationId} (truncated append?)`);
-  }
-  return events;
+    throw error;
+  } finally { await handle.close(); }
 }
 
 export const SSE_LOG_REPLAY_LIMITS = Object.freeze({ maxBytes: 1024 * 1024, maxEvents: 1000 });
@@ -585,6 +624,12 @@ function projectMessageEvents(
         projectedId === incoming.id ? incoming : { ...incoming, id: projectedId };
       const projected: FlujoChatMessage =
         depth > 0 ? { ...withRecoveredId, depth } : { ...withRecoveredId };
+      // Provenance belongs to the log event, not its caller-controlled message.
+      // Legacy events remain unknown rather than inferring origin from content.
+      delete projected.executionOrigin;
+      if (!applyContextRemovals && (event.messageOrigin === 'input' || event.messageOrigin === 'internal')) {
+        projected.executionOrigin = event.messageOrigin;
+      }
       if (existingIndex !== undefined) {
         messages[existingIndex] = projected;
       } else {
@@ -646,6 +691,7 @@ function messageSignature(m: FlujoChatMessage): string {
 export async function reconcileConversationLog(
   state: SharedState,
   previousMessages: FlujoChatMessage[],
+  inputMessageIds: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (state.ephemeral) return;
   const conversationId = state.conversationId;
@@ -663,8 +709,10 @@ export async function reconcileConversationLog(
   const raws: RawExecutionEvent[] = [];
   for (const m of current) {
     const previous = baselineById.get(m.id);
-    if (!previous || messageSignature(previous) !== messageSignature(m)) {
-      raws.push({ type: 'message', message: m });
+    if (!previous || messageSignature(previous) !== messageSignature(m)
+      || (m.role === 'user' && inputMessageIds.has(m.id))) {
+      raws.push({ type: 'message', message: m,
+        ...(inputMessageIds.has(m.id) ? { messageOrigin: 'input' as const } : {}) });
     }
   }
   for (const m of baseline) {
@@ -784,12 +832,12 @@ export function repairDanglingToolCalls(
  * present, plus at least one more. Anything else (no log, log incomplete or
  * diverged) keeps the snapshot untouched. Returns true when recovery applied.
  */
-export async function recoverMessagesFromLog(state: SharedState): Promise<boolean> {
+export async function recoverMessagesFromLog(state: SharedState, reservation?: ConversationReadReservation): Promise<boolean> {
   if (state.ephemeral) return false;
   const conversationId = state.conversationId;
   if (!conversationId || !SAFE_ID.test(conversationId)) return false;
 
-  const events = await readConversationLog(conversationId);
+  return withConversationLogEvents(conversationId, async events => {
   if (!events) return false;
 
   const projectedParent = projectModelContextMessages(events).filter((m) => !((m.depth ?? 0) > 0));
@@ -805,6 +853,7 @@ export async function recoverMessagesFromLog(state: SharedState): Promise<boolea
   );
   state.messages = projectedParent;
   return true;
+  }, reservation);
 }
 
 /**
@@ -827,7 +876,7 @@ export async function recoverMessagesFromLog(state: SharedState): Promise<boolea
  * On a match the snapshot-only messages are APPENDED as `message` events
  * (system messages excluded). Existing audit history and context tombstones
  * remain intact. The authoritative active messages are returned for display;
- * otherwise this returns undefined and leaves the log untouched. Never throws.
+ * otherwise this returns undefined and leaves the log untouched. Resource pressure propagates.
  */
 export async function repairTruncatedConversationLog(
   state: SharedState,
@@ -842,7 +891,7 @@ export async function repairTruncatedConversationLog(
   const conversationId = state.conversationId;
   if (!conversationId || !SAFE_ID.test(conversationId)) return undefined;
 
-  const events = await readConversationLog(conversationId);
+  return withConversationLogEvents(conversationId, async events => {
   if (!events) return undefined; // no log — route falls back to the snapshot itself
 
   const projectedParent = projectModelContextMessages(events).filter((m) => !((m.depth ?? 0) > 0));
@@ -868,6 +917,7 @@ export async function repairTruncatedConversationLog(
     // Still return the snapshot for display; the append can retry next read.
   }
   return snapshot;
+  });
 }
 
 export interface RecoveredConversationTranscript {
@@ -887,10 +937,13 @@ export async function recoverConversationTranscript(
 ): Promise<RecoveredConversationTranscript> {
   const snapshot = (state.messages ?? [])
     .filter((message) => message.role !== 'system')
-    .map((message) => ({
-      ...message,
-      id: message.id || crypto.randomUUID(),
-    }));
+    .map((message) => {
+      const projected = { ...message, id: message.id || crypto.randomUUID() };
+      // Snapshots may contain round-tripped input. Only log events can attest
+      // origin, including when snapshot-only messages fill a damaged log gap.
+      delete projected.executionOrigin;
+      return projected;
+    });
   if (state.ephemeral) return { messages: snapshot, source: 'snapshot' };
 
   const conversationId = state.conversationId;
@@ -900,7 +953,7 @@ export async function recoverConversationTranscript(
 
   await flushConversationLog(conversationId);
   await repairTruncatedConversationLog(state);
-  const events = await readConversationLog(conversationId);
+  return withConversationLogEvents(conversationId, async events => {
   const durable = events ? projectMessages(events) : [];
   if (durable.length === 0) return { messages: snapshot, source: 'snapshot' };
 
@@ -913,6 +966,7 @@ export async function recoverConversationTranscript(
     messages: [...durable, ...snapshotOnly],
     source: 'durable-log',
   };
+  });
 }
 
 /** True if a persisted log exists for this conversation. */

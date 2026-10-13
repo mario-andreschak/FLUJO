@@ -211,11 +211,10 @@ export default function EncryptionAuthDialog() {
       open={isOpen} 
       maxWidth="sm" 
       fullWidth
-      disableEscapeKeyDown
-      onClose={() => {}} // Empty onClose to prevent closing by backdrop click
+      onClose={() => {}} // Keep the required unlock open on Escape and backdrop clicks.
     >
       <DialogTitle component="div">
-        <Box display="flex" alignItems="center">
+        <Box sx={{ display: "flex", alignItems: "center" }}>
           <LockOutlined sx={{ mr: 1 }} />
           <Typography variant="h6">{t(isSetup ? 'settings.encryption.setTitle' : 'encryption.unlock.title')}</Typography>
         </Box>
@@ -229,7 +228,7 @@ export default function EncryptionAuthDialog() {
         )}
         
         {operatorUnavailable && <Alert severity="error">{t('encryption.operator.unavailable')}</Alert>}
-        <Typography variant="body1" paragraph>
+        <Typography variant="body1" sx={{ marginBottom: '16px' }}>
           {t(isSetup ? 'settings.encryption.newHelp' : 'encryption.unlock.description')}
         </Typography>
         
@@ -243,7 +242,7 @@ export default function EncryptionAuthDialog() {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           onKeyDown={handleKeyDown}
-          InputProps={{
+          slotProps={{ input: {
             endAdornment: (
               <InputAdornment position="end">
                 <IconButton
@@ -255,7 +254,7 @@ export default function EncryptionAuthDialog() {
                 </IconButton>
               </InputAdornment>
             ),
-          }}
+          } }}
           sx={{ mt: 2 }}
         />
         {isSetup && <TextField fullWidth type="password" label={t('settings.encryption.confirmPassword')}

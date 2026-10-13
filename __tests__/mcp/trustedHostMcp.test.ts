@@ -5,7 +5,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { resolveTrustedHostLaunch } from '@/backend/services/mcp/trustedHost';
 import { getCurrentWorkspace, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import {
-  assertTrustedHostMcpAllowed, fingerprintTrustedHostExecutable,
+  assertTrustedHostMcpAllowed, fingerprintTrustedHostExecutable, readPrivateApprovalSet, readPrivateApprovalSetAsync,
   fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp,
 } from '@/backend/services/security/trustedHostMcp';
 
@@ -60,6 +60,86 @@ it('requires a separate grant and accepts the matching explicit package revision
   delete process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
   expect(() => assertTrustedHostMcpAllowed(config)).toThrow('explicit owner consent');
   expect(() => assertTrustedHostMcpAllowed({ ...config, trustedHost: undefined })).toThrow('explicit owner consent');
+});
+
+it('overlaps eight actual sibling reads while preserving the synchronous ordered package digest', async () => {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  for (let index = 0; index < 24; index++) {
+    fs.writeFileSync(path.join(policy.sourceRoot, `a-${String(index).padStart(2, '0')}.js`), `source member ${index}`);
+  }
+  const nested = path.join(policy.sourceRoot, 'm-nested');
+  fs.mkdirSync(nested);
+  fs.writeFileSync(path.join(nested, 'child.js'), 'nested member');
+  config.trustedHost = { ...policy, sourceDigest: fingerprintTrustedHostSource(policy.sourceRoot) };
+  approval.approvals[0].policyDigest = trustedHostMcpPolicyDigest(config);
+  persist();
+  const open = fs.promises.open.bind(fs.promises);
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>(resolve => { entered = resolve; });
+  const finish = new Promise<void>(resolve => { release = resolve; });
+  let readers = 0, closed = 0;
+  const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (/^a-0[0-7]\.js$/.test(path.basename(String(args[0])))) {
+      const read = handle.read.bind(handle), close = handle.close.bind(handle);
+      let first = true;
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        if (first) { first = false; if (++readers === 8) entered(); await finish; }
+        return read(...readArgs);
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); closed++; };
+    }
+    return handle;
+  });
+  const verification = verifyTrustedHostMcp(config);
+  const outcome = verification.then(value => ({ value }), error => ({ error }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([checking, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Sibling reads remained serial.')), 30_000);
+    })]);
+    expect(readers).toBe(8);
+    release();
+    expect(await outcome).toHaveProperty('value');
+    expect(closed).toBe(8);
+  } finally { clearTimeout(timer); release(); await outcome; spy.mockRestore(); }
+}, 120_000);
+
+it.each(['sync', 'async'] as const)('fresh %s private sets reject mutation of another member during a genuine held read', async mode => {
+  const first = path.join(root, 'set-first.json'), second = path.join(root, 'set-second.json');
+  fs.writeFileSync(first, '{"value":"first"}', { mode: 0o600 });
+  fs.writeFileSync(second, '{"value":"second"}', { mode: 0o600 });
+  const members = [process.env.FLUJO_OWNER_AUTH_FILE!, process.env.FLUJO_MCP_TRUSTED_HOST_FILE!, first, second];
+  expect(mode === 'sync' ? readPrivateApprovalSet(members) : await readPrivateApprovalSetAsync(members)).toHaveLength(4);
+  const expected = fs.lstatSync(first, { bigint: true });
+  const actual = fs.readSync;
+  let changed = false;
+  const read = jest.spyOn(fs, 'readSync').mockImplementation((...args: Parameters<typeof fs.readSync>) => {
+    const count = Reflect.apply(actual, fs, args) as number;
+    if (!changed) {
+      const current = fs.fstatSync(args[0], { bigint: true });
+      if (current.dev === expected.dev && current.ino === expected.ino) {
+        changed = true; fs.writeFileSync(second, '{"value":"changed-during-other-held-read"}');
+      }
+    }
+    return count;
+  });
+  try {
+    if (mode === 'sync') expect(() => readPrivateApprovalSet(members)).toThrow();
+    else await expect(readPrivateApprovalSetAsync(members)).rejects.toThrow();
+    expect(changed).toBe(true);
+  } finally { read.mockRestore(); }
+});
+
+it('bounded private sets refuse duplicate, relative and pre-aborted inputs', async () => {
+  const file = process.env.FLUJO_OWNER_AUTH_FILE!;
+  const abort = new AbortController(); abort.abort();
+  for (const members of [[], [file, file], ['relative.json'], [file, file, file, file, file]]) {
+    expect(() => readPrivateApprovalSet(members)).toThrow();
+    await expect(readPrivateApprovalSetAsync(members)).rejects.toThrow();
+  }
+  expect(() => readPrivateApprovalSet([file], abort.signal)).toThrow();
+  await expect(readPrivateApprovalSetAsync([file], abort.signal)).rejects.toThrow();
 });
 
 it.each(['inherited', 'field-accessor', 'map-accessor'])('refuses %s environment values without invoking getters', kind => {
@@ -170,6 +250,60 @@ it('refuses a node entry point outside the fingerprinted package and dynamic run
   expect(() => trustedHostMcpPolicyDigest({ ...config, command: path.join(path.dirname(config.command), 'npx'), trustedHost: { ...(config.trustedHost as object), entryPoint: path.join(path.dirname(config.command), 'npx') } })).toThrow('policy is invalid');
 });
 
+it('fresh large-file verification accepts exact bytes and refuses mutation after an actual held read', async () => {
+  const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
+  fs.writeFileSync(config.command, Buffer.alloc(2 * 1024 * 1024 + 17, 0x61));
+  config.trustedHost = { ...policy, sourceDigest: fingerprintTrustedHostSource(policy.sourceRoot),
+    executableDigest: fingerprintTrustedHostExecutable(config.command) };
+  approval.approvals[0].policyDigest = trustedHostMcpPolicyDigest(config); persist();
+  await expect(verifyTrustedHostMcp(config)).resolves.toMatchObject({ ownerId: approval.ownerId });
+  const open = fs.promises.open.bind(fs.promises);
+  let mutated = false, opened = 0, closed = 0;
+  const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (String(args[0]) === config.command) {
+      opened++;
+      const read = handle.read.bind(handle), close = handle.close.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        const result = await read(...readArgs);
+        if (result.bytesRead && !mutated) {
+          mutated = true;
+          fs.writeFileSync(config.command, Buffer.alloc(2 * 1024 * 1024 + 17, 0x62));
+        }
+        return result;
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); closed++; };
+    }
+    return handle;
+  });
+  try {
+    await expect(verifyTrustedHostMcp(config)).rejects.toThrow('package revision changed');
+    expect(mutated).toBe(true); expect(opened).toBeGreaterThan(0); expect(closed).toBe(opened);
+  } finally { spy.mockRestore(); }
+  fs.writeFileSync(config.command, Buffer.alloc(2 * 1024 * 1024 + 17, 0x61));
+  const cancellation = new AbortController();
+  let aborted = false;
+  opened = 0; closed = 0;
+  const abortSpy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (String(args[0]) === config.command) {
+      opened++;
+      const read = handle.read.bind(handle), close = handle.close.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        const result = await read(...readArgs);
+        if (result.bytesRead && !aborted) { aborted = true; cancellation.abort(new Error('Actual large-file read cancellation.')); }
+        return result;
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); closed++; };
+    }
+    return handle;
+  });
+  try {
+    await expect(verifyTrustedHostMcp(config, cancellation.signal)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
+    expect(aborted).toBe(true); expect(opened).toBeGreaterThan(0); expect(closed).toBe(opened);
+  } finally { abortSpy.mockRestore(); }
+});
+
 it('async verification yields and refuses an approval revoked while filesystem verification is pending', async () => {
   const open = fs.promises.open.bind(fs.promises);
   let entered!: () => void;
@@ -192,4 +326,60 @@ it('async verification yields and refuses an approval revoked while filesystem v
   release();
   await rejected;
   spy.mockRestore();
+});
+
+it('an executable read refusal drains the pending actual source descriptor before returning', async () => {
+  const open = fs.promises.open.bind(fs.promises);
+  const sourceFile = path.join(trustedHostMcpPolicySchema.parse(config.trustedHost).sourceRoot, 'server.js');
+  let entered!: () => void;
+  let release!: () => void;
+  const checking = new Promise<void>(resolve => { entered = resolve; });
+  const finish = new Promise<void>(resolve => { release = resolve; });
+  let sourceClosed = false;
+  let executableReadAttempted = false;
+  let executableClosed = false;
+  let closedExecutable!: () => void;
+  const executableFinished = new Promise<void>(resolve => { closedExecutable = resolve; });
+  let settled = false;
+  const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    const filename = String(args[0]);
+    if (filename === config.command) {
+      const close = handle.close.bind(handle);
+      handle.read = (async () => {
+        executableReadAttempted = true;
+        throw new Error('actual executable read refused');
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); executableClosed = true; closedExecutable(); };
+    } else if (filename === sourceFile) {
+      const read = handle.read.bind(handle);
+      const close = handle.close.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        entered(); await finish; return read(...readArgs);
+      }) as typeof handle.read;
+      handle.close = async () => { await close(); sourceClosed = true; };
+    }
+    return handle;
+  });
+  const verification = verifyTrustedHostMcp(config);
+  const outcome = verification.then(() => { settled = true; return undefined; }, error => { settled = true; return error; });
+  try {
+    await checking;
+    await executableFinished;
+    // Let the executable rejection propagate after its real descriptor closes,
+    // while the separately opened source descriptor remains deliberately held.
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+    expect(executableReadAttempted).toBe(true);
+    expect(executableClosed).toBe(true);
+    expect(settled).toBe(false);
+    expect(sourceClosed).toBe(false);
+    release();
+    expect((await outcome).message).toContain('package revision changed');
+    expect(sourceClosed).toBe(true);
+    expect(executableClosed).toBe(true);
+  } finally {
+    release();
+    await outcome;
+    spy.mockRestore();
+  }
 });

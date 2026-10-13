@@ -16,14 +16,22 @@ adds the early Unix refusal before bootstrap and log writes; the earlier
 | Minimum 24 | 24.2.0 | 1.51.0 | Build, workspace types and actual packed-process checks |
 | Current 24 | 24.21.0 | 1.52.1 | Build, workspace types and actual packed-process checks |
 
-The existing Ubuntu and Windows production jobs each execute all four supported
-profiles serially. Every profile verifies the binary before `npm ci`, uses
-`npm run build` with the ordinary default heap, then enforces MCP typecheck,
-payload validation and `npm run smoke:mcp-artifacts`. Bash failure propagation
-prevents a later successful command from hiding an earlier failure on Windows.
-The unchanged 13 required check names and exact main-push publication gate
-remain the acceptance contract. Historical build scope cannot admit Node
+Broad qualification runs locally before publication. The automatic
+`verify.yml` workflow has one `verification` job: exact Node 24.21.0, one
+ordinary default-heap application build, MCP typechecks and payload validation,
+workflow/release contracts, and the focused critical regression list.
+
+The manually dispatched `verify-full.yml` retains Ubuntu and Windows coverage
+of all four supported profiles, actual packed-process checks and the broader
+test/scanner suites. Each profile verifies the binary before dependency and
+build commands. Bash failure propagation prevents a later successful command
+from hiding an earlier failure on Windows. Do not dispatch this matrix simply
+to repeat an already qualified PR. Historical build scope cannot admit Node
 22.13.1 to installed application, MCP or container acceptance.
+
+The source ruleset requests the single `verification` context. Repository
+administrators must keep the live ruleset aligned with it; workflow changes
+cannot remove obsolete required contexts from GitHub's live configuration.
 
 Other CI workflows use exact current Node 22.23.3; npm publication uses exact
 24.21.0 and retains its separately pinned npm toolchain. Each direct setup is
@@ -32,8 +40,30 @@ moving versions, early Node commands, missing/optional guards, omitted edge
 profiles, heap overrides and missing runtime artifact retention. New stacked
 release jobs also have to satisfy this contract: when the frozen installer
 provenance stack is integrated, both its attest and publish jobs must receive
-the same current 22.23.3 pin and immediate binary check. Their older moving
-`22` selectors intentionally fail this contract until that integration is fixed.
+the same current 22.23.3 pin and immediate binary check.
+
+## GitHub action runtimes
+
+Action runtimes are separate from the application Node version selected by
+`setup-node`. Workflows pin the official Node 24 actions to immutable commits:
+checkout 7.0.1, setup-node 7.1.0, upload-artifact 7.0.2 and download-artifact
+8.0.2. These require Actions Runner 2.327.1 or newer; the workflows use
+GitHub-hosted runners. Application Node pins and executable measurements remain
+in place after the action upgrades.
+
+[Checkout 7](https://github.com/actions/checkout/releases/tag/v7.0.1) refuses
+unsafe fork checkout in privileged `pull_request_target` and `workflow_run`
+contexts by default. These workflows do not opt out of that protection.
+[Setup-node 7](https://github.com/actions/setup-node/blob/v7.1.0/README.md)
+removes the dummy `NODE_AUTH_TOKEN` fallback; the npm release workflow uses
+trusted publishing and explicitly disables automatic package-manager caching.
+Explicit npm cache inputs on verification jobs are retained.
+
+[Upload-artifact 7](https://github.com/actions/upload-artifact/releases/tag/v7.0.0)
+keeps zipped archives as its default; no workflow opts into direct unzipped
+uploads. [Download-artifact 8](https://github.com/actions/download-artifact/releases/tag/v8.0.0)
+fails on artifact digest mismatch by default. Release handoffs retain that
+default and their existing exact artifact IDs and package checksum checks.
 
 ## Official executable evidence
 

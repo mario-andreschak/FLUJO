@@ -73,7 +73,7 @@
     }
   },
   "containerBase": {
-    "reference": "node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c",
+    "reference": "public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c",
     "metadataUrl": "https://hub.docker.com/v2/repositories/library/node/tags/22.23.3-bookworm-slim",
     "metadataFile": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/docker-official-node-22.23.3-bookworm-slim.json",
     "metadataSha256": "6788266cb9fe3669058a092daf9a23eb8ecdb7f9c03e86c3ae03f7367b60c246",

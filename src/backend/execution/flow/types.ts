@@ -146,6 +146,9 @@ export interface TodoItem {
 }
 
 export interface ProcessNodeProperties {
+    /** Explicit engine-owned routing to a sole, unconditioned Finish successor.
+     * No model tools are advertised or dispatched. Absent keeps model handoffs. */
+    terminalRouting?: 'tool-free';
     name?: string;
     /** True once the user edits the node's label by hand; suppresses auto-naming
      *  the node after its bound model on (re)binding (issue #38, Item C). */
@@ -774,6 +777,9 @@ export interface FlowParams {
 
 /** Durable Codex SDK thread metadata, scoped to one Process node. */
 export interface CodexSessionMetadata {
+    /** Protocol totals permit restart-safe accounting without reading rollout files. */
+    totalUsage?: { input_tokens?: number; output_tokens?: number; cached_input_tokens?: number;
+        cache_write_input_tokens?: number; reasoning_output_tokens?: number };
     adapter: string;
     provider: string;
     threadId: string;
@@ -1456,6 +1462,10 @@ export interface StartNodePrepResult extends BasePrepResult {
 // ProcessNode prep result
 export interface ProcessNodePrepResult extends BasePrepResult {
     nodeType: 'process';
+    /** Identity only; Native admission resolves the plan from the frozen root. */
+    flowId?: string;
+    /** Non-enumerable preparation field, checked against the immutable plan. */
+    nativeFlowSnapshot?: Flow;
     currentPrompt: string;
     boundModel: string;
     modelDisplayName?: string;

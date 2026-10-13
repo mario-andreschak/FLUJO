@@ -125,6 +125,8 @@ export interface SplitResult {
   leadingSystem: FlujoChatMessage[];
   /** depth>0 subflow display-only messages from the old slice, kept verbatim. */
   preservedSubflow: FlujoChatMessage[];
+  /** Old user instructions/corrections, retained with their original role/id. */
+  protectedMessages: FlujoChatMessage[];
   /** The recent tail kept verbatim. */
   toKeep: FlujoChatMessage[];
   /** Text of a previous compaction summary found in the summarizable slice. */
@@ -142,7 +144,7 @@ export function splitHistoryForCompaction(
   messages: FlujoChatMessage[],
   keepTokens: number,
 ): SplitResult {
-  const empty: SplitResult = { toSummarize: [], leadingSystem: [], preservedSubflow: [], toKeep: messages };
+  const empty: SplitResult = { toSummarize: [], leadingSystem: [], preservedSubflow: [], protectedMessages: [], toKeep: messages };
   if (messages.length === 0) return empty;
 
   // Walk from the end accumulating tokens until we reach the keep budget.
@@ -177,11 +179,12 @@ export function splitHistoryForCompaction(
 
   const leadingSystem: FlujoChatMessage[] = [];
   const preservedSubflow: FlujoChatMessage[] = [];
+  const protectedMessages: FlujoChatMessage[] = [];
   const toSummarize: FlujoChatMessage[] = [];
   let previousSummary: string | undefined;
 
   for (const m of oldSlice) {
-    if (m.role === 'system') {
+    if (m.role === 'system' || m.role === 'developer') {
       leadingSystem.push(m);
       continue;
     }
@@ -189,13 +192,41 @@ export function splitHistoryForCompaction(
       preservedSubflow.push(m);
       continue;
     }
+    if (m.role === 'user') protectedMessages.push(m);
     if (isCompactionSummary(m) && typeof m.content === 'string') {
       previousSummary = m.content.slice(COMPACTION_SUMMARY_MARKER.length).trim();
     }
     toSummarize.push(m);
   }
 
-  return { toSummarize, leadingSystem, preservedSubflow, toKeep, previousSummary };
+  return { toSummarize, leadingSystem, preservedSubflow, protectedMessages, toKeep, previousSummary };
+}
+
+function retainedOldMessages(messages: FlujoChatMessage[], split: SplitResult): FlujoChatMessage[] {
+  const retained = new Set([...split.protectedMessages, ...split.preservedSubflow]);
+  return messages.filter(message => retained.has(message));
+}
+
+/** Validate syntax deterministically; generated prose never becomes the
+ * authority for instructions or execution receipts. Missing sections, fenced
+ * or unfinished output are rejected rather than persisted as a usable anchor. */
+export function validateCompactionSummary(summary: string): boolean {
+  const headings = summary.split(/\r?\n/).filter(line => /^## /.test(line));
+  return COMPACTION_SUMMARY_SECTIONS.every((section, index) => headings[index] === section)
+    && !summary.includes('```')
+    && !/\[(?:truncated|incomplete)\]\s*$/i.test(summary.trim());
+}
+
+function preserveExecutionReceipts(summary: string, messages: FlujoChatMessage[]): string {
+  const results = new Set(messages.filter(message => message.role === 'tool')
+    .map(message => (message as FlujoChatMessage & { tool_call_id?: string }).tool_call_id));
+  const receipts = messages.flatMap(message => (message.role === 'assistant' ? message.tool_calls ?? [] : [])
+    .filter(call => call.type === 'function')
+    .map(call => JSON.stringify({ call_id: call.id, tool: call.function.name,
+      state: results.has(call.id) ? 'result-observed' : 'unresolved' })));
+  return receipts.length ? summary + '\n\n## Execution Receipts\n'
+    + 'Exact recorded identifiers; an observed result does not assert side-effect success. Consult the source artifact before recovery; do not repeat a call because detail was summarized.\n'
+    + receipts.join('\n') : summary;
 }
 
 /**
@@ -283,10 +314,19 @@ export async function compactHistory(
   const uuid = deps.uuid ?? (() => crypto.randomUUID());
 
   const split = splitHistoryForCompaction(messages, opts.keepTokens);
-  if (split.toSummarize.length === 0) {
+  if (split.toSummarize.length === 0 || split.toSummarize.every(message => message.role === 'user')) {
     log.debug('compactHistory: nothing old enough to summarize; no-op');
     return null;
   }
+  // Incomplete call groups must remain on the original wire. A narrative
+  // summary cannot supply a missing result or stand in for pending execution.
+  const completed = new Set(split.toSummarize.filter(message => message.role === 'tool')
+    .map(message => (message as FlujoChatMessage & { tool_call_id?: string }).tool_call_id));
+  if (split.toSummarize.some(message => message.role === 'assistant'
+    && message.tool_calls?.some(call => !completed.has(call.id)))) return null;
+  const summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user')
+    .map(message => message.id).filter((id): id is string => Boolean(id));
+  const retainedOld = retainedOldMessages(messages, split);
 
   const reusable = opts.reusableArtifact;
   if (
@@ -301,6 +341,7 @@ export async function compactHistory(
     reusable.sourceStartId === split.toSummarize[0]?.id &&
     reusable.sourceEndId === split.toSummarize.at(-1)?.id &&
     reusable.sourceMessageCount === split.toSummarize.length
+    && validateCompactionSummary(reusable.summaryText)
   ) {
     const summaryMessage: FlujoChatMessage = {
       id: reusable.artifactId,
@@ -313,11 +354,11 @@ export async function compactHistory(
       wireMessages: [
         ...split.leadingSystem,
         summaryMessage,
-        ...split.preservedSubflow,
+        ...retainedOld,
         ...split.toKeep,
       ],
       artifact: reusable,
-      summarizedMessageIds: split.toSummarize.map(message => message.id).filter((id): id is string => Boolean(id)),
+      summarizedMessageIds,
     };
   }
 
@@ -330,13 +371,24 @@ export async function compactHistory(
     log.warn('compactHistory: summarization model call failed; falling back (no mutation)', error);
     return null;
   }
-  if (!summaryBody) {
-    log.warn('compactHistory: empty summary returned; falling back (no mutation)');
+  if (!summaryBody || !validateCompactionSummary(summaryBody)) {
+    log.warn('compactHistory: incomplete summary returned; falling back (no mutation)');
     return null;
   }
 
   // Preserve dereferenceable resource URIs from the summarized slice.
   summaryBody = preserveResourceUris(summaryBody, split.toSummarize);
+  summaryBody = preserveExecutionReceipts(summaryBody, split.toSummarize);
+  // Validate achieved reduction after exact instruction/receipt restoration,
+  // before writing an artifact. Refuse a cosmetic summary that makes the wire
+  // larger and amplifies memory/transport pressure.
+  if (estimateTokens([
+    ...split.leadingSystem,
+    { id: 'summary', role: 'assistant', content: COMPACTION_SUMMARY_MARKER + '\n\n' + summaryBody,
+      timestamp: now() } as FlujoChatMessage,
+    ...retainedOld,
+    ...split.toKeep,
+  ]) >= estimateTokens(messages)) return null;
 
   const artifactId = uuid();
   // The artifact payload is the complete projected source, including canonical
@@ -351,9 +403,15 @@ export async function compactHistory(
         projectionDigest: opts.projectionDigest,
       });
     } catch (error) {
-      log.warn('compactHistory: failed to persist wire artifact; continuing without resource', error);
+      log.warn('compactHistory: failed to persist wire artifact; retaining canonical wire', error);
+      return null;
     }
+    if (!anchorUri) return null;
   }
+  // Dropping tool observations requires an exact archived source, even when
+  // the summarizer returned plausible prose. Repeating mutable observations
+  // is not a valid replacement for recovering the original result.
+  if (!anchorUri && split.toSummarize.some(message => message.role === 'tool')) return null;
 
   const anchorLine = anchorUri
     ? `\n\n_(Earlier turns compacted; full pre-summary history preserved at ${anchorUri}.)_`
@@ -370,9 +428,10 @@ export async function compactHistory(
   const wireMessages: FlujoChatMessage[] = [
     ...split.leadingSystem,
     summaryMessage,
-    ...split.preservedSubflow,
+    ...retainedOld,
     ...split.toKeep,
   ];
+  if (estimateTokens(wireMessages) >= estimateTokens(messages)) return null;
   const artifact: WireSummaryArtifact = {
     artifactId,
     conversationId: opts.conversationId,
@@ -400,6 +459,6 @@ export async function compactHistory(
   return {
     wireMessages,
     artifact,
-    summarizedMessageIds: split.toSummarize.map(message => message.id).filter((id): id is string => Boolean(id)),
+    summarizedMessageIds,
   };
 }

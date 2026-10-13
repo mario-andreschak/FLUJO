@@ -25,6 +25,12 @@ it('reports old SDK records and explicitly unavailable snapshots as unknown', as
   expect(await buildContextInfo(state({ contextUsage: null }))).not.toHaveProperty('promptTokens');
 });
 
+it('does not reinterpret aggregate Antigravity CLI usage as current context', async () => {
+  getModel.mockResolvedValue({ adapter: 'antigravity-cli', provider: 'antigravity-cli', name: 'Antigravity CLI', contextWindow: 1000000 });
+  expect(await buildContextInfo(state({}))).toEqual({ nodeId: 'node', modelDisplayName: 'Antigravity CLI' });
+  expect(await buildContextInfo(state({ contextUsage: null }))).not.toHaveProperty('promptTokens');
+});
+
 it('does not replace an unknown runtime limit with the configured 1M', async () => {
   const { contextWindow: _window, ...snapshot } = contextUsage;
   expect(await buildContextInfo(state({ contextUsage: snapshot }))).not.toHaveProperty('contextWindow');

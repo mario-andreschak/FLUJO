@@ -56,7 +56,7 @@ export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: Finis
       onClose={onClose}
       maxWidth="md" 
       fullWidth
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           borderTop: 5, 
           borderColor: 'success.main',
@@ -65,7 +65,7 @@ export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: Finis
           maxWidth: '95vw',
           maxHeight: '90vh',
         }
-      }}
+      } }}
     >
       <DialogHeaderActions
         title={t('flows.modal.properties', { name: nodeData.label || t('flows.modal.finishNode') })}

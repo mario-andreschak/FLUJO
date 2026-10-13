@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import test from 'node:test';
-import { createServer } from 'node:http';
-import { createSmokeOperator, createSmokeMetadataBff } from './smoke-bundled-operator.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createSmokeOperator } from './smoke-bundled-operator.mjs';
 
 test('the packed operator uses a genuine scoped credential with an absent cold ledger and independent cleanup', async () => {
   const operator = await createSmokeOperator();
@@ -25,37 +28,33 @@ test('the packed operator uses a genuine scoped credential with an absent cold l
   await assert.rejects(fs.access(ownerFile), { code: 'ENOENT' });
 });
 
-test('the disposable metadata bridge retains owner authority and refuses writes or other workspaces', async () => {
-  const received = [];
-  const upstream = createServer((request, response) => {
-    received.push({ url: request.url, authorization: request.headers.authorization, workspace: request.headers['x-flujo-workspace'] });
-    response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ resources: [] }));
-  });
-  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
-  let bridge;
+
+test('the source-absent packaged consumer uses the built production issuer and rejects altered compiled bytes', async () => {
+  const scripts = path.dirname(fileURLToPath(import.meta.url));
+  await promisify(execFile)(process.execPath, [path.join(scripts, 'build-smoke-owner-issuer.mjs')]);
+  const root = await fs.mkdtemp(path.join(scripts, '.owner-issuer-consumer-'));
+  const equipment = path.join(root, 'scripts');
   try {
-    bridge = await createSmokeMetadataBff(`http://127.0.0.1:${upstream.address().port}`, 'synthetic-test-only-owner');
-    assert.ok(!bridge.url.includes('synthetic-test-only-owner'));
-    const result = await fetch(bridge.url + '/api/mcp/flujo/resources?cursor=next', { headers: { 'x-flujo-workspace': 'foreign' } });
-    assert.equal(result.status, 200); assert.deepEqual(await result.json(), { resources: [] });
-    assert.deepEqual(received, [{ url: '/api/mcp/flujo/resources?cursor=next', authorization: 'Bearer synthetic-test-only-owner', workspace: 'default-workspace' }]);
-    for (const [route, method] of [['/api/mcp/flujo/flows', 'POST'], ['/api/mcp/flujo/resources', 'POST'], ['/api/mcp/flujo/tools?workspace=foreign', 'GET']]) {
-      assert.equal((await fetch(bridge.url + route, { method })).status, 404);
+    await fs.mkdir(equipment);
+    for (const name of ['smoke-bundled-operator.mjs', 'local-instance.mjs', 'generated-smoke-owner-issuer.cjs', 'generated-smoke-owner-issuer.json']) {
+      await fs.copyFile(path.join(scripts, name), path.join(equipment, name));
     }
-    assert.equal(received.length, 1);
-    await assert.rejects(createSmokeMetadataBff('https://example.com', 'synthetic-test-only-owner'));
-    await assert.rejects(createSmokeMetadataBff(`http://127.0.0.1:${upstream.address().port}/?target=foreign`, 'synthetic-test-only-owner'));
-    for (const route of ['/api/mcp/flujo/resources?cursor=a&cursor=b',
-      '//example.com/api/mcp/flujo/resources', '/api/mcp/flujo/resources%2f..%2fsecrets']) {
-      assert.equal((await fetch(bridge.url + route)).status, 404);
-    }
-    assert.equal(received.length, 1);
-    const cursor = 'https://example.com/private?workspace=foreign#fragment';
-    assert.equal((await fetch(bridge.url + '/api/mcp/flujo/tools?cursor=' + encodeURIComponent(cursor))).status, 200);
-    assert.equal(received.at(-1).url, '/api/mcp/flujo/tools?' + new URLSearchParams({ cursor }).toString());
-    assert.equal(received.at(-1).workspace, 'default-workspace');
+    await assert.rejects(fs.access(path.join(root, 'src/backend/services/security/ownerCredentials.ts')), { code: 'ENOENT' });
+    const { createSmokeOperator: createCompiledOperator } = await import(new URL(`./${path.basename(root)}/scripts/smoke-bundled-operator.mjs`, import.meta.url));
+    const operator = await createCompiledOperator();
+    try {
+      assert.equal(operator.issuerEquipment, 'compiled-production-source');
+      const actualSource = await fs.readFile(path.join(scripts, '../src/backend/services/security/ownerCredentials.ts'));
+      assert.equal(operator.issuerSourceSha256, createHash('sha256').update(actualSource).digest('hex'));
+      const policy = JSON.parse(await fs.readFile(operator.env.FLUJO_OWNER_AUTH_FILE, 'utf8'));
+      assert.deepEqual(policy.credentials[0].scopes, ['control:admin', 'mcp:access', 'secrets:read']);
+      assert.equal(policy.credentials[0].digest, createHash('sha256').update(operator.token).digest('hex'));
+      await assert.rejects(fs.access(operator.env.FLUJO_MCP_TRUSTED_HOST_FILE), { code: 'ENOENT' });
+    } finally { await operator.restore(); }
+    await fs.appendFile(path.join(equipment, 'generated-smoke-owner-issuer.cjs'), '\n// altered bytes\n');
+    await assert.rejects(createCompiledOperator(), /Compiled owner issuer binding mismatch/);
   } finally {
-    await bridge?.close();
-    upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve));
+    if (path.dirname(root) !== scripts || !path.basename(root).startsWith('.owner-issuer-consumer-')) throw new Error('Unsafe compiled consumer cleanup.');
+    await fs.rm(root, { recursive: true });
   }
 });

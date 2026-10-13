@@ -17,6 +17,8 @@ jest.mock('@/backend/services/flow', () => ({
   flowService: { migrateMcpServerReferences: jest.fn(async () => ({ success: true, migratedReferences: 0 })) },
 }));
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: jest.fn(),
   createTransport: jest.fn(),
   resolveConfigHeaders: jest.fn(),

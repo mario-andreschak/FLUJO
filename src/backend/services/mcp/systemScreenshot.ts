@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 
 const SPAWN_TIMEOUT_MS = 15_000;
 const MAX_IMAGE_BYTES = 30_000_000;
@@ -90,7 +91,8 @@ function hasInteractiveDesktopSession(): boolean {
   return true;
 }
 
-function runSpawn(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
+async function runSpawn(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
+  await assertBundledFlujoWorkloadEffectCurrent();
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -120,7 +122,8 @@ async function commandExists(command: string): Promise<boolean> {
   try {
     await runSpawn(probe, [command]);
     return true;
-  } catch {
+  } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     return false;
   }
 }
@@ -234,6 +237,7 @@ async function captureLinux(req: CaptureRequest): Promise<void> {
 }
 
 async function captureDesktop(req: CaptureRequest): Promise<void> {
+  await assertBundledFlujoWorkloadEffectCurrent();
   await fs.mkdir(path.dirname(req.outputPath), { recursive: true });
   if (process.platform === 'win32') return captureWindows(req);
   if (process.platform === 'darwin') return captureMacOs(req);
@@ -311,21 +315,27 @@ export async function systemScreenshotHandler(args: Record<string, unknown>): Pr
   try {
     outputPath = await resolveOutputPath(args?.outputPath);
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     return textResult({ error: error instanceof Error ? error.message : 'Invalid outputPath.' }, true);
   }
 
   try {
     await captureDesktop({ mode, display, x, y, width, height, outputPath });
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     return textResult({ error: error instanceof Error ? error.message : 'The desktop screenshot failed.' }, true);
   }
 
   let png: Buffer;
   try {
+    await assertBundledFlujoWorkloadEffectCurrent();
     png = await fs.readFile(outputPath);
-  } catch {
+  } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) throw error;
     return textResult({ error: 'The screenshot backend did not produce an output file.' }, true);
   }
+  try { await assertBundledFlujoWorkloadEffectCurrent(); }
+  catch (error) { png.fill(0); throw error; }
   if (png.length === 0 || png.length > MAX_IMAGE_BYTES) {
     return textResult({ error: 'The captured screenshot had an invalid size.' }, true);
   }

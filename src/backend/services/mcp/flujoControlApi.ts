@@ -3,6 +3,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { json } from '@/app/api/mcp/_helpers';
+import { assertBundledFlujoWorkloadAction, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
 
 const log = createLogger('backend/services/mcp/flujoControlApi');
 
@@ -113,14 +114,17 @@ export async function handleFlujoToolRequest(
       import('@/backend/services/mcp'),
       import('@/backend/services/mcp/internalTools'),
     ]);
+    await assertBundledFlujoWorkloadAction(typeof body.name === 'string' ? body.name : '', request.method, request.nextUrl.pathname, body.args ?? {});
     const result: CallToolResult = await internalCallTool(
       mcpService,
       name,
       (body.args ?? {}) as Record<string, unknown>,
       'host',
     );
+    await assertBundledFlujoWorkloadAction(typeof body.name === 'string' ? body.name : '', request.method, request.nextUrl.pathname, body.args ?? {});
     return json(result, 200);
   } catch (error) {
+    if (error instanceof BundledFlujoWorkloadError) return error.response;
     log.error('FLUJO control tool failed', {
       name,
       error: error instanceof Error ? error.message : String(error),

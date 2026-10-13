@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { admitCodexDirectory } from './codexRuntimeFiles';
-import { createOwnedCodexThread } from './codexOwnedThread';
+import { createQualificationCodexThread } from './codexQualificationThread';
 import { RESTRICTED_CODEX_CONFIG } from './codexRestrictedProfile';
 import type { CodexOwnedProcessRegistration } from './codexAppServerProcess';
 
@@ -24,8 +24,9 @@ export async function qualifyCodexNativeInventory(input:{executable:string;catal
     if(process.env[key]!==undefined)env[key]=process.env[key];
   for(const key of ['HOME','USERPROFILE','CODEX_HOME','APPDATA','LOCALAPPDATA','XDG_CONFIG_HOME','XDG_CACHE_HOME',
     'XDG_DATA_HOME','XDG_STATE_HOME','XDG_RUNTIME_DIR','TMPDIR','TMP','TEMP'])env[key]=home;
-  let thread:ReturnType<typeof createOwnedCodexThread>|undefined,registration:CodexOwnedProcessRegistration|undefined;
-  let posts=0,denied=false;const inventories:string[][]=[];
+  let thread:ReturnType<typeof createQualificationCodexThread>|undefined,registration:CodexOwnedProcessRegistration|undefined;
+  let posts=0,denied=false,closeObserved=false;const inventories:string[][]=[];
+  let primaryFailure: unknown;
   const server=createServer(async(req,res)=>{
     try {
       if(req.socket.remoteAddress!=='127.0.0.1'||req.method!=='POST'||req.url!=='/responses'||++posts>2)throw refused();
@@ -72,8 +73,9 @@ export async function qualifyCodexNativeInventory(input:{executable:string;catal
     const url=`http://127.0.0.1:${address.port}`;
     const {forced_login_method:omitted,...restricted}=RESTRICTED_CODEX_CONFIG;void omitted;
     const owner={};
-    thread=createOwnedCodexThread({executable:input.executable,env,cwd,owner,model:input.model,signal:input.signal,
-      register:async value=>{registration=value;await input.assertCurrent();input.signal.throwIfAborted();},
+    thread=createQualificationCodexThread({executable:input.executable,env,cwd,owner,model:input.model,signal:input.signal,
+      register:async value=>{registration=value;void value.close.then(()=>{closeObserved=true;});
+        await input.assertCurrent();input.signal.throwIfAborted();},
       beforePrompt:async()=>{await input.assertCurrent();input.signal.throwIfAborted();},observeUsage:async()=>{},
       configOverrides:['project_root_markers=[]',`projects.${JSON.stringify(cwd)}.trust_level="untrusted"`],
       config:{...restricted,model_catalog_json:input.catalogPath,model_provider:'inventory',
@@ -93,10 +95,31 @@ export async function qualifyCodexNativeInventory(input:{executable:string;catal
     return {kind:'offline-pinned-binary-inventory',posts,advertisedTools:inventories[0],forcedCalls:probes,
       forcedCallsDenied:true,processIdentity:registration.identity,exit,closeObserved:true,
       authenticated:false,liveProvider:false,billedCostUsd:null};
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
   } finally {
-    await thread?.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));
-    await parentGuard();await guard();
-    if(path.dirname(path.resolve(home))!==path.resolve(parent)||!path.basename(home).startsWith('codex-private-inventory-'))throw refused();
-    await fs.rm(home,{recursive:true,force:true});
+    const closure = await Promise.allSettled([
+      thread?.close(),
+      (async () => {
+        server.closeAllConnections();
+        await new Promise<void>(resolve=>server.close(()=>resolve()));
+      })(),
+    ]);
+    const failures = closure.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    // Keep a runtime needed by an Original whose pipe closure remains uncertain.
+    // A nonzero exit still permits removal when this exact registration closed.
+    if (!thread || closeObserved) {
+      try {
+        await parentGuard();await guard();
+        if(path.dirname(path.resolve(home))!==path.resolve(parent)||!path.basename(home).startsWith('codex-private-inventory-'))throw refused();
+        await fs.rm(home,{recursive:true,force:true});
+      } catch (error) { failures.push(error); }
+    } else {
+      failures.push(new Error('Native Codex inventory runtime retained: original pipe closure is unconfirmed.'));
+    }
+    if (failures.length) throw new AggregateError(
+      primaryFailure === undefined ? failures : [primaryFailure, ...failures],
+      'Native Codex inventory qualification or cleanup failed.');
   }
 }

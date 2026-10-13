@@ -21,6 +21,11 @@ const fixture = `
 const fs=require('node:fs'),readline=require('node:readline');
 const log=process.argv[1], mode=process.argv[2];
 setInterval(()=>{},1000);
+if(mode==='pre-admission'){
+  const tick=setInterval(()=>{if(fs.existsSync(log+'.trigger')){
+    clearInterval(tick);process.stdout.write(JSON.stringify({method:'unsolicited',params:{private:'must not publish'}})+'\\n');
+  }},5);
+}
 process.stdin.on('end',()=>process.exit(0));
 readline.createInterface({input:process.stdin}).on('line',line=>{
   fs.appendFileSync(log,line+'\\n');
@@ -28,6 +33,12 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   if(mode==='silent')return;
   if(mode==='malformed'){process.stdout.write('{invalid\\n');return;}
   if(mode==='unknown'){process.stdout.write(JSON.stringify({id:m.id+100,result:{}})+'\\n');return;}
+  if(mode==='dualerror'){process.stdout.write(JSON.stringify({id:m.id,result:{},error:{code:-32600,message:'invalid'}})+'\\n');return;}
+  if(mode==='bareerror'){process.stdout.write(JSON.stringify({id:m.id,error:{code:-32600}})+'\\n');return;}
+  if(mode==='coalesced'){
+    process.stdout.write(JSON.stringify({id:m.id,result:{method:m.method}})+'\\n'+
+      JSON.stringify({method:'first',params:{}})+'\\n'+JSON.stringify({method:'second',params:{}})+'\\n');return;
+  }
   process.stdout.write(JSON.stringify({id:m.id,result:{method:m.method}})+'\\n');
 });`;
 let root: string;
@@ -35,15 +46,54 @@ const children: Array<Awaited<ReturnType<typeof startOwnedCodexAppServer>>> = []
 const registrations: CodexOwnedProcessRegistration[] = [];
 beforeEach(async()=>{uncertainProbe=false;unavailableBirthReads=0;birthReads=0;lastBirthPid=0;root=await fs.mkdtemp(path.join(os.tmpdir(),'codex-owned-process-'));});
 afterEach(async()=>{
-  await Promise.all(children.splice(0).map(child=>child.stop()));
-  for(const registration of registrations.splice(0)){registration.requestStop();await registration.close;}
-  if(path.dirname(path.resolve(root))!==path.resolve(os.tmpdir()) || !path.basename(root).startsWith('codex-owned-process-'))throw new Error('Unexpected fixture cleanup path');
-  await fs.rm(root,{recursive:true,force:true});
+  const stopped=await Promise.allSettled(children.splice(0).map(child=>child.stop()));
+  try {
+    for(const registration of registrations.splice(0)){registration.requestStop();await registration.close;}
+  } finally {
+    if(path.dirname(path.resolve(root))!==path.resolve(os.tmpdir()) || !path.basename(root).startsWith('codex-owned-process-'))throw new Error('Unexpected fixture cleanup path');
+    await fs.rm(root,{recursive:true,force:true});
+  }
+  const failures=stopped.filter((result): result is PromiseRejectedResult=>result.status==='rejected');
+  if(failures.length)throw new AggregateError(failures.map(result=>result.reason),'Owned process cleanup failed');
+});
+
+it('refuses unsolicited incoming notifications during pending owner admission',async()=>{
+  const notification=jest.fn();
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const running=startOwnedCodexAppServer({...options('pre-admission'),onNotification:notification,
+    register:async registration=>{
+      registrations.push(registration);
+      await fs.writeFile(path.join(root,'wire.jsonl.trigger'),'ready');
+      await gate;
+    }});
+  try {
+    await expect(running).rejects.toThrow('unavailable');
+    expect(notification).not.toHaveBeenCalled();
+    expect(await wire()).toBe('');
+    await registrations[0].exit;await registrations[0].close;
+  } finally {release();}
+});
+
+it.each(['throw','stop','abort'])('stops coalesced incoming callbacks immediately after %s',async refusal=>{
+  const controller=new AbortController();
+  const methods:string[]=[];
+  const child=await startOwnedCodexAppServer({...options('coalesced'),signal:controller.signal,
+    onNotification:message=>{
+      methods.push(message.method!);
+      if(refusal==='throw')throw new Error('Source callback refused');
+      if(refusal==='stop')registrations[0].requestStop();
+      if(refusal==='abort')controller.abort();
+    }});
+  children.push(child);
+  await child.request('initialize',{});
+  await child.registration.exit;await child.registration.close;
+  expect(methods).toEqual(['first']);
 });
 function options(mode='normal') {
   const owner={};
   // Explicit minimal environment: fixture tests never inherit account state.
-  const env: NodeJS.ProcessEnv={NODE_ENV:'test'};
+  const env: NodeJS.ProcessEnv={NODE_ENV:'production'};
   for(const key of ['SystemRoot','SYSTEMROOT','WINDIR','PATH','Path'])if(process.env[key])env[key]=process.env[key];
   return {executable:process.execPath,args:['-e',fixture,path.join(root,'wire.jsonl'),mode],env,cwd:root,owner,
     onNotification:()=>{},register:async(registration: CodexOwnedProcessRegistration)=>{registrations.push(registration);}};
@@ -124,7 +174,7 @@ it('bounds stalled admission while retaining separate exit and close evidence',a
   expect(await wire()).toBe('');
 });
 
-it.each(['malformed','unknown'])('rejects %s responses and confirms owned process closure',async mode=>{
+it.each(['malformed','unknown','dualerror','bareerror'])('rejects %s responses and confirms owned process closure',async mode=>{
   const child=await startOwnedCodexAppServer(options(mode));children.push(child);
   await expect(child.request('initialize',{})).rejects.toThrow('unavailable');
   await child.registration.exit;await child.registration.close;

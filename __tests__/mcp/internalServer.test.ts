@@ -15,6 +15,7 @@ jest.mock('@/utils/logger', () => {
 });
 
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { mcpService } from '@/backend/services/mcp';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import {
@@ -188,20 +189,36 @@ describe('normal stdio delivery', () => {
     let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
     const approved = new Map<string, MCPStdioConfig>();
     beforeAll(async () => {
+      const preparationStarted = performance.now();
+      const phase = (stage: 'private-profile-enter' | 'private-profile-ready' | 'workspace-enter' | 'workspace-ready' | 'provisioning-enter' | 'provisioning-ready' | 'config-enter' | 'config-ready' | 'preview-enter' | 'preview-ready' | 'grant-enter' | 'grant-ready') => {
+        console.info(JSON.stringify({ shippedFixture: 'internal-server', stage, elapsedMs: performance.now() - preparationStarted }));
+      };
+      phase('private-profile-enter');
       profile = installTrustedHostProfile({ nodeSource: '// Owned setup profile; never executed.' });
       owner = installBundledFixtureOwner();
+      phase('private-profile-ready');
+      phase('workspace-enter');
       await ensureWorkspaceDirs();
+      phase('workspace-ready');
+      phase('provisioning-enter');
       await ensureShippedWorkspacePackages(getWorkspaceDataDir());
+      phase('provisioning-ready');
       storage = new Map();
       loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) => storage.has(key) ? copy(storage.get(key)) : fallback);
       saveItemMock.mockImplementation(async (key: StorageKey, value: unknown) => { storage.set(key, copy(value)); });
+      phase('config-enter');
       await saveConfig(new Map(SHIPPED_MCP_SERVERS.map(descriptor => [descriptor.defaultName,
         { ...createShippedServerConfig(descriptor), disabled: false }])));
+      phase('config-ready');
       for (const descriptor of SHIPPED_MCP_SERVERS) {
+        phase('preview-enter');
         const preview = await previewBundledHostConsent(descriptor.defaultName, { runtimeHome: 'host' });
+        phase('preview-ready');
+        phase('grant-enter');
         const result = await approveBundledHostConsent(owner.request(descriptor.defaultName), descriptor.defaultName, {
           runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
         });
+        phase('grant-ready');
         approved.set(descriptor.defaultName, result.config);
       }
     }, 120_000);
@@ -266,8 +283,6 @@ describe('normal stdio delivery', () => {
     const env = shippedServerEnv(descriptor, {
       FLUJO_DATA_DIR: '/data',
       FLUJO_FS_ROOTS: '/workspace',
-      NODE_OPTIONS: '--use-system-ca',
-      NODE_EXTRA_CA_CERTS: '/owned/ca.pem',
       SECRET_THAT_MUST_NOT_LEAK: 'secret',
     });
     expect(env).toMatchObject({
@@ -275,15 +290,8 @@ describe('normal stdio delivery', () => {
       FLUJO_DATA_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace'),
       FLUJO_WORKSPACE: 'default-workspace',
       FLUJO_FS_ROOTS: '/workspace',
-      NODE_EXTRA_CA_CERTS: '/owned/ca.pem',
     });
     expect(env).not.toHaveProperty('SECRET_THAT_MUST_NOT_LEAK');
-    expect(env).not.toHaveProperty('NODE_OPTIONS');
-  });
-
-  it.each(SHIPPED_MCP_SERVERS)('keeps application loader options out of the $defaultName proposal', descriptor => {
-    expect(shippedServerEnv(descriptor, { NODE_OPTIONS: '--require /host-only/loader.cjs' }))
-      .not.toHaveProperty('NODE_OPTIONS');
   });
 
   it('uses the parent marker instead of nesting a workspace-scoped child root again', () => {

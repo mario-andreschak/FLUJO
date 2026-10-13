@@ -24,7 +24,8 @@ type Gateway = Pick<ExecutionExtensionAdapter, 'isProtectedServer' | 'assertServ
   'authorizeHandoffs' | 'assertModelTool' | 'assertDispatch' | 'normalizeArguments' | 'requestMeta' | 'validateResult'>;
 type Active = { remote: object; claim: Claim; plan: Plan; children:ChildPlan[];
   context?:ExecutionExtensionContext; child?:Child; handoffs:Set<string>; watch: Awaited<ReturnType<ControllerNativeTransport['observe']>> };
-type Child = {root:Active;plan:ChildPlan;conversationId:string;logicalRunId?:string;handoffs:Set<string>};
+type Child = {root:Active;plan:ChildPlan;conversationId:string;logicalRunId?:string;handoffs:Set<string>;
+  parentLogicalRunId:string;invocationId:string;laneId:string};
 const denied = () => new ExecutionExtensionError('controller_native_source_refused');
 function checkedPlan(value: Plan): Plan {
   if (!value || Object.keys(value).sort().join() !== ['flowDigest','flowId','modelDigest','modelId'].join()
@@ -152,7 +153,8 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
         ||invocation.parentRunId!==selected.claim.rootConversationId||invocation.parentNodeId!==plan.parentNodeId
         ||invocation.lanes.length!==1||invocation.status!=='running'||lane?.status!=='running'
         ||lane.conversationId!==input.conversationId||lane.subflowId!==plan.flowId)throw denied();
-      const child:Child={root:selected,plan,conversationId:input.conversationId,handoffs:new Set()};
+      const child:Child={root:selected,plan,conversationId:input.conversationId,handoffs:new Set(),
+        parentLogicalRunId:parent.logicalRunId,invocationId:input.lane.invocationId,laneId:input.lane.laneId};
       const value=Object.freeze({});childContexts.set(value,child);selected.child=child;
       conversations.add(child.conversationId);return value;
     },
@@ -216,11 +218,25 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
         ||expected.workspace!==selected.claim.workspace||expected.flowId!==child.plan.flowId
         ||expected.flowDigest!==child.plan.flowDigest||expected.modelId!==child.plan.modelId||expected.modelDigest!==child.plan.modelDigest)throw denied();
       const {FlowExecutor}=await import('../flow/FlowExecutor');
-      const parent=FlowExecutor.conversationStates.get(selected.claim.rootConversationId);
-      if(!parent?.logicalRunId||parent.executionExtensionContext!==selected.context)throw denied();
+      const assertParentCurrent=()=>{
+        const parent=FlowExecutor.conversationStates.get(selected.claim.rootConversationId);
+        const invocation=parent?.subflowInvocations?.[child.invocationId];
+        const lane=invocation?.lanes.find(value=>value.id===child.laneId);
+        const node=parent?.flowSnapshot?.nodes.find(value=>value.id===child.plan.parentNodeId);
+        if(!parent?.logicalRunId||parent.logicalRunId!==child.parentLogicalRunId
+          ||parent.executionExtensionContext!==selected.context||parent.isCancelled||parent.runDepth!==0
+          ||digest(parent.flowSnapshot)!==selected.plan.flowDigest||node?.data.type!=='subflow'
+          ||node.data.properties?.subflowId!==child.plan.flowId||invocation?.version!==1
+          ||invocation.id!==child.invocationId||invocation.parentConversationId!==selected.claim.rootConversationId
+          ||invocation.parentRunId!==selected.claim.rootConversationId||invocation.parentNodeId!==child.plan.parentNodeId
+          ||invocation.status!=='running'||invocation.lanes.length!==1||lane?.status!=='running'
+          ||lane.conversationId!==child.conversationId||lane.subflowId!==child.plan.flowId)throw denied();
+        return parent;
+      };
+      assertParentCurrent();
       const root=await executionExtensionNativeWorkerRoot(selected.context,{conversationId:selected.claim.rootConversationId,
-        runId:parent.logicalRunId,workspace:selected.claim.workspace,...selected.plan});
-      if(!root)throw denied();await current(selected);
+        runId:child.parentLogicalRunId,workspace:selected.claim.workspace,...selected.plan});
+      if(!root)throw denied();await current(selected);assertParentCurrent();
       return {root,parentNodeId:child.plan.parentNodeId,flowDigest:child.plan.flowDigest,modelId:child.plan.modelId,modelDigest:child.plan.modelDigest};
     },
   };

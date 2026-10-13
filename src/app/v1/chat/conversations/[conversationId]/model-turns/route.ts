@@ -1,6 +1,6 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { loadConversationStateReadOnly } from '@/backend/execution/flow/loadConversationState';
-import { flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { flushConversationLog, withConversationLogEvents } from '@/backend/execution/flow/conversationLog';
 import type { ModelTurnIndexEntry, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -20,21 +20,22 @@ async function GET_handler(
   if (!state) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
 
   await flushConversationLog(conversationId);
-  const events = await readConversationLog(conversationId) ?? [];
-  const turns: ModelTurnIndexEntry[] = [];
-  const indexById = new Map<string, number>();
-  for (const event of events) {
-    if (event.type === 'model:dispatch') {
-      indexById.set(event.turn.id, turns.length);
-      turns.push({ ...event.turn, timestamp: event.timestamp || event.turn.timestamp });
-    } else if (event.type === 'model:dispatch-result') {
-      const index = indexById.get(event.dispatchId);
-      if (index != null) turns[index] = { ...turns[index], outcome: event.outcome };
+  return withConversationLogEvents(conversationId, async events => {
+    const turns: ModelTurnIndexEntry[] = [];
+    const indexById = new Map<string, number>();
+    for (const event of events ?? []) {
+      if (event.type === 'model:dispatch') {
+        indexById.set(event.turn.id, turns.length);
+        turns.push({ ...event.turn, timestamp: event.timestamp || event.turn.timestamp });
+      } else if (event.type === 'model:dispatch-result') {
+        const index = indexById.get(event.dispatchId);
+        if (index != null) turns[index] = { ...turns[index], outcome: event.outcome };
+      }
     }
-  }
 
-  return NextResponse.json({ conversationId, turns } satisfies ModelTurnTimelineResponse, {
-    headers: { 'Cache-Control': 'no-store' },
+    return NextResponse.json({ conversationId, turns } satisfies ModelTurnTimelineResponse, {
+      headers: { 'Cache-Control': 'no-store' },
+    });
   });
 }
 

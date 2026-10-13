@@ -2,8 +2,8 @@
 
 This component advances #568 under epic #563. The application now calls this
 primitive for explicitly approved isolated stdio profiles through the
-[container transport integration](./mcp-isolation-integration-v1.md). Legacy
-unconfigured servers still launch on the host. #568 remains open for the
+[container transport integration](./mcp-isolation-integration-v1.md). Host launches
+require separately approved trusted-host consent. #568 remains open for the
 acceptance gaps recorded in that integration document.
 
 ## Enforcement and approval contract
@@ -31,6 +31,14 @@ the grant path are rejected. The caller must keep the trusted grant tree stable
 between validation and daemon mount resolution; this component does not eliminate
 host-side filesystem races or establish ownership of the selected workspace.
 
+Container creation also requires Docker's `--init`. The trusted daemon supplies
+the PID 1 process that forwards signals and reaps exited descendants, so the MCP
+server does not have to implement a reaper. This is a fixed lifecycle rule; the
+policy does not permit disabling it or injecting additional Docker flags. The
+daemon-provided init belongs to the existing trusted daemon boundary, and its
+process counts toward the configured PID limit. If creation fails, launch fails
+closed. See Docker's [init documentation](https://docs.docker.com/reference/cli/docker/container/run/#specify-an-init-process).
+
 Creation happens without executing the server. The returned attach command targets
 the verified full container ID. Cleanup checks that ID and generation, removes
 only that owned container, then observes absence. Docker client exit or successful
@@ -52,6 +60,22 @@ Docker's documented controls underpin the policy:
 and [rootless boundary](https://docs.docker.com/engine/security/rootless/).
 
 ## Reproducible source checks
+
+The current managed-container reaping probe runs through the production launch
+primitive and both installed SDKs, using an already installed Linux image:
+
+```text
+node __tests__/security/fixtures/isolated-mcp-reaping-probe.cjs <absolute-docker-executable> <explicit-local-daemon> <immutable-image-id> reaped
+```
+
+It holds an orphan until `/proc` shows adoption by PID 1, releases it, verifies
+its disappearance while the server still answers tools, checks the actual
+container restrictions, and observes removal of the owned container. Unobserved
+cleanup retains its grant directory. The pre-fix launch produced a zombie in
+both SDKs; the repaired launch reaped both descendants. The separate application
+container tests passed genuine owner approval, discovery, dispatch, revocation
+and cleanup. These source checks do not prove full official-image, provider or
+worker shutdown acceptance; #568 and #700 remain open for their wider scopes.
 
 Owned checkout: `C:\Users\Moe\.codex\worktrees\scorecard-security\FLUJO`, based on
 main `3511ba49514fe8cf525f5a22c16c3806bf3886ba`. Node 22.13.1, Next 16.3.5,

@@ -1,4 +1,5 @@
 "use client";
+import { cancelPendingElicitation } from './elicitationState';
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
 import { useRouter } from 'next/navigation';
@@ -9,7 +10,7 @@ import { useChatScrollNav } from '@/frontend/components/Chat/hooks/useChatScroll
 import BoltIcon from '@mui/icons-material/Bolt';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -76,7 +77,7 @@ import DebuggerConversation from './DebuggerConversation';
 import DebuggerPendingPanel from './DebuggerPendingPanel';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
 import ModelTurnTimeline from './ModelTurnTimeline';
-import ModelTurnInspector, { type ModelTurnInspectorTab } from './ModelTurnInspector';
+import ModelTurnInspector, { ArchivedModelTurnChat, type ModelTurnInspectorTab } from './ModelTurnInspector';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import type { RecoveryRecord } from '@/shared/types/execution/events';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
@@ -111,7 +112,9 @@ import {
   type McpLoadedSkill,
   type McpSkillSelection,
 } from '@/shared/types/mcp';
-import type { ModelTurnIndexEntry, ModelTurnSnapshot } from '@/shared/types/modelTurn';
+import type { ModelTurnIndexEntry } from '@/shared/types/modelTurn';
+import { ModelTurnDetailCache } from './modelTurnDetailCache';
+import { isModelTurnInspection, type ModelTurnView } from '@/frontend/services/chat/modelTurnInspection';
 import {
   LiveActivity,
   EMPTY_LIVE_ACTIVITY,
@@ -578,7 +581,7 @@ const Chat: React.FC = () => {
   // the selected sidecar supplies both its historical Chat render and Model Input.
   const [modelTurns, setModelTurns] = useState<ModelTurnIndexEntry[]>([]);
   const [selectedModelTurnId, setSelectedModelTurnId] = useState<string | null>(null);
-  const [modelTurnSnapshot, setModelTurnSnapshot] = useState<ModelTurnSnapshot | null>(null);
+  const [modelTurnSnapshot, setModelTurnSnapshot] = useState<ModelTurnView | null>(null);
   const [modelTurnLoading, setModelTurnLoading] = useState(false);
   const [modelTurnError, setModelTurnError] = useState<string | null>(null);
   const [modelTurnRetry, setModelTurnRetry] = useState(0);
@@ -588,7 +591,7 @@ const Chat: React.FC = () => {
   const [modelTurnFollowLive, setModelTurnFollowLive] = useState(true);
   const [unseenModelTurnCount, setUnseenModelTurnCount] = useState(0);
   const modelTurnFollowLiveRef = useRef(true);
-  const modelTurnDetailCacheRef = useRef(new Map<string, ModelTurnSnapshot>());
+  const modelTurnDetailCacheRef = useRef(new ModelTurnDetailCache());
   const modelTurnIdsRef = useRef(new Set<string>());
   const modelTurnsRef = useRef<ModelTurnIndexEntry[]>([]);
   // Whether a debug session is active (panel should stay open). Decoupled from
@@ -1437,7 +1440,8 @@ const Chat: React.FC = () => {
       return;
     }
     let disposed = false;
-    void chatService.getSubflowRecoveryOptions(conversationId)
+    const controller = new AbortController();
+    void chatService.getSubflowRecoveryOptions(conversationId, controller.signal)
       .then((options) => {
         if (!disposed) setSubflowRecoveryOptions(options.hasRecoverableFamily ? options : null);
       })
@@ -1445,7 +1449,7 @@ const Chat: React.FC = () => {
         log.warn('Could not load subflow recovery options', { conversationId, err });
         if (!disposed) setSubflowRecoveryOptions(null);
       });
-    return () => { disposed = true; };
+    return () => { disposed = true; controller.abort(); };
   }, [
     detailedConversation?.id,
     detailedConversation?.parentConversationId,
@@ -2430,6 +2434,11 @@ const Chat: React.FC = () => {
             message: event.message,
             requestedSchema: event.requestedSchema,
           });
+        }
+        break;
+      case 'run:elicitation_cancelled':
+        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+          setPendingElicitation((pending) => cancelPendingElicitation(pending, event.elicitationId));
         }
         break;
       case 'run:awaiting_question':
@@ -4725,7 +4734,7 @@ const Chat: React.FC = () => {
     && currentPreviewAvailable;
   const showingWireView = showingArchivedModelTurn || showingHistoricalWireView || showingCurrentPreview;
   const selectedModelTurnChatMessages = useMemo(
-    () => (modelTurnSnapshot?.canonicalMessages ?? [])
+    () => (modelTurnSnapshot && !isModelTurnInspection(modelTurnSnapshot) ? modelTurnSnapshot.canonicalMessages : [])
       .filter(message => message.role !== 'system') as ChatMessage[],
     [modelTurnSnapshot],
   );
@@ -4744,11 +4753,14 @@ const Chat: React.FC = () => {
       return;
     }
 
+    // Release the previously selected, durably archived snapshot before the
+    // next response is parsed. Revisiting another marker reloads its history.
+    modelTurnDetailCacheRef.current.clear();
     const controller = new AbortController();
     setModelTurnSnapshot(null);
     setModelTurnError(null);
     setModelTurnLoading(true);
-    void chatService.getModelTurn(
+    void chatService.getModelTurnInspection(
       selectedModelTurn.conversationId,
       selectedModelTurn.id,
       { signal: controller.signal },
@@ -5045,7 +5057,7 @@ const Chat: React.FC = () => {
           open={mobileSidebarOpen}
           onClose={() => setMobileSidebarOpen(false)}
           ModalProps={{ keepMounted: true }}
-          PaperProps={{
+          slotProps={{ paper: {
             sx: {
               width: 'min(86vw, 340px)',
               maxWidth: 'calc(100vw - 28px)',
@@ -5056,7 +5068,7 @@ const Chat: React.FC = () => {
               backdropFilter: 'blur(22px) saturate(140%)',
               boxShadow: '24px 0 70px rgba(0,0,0,.45)',
             },
-          }}
+          } }}
         >
           {sidebarPanelContent}
         </Drawer>
@@ -5185,7 +5197,7 @@ const Chat: React.FC = () => {
                   size="small"
                   autoFocus
                   fullWidth
-                  inputProps={{ maxLength: 200, 'aria-label': t('chat.page.conversationTitle') }}
+                  slotProps={{ htmlInput: { maxLength: 200, 'aria-label': t('chat.page.conversationTitle') } }}
                 />
               ) : (
                 <>
@@ -5562,7 +5574,9 @@ const Chat: React.FC = () => {
                       {modelTurnError}
                     </Alert>
                   ) : modelTurnSnapshot ? (
-                    selectedModelTurnChatMessages.length > 0 ? (
+                    isModelTurnInspection(modelTurnSnapshot) && selectedModelTurn ? (
+                      <ArchivedModelTurnChat key={modelTurnSnapshot.entry.id} snapshot={modelTurnSnapshot} conversationId={selectedModelTurn.conversationId} />
+                    ) : selectedModelTurnChatMessages.length > 0 ? (
                       <ChatMessages
                         messages={selectedModelTurnChatMessages}
                         availableNodes={availableNodes}
@@ -5693,7 +5707,7 @@ const Chat: React.FC = () => {
                       </Button>
                     }
                   >
-                    <Typography variant="body2" fontWeight={600}>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {detailedConversation.recovery.currentCheckpoint?.nodeId
                         ? t('chat.page.recoveryAtNode', { node: detailedConversation.recovery.currentCheckpoint.nodeId })
                         : t('chat.page.recovery')}
@@ -5828,6 +5842,15 @@ const Chat: React.FC = () => {
                   ? t('chat.page.selectOrCreate')
                   : t('chat.page.createToStart')}
               </Typography>
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<BoltIcon />}
+                onClick={sidebarOpenQuickChat}
+                sx={{ minHeight: 48, borderRadius: 999, px: 2.5 }}
+              >
+                {t('chat.page.quickChat')}
+              </Button>
               {flows.length > 0 && (
                 <Button
                   variant="contained"
