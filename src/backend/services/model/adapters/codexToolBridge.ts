@@ -20,7 +20,7 @@ export interface BridgeTool {
   inputSchema: Record<string, unknown> | undefined;
   /** Preserve real MCP hints when the caller has them; never invent safer hints. */
   annotations?: ToolAnnotations;
-  handler: (args: Record<string, unknown>, requestIdentity?: string) => Promise<CallToolResult>;
+  handler: (args: Record<string, unknown>, requestIdentity?: string, signal?: AbortSignal) => Promise<CallToolResult>;
 }
 
 export interface CodexToolBridge {

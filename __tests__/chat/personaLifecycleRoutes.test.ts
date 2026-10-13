@@ -44,13 +44,15 @@ jest.mock('@/backend/execution/flow/toolCancelRegistry', () => ({
 }));
 const resolveElicitationMock = jest.fn(() => false);
 jest.mock('@/backend/services/mcp/elicitationRegistry', () => ({
-  resolveElicitation: (...args: unknown[]) => resolveElicitationMock(...(args as [])),
+  resolveConversationElicitation: (...args: unknown[]) => resolveElicitationMock(...(args as [])),
+  InvalidElicitationResponseError: class extends Error {},
 }));
 const resolvePendingQuestionMock = jest.fn(() => false);
 const declinePendingQuestionMock = jest.fn(() => false);
 jest.mock('@/backend/services/questionRegistry', () => ({
   resolvePendingQuestion: (...args: unknown[]) => resolvePendingQuestionMock(...(args as [])),
   declinePendingQuestion: (...args: unknown[]) => declinePendingQuestionMock(...(args as [])),
+  InvalidQuestionAnswerError: class extends Error {},
 }));
 
 const applyApprovalDecisionMock = jest.fn();

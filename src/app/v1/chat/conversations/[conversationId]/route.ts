@@ -35,6 +35,9 @@ import {
   listPersonaActivities,
 } from '@/backend/services/enduringAgents';
 import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
+import { listPendingQuestions } from '@/backend/services/questionRegistry';
+import { listPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -240,7 +243,14 @@ async function GET_handler(
       };
 
       // Return the full conversation data
-      return NextResponse.json(conversationData);
+      // Capture after async transcript/context work. No await separates the
+      // mailboxes and their sequence boundary, so an older response cannot
+      // erase a newer prompt that reached the browser over the live stream.
+      return NextResponse.json({ ...conversationData, pendingInputs: {
+        questions: sharedState.personaArchived ? [] : listPendingQuestions(conversationId),
+        elicitations: sharedState.personaArchived ? [] : listPendingElicitations(conversationId),
+        nextSeq: executionEventBus.currentSeq(conversationId),
+      } }, { headers: { 'Cache-Control': 'private, no-store' } });
     } else {
       // Use variable for logging
       log.warn(`Conversation state not found`, { requestId, conversationId });

@@ -39,9 +39,20 @@ import {
   flushConversationLog,
 } from '@/backend/execution/flow/conversationLog';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { registerPendingQuestion, declinePendingQuestion, clearPendingQuestions } from '@/backend/services/questionRegistry';
+import { registerPendingElicitation, cancelConversationElicitation, clearPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+
+/** Background Persona lock writes share fs.open; intercept only this replay. */
+function mockReplayOpen(conversationId: string, handle: unknown) {
+  const nativeOpen = fs.open;
+  return jest.spyOn(fs, 'open').mockImplementation((file, flags, mode) => {
+    if (path.basename(String(file)) === `${conversationId}.jsonl`) return Promise.resolve(handle as Awaited<ReturnType<typeof fs.open>>);
+    return nativeOpen(file, flags, mode);
+  });
+}
 
 const makeRequest = (
   conversationId: string,
@@ -158,6 +169,40 @@ beforeEach(() => {
 });
 
 describe('events route SSE replay across runs', () => {
+  it('replays only live conversation-owned prompts and preserves the original event sequence', async () => {
+    const conv = 'conv-live-input-replay';
+    const sibling = 'conv-sibling-input-replay';
+    const questions = [{ prompt: 'Pick', options: ['A'], custom: false }];
+    const form = { message: 'Current form', requestedSchema: { type: 'object', properties: {} } };
+    emit(conv, { type: 'run:start', flowId: 'f1' });
+    const oldQuestion = registerPendingQuestion(conv, 'old-question', questions);
+    emit(conv, { type: 'run:awaiting_question', questionId: 'old-question', questions });
+    declinePendingQuestion(conv, 'old-question'); await oldQuestion;
+    const currentQuestion = registerPendingQuestion(conv, 'current-question', questions);
+    emit(conv, { type: 'run:awaiting_question', questionId: 'current-question', questions });
+    const siblingForm = registerPendingElicitation('sibling-form', undefined, { conversationId: sibling, ...form });
+    emit(conv, { type: 'run:awaiting_elicitation', elicitationId: 'sibling-form', ...form });
+    const oldForm = registerPendingElicitation('old-form', undefined, { conversationId: conv, ...form });
+    emit(conv, { type: 'run:awaiting_elicitation', elicitationId: 'old-form', ...form });
+    cancelConversationElicitation(conv, 'old-form'); await oldForm;
+    const currentForm = registerPendingElicitation('current-form', undefined, { conversationId: conv, ...form });
+    emit(conv, { type: 'run:awaiting_elicitation', elicitationId: 'current-form', ...form });
+    const { reader, abort } = await openStream(conv, 0, { activityOnly: true });
+    try {
+      const replay = await readEvents(reader, 5);
+      expect(replay.events.map(event => event.seq)).toEqual([0, 2, 3, 6, 7]);
+      expect(replay.events.filter(event => event.type === 'run:awaiting_question')).toEqual([
+        expect.objectContaining({ questionId: 'current-question' }),
+      ]);
+      expect(replay.events.filter(event => event.type === 'run:awaiting_elicitation')).toEqual([
+        expect.objectContaining({ elicitationId: 'current-form' }),
+      ]);
+    } finally {
+      abort.abort(); clearPendingQuestions(conv); clearPendingElicitations(conv); clearPendingElicitations(sibling);
+      await Promise.all([currentQuestion, currentForm, siblingForm]);
+    }
+  });
+
   it('rejects a Persona event stream before replay or subscription', async () => {
     loadConversationStateMock.mockResolvedValueOnce({
       conversationId: 'persona-events',
@@ -476,7 +521,7 @@ describe('conversation execution stream limits', () => {
       const response = await GET(makeRequest(id, 0, new AbortController().signal), { params: Promise.resolve({ conversationId: id }) });
       expect(response.status).toBe(503);
       expect(response.headers.get('Retry-After')).toBe('3');
-      expect(open).not.toHaveBeenCalled();
+      expect(open.mock.calls.filter(([file]) => path.basename(String(file)) === `${id}.jsonl`)).toHaveLength(0);
     } finally { open.mockRestore(); releases.forEach(release => release()); }
   });
 
@@ -501,10 +546,10 @@ describe('conversation execution stream limits', () => {
     const pending = new Promise<{ bytesRead: number }>(resolve => { complete = resolve; });
     let closed!: () => void; const closeCompleted = new Promise<void>(resolve => { closed = resolve; });
     const close = jest.fn(async () => { closed(); });
-    const open = jest.spyOn(fs, 'open').mockResolvedValueOnce({
+    const open = mockReplayOpen(id, {
       stat: async () => ({ isFile: () => true, size: 10 }),
       read: () => { enter(); return pending; }, close,
-    } as never);
+    });
     const subscribe = jest.spyOn(executionEventBus, 'subscribe');
     try {
       const response = await GET(makeRequest(id, 0, new AbortController().signal), { params: Promise.resolve({ conversationId: id }) });
@@ -522,9 +567,9 @@ describe('conversation execution stream limits', () => {
   it('overlarge durable replay requests snapshot recovery without invoking a full file read', async () => {
     const id = 'large-durable-replay';
     const read = jest.fn(); const close = jest.fn(async () => {});
-    const open = jest.spyOn(fs, 'open').mockResolvedValueOnce({
+    const open = mockReplayOpen(id, {
       stat: async () => ({ isFile: () => true, size: 1024 * 1024 + 1 }), read, close,
-    } as never);
+    });
     try {
       const response = await GET(makeRequest(id, 0, new AbortController().signal), { params: Promise.resolve({ conversationId: id }) });
       expect(await response.text()).toContain('"reason":"replay-gap"');

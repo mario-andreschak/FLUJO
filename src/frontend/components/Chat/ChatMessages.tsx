@@ -2355,6 +2355,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       {/* Display Pending Elicitation Form */}
       {pendingElicitation && (
         <ElicitationFormCard
+          key={pendingElicitation.elicitationId}
           elicitation={pendingElicitation}
           onSubmit={onSubmitElicitation}
           onCancel={onCancelElicitation}
@@ -2364,6 +2365,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       {/* Display Pending Question (issue #258) */}
       {pendingQuestion && (
         <QuestionCard
+          key={pendingQuestion.questionId}
           question={pendingQuestion}
           onAnswer={onAnswerQuestion}
           onDecline={onDeclineQuestion}

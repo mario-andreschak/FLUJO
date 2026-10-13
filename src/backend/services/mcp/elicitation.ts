@@ -10,7 +10,7 @@ import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPElicitationPolicy } from '@/shared/types/mcp';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getElicitationContext } from './elicitationContext';
-import { registerPendingElicitation, cancelElicitation } from './elicitationRegistry';
+import { registerPendingElicitation, cancelConversationElicitation } from './elicitationRegistry';
 import { captureExternalAuthorizationElicitation } from './externalAuthorization';
 import { relatedTaskIdOf } from '@/shared/types/mcp/tasks';
 import {
@@ -122,10 +122,12 @@ export function createElicitationHandler(
     await assertTaskInputCurrent(options);
     if (getElicitationContext(config.name) !== ctx || ctx.getUnattended()) return { action: 'cancel' };
     // Install the mailbox before publishing the request, including fast answers.
-    const pending = registerPendingElicitation(elicitationId);
+    const pending = registerPendingElicitation(elicitationId, undefined, {
+      conversationId: ctx.conversationId, message, requestedSchema,
+    });
     const emit = executionEventBus.emitterFor(ctx.conversationId);
     const cancel = bindToCurrentWorkspace(() => {
-      if (cancelElicitation(elicitationId)) emit({ type: 'run:elicitation_cancelled', elicitationId });
+      if (cancelConversationElicitation(ctx.conversationId, elicitationId)) emit({ type: 'run:elicitation_cancelled', elicitationId });
     });
     options.signal?.addEventListener('abort', cancel, { once: true });
     if (options.signal?.aborted) cancel();
