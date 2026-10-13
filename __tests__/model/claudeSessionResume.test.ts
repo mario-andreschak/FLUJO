@@ -102,6 +102,30 @@ describe('ClaudeSubscriptionAdapter — session resume (#154)', () => {
   it('uses standard UUID v5 values for deterministic consumption identities', () => {
     expect(uuidv5('https://example.com', uuidv5.URL)).toBe('4fd35a71-71ef-5a55-a9d9-aa75c889a6d0');
   });
+  it('rejects success-subtype error results, closes the query and invalidates an existing resume checkpoint', async () => {
+    const adapter = new ClaudeSubscriptionAdapter();
+    queryMock.mockImplementationOnce(() => successStream('previously-good', 'remembered'));
+    await adapter.createCompletion(baseInput({ sessionResume: true, messages: [{ role: 'user', content: 'first' }] }));
+    const close = jest.fn();
+    const outcomes: unknown[] = [];
+    queryMock.mockImplementationOnce(() => Object.assign((async function* () {
+      yield { type: 'result', subtype: 'success', is_error: true, session_id: 'previously-good',
+        result: 'Request rejected for oauth-token', usage: { input_tokens: 0, output_tokens: 0 } };
+    })(), { close }));
+    const history: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'user', content: 'first' }, { role: 'assistant', content: 'remembered' }, { role: 'user', content: 'second' },
+    ];
+    await expect(adapter.createCompletion(baseInput({ sessionResume: true, messages: history,
+      onSdkRequest: async () => 'failed-dispatch', onSdkRequestResult: async outcome => { outcomes.push(outcome); },
+    }))).rejects.toThrow('Request rejected for [credential redacted]');
+    expect(optionsOf(1).resume).toBe('previously-good');
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(outcomes).toEqual([expect.objectContaining({ dispatchId: 'failed-dispatch', outcome: 'error' })]);
+    queryMock.mockImplementationOnce(() => successStream('fresh-after-error', 'recovered'));
+    await adapter.createCompletion(baseInput({ sessionResume: true, messages: [...history, { role: 'user', content: 'retry' }] }));
+    expect(optionsOf(2).resume).toBeUndefined();
+    expect(await promptContentOf(2)).toContain('Human: first');
+  });
   it('closes a settled foreground turn with ambient watchers and refuses an uncertain resume baseline', async () => {
     const events: Array<unknown> = [];
     queryMock.mockImplementationOnce(() => (async function* () {

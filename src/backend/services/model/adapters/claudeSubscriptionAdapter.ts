@@ -1554,12 +1554,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             if (unansweredTools.has(denial.tool_use_id)) recordToolResult({ id: denial.tool_use_id, resultContent: 'tool denied by Claude permission policy' });
           }
           if (!backgroundTasks && unansweredTools.size > 0) throw new Error('Claude terminal result has unresolved tool calls.');
-          if (message.subtype === 'success') {
+          if (message.subtype === 'success' && !message.is_error) {
             resultText = (message as { result?: string }).result ?? '';
             nativeSdkTerminal = true;
           } else if (handoffCalls.length === 0) {
             const errs = (message as { errors?: string[] }).errors;
-            const detail = Array.isArray(errs) && errs.length ? errs.join('; ') : message.subtype;
+            const errorResult = message.is_error ? (message as { result?: string }).result : undefined;
+            const rawDetail = Array.isArray(errs) && errs.length ? errs.join('; ')
+              : errorResult?.trim() || (message.is_error ? 'SDK reported an error result' : message.subtype);
+            const detail = apiKey ? rawDetail.split(apiKey).join('[credential redacted]') : rawDetail;
             throw new Error(`Claude subscription run failed: ${detail}`);
           }
           await watcher.poll();

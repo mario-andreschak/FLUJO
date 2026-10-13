@@ -10,8 +10,11 @@ import { snapshotBehaviorFlowDependencies } from '@/backend/services/enduringAge
 import { ENDURING_AGENT_COLLECTIONS as c } from '@/backend/services/enduringAgents/collections';
 import { claimNextPersonaActivity, completePersonaActivity, enqueuePersonaMailboxItem } from '@/backend/services/enduringAgents/activityRuntime';
 import { createRoleVersion, getPersonaActivity, listMemoryItems, savePersonaActivity } from '@/backend/services/enduringAgents/store';
+import { persistConversationSummaryStrict } from '@/backend/execution/flow/conversationSummaryStore';
+import type { SharedState } from '@/backend/execution/flow/types';
+import { CONVERSATION_SUMMARY_VERSION } from '@/shared/types/conversationSummary';
 import { RoleVersionSchema } from '@/shared/types/enduringAgent';
-import { saveCollectionItem } from '@/utils/storage/backend';
+import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
 import { getCurrentWorkspace, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import { buildTestRoleVersion, createPersonaFromRole } from './fixtures/personaFactory';
 
@@ -45,6 +48,37 @@ async function fixture() {
 }
 
 describe('Persona recovery capture and complete manifest preflight', () => {
+  it('captures a current production sidecar without changing its identity or bytes', async () => fresh(async () => {
+    const { persona, root } = await fixture();
+    const state = await loadCollectionItem<SharedState | null>('conversations', 'conversation_recovery', null);
+    expect(state).not.toBeNull();
+    await persistConversationSummaryStrict('conversation_recovery', state!);
+    const bytes = await fs.readFile(path.join(root, 'db/conversation-summaries/conversation_recovery.json'));
+    expect(JSON.parse(bytes.toString())).toMatchObject({
+      version: CONVERSATION_SUMMARY_VERSION, id: 'conversation_recovery', personaId: persona.id,
+    });
+    const files = decodePersonaRecoveryZip((await capturePersonaRecovery()).bytes);
+    expect(files.find(file => file.path === 'conversation-summaries/conversation_recovery.json')?.bytes).toEqual(bytes);
+    expect(validatePersonaRecoveryArchive(files).manifest.counts['conversation-summaries']).toBe(1);
+
+    const payload = files.filter(file => file.path !== PERSONA_RECOVERY_MANIFEST);
+    const summary = payload.find(file => file.path === 'conversation-summaries/conversation_recovery.json')!;
+    const value = JSON.parse(summary.bytes.toString());
+    const withSummary = (next: Record<string, unknown>) => payload.map(file => file === summary
+      ? { ...file, bytes: Buffer.from(JSON.stringify(next)) } : file);
+    expect(() => inspectPersonaRecoveryFiles(withSummary({ ...value, version: 9 }), getCurrentWorkspace())).not.toThrow();
+    for (const invalid of [
+      { ...value, version: CONVERSATION_SUMMARY_VERSION + 1 }, { ...value, version: 0 },
+      { ...value, version: 1.5 }, { ...value, version: String(CONVERSATION_SUMMARY_VERSION) },
+      { ...value, id: 'foreign', conversationId: 'conversation_recovery' },
+      { ...value, id: undefined, conversationId: 'conversation_recovery' },
+      { ...value, personaId: 'foreign' }, { ...value, updatedAt: 'invalid' },
+    ]) {
+      expect(() => inspectPersonaRecoveryFiles(withSummary(invalid), getCurrentWorkspace()))
+        .toThrow('summary identity or version mismatch');
+    }
+  }));
+
   it('captures closed Role templates after their original mutable worker has been deleted', async () => fresh(async () => {
     await fixture();
     const base = buildTestRoleVersion().coreFlowTemplate!;
