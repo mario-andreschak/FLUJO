@@ -41,7 +41,7 @@ import {
   WavesRounded,
 } from '@mui/icons-material';
 import { alpha } from '@mui/material/styles';
-import { ElementType, Fragment, Suspense, useEffect, useState } from 'react';
+import { ElementType, Fragment, Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
@@ -404,6 +404,7 @@ export default function Navigation() {
   const router = useRouter();
   const { settings, settingsHydrated } = useStorage();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
   // Translated labels plus workspace/account controls need more room than the
   // former 1280px desktop threshold. Use the existing drawer on smaller screens.
   const isCompact = useMediaQuery('(max-width:1535px)');
@@ -456,6 +457,18 @@ export default function Navigation() {
     handleNavClick(href)(event);
   };
 
+  const handleDrawerEntered = () => {
+    const paper = drawerRef.current;
+    const active = paper?.ownerDocument.activeElement;
+    // Opening from an edited/resizeable page can leave focus on the hidden
+    // trigger until the Slide is visible. Move only background focus, keeping
+    // a user's focus inside this drawer or another dialog where they put it.
+    if (paper && active && !paper.contains(active)
+      && (active === paper.ownerDocument.body || active.closest('[aria-hidden="true"]'))) {
+      paper.focus();
+    }
+  };
+
   /**
    * Programmatic sibling of `handleNavClick` for controls that are not links
    * (the quick-actions menu, #396). Route changes keep flowing through the same
@@ -472,8 +485,8 @@ export default function Navigation() {
       <Toolbar
         data-app-navigation-toolbar
         sx={{
-          gap: { xs: 1, sm: 1.5 },
-          px: { xs: 1.5, sm: 2.5, xl: 3.5 },
+          gap: { xs: 0.5, sm: 1.5 },
+          px: { xs: 1, sm: 2.5, xl: 3.5 },
           minHeight: 'var(--app-bar-height) !important',
         }}
       >
@@ -481,6 +494,9 @@ export default function Navigation() {
           <IconButton
             color="inherit"
             aria-label={t('nav.openMenu')}
+            aria-haspopup="dialog"
+            aria-expanded={drawerOpen}
+            aria-controls="app-navigation-drawer"
             onClick={() => setDrawerOpen(true)}
             sx={{ border: 1, borderColor: 'divider' }}
           >
@@ -498,6 +514,9 @@ export default function Navigation() {
             display: 'flex',
             alignItems: 'center',
             gap: 1.1,
+            minWidth: 38,
+            minHeight: 38,
+            flexShrink: 0,
             mr: { xs: 0, xl: 0.75 },
             color: 'text.primary',
             textDecoration: 'none',
@@ -567,7 +586,9 @@ export default function Navigation() {
 
         {isCompact && <Box sx={{ flex: 1 }} />}
 
-        <Stack direction="row" spacing={0.7} sx={{ alignItems: "center" }}>
+        {/* The chat link adds a fifth action. Keep each control's hit area and
+            use smaller gaps on phones so the whole row fits at 320px. */}
+        <Stack direction="row" spacing={{ xs: 0.25, sm: 0.7 }} sx={{ alignItems: "center" }}>
           {/* The workspace menu owns namespace selection and management. It is
               always visible so a single-workspace install can create another. */}
           {!isCompact && <WorkspaceTabs />}
@@ -674,6 +695,12 @@ export default function Navigation() {
         onClose={() => setDrawerOpen(false)}
         ModalProps={{ keepMounted: true }}
         slotProps={{ paper: {
+          ref: drawerRef,
+          tabIndex: -1,
+          id: 'app-navigation-drawer',
+          role: 'dialog',
+          'aria-modal': true,
+          'aria-label': t('nav.primaryAria'),
           sx: {
             display: 'flex',
             flexDirection: 'column',
@@ -686,6 +713,7 @@ export default function Navigation() {
             backdropFilter: 'blur(20px) saturate(125%)',
           },
         },
+          transition: { onEntered: handleDrawerEntered },
           backdrop: {
             sx: {
               backgroundColor: alpha(theme.palette.common.black, isDarkMode ? 0.2 : 0.1),

@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import type { PersonaDetail } from '@/frontend/services/personas';
 import type { PersonaComposition } from '@/shared/types/enduringAgent';
@@ -169,7 +169,7 @@ describe('PersonaFlowsArea Behavior versions', () => {
     getCompositionMock.mockResolvedValue(refreshed);
     updateCompositionMock.mockRejectedValueOnce(new PersonasApiError(409, 'Persona composition changed since it was inspected.')).mockResolvedValueOnce(refreshed);
     const save = within(dialog).getByRole('button', { name: catalogs[locale]['personas.action.save'] });
-    save.focus();
+    act(() => save.focus());
     fireEvent.click(save);
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(catalogs[locale]['personas.flows.changed']);
     expect(input).toHaveValue('Unsaved specialist name');
