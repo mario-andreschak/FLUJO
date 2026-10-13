@@ -155,6 +155,13 @@ async function POST_handler(
     return NextResponse.json({ cancelled, conversation_id: conversationId });
   }
 
+  // A finished run may briefly retain a mailbox until the external request
+  // cancellation/timeout arrives. A late answer must not release its server.
+  if (['question-answer', 'question-decline', 'elicitation-submit', 'elicitation-cancel'].includes(requestBody.action)
+    && ['completed', 'error', 'capped'].includes(responseState?.status ?? '')) {
+    return NextResponse.json({ error: 'This conversation is no longer awaiting this input.' }, { status: 404 });
+  }
+
   // --- Elicitation submit/cancel (in-request path: run is live, blocked in the handler) ---
   if (requestBody.action === 'elicitation-submit' || requestBody.action === 'elicitation-cancel') {
     const { action, elicitationId } = requestBody;

@@ -752,6 +752,8 @@ export class CodexAdapter implements CompletionAdapter {
     let inputSystemPrompt = systemPrompt;
     const ordinaryThreadPath = !nativeToolPort && !executionExtensionContext && !nativeOriginalProcessHost && !apiKey
       && process.env.FLUJO_CODEX_APP_SERVER !== '0';
+    if (ordinaryThreadPath) configuration.developerInstructions +=
+      '\nWhen calling FLUJO MCP tools from code-mode exec, capture the result and emit the relevant returned content with text(...) or image(...) for image blocks. Put that emission after await in the same exec script, including calls that yield and resume with wait. Use the emitted result to produce the requested final response.';
     const ordinaryQuestion = ordinaryThreadPath ? bridgeTools.find(tool => tool.name === 'question') : undefined;
     if (ordinaryQuestion) configuration.developerInstructions +=
       '\nFLUJO enables request_user_input and request_user_input_async for short user questions through the same flow question policy and approval gate as the question tool. After asking, end your turn; FLUJO will deliver the actual user response. Do not use clock or collaboration tools to wait for an answer.';

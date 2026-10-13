@@ -246,9 +246,12 @@ async function GET_handler(
       // Capture after async transcript/context work. No await separates the
       // mailboxes and their sequence boundary, so an older response cannot
       // erase a newer prompt that reached the browser over the live stream.
+      // A tool deadline can finish the run before its input mailbox expires.
+      // Do not restore that orphaned prompt after the terminal stream closes.
+      const inputClosed = sharedState.personaArchived || ['completed', 'error', 'capped'].includes(sharedState.status ?? '');
       return NextResponse.json({ ...conversationData, pendingInputs: {
-        questions: sharedState.personaArchived ? [] : listPendingQuestions(conversationId),
-        elicitations: sharedState.personaArchived ? [] : listPendingElicitations(conversationId),
+        questions: inputClosed ? [] : listPendingQuestions(conversationId),
+        elicitations: inputClosed ? [] : listPendingElicitations(conversationId),
         nextSeq: executionEventBus.currentSeq(conversationId),
       } }, { headers: { 'Cache-Control': 'private, no-store' } });
     } else {

@@ -178,6 +178,25 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
     }
   });
 
+  it.each(['completed', 'error', 'capped'] as const)('does not restore orphaned input cards after a %s run', async (status) => {
+    const conversationId = 'conv-orphan-inputs';
+    seedConversation(conversationId, status);
+    const question = registerPendingQuestion(conversationId, 'orphan-question', [{ prompt: 'Pick', options: ['A'], custom: false }]);
+    const form = registerPendingElicitation('orphan-form', undefined, {
+      conversationId, message: 'Pick', requestedSchema: { type: 'object', properties: {} },
+    });
+    try {
+      const response = await GET(new NextRequest(`http://localhost/v1/chat/conversations/${conversationId}`, {
+        headers: { host: 'localhost', origin: 'http://localhost' },
+      }), { params: Promise.resolve({ conversationId }) });
+      expect(response.status).toBe(200);
+      expect((await response.json()).pendingInputs).toEqual({ nextSeq: expect.any(Number), questions: [], elicitations: [] });
+    } finally {
+      clearPendingQuestions(conversationId); clearPendingElicitations(conversationId);
+      await Promise.all([question, form]);
+    }
+  });
+
   it('hydrates a bounded suffix from the automatically recovered durable transcript', async () => {
     seedConversation('conv-fast', 'completed');
     stored['conversations/conv-fast'].messages = [

@@ -88,6 +88,9 @@ bridge. Current CodeModeOnly models use Codex's computational wrapper to call
 those offered tools. Native shell, agent, browser and computer feature flags are
 disabled at startup; unsupported operations and server requests are refused.
 The effective tool policy participates in session compatibility.
+Ordinary instructions also require code-mode scripts to emit the relevant
+returned tool content after awaiting it, including when a long call yields and
+resumes. This keeps the actual result available for the model's final response.
 
 A Process node with `allowQuestion` enabled can receive typed native Codex
 questions through its existing question executor and tool-approval policy.

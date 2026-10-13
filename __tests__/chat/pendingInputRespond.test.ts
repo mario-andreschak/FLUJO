@@ -26,6 +26,30 @@ async function respond(conversationId: string, body: unknown) {
 }
 afterEach(() => { clearPendingQuestions('input-one'); clearAllElicitations(); });
 
+it.each(['completed', 'error', 'capped'] as const)('rejects orphaned inputs from a %s run without releasing its server', async (status) => {
+  const question = registerPendingQuestion('input-one', 'orphan-question', [{ prompt: 'Pick', options: ['A'], custom: false }]);
+  const form = registerPendingElicitation('orphan-form', undefined, {
+    conversationId: 'input-one', message: 'Pick', requestedSchema: { type: 'object', properties: {} },
+  });
+  try {
+    const terminal = { conversationId: 'input-one', status, messages: [] } as unknown as SharedState;
+    for (const body of [
+      { action: 'question-answer', questionId: 'orphan-question', answers: [['A']] },
+      { action: 'question-decline', questionId: 'orphan-question' },
+      { action: 'elicitation-submit', elicitationId: 'orphan-form', content: {} },
+      { action: 'elicitation-cancel', elicitationId: 'orphan-form' },
+    ]) {
+      loadConversationState.mockResolvedValueOnce(terminal);
+      expect((await respond('input-one', body)).status).toBe(404);
+    }
+    expect(listPendingQuestions('input-one')).toHaveLength(1);
+    expect(listPendingElicitations('input-one')).toHaveLength(1);
+  } finally {
+    clearPendingQuestions('input-one'); clearAllElicitations();
+    await Promise.all([question, form]);
+  }
+});
+
 it('validates the action-specific input ID even when an unrelated valid ID is supplied', async () => {
   expect((await respond('input-one', { action: 'question-answer', questionId: 7,
     toolCallId: 'unrelated', answers: [['A']] })).status).toBe(400);
