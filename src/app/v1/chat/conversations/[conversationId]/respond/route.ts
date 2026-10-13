@@ -14,8 +14,8 @@ import { loadConversationState } from '@/backend/execution/flow/loadConversation
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { cancelToolCall } from '@/backend/execution/flow/toolCancelRegistry';
-import { resolveElicitation } from '@/backend/services/mcp/elicitationRegistry';
-import { resolvePendingQuestion, declinePendingQuestion } from '@/backend/services/questionRegistry';
+import { resolveConversationElicitation, InvalidElicitationResponseError } from '@/backend/services/mcp/elicitationRegistry';
+import { resolvePendingQuestion, declinePendingQuestion, InvalidQuestionAnswerError } from '@/backend/services/questionRegistry';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
@@ -93,6 +93,7 @@ async function POST_handler(
   let requestBody: RespondRequestBody;
   try {
     requestBody = await request.json();
+    if (!requestBody || typeof requestBody !== 'object' || Array.isArray(requestBody)) throw new Error('An action object is required');
     const validActions = ['approve', 'reject', 'elicitation-submit', 'elicitation-cancel', 'question-answer', 'question-decline', 'cancelToolCall'];
     if (!requestBody.action || !validActions.includes(requestBody.action)) {
       throw new Error(`Invalid request body. action must be one of: ${validActions.join(', ')}`);
@@ -105,6 +106,17 @@ async function POST_handler(
     }
     if ((requestBody.action === 'question-answer' || requestBody.action === 'question-decline') && !requestBody.questionId) {
       throw new Error('questionId is required for question actions');
+    }
+    const id = requestBody.action === 'question-answer' || requestBody.action === 'question-decline'
+      ? requestBody.questionId
+      : requestBody.action === 'elicitation-submit' || requestBody.action === 'elicitation-cancel'
+        ? requestBody.elicitationId : requestBody.toolCallId;
+    if (typeof id !== 'string' || !id.trim() || id.length > 256) throw new Error('A valid input ID is required');
+    if (requestBody.action === 'elicitation-submit' && (!requestBody.content
+      || typeof requestBody.content !== 'object' || Array.isArray(requestBody.content))) throw new Error('Elicitation content must be an object');
+    if (requestBody.action === 'question-answer' && (!Array.isArray(requestBody.answers)
+      || requestBody.answers.some(answer => !Array.isArray(answer) || answer.some(value => typeof value !== 'string')))) {
+      throw new Error('Question answers must be arrays of strings');
     }
   } catch (error) {
     if (error instanceof ConversationLogReadPressureError) throw error;
@@ -143,12 +155,19 @@ async function POST_handler(
     return NextResponse.json({ cancelled, conversation_id: conversationId });
   }
 
+  // A finished run may briefly retain a mailbox until the external request
+  // cancellation/timeout arrives. A late answer must not release its server.
+  if (['question-answer', 'question-decline', 'elicitation-submit', 'elicitation-cancel'].includes(requestBody.action)
+    && ['completed', 'error', 'capped'].includes(responseState?.status ?? '')) {
+    return NextResponse.json({ error: 'This conversation is no longer awaiting this input.' }, { status: 404 });
+  }
+
   // --- Elicitation submit/cancel (in-request path: run is live, blocked in the handler) ---
   if (requestBody.action === 'elicitation-submit' || requestBody.action === 'elicitation-cancel') {
     const { action, elicitationId } = requestBody;
     const resolve = () => action === 'elicitation-submit'
-      ? resolveElicitation(elicitationId, { action: 'accept', content: requestBody.content })
-      : resolveElicitation(elicitationId, { action: 'cancel' });
+      ? resolveConversationElicitation(conversationId, elicitationId, { action: 'accept', content: requestBody.content })
+      : resolveConversationElicitation(conversationId, elicitationId, { action: 'cancel' });
     let result: ReturnType<typeof resolve>;
     if (action === 'elicitation-submit' && isPersonaOwnedConversationState(responseState)) {
       const authority = responseState?.executionAuthority;
@@ -162,13 +181,20 @@ async function POST_handler(
         // side effect. Hold the Persona lease across the synchronous registry
         // resolution so deletion cannot enter at the promise-continuation gap.
         result = await authority.commitWhileCurrent(async () => resolve());
-      } catch {
+      } catch (error) {
+        if (error instanceof InvalidElicitationResponseError) {
+          return NextResponse.json({ error: error.message }, { status: 400 });
+        }
         return NextResponse.json({
           error: 'Persona execution authority expired before elicitation resolution.',
         }, { status: 409 });
       }
     } else {
-      result = resolve();
+      try { result = resolve(); }
+      catch (error) {
+        if (error instanceof InvalidElicitationResponseError) return NextResponse.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
     }
     if (!result) {
       log.warn('No pending elicitation found', { requestId, conversationId, elicitationId });
@@ -181,9 +207,25 @@ async function POST_handler(
   // --- Question answer/decline (issue #258; in-request blocking-promise path) ---
   if (requestBody.action === 'question-answer' || requestBody.action === 'question-decline') {
     const { action, questionId } = requestBody;
-    const resolved = action === 'question-answer'
+    const resolve = () => action === 'question-answer'
       ? resolvePendingQuestion(conversationId, questionId, requestBody.answers ?? [])
       : declinePendingQuestion(conversationId, questionId);
+    let resolved: boolean;
+    try {
+      if (action === 'question-answer' && isPersonaOwnedConversationState(responseState)) {
+        const authority = responseState?.executionAuthority;
+        if (!authority?.commitWhileCurrent) return NextResponse.json({
+          error: 'Persona execution authority is unavailable; refusing an unfenced question answer.',
+        }, { status: 409 });
+        resolved = await authority.commitWhileCurrent(async () => resolve());
+      } else resolved = resolve();
+    } catch (error) {
+      if (error instanceof InvalidQuestionAnswerError) return NextResponse.json({ error: error.message }, { status: 400 });
+      if (isPersonaOwnedConversationState(responseState)) return NextResponse.json({
+        error: 'Persona execution authority expired before question resolution.',
+      }, { status: 409 });
+      throw error;
+    }
     if (!resolved) {
       log.warn('No pending question found', { requestId, conversationId, questionId });
       return NextResponse.json({ error: `No pending question with ID ${questionId}` }, { status: 404 });

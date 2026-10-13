@@ -36,6 +36,17 @@ async function begin(thread: ReturnType<typeof make>, signal?: AbortSignal) {
   await events.next(); await events.next();
   return events;
 }
+it('applies native-tool denial before the app-server child starts', async () => {
+  const thread = make({ config: { features: { shell_tool: false, code_mode_host: false, multi_agent: false } }, onQuestion: jest.fn() });
+  const events = await begin(thread);
+  expect(jest.mocked(startOwnedCodexAppServer).mock.calls[0][0].args).toEqual([
+    '-c', 'features.shell_tool=false', '-c', 'features.code_mode_host=false', '-c', 'features.multi_agent=false',
+    '-c', 'web_search="disabled"', '-c', 'tools.view_image=false',
+    '-c', 'tools.experimental_request_user_input.enabled=true',
+    '-c', 'features.default_mode_request_user_input=true', 'app-server',
+  ]);
+  await events.return(undefined); await thread.close();
+});
 it('resumes over RPC, streams true deltas, preserves token subsets and completes exactly once', async () => {
   const observed = jest.fn(), thread = make({ resumeThreadId: 'thread-1', onUsage: observed });
   const events = await begin(thread);
@@ -137,4 +148,212 @@ it('does not hide unconfirmed closure when admission and its process drain both 
   const thread = make(), { events } = await thread.runStreamed('input', {});
   await expect(events.next()).rejects.toThrow('unconfirmed owned process');
   await expect(thread.close()).rejects.toThrow('unconfirmed owned process');
+});
+
+it('retains branded registration close proof when admission rejects before returning a child', async () => {
+  let closed!: () => void;
+  const proof = new Promise<void>(resolve => { closed = resolve; });
+  const failure = new AggregateError([new Error('admission'), new Error('unconfirmed drain')], 'unconfirmed owned process');
+  jest.mocked(startOwnedCodexAppServer).mockImplementationOnce(async input => {
+    await input.register({ close: proof } as Parameters<typeof input.register>[0]);
+    throw failure;
+  });
+  const thread = make(), { events } = await thread.runStreamed('input', {});
+  await expect(events.next()).rejects.toBe(failure);
+  expect(thread.whenClosed()).toBe(proof);
+  closed(); await expect(thread.whenClosed()).resolves.toBeUndefined();
+});
+
+it('routes only an opted-in direct question for the owned active turn', async () => {
+  const question = jest.fn(async () => ({ answers: { choice: { answers: ['Blue'] } } }));
+  const thread = make({ onQuestion: question }), events = await begin(thread);
+  const callback = jest.mocked(startOwnedCodexAppServer).mock.calls.at(-1)![0].onRequest!;
+  const signal = new AbortController().signal;
+  const params = { threadId: 'thread-1', turnId: 'turn-1', itemId: 'question-item', questions: [] };
+  await expect(callback({ id: 'question-1', method: 'item/tool/requestUserInput', params }, signal))
+    .resolves.toEqual({ answers: { choice: { answers: ['Blue'] } } });
+  expect(question).toHaveBeenCalledWith([], signal);
+  expect(request).toHaveBeenCalledWith('initialize', expect.objectContaining({ capabilities: { experimentalApi: true } }));
+  await expect(callback({ id: 'wrong-thread', method: 'item/tool/requestUserInput', params: { ...params, threadId: 'other' } }, signal)).rejects.toThrow('active FLUJO turn');
+  await expect(callback({ id: 'wrong-turn', method: 'item/tool/requestUserInput', params: { ...params, turnId: 'old-turn' } }, signal)).rejects.toThrow('active FLUJO turn');
+  await expect(callback({ id: 'shell', method: 'item/commandExecution/requestApproval', params }, signal)).rejects.toThrow('not enabled');
+  expect(question).toHaveBeenCalledTimes(1);
+  send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  await events.next();
+  await expect(callback({ id: 'stale', method: 'item/tool/requestUserInput', params }, signal)).rejects.toThrow('active FLUJO turn');
+  await thread.close();
+});
+
+it('refuses a deferred answer and coalesced stale request once their turn terminates', async () => {
+  let answer!: (value: unknown) => void;
+  const question = jest.fn(() => new Promise(resolve => { answer = resolve; }));
+  const thread = make({ onQuestion: question }), events = await begin(thread);
+  const callback = jest.mocked(startOwnedCodexAppServer).mock.calls.at(-1)![0].onRequest!;
+  const params = { threadId: 'thread-1', turnId: 'turn-1', itemId: 'input', questions: [] };
+  const pending = callback({ id: 'question-1', method: 'item/tool/requestUserInput', params }, new AbortController().signal);
+  send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  // Arrival revokes input authority before the iterator consumes the terminal.
+  expect(thread.canSteer()).toBe(false);
+  await expect(callback({ id: 'question-2', method: 'item/tool/requestUserInput', params }, new AbortController().signal)).rejects.toThrow('active FLUJO turn');
+  answer({ answers: { color: { answers: ['Blue'] } } });
+  await expect(pending).rejects.toThrow('turn ended');
+  expect(question).toHaveBeenCalledTimes(1);
+  await events.next();
+  await thread.close();
+});
+
+const asyncQuestion = { id: 'async-question', type: 'agentMessage', text: 'Which color?\n- Blue\n- Green',
+  delivery: 'async', phase: 'final_answer', questions: [{ title: 'Which color?', options: ['Blue', 'Green'] }] };
+function distinctTurnIds() {
+  const original = request.getMockImplementation()!;
+  let starts = 0;
+  request.mockImplementation((method, ...args) => method === 'turn/start'
+    ? Promise.resolve({ turn: { id: `turn-${++starts}`, status: 'inProgress' } }) : original(method, ...args));
+}
+function trackInterrupt() {
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((method, ...args) => { if (method === 'turn/interrupt') entered(); return original(method, ...args); });
+  return ready;
+}
+const blueAnswer = { action: 'answer' as const, text: 'Actual user answer: Blue' };
+
+it('requires a matching terminal and fresh ownership before submitting the actual async answer', async () => {
+  distinctTurnIds();
+  const interrupted = trackInterrupt();
+  let answer!: (value: typeof blueAnswer) => void, entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const onAsyncQuestion = jest.fn(() => { entered(); return new Promise<typeof blueAnswer>(resolve => { answer = resolve; }); });
+  const beforeContinuation = jest.fn(async () => {}), observed = jest.fn();
+  const thread = make({ onAsyncQuestion, onUsage: observed, beforeContinuation }), events = await begin(thread);
+  send('item/started', { item: asyncQuestion }); send('item/completed', { item: asyncQuestion });
+  const next = events.next(); await interrupted;
+  expect(request).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thread-1', turnId: 'turn-1' }, 5000);
+  expect(onAsyncQuestion).not.toHaveBeenCalled();
+  expect(thread.canSteer()).toBe(false); expect(await thread.steer('unrelated correction')).toBe(false);
+  send('thread/tokenUsage/updated', { tokenUsage: usage });
+  send('turn/completed', { turn: { id: 'turn-1', status: 'interrupted' } }); await ready;
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1);
+  answer(blueAnswer);
+  expect((await next).value?.type).toBe('turn.started');
+  expect(beforeContinuation).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(2);
+  expect(request).toHaveBeenLastCalledWith('turn/start', expect.objectContaining({ input: [{ type: 'text', text: blueAnswer.text }] }));
+  expect(onAsyncQuestion).toHaveBeenCalledTimes(1);
+  send('thread/tokenUsage/updated', { tokenUsage: usage }); // Late prior-turn totals.
+  send('item/completed', { turnId: 'turn-2', item: { id: 'final-2', type: 'agentMessage', text: 'Blue', phase: 'final_answer' } });
+  send('thread/tokenUsage/updated', { turnId: 'turn-2', tokenUsage: { ...usage, total: { ...usage.total, inputTokens: 150 } } });
+  send('turn/completed', { turn: { id: 'turn-2', status: 'completed' } });
+  const collected = []; for await (const event of events) collected.push(event);
+  expect(collected.map(event => event.type)).toEqual(['item.completed', 'turn.completed']);
+  expect(collected[0]).toMatchObject({ item: { text: 'Blue' } });
+  expect(thread.usage()?.input_tokens).toBe(150); expect(observed).toHaveBeenCalledTimes(2);
+  await thread.close();
+});
+
+it.each(['failed', 'invalid'])('refuses asynchronous input after a %s terminal', async status => {
+  const interrupted = trackInterrupt(), onAsyncQuestion = jest.fn();
+  const thread = make({ onAsyncQuestion }), events = await begin(thread);
+  send('item/completed', { item: asyncQuestion }); const next = events.next(); await interrupted;
+  send('turn/completed', { turn: { id: 'turn-1', status } });
+  await expect(next).rejects.toThrow('valid terminal'); expect(onAsyncQuestion).not.toHaveBeenCalled();
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1);
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it.each(['stop', 'connection'])('drains an asynchronous question on %s after its interrupted terminal', async reason => {
+  const interrupted = trackInterrupt();
+  let entered!: () => void, questionSignal!: AbortSignal;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const controller = new AbortController();
+  const thread = make({ onAsyncQuestion: (_questions, signal) => { questionSignal = signal; entered(); return new Promise(() => {}); } });
+  const events = await begin(thread, controller.signal);
+  send('item/completed', { item: asyncQuestion }); const next = events.next(); await interrupted;
+  send('turn/completed', { turn: { id: 'turn-1', status: 'interrupted' } }); await ready;
+  if (reason === 'stop') controller.abort(); else close();
+  await expect(next).rejects.toBeDefined(); expect(questionSignal.aborted).toBe(true);
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1);
+});
+
+it('rejects an unapproved native operation before admitting the asynchronous question', async () => {
+  const interrupted = trackInterrupt(), onAsyncQuestion = jest.fn();
+  const thread = make({ onAsyncQuestion }), events = await begin(thread);
+  send('item/completed', { item: asyncQuestion }); const next = events.next(); await interrupted;
+  send('item/started', { item: { id: 'native-wait', type: 'collabAgentToolCall', tool: 'wait' } });
+  await expect(next).rejects.toThrow('unsupported item (collabAgentToolCall)');
+  expect(onAsyncQuestion).not.toHaveBeenCalled();
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1);
+});
+
+it('ends an explicit decline without another provider turn', async () => {
+  const interrupted = trackInterrupt(), onAsyncQuestion = jest.fn(async () => ({ action: 'decline' as const }));
+  const thread = make({ onAsyncQuestion }), events = await begin(thread);
+  send('item/completed', { item: asyncQuestion }); const next = events.next(); await interrupted;
+  send('turn/completed', { turn: { id: 'turn-1', status: 'interrupted' } });
+  expect((await next).value?.type).toBe('turn.completed');
+  expect(onAsyncQuestion).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1);
+  await events.return(undefined); await thread.close();
+});
+
+it.each(['superseded', 'stop-after-fence'])('refuses answer continuation on %s after the human wait', async reason => {
+  const interrupted = trackInterrupt(), controller = new AbortController();
+  const beforeContinuation = jest.fn(async () => { if (reason === 'superseded') throw new Error('superseded owner'); controller.abort(); });
+  const thread = make({ onAsyncQuestion: async () => blueAnswer, beforeContinuation }), events = await begin(thread, controller.signal);
+  send('item/completed', { item: asyncQuestion }); const next = events.next(); await interrupted;
+  send('turn/completed', { turn: { id: 'turn-1', status: 'interrupted' } });
+  await expect(next).rejects.toBeDefined(); expect(beforeContinuation).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1);
+});
+
+it('bounds an acknowledged interrupt without matching terminal proof', async () => {
+  jest.useFakeTimers();
+  try {
+    const interrupted = trackInterrupt(), onAsyncQuestion = jest.fn();
+    const thread = make({ onAsyncQuestion }), events = await begin(thread);
+    send('item/completed', { item: asyncQuestion }); const next = events.next(); await interrupted;
+    const failure = expect(next).rejects.toThrow('no confirmed terminal');
+    await jest.advanceTimersByTimeAsync(5000); await failure;
+    expect(onAsyncQuestion).not.toHaveBeenCalled(); expect(stop).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1);
+  } finally { jest.useRealTimers(); }
+});
+
+it('accepts matching completed proof after a received interrupt race rejection', async () => {
+  distinctTurnIds();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((method, ...args) => {
+    if (method === 'turn/interrupt') { send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } }); return Promise.reject(new CodexAppServerRpcError(-32600)); }
+    return original(method, ...args);
+  });
+  const onAsyncQuestion = jest.fn(async () => blueAnswer), thread = make({ onAsyncQuestion }), events = await begin(thread);
+  send('item/completed', { item: asyncQuestion });
+  expect((await events.next()).value?.type).toBe('turn.started'); expect(onAsyncQuestion).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(2);
+  await events.return(undefined); await thread.close();
+});
+
+it('does not submit an answer after an uncertain interrupt acknowledgement', async () => {
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((method, ...args) => method === 'turn/interrupt' ? Promise.reject(new Error('lost interrupt acknowledgement')) : original(method, ...args));
+  const onAsyncQuestion = jest.fn(), thread = make({ onAsyncQuestion }), events = await begin(thread);
+  send('item/completed', { item: asyncQuestion });
+  await expect(events.next()).rejects.toThrow('lost interrupt acknowledgement'); expect(onAsyncQuestion).not.toHaveBeenCalled();
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1); expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it('enforces the configured turn limit before creating another question continuation', async () => {
+  const onAsyncQuestion = jest.fn(), thread = make({ onAsyncQuestion, maxTurns: 1 }), events = await begin(thread);
+  send('item/completed', { item: asyncQuestion }); await expect(events.next()).rejects.toThrow('flow turn limit');
+  expect(onAsyncQuestion).not.toHaveBeenCalled(); expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(1);
+});
+
+it('refuses async questions with an unresolved MCP effect and without a bound local executor', async () => {
+  const onAsyncQuestion = jest.fn(), thread = make({ onAsyncQuestion }), events = await begin(thread);
+  send('item/started', { item: { id: 'effect', type: 'mcpToolCall', server: 'flujo', tool: 'example', status: 'inProgress' } });
+  expect((await events.next()).value?.type).toBe('item.started'); send('item/completed', { item: asyncQuestion });
+  await expect(events.next()).rejects.toThrow('overlapping'); expect(onAsyncQuestion).not.toHaveBeenCalled();
+  const unbound = make(), otherEvents = await begin(unbound); send('item/completed', { item: asyncQuestion });
+  await expect(otherEvents.next()).rejects.toThrow('not enabled');
 });

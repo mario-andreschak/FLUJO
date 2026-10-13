@@ -1,5 +1,5 @@
 "use client";
-import { cancelPendingElicitation } from './elicitationState';
+import { cancelPendingElicitation, clearPendingQuestion, shouldHydratePendingInputs } from './elicitationState';
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
 import { useRouter } from 'next/navigation';
@@ -79,7 +79,7 @@ import ExecutedFlowPanel from './ExecutedFlowPanel';
 import ModelTurnTimeline from './ModelTurnTimeline';
 import ModelTurnInspector, { ArchivedModelTurnChat, type ModelTurnInspectorTab } from './ModelTurnInspector';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
-import type { RecoveryRecord } from '@/shared/types/execution/events';
+import type { RecoveryRecord, PendingInputSnapshot } from '@/shared/types/execution/events';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import ChatErrorDetails from './ChatErrorDetails';
 import { getStartNode } from '@/utils/shared/getStartNode';
@@ -93,6 +93,7 @@ import {
   type SubflowRecoveryScope,
 } from '@/frontend/services/chat';
 import { createLogger } from '@/utils/logger';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import {
   BIG_TUTORIAL_EVENT,
   emitBigTutorialEvent,
@@ -198,6 +199,7 @@ export interface Conversation {
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error' | 'capped';
   /** Additive durable cancellation/interruption/failure metadata (issue #355). */
   recovery?: RecoveryRecord;
+  pendingInputs?: PendingInputSnapshot;
   parentConversationId?: string | null;
   rootConversationId?: string | null;
   /** Node where execution currently sits (server truth). May reference a node
@@ -876,6 +878,8 @@ const Chat: React.FC = () => {
   const handleDebugCloseRef = useRef<(() => Promise<void>) | null>(null);
   // Highest event seq applied, for ordering + dedupe across SSE reconnects.
   const lastSeqRef = useRef<number>(-1);
+  const pendingInputPositionRef = useRef<{ conversationId: string | null; seq: number }>({ conversationId: null, seq: -1 });
+  const pendingInputSnapshotGenerationRef = useRef(0);
   const mcpAppContextsByConversationRef = useRef<Map<string, McpAppModelContextMap>>(
     new Map(),
   );
@@ -1232,6 +1236,27 @@ const Chat: React.FC = () => {
     };
   }, [fetchConversations]);
 
+  const hydratePendingInputs = useCallback((id: string, snapshot: PendingInputSnapshot | undefined, generation: number) => {
+    if (!snapshot || generation !== pendingInputSnapshotGenerationRef.current || stoppedConversationIdsRef.current.has(id)) return;
+    const position = pendingInputPositionRef.current;
+    const lastInputSeq = position.conversationId === id ? position.seq : -1;
+    if (!shouldHydratePendingInputs(currentConversationIdRef.current, id, snapshot.nextSeq, lastInputSeq)) return;
+    pendingInputPositionRef.current = { conversationId: id, seq: snapshot.nextSeq - 1 };
+    setPendingQuestion(snapshot.questions.at(-1) ?? null);
+    setPendingElicitation(snapshot.elicitations.at(-1) ?? null);
+  }, []);
+
+  const refreshPendingInputs = useCallback(async (id: string) => {
+    if (currentConversationIdRef.current !== id) return;
+    const generation = pendingInputSnapshotGenerationRef.current;
+    try {
+      const conversation = await chatService.getConversation(id, { messageLimit: 1 });
+      hydratePendingInputs(id, conversation.pendingInputs, generation);
+    } catch (error) {
+      log.warn('Failed to refresh pending conversation input', { conversationId: id, error });
+    }
+  }, [hydratePendingInputs]);
+
   // Fetch detailed conversation when ID changes
   const fetchDetailedConversation = useCallback(async (id: string) => {
     // Client-only conversations (an unsent split) don't exist on the backend;
@@ -1251,6 +1276,7 @@ const Chat: React.FC = () => {
       return;
     }
     log.debug('Fetching detailed conversation', { conversationId: id });
+    const inputSnapshotGeneration = pendingInputSnapshotGenerationRef.current;
     setIsLoadingDetails(true);
     setDetailsError(null);
     // Do NOT eagerly null out detailedConversation here (#221): clearing it
@@ -1285,6 +1311,7 @@ const Chat: React.FC = () => {
         );
       }
       setDetailedConversation(conversation);
+      hydratePendingInputs(id, conversation.pendingInputs, inputSnapshotGeneration);
       // Issue #383 (gap 2): rehydrate the error message + code from the
       // server so it survives a reload or re-selecting an older errored
       // conversation from the sidebar — previously only a live SSE `error`
@@ -1337,7 +1364,7 @@ const Chat: React.FC = () => {
         setIsLoadingDetails(false);
       }
     }
-  }, [fetchConversations, setCurrentConversationId, t]); // currentConversationId read via ref
+  }, [fetchConversations, hydratePendingInputs, setCurrentConversationId, t]); // currentConversationId read via ref
 
   const loadFullTranscript = useCallback(async () => {
     const id = currentConversationIdRef.current;
@@ -1383,6 +1410,10 @@ const Chat: React.FC = () => {
     // re-appears from the (replayed) event stream if the now-viewed conversation
     // is itself awaiting approval.
     setPendingToolCalls(null);
+    setPendingQuestion(null);
+    setPendingElicitation(null);
+    pendingInputSnapshotGenerationRef.current++;
+    pendingInputPositionRef.current = { conversationId: currentConversationId, seq: -1 };
     // A manual node pick belongs to the conversation it was made in.
     setNodeOverride(null);
     if (currentConversationId) {
@@ -2103,6 +2134,15 @@ const Chat: React.FC = () => {
       if (event.seq <= lastSeqRef.current) return;
       lastSeqRef.current = event.seq;
     }
+    const inputControlEvent = event.type === 'run:awaiting_question' || event.type === 'run:question_resolved'
+      || event.type === 'run:awaiting_elicitation' || event.type === 'run:elicitation_resolved'
+      || event.type === 'run:elicitation_cancelled' || event.type === 'run:done';
+    const inputPosition = pendingInputPositionRef.current;
+    const ownsPendingInputUpdate = event.conversationId === currentConversationIdRef.current
+      && (inputPosition.conversationId !== event.conversationId || event.seq > inputPosition.seq);
+    if (inputControlEvent && ownsPendingInputUpdate) {
+      pendingInputPositionRef.current = { conversationId: event.conversationId, seq: event.seq };
+    }
 
     if (event.type === 'model:delta') {
       enqueueModelDelta(event);
@@ -2423,12 +2463,13 @@ const Chat: React.FC = () => {
         if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
           setPendingToolCalls(event.pendingToolCalls || []);
         }
-        if (event.conversationId) patchConversationStatus(event.conversationId, 'awaiting_tool_approval');
+        if (event.conversationId) patchConversationStatus(event.conversationId,
+          event.pendingToolCalls?.length ? 'awaiting_tool_approval' : 'running');
         break;
       case 'run:awaiting_elicitation':
         // Same bleed-prevention rule as awaiting_approval: only surface for the
         // viewed conversation.
-        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+        if (ownsPendingInputUpdate) {
           setPendingElicitation({
             elicitationId: event.elicitationId,
             message: event.message,
@@ -2437,18 +2478,26 @@ const Chat: React.FC = () => {
         }
         break;
       case 'run:elicitation_cancelled':
-        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+      case 'run:elicitation_resolved':
+        if (ownsPendingInputUpdate) {
           setPendingElicitation((pending) => cancelPendingElicitation(pending, event.elicitationId));
+          void refreshPendingInputs(event.conversationId);
         }
         break;
       case 'run:awaiting_question':
         // Same bleed-prevention rule as awaiting_approval/elicitation: only
         // surface for the conversation currently being viewed (issue #258).
-        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+        if (ownsPendingInputUpdate) {
           setPendingQuestion({
             questionId: event.questionId,
             questions: event.questions,
           });
+        }
+        break;
+      case 'run:question_resolved':
+        if (ownsPendingInputUpdate) {
+          setPendingQuestion((pending) => clearPendingQuestion(pending, event.questionId));
+          void refreshPendingInputs(event.conversationId);
         }
         break;
       case 'breakpoint:hit':
@@ -2473,7 +2522,7 @@ const Chat: React.FC = () => {
           setErrorInfo(event.error);
         }
         // Clear any pending elicitation/question when the run completes.
-        if (event.conversationId === currentConversationIdRef.current) {
+        if (ownsPendingInputUpdate) {
           setPendingElicitation(null);
           setPendingQuestion(null);
         }
@@ -2536,7 +2585,7 @@ const Chat: React.FC = () => {
         touch({});
         break;
     }
-  }, [closeEventStream, enqueueModelDelta, enqueueToolProgress, fetchDetailedConversation, fetchConversations, flushModelDeltas, flushToolProgress, markConvRunning, patchConversationStatus, markConversationStopped, t]);
+  }, [closeEventStream, enqueueModelDelta, enqueueToolProgress, fetchDetailedConversation, fetchConversations, flushModelDeltas, flushToolProgress, markConvRunning, patchConversationStatus, markConversationStopped, refreshPendingInputs, t]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
@@ -2570,11 +2619,23 @@ const Chat: React.FC = () => {
             onEvent: (event) => {
               if (eventStreamGenerationRef.current === streamGeneration) applyExecutionEvent(event);
             },
-            onOpen: settle,
+            onOpen: () => {
+              settle();
+              if (eventStreamGenerationRef.current === streamGeneration && currentConversationIdRef.current === conversationId) {
+                // A backend restart has lost its in-memory mailboxes. Reset
+                // this input cursor on each connection, without changing the
+                // transcript/usage cursor, and reject GETs from an old connection.
+                pendingInputSnapshotGenerationRef.current++;
+                pendingInputPositionRef.current = { conversationId, seq: -1 };
+                void refreshPendingInputs(conversationId);
+              }
+            },
             onReset: (control) => {
               settle();
               if (eventStreamGenerationRef.current !== streamGeneration) return;
               closeEventStream();
+              pendingInputSnapshotGenerationRef.current++;
+              pendingInputPositionRef.current = { conversationId, seq: -1 };
               const recoveryGeneration = eventStreamGenerationRef.current;
               void fetchDetailedConversation(conversationId).then(() => {
                 if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
@@ -2596,7 +2657,7 @@ const Chat: React.FC = () => {
         settle();
       }
     });
-  }, [applyExecutionEvent, closeEventStream, fetchDetailedConversation]);
+  }, [applyExecutionEvent, closeEventStream, fetchDetailedConversation, refreshPendingInputs]);
 
   // Re-attach to a run that is still in progress on the backend — e.g. after
   // navigating to another page (which unmounts Chat and tears down the stream)
@@ -4216,67 +4277,57 @@ const Chat: React.FC = () => {
     }
   };
 
+  const respondToPendingInput = async (body: {
+    action: 'elicitation-submit' | 'elicitation-cancel' | 'question-answer' | 'question-decline';
+    elicitationId?: string;
+    questionId?: string;
+    content?: Record<string, string | number | boolean | string[]>;
+    answers?: string[][];
+  }) => {
+    const conversationId = currentConversationIdRef.current;
+    if (!conversationId) return;
+    try {
+      const response = await fetch(withWorkspaceUrl(`/v1/chat/conversations/${encodeURIComponent(conversationId)}/respond`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(failure.error ?? 'Unable to respond to this request.');
+      }
+      if (currentConversationIdRef.current === conversationId) {
+        setError(null);
+        if (body.elicitationId) setPendingElicitation(pending => cancelPendingElicitation(pending, body.elicitationId!));
+        if (body.questionId) setPendingQuestion(pending => clearPendingQuestion(pending, body.questionId!));
+      }
+    } catch (err) {
+      log.warn('Failed to respond to pending input', { conversationId, action: body.action, err });
+      if (currentConversationIdRef.current === conversationId) {
+        setError(err instanceof Error ? err.message : 'Unable to respond to this request.');
+      }
+    } finally {
+      // Accepted input may reveal another concurrent mailbox. Invalid or stale
+      // input must keep the actual current form instead of disappearing locally.
+      await refreshPendingInputs(conversationId);
+    }
+  };
+
   const handleSubmitElicitation = async (
     elicitationId: string,
     content: Record<string, string | number | boolean | string[]>
-  ) => {
-    if (!currentConversationId) return;
-    log.info('Submitting elicitation form', { conversationId: currentConversationId, elicitationId });
-    setPendingElicitation(null);
-    try {
-      await fetch(`/v1/chat/conversations/${currentConversationId}/respond`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'elicitation-submit', elicitationId, content }),
-      });
-    } catch (err) {
-      log.error('Failed to submit elicitation', { conversationId: currentConversationId, elicitationId, err });
-    }
-  };
+  ) => respondToPendingInput({ action: 'elicitation-submit', elicitationId, content });
 
   const handleCancelElicitation = async (elicitationId: string) => {
-    if (!currentConversationId) return;
-    log.info('Cancelling elicitation', { conversationId: currentConversationId, elicitationId });
-    setPendingElicitation(null);
-    try {
-      await fetch(`/v1/chat/conversations/${currentConversationId}/respond`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'elicitation-cancel', elicitationId }),
-      });
-    } catch (err) {
-      log.error('Failed to cancel elicitation', { conversationId: currentConversationId, elicitationId, err });
-    }
+    await respondToPendingInput({ action: 'elicitation-cancel', elicitationId });
   };
 
   const handleAnswerQuestion = async (questionId: string, answers: string[][]) => {
-    if (!currentConversationId) return;
-    log.info('Answering question', { conversationId: currentConversationId, questionId });
-    setPendingQuestion(null);
-    try {
-      await fetch(`/v1/chat/conversations/${currentConversationId}/respond`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'question-answer', questionId, answers }),
-      });
-    } catch (err) {
-      log.error('Failed to answer question', { conversationId: currentConversationId, questionId, err });
-    }
+    await respondToPendingInput({ action: 'question-answer', questionId, answers });
   };
 
   const handleDeclineQuestion = async (questionId: string) => {
-    if (!currentConversationId) return;
-    log.info('Declining question', { conversationId: currentConversationId, questionId });
-    setPendingQuestion(null);
-    try {
-      await fetch(`/v1/chat/conversations/${currentConversationId}/respond`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'question-decline', questionId }),
-      });
-    } catch (err) {
-      log.error('Failed to decline question', { conversationId: currentConversationId, questionId, err });
-    }
+    await respondToPendingInput({ action: 'question-decline', questionId });
   };
 
   // --- Debugger Control Handlers ---
@@ -4487,6 +4538,8 @@ const Chat: React.FC = () => {
     setBreakpoints([]);
     closeEventStream();
     setPendingToolCalls(null);
+    setPendingQuestion(null);
+    setPendingElicitation(null);
     setRetryWait(null); // #400: Stop during a session-limit wait ends the wait too
     setError(null); // a deliberate Stop is not an error to surface
     setErrorInfo(null); // Issue #383: keep errorInfo in sync with error

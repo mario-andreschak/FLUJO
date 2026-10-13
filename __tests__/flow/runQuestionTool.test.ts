@@ -19,6 +19,7 @@ import {
   formatAnswers,
   QUESTION_TOOL_NAME,
   CUSTOM_OPTION_LABEL,
+  observeQuestionResolution,
 } from '@/backend/execution/flow/handlers/runQuestionTool';
 import {
   resolvePendingQuestion,
@@ -121,6 +122,57 @@ describe('executeQuestionTool — interactive resolve', () => {
     expect(outcome.success).toBe(true);
     expect(String(outcome.data)).toContain('Pick a color');
     expect(String(outcome.data)).toContain('Blue');
+  });
+
+  it('admits a synchronous answer while publishing the prompt', async () => {
+    const emit = jest.fn(event => {
+      if (event.type === 'run:awaiting_question') {
+        expect(resolvePendingQuestion('conv-q', event.questionId, [['Blue']])).toBe(true);
+      }
+    });
+    await expect(executeQuestionTool(
+      { questions: [{ prompt: 'Pick a color', options: ['Red', 'Blue'] }] },
+      { conversationId: 'conv-q', emit },
+    )).resolves.toMatchObject({ success: true, data: expect.stringContaining('Blue') });
+  });
+
+  it('observes structured answers without changing prose or retaining an observer on reused args', async () => {
+    const observer = jest.fn();
+    const args = observeQuestionResolution({ questions: [{ prompt: 'Color?', options: ['Blue'] }] }, observer);
+    const emit = jest.fn(event => {
+      if (event.type === 'run:awaiting_question') resolvePendingQuestion('conv-q', event.questionId, [['Blue']]);
+    });
+    await expect(executeQuestionTool(args, { conversationId: 'conv-q', emit })).resolves.toMatchObject({ data: expect.stringContaining('Blue') });
+    expect(observer).toHaveBeenCalledWith({ action: 'answer', answers: [['Blue']] });
+    await executeQuestionTool(args, { conversationId: 'conv-q', emit });
+    expect(observer).toHaveBeenCalledTimes(1);
+  });
+
+  it('declines only the observed request on cancellation and leaves its sibling answerable', async () => {
+    const controller = new AbortController();
+    const observer = jest.fn();
+    const args = observeQuestionResolution({ questions: [{ prompt: 'Cancel?', options: ['Yes'] }] }, observer, controller.signal);
+    const emit = jest.fn();
+    const first = executeQuestionTool(args, { conversationId: 'conv-q', emit });
+    const firstId = emittedQuestionId(emit);
+    const otherEmit = jest.fn();
+    const sibling = executeQuestionTool({ questions: [{ prompt: 'Keep?', options: ['Yes'] }] }, { conversationId: 'conv-q', emit: otherEmit });
+    controller.abort();
+    await expect(first).resolves.toMatchObject({ declined: true });
+    expect(observer).toHaveBeenCalledWith({ action: 'decline' });
+    expect(resolvePendingQuestion('conv-q', firstId, [['Yes']])).toBe(false);
+    expect(resolvePendingQuestion('conv-q', emittedQuestionId(otherEmit), [['Yes']])).toBe(true);
+    await expect(sibling).resolves.toMatchObject({ success: true, data: expect.stringContaining('Yes') });
+  });
+
+  it('never publishes an observed prompt whose request was already cancelled', async () => {
+    const controller = new AbortController(); controller.abort();
+    const observer = jest.fn(); const emit = jest.fn();
+    await expect(executeQuestionTool(observeQuestionResolution(
+      { questions: [{ prompt: 'Cancelled?', options: ['Yes'] }] }, observer, controller.signal,
+    ), { conversationId: 'conv-q', emit })).resolves.toMatchObject({ declined: true });
+    expect(emit).not.toHaveBeenCalled();
+    expect(observer).toHaveBeenCalledWith({ action: 'decline' });
   });
 
   it('does not append the custom option when custom:false', async () => {
