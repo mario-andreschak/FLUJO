@@ -209,7 +209,7 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
       : personaLabel;
     return (
       <Tooltip title={t('chat.target.locked')}>
-        <span>
+        <Box component="span" sx={{ display: 'inline-flex', minWidth: 0, maxWidth: '100%' }}>
           <Button
             variant="outlined"
             size={compact ? 'small' : 'medium'}
@@ -222,7 +222,7 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
               {label}
             </Box>
           </Button>
-        </span>
+        </Box>
       </Tooltip>
     );
   }
