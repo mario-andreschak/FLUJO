@@ -171,8 +171,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
    }
    if(process.argv[2]==='thread')threadId='foreign_thread';
    if(process.argv[2]==='turn')turnId='foreign_turn';
+   send({method:'item/started',params:{threadId,turnId,item:{id:'native_user_echo',type:'userMessage',content:[{type:'text',text:'INPUT_ECHO_SENTINEL'}]}}});
    send({method:'item/completed',params:{threadId,turnId,item:{id:'native_codex_item',type:'agentMessage',text:'offline codex done'}}});
-   send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{total:{inputTokens:7,outputTokens:4,cachedInputTokens:0,cacheWriteInputTokens:0,reasoningOutputTokens:0}}}});
+   send({method:'thread/tokenUsage/updated',params:{threadId,turnId,tokenUsage:{total:{inputTokens:7,outputTokens:4,cachedInputTokens:0,reasoningOutputTokens:0}}}});
    send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
   },5);
  }
