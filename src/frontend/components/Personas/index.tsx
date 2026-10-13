@@ -70,6 +70,7 @@ import PersonaSetup from './PersonaSetup';
 import PersonaSettings from './settings/PersonaSettings';
 import PersonasGallery from './PersonasGallery';
 import { invalidatePersonaSummaryCache } from './personaQueries';
+import { taskDeadlineInputValue } from './taskDeadline';
 import {
   personasService,
   type PersonaDetail,
@@ -873,7 +874,7 @@ function draftForWorkItem(item?: PersonaWorkItem): WorkDraft {
     description: item.description ?? '',
     priority: item.priority,
     nextAction: item.nextAction ?? '',
-    deadline: item.deadline ? new Date(item.deadline).toISOString().slice(0, 10) : '',
+    deadline: item.deadline ? taskDeadlineInputValue(item.deadline) : '',
     dependencyIds: item.dependencyIds,
     expectedUpdatedAt: item.updatedAt,
   } : { title: '', description: '', priority: 'normal', nextAction: '', deadline: '', dependencyIds: [] };

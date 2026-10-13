@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import type { PersonaDetail } from '@/frontend/services/personas';
 import type { PersonaComposition } from '@/shared/types/enduringAgent';
@@ -9,12 +9,15 @@ const getCompositionMock = jest.fn();
 const activateBehaviorMock = jest.fn();
 const loadFlowsMock = jest.fn();
 const addBehaviorMock = jest.fn();
+const updateCompositionMock = jest.fn();
 
 jest.mock('@/frontend/services/personas', () => ({
+  ...jest.requireActual('@/frontend/services/personas'),
   personasService: {
     getComposition: (...args: unknown[]) => getCompositionMock(...args),
     activateBehavior: (...args: unknown[]) => activateBehaviorMock(...args),
     addBehavior: (...args: unknown[]) => addBehaviorMock(...args),
+    updateComposition: (...args: unknown[]) => updateCompositionMock(...args),
   },
 }));
 
@@ -47,7 +50,9 @@ jest.mock('@/frontend/components/shared/CardPickerDialog', () => ({
 
 import PersonaFlowsArea from '@/frontend/components/Personas/PersonaFlowsArea';
 import { I18nProvider } from '@/frontend/contexts/I18nContext';
-import { LOCALE_STORAGE_KEY } from '@/frontend/i18n/locales';
+import { LOCALE_STORAGE_KEY, type SupportedLocale } from '@/frontend/i18n/locales';
+import { catalogs } from '@/frontend/i18n/messages';
+import { PersonasApiError } from '@/frontend/services/personas';
 
 const currentRevision = {
   schemaVersion: 1 as const,
@@ -141,13 +146,54 @@ const detail = {
 describe('PersonaFlowsArea Behavior versions', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    localStorage.clear();
     getCompositionMock.mockResolvedValue(composition);
     loadFlowsMock.mockResolvedValue([]);
     addBehaviorMock.mockResolvedValue(composition);
+    updateCompositionMock.mockReset().mockResolvedValue(composition);
     activateBehaviorMock.mockResolvedValue({
       binding: { ...binding, activeRevisionId: earlierRevision.id },
       revision: earlierRevision,
     });
+  });
+
+  it.each<SupportedLocale>(['en', 'es', 'de', 'fr', 'it', 'pt', 'zh-CN'])('keeps the rename draft focused, explains a conflict in %s, and retries with the refreshed guard', async (locale) => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    const onChanged = jest.fn().mockResolvedValue(undefined);
+    render(<I18nProvider><PersonaFlowsArea detail={detail} onChanged={onChanged} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: catalogs[locale]['personas.behaviors.rename'] }));
+    const dialog = screen.getByRole('dialog');
+    const input = within(dialog).getByRole('textbox', { name: catalogs[locale]['personas.behaviors.name'] });
+    fireEvent.change(input, { target: { value: 'Unsaved specialist name' } });
+    const refreshed = { ...composition, expectedUpdatedAt: 40 };
+    getCompositionMock.mockResolvedValue(refreshed);
+    updateCompositionMock.mockRejectedValueOnce(new PersonasApiError(409, 'Persona composition changed since it was inspected.')).mockResolvedValueOnce(refreshed);
+    const save = within(dialog).getByRole('button', { name: catalogs[locale]['personas.action.save'] });
+    act(() => save.focus());
+    fireEvent.click(save);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(catalogs[locale]['personas.flows.changed']);
+    expect(input).toHaveValue('Unsaved specialist name');
+    expect(save).toHaveFocus();
+    expect(updateCompositionMock).toHaveBeenCalledWith('jim', expect.objectContaining({ expectedUpdatedAt: 20 }));
+    expect(onChanged).not.toHaveBeenCalled();
+    fireEvent.click(save);
+    await waitFor(() => expect(updateCompositionMock).toHaveBeenCalledTimes(2));
+    expect(updateCompositionMock).toHaveBeenLastCalledWith('jim', expect.objectContaining({ expectedUpdatedAt: 40, behaviors: [expect.objectContaining({ name: 'Unsaved specialist name' })] }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the draft and refresh failure guidance when the changed composition cannot be reloaded', async () => {
+    render(<PersonaFlowsArea detail={detail} onChanged={jest.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename' }));
+    const dialog = screen.getByRole('dialog');
+    const input = within(dialog).getByRole('textbox', { name: 'Behavior name' });
+    fireEvent.change(input, { target: { value: 'Retained offline draft' } });
+    getCompositionMock.mockRejectedValue(new Error('Current Flows unavailable; try again when connected.'));
+    updateCompositionMock.mockRejectedValue(new PersonasApiError(409, 'Changed elsewhere'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Current Flows unavailable; try again when connected.');
+    expect(input).toHaveValue('Retained offline draft');
   });
 
   it('shows friendly version history and restores an earlier version with a guarded request', async () => {

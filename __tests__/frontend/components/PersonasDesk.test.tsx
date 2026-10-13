@@ -482,7 +482,7 @@ it('keeps App tool drafts and reports a failed save inside the dialog before ret
   fireEvent.click(await screen.findByRole('button', { name: 'Configure tools' }));
   const dialog = await screen.findByRole('dialog', { name: 'Tools for github-jim' });
   const tools = within(dialog);
-  fireEvent.click(tools.getByRole('checkbox', { name: 'Toggle Delete issue' }));
+  fireEvent.click(tools.getByRole('switch', { name: 'Toggle Delete issue' }));
   fireEvent.click(tools.getByRole('button', {
     name: /Fixed parameters for List issues Configure values hidden from the model/,
   }));
@@ -495,7 +495,7 @@ it('keeps App tool drafts and reports a failed save inside the dialog before ret
     'The App changed. Review its current access before saving.',
   );
   expect(tools.getByRole('alert')).toHaveFocus();
-  expect(tools.getByRole('checkbox', { name: 'Toggle Delete issue' })).not.toBeChecked();
+  expect(tools.getByRole('switch', { name: 'Toggle Delete issue' })).not.toBeChecked();
   expect(tools.getByRole('textbox', { name: 'Fixed value for list_issues.owner' })).toHaveValue('@app.name');
   fireEvent.click(tools.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -521,7 +521,7 @@ it('localizes App conflicts and fixed-parameter controls without replacing an op
   fireEvent.click(await screen.findByRole('tab', { name: 'Apps' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Werkzeuge einrichten' }));
   const dialog = within(await screen.findByRole('dialog', { name: 'Werkzeuge für github-jim' }));
-  fireEvent.click(dialog.getByRole('checkbox', { name: /Delete issue/ }));
+  fireEvent.click(dialog.getByRole('switch', { name: /Delete issue/ }));
   fireEvent.click(dialog.getByRole('button', { name: /Feste Parameter für List issues/ }));
   fireEvent.click(dialog.getByRole('checkbox', { name: /owner/ }));
   fireEvent.change(dialog.getByRole('textbox', { name: 'Fester Wert für list_issues.owner' }), {
@@ -534,6 +534,7 @@ it('localizes App conflicts and fixed-parameter controls without replacing an op
   const alert = await dialog.findByRole('alert');
   expect(alert).toHaveTextContent('Diese App wurde an anderer Stelle geändert. Deine Auswahl bleibt erhalten.');
   expect(alert).toHaveFocus();
+  expect(alert).toHaveAttribute('aria-live', 'off');
   expect(screen.queryByText('The Persona App selection changed in another request.')).not.toBeInTheDocument();
   expect(dialog.getByRole('textbox', { name: 'Fester Wert für list_issues.owner' })).toHaveValue('@app.name');
   fireEvent.click(dialog.getByRole('button', { name: 'Speichern' }));
@@ -552,7 +553,7 @@ it('configures Persona Core tools and @-aware fixed parameters on a grant', asyn
   fireEvent.click(await screen.findByRole('button', { name: 'Configure tools' }));
   expect(await screen.findByRole('heading', { name: 'Tools for github-jim' })).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Toggle Delete issue' }));
+  fireEvent.click(screen.getByRole('switch', { name: 'Toggle Delete issue' }));
   fireEvent.click(screen.getByRole('button', {
     name: /Fixed parameters for List issues Configure values hidden from the model/,
   }));
@@ -825,6 +826,22 @@ function removableTaskDetail() {
     blockerTitles: [], expectedUpdatedAt: item.updatedAt,
   }] } };
 }
+
+it('keeps the saved local deadline when editing another Task field', async () => {
+  const original = removableTaskDetail();
+  const deadline = new Date('2030-07-19T23:59:59').getTime();
+  const item = { ...original.workItems[0], deadline };
+  getMock.mockResolvedValue({ ...original, workItems: [item] });
+  updateWorkItemMock.mockResolvedValue({ ...item, description: 'Updated without changing the date', updatedAt: item.updatedAt + 1 });
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('tab', { name: /Tasks/i }));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Task' }));
+  const dialog = screen.getByRole('dialog');
+  expect(within(dialog).getByLabelText('Deadline')).toHaveValue('2030-07-19');
+  fireEvent.change(within(dialog).getByRole('textbox', { name: 'Description' }), { target: { value: 'Updated without changing the date' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(updateWorkItemMock).toHaveBeenCalledWith('jim', item.id, expect.objectContaining({ deadline, description: 'Updated without changing the date', expectedUpdatedAt: item.updatedAt })));
+});
 
 it('cancels Task deletion without a browser confirm or request and restores focus', async () => {
   getMock.mockResolvedValue(removableTaskDetail());

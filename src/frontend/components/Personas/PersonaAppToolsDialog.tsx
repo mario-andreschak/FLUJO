@@ -91,7 +91,7 @@ export default function PersonaAppToolsDialog({
       <DialogContent dividers>
         <Stack spacing={2}>
           <Typography id={helpId} color="text.secondary">{t('personas.apps.toolsHelp')}</Typography>
-          {saveFailure && <Alert severity="error" ref={saveErrorRef} tabIndex={-1}>{saveError || saveFailure}</Alert>}
+          {saveFailure && <Alert severity="error" ref={saveErrorRef} tabIndex={-1} aria-live="off">{saveError || saveFailure}</Alert>}
           {isLoading && (
             <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }} role="status">
               <CircularProgress size={22} aria-hidden="true" />
