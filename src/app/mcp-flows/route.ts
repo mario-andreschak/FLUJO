@@ -1,3 +1,4 @@
+import { isMcpBetaProtocolEnabled } from '@/backend/services/mcp/betaClient';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * FLUJO as an MCP server — Flows-as-tools endpoint (#38, Item D / #17).
@@ -68,12 +69,8 @@ async function classificationBodyFits(request: Request): Promise<boolean> {
   } finally { reader.releaseLock(); }
 }
 
-// MCP 2026-07-28 note: the new spec introduces `Mcp-Method` and `Mcp-Name` HTTP request
-// headers as advisory routing hints for load balancers and intermediate proxies. FLUJO
-// re-terminates every inbound MCP request (a fresh `Server` + Web-standard transport
-// is created per HTTP request), so routing is already handled by the URL path (`/mcp-flows`).
-// The `Mcp-Method`/`Mcp-Name` headers are safely ignored by the v1
-// transport; no implementation is needed here.
+// This server retains legacy framing. Modern requests use the strict split-SDK
+// handler below, independently of optional Tasks, with mandatory routing headers.
 function buildFlowsServer(): Server {
   const server = new Server(
     { name: 'flujo-flows', version: SERVER_VERSION },
@@ -113,7 +110,7 @@ async function handle(request: Request): Promise<Response> {
     return jsonError(403, 'Forbidden: this endpoint only accepts local requests.');
   }
 
-  if (mcpTasksServerEnabled()) {
+  if (mcpTasksServerEnabled() || await isMcpBetaProtocolEnabled()) {
     if (!await classificationBodyFits(request)) return jsonError(413, 'MCP request body exceeds the limit.');
     if (!await isLegacyFlowsMcpRequest(request)) return handleModernFlowsMcpRequest(request);
   }

@@ -6,8 +6,8 @@
  * captured as a run resource, `buildUserMessage` renders a head excerpt plus a
  * dereferenceable `flujo://run/...` marker (which the model can read via the
  * `read_resource` tool) instead of a plain `…[truncated …]`. When there is no
- * captured entry — or the content fits — the output stays byte-identical to the
- * pre-#168 plain-truncation behaviour (prefix-cache stability). The current
+ * captured entry, the complete observation is retained under the current
+ * protected projection policy. Content that fits is unchanged. The current
  * node's live loop is never handed to this function, so only prior/settled
  * turns can ever be rewritten.
  */
@@ -54,11 +54,13 @@ describe('buildUserMessage resource-aware markers (#168)', () => {
     expect(text).toContain('A'.repeat(4000));
   });
 
-  it('falls back to plain truncation for an oversized result WITHOUT an entry (byte-identical)', () => {
-    const withoutMarkers = asString(buildUserMessage(toolHistory(BIG)).content);
-    const withEmptyMarkers = asString(buildUserMessage(toolHistory(BIG), new Map()).content);
+  it('preserves the complete oversized result WITHOUT a recoverable entry', () => {
+    const original = `${BIG}EXACT_UNARCHIVED_TAIL`;
+    const withoutMarkers = asString(buildUserMessage(toolHistory(original)).content);
+    const withEmptyMarkers = asString(buildUserMessage(toolHistory(original), new Map()).content);
     expect(withoutMarkers).toBe(withEmptyMarkers);
-    expect(withoutMarkers).toContain('[truncated');
+    expect(withoutMarkers).toContain(original);
+    expect(withoutMarkers).not.toContain('[truncated');
     expect(withoutMarkers).not.toContain('flujo://run/');
   });
 

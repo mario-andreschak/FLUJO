@@ -92,7 +92,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     supportsProviderModelDiscovery(currentProfile, formState.baseUrl);
   const discoveryCredential = isApiKeyBound && boundToGlobalVar
     ? `\${global:${boundToGlobalVar}}`
-    : (formState.ApiKey && formState.ApiKey !== MASKED_API_KEY ? formState.ApiKey : undefined);
+    : currentProfile.id === 'antigravity-cli' && formState.ApiKey !== MASKED_API_KEY
+      ? formState.ApiKey ?? ''
+      : (formState.ApiKey && formState.ApiKey !== MASKED_API_KEY ? formState.ApiKey : undefined);
   const hasDiscoveryCredential =
     currentProfile.id !== 'gemini-native' ||
     Boolean(discoveryCredential) ||
@@ -771,7 +773,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   groupBy={currentProfile.adapter === 'antigravity-cli'
                     ? option => option === 'default' ? t('models.modal.antigravityCli.defaultGroup')
                       : option.startsWith('gemini-') ? 'Gemini'
-                        : option.startsWith('claude-') ? 'Claude' : 'GPT-OSS'
+                        : option.startsWith('claude-') ? 'Claude'
+                          : option.startsWith('gpt-oss-') ? 'GPT-OSS' : t('models.modal.antigravityCli.otherGroup')
                     : undefined}
                   value={formState.name || ''}
                   onChange={(_, newValue) => {
@@ -857,7 +860,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     return (
                       <li key={key} {...otherProps} style={{ borderBottom: '1px solid rgba(0,0,0,0.1)', padding: '8px 16px' }}>
                         <Box>
-                          <Typography variant="body1" sx={{ fontWeight: "bold" }}>{currentProfile.adapter === 'antigravity-cli' ? getAntigravityCliModelLabel(option) : option}</Typography>
+                          <Typography variant="body1" sx={{ fontWeight: "bold" }}>{currentProfile.adapter === 'antigravity-cli' ? model?.name ?? getAntigravityCliModelLabel(option) : option}</Typography>
                           {currentProfile.adapter === 'antigravity-cli' && <Typography variant="caption" color="text.secondary">{option}</Typography>}
                           {model?.description && (
                             <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>

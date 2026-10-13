@@ -46,6 +46,23 @@ describe('visualCompaction (issue #356)', () => {
     expect(detectVisualArchiveSecret('ordinary public log output')).toBe(false);
   });
 
+  it('retains every trusted role even when unrestricted visual archives are enabled', () => {
+    for (const role of ['system', 'developer', 'user'] as const) {
+      const messages: OpenAI.ChatCompletionMessageParam[] = [{ role, content: 'Instruction '.repeat(2_000) }, ...recent()];
+      expect(selectVisualArchiveCandidate(messages, false).candidate).toBeUndefined();
+    }
+  });
+
+  it('keeps tool pairs whose result crosses the recent boundary even in unrestricted mode', () => {
+    const messages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'assistant', content: 'ordinary text '.repeat(1_000),
+        tool_calls: [{ id: 'cross-boundary', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'cross-boundary', content: 'result' },
+      ...recent().slice(0, 5),
+    ];
+    expect(selectVisualArchiveCandidate(messages, false).candidate).toBeUndefined();
+  });
+
   it('renders deterministic PNG bytes and provider-aware estimates', () => {
     const first = renderVisualArchivePages('hello world\n'.repeat(100));
     const second = renderVisualArchivePages('hello world\n'.repeat(100));

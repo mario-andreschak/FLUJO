@@ -1,0 +1,70 @@
+{
+  "origin": "http://127.0.0.1:4200",
+  "workspace": "default-workspace",
+  "apply": true,
+  "startedAt": "2026-10-13T00:09:39.766Z",
+  "flows": [
+    {
+      "name": "ap-32-code-explore",
+      "id": "pkg-software-dev-pkg-softwaredev-cc9947b8-84e1-409f-a17-179846a9",
+      "before": "85af0b5bb37a9cf64053ed721fcf7bf8564dd6a38501ad49fd5f9c7d137d8877",
+      "after": "6f30090f09a27a69744047a3e48160e9e8de157726f69d800b0ac8076883d4fd",
+      "changed": true,
+      "status": "verified",
+      "updatedAt": 1791850180007,
+      "archive": {
+        "versions": [
+          {
+            "versionId": "1791850179972-90ry",
+            "savedAt": 1791850179972,
+            "name": "ap-32-code-explore",
+            "nodeCount": 5,
+            "edgeCount": 4
+          }
+        ]
+      }
+    },
+    {
+      "name": "ap-11-planning-agent",
+      "id": "pkg-software-dev-pkg-softwaredev-1066b48c-d867-432f-8ce-f959fbe6",
+      "before": "3c106241f8e461e22a07aa09ded4525dd895a791d14ba530a3aba6fb90d26f55",
+      "after": "499dcea6af357b71e48512576ab59d94d5974533b332088236d3fdee2bc5e5c2",
+      "changed": true,
+      "status": "verified",
+      "updatedAt": 1791850180300,
+      "archive": {
+        "versions": [
+          {
+            "versionId": "1791850180260-pomt",
+            "savedAt": 1791850180260,
+            "name": "ap-11-planning-agent",
+            "nodeCount": 8,
+            "edgeCount": 7
+          }
+        ]
+      }
+    },
+    {
+      "name": "ap-10-planner-wave",
+      "id": "pkg-software-dev-pkg-softwaredev-512c98bd-51c2-4549-b58-3eaa2a60",
+      "before": "e4a8aa5cb165d30f953fe4155387d0161251850cff0091811326dc9e354886d6",
+      "after": "a5f48680f6142dcff81a6eb60a64a99684071d90be98de7c1245803134237996",
+      "changed": true,
+      "status": "verified",
+      "updatedAt": 1791850180986,
+      "archive": {
+        "versions": [
+          {
+            "versionId": "1791850180940-xcom",
+            "savedAt": 1791850180940,
+            "name": "ap-10-planner-wave",
+            "nodeCount": 7,
+            "edgeCount": 6
+          }
+        ]
+      }
+    }
+  ],
+  "result": "passed",
+  "finishedAt": "2026-10-13T00:09:41.033Z"
+}

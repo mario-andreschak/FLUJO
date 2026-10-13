@@ -32,6 +32,7 @@ import { createHash } from 'crypto';
 import { loadClaudeSessions, saveClaudeSession, removeClaudeSession, acquireDurableClaudeSession, sessionValueHash, canonicalSessionValue, CLAUDE_SESSION_TTL_MS } from './claudeSessionPersistence';
 import type { ClaudeUsageCheckpoint } from './claudeUsageTracker';
 import type { ClaudeTranscriptCheckpoint } from './claudeSessionPersistence';
+import { MESSAGE_NORMALIZATION_POLICY_VERSION } from './messageNormalization';
 
 /** A session the adapter may be able to resume on a later turn. */
 export interface StoredSession {
@@ -103,7 +104,7 @@ export function computePrefixHash(
   toolDefinitions: readonly unknown[],
   configuration: Record<string, unknown> = {},
 ): string {
-  return sessionValueHash({ version: 2,
+  return sessionValueHash({ version: 2, projection: MESSAGE_NORMALIZATION_POLICY_VERSION,
     systemPrompt: configuration.systemPromptPolicy === 'per-turn' ? undefined : systemPrompt ?? '',
     tools: toolDefinitions.map(canonicalSessionValue).sort(), configuration });
 }
