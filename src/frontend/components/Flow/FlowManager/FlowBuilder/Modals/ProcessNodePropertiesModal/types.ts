@@ -40,6 +40,7 @@ export interface ProcessNodeProperties extends Record<string, unknown> {
     modelName?: string;
     nameIsCustom?: boolean;
     promptTemplate?: string;
+    systemPromptPolicy?: 'stable' | 'per-turn';
     excludeModelPrompt?: boolean;
     excludeStartNodePrompt?: boolean;
     excludeSystemPrompt?: boolean;

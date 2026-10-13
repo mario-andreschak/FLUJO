@@ -130,6 +130,7 @@ export const ProcessNodePropertiesModal = ({
   const [excludeModelPrompt, setExcludeModelPrompt] = useState(false);
   const [excludeStartNodePrompt, setExcludeStartNodePrompt] = useState(false);
   const [excludeSystemPrompt, setExcludeSystemPrompt] = useState(false);
+  const [systemPromptPolicy, setSystemPromptPolicy] = useState<'stable' | 'per-turn'>('stable');
   const [inputMode, setInputMode] = useState<'full-history' | 'latest-message' | 'isolated'>('full-history');
   const [isolatedPrompt, setIsolatedPrompt] = useState('');
   // Issue #96: only meaningful in isolated mode; default ON (a caller may pass a
@@ -387,6 +388,7 @@ export const ProcessNodePropertiesModal = ({
       setExcludeModelPrompt(properties.excludeModelPrompt ?? false);
       setExcludeStartNodePrompt(properties.excludeStartNodePrompt ?? false);
       setExcludeSystemPrompt(properties.excludeSystemPrompt ?? false);
+      setSystemPromptPolicy(properties.systemPromptPolicy === 'per-turn' ? 'per-turn' : 'stable');
       setInputMode(properties.inputMode ?? 'full-history');
       setIsolatedPrompt(properties.isolatedPrompt ?? '');
       setAllowCallerPrompt(properties.allowCallerPrompt !== false);
@@ -574,6 +576,7 @@ export const ProcessNodePropertiesModal = ({
           excludeStartNodePrompt,
           excludeSystemPrompt,
           inputMode,
+          systemPromptPolicy,
           isolatedPrompt,
           allowCallerPrompt,
           outputMode,
@@ -924,6 +927,14 @@ export const ProcessNodePropertiesModal = ({
           {/* Advanced */}
           {authoringMode === 'advanced' && <Box ref={advancedRef} data-section="advanced" sx={sectionSx}>
             <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.advanced')}</Typography>
+            <FormControlLabel
+              sx={{ minHeight: 48, width: '100%', alignItems: 'flex-start', my: 1 }}
+              control={<Switch checked={systemPromptPolicy === 'per-turn'} onChange={(_, checked) => setSystemPromptPolicy(checked ? 'per-turn' : 'stable')} />}
+              label={<Box>
+                <Typography>{t('flows.process.freshInstructions')}</Typography>
+                <Typography variant="body2" color="text.secondary">{t('flows.process.freshInstructionsHelp')}</Typography>
+              </Box>}
+            />
             <Box sx={{ mb: 3 }}>
               <NodeProperties nodeData={nodeData} handlePropertyChange={handlePropertyChange} properties={properties} />
             </Box>

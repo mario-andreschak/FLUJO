@@ -152,6 +152,8 @@ export interface FlowSpecNode {
   allowedTools?: string[];
   /** process/subflow: what the step receives from the conversation. */
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
+  /** process only: fresh authoritative prompt versus stable contextual updates. */
+  systemPromptPolicy?: 'stable' | 'per-turn';
   /** process only, inputMode 'isolated': the replacement context. */
   isolatedPrompt?: string;
   /** resource only: the MCP server publishing a STATIC resource (with `uri`). */
@@ -733,6 +735,11 @@ export function compileFlowSpec(
             properties.boundModel = specNode.model;
             warn('model-unresolved', `Node "${key}": model "${specNode.model}" does not match any configured model (by id, display name, or name).`, key);
           }
+        }
+
+        if (specNode.systemPromptPolicy !== undefined) {
+          if (specNode.systemPromptPolicy === 'stable' || specNode.systemPromptPolicy === 'per-turn') properties.systemPromptPolicy = specNode.systemPromptPolicy;
+          else warn('invalid-system-prompt-policy', `Node "${key}": invalid systemPromptPolicy; use stable or per-turn.`, key);
         }
 
         if (specNode.inputMode !== undefined) {
@@ -1563,6 +1570,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
     } else if (type === 'process') {
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
       if (typeof props.boundModel === 'string' && props.boundModel) specNode.model = props.boundModel;
+      if (props.systemPromptPolicy === 'stable' || props.systemPromptPolicy === 'per-turn') specNode.systemPromptPolicy = props.systemPromptPolicy;
       if (typeof props.inputMode === 'string') specNode.inputMode = props.inputMode as FlowSpecNode['inputMode'];
       if (typeof props.isolatedPrompt === 'string' && props.isolatedPrompt) specNode.isolatedPrompt = props.isolatedPrompt;
       // Opt-out caller prompt (issue #96): round-trip only the explicit false

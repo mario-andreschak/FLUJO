@@ -40,6 +40,9 @@ const OWN_PROCESS_BIRTH_PROBE_RETRY_MS = 100;
 const PROCESS_BIRTH_MARKER_SUPPORTED = ['darwin', 'linux', 'win32'].includes(process.platform);
 const UUID_FILE_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const execFileAsync = promisify(execFile);
+// New owned children establish identity; foreign stale-owner probes retain
+// their short deadline. Cold startup uses the backend's bounded warmup window.
+const ownedChildBirthEstablishment = new AsyncLocalStorage<boolean>();
 
 interface ProcessBirthProbeOptions {
   encoding: 'utf8';
@@ -417,7 +420,7 @@ async function queryWindowsProcessBirthMarker(pid: number): Promise<string | nul
     `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`,
   ], {
     encoding: 'utf8',
-    timeout: pid === process.pid
+    timeout: pid === process.pid || ownedChildBirthEstablishment.getStore()
       ? OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS
       : WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS,
     windowsHide: true,
@@ -706,7 +709,12 @@ export interface RuntimeProcessIdentity {
 /** Bind a newly spawned child to an OS birth observation, never to PID alone. */
 export async function captureRuntimeChildIdentity(pid: number): Promise<RuntimeProcessIdentity> {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid child PID.');
-  const birth = await queryProcessBirthMarker(pid);
+  let birth: string | null = null;
+  for (let attempt = 0; attempt < OWN_PROCESS_BIRTH_PROBE_ATTEMPTS; attempt += 1) {
+    birth = await ownedChildBirthEstablishment.run(true, () => queryProcessBirthMarker(pid));
+    if (birth && birthMarkerVersion(birth)) break;
+    if (attempt + 1 < OWN_PROCESS_BIRTH_PROBE_ATTEMPTS) await systemClock.sleep(OWN_PROCESS_BIRTH_PROBE_RETRY_MS);
+  }
   if (!birth || !birthMarkerVersion(birth)) throw new Error('Child process birth identity is unavailable.');
   return { pid, processInstanceId: randomUUID(), processBirthMarkerV2: birth };
 }

@@ -67,6 +67,25 @@ function byLabel(flow: NonNullable<ReturnType<typeof compileFlowSpec>['flow']>, 
   return node!;
 }
 
+describe('Process node system prompt policy', () => {
+  it.each(['stable', 'per-turn'] as const)('preserves %s through FlowSpec import and export', policy => {
+    const spec: FlowSpec = { ...happySpec, nodes: happySpec.nodes.map(node =>
+      node.type === 'process' ? { ...node, systemPromptPolicy: policy } : node) };
+    const result = compileFlowSpec(spec, context);
+    expect(result.errorCount).toBe(0);
+    expect(byLabel(result.flow!, 'Researcher').data.properties?.systemPromptPolicy).toBe(policy);
+    expect(flowToSpec(result.flow!).nodes.find(node => node.type === 'process')?.systemPromptPolicy).toBe(policy);
+  });
+
+  it('warns and retains the stable default for an unsupported policy', () => {
+    const spec: FlowSpec = { ...happySpec, nodes: happySpec.nodes.map(node =>
+      node.type === 'process' ? { ...node, systemPromptPolicy: 'unsupported' as 'stable' } : node) };
+    const result = compileFlowSpec(spec, context);
+    expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'invalid-system-prompt-policy' })]));
+    expect(byLabel(result.flow!, 'Researcher').data.properties?.systemPromptPolicy).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Happy path
 // ---------------------------------------------------------------------------

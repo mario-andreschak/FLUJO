@@ -6,6 +6,7 @@ import {
   _setPersonaRuntimeLockProcessBirthProbeForTests,
   _setPersonaRuntimeLockProcessBirthProbeRunnerForTests,
   initializePersonaRuntimeLockProcessIdentity,
+  captureRuntimeChildIdentity,
   withPersonaRuntimeLock,
 } from '@/backend/services/enduringAgents/runtimeLock';
 import {
@@ -56,6 +57,32 @@ afterEach(() => {
 });
 
 describe('Persona runtime own-process birth identity', () => {
+  it('uses bounded startup probes for a new owned child and retains fail-closed exhaustion', async () => {
+    const childPid = process.pid + 1;
+    const runner = jest.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('cold startup'), { killed: true }))
+      .mockResolvedValueOnce({ stdout: '638927322190000000\r\n' });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
+    _setPersonaRuntimeLockProcessBirthProbeForTests(pid => _queryWindowsProcessBirthMarkerForTests(pid));
+    await expect(captureRuntimeChildIdentity(childPid)).resolves.toMatchObject({ pid: childPid, processBirthMarkerV2: marker });
+    expect(runner.mock.calls.map(call => call[2].timeout)).toEqual([3_000, 3_000]);
+    runner.mockReset().mockResolvedValue({ stdout: 'invalid observation' });
+    await expect(captureRuntimeChildIdentity(childPid)).rejects.toThrow('Child process birth identity is unavailable.');
+    expect(runner).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps concurrent foreign-owner observations short while owned child establishment waits', async () => {
+    let resolveChild!: (value: { stdout: string }) => void;
+    const runner = jest.fn().mockImplementationOnce(() => new Promise<{ stdout: string }>(resolve => { resolveChild = resolve; }))
+      .mockResolvedValue({ stdout: '638927322190000000' });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
+    _setPersonaRuntimeLockProcessBirthProbeForTests(pid => _queryWindowsProcessBirthMarkerForTests(pid));
+    const child = captureRuntimeChildIdentity(process.pid + 1);
+    await expect(_queryWindowsProcessBirthMarkerForTests(process.pid + 2)).resolves.toBe(marker);
+    expect(runner.mock.calls.map(call => call[2].timeout)).toEqual([3_000, 900]);
+    resolveChild({ stdout: '638927322190000000' });
+    await expect(child).resolves.toMatchObject({ processBirthMarkerV2: marker });
+  });
   it('shares the complete transient-failure retry sequence and caches its successful identity', async () => {
     const probe = jest.fn()
       .mockRejectedValueOnce(Object.assign(new Error('timeout'), { killed: true }))

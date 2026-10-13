@@ -725,7 +725,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // the provider's prefix cache — so it is surfaced to the model as a synthetic
     // `[System update]` tail message instead. Re-frozen only at a compaction
     // boundary (where the prefix is rebuilt anyway).
-    const freeze = resolveFrozenSystemPrompt(
+    const requestedPromptPolicy = node_params?.properties?.systemPromptPolicy;
+    if (requestedPromptPolicy !== undefined && requestedPromptPolicy !== 'stable' && requestedPromptPolicy !== 'per-turn') {
+      throw new Error('Choose stable or per-turn system instructions for this step.');
+    }
+    const systemPromptPolicy = requestedPromptPolicy ?? 'stable';
+    prepResult.systemPromptPolicy = systemPromptPolicy;
+    const freeze = systemPromptPolicy === 'per-turn'
+      ? { content: completePrompt, frozenSystemPrompts: sharedState.frozenSystemPrompts ?? {}, frozeNow: false, driftUpdate: undefined }
+      : resolveFrozenSystemPrompt(
       nodeId,
       completePrompt,
       sharedState.frozenSystemPrompts,
@@ -1167,6 +1175,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           const result = await ModelHandler.callModel({
             modelId: prepResult.boundModel,
             prompt: prepResult.currentPrompt,
+            systemPromptPolicy: prepResult.systemPromptPolicy,
             messages: prepResult.messages,
             // Scoped view for latest-message / isolated inputMode; when unset the
             // model sees `messages` verbatim (full-history). Persistence always uses

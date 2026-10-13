@@ -15,6 +15,38 @@ function request(tracker: ClaudeUsageTracker, id: string, usage: SdkUsage, paren
 }
 
 describe('Claude Agent SDK usage scope', () => {
+  it('retains observed usage when a crash result reports zeroed placeholder totals', () => {
+    const tracker = new ClaudeUsageTracker();
+    request(tracker, 'root-before-crash', { input_tokens: 100, output_tokens: 10 });
+    tracker.observe({ type: 'result', subtype: 'error_during_execution', is_error: true, modelUsage: {},
+      usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
+    expect(mapSdkUsage(tracker.getUsage())).toMatchObject({ promptTokens: 100, completionTokens: 10 });
+    expect(tracker.getCheckpoint()).toBeUndefined();
+  });
+  it('subtracts a persisted session baseline and ignores repeated results', () => {
+    const first = new ClaudeUsageTracker();
+    first.observe({ type: 'result', uuid: 'first', result_index: 1, total_cost_usd: 0.05,
+      modelUsage: { sonnet: { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 300 } } });
+    const resumed = new ClaudeUsageTracker(first.getCheckpoint());
+    const result = { type: 'result', uuid: 'second', result_index: 1, total_cost_usd: 0.07,
+      modelUsage: { sonnet: { inputTokens: 130, outputTokens: 14, cacheReadInputTokens: 600 } } };
+    resumed.observe(result);
+    resumed.observe(result);
+    expect(mapSdkUsage(resumed.getUsage())).toMatchObject({ promptTokens: 330, completionTokens: 4, cacheReadTokens: 300 });
+    expect(resumed.getAccounting().estimatedCostUsd).toBeCloseTo(0.02);
+    expect(resumed.getContextUsage(200000)).toBeNull();
+  });
+
+  it('retains an invocation delta across a cumulative reset and includes later partial child work', () => {
+    const tracker = new ClaudeUsageTracker({ modelUsage: { sonnet: {
+      inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+    } }, totalCostUsd: 0.1 });
+    tracker.observe({ type: 'result', uuid: 'r1', modelUsage: { sonnet: { inputTokens: 120, outputTokens: 15 } }, total_cost_usd: 0.12 });
+    tracker.observe({ type: 'result', uuid: 'r2', modelUsage: { sonnet: { inputTokens: 8, outputTokens: 2 } }, total_cost_usd: 0.01 });
+    request(tracker, 'child-after-reset', { input_tokens: 7, output_tokens: 3 }, 'child');
+    expect(mapSdkUsage(tracker.getUsage())).toMatchObject({ promptTokens: 35, completionTokens: 10 });
+    expect(tracker.getAccounting().estimatedCostUsd).toBeCloseTo(0.03);
+  });
   it('deduplicates blocks, ignores placeholder output, and keeps only the last request for context', () => {
     const tracker = new ClaudeUsageTracker();
     request(tracker, 'first', { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 40 });

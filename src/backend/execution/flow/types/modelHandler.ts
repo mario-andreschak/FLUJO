@@ -19,6 +19,7 @@ import type { ModelInputSnapshot } from '../types';
 export interface ModelCallInput {
   modelId: string;
   prompt: string;
+  systemPromptPolicy?: 'stable' | 'per-turn';
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
   /**
    * Optional scoped view to send to the provider instead of `messages`. Lets a

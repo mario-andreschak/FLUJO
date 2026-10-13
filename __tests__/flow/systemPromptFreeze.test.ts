@@ -22,6 +22,15 @@ import {
 const NODE = 'node-1';
 
 describe('resolveFrozenSystemPrompt (issue #249)', () => {
+  it('emits a latest-state update for A to B to A and permits a later B again', () => {
+    const frozen = { [NODE]: 'A' };
+    const updateB = buildSystemUpdateText('A', 'B');
+    const updateA = resolveFrozenSystemPrompt(NODE, 'A', frozen, [{ role: 'user', content: updateB }]).driftUpdate;
+    expect(updateA).toBe(buildSystemUpdateText('A', 'A'));
+    const messages = [{ role: 'user', content: updateB }, { role: 'user', content: updateA }];
+    expect(resolveFrozenSystemPrompt(NODE, 'B', frozen, messages).driftUpdate).toBe(updateB);
+    expect(resolveFrozenSystemPrompt(NODE, 'A', frozen, messages).driftUpdate).toBeUndefined();
+  });
   it('freezes the prompt on first render and reports frozeNow', () => {
     const first = resolveFrozenSystemPrompt(NODE, 'SYS v1', undefined, []);
     expect(first.frozeNow).toBe(true);

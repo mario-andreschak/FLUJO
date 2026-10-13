@@ -139,6 +139,7 @@ export type ExecutionEventType =
   | 'model:start'
   | 'model:dispatch'
   | 'model:dispatch-result'
+  | 'model:status'
   | 'model:delta'
   | 'model:end'
   | 'tool:call'
@@ -345,6 +346,18 @@ export interface ModelDispatchResultEvent extends ExecutionEventBase {
   type: 'model:dispatch-result';
   dispatchId: string;
   outcome: Exclude<ModelDispatchOutcome, 'running'>;
+}
+export interface ModelStatusEvent extends ExecutionEventBase {
+  type: 'model:status';
+  node?: NodeRef;
+  kind: string;
+  state?: string;
+  attempt?: number;
+  retryDelayMs?: number;
+  terminalReason?: string;
+  runtimeVersion?: string;
+  accounting?: { scope: 'completion'; costBasis: 'sdk-estimate'; estimatedCostUsd?: number; partial?: boolean;
+    usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
 }
 export interface ModelDeltaEvent extends ExecutionEventBase {
   type: 'model:delta';
@@ -568,6 +581,7 @@ export type ExecutionEvent =
   | ModelStartEvent
   | ModelDispatchEvent
   | ModelDispatchResultEvent
+  | ModelStatusEvent
   | ModelDeltaEvent
   | ModelEndEvent
   | ToolCallEvent

@@ -70,6 +70,7 @@ import {
   refitCodexMessagesForInputLimit,
 } from '@/backend/services/model/adapters/codexInputCompaction';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
+import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
 import { prepareOpenAiPromptCacheWire } from '@/backend/services/model/adapters/openaiPromptCaching';
 import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
@@ -1213,6 +1214,7 @@ export class ModelHandler {
     // existing experimental setting. Ineligible adapters always re-flatten.
     const sessionResume =
       !input.nativeBrokerAuthority &&
+      (modelAdapter !== 'claude-cli' || !input.executionExtensionContext) &&
       !wireMessages &&
       (modelAdapter === 'codex-cli' ||
         (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()));
@@ -1675,6 +1677,14 @@ export class ModelHandler {
       shouldEndAgenticTurn,
       runResourceMarkers,
       sessionResume,
+      systemPromptPolicy: input.systemPromptPolicy,
+      onSessionEvent: event => {
+        if (!acceptLiveProjection || (event.kind !== 'accounting' && shouldAbort?.())) return;
+        enqueueLiveProjection(async () => {
+          await input.executionAuthority?.assertCurrent();
+          emit?.({ type: 'model:status', node: { nodeId, nodeName }, ...event });
+        });
+      },
       onFinalWire,
       archiveModelTurns: input.archiveModelTurns,
       canonicalMessages: messages,
@@ -1955,6 +1965,8 @@ export class ModelHandler {
        * subscription adapter. Resolved by callModel from the experimental setting
        * and node eligibility. */
       sessionResume?: boolean;
+      systemPromptPolicy?: 'stable' | 'per-turn';
+      onSessionEvent?: CompletionInput['onSessionEvent'];
       onFinalWire?: ModelCallInput['onFinalWire'];
       archiveModelTurns?: boolean;
       canonicalMessages?: FlujoChatMessage[];
@@ -2954,7 +2966,9 @@ export class ModelHandler {
                     outcome: 'completed' | 'error' | 'cancelled';
                   }): Promise<void> => {
                     try {
-                      if (nativeSession) markNativeSdkFinished();
+                      // Claude certifies stream closure through its dedicated
+                      // notification after query close and owned process exit.
+                      if (nativeSession && model.adapter !== 'claude-cli') markNativeSdkFinished();
                       await updateModelDispatchOutcome(opts!.conversationId!, dispatchId, outcome, opts?.durableContext);
                       if (nativeSession) {
                         await opts!.nativeInvocationSessionHook!.acknowledgeSdkOutcome(nativeSession.session, outcome);
@@ -3025,6 +3039,8 @@ export class ModelHandler {
               onCodexSessionChange: nativeToolPort ? undefined : opts?.onCodexSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
               sessionResume: nativeToolPort ? false : opts?.sessionResume,
+              systemPromptPolicy: opts?.systemPromptPolicy,
+              onSessionEvent: opts?.onSessionEvent,
               // Derived from the tool-block hash, or from the conversation for a
               // no-tool history-first wire, so requests sharing the reusable
               // prefix route to one prompt-cache shard (see derivePromptCacheKey).

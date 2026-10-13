@@ -32,6 +32,7 @@ let sdkToolsMock: Array<{
   name: string;
   handler: (args: Record<string, unknown>) => Promise<unknown>;
 }> = [];
+let autoToolSequence = 0;
 
 // Mock the ESM Agent SDK so it is never really loaded (that ESM load is the very
 // reason the adapter imports it lazily). createSdkMcpServer/tool return inert
@@ -124,6 +125,24 @@ const capturedOptions = () => {
   return queryMock.mock.calls[0][0].options as Record<string, unknown>;
 };
 
+async function runAutoApprovedTool(args: Record<string, unknown>): Promise<unknown> {
+  const options = capturedOptions();
+  const toolUseId = `auto-${++autoToolSequence}`;
+  const sdkTool = sdkToolsMock[0];
+  const hooks = options.hooks as { PreToolUse: Array<{ hooks: Array<(
+    input: { hook_event_name: 'PreToolUse'; tool_name: string; tool_input: Record<string, unknown>; tool_use_id: string },
+    id: string, options: { signal: AbortSignal },
+  ) => Promise<{ hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } }>> }> };
+  const decision = await hooks.PreToolUse[0].hooks[0]({ hook_event_name: 'PreToolUse',
+    tool_name: `mcp__flujo__${sdkTool.name}`, tool_input: args, tool_use_id: toolUseId,
+  }, toolUseId, { signal: (options.abortController as AbortController).signal });
+  if (decision.hookSpecificOutput?.permissionDecision === 'deny') return {
+    isError: true, content: [{ type: 'text', text: decision.hookSpecificOutput.permissionDecisionReason }],
+  };
+  if (decision.hookSpecificOutput?.permissionDecision === 'ask') throw new Error('This fixture must resolve the SDK human decision before execution.');
+  return sdkTool.handler(args);
+}
+
 it('routes a native Claude tool-use ID through the durable Worker port without host MCP fallback', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-claude-native-port-'));
   _setNativeToolJournalRootForTests(directory);
@@ -147,26 +166,28 @@ it('routes a native Claude tool-use ID through the durable Worker port without h
     const observedLive = jest.fn(async () => undefined);
     const observedFinished = jest.fn();
     callToolMock.mockImplementation(() => { throw new Error('host MCP fallback called'); });
-    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
+    queryMock.mockImplementation(() => (async function* () {
+      const permission = capturedOptions().canUseTool as (
+        name: string, args: Record<string, unknown>, options: { toolUseID: string },
+      ) => Promise<{ behavior: string }>;
+      expect((await permission('mcp__flujo__worker_search', { q: 'test' }, { toolUseID: 'sdk-claude-1' })).behavior).toBe('allow');
+      expect(await sdkToolsMock[0].handler({ q: 'test' })).toMatchObject({ content: [{ type: 'text' }] });
+      await permission('mcp__flujo__worker_search', { q: 'same' }, { toolUseID: 'sdk-claude-2' });
+      await permission('mcp__flujo__worker_search', { q: 'same' }, { toolUseID: 'sdk-claude-3' });
+      await sdkToolsMock[0].handler({ q: 'same' });
+      yield* successStream();
+    })());
+    const outcome = jest.fn(async () => undefined);
+    await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
       onSdkRequest: async () => receipt.invocationId,
       onNativeSdkLive: observedLive,
       onNativeSdkFinished: observedFinished,
-      onSdkRequestResult: async () => undefined }));
+      onSdkRequestResult: outcome }))).rejects.toThrow(/ambiguous/);
     expect(observedLive).not.toHaveBeenCalled();
     expect(observedFinished).toHaveBeenCalledTimes(1);
-    const permission = capturedOptions().canUseTool as (
-      name: string, args: Record<string, unknown>, options: { toolUseID: string },
-    ) => Promise<{ behavior: string }>;
-    expect((await permission('mcp__flujo__worker_search', { q: 'test' }, { toolUseID: 'sdk-claude-1' })).behavior)
-      .toBe('allow');
-    const result = await sdkToolsMock[0].handler({ q: 'test' });
-    expect(result).toMatchObject({ content: [{ type: 'text' }] });
+    expect(outcome).toHaveBeenCalledWith({ dispatchId: receipt.invocationId, outcome: 'error' });
     expect(executor).toHaveBeenCalledTimes(1);
     expect(callToolMock).not.toHaveBeenCalled();
-    await permission('mcp__flujo__worker_search', { q: 'same' }, { toolUseID: 'sdk-claude-2' });
-    await permission('mcp__flujo__worker_search', { q: 'same' }, { toolUseID: 'sdk-claude-3' });
-    await expect(sdkToolsMock[0].handler({ q: 'same' })).rejects.toThrow(/ambiguous/);
-    expect(executor).toHaveBeenCalledTimes(1);
   } finally {
     _setNativeToolJournalRootForTests(undefined);
     await fs.rm(directory, { recursive: true, force: true });
@@ -680,34 +701,40 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
 
   it('canUseTool DENIES an arbitrary built-in tool with the #166 message', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
-    await adapter.createCompletion(baseInput({ tools: [] }));
-
-    const canUseTool = capturedOptions().canUseTool as (
+    type Permission = (
       toolName: string,
       input: unknown,
       opts: { toolUseID: string },
     ) => Promise<{ behavior: string; message?: string }>;
-
-    const bash = await canUseTool('Bash', { command: 'ls' }, { toolUseID: 't1' });
-    expect(bash.behavior).toBe('deny');
-    expect(bash.message).toContain('is not permitted for this node');
-
-    const webfetch = await canUseTool('WebFetch', {}, { toolUseID: 't2' });
-    expect(webfetch.behavior).toBe('deny');
+    queryMock.mockImplementation(() => (async function* () {
+      const canUseTool = capturedOptions().canUseTool as Permission;
+      const bash = await canUseTool('Bash', { command: 'ls' }, { toolUseID: 't1' });
+      expect(bash.behavior).toBe('deny');
+      expect(bash.message).toContain('is not permitted for this node');
+      expect((await canUseTool('WebFetch', {}, { toolUseID: 't2' })).behavior).toBe('deny');
+      yield* successStream();
+    })());
+    await adapter.createCompletion(baseInput({ tools: [] }));
   });
 
-  it("canUseTool ALLOWS FLUJO's own mcp__flujo__* tools (no approval gate wired)", async () => {
+  it('allows an advertised FLUJO tool only while its SDK turn is open', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
-    await adapter.createCompletion(baseInput({ tools: [] }));
-
-    const canUseTool = capturedOptions().canUseTool as (
+    type Permission = (
       toolName: string,
       input: unknown,
       opts: { toolUseID: string },
     ) => Promise<{ behavior: string }>;
-
-    const allowed = await canUseTool('mcp__flujo__handoff_to_finish_node', {}, { toolUseID: 't3' });
-    expect(allowed.behavior).toBe('allow');
+    queryMock.mockImplementation(() => (async function* () {
+      const permission = capturedOptions().canUseTool as Permission;
+      expect((await permission('mcp__flujo__handoff_to_finish_node', {}, { toolUseID: 't3' })).behavior).toBe('allow');
+      expect((await permission('mcp__flujo__unbound_tool', {}, { toolUseID: 't4' })).behavior).toBe('deny');
+      yield* successStream();
+    })());
+    await adapter.createCompletion(baseInput({ tools: [{ type: 'function', function: {
+      name: 'handoff_to_finish_node', parameters: { type: 'object', properties: {} },
+    } }] }));
+    const permission = capturedOptions().canUseTool as Permission;
+    expect((await permission('mcp__flujo__handoff_to_finish_node', {}, { toolUseID: 'late' })).behavior).toBe('deny');
   });
 
   it('still disables built-ins when the node HAS bound (handoff) tools', async () => {
@@ -804,7 +831,7 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
     boundToolResultMock.mockResolvedValueOnce({ spilled: true, content: '[bounded text preview]' });
     let sdkResult: unknown;
     queryMock.mockImplementation(() => (async function* () {
-      sdkResult = await sdkToolsMock[0].handler({ q: 'x' });
+      sdkResult = await runAutoApprovedTool({ q: 'x' });
       yield {
         type: 'result',
         subtype: 'success',
@@ -844,7 +871,7 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
       },
     });
     queryMock.mockImplementation(() => (async function* () {
-      await sdkToolsMock[0].handler({ q: 'x' });
+      await runAutoApprovedTool({ q: 'x' });
       yield {
         type: 'result',
         subtype: 'success',
@@ -897,7 +924,7 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
       return { success: true, data: { content: [{ type: 'text', text: 'ok' }] } };
     });
     queryMock.mockImplementation(() => (async function* () {
-      await sdkToolsMock[0].handler({ q: 'x' });
+      await runAutoApprovedTool({ q: 'x' });
       yield {
         type: 'result',
         subtype: 'success',
@@ -1031,7 +1058,7 @@ it('rejects a late MCP result before transcript and resource handling', async ()
   const afterToolDispatch = jest.fn(async () => { throw lost; });
   callToolMock.mockResolvedValueOnce({ success: true, data: { content: [{ type: 'text', text: 'late result' }] } });
   queryMock.mockImplementation(() => (async function* () {
-    await sdkToolsMock[0].handler({ q: 'recent' });
+    await runAutoApprovedTool({ q: 'recent' });
     yield { type: 'result', subtype: 'success', result: 'done', session_id: 'sess-1',
       usage: { input_tokens: 1, output_tokens: 1 } };
   })());
@@ -1049,7 +1076,7 @@ it('rejects a late MCP result before transcript and resource handling', async ()
 it('checks MCP identity after the asynchronous dispatch fence', async () => {
   let sdkResult: unknown;
   queryMock.mockImplementation(() => (async function* () {
-    sdkResult = await sdkToolsMock[0].handler({ q: 'recent' });
+    sdkResult = await runAutoApprovedTool({ q: 'recent' });
     yield { type: 'result', subtype: 'success', result: 'done', session_id: 'sess-1',
       usage: { input_tokens: 1, output_tokens: 1 } };
   })());

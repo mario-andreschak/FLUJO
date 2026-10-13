@@ -19,16 +19,19 @@
  * conversation history is pruned/diverges from what the session last saw, or the
  * run errors / hands off (each starts fresh context).
  *
- * SCOPE OF THIS MODULE. A PURE, in-process registry holding the keying +
- * invalidation decision logic, fully unit tested. The adapter both READS it (to
+ * SCOPE OF THIS MODULE. Workspace-scoped durable metadata with content and
+ * accounting checkpoints and process/session leases. The adapter READS it (to
  * decide whether to `resume` this turn) and WRITES it (recording the captured
  * session id + watermark after a successful run). The actual send-path behaviour
  * change lives in the adapter and is gated by the experimental
  * `claudeSessionResume` setting; this module stays behaviour-agnostic.
  */
 
-import { createHash } from 'crypto';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { createHash } from 'crypto';
+import { loadClaudeSessions, saveClaudeSession, removeClaudeSession, acquireDurableClaudeSession, sessionValueHash, canonicalSessionValue, CLAUDE_SESSION_TTL_MS } from './claudeSessionPersistence';
+import type { ClaudeUsageCheckpoint } from './claudeUsageTracker';
+import type { ClaudeTranscriptCheckpoint } from './claudeSessionPersistence';
 
 /** A session the adapter may be able to resume on a later turn. */
 export interface StoredSession {
@@ -49,6 +52,10 @@ export interface StoredSession {
   leadingSystemMessageCount: number;
   /** Last time this entry was written (for TTL/eviction bookkeeping). */
   updatedAt: number;
+  /** Provider-visible consumed history, excluding the authoritative leading system block. */
+  historyHash?: string;
+  usageCheckpoint?: ClaudeUsageCheckpoint;
+  transcriptCheckpoint?: ClaudeTranscriptCheckpoint;
 }
 
 /** Details needed to record/refresh a session entry. */
@@ -57,6 +64,9 @@ export interface SessionObservation {
   prefixHash: string;
   seenMessageCount: number;
   leadingSystemMessageCount: number;
+  historyHash?: string;
+  usageCheckpoint?: ClaudeUsageCheckpoint;
+  transcriptCheckpoint?: ClaudeTranscriptCheckpoint;
 }
 
 // Process-memory registry, keyed by `${conversationId}::${nodeId}`. Mirrors the
@@ -70,7 +80,7 @@ function sessions(): Map<string, StoredSession> {
   const workspace = getCurrentWorkspace();
   let value = sessionsByWorkspace.get(workspace);
   if (!value) {
-    value = new Map();
+    value = loadClaudeSessions();
     sessionsByWorkspace.set(workspace, value);
   }
   return value;
@@ -78,7 +88,7 @@ function sessions(): Map<string, StoredSession> {
 
 /** Stable registry key for a conversation's node. */
 export function sessionKey(conversationId: string, nodeId: string): string {
-  return `${conversationId}::${nodeId}`;
+  return JSON.stringify([conversationId, nodeId]);
 }
 
 /**
@@ -90,17 +100,24 @@ export function sessionKey(conversationId: string, nodeId: string): string {
  */
 export function computePrefixHash(
   systemPrompt: string | undefined,
-  toolNames: readonly string[],
+  toolDefinitions: readonly unknown[],
+  configuration: Record<string, unknown> = {},
 ): string {
-  const h = createHash('sha256');
-  h.update('sys\0');
-  h.update(systemPrompt ?? '');
-  h.update('\0tools\0');
-  for (const name of [...toolNames].sort()) {
-    h.update(name);
-    h.update('\0');
+  return sessionValueHash({ version: 2,
+    systemPrompt: configuration.systemPromptPolicy === 'per-turn' ? undefined : systemPrompt ?? '',
+    tools: toolDefinitions.map(canonicalSessionValue).sort(), configuration });
+}
+
+/** Ignores transport ids/timestamps; retains content, tool identity, media and ordering. */
+export function computeHistoryHash(messages: readonly { role: string; [key: string]: unknown }[], leadingSystems = 0): string {
+  const hash = createHash('sha256').update('claude-history-v2\0');
+  for (let index = leadingSystems; index < messages.length; index++) {
+    const message = messages[index];
+    hash.update(canonicalSessionValue({ role: message.role, content: message.content ?? null,
+      tool_calls: message.tool_calls, tool_call_id: message.tool_call_id, name: message.name, media: message.media }));
+    hash.update('\0');
   }
-  return h.digest('hex');
+  return hash.digest('hex');
 }
 
 /**
@@ -116,26 +133,32 @@ export function computePrefixHash(
 export function findReusableSession(
   key: string,
   prefixHash: string,
-  currentMessageCount: number,
+  currentMessages: readonly { role: string; [key: string]: unknown }[],
   currentLeadingSystemMessageCount: number,
 ): StoredSession | undefined {
   const existing = sessions().get(key);
   if (!existing) return undefined;
+  if (Date.now() - existing.updatedAt > CLAUDE_SESSION_TTL_MS) { invalidateSession(key); return undefined; }
   if (existing.prefixHash !== prefixHash) return undefined;
   if (existing.leadingSystemMessageCount === undefined) return undefined;
   if (existing.leadingSystemMessageCount !== currentLeadingSystemMessageCount) return undefined;
+  const currentMessageCount = currentMessages.length;
   if (currentMessageCount < existing.seenMessageCount) return undefined;
+  if (!existing.historyHash
+    || existing.historyHash !== computeHistoryHash(currentMessages.slice(0, existing.seenMessageCount), currentLeadingSystemMessageCount)) return undefined;
   return existing;
 }
 
 /** Record (or refresh) the session for a key after a successful run. */
 export function recordSession(key: string, observation: SessionObservation): void {
   sessions().set(key, { ...observation, updatedAt: Date.now() });
+  saveClaudeSession(key, sessions().get(key)!);
 }
 
 /** Drop the session for a key (on error, handoff, or detected divergence). */
 export function invalidateSession(key: string): void {
   sessions().delete(key);
+  removeClaudeSession(key);
 }
 
 /** Current number of tracked sessions (diagnostics/tests). */
@@ -146,4 +169,40 @@ export function sessionCount(): number {
 /** Test-only: clear the whole registry between cases. */
 export function _clearAllSessionsForTests(): void {
   sessions().clear();
+}
+
+/** Test-only restart simulation: forget memory without erasing durable metadata. */
+export function _reloadClaudeSessionsForTests(): void { sessionsByWorkspace.clear(); }
+
+const sessionTails = new Map<string, Promise<void>>();
+/** Serialize complete invocations, including prompt configuration and accounting. */
+export async function acquireClaudeSession(key: string, signal?: AbortSignal): Promise<() => void> {
+  const scope = JSON.stringify([getCurrentWorkspace(), key]);
+  const previous = sessionTails.get(scope) ?? Promise.resolve();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const tail = previous.then(() => held);
+  sessionTails.set(scope, tail);
+  let onAbort: (() => void) | undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new Error('Claude session wait cancelled.'));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  try { await Promise.race([previous, cancelled]); }
+  catch (error) { void previous.then(release); throw error; }
+  finally { if (onAbort) signal?.removeEventListener('abort', onAbort); }
+  let releaseDurable: () => void;
+  try { releaseDurable = await acquireDurableClaudeSession(key, signal); }
+  catch (error) { release(); throw error; }
+  // Refresh after obtaining the file lease, so another backend's successful
+  // checkpoint cannot be shadowed by an older process-memory observation.
+  if (process.env.NODE_ENV !== 'test' || process.env.FLUJO_TEST_CLAUDE_SESSION_DIR) sessionsByWorkspace.delete(getCurrentWorkspace());
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    try { releaseDurable(); } finally { release(); }
+    void tail.then(() => { if (sessionTails.get(scope) === tail) sessionTails.delete(scope); });
+  };
 }
