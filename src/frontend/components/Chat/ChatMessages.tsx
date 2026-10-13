@@ -1863,7 +1863,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {questions.map((q, qi) => (
           <FormControl key={qi} component="fieldset" sx={{ display: 'flex' }}>
-            <FormLabel sx={{ mb: 0.5 }}>{q.prompt}</FormLabel>
+            <FormLabel component="legend" id={`${questionId}-${qi}-prompt`} sx={{ mb: 0.5 }}>{q.prompt}</FormLabel>
             {q.multiple ? (
               <Box sx={{ display: 'flex', flexDirection: 'column' }}>
                 {q.options.map((opt) => (
@@ -1882,6 +1882,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
               </Box>
             ) : (
               <RadioGroup
+                aria-labelledby={`${questionId}-${qi}-prompt`}
                 value={(selected[qi] ?? [])[0] ?? ''}
                 onChange={(e) => setSingle(qi, e.target.value)}
               >
@@ -1894,6 +1895,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
               <TextField
                 size="small"
                 sx={{ mt: 1 }}
+                label={t('chat.question.answerLabel')}
                 placeholder={t('chat.question.placeholder')}
                 value={customText[qi]}
                 onChange={(e) =>
