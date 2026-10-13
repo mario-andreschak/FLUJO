@@ -163,7 +163,8 @@ export default function PersonaRecoverySettings() {
       <CircularProgress size={20} aria-label={t('settings.personaRecovery.working')} />
       <Typography>{t('settings.personaRecovery.working')}</Typography>
     </Box>}
-    {error && !preview && <Alert ref={errorRef} tabIndex={-1} severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+    {/* Moving focus announces errors; a live alert would repeat the same message. */}
+    {error && !preview && <Alert ref={errorRef} tabIndex={-1} aria-live="off" severity="error" sx={{ mt: 2 }}>{error}</Alert>}
     {restored && <Alert severity="success" sx={{ mt: 2, overflowWrap: 'anywhere' }}>
       {t('settings.personaRecovery.success', { workspace: restored })}
       <Box sx={{ mt: 1 }}><Button ref={restoredLinkRef} href={workspacePageUrl(restored)}>{t('settings.personaRecovery.open')}</Button></Box>
@@ -193,7 +194,7 @@ export default function PersonaRecoverySettings() {
           <Typography sx={{ mt: 2 }}>{t('settings.personaRecovery.connections', { models: preview.requiredModelIds.length, apps: preview.requiredAppNames.length })}</Typography>
         </>}
         {busy && <Typography role="status" sx={{ mt: 2 }}>{t('settings.personaRecovery.working')}</Typography>}
-        {error && preview && <Alert ref={errorRef} tabIndex={-1} severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+        {error && preview && <Alert ref={errorRef} tabIndex={-1} aria-live="off" severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       </DialogContent>
       <DialogActions disableSpacing sx={dialogActionsSx}><Button disabled={busy} onClick={() => setPreview(null)}>{t('common.cancel')}</Button><Button disabled={busy} variant="contained" onClick={() => void restore()}>{t('settings.personaRecovery.restore')}</Button></DialogActions>
     </Dialog>

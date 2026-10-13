@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { z } from 'zod';
 import type { Flow } from '@/shared/types/flow';
+import { CONVERSATION_SUMMARY_VERSION } from '@/shared/types/conversationSummary';
 import { parseModelTurnOutcomeRecord } from '@/shared/types/modelTurn';
 import {
   EnduringAgentIdSchema, FlowSnapshotSchema, PersonaAttributionSchema, PersonaInstructionContextSchema,
@@ -283,7 +284,7 @@ export function inspectPersonaRecoveryFiles(files: readonly PersonaRecoveryZipFi
         const attribution = conversation.personaAttribution as ObjectValue | undefined;
         if (summary.id !== conversationId || typeof summary.title !== 'string'
           || !Number.isFinite(summary.createdAt) || !Number.isFinite(summary.updatedAt)
-          || !Number.isInteger(summary.version) || Number(summary.version) < 1 || Number(summary.version) > 9
+          || !Number.isInteger(summary.version) || Number(summary.version) < 1 || Number(summary.version) > CONVERSATION_SUMMARY_VERSION
           || (summary.personaId !== undefined && summary.personaId !== (attribution?.personaId ?? conversation.personaTargetId))) {
           throw new PersonaRecoveryError('Recovery conversation summary identity or version mismatch.');
         }
