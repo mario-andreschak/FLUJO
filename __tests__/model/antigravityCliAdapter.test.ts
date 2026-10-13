@@ -46,6 +46,117 @@ const finish = (options: RunOptions) => {
   text(options, 'Hello'); text(options, ' world');
   options.onEvent({ event: 'result', result: { conversation_id: sessions.get(options)!, status: 'SUCCESS', response: 'Hello world', usage: { input_tokens: 20, output_tokens: 10, thinking_tokens: 4, cache_read_tokens: 80, total_tokens: 30 } } });
 };
+
+test('missing native usage remains unavailable while retaining the received counters', async () => {
+  mockRun.mockImplementationOnce(async (options: RunOptions) => {
+    await start(options); text(options, 'Complete');
+    options.onEvent({ event: 'result', result: { conversation_id: sessions.get(options)!, status: 'SUCCESS', response: 'Complete' } });
+  });
+  const result = await new AntigravityCliAdapter().createCompletion(input());
+  expect(result.completion.usage).toBeUndefined();
+  expect(result.completion).toMatchObject({ flujo_antigravity_usage: { reported: [{}], complete: false } });
+});
+
+test('Stop during pending approval returns without a late executor effect', async () => {
+  const controller = new AbortController();
+  let entered!: () => void, approve!: (value: boolean) => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const approval = jest.fn(() => { entered(); return new Promise<boolean>(resolve => { approve = resolve; }); });
+  const executor = jest.fn(async () => 'late');
+  mockRun.mockImplementationOnce(async (options: RunOptions) => {
+    await start(options);
+    void mockTools[0].handler({}).catch(() => {});
+    await new Promise<void>((_resolve, reject) => options.signal.addEventListener('abort', () => reject(Object.assign(new Error('stopped'), { name: 'AbortError' })), { once: true }));
+  });
+  const run = new AntigravityCliAdapter().createCompletion(input({ signal: controller.signal,
+    tools: [fnTool('local')], localToolExecutors: { local: executor }, requestToolApproval: approval }));
+  await ready; controller.abort();
+  await expect(run).rejects.toMatchObject({ name: 'AbortError' });
+  approve(true); await Promise.resolve();
+  expect(executor).not.toHaveBeenCalled();
+});
+
+test('Stop reaches the local executor signal and fences its late result', async () => {
+  const controller = new AbortController();
+  let entered!: () => void, release!: (value: string) => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const executor = jest.fn((_args: Record<string, unknown>, context?: { signal: AbortSignal }) => {
+    expect(context?.signal).toBeInstanceOf(AbortSignal); entered();
+    return new Promise<string>(resolve => { release = resolve; });
+  });
+  const transcript = jest.fn();
+  mockRun.mockImplementationOnce(async (options: RunOptions) => {
+    await start(options); void mockTools[0].handler({}).catch(() => {});
+    await new Promise<void>((_resolve, reject) => options.signal.addEventListener('abort', () => reject(Object.assign(new Error('stopped'), { name: 'AbortError' })), { once: true }));
+  });
+  const run = new AntigravityCliAdapter().createCompletion(input({ signal: controller.signal,
+    tools: [fnTool('local')], localToolExecutors: { local: executor }, onTranscriptMessage: transcript }));
+  await ready; controller.abort(); await expect(run).rejects.toMatchObject({ name: 'AbortError' });
+  expect(executor.mock.calls[0][1]?.signal.aborted).toBe(true);
+  const count = transcript.mock.calls.length; release('late'); await Promise.resolve();
+  expect(transcript).toHaveBeenCalledTimes(count);
+});
+
+test('native EOF cancels a delayed dispatch fence before it can invoke MCP', async () => {
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const fence = jest.fn(() => { entered(); return new Promise<void>(resolve => { release = resolve; }); });
+  mockRun.mockImplementationOnce(async (options: RunOptions) => {
+    await start(options); void mockTools[0].handler({}).catch(() => {});
+    await ready; finish(options);
+  });
+  await expect(new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('bound')],
+    toolNameMap: { bound: { server: 'server', tool: 'read' } }, beforeToolDispatch: fence }))).rejects.toThrow('ended before pending FLUJO tools completed');
+  release(); await Promise.resolve();
+  expect(mockCallTool).not.toHaveBeenCalled();
+});
+
+test('Stop during paced tool arguments records one matched cancelled pair and fences late deltas', async () => {
+  const controller = new AbortController();
+  const transcript = jest.fn();
+  let deltas = 0;
+  mockRun.mockImplementationOnce(async (options: RunOptions) => {
+    await start(options); void mockTools[0].handler({ text: 'x'.repeat(4000) }).catch(() => {});
+    await new Promise<void>((_resolve, reject) => {
+      if (options.signal.aborted) reject(Object.assign(new Error('stopped'), { name: 'AbortError' }));
+      else options.signal.addEventListener('abort', () => reject(Object.assign(new Error('stopped'), { name: 'AbortError' })), { once: true });
+    });
+  });
+  const executor = jest.fn(async () => 'no');
+  await expect(new AntigravityCliAdapter().createCompletion(input({ signal: controller.signal,
+    tools: [fnTool('local')], localToolExecutors: { local: executor }, onTranscriptMessage: transcript,
+    onModelDelta: delta => { deltas++; if (delta.toolCallDelta?.argumentsDelta) controller.abort(); },
+  }))).rejects.toMatchObject({ name: 'AbortError' });
+  const messages = transcript.mock.calls.map(([message]) => message);
+  expect(messages).toHaveLength(2);
+  expect(messages[0]).toMatchObject({ role: 'assistant', tool_calls: [{ id: messages[1].tool_call_id }] });
+  expect(messages[1]).toMatchObject({ role: 'tool', content: 'tool cancelled' });
+  const deltaCount = deltas, messageCount = transcript.mock.calls.length;
+  await new Promise<void>(resolve => setTimeout(resolve, 250));
+  expect(deltas).toBe(deltaCount); expect(transcript).toHaveBeenCalledTimes(messageCount);
+  expect(executor).not.toHaveBeenCalled();
+});
+
+test('Stop cancels an uncooperative MCP wait and rejects its late successful transcript result', async () => {
+  const controller = new AbortController();
+  let entered!: () => void, release!: (value: unknown) => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  mockCallTool.mockImplementationOnce(() => { entered(); return new Promise(resolve => { release = resolve; }); });
+  const transcript = jest.fn();
+  mockRun.mockImplementationOnce(async (options: RunOptions) => {
+    await start(options); void mockTools[0].handler({}).catch(() => {});
+    await new Promise<void>((_resolve, reject) => options.signal.addEventListener('abort', () => reject(Object.assign(new Error('stopped'), { name: 'AbortError' })), { once: true }));
+  });
+  const run = new AntigravityCliAdapter().createCompletion(input({ signal: controller.signal,
+    tools: [fnTool('bound')], toolNameMap: { bound: { server: 'server', tool: 'read' } }, onTranscriptMessage: transcript }));
+  await ready; controller.abort(); await expect(run).rejects.toMatchObject({ name: 'AbortError' });
+  expect(mockCallTool.mock.calls[0][6].aborted).toBe(true);
+  const count = transcript.mock.calls.length;
+  release({ success: true, data: { content: [{ type: 'text', text: 'late-success' }] } });
+  await Promise.resolve(); await Promise.resolve();
+  expect(transcript).toHaveBeenCalledTimes(count);
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockTools = [];

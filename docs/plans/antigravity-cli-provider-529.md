@@ -2,6 +2,10 @@
 
 Issue: https://github.com/mario-andreschak/FLUJO/issues/529
 
+This document retains the historical #529 implementation and acceptance record
+for runtime 1.2.13. The current 1.3.3 maintenance evidence and remaining release
+criteria are recorded in [the #1094 runtime audit](../audits/antigravity-native-1094-2026-10-12.md).
+
 ## Outcome and scope
 
 The operator explicitly replaced the issue's Gemini CLI target with Antigravity
