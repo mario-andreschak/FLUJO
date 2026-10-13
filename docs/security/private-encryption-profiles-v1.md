@@ -36,6 +36,25 @@ the matching protected secret to recover. Operator-secret rotation must retain
 matching old metadata/secret backups until the new pair is verified; automated
 resumable operator rotation is still pending.
 
+The process retains at most 16 completed, authenticated operator keyring unwraps,
+independently scoped by workspace. The least recently used entry is evicted when
+that bound is reached; ordinary access in another workspace does not replace a
+currently retained entry.
+Reuse still reads the complete current metadata and migration state, validates and
+rereads the bounded independent secret file, and checks the named/canonical
+workspace root and its filesystem identity on every access. The identity includes
+the complete metadata revision, data-key ID, current secret digest, and validated
+mount path/file/permission identity. It never treats a browser flag, generic server
+unlock, token, elapsed time or matching workspace name alone as authority.
+Changes force a canonical 600,000-iteration unwrap; cold derivations recheck the
+current inputs before publishing a result. A lock, unlock, session creation,
+revocation/expiry, migration denial, profile change or failed access invalidates
+that workspace's reuse and prevents an earlier derivation from repopulating it.
+Observed expired sessions revoke their issuing workspace's entry even when
+cleanup runs in another workspace. There is no TTL.
+Transferred-worker provenance retains its separate fresh validation path; a cached
+operator key never substitutes for a missing mount or valid transfer provenance.
+
 Passphrase unlock capabilities bind the complete committed metadata revision.
 Changing the wrapper or profile marker invalidates cached unlock authority;
 passphrase rotation invalidates old unlock tokens while preserving the data key.
