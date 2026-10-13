@@ -8,6 +8,8 @@ import { ExecutionEvent } from '@/shared/types/execution/events';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { hasPendingQuestion } from '@/backend/services/questionRegistry';
+import { hasPendingElicitation } from '@/backend/services/mcp/elicitationRegistry';
 
 import {
   createExecutionStream, executionStreamAdmission, executionStreamCapacityResponse, EXECUTION_SSE_HEADERS,
@@ -122,6 +124,10 @@ async function GET_handler(
         }
         for (const event of replay) {
           if (event.seq < replayFrom) continue;
+          // Historical activity is never authority to answer a process-local
+          // request. Closed mailboxes remain closed after replay or restart.
+          if (event.type === 'run:awaiting_question' && !hasPendingQuestion(conversationId, event.questionId)) continue;
+          if (event.type === 'run:awaiting_elicitation' && !hasPendingElicitation(conversationId, event.elicitationId)) continue;
           if (activityOnlyReplay && (
             event.type === 'model:start' || event.type === 'model:dispatch'
             || event.type === 'model:dispatch-result' || event.type === 'model:delta'

@@ -9,7 +9,7 @@ import { dispatchTaskInputRequest, registerTaskInputHandler } from '@/backend/se
 import { registerSamplingHandler } from '@/backend/services/mcp/sampling';
 import { registerElicitationHandler } from '@/backend/services/mcp/elicitation';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
-import { resolveElicitation, clearAllElicitations } from '@/backend/services/mcp/elicitationRegistry';
+import { resolveConversationElicitation, clearAllElicitations } from '@/backend/services/mcp/elicitationRegistry';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 
@@ -71,7 +71,7 @@ it('cancels attended form input immediately and removes its real pending registr
   const event=emit.mock.calls.find(([event])=>event.type==='run:awaiting_elicitation')?.[0];
   expect(event).toBeDefined();
   controller.abort(); await rejection;
-  expect(resolveElicitation(event.elicitationId,{action:'accept',content:{}})).toBe(false);
+  expect(resolveConversationElicitation('offline-conversation',event.elicitationId,{action:'accept',content:{}})).toBe(false);
   expect(emit).toHaveBeenCalledWith({type:'run:elicitation_cancelled',elicitationId:event.elicitationId});
 });
 
