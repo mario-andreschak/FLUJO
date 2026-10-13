@@ -533,6 +533,9 @@ const Chat: React.FC = () => {
   const [queuedMessages, setQueuedMessages] = useState<QueueMap>({});
   // Guards the drain effect against re-entrancy (one dequeue per idle window).
   const drainingRef = useRef<boolean>(false);
+  // Keep this failure as a key so changing language also updates a visible
+  // pending-input error. Its recovery belongs to the current input controls.
+  const pendingInputErrorKey = 'chat.page.inputResponseFailed' as const;
   const [error, setError] = useState<string | null>(null); // General error display
   // Issue #383: normalized error (message + code/status/class/redacted
   // details) kept alongside `error` rather than replacing it, so this stays a
@@ -1257,8 +1260,9 @@ const Chat: React.FC = () => {
     }
   }, [hydratePendingInputs]);
 
-  // Fetch detailed conversation when ID changes
-  const fetchDetailedConversation = useCallback(async (id: string) => {
+  // Keep selection effects tied to the conversation ID. A language change
+  // must not reset live question/form cards and discard their unsent drafts.
+  const fetchDetailedConversation = useStableCallback(async (id: string) => {
     // Client-only conversations (an unsent split) don't exist on the backend;
     // fetching would 404 and clobber the locally-set detailed view.
     if (localOnlyConversationIdsRef.current.has(id)) {
@@ -1364,7 +1368,7 @@ const Chat: React.FC = () => {
         setIsLoadingDetails(false);
       }
     }
-  }, [fetchConversations, hydratePendingInputs, setCurrentConversationId, t]); // currentConversationId read via ref
+  });
 
   const loadFullTranscript = useCallback(async () => {
     const id = currentConversationIdRef.current;
@@ -4286,6 +4290,8 @@ const Chat: React.FC = () => {
   }) => {
     const conversationId = currentConversationIdRef.current;
     if (!conversationId) return;
+    setError(null);
+    setErrorInfo(null);
     try {
       const response = await fetch(withWorkspaceUrl(`/v1/chat/conversations/${encodeURIComponent(conversationId)}/respond`), {
         method: 'POST',
@@ -4298,13 +4304,15 @@ const Chat: React.FC = () => {
       }
       if (currentConversationIdRef.current === conversationId) {
         setError(null);
+        setErrorInfo(null);
         if (body.elicitationId) setPendingElicitation(pending => cancelPendingElicitation(pending, body.elicitationId!));
         if (body.questionId) setPendingQuestion(pending => clearPendingQuestion(pending, body.questionId!));
       }
     } catch (err) {
       log.warn('Failed to respond to pending input', { conversationId, action: body.action, err });
       if (currentConversationIdRef.current === conversationId) {
-        setError(err instanceof Error ? err.message : 'Unable to respond to this request.');
+        setErrorInfo(null);
+        setError(pendingInputErrorKey);
       }
     } finally {
       // Accepted input may reveal another concurrent mailbox. Invalid or stale
@@ -5855,8 +5863,9 @@ const Chat: React.FC = () => {
               {error && (
                 <Alert
                   severity="error"
+                  aria-atomic="true"
                   sx={{ mt: 2 }}
-                  action={
+                  action={error !== pendingInputErrorKey && (
                     <Button
                       color="inherit"
                       size="small"
@@ -5869,9 +5878,9 @@ const Chat: React.FC = () => {
                     >
                       {t('chat.page.retry')}
                     </Button>
-                  }
+                  )}
                 >
-                  <ChatErrorDetails error={errorInfo} fallbackMessage={error} compact />
+                  <ChatErrorDetails error={errorInfo} fallbackMessage={error === pendingInputErrorKey ? t(pendingInputErrorKey) : error} compact />
                 </Alert>
               )}
                 </>
