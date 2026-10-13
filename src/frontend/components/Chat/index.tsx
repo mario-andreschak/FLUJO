@@ -536,6 +536,7 @@ const Chat: React.FC = () => {
   // Keep this failure as a key so changing language also updates a visible
   // pending-input error. Its recovery belongs to the current input controls.
   const pendingInputErrorKey = 'chat.page.inputResponseFailed' as const;
+  const [pendingInputErrorRevision, setPendingInputErrorRevision] = useState(0);
   const [error, setError] = useState<string | null>(null); // General error display
   // Issue #383: normalized error (message + code/status/class/redacted
   // details) kept alongside `error` rather than replacing it, so this stays a
@@ -4312,6 +4313,9 @@ const Chat: React.FC = () => {
       log.warn('Failed to respond to pending input', { conversationId, action: body.action, err });
       if (currentConversationIdRef.current === conversationId) {
         setErrorInfo(null);
+        // A fast repeated failure can batch with the clear above. Remount its
+        // live alert so the identical guidance is announced again, once.
+        setPendingInputErrorRevision(revision => revision + 1);
         setError(pendingInputErrorKey);
       }
     } finally {
@@ -5862,6 +5866,7 @@ const Chat: React.FC = () => {
               {/* Error Display */}
               {error && (
                 <Alert
+                  key={error === pendingInputErrorKey ? pendingInputErrorRevision : undefined}
                   severity="error"
                   aria-atomic="true"
                   sx={{ mt: 2 }}

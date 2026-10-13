@@ -718,4 +718,23 @@ describe('Talk conversation Agent switch terminology', () => {
       expect(screen.getByRole('button', { name: 'Answer pending question' })).toBeInTheDocument();
     } finally { view.unmount(); globalThis.fetch = originalFetch; }
   });
+
+  it('exposes a fresh live alert for identical failures batched with their clear', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn(async () => ({ ok: false, json: async () => ({ error: 'Same failed response' }) } as Response));
+    mockListConversations.mockResolvedValue([pendingConversation]);
+    mockGetConversation.mockResolvedValue(pendingConversation);
+    const view = render(<Chat />);
+    try {
+      const control = await screen.findByRole('button', { name: 'Answer pending question' });
+      control.focus();
+      await act(async () => { fireEvent.click(control); });
+      const first = screen.getByRole('alert');
+      await act(async () => { fireEvent.click(control); });
+      expect(screen.getByRole('alert')).not.toBe(first);
+      expect(screen.getByRole('alert')).toHaveTextContent(translate('en', 'chat.page.inputResponseFailed'));
+      expect(document.activeElement).toBe(control);
+      expect(mockStartCompletion).not.toHaveBeenCalled();
+    } finally { view.unmount(); globalThis.fetch = originalFetch; }
+  });
 });
