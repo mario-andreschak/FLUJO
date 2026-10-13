@@ -40,6 +40,17 @@ jest.mock('@/utils/storage/backend', () => {
         ? jsonRoundTrip(mockPersistenceStore.get(key))
         : defaultValue
     )),
+    withConversationSnapshot: jest.fn(async (
+      id: string,
+      consume: (state: unknown, token: unknown) => Promise<unknown>,
+    ) => {
+      requireSafeId(id);
+      const state = mockPersistenceStore.get(collectionKey('conversations', id));
+      return jest.requireActual('@/backend/execution/flow/conversationLogReadAdmission')
+        .withConversationLogReadAdmission(100, (token: unknown) => consume(
+          state === undefined ? undefined : jsonRoundTrip(state), token,
+        ));
+    }),
     saveItem: jest.fn(async (key: string, value: unknown) => {
       mockPersistenceStore.set(key, jsonRoundTrip(value));
     }),

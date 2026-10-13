@@ -83,6 +83,7 @@ const RunTools: React.FC<RunToolsProps> = ({
   isAuthenticating = false
 }) => {
   const { t, formatNumber } = useI18n();
+  const fieldId = React.useId();
   // Check for MODULE_NOT_FOUND in console output
   useEffect(() => {
     if (consoleOutput.includes("MODULE_NOT_FOUND")) {
@@ -178,10 +179,11 @@ const RunTools: React.FC<RunToolsProps> = ({
       {/* WebSocket URL input (only shown when websocket transport is selected) */}
       {transport === 'websocket' && (
         <Box>
-          <Typography variant="subtitle2" gutterBottom>
+          <Typography component="label" htmlFor={`${fieldId}-websocket`} variant="subtitle2" gutterBottom sx={{ display: 'block' }}>
             {t('mcp.local.run.websocketUrl')}
           </Typography>
           <TextField
+            id={`${fieldId}-websocket`}
             fullWidth
             size="small"
             value={websocketUrl}
@@ -203,10 +205,11 @@ const RunTools: React.FC<RunToolsProps> = ({
       {/* Server URL input (only shown when sse or streamable transport is selected) */}
       {(transport === 'sse' || transport === 'streamable') && (
         <Box>
-          <Typography variant="subtitle2" gutterBottom>
+          <Typography component="label" htmlFor={`${fieldId}-server`} variant="subtitle2" gutterBottom sx={{ display: 'block' }}>
             {t('mcp.local.run.serverUrl')}
           </Typography>
           <TextField
+            id={`${fieldId}-server`}
             fullWidth
             size="small"
             value={serverUrl}
@@ -242,10 +245,11 @@ const RunTools: React.FC<RunToolsProps> = ({
       {/* Run Command input (only shown when stdio transport is selected) */}
       {transport === 'stdio' && (
         <Box>
-          <Typography variant="subtitle2" gutterBottom>
+          <Typography component="label" htmlFor={`${fieldId}-command`} variant="subtitle2" gutterBottom sx={{ display: 'block' }}>
             {t('mcp.local.run.command')}
           </Typography>
           <TextField
+            id={`${fieldId}-command`}
             fullWidth
             size="small"
             value={command}

@@ -9,6 +9,7 @@
 services:
   flujo:
     build: .
+    init: true
     # Or use a published image instead of building locally:
     # image: ghcr.io/mario-andreschak/flujo:latest
     ports:

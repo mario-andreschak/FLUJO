@@ -271,10 +271,8 @@ export default function Settings() {
         >
           <Stack
             direction="row"
-            alignItems="center"
-            justifyContent="space-between"
             spacing={3}
-            sx={{ position: 'relative', zIndex: 1 }}
+            sx={{ alignItems: "center", justifyContent: "space-between",  position: 'relative', zIndex: 1 }}
           >
             <Box>
               <Chip
@@ -345,9 +343,9 @@ export default function Settings() {
               label={t('settings.sectionLabel')}
               onChange={handleMobileSectionChange}
               renderValue={() => (
-                <Stack direction="row" alignItems="center" spacing={1.25}>
+                <Stack direction="row" sx={{ alignItems: "center" }} spacing={1.25}>
                   <ActiveSectionIcon color="primary" fontSize="small" />
-                  <Typography variant="body2" fontWeight={650}>
+                  <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     {t(activeSection.titleKey)}
                   </Typography>
                 </Stack>
@@ -387,7 +385,7 @@ export default function Settings() {
                   <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 750, letterSpacing: '0.1em' }}>
                     {t(category.titleKey)}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary" display="block">
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
                     {t(category.descriptionKey)}
                   </Typography>
                 </Box>
@@ -440,10 +438,10 @@ export default function Settings() {
                         </ListItemIcon>
                         <ListItemText
                           primary={t(section.titleKey)}
-                          primaryTypographyProps={{
+                          slotProps={{ primary: { sx: {
                             fontSize: '0.9rem',
                             fontWeight: selected ? 700 : 550,
-                          }}
+                          } } }}
                         />
                         <ChevronRightRoundedIcon
                           fontSize="small"

@@ -14,7 +14,7 @@ const readConversationLogMock = jest.fn();
 const projectMessagesMock = jest.fn();
 const appendRawForStateMock = jest.fn(async (_state: unknown, _raws: unknown[]) => undefined);
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
-  readConversationLog: (...args: unknown[]) => readConversationLogMock(...args),
+  withConversationLogEvents: async (id: string, consume: (events: unknown) => unknown) => jest.requireActual('@/backend/execution/flow/conversationLogReadAdmission').withConversationLogReadAdmission(100, async () => consume(await readConversationLogMock(id))),
   projectMessages: (...args: unknown[]) => projectMessagesMock(...args),
   projectModelContextMessages: (...args: unknown[]) => projectMessagesMock(...args),
   appendRawForState: (state: unknown, raws: unknown[]) => appendRawForStateMock(state, raws),
@@ -43,6 +43,8 @@ jest.mock('@/backend/services/snapshot/ShadowRepoService', () => ({
   snapshotsEnabled: jest.fn(async () => true),
 }));
 
+import { ConversationLogReadPressureError, getConversationLogReadAdmission } from '@/backend/execution/flow/conversationLogReadAdmission';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { GET, POST } from '@/app/v1/chat/conversations/[conversationId]/revert/route';
 
 const CONVERSATION_ID = 'conversation-1';
@@ -89,6 +91,7 @@ beforeEach(() => {
   readConversationLogMock.mockReset();
   projectMessagesMock.mockReset();
   appendRawForStateMock.mockClear();
+  jest.mocked(persistConversationState).mockClear();
   loadConversationStateMock.mockReset();
   diffMock.mockReset();
   revertMock.mockReset();
@@ -251,5 +254,49 @@ describe('conversation revert route', () => {
         { type: 'message', message: chatMessage('m2') },
       ],
     );
+  });
+});
+
+
+describe('restore history admission', () => {
+  it('retains reservation through preview and file/chat mutation persistence', async () => {
+    readConversationLogMock.mockResolvedValue([message('m1', 'user'), changedFiles('before', 'after', ['file.ts']), message('m2')]);
+    diffMock.mockImplementation(async () => { expect(getConversationLogReadAdmission().active).toBe(1); return 'diff'; });
+    revertMock.mockImplementation(async () => { expect(getConversationLogReadAdmission().active).toBe(1); return 'undo'; });
+    appendRawForStateMock.mockImplementationOnce(async () => { expect(getConversationLogReadAdmission().active).toBe(1); });
+    jest.mocked(persistConversationState).mockImplementationOnce(async () => { expect(getConversationLogReadAdmission().active).toBe(1); });
+    const plan = await (await preview('m1')).json();
+    const response = await restore({ messageId: 'm1', previewId: plan.previewId, mode: 'chat-and-files' });
+    expect(response.status).toBe(200);
+    expect(getConversationLogReadAdmission()).toEqual({ active: 0, bytes: 0 });
+  });
+
+  it.each([429, 503] as const)('refuses restore under pressure (%s) without changing chat or files', async status => {
+    const state = await loadConversationStateMock();
+    const before = JSON.stringify(state);
+    readConversationLogMock.mockRejectedValueOnce(new ConversationLogReadPressureError(status === 429 ? 'CONVERSATION_LOG_READ_BUSY' : 'CONVERSATION_LOG_READ_MEMORY', status));
+    const response = await restore({ messageId: 'm1', previewId: 'unused', mode: 'chat-and-files' });
+    expect(response.status).toBe(status);
+    expect(JSON.stringify(state)).toBe(before);
+    expect(diffMock).not.toHaveBeenCalled(); expect(revertMock).not.toHaveBeenCalled();
+    expect(appendRawForStateMock).not.toHaveBeenCalled(); expect(persistConversationState).not.toHaveBeenCalled();
+    expect(getConversationLogReadAdmission()).toEqual({ active: 0, bytes: 0 });
+  });
+
+  it('holds undo admission through restored message append and rejects pressure before file undo', async () => {
+    const state = await loadConversationStateMock();
+    state.messages = [];
+    state.revertOperations = { op: { mode: 'chat-and-files', root: ROOT, snapshotId: 'undo', paths: ['file.ts'], chatHeadMessageIds: [], chatTailMessageIds: ['m1'] } };
+    projectMessagesMock.mockReturnValue([]);
+    readConversationLogMock.mockRejectedValueOnce(new ConversationLogReadPressureError('CONVERSATION_LOG_READ_MEMORY', 503));
+    expect((await restore({ action: 'undo', operationId: 'op' })).status).toBe(503);
+    expect(revertMock).not.toHaveBeenCalled(); expect(appendRawForStateMock).not.toHaveBeenCalled();
+    expect(state.revertOperations.op.undoneAt).toBeUndefined();
+    readConversationLogMock.mockResolvedValueOnce([message('m1', 'user')]);
+    revertMock.mockImplementationOnce(async () => { expect(getConversationLogReadAdmission().active).toBe(1); return 'redo'; });
+    appendRawForStateMock.mockImplementationOnce(async () => { expect(getConversationLogReadAdmission().active).toBe(1); });
+    expect((await restore({ action: 'undo', operationId: 'op' })).status).toBe(204);
+    expect(state.messages.map((m: { id: string }) => m.id)).toEqual(['m1']);
+    expect(getConversationLogReadAdmission()).toEqual({ active: 0, bytes: 0 });
   });
 });

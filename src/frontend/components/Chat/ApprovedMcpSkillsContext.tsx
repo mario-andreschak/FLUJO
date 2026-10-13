@@ -70,7 +70,7 @@ const ApprovedMcpSkillsContext: React.FC<ApprovedMcpSkillsContextProps> = ({
       <Stack spacing={0.25}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
           <AutoAwesomeIcon color="warning" fontSize="small" />
-          <Typography variant="caption" fontWeight={700}>
+          <Typography variant="caption" sx={{ fontWeight: 700 }}>
             {t('mcp.skills.chatTitle')}
           </Typography>
           <Typography variant="caption" color="text.secondary">
@@ -102,14 +102,13 @@ const ApprovedMcpSkillsContext: React.FC<ApprovedMcpSkillsContextProps> = ({
                 )}
                 label={(
                   <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="caption" display="block">
+                    <Typography variant="caption" sx={{ display: "block" }}>
                       {skill.entry.frontmatter.name} · {skill.identity.serverName}
                     </Typography>
                     <Typography
                       variant="caption"
                       color="text.secondary"
-                      display="block"
-                      sx={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      sx={{ display: "block",  maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' }}
                     >
                       {skill.identity.skillUri} · {skill.manifest.digest}
                     </Typography>

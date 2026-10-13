@@ -5,6 +5,8 @@
 // the matcher and the "nothing is silently skipped" check can never drift
 // apart. See issue #176: a `.test.tsx` under `__tests__/` used to be dropped
 // because the matcher only listed `.test.ts`.
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // Glob patterns relative to the repo root, posix separators.
 // The jsdom project owns component/render tests, plus hook tests that need a
@@ -23,12 +25,32 @@ export const NODE_IGNORE_GLOBS = [
   '__tests__/frontend/workspaceSelection\\.test\\.(?:ts|tsx)$',
 ];
 
-const withRoot = (globs) => globs.map((g) => `<rootDir>/${g}`);
+const escapeForRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Jest-consumable shapes (with the <rootDir> token Jest substitutes).
-export const jsdomTestMatch = withRoot(JSDOM_TEST_GLOBS);
-export const nodeTestMatch = withRoot(NODE_TEST_GLOBS);
-export const nodeTestPathIgnorePatterns = ['/node_modules/', ...withRoot(NODE_IGNORE_GLOBS)];
+// Jest's Windows glob normalizer preserves `\.` as a glob escape. Substituting
+// a native <rootDir> containing `\.codex` therefore loses that separator.
+// Supply POSIX roots before normalization, and escape regex roots separately.
+export function testPatternsForRoot(root) {
+  // Jest canonicalizes rootDir before collecting files. Windows TEMP can use
+  // an 8.3 alias (RUNNER~1), and managed checkouts can use directory junctions.
+  // Match the physical root rather than embedding the caller's alias in globs.
+  let physicalRoot = root;
+  try { physicalRoot = realpathSync.native(root); } catch (error) {
+    // Keep synthetic/nonexistent roots useful to the portable matcher guards.
+    if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+  }
+  const normalized = physicalRoot.replaceAll('\\', '/').replace(/\/$/, '');
+  const globRoot = normalized;
+  const regexRoot = escapeForRegExp(normalized);
+  return {
+    nodeTestMatch: NODE_TEST_GLOBS.map((glob) => `${globRoot}/${glob}`),
+    jsdomTestMatch: JSDOM_TEST_GLOBS.map((glob) => `${globRoot}/${glob}`),
+    nodeTestPathIgnorePatterns: ['/node_modules/', ...NODE_IGNORE_GLOBS.map((pattern) => `${regexRoot}/${pattern}`)],
+    isolatedTestPathIgnorePatterns: ISOLATED_TEST_FILES.map((file) => `${regexRoot}/${escapeForRegExp(file)}$`),
+  };
+}
+
+// Initialized after the isolated-file contract below.
 
 // Union of every project's collection globs, relative to root (for the guard).
 export const ALL_TEST_GLOBS = [...NODE_TEST_GLOBS, ...JSDOM_TEST_GLOBS];
@@ -43,6 +65,14 @@ export const ALL_TEST_GLOBS = [...NODE_TEST_GLOBS, ...JSDOM_TEST_GLOBS];
 // the main run merely *ignores* them when the exclusion switch is on.
 // ---------------------------------------------------------------------------
 export const ISOLATED_TEST_FILES = [
+  '__tests__/mcp/internalServer.test.ts',
+  '__tests__/mcp/protectedPackageRunner.test.ts',
+  '__tests__/mcp/serverTasks.test.ts',
+  '__tests__/scheduler/staticRealBashFlow.test.ts',
+  '__tests__/flow/original520OfflineWorkload.test.ts',
+  '__tests__/flow/nativeOriginalHost.test.ts',
+  '__tests__/flow/archiveWriteQuarantineProcess.test.ts',
+  '__tests__/model/claudeArchiveMemoryBoundary.test.ts',
   '__tests__/enduringAgents/personaProcessBoundary.test.ts',
   '__tests__/enduringAgents/activityRuntime.test.ts',
   '__tests__/enduringAgents/memoryLifecycle.test.ts',
@@ -59,11 +89,8 @@ export const ISOLATED_TEST_FILES = [
 // scripts cannot portably prefix `VAR=value`).
 export const EXCLUDE_ISOLATED_SUITES_ENV = 'FLUJO_JEST_EXCLUDE_ISOLATED_SUITES';
 
-const escapeForRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-export const isolatedTestPathIgnorePatterns = ISOLATED_TEST_FILES.map(
-  (file) => `<rootDir>/${escapeForRegExp(file)}$`,
-);
+export const { nodeTestMatch, jsdomTestMatch, nodeTestPathIgnorePatterns, isolatedTestPathIgnorePatterns } =
+  testPatternsForRoot(fileURLToPath(new URL('.', import.meta.url)));
 
 export function shouldExcludeIsolatedSuites(env = process.env) {
   return /^(?:1|true|yes|on)$/i.test(env[EXCLUDE_ISOLATED_SUITES_ENV] ?? '');

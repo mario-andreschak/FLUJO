@@ -637,7 +637,7 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
         <NodeHeader nodeType={nodeType}>
           <NodeContent>
             {getNodeIcon(nodeType)}
-            <Typography variant="subtitle2" fontWeight="bold">
+            <Typography variant="subtitle2" sx={{ fontWeight: "bold" }}>
               {information.label}
             </Typography>
           </NodeContent>

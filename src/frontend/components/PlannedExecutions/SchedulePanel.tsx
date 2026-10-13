@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
   Alert,
   Box,
+  Button,
   Checkbox,
   FormControl,
   FormControlLabel,
@@ -17,7 +18,7 @@ import {
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
+import { plannedExecutionsService, type SchedulePreviewResult } from '@/frontend/services/plannedExecutions';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 type PresetMode = 'seconds' | 'minutes' | 'hours' | 'daily' | 'weekdays' | 'custom';
@@ -85,15 +86,28 @@ const SchedulePanel = ({
   onCatchUpChange,
 }: SchedulePanelProps) => {
   const { t, formatDate } = useI18n();
+  const presetLabelId = useId();
   const resolvedVerb = verb ?? t('automations.schedule.runsVerb');
   const initial = useMemo(() => presetFromCron(cronProp), []);
   const [mode, setMode] = useState<PresetMode>(initial.mode);
   const [n, setN] = useState<number>(initial.n);
   const [time, setTime] = useState<string>(initial.time);
   const [customCron, setCustomCron] = useState<string>(cronProp);
-  const [preview, setPreview] = useState<{ valid: boolean; error?: string; nextRuns: string[] } | null>(null);
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [previewState, setPreviewState] = useState<{
+    cron: string;
+    timezone?: string;
+    attempt: number;
+    result: SchedulePreviewResult;
+  } | null>(null);
 
   const cron = cronFromPreset(mode, n, time, customCron);
+  // A preview only describes the inputs that produced it, including during debounce.
+  const preview = previewState?.cron === cron
+    && previewState.timezone === timezone
+    && previewState.attempt === previewAttempt
+    ? previewState.result
+    : null;
 
   // Push the generated pattern up whenever any input changes.
   useEffect(() => {
@@ -109,22 +123,22 @@ const SchedulePanel = ({
       plannedExecutionsService
         .previewSchedule(cron, timezone)
         .then(result => {
-          if (!cancelled) setPreview(result);
+          if (!cancelled) setPreviewState({ cron, timezone, attempt: previewAttempt, result });
         });
     }, 300);
     return () => {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [cron, timezone]);
+  }, [cron, timezone, previewAttempt]);
 
   return (
-    <Box>
+    <Box sx={{ minWidth: 0 }}>
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', mt: 1 }}>
-        <FormControl sx={{ minWidth: 180 }}>
-          <InputLabel id="schedule-preset-label">{resolvedVerb}</InputLabel>
+        <FormControl sx={{ minWidth: 0, width: { xs: '100%', sm: 180 } }}>
+          <InputLabel id={presetLabelId}>{resolvedVerb}</InputLabel>
           <Select
-            labelId="schedule-preset-label"
+            labelId={presetLabelId}
             label={resolvedVerb}
             value={mode}
             onChange={(e) => setMode(e.target.value as PresetMode)}
@@ -144,8 +158,8 @@ const SchedulePanel = ({
             type="number"
             value={n}
             onChange={(e) => setN(Number(e.target.value))}
-            inputProps={{ min: 1, max: mode === 'hours' ? 23 : 59 }}
-            sx={{ width: 120 }}
+            slotProps={{ htmlInput: { min: 1, max: mode === 'hours' ? 23 : 59 } }}
+            sx={{ width: { xs: '100%', sm: 120 } }}
           />
         )}
 
@@ -155,8 +169,8 @@ const SchedulePanel = ({
             type="time"
             value={time}
             onChange={(e) => setTime(e.target.value)}
-            sx={{ width: 150 }}
-            InputLabelProps={{ shrink: true }}
+            sx={{ width: { xs: '100%', sm: 150 } }}
+            slotProps={{ inputLabel: { shrink: true } }}
           />
         )}
 
@@ -165,21 +179,42 @@ const SchedulePanel = ({
             label={t('automations.schedule.cron')}
             value={customCron}
             onChange={(e) => setCustomCron(e.target.value)}
-            sx={{ minWidth: 220 }}
+            sx={{ minWidth: 0, width: { xs: '100%', sm: 220 } }}
             placeholder="*/15 * * * *"
           />
         )}
       </Box>
 
-      {preview && !preview.valid && (
-        <Alert severity="error" sx={{ mt: 2 }}>
-          {preview.error || t('automations.schedule.invalid')}
+      <Box role="status" aria-live="polite" sx={{ mt: 2, overflowWrap: 'anywhere' }}>
+        {!preview && (
+          <Typography variant="body2" color="text.secondary">{t('automations.schedule.checking')}</Typography>
+        )}
+        {preview?.valid && (
+          <Typography variant="body2" color="text.secondary">
+            {preview.nextRuns.length > 0
+              ? t('automations.schedule.next', { times: preview.nextRuns.map(iso => formatDate(iso, { dateStyle: 'short', timeStyle: 'short' })).join('  ·  ') })
+              : t('automations.schedule.noNextRuns')}
+          </Typography>
+        )}
+      </Box>
+      {preview?.unavailable && (
+        <Alert
+          severity="warning"
+          sx={{ mt: 1, flexDirection: { xs: 'column', sm: 'row' }, '& .MuiAlert-message': { minWidth: 0 }, '& .MuiAlert-action': { ml: 0, pl: { xs: 0, sm: 2 }, alignSelf: { xs: 'stretch', sm: 'center' } } }}
+          action={
+            <Button color="inherit" onClick={() => setPreviewAttempt((attempt) => attempt + 1)} sx={{ minHeight: 44, width: { xs: '100%', sm: 'auto' } }}>
+              {t('common.tryAgain')}
+            </Button>
+          }
+        >
+          {t('automations.schedule.previewUnavailable')}
         </Alert>
       )}
-      {preview && preview.valid && preview.nextRuns.length > 0 && (
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-          {t('automations.schedule.next', { times: preview.nextRuns.map(iso => formatDate(iso, { dateStyle: 'short', timeStyle: 'short' })).join('  ·  ') })}
-        </Typography>
+      {preview && !preview.valid && !preview.unavailable && (
+        <Alert severity="error" sx={{ mt: 2 }}>
+          {t('automations.schedule.invalid')}
+          {preview.error && <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{preview.error}</Typography>}
+        </Alert>
       )}
 
       {onCatchUpChange && (
@@ -196,7 +231,7 @@ const SchedulePanel = ({
       )}
 
       <Accordion disableGutters elevation={0} sx={{ mt: 1, '&:before': { display: 'none' } }}>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 0 }}>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 0, minHeight: 48 }}>
           <Typography variant="body2" color="text.secondary">{t('automations.advanced')}</Typography>
         </AccordionSummary>
         <AccordionDetails sx={{ px: 0 }}>
@@ -207,18 +242,18 @@ const SchedulePanel = ({
               onChange={(e) => onChange({ cron, timezone: e.target.value || undefined })}
               placeholder={t('automations.schedule.timezonePlaceholder')}
               helperText={t('automations.schedule.timezoneHelp')}
-              sx={{ minWidth: 260 }}
+              sx={{ minWidth: 0, width: { xs: '100%', sm: 260 } }}
             />
             <TextField
               label={t('automations.schedule.generatedCron')}
               value={cron}
-              InputProps={{ readOnly: mode !== 'custom' }}
+              slotProps={{ input: { readOnly: mode !== 'custom' } }}
               onChange={(e) => {
                 setMode('custom');
                 setCustomCron(e.target.value);
               }}
               helperText={t('automations.schedule.editCustom')}
-              sx={{ minWidth: 220 }}
+              sx={{ minWidth: 0, width: { xs: '100%', sm: 220 } }}
             />
           </Box>
         </AccordionDetails>

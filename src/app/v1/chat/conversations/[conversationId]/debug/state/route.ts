@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -51,6 +52,7 @@ async function GET_handler(
       debugState: sharedState,
     });
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     log.error('Error reading debug state', { conversationId, error });
     return NextResponse.json({ error: 'Internal server error reading debug state' }, { status: 500 });
   }

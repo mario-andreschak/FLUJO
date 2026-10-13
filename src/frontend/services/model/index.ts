@@ -4,6 +4,8 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/services/model');
 
+export const MODEL_CATALOG_CHANGED_EVENT = 'flujo:models-changed';
+
 export interface ModelResult {
   success: boolean;
   model?: Model;
@@ -17,6 +19,10 @@ interface ModelsResult {
 }
 
 class ModelService {
+  private notifyCatalogChanged(): void {
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(MODEL_CATALOG_CHANGED_EVENT));
+  }
+
   private async fetchWithErrorHandling<T>(url: string, options?: RequestInit): Promise<T> {
     try {
       // Log request attempt
@@ -172,6 +178,8 @@ class ModelService {
         displayName: newModel.displayName 
       });
 
+      this.notifyCatalogChanged();
+
       return {
         success: true,
         model: newModel,
@@ -239,6 +247,8 @@ class ModelService {
         displayName: model.displayName 
       });
 
+      this.notifyCatalogChanged();
+
       return {
         success: true,
         model: updatedModel,
@@ -304,6 +314,8 @@ class ModelService {
         modelId: id,
         displayName: model.displayName 
       });
+
+      this.notifyCatalogChanged();
 
       return { success: true };
     } catch (error) {

@@ -21,7 +21,7 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 
 jest.mock('@/backend/services/mcp/config', () => ({
   loadServerConfigs: jest.fn(async () => [
-    { name: 'srv', transport: 'stdio', command: 'x', args: [], env: {}, disabled: false },
+    { name: 'srv', transport: 'streamable', serverUrl: 'https://lifecycle.example.test/mcp', disabled: false },
   ]),
   saveConfig: jest.fn(async () => ({ success: true })),
 }));
@@ -34,6 +34,8 @@ jest.mock('@/backend/services/mcp/tools', () => ({
 
 const createNewClientMock = jest.fn();
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: (...args: unknown[]) => createNewClientMock(...args),
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),

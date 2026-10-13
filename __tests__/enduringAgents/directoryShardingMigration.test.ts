@@ -9,6 +9,7 @@ import {
   getLegacyCollectionItemPath,
   getShardedCollectionItemPath,
   loadShardedCollectionItem,
+  listShardedCollectionItems,
   saveCollectionItem,
   saveShardedCollectionItem,
   type PersonaShardedCollection,
@@ -60,6 +61,7 @@ const COLLECTIONS: PersonaShardedCollection[] = [
 ];
 
 describe('Enduring Agent Persona directory sharding', () => {
+  afterEach(() => jest.restoreAllMocks());
   it('writes, reads, and deletes a Persona-owned record in its shard', async () => {
     await inFreshWorkspace(async () => {
       const value = record(
@@ -183,6 +185,24 @@ describe('Enduring Agent Persona directory sharding', () => {
       await expect(fs.access(getLegacyCollectionItemPath(collection, flat.id)))
         .resolves.toBeUndefined();
       await expect(fs.access(shardedPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it('refuses a shard replaced after the directory and item were checked', async () => {
+    await inFreshWorkspace(async () => {
+      const collection = ENDURING_AGENT_COLLECTIONS.activities;
+      const value = record(collection, 'persona_a', 'activity_a');
+      await saveShardedCollectionItem(collection, value.personaId, value.id, value);
+      const file = getShardedCollectionItemPath(collection, value.personaId, value.id);
+      const open = fs.open.bind(fs);
+      jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+        if (String(args[0]) === file) {
+          await fs.rename(file, `${file}.original`);
+          await fs.writeFile(file, JSON.stringify({ ...value, payload: 'external replacement' }));
+        }
+        return open(...args);
+      });
+      await expect(listShardedCollectionItems(collection, value.personaId)).rejects.toMatchObject({ code: 'UNSAFE_FILE' });
     });
   });
 });

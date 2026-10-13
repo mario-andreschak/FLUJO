@@ -1,6 +1,9 @@
 /** @jest-environment jsdom */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import PersonaRecoverySettings from '@/frontend/components/Settings/PersonaRecoverySettings';
+import { I18nProvider } from '@/frontend/contexts/I18nContext';
+import { formatDate, translate } from '@/frontend/i18n/core';
+import { LOCALE_STORAGE_KEY, SUPPORTED_LOCALES } from '@/frontend/i18n/locales';
 
 let selected = 'source-workspace';
 let workspaceChanged: (workspace: string) => void;
@@ -28,6 +31,7 @@ function chooseFile(size = 4) {
 describe('Persona recovery owner review', () => {
   beforeEach(() => {
     jest.clearAllMocks(); selected = 'source-workspace'; global.fetch = fetchMock;
+    window.localStorage.clear();
     URL.createObjectURL = jest.fn(() => 'blob:recovery'); URL.revokeObjectURL = jest.fn();
   });
   afterAll(() => { global.fetch = originalFetch; });
@@ -113,5 +117,97 @@ describe('Persona recovery owner review', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Prepare Persona backup' })).not.toHaveFocus();
     expect(screen.getByRole('button', { name: 'Preview recovery' })).not.toHaveFocus();
+  });
+
+  it.each(SUPPORTED_LOCALES)('retains upload choices and offers a localized retry after a rejected ZIP in $code', async ({ code }) => {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, code);
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ error: 'Invalid recovery ZIP end directory.' }) });
+    render(<I18nProvider><PersonaRecoverySettings /></I18nProvider>);
+    const file = new File(['broken zip'], 'persona-backup.zip', { type: 'application/zip' });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    const destination = screen.getByRole('textbox', { name: translate(code, 'settings.personaRecovery.destination') });
+    fireEvent.change(destination, { target: { value: 'restored-workspace' } });
+    fireEvent.click(screen.getByRole('button', { name: translate(code, 'settings.personaRecovery.inspect') }));
+    const error = await screen.findByText(translate(code, 'settings.personaRecovery.inspectFailed'));
+    expect(error.closest('[role="alert"]')).toHaveFocus();
+    expect(screen.queryByText('Invalid recovery ZIP end directory.')).not.toBeInTheDocument();
+    expect(destination).toHaveValue('restored-workspace');
+    expect((document.querySelector('input[type="file"]') as HTMLInputElement).files?.[0]).toBe(file);
+    expect(screen.getByRole('button', { name: translate(code, 'settings.personaRecovery.inspect') })).toBeEnabled();
+    fetchMock.mockResolvedValueOnce(response(preview));
+    fireEvent.click(screen.getByRole('button', { name: translate(code, 'settings.personaRecovery.inspect') }));
+    await screen.findByRole('dialog');
+    expect(fetchMock.mock.calls[1][1].body).toBe(file);
+  });
+
+  it.each(SUPPORTED_LOCALES)('localizes a network failure while preparing a backup in $code', async ({ code }) => {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, code);
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(<I18nProvider><PersonaRecoverySettings /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: translate(code, 'settings.personaRecovery.prepare') }));
+    expect((await screen.findByText(translate(code, 'settings.personaRecovery.captureFailed'))).closest('[role="alert"]')).toHaveFocus();
+    expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: translate(code, 'settings.personaRecovery.prepare') })).toBeEnabled();
+  });
+
+  it.each([
+    [423, 'settings.personaRecovery.locked'],
+    [403, 'settings.personaRecovery.localOnly'],
+    [413, 'settings.personaRecovery.fileLimit'],
+  ] as const)('gives actionable localized guidance for HTTP %s', async (status, key) => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status, json: async () => ({ error: 'Raw backend diagnostic' }) });
+    render(<PersonaRecoverySettings />); chooseFile();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview recovery' }));
+    expect((await screen.findByText(translate('en', key))).closest('[role="alert"]')).toHaveFocus();
+    expect(screen.queryByText('Raw backend diagnostic')).not.toBeInTheDocument();
+  });
+
+  it('keeps a failed restore in the preview with one focused error and permits reviewing the same file again', async () => {
+    fetchMock.mockResolvedValueOnce(response(preview));
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(<PersonaRecoverySettings />); chooseFile();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview recovery' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restore into new workspace' }));
+    const errors = await screen.findAllByText(translate('en', 'settings.personaRecovery.restoreFailed'));
+    expect(errors).toHaveLength(1);
+    expect(errors[0].closest('[role="alert"]')).toHaveFocus();
+    expect(dialog).toContainElement(errors[0]);
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Preview recovery' })).toHaveFocus();
+    expect(screen.getByRole('textbox', { name: 'New workspace name' })).toHaveValue('restored-workspace');
+  });
+
+  it.each([
+    ['The recovery destination already exists; choose a new workspace name.', 'settings.personaRecovery.destinationExists'],
+    ['A case-equivalent recovery workspace already exists.', 'settings.personaRecovery.destinationExists'],
+    ['The destination contains a different recovery or existing workspace.', 'settings.personaRecovery.destinationExists'],
+    ['Recovery preview changed; inspect the archive and destination again.', 'settings.personaRecovery.previewChanged'],
+  ] as const)('keeps specific restore guidance localized for %s', async (backendMessage, key) => {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, 'es');
+    fetchMock.mockResolvedValueOnce(response(preview));
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ error: backendMessage }) });
+    render(<I18nProvider><PersonaRecoverySettings /></I18nProvider>);
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(['zip'], 'persona-backup.zip')] } });
+    fireEvent.change(screen.getByRole('textbox', { name: translate('es', 'settings.personaRecovery.destination') }), { target: { value: 'restored-workspace' } });
+    fireEvent.click(screen.getByRole('button', { name: translate('es', 'settings.personaRecovery.inspect') }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: translate('es', 'settings.personaRecovery.restore') }));
+    expect((await within(dialog).findByText(translate('es', key))).closest('[role="alert"]')).toHaveFocus();
+    expect(screen.queryByText(backendMessage)).not.toBeInTheDocument();
+  });
+
+  it.each(SUPPORTED_LOCALES)('uses the selected $code locale for the capture date', async ({ code }) => {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, code);
+    const blob = new Blob(['zip']);
+    fetchMock.mockResolvedValueOnce({ ok: true, blob: async () => blob, headers: { get: () => encodeURIComponent(JSON.stringify({
+      sourceWorkspace: selected, captureId: 'capture-id', capturedAt: 1, archiveBytes: blob.size, counts: { personas: 1 },
+    })) } });
+    render(<I18nProvider><PersonaRecoverySettings /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: translate(code, 'settings.personaRecovery.prepare') }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(translate(code, 'settings.personaRecovery.source', { workspace: selected, date: formatDate(code, 1, { dateStyle: 'medium', timeStyle: 'medium' }) }))).toBeInTheDocument();
   });
 });

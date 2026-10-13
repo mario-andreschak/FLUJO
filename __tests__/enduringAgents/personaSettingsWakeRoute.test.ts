@@ -3,6 +3,7 @@ const assertUnlockedMock = jest.fn();
 const updatePersonaSettingsMock = jest.fn();
 const pumpPersonaFlowDispatchesMock = jest.fn();
 const listPersonaFlowDispatchesMock = jest.fn();
+const listPersonaRuntimeRecordsStrictMock = jest.fn();
 const projectPersonaPresentationMock = jest.fn();
 const readPersonaRuntimeSnapshotMock = jest.fn();
 
@@ -29,6 +30,7 @@ jest.mock('@/backend/services/enduringAgents', () => ({
   PersonaDeletionNotFoundError: class extends Error {},
   deletePersona: jest.fn(),
   listPersonaFlowDispatches: (...args: unknown[]) => listPersonaFlowDispatchesMock(...args),
+  listPersonaRuntimeRecordsStrict: (...args: unknown[]) => listPersonaRuntimeRecordsStrictMock(...args),
   projectPersonaPresentation: (...args: unknown[]) => projectPersonaPresentationMock(...args),
   readPersonaRuntimeSnapshot: (...args: unknown[]) => readPersonaRuntimeSnapshotMock(...args),
   updatePersonaSettings: (...args: unknown[]) => updatePersonaSettingsMock(...args),
@@ -85,7 +87,8 @@ describe('Persona Settings wake behavior', () => {
   });
 
   it('projects a bounded, readable result without exposing the dispatch record', async () => {
-    const bundle = { persona: { id: 'persona_test' } };
+    const bundle = { persona: { id: 'persona_test' }, mailboxItems: [], activities: [], lease: null };
+    listPersonaRuntimeRecordsStrictMock.mockResolvedValue({ activities: [], mailboxItems: [] });
     readPersonaRuntimeSnapshotMock.mockResolvedValue({
       bundle,
       runtime: { projection: { active: null } },
@@ -94,7 +97,7 @@ describe('Persona Settings wake behavior', () => {
       id: 'private_dispatch_id',
       state: 'completed',
       activityId: 'activity_result',
-      admission: { kind: 'assignment' },
+      admission: { kind: 'assignment', source: { kind: 'api' } },
       outcome: {
         activityId: 'activity_result',
         status: 'completed',
@@ -104,7 +107,7 @@ describe('Persona Settings wake behavior', () => {
       id: 'private_maintenance_id',
       state: 'completed',
       activityId: 'activity_maintenance',
-      admission: { kind: 'maintenance' },
+      admission: { kind: 'maintenance', source: { kind: 'api' } },
       outcome: {
         activityId: 'activity_maintenance',
         status: 'completed',
@@ -126,7 +129,7 @@ describe('Persona Settings wake behavior', () => {
       id: 'private_error_id',
       state: 'error',
       activityId: 'activity_error',
-      admission: { kind: 'assignment' },
+      admission: { kind: 'assignment', source: { kind: 'api' } },
       outcome: {
         activityId: 'activity_error',
         status: 'error',
@@ -137,7 +140,7 @@ describe('Persona Settings wake behavior', () => {
       id: 'private_final_action_id',
       state: 'completed',
       activityId: 'activity_final_action',
-      admission: { kind: 'assignment' },
+      admission: { kind: 'assignment', source: { kind: 'api' } },
       outcome: {
         activityId: 'activity_final_action',
         status: 'completed',
@@ -166,6 +169,8 @@ describe('Persona Settings wake behavior', () => {
       'activity_result',
       'activity_maintenance',
     ]);
-    expect(JSON.stringify(await response.json())).not.toContain('private_dispatch_id');
+    const payload = JSON.stringify(await response.json());
+    expect(payload).toContain('private_dispatch_id');
+    expect(payload).not.toContain('internal');
   });
 });

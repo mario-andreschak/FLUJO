@@ -317,7 +317,7 @@ export default function PersonaFlowsArea({
   if (loading) {
     return (
       <Paper variant="outlined" sx={{ p: 4, borderRadius: 4 }}>
-        <Stack alignItems="center" spacing={2} role="status">
+        <Stack sx={{ alignItems: "center" }} spacing={2} role="status">
           <CircularProgress aria-hidden="true" />
           <Typography color="text.secondary">{t('personas.flows.loading')}</Typography>
         </Stack>
@@ -357,9 +357,9 @@ export default function PersonaFlowsArea({
         />
       ))}
       <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4 }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1} sx={{ mb: 2 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 1,  mb: 2 }}>
           <Box>
-            <Typography variant="h5" component="h2" fontWeight={760}>{t('personas.behaviors.title')}</Typography>
+            <Typography variant="h5" component="h2" sx={{ fontWeight: 760 }}>{t('personas.behaviors.title')}</Typography>
             <Typography color="text.secondary">{t('personas.behaviors.description')}</Typography>
           </Box>
             <Button
@@ -383,14 +383,14 @@ export default function PersonaFlowsArea({
               return (
                 <Card key={card.ref} variant="outlined" sx={{ borderRadius: 3 }}>
                   <CardContent>
-                    <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1}>
+                    <Stack direction={{ xs: 'column', md: 'row' }} sx={{ justifyContent: "space-between", gap: 1 }}>
                       <Box>
-                        <Typography variant="h6" component="h3" fontWeight={750}>{label.name}</Typography>
+                        <Typography variant="h6" component="h3" sx={{ fontWeight: 750 }}>{label.name}</Typography>
                         {card.slotKey === 'maintain_memory'
                           ? <Typography color="text.secondary">{t('personas.behaviors.maintenanceHelp')}</Typography>
                           : label.description && <Typography color="text.secondary">{label.description}</Typography>}
                       </Box>
-                      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                      <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                         <BindingChip card={card} />
                         <Chip label={t(card.slotKey === 'maintain_memory'
                           ? 'personas.behaviors.maintenance'
@@ -492,13 +492,11 @@ function BehaviorVersionHistory({
             <Paper key={revision.id} variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
               <Stack
                 direction={{ xs: 'column', sm: 'row' }}
-                justifyContent="space-between"
-                alignItems={{ xs: 'stretch', sm: 'center' }}
-                gap={1}
+                sx={{ justifyContent: "space-between", alignItems: { xs: 'stretch', sm: 'center' }, gap: 1 }}
               >
                 <Box>
-                  <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-                    <Typography fontWeight={700}>
+                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
+                    <Typography sx={{ fontWeight: 700 }}>
                       {t('personas.behaviors.version', { version: revision.revision })}
                     </Typography>
                     {current && <Chip size="small" color="success" label={t('personas.behaviors.currentVersion')} />}
@@ -565,10 +563,10 @@ function FlowSection({
   const { t } = useI18n();
   return (
     <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4 }}>
-      <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1}>
-        <Box><Typography variant="h5" component="h2" fontWeight={760}>{title}</Typography><Typography color="text.secondary">{description}</Typography></Box>
+      <Stack direction={{ xs: 'column', md: 'row' }} sx={{ justifyContent: "space-between", gap: 1 }}>
+        <Box><Typography variant="h5" component="h2" sx={{ fontWeight: 760 }}>{title}</Typography><Typography color="text.secondary">{description}</Typography></Box>
         {card && (
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
             <OwnershipChip card={card} />
             <BindingChip card={card} />
             <ReadinessChip card={card} />
@@ -581,7 +579,7 @@ function FlowSection({
           : <Alert severity="warning">{t('personas.behaviors.missing')}</Alert>}
       </Box>
       {card && <ReadinessHelp card={card} />}
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
+      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap",  mt: 1.5 }}>
         <Button disabled={busy} onClick={onChange}>{card?.flow ? t('personas.behaviors.change') : t('personas.behaviors.replace')}</Button>
         {card && <FlowLinks card={card} personaId={personaId} />}
         {onReset && (

@@ -1,4 +1,5 @@
 import { ProcessNode } from '@/backend/execution/flow/nodes';
+import { createHash } from 'node:crypto';
 import { ToolHandler } from '@/backend/execution/flow/handlers/ToolHandler';
 import { ResourceHandler } from '@/backend/execution/flow/handlers/ResourceHandler';
 import { mcpService } from '@/backend/services/mcp';
@@ -66,6 +67,33 @@ describe('protected Process preparation has no foreign MCP effects', () => {
       jest.spyOn(mcpService, 'subscribeToResource'),
     ];
   }
+
+  test('protected config equality tokens hide raw secret digests and change on credential rotation', () => {
+    const config = { name: 'protected-fixture', transport: 'streamable',
+      serverUrl: 'https://protected.example/mcp', headers: { Authorization: 'Bearer low-entropy-fixture' } };
+    const token = protectedConfigFingerprint(config as never);
+    expect(token).toBe(protectedConfigFingerprint({ ...config } as never));
+    expect(token).not.toBe(createHash('sha256').update(JSON.stringify(config)).digest('hex'));
+    expect(token).not.toBe(protectedConfigFingerprint({ ...config,
+      headers: { Authorization: 'Bearer rotated-fixture' } } as never));
+  });
+
+  test('protected connection failure never falls through to OAuth discovery or config persistence', async () => {
+    const { state } = setup();
+    const config = { name: 'protected-fixture', transport: 'streamable', disabled: false,
+      serverUrl: 'https://protected.example/mcp', headers: {} };
+    jest.spyOn(mcpService, 'loadServerConfigs').mockResolvedValue([config as never]);
+    jest.spyOn(mcpService, 'isServerDisabled').mockResolvedValue(false);
+    jest.spyOn(mcpConnection, 'resolveConfigHeaders').mockResolvedValue(config as never);
+    const transport = mcpConnection.createTransport as jest.Mock;
+    transport.mockImplementationOnce(() => { throw Object.assign(new Error('Unauthorized'), { status: 401 }); });
+    const providerFetch = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected OAuth discovery'));
+    const persist = jest.spyOn(mcpService, 'updateServerConfig');
+    const result = await mcpService.connectServer('protected-fixture', state.executionExtensionContext);
+    expect(result).toMatchObject({ success: false, error: 'execution_mcp_connect_failed', errorType: 'execution-authorization' });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+  });
 
   test('owned state without live context is refused before prompt preparation', async () => {
     const { state, params } = setup();
@@ -322,7 +350,7 @@ describe('protected Process preparation has no foreign MCP effects', () => {
     expect(status).not.toHaveBeenCalled();
   });
 
-  test('protected tool listing rejects a client for an older websocket recipient', async () => {
+  test.each([undefined, 'page-2'])('protected paginated tool listing rejects an older websocket recipient (cursor=%s)', async cursor => {
     const { state } = setup();
     const oldConfig = { name: 'protected-fixture', transport: 'websocket', websocketUrl: 'wss://old.example/mcp' };
     const currentConfig = { ...oldConfig, websocketUrl: 'wss://current.example/mcp' };
@@ -332,17 +360,32 @@ describe('protected Process preparation has no foreign MCP effects', () => {
     } as never);
     const reconnect = jest.spyOn(mcpService, 'forceReconnect');
 
-    await expect(mcpService.listServerTools('protected-fixture', 'model', state.executionExtensionContext))
+    await expect(mcpService.listServerTools('protected-fixture', 'model', state.executionExtensionContext, cursor))
       .rejects.toMatchObject({ code: 'execution_mcp_client_identity_changed' });
     expect(reconnect).not.toHaveBeenCalled();
   });
 
-  test('host inventory cannot list a protected server without a run context', async () => {
+  test.each([undefined, 'page-2'])('host inventory cannot use a cursor as protected authority (cursor=%s)', async cursor => {
     setup();
     const client = jest.spyOn(mcpService, 'getClient');
-    await expect(mcpService.listServerTools('protected-fixture', 'all'))
+    await expect(mcpService.listServerTools('protected-fixture', 'all', cursor))
       .rejects.toMatchObject({ code: 'trusted_execution_context_required' });
     expect(client).not.toHaveBeenCalled();
+  });
+
+  test('a protected context and explicit cursor retain recipient and owner checks', async () => {
+    const { state } = setup();
+    const config = { name: 'protected-fixture', transport: 'websocket', websocketUrl: 'wss://current.example/mcp' };
+    const request = jest.fn().mockResolvedValue({ tools: [], nextCursor: 'page-3' });
+    const currentClient = { __flujoProtectedConfigFingerprint: protectedConfigFingerprint(config as never), request };
+    jest.spyOn(mcpService, 'loadServerConfigs').mockResolvedValue([config as never]);
+    jest.spyOn(mcpService, 'getClient').mockReturnValue(currentClient as never);
+    const reconnect = jest.spyOn(mcpService, 'forceReconnect');
+
+    await expect(mcpService.listServerTools('protected-fixture', 'all', state.executionExtensionContext, 'page-2'))
+      .resolves.toEqual({ tools: [], nextCursor: 'page-3' });
+    expect(request).toHaveBeenCalledWith({ method: 'tools/list', params: { cursor: 'page-2' } }, expect.anything(), undefined);
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   test('revocation while loading protected connection config stops before transport creation', async () => {

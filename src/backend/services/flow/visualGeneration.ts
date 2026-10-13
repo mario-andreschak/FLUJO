@@ -20,6 +20,7 @@ import {
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter, type CompletionAdapter } from '@/backend/services/model/adapters';
 import { normalizeMaxTokens, type Model } from '@/shared/types/model';
+import { resolveModelAdapter, supportsLocalModelAuth } from '@/shared/types/model/provider';
 import {
   applyGenerationDefaults,
   type CompileIssue,
@@ -981,7 +982,7 @@ export async function generateFlowVisually(
     throw new Error('Owner-bound models require an authorized model-step transport.');
   }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-  const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the generator model API key.');
   const [context, storedFlows] = await Promise.all([
     gatherGenerationContext(),

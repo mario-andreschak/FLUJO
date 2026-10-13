@@ -44,15 +44,15 @@ function ChainTreeSkeleton() {
   const { t } = useI18n();
   return (
     <Box aria-busy="true" aria-label={t('chainChat.loading')} sx={{ minHeight: 420, pt: 4 }}>
-      <Stack alignItems="center" spacing={5}>
-        <Stack direction="row" spacing={1.4} alignItems="center">
+      <Stack sx={{ alignItems: "center" }} spacing={5}>
+        <Stack direction="row" spacing={1.4} sx={{ alignItems: "center" }}>
           <Skeleton variant="rounded" width={148} height={84} sx={{ borderRadius: 4 }} />
           <Skeleton variant="rounded" width={216} height={84} sx={{ borderRadius: 4 }} />
         </Stack>
         <Box sx={{ width: 1, height: 30, bgcolor: 'divider' }} />
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={3}>
           {[0, 1].map((item) => (
-            <Stack key={item} direction="row" spacing={1.4} alignItems="center">
+            <Stack key={item} direction="row" spacing={1.4} sx={{ alignItems: "center" }}>
               <Skeleton variant="rounded" width={148} height={82} sx={{ borderRadius: 3 }} />
               <Skeleton variant="rounded" width={216} height={82} sx={{ borderRadius: 4 }} />
             </Stack>
@@ -104,7 +104,10 @@ export function ConversationChainGraph() {
   // a fan-out produces one refreshed projection rather than one per lane.
   useEffect(() => {
     if (typeof chatService.subscribeToSidebarEvents !== 'function') return;
-    const stream = chatService.subscribeToSidebarEvents({
+    let stream: EventSource | undefined;
+    let retryTimer: number | undefined;
+    let disposed = false;
+    const connect = () => { if (!disposed) stream = chatService.subscribeToSidebarEvents({
       onEvent: () => {
         if (liveRefreshTimerRef.current !== null) window.clearTimeout(liveRefreshTimerRef.current);
         liveRefreshTimerRef.current = window.setTimeout(() => {
@@ -112,11 +115,20 @@ export function ConversationChainGraph() {
           liveRefreshTimerRef.current = null;
         }, 450);
       },
-    });
+      onReset: () => {
+        if (disposed) return;
+        window.clearTimeout(retryTimer);
+        setReloadToken(token => token + 1);
+        retryTimer = window.setTimeout(connect, 3000);
+      },
+    }); };
+    connect();
     return () => {
+      disposed = true;
+      window.clearTimeout(retryTimer);
       if (liveRefreshTimerRef.current !== null) window.clearTimeout(liveRefreshTimerRef.current);
       liveRefreshTimerRef.current = null;
-      stream.close();
+      stream?.close();
     };
   }, []);
 
@@ -195,7 +207,7 @@ export function ConversationChainGraph() {
   const refresh = useCallback(() => setReloadToken((token) => token + 1), []);
 
   const actions = (
-    <Stack direction="row" spacing={1} alignItems="center" sx={{ width: { xs: '100%', sm: 'auto' } }}>
+    <Stack direction="row" spacing={1} sx={{ alignItems: "center",  width: { xs: '100%', sm: 'auto' } }}>
       {chains.length > 1 && (
         <TextField
           select
@@ -296,9 +308,7 @@ export function ConversationChainGraph() {
         <Stack
           direction="row"
           spacing={0.8}
-          alignItems="center"
-          justifyContent="center"
-          sx={{ mb: 0.5, color: 'text.secondary' }}
+          sx={{ alignItems: "center", justifyContent: "center",  mb: 0.5, color: 'text.secondary' }}
         >
           <Chip
             size="small"

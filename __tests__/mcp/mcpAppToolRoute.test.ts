@@ -1,3 +1,7 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+beforeEach(async () => { privateFixture = await installPrivateProfileFixture(); });
+afterEach(async () => { await privateFixture?.restore(); });
 const callToolMock = jest.fn();
 const callToolFromAppMock = jest.fn();
 
@@ -62,13 +66,14 @@ describe('MCP App tool-call REST routing', () => {
   it('keeps ordinary calls on the model/manual path', async () => {
     callToolMock.mockResolvedValue({ success: true, data: { content: [] } });
 
+    const request = makeLocalRequest({ body: { args: {} } });
     const response = await POST(
-      makeLocalRequest({ body: { args: {} } }),
+      request,
       context('srv', 'read')
     );
 
     expect(response.status).toBe(200);
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'read', {}, undefined);
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'read', {}, undefined, undefined, undefined, request.signal);
     expect(callToolFromAppMock).not.toHaveBeenCalled();
   });
 });

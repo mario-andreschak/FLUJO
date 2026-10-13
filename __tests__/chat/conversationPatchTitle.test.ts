@@ -1,3 +1,6 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Tests for renaming a conversation via PATCH /v1/chat/conversations/:id
  * (issue #134, item 2).
@@ -59,8 +62,9 @@ async function patch(conversationId: string, body: unknown) {
 }
 
 describe('PATCH /v1/chat/conversations/:id title (rename)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     for (const key of Object.keys(stored)) delete stored[key];
+    privateFixture = await installPrivateProfileFixture(metadata => { Object.assign(stored, { encryption_key: metadata }); });
   });
 
   it('renames the conversation and returns the new title', async () => {

@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
+import { createPersonaNativeOriginalHost } from '../handlers/nativeOriginalHost';
 import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
 import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
@@ -55,6 +56,7 @@ import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillMode
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
 import { takeExecutionModelStepOrdinal } from '../modelStepOrdinals';
 import { ExecutionExtensionError, assertExecutionExtensionCurrent, assertExecutionModelStepNodeId, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, isExecutionProtectedState } from '@/backend/execution/extensions';
+import { combineAbortSignals } from '../combineAbortSignals';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -220,7 +222,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         const subflowToolProps = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
         const taskMandatory = !(subflowToolProps?.promptTemplate?.trim());
         handoffTools.push(
-          buildSubflowTool(toolName, { id: target.id, label: target.label }, description, taskMandatory),
+          buildSubflowTool(toolName, { id: target.id, label: target.label }, description, taskMandatory, subflowToolProps?.sessionScope),
         );
         log.debug('Created subflow tool-invocation tool', { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
       }
@@ -432,6 +434,23 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       log.error('Missing bound model');
       throw new Error("Process node requires a bound model");
     }
+    const terminalRouting = node_params?.properties?.terminalRouting;
+    if (terminalRouting !== undefined && terminalRouting !== 'tool-free') {
+      throw new Error('Invalid terminalRouting policy');
+    }
+    if (terminalRouting === 'tool-free') {
+      const edges = this.orderedControlEdges(node_params);
+      if (edges.length !== 1 || node_params?.edgeConditions?.[edges[0]]
+          || this.successors.get(edges[0])?.node_params?.type !== 'finish') {
+        throw new Error('Tool-free terminal routing requires a sole unconditioned Finish successor');
+      }
+      const props = node_params?.properties;
+      if (props?.mcpNodes?.length || props?.resourceNodes?.length || props?.personaTools?.length
+          || props?.allowQuestion || props?.enableTodoTool || sharedState.mcpContext?.availableTools?.length
+          || sharedState.armedSyntheticTools?.length || (sharedState.meetingParticipant && sharedState.meetingTurn)) {
+        throw new Error('Tool-free terminal routing cannot authorize executable tools');
+      }
+    }
 
     // A contextless Process must not render resources or connect an MCP server
     // for a model that only the original owner may dispatch. ModelHandler also
@@ -514,7 +533,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
-      { nodeId }
+      { nodeId },
+      sharedState,
     );
 
     // Resolve configuration globals at execution time. The prompt-safe resolver
@@ -624,7 +644,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Generate handoff tools for each connected non-MCP node (also emits
     // `call_subflow_<slug>` tool-invocation tools for tool-mode Subflow
     // targets — issue #385 — and populates sharedState.subflowToolNameMap).
-    const handoffTools = await this.generateHandoffTools(sharedState, Boolean(executionExtensionContext));
+    const handoffTools = terminalRouting === 'tool-free' ? [] : await this.generateHandoffTools(sharedState, Boolean(executionExtensionContext));
 
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];
@@ -707,6 +727,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // resume (#16). Handoff tools have no server and are decoded by name prefix.
     if (executionExtensionContext) {
       const { executionExtensionProtectedServer, authorizeExecutionExtensionHandoffs } = await import('@/backend/execution/extensions');
+      if (terminalRouting === 'tool-free' && availableTools.length) throw new Error('Tool-free terminal routing cannot authorize executable tools');
       const server = executionExtensionProtectedServer(executionExtensionContext);
       availableTools = availableTools.filter(tool =>
         tool.server === server || handoffTools.some(handoff => handoff.name === tool.name));
@@ -744,6 +765,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
   const prepResult: ProcessNodePrepResult = {
     nodeId,
     nodeType: 'process',
+    flowId: sharedState.flowId,
     currentPrompt: completePrompt,
     boundModel,
     mcpNodesForDispatch: mcpNodes,
@@ -794,6 +816,18 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     writable: false,
     configurable: false,
   });
+
+    Object.defineProperty(prepResult, 'nativeFlowSnapshot', {
+      value: sharedState.personaAttribution ? sharedState.flowSnapshot : undefined,
+      enumerable: false,
+    });
+    // runFlow's owner/cancellation-registration signal must reach the provider
+    // even when the separate execution authority remains current. Keep this
+    // live capability out of serialized preparation/debugger records.
+    Object.defineProperty(prepResult, 'abortSignal', {
+      value: sharedState.abortSignal,
+      enumerable: false,
+    });
 
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
     // per (conversation, node) on first render and re-send it byte-identically
@@ -931,6 +965,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
           { nodeId },
+          sharedState,
         );
         content = await resolvePromptDynamicReferences(content, {
           conversationId: sharedState.conversationId,
@@ -960,7 +995,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
             sharedState.emit,
-            { nodeId }
+            { nodeId },
+            sharedState,
           )
         : isolatedPrompt;
       if (!executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
@@ -1157,6 +1193,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       prepResult.forceSummaryTurn = true;
     }
 
+    if (terminalRouting === 'tool-free' && prepResult.availableTools?.length) {
+      throw new Error('Tool-free terminal routing cannot advertise executable tools');
+    }
     log.info('prep() completed', {
       completePromptLength: completePrompt.length,
       boundModel,
@@ -1183,6 +1222,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         throw new ExecutionExtensionError('execution_mcp_admission_required');
       }
       // Prepare tools if available
+      if (node_params?.properties?.terminalRouting === 'tool-free' && prepResult.availableTools?.length) {
+        throw new Error('Tool-free terminal routing cannot prepare executable tools');
+      }
       let tools: OpenAI.ChatCompletionFunctionTool[] | undefined = undefined; // Initialize tools
 
       if (prepResult.availableTools && prepResult.availableTools.length > 0) {
@@ -1235,7 +1277,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       });
 
       let modelResult;
-      let usedToolFreeFallback = false;
+      let usedToolFreeFallback = node_params?.properties?.terminalRouting === 'tool-free';
       // Only owner-bound completions call this reservation. The first request
       // and optional tool-free fallback consume consecutive run-wide slots.
       const processNodeId = node_params?.id;
@@ -1318,12 +1360,26 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             onApprovalRequired: prepResult.onApprovalRequired,
             mcpNodes: prepResult.mcpNodesForDispatch ?? node_params?.properties?.mcpNodes,
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
-            beforeToolDispatch: () => assertFlowExecutionCurrent(prepResult),
+            beforeToolDispatch: async () => {
+              await assertFlowExecutionCurrent(prepResult);
+              if (node_params?.properties?.terminalRouting === 'tool-free') throw new Error('Tool-free terminal routing denies tool dispatch');
+            },
             beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
+            nativeOriginalHost: await createPersonaNativeOriginalHost({
+              authority: prepResult.executionAuthority, conversationId: prepResult.conversationId,
+              runId: prepResult.runId, nodeId: prepResult.nodeId, modelId: prepResult.boundModel,
+              flowId: prepResult.flowId,
+              flowSnapshot: prepResult.nativeFlowSnapshot,
+              personaAttribution: prepResult.personaAttribution,
+            }),
             executionAuthority: prepResult.executionAuthority,
             executionExtensionContext: prepResult.executionExtensionContext,
             personaAttribution: prepResult.personaAttribution,
-            signal: prepResult.executionExtensionContext ? executionExtensionSignal(prepResult.executionExtensionContext) : prepResult.executionAuthority?.signal,
+            signal: combineAbortSignals(
+              prepResult.abortSignal,
+              prepResult.executionAuthority?.signal,
+              prepResult.executionExtensionContext ? executionExtensionSignal(prepResult.executionExtensionContext) : undefined,
+            ),
           });
           // Provider abort is cooperative. A response can arrive after the
           // Persona heartbeat/fence was lost, so reject it before any message,
@@ -1429,6 +1485,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       }
 
       const result = modelResult.value;
+      if (node_params?.properties?.terminalRouting === 'tool-free' && result.toolCalls?.length) {
+        throw new Error('Tool-free terminal routing denies model tool calls');
+      }
 
       // Create a properly typed ExecResult
       const execResult: ProcessNodeExecResult = {

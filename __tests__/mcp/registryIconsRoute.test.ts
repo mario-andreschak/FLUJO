@@ -1,6 +1,11 @@
 const assertUnlockedMock = jest.fn();
 const registryGetRawMock = jest.fn();
 const rankRegistryResultsMock = jest.fn();
+const discoverRegistryServersMock = jest.fn();
+
+jest.mock('@/backend/services/mcp/registryDiscovery', () => ({
+  discoverRegistryServers: (...args: unknown[]) => discoverRegistryServersMock(...args),
+}));
 
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: (...args: unknown[]) => assertUnlockedMock(...args),
@@ -35,6 +40,10 @@ describe('GET /api/mcp-registry icon metadata mode', () => {
         ],
       }),
     });
+    discoverRegistryServersMock.mockResolvedValue({
+      servers: [{ server: { name: 'io.example/logo-route-test' } }],
+      discovery: { bounded: true, terms: ['logo'], partial: false, truncated: false },
+    });
   });
 
   it('returns raw registry metadata without quality ranking when iconsOnly is true', async () => {
@@ -44,6 +53,7 @@ describe('GET /api/mcp-registry icon metadata mode', () => {
 
     expect(response.status).toBe(200);
     expect(rankRegistryResultsMock).not.toHaveBeenCalled();
+    expect(discoverRegistryServersMock).not.toHaveBeenCalled();
     expect(registryGetRawMock).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
       success: true,

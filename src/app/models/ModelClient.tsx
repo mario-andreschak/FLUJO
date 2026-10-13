@@ -23,6 +23,7 @@ import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { v4 as uuidv4 } from 'uuid';
 
 import ModelList from '@/frontend/components/models/list/ModelList';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import ModelModal from '@/frontend/components/models/modal';
 import ModelConnectionWizard, {
   GuidedCreationResult,
@@ -31,6 +32,7 @@ import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
+import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { getModelService, ModelResult } from '@/frontend/services/model';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { collectFolders } from '@/utils/shared/cardGrouping';
@@ -259,7 +261,7 @@ export default function ModelClient() {
         // correction or a rotated key).
         const match = known.find((model) =>
           model.provider === candidate.provider &&
-          (model.adapter || 'openai') === (candidate.adapter || 'openai') &&
+          resolveModelAdapter(model.provider, model.adapter) === resolveModelAdapter(candidate.provider, candidate.adapter) &&
           model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase() &&
           (candidate.provider !== 'azure' || (
             (model.baseUrl || '').replace(/\/+$/, '').toLowerCase() ===
@@ -268,8 +270,12 @@ export default function ModelClient() {
           ))
         );
         if (match) {
-          if (candidate.ApiKey?.trim() && candidate.provider !== 'ollama') {
-            const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey });
+          // The Antigravity wizard explicitly chooses between an API key and
+          // the host account login. Clearing a saved key applies that choice.
+          const clearsAntigravityKey = candidate.provider === 'antigravity-cli' &&
+            !candidate.ApiKey?.trim() && Boolean(match.ApiKey?.trim());
+          if ((candidate.ApiKey?.trim() && candidate.provider !== 'ollama') || clearsAntigravityKey) {
+            const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey ?? '' });
             if (!result.success || !result.model) {
               setModels(await service.loadModels());
               return { success: false, created, existing, error: result.error || t('models.saveFailed') };
@@ -474,7 +480,7 @@ export default function ModelClient() {
   return (
     <>
       {/* Toolbar with search + add, matching the Flows/MCP list toolbars */}
-      <StickySearchBar mode="page">
+      <StickySearchBar mode="container">
       <Paper
         elevation={0}
         variant="outlined"
@@ -496,13 +502,13 @@ export default function ModelClient() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             inputRef={searchInputRef}
-            InputProps={{
+            slotProps={{ input: {
               startAdornment: (
                 <InputAdornment position="start">
                   <SearchIcon fontSize="small" />
                 </InputAdornment>
               ),
-            }}
+            } }}
             sx={{ maxWidth: { sm: 300 }, width: '100%' }}
           />
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
@@ -544,6 +550,7 @@ export default function ModelClient() {
         </Box>
       </Paper>
       </StickySearchBar>
+      <AllowanceBar overview />
 
       {error && (
         <Box sx={{ mb: 2 }}>
@@ -581,6 +588,7 @@ export default function ModelClient() {
           submitLabel={t('models.agent.saveAndOpen')}
           submittingLabel={t('models.agent.saving')}
           connectedServersOnly
+          selectApps
         />
       )}
 

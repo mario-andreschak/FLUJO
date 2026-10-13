@@ -68,6 +68,43 @@ describe('flowToolsCallTool', () => {
     { id: 'f2', name: 'Daily Digest', nodes: [] },
   ];
 
+  it('requires supported input for explicit confirmation and skips declined flows', async () => {
+    loadFlows.mockResolvedValue(flows);
+    expect((await flowToolsCallTool('web_research', { input: 'work', confirm: true })).isError).toBe(true);
+    const requestInput = jest.fn(async () => ({ confirmation: { action: 'decline' as const } }));
+    const declined = await flowToolsCallTool('web_research', { input: 'work', confirm: true }, { requestInput });
+    expect(declined.content).toEqual([{ type: 'text', text: 'Flow execution declined.' }]);
+    expect(runFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('threads cancellation and live authority into the actual flow boundary after confirmation', async () => {
+    loadFlows.mockResolvedValue(flows);
+    runFlowMock.mockResolvedValue({ status: 'completed', outputText: 'result' });
+    const controller = new AbortController();
+    let current = true;
+    const assertAuthorized = () => { if (!current) throw new Error('revoked'); };
+    const requestInput = jest.fn(async () => ({ confirmation: { action: 'accept' as const, content: { confirmed: true } } }));
+    await flowToolsCallTool('web_research', { input: 'work', confirm: true }, {
+      abortSignal: controller.signal, assertAuthorized, requestInput,
+    });
+    const input = runFlowMock.mock.calls[0][0];
+    expect(input.abortSignal).toBe(controller.signal);
+    await expect(input.executionAuthority.assertCurrent()).resolves.toBeUndefined();
+    current = false;
+    await expect(input.executionAuthority.assertCurrent()).rejects.toThrow('revoked');
+  });
+
+  it('refuses a revoked or aborted confirmation before any flow effect', async () => {
+    loadFlows.mockResolvedValue(flows);
+    let current = true;
+    const assertAuthorized = () => { if (!current) throw new Error('revoked'); };
+    const requestInput = jest.fn(async () => { current = false; return { confirmation: { action: 'accept' as const, content: { confirmed: true } } }; });
+    await expect(flowToolsCallTool('web_research', { input: 'work', confirm: true }, { assertAuthorized, requestInput })).rejects.toThrow('revoked');
+    const controller = new AbortController(); controller.abort();
+    await expect(flowToolsCallTool('web_research', { input: 'work' }, { abortSignal: controller.signal })).rejects.toThrow();
+    expect(runFlowMock).not.toHaveBeenCalled();
+  });
+
   it('resolves the tool name back to the flow id and runs it ephemerally, returning its output', async () => {
     loadFlows.mockResolvedValue(flows);
     runFlowMock.mockResolvedValue({ status: 'completed', outputText: 'the answer' });

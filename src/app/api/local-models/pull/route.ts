@@ -51,6 +51,7 @@ async function POST_handler(request: NextRequest) {
       emit({ type: 'status', phase: 'running', message: `Pulling ${model}…` });
 
       let streamError: string | undefined;
+      let succeeded = false;
       await pull(
         model,
         (progress) => {
@@ -59,10 +60,13 @@ async function POST_handler(request: NextRequest) {
             emit({ type: 'stderr', data: progress.error });
             return;
           }
+          if (progress.status === 'success') succeeded = true;
           emit({ type: 'stdout', data: formatPullProgress(progress) });
         },
         signal
       );
+
+      if (!streamError && !succeeded) streamError = 'Ollama pull ended without a success status';
 
       emit(
         streamError

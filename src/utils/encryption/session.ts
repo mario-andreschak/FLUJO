@@ -17,6 +17,15 @@ interface EncryptionSession {
 // Session expiration time (2 hours)
 const SESSION_EXPIRATION_MS = 2 * 60 * 60 * 1000;
 
+export interface WorkerTransferProvenance {
+  workspace: string;
+  root: string;
+  rootDevice: string;
+  rootInode: string;
+  keyId: string;
+  metadataRevision: string;
+}
+
 declare global {
   // The 2-hour token sessions used by the UI unlock dialog. Global-backed so
   // that Next.js dev-mode HMR (which can duplicate this module) does not create
@@ -30,6 +39,7 @@ declare global {
   // routes never see a locked/unlocked split-brain.
   var __flujo_server_dek: string | null | undefined;
   var __flujo_server_deks_by_workspace: Map<string, string | null> | undefined;
+  var __flujo_worker_transfer_provenance: Map<string, WorkerTransferProvenance> | undefined;
 }
 
 function sessionsForWorkspace(workspace = getCurrentWorkspace()): Map<string, EncryptionSession> {
@@ -140,6 +150,7 @@ export function invalidateSession(token: string): void {
  */
 export function unlockServer(dek: string): void {
   const workspace = getCurrentWorkspace();
+  global.__flujo_worker_transfer_provenance?.delete(workspace);
   if (workspace === DEFAULT_WORKSPACE) global.__flujo_server_dek = dek;
   else serverDeks().set(workspace, dek);
   log.info('Server encryption unlocked', { workspace });
@@ -150,6 +161,7 @@ export function unlockServer(dek: string): void {
  */
 export function lockServer(): void {
   const workspace = getCurrentWorkspace();
+  global.__flujo_worker_transfer_provenance?.delete(workspace);
   if (workspace === DEFAULT_WORKSPACE) global.__flujo_server_dek = null;
   else serverDeks().set(workspace, null);
   log.info('Server encryption locked', { workspace });
@@ -170,6 +182,16 @@ export function getServerDek(): string | null {
   return workspace === DEFAULT_WORKSPACE
     ? global.__flujo_server_dek ?? null
     : serverDeks().get(workspace) ?? null;
+}
+
+/** Internal state installed only after secure.ts validates a worker transfer. */
+export function recordWorkerTransferProvenance(value: WorkerTransferProvenance): void {
+  if (value.workspace !== getCurrentWorkspace()) throw new Error('Worker transfer workspace mismatch');
+  (global.__flujo_worker_transfer_provenance ??= new Map()).set(value.workspace, Object.freeze({ ...value }));
+}
+
+export function getWorkerTransferProvenance(): Readonly<WorkerTransferProvenance> | undefined {
+  return global.__flujo_worker_transfer_provenance?.get(getCurrentWorkspace());
 }
 
 /**

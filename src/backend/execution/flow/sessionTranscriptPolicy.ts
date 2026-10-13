@@ -53,6 +53,8 @@ export function validateSessionTranscript(messages: unknown): string | undefined
   if (!Array.isArray(messages)) return 'messages is not an array';
   const ids = new Set<string>();
   let pendingToolIds = new Set<string>();
+  let pendingNodeId: string | undefined;
+  let pendingDepth: number | undefined;
 
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index] as Partial<FlujoChatMessage>;
@@ -72,10 +74,25 @@ export function validateSessionTranscript(messages: unknown): string | undefined
       continue;
     }
 
-    if (pendingToolIds.size > 0) {
+    const callIds = toolCallIds(message as FlujoChatMessage);
+    // Native adapters record concurrently started calls as separate, empty
+    // assistant entries. They form one bundle until every result has arrived.
+    const continuesParallelBundle = message.role === 'assistant' && callIds.length > 0
+      && (message.content == null || message.content === '')
+      && message.processNodeId === pendingNodeId && message.depth === pendingDepth;
+    if (pendingToolIds.size > 0 && !continuesParallelBundle) {
       return `assistant tool call before message ${index} is missing result(s)`;
     }
-    pendingToolIds = new Set(toolCallIds(message as FlujoChatMessage));
+    if (new Set(callIds).size !== callIds.length || callIds.some(id => pendingToolIds.has(id))) {
+      return `duplicate tool call at message ${index}`;
+    }
+    if (pendingToolIds.size === 0) {
+      pendingNodeId = message.processNodeId;
+      pendingDepth = message.depth;
+      pendingToolIds = new Set(callIds);
+    } else {
+      for (const id of callIds) pendingToolIds.add(id);
+    }
   }
 
   return pendingToolIds.size > 0 ? 'final assistant tool call is missing result(s)' : undefined;

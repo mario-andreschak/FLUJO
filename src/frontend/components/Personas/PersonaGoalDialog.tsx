@@ -156,9 +156,9 @@ export default function PersonaGoalDialog({ open, personaId, busy, mutate, onClo
             <Box component="details">
               <Box component="summary" sx={{ cursor: 'pointer' }}>{t('personas.goal.continuationControls')}</Box>
               <Stack spacing={2} sx={{ mt: 2 }}>
-                <TextField type="number" label={t('personas.goal.cadence')} value={intervalSeconds} disabled={readOnly} error={!cadenceValid} helperText={t('personas.goal.cadenceHelp')} onChange={(event) => { if (!readOnly) setIntervalSeconds(event.target.value); }} slotProps={{ htmlInput: { min: 10, max: 604_800, step: 1 } }} />
-                <TextField type="number" label={t('personas.goal.dailyLimit')} value={dailyLimit} disabled={readOnly} error={!dailyLimitValid} helperText={t('personas.goal.dailyLimitHelp')} onChange={(event) => { if (!readOnly) setDailyLimit(event.target.value); }} slotProps={{ htmlInput: { min: 1, max: 10_000, step: 1 } }} />
-                <TextField type="number" label={t('personas.goal.maxRounds')} value={maxRounds} disabled={readOnly} error={!budgetValid} helperText={t('personas.goal.maxRoundsHelp')} onChange={(event) => { if (!readOnly) setMaxRounds(event.target.value); }} slotProps={{ htmlInput: { min: 1, step: 1 } }} />
+                <TextField type="number" label={t('personas.goal.cadence')} value={intervalSeconds} disabled={readOnly} error={!cadenceValid} helperText={t(cadenceValid ? 'personas.goal.cadenceHelp' : 'personas.goal.cadenceInvalid')} onChange={(event) => { if (!readOnly) setIntervalSeconds(event.target.value); }} slotProps={{ htmlInput: { min: 10, max: 604_800, step: 1 } }} />
+                <TextField type="number" label={t('personas.goal.dailyLimit')} value={dailyLimit} disabled={readOnly} error={!dailyLimitValid} helperText={t(dailyLimitValid ? 'personas.goal.dailyLimitHelp' : 'personas.goal.dailyLimitInvalid')} onChange={(event) => { if (!readOnly) setDailyLimit(event.target.value); }} slotProps={{ htmlInput: { min: 1, max: 10_000, step: 1 } }} />
+                <TextField type="number" label={t('personas.goal.maxRounds')} value={maxRounds} disabled={readOnly} error={!budgetValid} helperText={t(budgetValid ? 'personas.goal.maxRoundsHelp' : 'personas.goal.maxRoundsInvalid')} onChange={(event) => { if (!readOnly) setMaxRounds(event.target.value); }} slotProps={{ htmlInput: { min: 1, step: 1 } }} />
                 <Typography variant="body2" color="text.secondary">{t('personas.goal.retryBudgetHelp')}</Typography>
               </Stack>
             </Box>

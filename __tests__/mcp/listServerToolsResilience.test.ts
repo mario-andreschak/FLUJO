@@ -35,6 +35,8 @@ jest.mock('@/backend/services/mcp/tools', () => ({
 // fresh client was built. Each call returns a brand-new fake client.
 const createNewClientMock = jest.fn();
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: (...args: unknown[]) => createNewClientMock(...args),
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
@@ -60,6 +62,19 @@ beforeEach(() => {
 });
 
 describe('MCPService.listServerTools', () => {
+  it('keeps an ordinary page cursor through a stale-client reconnect', async () => {
+    createNewClientMock.mockImplementation(() => makeClient());
+    const svc = new MCPService();
+    await svc.connectServer('srv');
+    listToolsMock.mockResolvedValueOnce({ tools: [], error: 'stale session' })
+      .mockResolvedValueOnce({ tools: [], nextCursor: 'page-3' });
+
+    await expect(svc.listServerTools('srv', 'all', 'page-2')).resolves.toEqual({ tools: [], nextCursor: 'page-3' });
+    expect(createNewClientMock).toHaveBeenCalledTimes(2);
+    expect(listToolsMock.mock.calls.map(args => args.slice(1))).toEqual([
+      ['srv', 'all', 'page-2'], ['srv', 'all', 'page-2'],
+    ]);
+  });
   it('returns tools directly when the connection is healthy', async () => {
     createNewClientMock.mockReturnValue(makeClient());
     const svc = new MCPService();

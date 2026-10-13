@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import syncFs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -12,6 +13,9 @@ import {
   runWithWorkspace,
 } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
+import { fingerprintTrustedHostSource, trustedHostEnvironment, trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
+import { materializeProtectedPackageRunner } from '../mcp/fixtures/protectedPackageRunner';
 
 const priorDataDir = process.env.FLUJO_DATA_DIR;
 const priorParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
@@ -63,9 +67,31 @@ const config: MCPStdioConfig = {
 const resolveIsolatedLaunch = (server: MCPStdioConfig) =>
   resolveStdioLaunch(server, { isolateRuntimeHome: true });
 
+// These existing Node positives use a fixed real source and a private grant.
+// This helper does not authorize the distinct dynamic package-runner contract.
+function resolveApprovedFixedNode(server: MCPStdioConfig, isolated = false) {
+  const sourceRoot = path.join(getWorkspaceDataDir(), server.rootPath || 'mcp-servers/runtime-home-fixture');
+  const entryPoint = path.join(sourceRoot, 'runtime-home-fixture.cjs');
+  syncFs.mkdirSync(sourceRoot, { recursive: true });
+  syncFs.writeFileSync(entryPoint, 'process.exitCode = 0;\n');
+  const fixture = installTrustedHostProfile({ name: server.name, nodeSource: 'process.exitCode = 0;\n',
+    environment: Object.fromEntries(trustedHostEnvironment(server)), runtimeHome: isolated ? 'isolated' : 'host' });
+  try {
+    process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
+    process.env.FLUJO_DATA_DIR = dataRoot;
+    const approved: MCPStdioConfig = { ...server, ...fixture.config, rootPath: server.rootPath,
+      cwd: sourceRoot, args: [entryPoint], trustedHost: { ...fixture.config.trustedHost!,
+        entryPoint, sourceRoot, sourceDigest: fingerprintTrustedHostSource(sourceRoot) } };
+    fixture.approve(approved);
+    return resolveStdioLaunch(approved, { isolateRuntimeHome: isolated });
+  } finally {
+    fixture.restore();
+  }
+}
+
 describe('stdio MCP runtime homes', () => {
   it('does not isolate runtime homes unless the resolved policy opts in', () => {
-    const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(config));
+    const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(config));
 
     expect(launch.env.HOME).toBe(config.env.HOME);
     expect(launch.env.USERPROFILE).toBe(config.env.USERPROFILE);
@@ -73,7 +99,12 @@ describe('stdio MCP runtime homes', () => {
     expect(launch.cwd).not.toContain(`${path.sep}userdata${path.sep}mcp-runtime${path.sep}`);
   });
 
-  it('keeps bundled Bash attached to the live host account and removes stale config redirects', () => {
+  it('requires private consent before applying runtime-home launch policy', () => {
+    expect(() => runWithWorkspace('runtime-a', () => resolveStdioLaunch(config)))
+      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+  });
+
+  it('rejects legacy bundled Bash redirects until its host launch is reviewed', () => {
     const bash = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'bash')!;
     const tracked = ['HOME', 'USERPROFILE', 'APPDATA', 'GH_CONFIG_DIR', 'FLUJO_BASH_HOST_ENV_TEST'] as const;
     const previous = new Map(tracked.map(key => [key, process.env[key]]));
@@ -99,14 +130,8 @@ describe('stdio MCP runtime homes', () => {
         GH_CONFIG_DIR: path.join(dataRoot, 'stale-gh-config'),
       };
 
-      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(shipped));
-
-      expect(launch.env.HOME).toBe(hostHome);
-      expect(launch.env.USERPROFILE).toBe(hostHome);
-      expect(launch.env.APPDATA).toBe(hostAppData);
-      expect(launch.env.FLUJO_BASH_HOST_ENV_TEST).toBe('visible-from-host');
-      expect(launch.env).not.toHaveProperty('GH_CONFIG_DIR');
-      expect(launch.cwd).toBe(path.join(getWorkspaceDataDir('runtime-a'), shipped.rootPath));
+      expect(() => runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(shipped)))
+        .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
     } finally {
       for (const key of tracked) {
         const value = previous.get(key);
@@ -117,8 +142,8 @@ describe('stdio MCP runtime homes', () => {
   });
 
   it('forces conventional home, config, cache, temp and FLUJO roots per workspace', () => {
-    const launchA = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(config));
-    const launchB = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(config));
+    const launchA = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(config, true));
+    const launchB = runWithWorkspace('runtime-b', () => resolveApprovedFixedNode(config, true));
     const rootA = getWorkspaceDataDir('runtime-a');
     const rootB = getWorkspaceDataDir('runtime-b');
 
@@ -134,30 +159,35 @@ describe('stdio MCP runtime homes', () => {
     expect(launchA.env.HOME).not.toBe(launchB.env.HOME);
   });
 
-  it('launches package runners from a private per-server cwd outside the managed server root', async () => {
-    const runner: MCPStdioConfig = {
-      ...config,
-      name: 'weather-mcp',
-      command: 'npx',
-      args: ['-y', '@example/weather-mcp'],
-      rootPath: 'mcp-servers/weather-mcp',
+  it('keeps reviewed npx package runners in private runtime cwd outside their managed source roots', () => {
+    const resolveRunner = (name: string) => {
+      const fixture = installTrustedHostProfile({ name, runtimeHome: 'isolated' });
+      try {
+        process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
+        process.env.FLUJO_DATA_DIR = dataRoot;
+        const runner = materializeProtectedPackageRunner(name, 'process.exitCode = 0;\n');
+        fixture.approve(runner);
+        return { runner, launch: resolveIsolatedLaunch(runner) };
+      } finally { fixture.restore(); }
     };
-    const otherRunner: MCPStdioConfig = {
-      ...runner,
-      name: 'search-mcp',
-      rootPath: 'mcp-servers/search-mcp',
-    };
-
-    const weatherLaunch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(runner));
-    const searchLaunch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(otherRunner));
-    const workspaceRoot = getWorkspaceDataDir('runtime-a');
-    const serverRoot = path.join(workspaceRoot, 'mcp-servers', 'weather-mcp');
-
-    expect(weatherLaunch.cwd).toBe(path.join(path.dirname(weatherLaunch.env.HOME), 'cwd'));
-    expect(weatherLaunch.cwd).not.toBe(serverRoot);
-    expect(path.relative(serverRoot, weatherLaunch.cwd)).toMatch(/^\.\.(?:[\\/]|$)/);
-    expect(weatherLaunch.cwd).not.toBe(searchLaunch.cwd);
-    await expect(fs.stat(weatherLaunch.cwd)).resolves.toMatchObject({});
+    const first = runWithWorkspace('runtime-a', () => resolveRunner('weather-mcp'));
+    const second = runWithWorkspace('runtime-a', () => resolveRunner('search-mcp'));
+    const otherWorkspace = runWithWorkspace('runtime-b', () => resolveRunner('weather-mcp'));
+    for (const { runner, launch } of [first, second, otherWorkspace]) {
+      const policy = trustedHostMcpPolicySchema.parse(runner.trustedHost);
+      expect(launch.command).toBe(process.execPath);
+      expect(launch.args[0]).toBe(policy.entryPoint);
+      expect(launch.args).toContain('--offline');
+      expect(launch.args).toContain('owned-probe@1.0.0');
+      expect(launch.cwd).toContain(`${path.sep}userdata${path.sep}mcp-runtime${path.sep}`);
+      expect(path.relative(policy.sourceRoot, launch.cwd)).toMatch(/^\.\.(?:[\\/]|$)/);
+    }
+    expect(first.launch.cwd).not.toBe(second.launch.cwd);
+    expect(first.runner.name).toBe(otherWorkspace.runner.name);
+    expect(first.launch.cwd).not.toBe(otherWorkspace.launch.cwd);
+    for (const name of ['HOME', 'NPM_CONFIG_CACHE', 'TMP', 'TEMP']) {
+      expect(first.launch.env[name]).not.toBe(otherWorkspace.launch.env[name]);
+    }
   });
 
   // A stdio server inherits an explicit env, and the MCP SDK's Windows defaults
@@ -167,7 +197,12 @@ describe('stdio MCP runtime homes', () => {
   (process.platform === 'win32' ? it : it.skip)(
     'passes the Windows launch essentials a child needs to spawn its own tools',
     () => {
-      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(config));
+      const reviewed = { ...config, env: { ...config.env,
+        ComSpec: process.env.ComSpec ?? process.env.COMSPEC!,
+        SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT!,
+        PATHEXT: process.env.PATHEXT!,
+      } };
+      const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(reviewed, true));
       const comSpec = launch.env.ComSpec ?? launch.env.COMSPEC;
       expect(comSpec).toBeTruthy();
       expect(path.basename(comSpec!).toLowerCase()).toBe('cmd.exe');
@@ -176,28 +211,19 @@ describe('stdio MCP runtime homes', () => {
     },
   );
 
-  // Windows resolves env vars case-insensitively, so a persisted config holding
-  // a blank `COMSPEC` must not survive next to the `ComSpec` we backfill: the
-  // child would inherit the empty one and npm would crash at spawn time again.
+  // Windows launch values must be reviewed, rather than silently repaired from
+  // the ambient host environment before consent.
   (process.platform === 'win32' ? it : it.skip)(
-    'replaces a blank Windows essential instead of shadowing it with a second spelling',
+    'rejects unreviewed blank Windows launch essentials',
     () => {
       const blanked: MCPStdioConfig = {
         ...config,
         name: 'server-with-blank-comspec',
         env: { ...config.env, COMSPEC: '', SYSTEMROOT: '   ' },
       };
-      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(blanked));
-
-      for (const key of ['ComSpec', 'SystemRoot']) {
-        const spellings = Object.entries(launch.env).filter(
-          ([name]) => name.toLowerCase() === key.toLowerCase(),
-        );
-        // Exactly one spelling survives, and it carries a usable value.
-        expect(spellings).toHaveLength(1);
-        expect(spellings[0][1].trim()).not.toBe('');
-      }
-      expect(path.basename(launch.env.ComSpec).toLowerCase()).toBe('cmd.exe');
+      // Persisted values cannot gain ambient launch authority through backfill.
+      expect(() => runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(blanked)))
+        .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
     },
   );
 
@@ -207,13 +233,13 @@ describe('stdio MCP runtime homes', () => {
       name: 'local-node-server',
       rootPath: 'mcp-servers/local-node-server',
     };
-    const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(ordinary));
+    const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(ordinary, true));
     expect(launch.cwd).toBe(
       path.join(getWorkspaceDataDir('runtime-a'), 'mcp-servers', 'local-node-server'),
     );
   });
 
-  it('overrides stale shipped-browser output paths at the final child boundary', () => {
+  it('rejects stale shipped-browser output paths before host consent', () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -230,14 +256,11 @@ describe('stdio MCP runtime homes', () => {
       FLUJO_BROWSER_RECORD_DIR: 'C:\\shared-recordings',
     };
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
-    const root = getWorkspaceDataDir('runtime-b');
-    expect(launch.env.FLUJO_BROWSER_PROFILE_DIR).toBe(path.join(root, 'browser-profile', 'trusted'));
-    expect(launch.env.FLUJO_BROWSER_SCREENSHOT_DIR).toBe(path.join(root, 'screenshots', 'browser'));
-    expect(launch.env.FLUJO_BROWSER_RECORD_DIR).toBe(path.join(root, 'recordings', 'browser'));
+    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
+      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('reattaches the host browser-binary cache to an existing workspace record', () => {
+  it('rejects an unreviewed host browser-binary cache', () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -245,15 +268,11 @@ describe('stdio MCP runtime homes', () => {
     delete (shipped.env as Record<string, unknown>).PLAYWRIGHT_BROWSERS_PATH;
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'shared-browser-binaries');
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
-
-    expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
-      .toBe(path.join(dataRoot, 'shared-browser-binaries'));
-    expect(path.relative(getWorkspaceDataDir('runtime-b'), launch.env.HOME))
-      .not.toMatch(/^\.\.(?:[\\/]|$)/);
+    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
+      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('preserves an explicit workspace browser-binary path over the host default', () => {
+  it('requires host consent even with an explicit workspace browser-binary path', () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -261,10 +280,8 @@ describe('stdio MCP runtime homes', () => {
     });
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'host-browser-binaries');
 
-    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
-
-    expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
-      .toBe(path.join(dataRoot, 'configured-browser-binaries'));
+    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
+      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
   it('remaps only unambiguous absolute paths left by a legacy managed MCP clone', async () => {

@@ -85,7 +85,11 @@ import {
   type PersonaAttribution,
   type PersonaInstructionContext,
 } from '@/shared/types/enduringAgent';
-import { behaviorFlowMatchesContentHash } from '@/backend/services/enduringAgents/behaviorRevisions';
+import {
+  instructionContextsEqual,
+  assertInstructionContextAttribution,
+  assertBehaviorSnapshotMatchesInstructionContext,
+} from '@/backend/execution/flow/personaRunContract';
 import {
   ATTACH_BREAKPOINT,
   matchToolBreakpoint,
@@ -129,53 +133,6 @@ const persistState = persistConversationState;
 
 /** Cap the output carried on a runFlow-originated FlowRunEvent (issue #116). */
 const MAX_EVENT_OUTPUT_CHARS = 4096;
-
-function instructionContextsEqual(
-  left: PersonaInstructionContext,
-  right: PersonaInstructionContext,
-): boolean {
-  return left.schemaVersion === right.schemaVersion
-    && left.personaId === right.personaId
-    && left.activityId === right.activityId
-    && left.behaviorRevisionId === right.behaviorRevisionId
-    && left.behaviorContentHash === right.behaviorContentHash
-    && left.behaviorSlotKey === right.behaviorSlotKey
-    && left.rootFlowId === right.rootFlowId
-    && left.roleVersionId === right.roleVersionId
-    && left.personaName === right.personaName
-    && left.personaMission === right.personaMission
-    && left.roleName === right.roleName
-    && left.roleMission === right.roleMission
-    && left.instruction === right.instruction;
-}
-
-function assertInstructionContextAttribution(
-  context: PersonaInstructionContext,
-  attribution: PersonaAttribution | undefined,
-  label: string,
-): void {
-  if (
-    !attribution
-    || context.personaId !== attribution.personaId
-    || context.activityId !== attribution.activityId
-    || context.behaviorRevisionId !== attribution.behaviorRevisionId
-  ) {
-    throw new Error(`${label} Persona instruction context does not match its attribution triple.`);
-  }
-}
-
-function assertBehaviorSnapshotMatchesInstructionContext(
-  flow: Flow,
-  context: PersonaInstructionContext,
-  label: string,
-): void {
-  if (flow.id !== context.rootFlowId) {
-    throw new Error(`${label} Behavior snapshot does not match the Persona instruction root Flow.`);
-  }
-  if (!behaviorFlowMatchesContentHash(flow, context.behaviorContentHash)) {
-    throw new Error(`${label} Behavior snapshot does not match the attributed immutable revision.`);
-  }
-}
 
 /** Unattended mode (issue #218): how many times to re-prompt a Process node
  *  that ended on plain text but has MORE THAN ONE forward successor (so the
@@ -1388,6 +1345,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // possibly pruned/edited history each turn), and the append-only log needs
   // the diff, not the replacement.
   const messagesBeforeTurn: FlujoChatMessage[] = [...(sharedState.messages ?? [])];
+  const admittedMessageIds = new Set<string>();
 
   // --- Configure State Based on Source ---
   if (stateSource === 'new') {
@@ -1400,6 +1358,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     }
     // Resolve the flow: prefer an explicit flowId, else the "flow-<name>" model.
     let resolvedFlowId = input.flowDefinition ? input.flowDefinition.id : input.flowId;
+    let resolvedFlow: Flow | undefined;
     if (!resolvedFlowId && data.model) {
       const flowName = data.model.substring(5); // Assumes "flow-FlowName" format
       const reactFlow = await flowService.getFlowByName(flowName);
@@ -1417,6 +1376,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         });
       }
       resolvedFlowId = reactFlow.id;
+      resolvedFlow = reactFlow;
     }
     if (!resolvedFlowId) {
       log.error('No flow specified for run (neither flowId nor model provided).');
@@ -1432,6 +1392,16 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     }
     sharedState.flowId = resolvedFlowId;
 
+    // Pin the actual saved definition before the first persistence or engine
+    // step. Named root runs and by-id subflow children use the same seam, so
+    // later edits to the catalog cannot change an in-flight or resumed run.
+    // Loaded conversations deliberately keep their original snapshot (or its
+    // absence for legacy runs); current catalog data is not historical proof.
+    if (!input.flowDefinition) {
+      resolvedFlow ??= await flowService.getFlow(resolvedFlowId) ?? undefined;
+      if (resolvedFlow) sharedState.flowSnapshot = structuredClone(resolvedFlow);
+    }
+
     // Preserve caller-provided ids/timestamps (like the resume path below).
     // The chat frontend sends its optimistic message id; keeping it means the
     // canonical copy MERGES with the optimistic bubble in the live view
@@ -1440,12 +1410,15 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     // — they must never (re-)enter the parent transcript / model context.
     const initialMessages: FlujoChatMessage[] = (data.messages || [])
       .filter(msg => !(typeof msg.depth === 'number' && msg.depth > 0))
-      .map(msg => ({
-        ...msg,
-        id: msg.id || crypto.randomUUID(),
-        timestamp: msg.timestamp || Date.now(),
-        processNodeId: msg.processNodeId || undefined,
-      }) as FlujoChatMessage);
+      .map(msg => {
+        const normalized = {
+          ...msg, id: msg.id || crypto.randomUUID(), timestamp: msg.timestamp || Date.now(),
+          processNodeId: msg.processNodeId || undefined,
+        } as FlujoChatMessage;
+        delete normalized.executionOrigin;
+        admittedMessageIds.add(normalized.id);
+        return normalized;
+      });
     sharedState.messages = initialMessages;
     // Stamp lastUserMessageAt for the initial user turn
     const _initLastUser = [...initialMessages].reverse().find(m => m.role === 'user');
@@ -1482,6 +1455,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             timestamp: msg.timestamp || Date.now(),
             processNodeId: msg.processNodeId || undefined,
           } as FlujoChatMessage;
+          delete flujoMsg.executionOrigin;
+          admittedMessageIds.add(flujoMsg.id);
           return flujoMsg;
         });
       if (input.resumeAsNewTurn) {
@@ -1561,9 +1536,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       const executionFlow = sharedState.flowSnapshot
         ?? await flowService.getFlow(sharedState.flowId);
       sharedState.statisticsFlowName ??= executionFlow?.name;
-      // Opaque, installation-local fingerprint of the SAVED flow configuration
-      // (graph plus node configuration). The configuration itself is never
-      // persisted; the fingerprint only makes revisions comparable over time.
+      // Opaque, installation-local fingerprint of the execution configuration
+      // (graph plus node configuration). Statistics store only the fingerprint;
+      // the conversation's snapshot separately preserves its definition.
       if (executionFlow && !sharedState.statisticsFlowRevisionId) {
         sharedState.statisticsFlowRevisionId = await statisticsRevisionId('flow', {
           id: executionFlow.id,
@@ -1583,7 +1558,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // is emitted. Ephemeral runs are refused inside. Advisory on failure: the
   // legacy SharedState persistence below still covers the conversation.
   try {
-    await reconcileConversationLog(sharedState, messagesBeforeTurn);
+    await reconcileConversationLog(sharedState, messagesBeforeTurn, admittedMessageIds);
     // Issue #256: heal any assistant tool_calls turn left unanswered by a
     // crash/restart mid-tool before the run loop builds a provider request.
     // Persist each synthetic result via the log-only path so the projection is
@@ -1731,7 +1706,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     });
   };
 
-  const emitNewMessages = () => {
+  const emitNewMessages = (inputMessageIds?: ReadonlySet<string>) => {
     for (const msg of sharedState.messages) {
       // Strengthen the id invariant at the emission boundary: a message
       // without an id could never be tracked (or deduped by any consumer).
@@ -1746,6 +1721,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       emit({
         type: 'message',
         message: msg,
+        messageOrigin: inputMessageIds?.has(msg.id) ? 'input' : 'internal',
         node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
       });
       accumulateUsage(msg);
@@ -1813,8 +1789,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // error path below formats the result (and emits run:done).
   if ((userTurn || stateSource === 'new') && sharedState.flowId) {
     try {
-      // Quick-Chat snapshots aren't in the store, so validate the in-memory
-      // object; everything else validates by id (unchanged path).
+      // Validate the pinned execution definition, including saved-flow runs.
+      // Legacy conversations without a snapshot retain the by-id path.
       const validation = sharedState.flowSnapshot
         ? await validateFlowObjectForRun(sharedState.flowSnapshot)
         : await validateFlowForRun(sharedState.flowId);
@@ -1950,19 +1926,21 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       // Stamp the current node so the message is attributed to the step it is
       // steering (live-view lane placement + subflow projection tagging).
       for (const m of newlyFolded) {
+        if (!m.id) m.id = crypto.randomUUID();
+        delete m.executionOrigin;
         if (!m.processNodeId && sharedState.currentNodeId) m.processNodeId = sharedState.currentNodeId;
       }
       if (newlyFolded.length > 0) {
         sharedState.messages.push(...newlyFolded);
         sharedState.lastUserMessageAt = newlyFolded[newlyFolded.length - 1].timestamp ?? Date.now();
         FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-        emitNewMessages();
+        emitNewMessages(new Set(newlyFolded.map(message => message.id)));
         // Per-step durability is the append-only log, exactly as for tool
         // results (the log refuses ephemeral runs, which have no transcript).
         if (!sharedState.ephemeral) {
           await appendRawForState(
             sharedState,
-            newlyFolded.map(message => ({ type: 'message', message })),
+            newlyFolded.map(message => ({ type: 'message', message, messageOrigin: 'input' })),
           );
         }
         foldedDurably = true;
@@ -2712,7 +2690,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                     try {
                       await appendRawForState(
                         sharedState,
-                        [...cappedToolResults, summaryInstruction].map((m) => ({ type: 'message', message: m })),
+                        [...cappedToolResults, summaryInstruction].map((m) => ({ type: 'message', message: m, messageOrigin: 'internal' })),
                       );
                     } catch (err) {
                       log.warn(`Failed to append graceful-cap messages to log for ${effectiveConvId}`, err);
@@ -3226,7 +3204,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // A cancellation that lands while the final step is completing (or one the
   // provider ignored) must not let the run report 'completed' — Stop means
   // stop, even when the model's answer won the race.
-  if (currentAction !== ERROR_ACTION && runCancelled()) {
+  // Evaluate cancellation even when the SDK abort became ERROR_ACTION, so its
+  // durable recovery record cannot classify an intentional stop as retryable.
+  if (runCancelled() && currentAction !== ERROR_ACTION) {
     log.info(`Cancellation flag set at run end for conv ${effectiveConvId}; reporting cancelled instead of '${sharedState.status}'.`);
     sharedState.status = 'error';
     sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };

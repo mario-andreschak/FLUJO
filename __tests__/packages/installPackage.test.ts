@@ -75,7 +75,21 @@ jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(async (key: string, value: unknown) => { store.set(key, value); }),
 }));
 
-import { installPackage } from '@/backend/services/packages/installPackage';
+import { installPackage, getLastInstallSummary, inspectPackageUninstall, uninstallPackage } from '@/backend/services/packages/installPackage';
+
+// Independent fixed vectors for newly installed flows. Existing ledger IDs
+// deliberately keep their legacy strings in the compatibility cases below.
+const INSTALLED_ROOT_ID = '49dce82c2d109956d0f7ed39b135c82bbc90a9600c8b23a62f190b835150d4e1';
+const INSTALLED_CHILD_ID = '1e50606c6aa171ef02d4c59c9456ce65cab80dacae561afa2e40aa168593d103';
+
+function seedLegacyFlowInstall(createdFlows: string[] = []) {
+  store.set('package_installs', { 'my-pkg': {
+    packageName: 'my-pkg', version: '0.9.0', installedAt: '2026-10-03T00:00:00Z',
+    entities: { flows: { 'local-root': 'pkg-my-pkg-local-root', 'local-child': 'pkg-my-pkg-local-child' },
+      models: {}, servers: [], plannedExecutions: [] },
+    created: { flows: createdFlows, models: [], servers: [], plannedExecutions: [] },
+  } });
+}
 
 const manifest = () => ({
   schemaVersion: 1,
@@ -183,7 +197,7 @@ describe('installPackage — happy path', () => {
     // Flows: saved with fresh deterministic ids in the package folder.
     expect(saveFlowMock).toHaveBeenCalledTimes(2);
     const savedIds = saveFlowMock.mock.calls.map((c) => (c[0] as { id: string }).id).sort();
-    expect(savedIds).toEqual(['pkg-my-pkg-local-child', 'pkg-my-pkg-local-root']);
+    expect(savedIds).toEqual([INSTALLED_CHILD_ID, INSTALLED_ROOT_ID]);
     expect(saveFlowMock.mock.calls.every((c) => (c[0] as { folder?: string }).folder === 'my-pkg')).toBe(true);
 
     // Planned execution: created disabled, with a remapped flowId.
@@ -192,7 +206,7 @@ describe('installPackage — happy path', () => {
       expect.objectContaining({
         id: 'pkg-my-pkg-nightly',
         enabled: false,
-        flowId: 'pkg-my-pkg-local-root',
+        flowId: INSTALLED_ROOT_ID,
         folder: 'my-pkg',
       }),
     );
@@ -201,9 +215,9 @@ describe('installPackage — happy path', () => {
 
   it('remaps a subflow reference to the freshly-installed child flow id', async () => {
     await installPackage({ source: 'registry', packageId: 'my-pkg', secrets: { API_KEY: 'sk-1' }, consentGranted: true });
-    const rootSave = saveFlowMock.mock.calls.find((c) => (c[0] as { id: string }).id === 'pkg-my-pkg-local-root');
+    const rootSave = saveFlowMock.mock.calls.find((c) => (c[0] as { id: string }).id === INSTALLED_ROOT_ID);
     const rootFlow = rootSave![0] as { nodes: Array<{ data: { properties: { subflowId: string } } }> };
-    expect(rootFlow.nodes[0].data.properties.subflowId).toBe('pkg-my-pkg-local-child');
+    expect(rootFlow.nodes[0].data.properties.subflowId).toBe(INSTALLED_CHILD_ID);
   });
 
   it('never writes a secret VALUE into the summary', async () => {
@@ -454,6 +468,7 @@ describe('installPackage — missing required secret is fail-soft', () => {
 
 describe('installPackage — idempotent re-install', () => {
   it('updates existing entities in place rather than duplicating', async () => {
+    seedLegacyFlowInstall();
     loadFlowsMock.mockResolvedValue([{ id: 'pkg-my-pkg-local-root' }, { id: 'pkg-my-pkg-local-child' }]);
     loadModelsMock.mockResolvedValue([{ id: 'existing-model', displayName: 'My GPT' }]);
     schedulerCreateMock.mockResolvedValue({ conflict: true, error: 'exists' });
@@ -479,13 +494,14 @@ describe('installPackage — created provenance (issue #211)', () => {
     await installPackage({ source: 'registry', packageId: 'my-pkg', secrets: { API_KEY: 'sk-1' }, consentGranted: true });
     const file = store.get('package_installs') as Record<string, { created?: { flows: string[]; models: string[]; servers: string[]; plannedExecutions: string[] } }>;
     const created = file['my-pkg'].created!;
-    expect(created.flows.sort()).toEqual(['pkg-my-pkg-local-child', 'pkg-my-pkg-local-root']);
+    expect(created.flows.sort()).toEqual([INSTALLED_CHILD_ID, INSTALLED_ROOT_ID]);
     expect(created.models).toHaveLength(1);
     expect(created.servers).toEqual(['web-search']);
     expect(created.plannedExecutions).toEqual(['pkg-my-pkg-nightly']);
   });
 
   it('does NOT record adopted/updated entities as created', async () => {
+    seedLegacyFlowInstall();
     loadFlowsMock.mockResolvedValue([{ id: 'pkg-my-pkg-local-root' }, { id: 'pkg-my-pkg-local-child' }]);
     loadModelsMock.mockResolvedValue([{ id: 'existing-model', displayName: 'My GPT' }]);
     installRegistryServerMock.mockResolvedValue({ installed: true, serverName: 'web-search', alreadyExisted: true });
@@ -498,6 +514,135 @@ describe('installPackage — created provenance (issue #211)', () => {
     expect(created.models).toEqual([]);
     expect(created.servers).toEqual([]);
     expect(created.plannedExecutions).toEqual([]);
+  });
+});
+
+describe('installPackage — collision-resistant flow identity', () => {
+  const packageName = 'collision-probe-' + 'x'.repeat(80);
+  const first = 'flow-00045416';
+  const second = 'flow-00139699';
+  const legacyId = 'pkg-collision-probe-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-5d8bc397';
+
+  function collisionManifest() {
+    const value = manifest();
+    value.name = packageName;
+    value.secrets = [];
+    value.models = [];
+    value.mcpServers = [];
+    value.flows = [
+      { flow: { id: first, name: 'First', nodes: [{ id: 'n1', data: { type: 'subflow', label: 'child', properties: { subflowId: second } } }], edges: [] } },
+      { flow: { id: second, name: 'Second', nodes: [], edges: [] } },
+    ];
+    value.plannedExecutions = value.flows.map(({ flow }, index) => ({
+      ...value.plannedExecutions[0], id: `plan-${index}`, name: `Plan ${index}`, flowId: flow.id,
+    }));
+    return value;
+  }
+
+  it('retains both flows from the actual 32-bit collision and separates every reference', async () => {
+    fetchPackageManifestMock.mockResolvedValue(collisionManifest());
+    const stored = new Map<string, { id: string; name: string }>();
+    saveFlowMock.mockImplementation(async (flow: { id: string; name: string }) => {
+      stored.set(flow.id, flow);
+      return { success: true };
+    });
+    const result = await installPackage({ source: 'registry', packageId: 'collision', consentGranted: true });
+    expect(result.ok).toBe(true);
+    expect(stored.size).toBe(2);
+    expect([...stored.values()].map((flow) => flow.name).sort()).toEqual(['First', 'Second']);
+    const installedIds = saveFlowMock.mock.calls.map(([flow]) => flow.id);
+    expect(new Set(installedIds).size).toBe(2);
+    expect(saveFlowMock.mock.calls[0][0].nodes[0].data.properties.subflowId).toBe(installedIds[1]);
+    expect(schedulerCreateMock.mock.calls.map(([plan]) => plan.flowId)).toEqual(installedIds);
+    const ledger = store.get('package_installs') as Record<string, { entities: { flows: Record<string, string> } }>;
+    expect(ledger[packageName].entities.flows).toEqual({ [first]: installedIds[0], [second]: installedIds[1] });
+  });
+
+  it.each([true, false])('retains legacy references and creation ownership across reinstall (provenance: %s)', async (provenance) => {
+    const value = collisionManifest();
+    value.flows = [value.flows[0]];
+    value.flows[0].flow.nodes = [];
+    value.plannedExecutions = [value.plannedExecutions[0]];
+    fetchPackageManifestMock.mockResolvedValue(value);
+    loadFlowsMock.mockResolvedValue([{ id: legacyId, name: 'Existing name' }]);
+    const record = { entities: { flows: { [first]: legacyId } },
+      ...(provenance ? { created: { flows: [legacyId], models: [], servers: [], plannedExecutions: [] } } : {}) };
+    store.set('package_installs', { [packageName]: record });
+    schedulerCreateMock.mockResolvedValue({ conflict: true });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await installPackage({ source: 'registry', packageId: 'collision', consentGranted: true,
+        renames: { flows: { [first]: 'Existing name' } } });
+      expect(result.ok).toBe(true);
+      expect(saveFlowMock.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ id: legacyId, name: 'Existing name' }));
+      expect(schedulerUpdateMock.mock.calls.at(-1)![1]).toEqual(expect.objectContaining({ flowId: legacyId, enabled: false }));
+      const ledger = store.get('package_installs') as Record<string, { created: { flows: string[] } }>;
+      expect(ledger[packageName].created.flows).toEqual([legacyId]);
+    }
+  });
+
+  it('refuses ambiguous legacy aliases before any entity mutation and retains the ledger', async () => {
+    fetchPackageManifestMock.mockResolvedValue(collisionManifest());
+    const ledger = { [packageName]: { entities: { flows: { [first]: legacyId, [second]: legacyId } } } };
+    store.set('package_installs', ledger);
+    loadFlowsMock.mockResolvedValue([{ id: legacyId }]);
+    const result = await installPackage({ source: 'registry', packageId: 'collision', consentGranted: true });
+    expect(result.ok).toBe(false);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(addModelMock).not.toHaveBeenCalled();
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+    expect(schedulerUpdateMock).not.toHaveBeenCalled();
+    expect(store.get('package_installs')).toBe(ledger);
+  });
+
+  it('refuses an unowned occupied new ID before installing the package', async () => {
+    loadFlowsMock.mockResolvedValue([{ id: INSTALLED_ROOT_ID }]);
+    const result = await installPackage({ source: 'registry', packageId: 'my-pkg', consentGranted: true });
+    expect(result.ok).toBe(false);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(addModelMock).not.toHaveBeenCalled();
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+    expect(store.has('package_installs')).toBe(false);
+  });
+
+  it('rejects duplicate manifest-local IDs before mutation', async () => {
+    const value = manifest();
+    value.flows[1].flow.id = value.flows[0].flow.id;
+    fetchPackageManifestMock.mockResolvedValue(value);
+    const result = await installPackage({ source: 'registry', packageId: 'my-pkg', consentGranted: true });
+    expect(result.ok).toBe(false);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(addModelMock).not.toHaveBeenCalled();
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves legacy mappings and creation ownership after a failed flow save', async () => {
+    const ids = ['pkg-my-pkg-local-root', 'pkg-my-pkg-local-child'];
+    seedLegacyFlowInstall(ids);
+    loadFlowsMock.mockResolvedValue(ids.map((id) => ({ id })));
+    saveFlowMock.mockResolvedValueOnce({ success: false, error: 'controlled failure' });
+    const result = await installPackage({ source: 'registry', packageId: 'my-pkg', consentGranted: true });
+    expect(result.skipped.some((step) => step.type === 'flow' && step.note === 'controlled failure')).toBe(true);
+    const ledger = store.get('package_installs') as Record<string, { entities: { flows: Record<string, string> }; created: { flows: string[] } }>;
+    expect(ledger['my-pkg'].entities.flows).toEqual({ 'local-root': ids[0], 'local-child': ids[1] });
+    expect(ledger['my-pkg'].created.flows).toEqual(ids);
+  });
+
+  it('keeps an omitted legacy flow recorded so a later version reuses its references', async () => {
+    const ids = ['pkg-my-pkg-local-root', 'pkg-my-pkg-local-child'];
+    seedLegacyFlowInstall(ids);
+    loadFlowsMock.mockResolvedValue(ids.map((id) => ({ id })));
+    const value = manifest();
+    value.flows = [value.flows[0]];
+    fetchPackageManifestMock.mockResolvedValue(value);
+    await installPackage({ source: 'registry', packageId: 'my-pkg', consentGranted: true });
+    fetchPackageManifestMock.mockResolvedValue(manifest());
+    await installPackage({ source: 'registry', packageId: 'my-pkg', consentGranted: true });
+    expect(saveFlowMock.mock.calls.at(-1)![0].id).toBe(ids[1]);
+    const ledger = store.get('package_installs') as Record<string, { created: { flows: string[] } }>;
+    expect(ledger['my-pkg'].created.flows).toEqual(ids);
   });
 });
 
@@ -978,5 +1123,123 @@ describe('installPackage — requiredGlobals / missingGlobals', () => {
       { name: 'OPTIONAL_LABEL', required: false, isSecret: false },
     ]);
     expect(preview.preview!.missingGlobals).toEqual(['REPOSITORY_URL']);
+  });
+});
+
+describe('installPackage — public identity and credential boundary', () => {
+  it.each(['package name', 'flow id', 'flow name', 'model displayName', 'plan name', 'server name'])(
+    'rejects placeholder-bearing %s before accessing supplied secrets or host services', async field => {
+      const pkg = manifest();
+      const value = 'public-prefix-{{secret.API_KEY}}';
+      if (field === 'package name') pkg.name = value;
+      if (field === 'flow id') pkg.flows[0].flow.id = value;
+      if (field === 'flow name') pkg.flows[0].flow.name = value;
+      if (field === 'model displayName') pkg.models[0].displayName = value;
+      if (field === 'plan name') pkg.plannedExecutions[0].name = value;
+      if (field === 'server name') pkg.mcpServers[0].name = value;
+      fetchPackageManifestMock.mockResolvedValue(pkg);
+      const secretAccess = jest.fn(() => { throw new Error('synthetic secret access must not happen'); });
+      const input = { source: 'registry' as const, packageId: 'fixture', consentGranted: true,
+        get secrets(): Record<string, string> { return secretAccess(); } };
+      const summary = await installPackage(input);
+      expect(summary.ok).toBe(false);
+      expect(summary.errors.join(' ')).toContain('Package identities and public labels cannot contain secret placeholders');
+      expect(secretAccess).not.toHaveBeenCalled();
+      for (const boundary of [loadModelsMock, loadFlowsMock, saveFlowMock, addModelMock, updateModelMock,
+        schedulerGetMock, schedulerCreateMock, schedulerUpdateMock, loadServerConfigsMock,
+        installRegistryServerMock, installGithubServerMock]) expect(boundary).not.toHaveBeenCalled();
+      expect(store.size).toBe(0);
+    },
+  );
+
+  it.each(['fresh', 'recorded legacy'])('keeps %s long public flow ids stable across different credentials without publishing the credentials in identities or ledger', async mode => {
+    const localId = `public-local-${'A'.repeat(100)}`;
+    const pkg = { ...manifest(), mcpServers: [], flows: [{ flow: { id: localId, name: 'Public Flow',
+      nodes: [{ id: 'n1', data: { type: 'process', label: 'Public Node', properties: { prompt: '{{secret.API_KEY}}' } } }],
+      edges: [] } }] };
+    pkg.plannedExecutions[0].flowId = localId;
+    pkg.plannedExecutions[0].prompt = '{{secret.API_KEY}}';
+    fetchPackageManifestMock.mockResolvedValue(pkg);
+    const savedFlows = new Map<string, unknown>();
+    // Independent SHA-256 vector for new IDs; recorded legacy IDs stay owned.
+    const expected = mode === 'fresh'
+      ? '2f10ae1e1f300ef8341696a7e58d6ce8da6e7fb71add6fb35617a58880103412'
+      : 'pkg-my-pkg-public-local-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-41b92396';
+    if (mode === 'recorded legacy') {
+      savedFlows.set(expected, { id: expected, name: 'Public Flow', nodes: [], edges: [] });
+      store.set('package_installs', { 'my-pkg': {
+        packageName: 'my-pkg', version: '0.9.0', installedAt: '2026-10-03T00:00:00Z',
+        entities: { flows: { [localId]: expected }, models: {}, servers: [], plannedExecutions: [] },
+        created: { flows: [expected], models: [], servers: [], plannedExecutions: [] },
+      } });
+    }
+    loadFlowsMock.mockImplementation(async () => [...savedFlows.values()]);
+    saveFlowMock.mockImplementation(async flow => { savedFlows.set(flow.id, flow); return { success: true }; });
+    const first = await installPackage({ source: 'registry', packageId: 'fixture', consentGranted: true,
+      secrets: { API_KEY: 'synthetic-credential-first' } });
+    const second = await installPackage({ source: 'registry', packageId: 'fixture', consentGranted: true,
+      secrets: { API_KEY: 'synthetic-credential-second' } });
+    expect(first.ok && second.ok).toBe(true);
+    expect(expected).toHaveLength(64);
+    expect(saveFlowMock.mock.calls.map(([flow]) => flow.id)).toEqual([expected, expected]);
+    expect(second.updated).toContainEqual({ type: 'flow', name: 'Public Flow', id: expected });
+    expect(saveFlowMock.mock.calls[1][0].nodes[0].data.properties.prompt).toBe('synthetic-credential-second');
+    expect(addModelMock.mock.calls[1][0].ApiKey).toBe('synthetic-credential-second');
+    expect(schedulerCreateMock.mock.calls[1][0].prompt).toBe('synthetic-credential-second');
+    expect(schedulerCreateMock.mock.calls[1][0].flowId).toBe(expected);
+    const published = JSON.stringify({ first, second, ledger: store.get('package_installs') });
+    expect(published).not.toContain('synthetic-credential-');
+    expect(published).not.toContain('{{secret.');
+  });
+
+  it.each(['__proto__', 'constructor', 'toString'])('preserves own public key %s through references, renames and ledger round-trip', async key => {
+    const pkg = { ...manifest(), mcpServers: [], flows: [{ flow: { id: key, name: 'Public Flow',
+      nodes: [{ id: 'n1', data: { type: 'process', label: 'Public Node', properties: { boundModel: key } } }], edges: [] } }] };
+    pkg.name = key;
+    pkg.models[0].id = key;
+    pkg.models[0].displayName = key;
+    pkg.plannedExecutions[0].flowId = key;
+    fetchPackageManifestMock.mockResolvedValue(pkg);
+    const renamed = Object.fromEntries([[key, 'Renamed Public Flow']]);
+    const summary = await installPackage({ source: 'registry', packageId: 'fixture', consentGranted: true,
+      modelMappings: {}, renames: { flows: renamed }, secrets: { API_KEY: 'synthetic-key-value' } });
+    expect(summary.ok).toBe(true);
+    const modelId = addModelMock.mock.calls[0][0].id;
+    expect(saveFlowMock.mock.calls[0][0].nodes[0].data.properties.boundModel).toBe(modelId);
+    expect(saveFlowMock.mock.calls[0][0].name).toBe('Renamed Public Flow');
+    const ledger = store.get('package_installs') as Record<string, any>;
+    expect(Object.getPrototypeOf(ledger)).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(ledger, key)).toBe(true);
+    expect(ledger[key].entities.flows[key]).toBe(saveFlowMock.mock.calls[0][0].id);
+    expect(ledger[key].entities.models[key]).toBe(modelId);
+    store.set('package_installs', JSON.parse(JSON.stringify(ledger)));
+    expect(await getLastInstallSummary(key)).toEqual(summary);
+    expect((await inspectPackageUninstall(key)).exists).toBe(true);
+  });
+
+  it('keeps an own __proto__ property as data while resolving runtime content', async () => {
+    const pkg = manifest();
+    pkg.mcpServers = [];
+    pkg.flows[0].flow.nodes[0].data.properties = JSON.parse('{"__proto__":{"fixture":"{{secret.API_KEY}}"}}');
+    fetchPackageManifestMock.mockResolvedValue(pkg);
+    await installPackage({ source: 'registry', packageId: 'fixture', consentGranted: true,
+      secrets: { API_KEY: 'synthetic-prototype-content' } });
+    const properties = saveFlowMock.mock.calls[0][0].nodes[0].data.properties;
+    expect(Object.getPrototypeOf(properties)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(properties, '__proto__')).toBe(true);
+    expect(properties.__proto__).toEqual({ fixture: 'synthetic-prototype-content' });
+    expect(properties.fixture).toBeUndefined();
+    expect((Object.prototype as Record<string, unknown>).fixture).toBeUndefined();
+  });
+
+  it('ignores inherited package ledger entries for status, inspection and uninstall', async () => {
+    const inherited = Object.create({ inherited: { summary: { fixture: 'untrusted' },
+      entities: { flows: { f: 'unowned-flow' }, models: {}, servers: [], plannedExecutions: [] } } });
+    store.set('package_installs', inherited);
+    expect(await getLastInstallSummary('inherited')).toBeNull();
+    expect(await inspectPackageUninstall('inherited')).toEqual({ exists: false, requiresPersonaControl: false });
+    expect(await uninstallPackage('inherited')).toMatchObject({ ok: true, removed: [], skipped: [], errors: [] });
+    expect(schedulerGetMock).not.toHaveBeenCalled();
+    expect(store.get('package_installs')).toBe(inherited);
   });
 });

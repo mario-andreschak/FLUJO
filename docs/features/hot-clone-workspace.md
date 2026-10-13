@@ -176,7 +176,10 @@ never overwritten. A matching restore marker makes process restarts reuse worker
 results instead of restoring the original archive again. Host external roots are
 cleared. Only the restored workspace is initialized.
 
-Worker mode suppresses scheduler catch-up, Persona dispatch and remote task resume.
+Worker mode suppresses copied-schedule catch-up, Persona dispatch and remote task
+resume by default. [Worker-local schedule recovery](worker-local-schedule-recovery.md)
+offers separate, explicit provenance-bound enrollment for ordinary cron plans
+created on a persistent worker; generic plan edits cannot enroll copied schedules.
 It rebuilds the MCP dependencies, verifies connection status, and exposes
 `GET /api/worker/status`. States include `restoring`, `locked`, `installing`,
 `ready`, and `error`. Worker API/MCP ingress requires the worker bearer token;

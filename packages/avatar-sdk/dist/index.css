@@ -1,0 +1,411 @@
+/* src/client/eyes.module.css */
+.eyes_eyes {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  height: 98px;
+  width: 220px;
+  margin: auto;
+  transform: translate(var(--gaze-x), var(--gaze-y));
+  transition: transform .28s;
+}
+.eyes_eye {
+  display: block;
+  width: 64px;
+  height: 83px;
+  border-radius: 50%;
+  background: #f3f4e9;
+  box-shadow: 0 0 20px #e5e9d912, 0 0 80px #eff7d908;
+  animation: eyes_blink 8s infinite;
+  position: relative;
+  z-index: 1;
+}
+.eyes_eye:nth-child(2) {
+  animation-delay: .025s;
+}
+.eyes_eye i {
+  position: absolute;
+  width: 11px;
+  height: 19px;
+  border-radius: 50%;
+  background: #151812;
+  top: 36%;
+  left: 45%;
+  transform: translate(calc(var(--gaze-x)*.65), calc(var(--gaze-y)*.6));
+  transition: transform .28s;
+}
+.eyes_eyeHalo {
+  position: absolute;
+  inset: -70px -50px;
+  background:
+    radial-gradient(
+      ellipse,
+      #eff8dd05,
+      transparent 65%);
+  filter: blur(15px);
+  pointer-events: none;
+}
+.eyes_eyes[data-avatar=orbit] .eyes_eye {
+  height: 70px;
+  width: 60px;
+}
+.eyes_eyes[data-avatar=spark] .eyes_eye {
+  height: 70px;
+  width: 58px;
+  border-radius: 47% 53% 50% 50%;
+  transform: rotate(-9deg);
+}
+.eyes_eyes[data-avatar=spark] .eyes_eye:nth-child(2) {
+  transform: rotate(9deg);
+}
+.eyes_eyes[data-phase=thinking] .eyes_eye {
+  animation: eyes_ponder 2.4s infinite;
+}
+.eyes_eyes[data-phase=listening] .eyes_eye {
+  height: 92px;
+  box-shadow: 0 0 35px #ffffff25;
+}
+.eyes_eyes[data-phase=speaking] .eyes_eye {
+  animation: eyes_speak .75s ease-in-out infinite alternate;
+}
+.eyes_eyes[data-phase=waiting] .eyes_eye {
+  height: 63px;
+  transform: rotate(-5deg);
+}
+.eyes_eyes[data-phase=error] .eyes_eye {
+  height: 48px;
+}
+.eyes_smallEyes {
+  scale: .64;
+  height: 58px;
+}
+@keyframes eyes_blink {
+  0%, 39%, 43%, 82%, 86%, 100% {
+    scale: 1 1;
+  }
+  41%, 84% {
+    scale: 1 .065;
+  }
+}
+@keyframes eyes_ponder {
+  0%, 100% {
+    scale: 1 .8;
+  }
+  50% {
+    scale: 1 .65;
+    translate: 0 3px;
+  }
+}
+@keyframes eyes_speak {
+  from {
+    scale: 1 .91;
+  }
+  to {
+    scale: 1 1.05;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eyes_eyes,
+  .eyes_eyes * {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+}
+.eyes_eyes {
+  gap: 21px;
+  transform: translate(var(--gaze-x), var(--gaze-y)) rotate(var(--head-tilt,0deg));
+  transition: none;
+}
+.eyes_eye {
+  width: 66px;
+  height: 85px;
+  background:
+    linear-gradient(
+      145deg,
+      #fff 5%,
+      #edf0e7 72%,
+      #d8dfd3);
+  box-shadow:
+    inset -5px -7px 12px #7b897c14,
+    0 0 28px #eef4dc20,
+    0 0 100px #eef4dc0a;
+  transition:
+    height .45s,
+    width .45s,
+    border-radius .45s;
+  animation: eyes_blink 7.7s infinite;
+}
+.eyes_eye:nth-child(2) {
+  animation-delay: .045s;
+  height: 88px;
+}
+.eyes_eye i {
+  width: 13px;
+  height: 23px;
+  top: 34%;
+  left: 41%;
+  background: #090c0c;
+  box-shadow: inset 1px 2px 3px #0008;
+  transition: height .3s, width .3s;
+  transform: translate(calc(var(--gaze-x)*.9), calc(var(--gaze-y)*.8));
+}
+.eyes_eyes[data-phase=listening] .eyes_eye {
+  height: 94px;
+  width: 70px;
+}
+.eyes_eyes[data-phase=listening] .eyes_eye i {
+  height: 26px;
+  width: 15px;
+}
+.eyes_eyes[data-phase=thinking] .eyes_eye,
+.eyes_eyes[data-phase=usingApp] .eyes_eye {
+  height: 72px;
+  animation: eyes_blink 7.7s infinite;
+}
+.eyes_eyes[data-phase=thinking] .eyes_eye:nth-child(2),
+.eyes_eyes[data-phase=usingApp] .eyes_eye:nth-child(2) {
+  height: 84px;
+}
+.eyes_eyes[data-phase=speaking] .eyes_eye {
+  animation: eyes_blink 7.7s infinite;
+  scale: 1 calc(.95 + var(--voice-level)*.13);
+}
+.eyes_eyes[data-phase=waiting] .eyes_eye {
+  height: 80px;
+  transform: rotate(-7deg);
+}
+.eyes_eyes[data-phase=waiting] .eyes_eye:nth-child(2) {
+  height: 69px;
+  transform: rotate(6deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .eyes_eyes[data-phase=speaking] .eyes_eye {
+    scale: 1 !important;
+  }
+}
+
+/* src/factory/factory.module.css */
+.factory_companion {
+  color: #eeeede;
+  background: #0c0e0b;
+  border: 1px solid #ffffff22;
+  border-radius: 22px;
+  padding: 24px;
+  font: 14px/1.6 system-ui, sans-serif;
+  max-width: 580px;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+.factory_companion * {
+  box-sizing: border-box;
+}
+.factory_notice {
+  font-size: 11px;
+  color: #b4bba8;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  margin-bottom: 22px;
+}
+.factory_companion h2 {
+  font-weight: 400;
+  font-size: 26px;
+  line-height: 1.25;
+  margin: 18px 0;
+  letter-spacing: -.03em;
+}
+.factory_caption {
+  font-size: 15px;
+  color: #f3f4e8;
+}
+.factory_authority,
+.factory_companion footer {
+  font-size: 11px;
+  color: #abb29f;
+}
+.factory_fact {
+  border-top: 1px solid #ffffff22;
+  margin-top: 20px;
+  padding-top: 12px;
+}
+.factory_fact h3 {
+  font-size: 14px;
+  font-weight: 500;
+}
+.factory_fact p {
+  color: #b9c0af;
+}
+.factory_fact dl {
+  font-size: 12px;
+}
+.factory_fact dt {
+  color: #979f8d;
+}
+.factory_fact dd {
+  margin: 0 0 10px;
+}
+.factory_fact code {
+  display: block;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.factory_fact button {
+  font: inherit;
+  color: #e5eadc;
+  background: #ffffff06;
+  border: 1px solid #ffffff33;
+  border-radius: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.factory_fact button:hover {
+  background: #ffffff12;
+}
+.factory_fact button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 4px;
+}
+.factory_companion footer {
+  border-top: 1px solid #ffffff22;
+  padding-top: 16px;
+  margin-top: 20px;
+}
+.factory_companion[data-read-state=stale] *,
+.factory_companion[data-read-state=unavailable] * {
+  animation: none !important;
+  transition: none !important;
+}
+.factory_companion[data-read-state=preview] .factory_notice {
+  color: #f4d399;
+}
+.factory_companion[data-read-state=unavailable] .factory_notice {
+  color: #e8c2ae;
+}
+@media (prefers-reduced-motion: reduce) {
+  .factory_companion * {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* src/world/world-sky.module.css */
+.world_sky_shell {
+  position: relative;
+  height: 100dvh;
+  min-height: 360px;
+  isolation: isolate;
+  color: #e5e9e4;
+  background: #050607;
+  font-family: inherit;
+}
+.world_sky_panorama {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  scroll-snap-type: y proximity;
+}
+.world_sky_panorama::-webkit-scrollbar {
+  display: none;
+}
+.world_sky_world,
+.world_sky_sky {
+  position: relative;
+  isolation: isolate;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  scroll-snap-align: start;
+  outline: none;
+}
+.world_sky_world {
+  background: #050607;
+}
+.world_sky_sky {
+  background:
+    radial-gradient(
+      ellipse at 50% 80%,
+      #16222a,
+      #04080d 65%);
+}
+.world_sky_camera {
+  position: absolute;
+  z-index: 2;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  max-width: calc(100% - 48px);
+  text-align: center;
+}
+.world_sky_camera button {
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: .04em;
+  color: inherit;
+  border: 1px solid #dce5e01e;
+  border-radius: 24px;
+  padding: 9px 15px;
+  cursor: pointer;
+  background: #080e12d9;
+  backdrop-filter: blur(12px);
+}
+.world_sky_camera button:hover {
+  background: #1d282ded;
+}
+.world_sky_camera button:focus-visible {
+  outline: 2px solid #e5ede4;
+  outline-offset: 4px;
+}
+.world_sky_camera button span {
+  margin-left: 8px;
+}
+.world_sky_camera small {
+  font-size: 10px;
+  line-height: 1.4;
+  color: #a4b5b6;
+  text-shadow: 0 1px 4px #000;
+  background: #05090bc9;
+  border-radius: 10px;
+  padding: 2px 7px;
+}
+.world_sky_selection {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 48px);
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 8px 14px;
+  border-radius: 18px;
+  color: #c1d1d1;
+  background: #080e12df;
+  pointer-events: none;
+}
+@media (max-width: 520px) {
+  .world_sky_camera {
+    top: 60px;
+    width: max-content;
+  }
+  .world_sky_camera button {
+    font-size: 11px;
+    padding: 8px 13px;
+  }
+  .world_sky_selection {
+    bottom: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .world_sky_panorama {
+    scroll-behavior: auto;
+    scroll-snap-type: none;
+  }
+}

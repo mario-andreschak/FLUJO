@@ -1,3 +1,4 @@
+import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
@@ -287,6 +288,7 @@ async function handleRequest(request: NextRequest) {
     
     return responseWithCors;
   } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
     const duration = Date.now() - startTime;
     const unsupportedTool = error instanceof UnsupportedOpenAIToolTypeError;
     const invalidPersonaMetadata = error instanceof InvalidPersonaChatMetadataError;

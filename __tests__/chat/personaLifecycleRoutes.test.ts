@@ -1,3 +1,6 @@
+import { installOwnerFixture } from '../utils/ownerFixture';
+let ownerFixture: Awaited<ReturnType<typeof installOwnerFixture>> | undefined;
+afterEach(async () => { await ownerFixture?.restore(); ownerFixture = undefined; });
 import type { SharedState } from '@/backend/execution/flow/types';
 import { NextRequest } from 'next/server';
 import { makeLocalRequest } from '../utils/localRequest';
@@ -282,12 +285,13 @@ describe('Persona-attributed conversation lifecycle routes', () => {
     { action: 'approve', toolCallId: 'tool_1' },
   ])('checks Persona trust before resolving live control input %#', async (body) => {
     process.env.FLUJO_EXPOSURE_MODE = 'public';
+    ownerFixture = await installOwnerFixture();
     loadConversationStateMock.mockResolvedValue(approvalState());
     const request = new NextRequest(
       `https://flujo.example.com/v1/chat/conversations/${CONVERSATION_ID}/respond`,
       {
         method: 'POST',
-        headers: { host: 'flujo.example.com', 'content-type': 'application/json' },
+        headers: { host: 'flujo.example.com', 'content-type': 'application/json', ...ownerFixture.headers },
         body: JSON.stringify(body),
       },
     );

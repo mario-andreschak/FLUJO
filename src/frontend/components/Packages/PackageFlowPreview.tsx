@@ -30,7 +30,7 @@ import {
 } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { CustomEdge, MCPEdge, ResourceEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
 import { useI18n } from '@/frontend/contexts/I18nContext';
-import type { PackageFlowInfo } from '@/backend/services/packages/installPackage';
+import type { PackageFlowInfo } from '@/shared/types/package/install';
 
 // Every builder node type must be registered — an unregistered type falls back
 // to React Flow's default node, which lacks the named handles the edges
@@ -103,9 +103,7 @@ export default function PackageFlowPreview({ flow, defaultTextual = false }: Pro
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={1}
-        alignItems={{ sm: 'center' }}
-        justifyContent="space-between"
-        sx={{ mb: 1 }}
+        sx={{ alignItems: { sm: 'center' }, justifyContent: "space-between",  mb: 1 }}
       >
         <Typography variant="caption" color="text.secondary">
           {t('packages.install.nodesEdges', {
@@ -176,7 +174,7 @@ export default function PackageFlowPreview({ flow, defaultTextual = false }: Pro
           )}
           {flow.nodeSummary.map((node, index) => (
             <Box component="li" key={`${node.id}-${index}`} sx={{ mb: 0.5 }}>
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                 <Chip size="small" variant="outlined" label={node.type} />
                 <Typography variant="body2">{node.label || node.id}</Typography>
               </Stack>

@@ -45,8 +45,8 @@ import MicIcon from '@mui/icons-material/Mic';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HandymanIcon from '@mui/icons-material/Handyman';
 import TerminalIcon from '@mui/icons-material/Terminal';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
@@ -560,7 +560,7 @@ const ProgressiveStructuredResult: React.FC<{ content: string }> = ({ content })
 const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ content, showRaw }) => {
   if (typeof content !== 'string') {
     return (
-      <Typography variant="body2" fontStyle="italic" color="text.secondary">
+      <Typography variant="body2" sx={{ fontStyle: "italic" }} color="text.secondary">
         [Invalid tool content]
       </Typography>
     );
@@ -942,7 +942,7 @@ const ToolCallDetails: React.FC<{
           />
         </>
       ) : (
-        <Typography variant="body2" fontStyle="italic" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: "italic",  display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
           {/* Issue #357: a stalling tool call can be aborted on its own, without
               stopping the whole run. Confirmation first, as the issue asks. */}
@@ -1493,7 +1493,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             )}
             {/* Fallback for non-string, non-array content (e.g., assistant message with only tool calls) */}
             {message.role !== 'tool' && typeof message.content !== 'string' && !Array.isArray(message.content) && !hasToolCalls(message) && !message.media?.length && (
-               <Typography variant="body2" fontStyle="italic" color="text.secondary">
+               <Typography variant="body2" sx={{ fontStyle: "italic" }} color="text.secondary">
                   {t('chat.messages.noText')}
                </Typography>
             )}
@@ -1762,12 +1762,12 @@ const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, 
               type={isNumeric ? 'number' : 'text'}
               value={String(val ?? '')}
               helperText={f.description}
-              inputProps={{
+              slotProps={{ htmlInput: {
                 minLength: f.minLength,
                 maxLength: f.maxLength,
                 min: f.minimum,
                 max: f.maximum,
-              }}
+              } }}
               onChange={(e) => {
                 if (isNumeric) {
                   const n = parseFloat(e.target.value);

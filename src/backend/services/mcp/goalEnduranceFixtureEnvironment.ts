@@ -1,5 +1,6 @@
 import path from 'path';
 import type { MCPServerConfig } from '@/shared/types/mcp';
+import { trustedHostMcpPolicySchema } from '../security/trustedHostMcp';
 
 export const GOAL_ENDURANCE_FIXTURE_TOKEN_ENV =
   'PERSONA_GOAL_ENDURANCE_FIXTURE_TOKEN';
@@ -8,6 +9,8 @@ const FIXTURE_PROFILE_ENV = 'PERSONA_GOAL_ENDURANCE_PROFILE';
 const FIXTURE_URL_ENV = 'PERSONA_GOAL_ENDURANCE_FIXTURE_URL';
 const FIXTURE_AGENT_ROOT_ENV = 'PERSONA_GOAL_ENDURANCE_AGENT_ROOT';
 const FIXTURE_RUN_ID_ENV = 'PERSONA_GOAL_ENDURANCE_RUN_ID';
+export const FIXTURE_ENTRY_ENV = 'PERSONA_GOAL_ENDURANCE_FIXTURE_ENTRY';
+export const FIXTURE_SOURCE_DIGEST_ENV = 'PERSONA_GOAL_ENDURANCE_FIXTURE_SOURCE_DIGEST';
 const SUPPORTED_PROFILE = 'structured-tools';
 const FIXTURE_SERVER_NAME = 'goal-endurance';
 const FIXTURE_SCRIPT = path.join(
@@ -49,7 +52,17 @@ export function resolveGoalEnduranceFixtureToken(
   }
 
   const args = config.args ?? [];
-  const expectedScript = path.resolve(process.cwd(), FIXTURE_SCRIPT);
+  // A staged package requires runner-owned revision and entry bindings in
+  // addition to the separately protected host grant checked at launch.
+  const parsedPolicy = config.trustedHost === undefined ? undefined : trustedHostMcpPolicySchema.safeParse(config.trustedHost);
+  if (parsedPolicy && !parsedPolicy.success) return undefined;
+  const policy = parsedPolicy?.success ? parsedPolicy.data : undefined;
+  const stagedEntry = env[FIXTURE_ENTRY_ENV];
+  if (policy && (!stagedEntry || !path.isAbsolute(stagedEntry)
+      || !samePath(policy.entryPoint, stagedEntry)
+      || !env[FIXTURE_SOURCE_DIGEST_ENV]
+      || policy.sourceDigest !== env[FIXTURE_SOURCE_DIGEST_ENV])) return undefined;
+  const expectedScript = policy ? stagedEntry! : path.resolve(process.cwd(), FIXTURE_SCRIPT);
   if (args.length !== 4 || !samePath(args[0], expectedScript)) {
     return undefined;
   }

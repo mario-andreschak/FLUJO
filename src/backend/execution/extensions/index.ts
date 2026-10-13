@@ -132,10 +132,21 @@ export function registerExecutionExtension(adapter: ExecutionExtensionAdapter): 
   registry.adapter = adapter;
   return () => { if (registry.adapter === adapter) registry.adapter = previous; };
 }
+/** Detect inherited private execution guards without exposing their authority. */
+export function hasExecutionExtensionContext(): boolean {
+  return registry.input.getStore()?.executionExtensionContext !== undefined
+    || registry.access.getStore() !== undefined
+    || registry.committing.getStore() !== undefined;
+}
 export function executionExtensionAdapter(): ExecutionExtensionAdapter | undefined {
   const adapter = registry.adapter ?? configuredAdapterInProcess();
   if (!adapter && process.env.FLUJO_EXECUTION_ADAPTER_MODULE) throw new ExecutionExtensionError('execution_adapter_not_loaded', 503);
   return adapter;
+}
+/** Arbitrary extension/access callbacks have no Persona-lock equivalence proof. */
+export function hasExecutionReadGuards(): boolean {
+  return Boolean(executionExtensionAdapter() || registry.access.getStore()
+    || registry.input.getStore()?.executionExtensionContext);
 }
 export function createExecutionExtensionContext(adapter: ExecutionExtensionAdapter, value: object): ExecutionExtensionContext {
   const context = Object.freeze({}) as ExecutionExtensionContext;

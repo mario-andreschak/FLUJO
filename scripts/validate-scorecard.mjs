@@ -1,0 +1,547 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readScorecardEvidence } from './read-scorecard-evidence.mjs';
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const defaultLedger = resolve(repositoryRoot, 'docs/audits/scorecard-563/scorecard.json');
+const defaultSchema = resolve(repositoryRoot, 'docs/audits/scorecard-563/scorecard.schema.json');
+const dimensions = new Map([
+  ['product-fit', ['Idea / product fit', 'A-']],
+  ['feature-surface', ['Feature surface', 'A-']],
+  ['engineering', ['Engineering discipline', 'B+']],
+  ['code-health', ['Code health', 'B-']],
+  ['security', ['Security', 'C+']],
+  ['maturity', ['Maturity / stability', 'C']],
+  ['community', ['Community / bus factor', 'D']],
+  ['docs', ['Docs honesty', 'A']],
+  ['production', ['Production-readiness', 'C-']],
+]);
+const profiles = ['local-owner', 'persistent-worker', 'shared-public'];
+const sourceGateEvidenceKinds = new Map([
+  ['dependency-audit', ['source-check']],
+  ['build-verification', ['source-check']],
+  ['persona-current-soak', ['offline-simulation']],
+]);
+const gateEvidenceKinds = gate => sourceGateEvidenceKinds.get(gate.id) ?? {
+  source: ['source-check', 'offline-simulation'], installed: ['installed-artifact'],
+  human: ['human-study'], live: ['live-provider'], independent: ['independent-assessment'],
+  external: ['external-agreement'],
+}[gate.kind];
+const installArtifactKinds = new Map([
+  ['versioned installer', ['windows-installer']], ['npm package', ['npm']],
+  ['pinned source', ['source-build']], ['container', ['container']],
+  ['pinned container/service', ['container']], ['pinned native service', ['npm', 'source-build']],
+  ['hardened pinned container/service with authenticated ingress', ['container']],
+]);
+const declaredPlatforms = {
+  'local-owner': {
+    Windows: ['versioned installer', 'npm package', 'pinned source'],
+    Linux: ['npm package', 'pinned source', 'container'], macOS: ['npm package', 'pinned source'],
+  },
+  'persistent-worker': { Linux: ['pinned container/service'], Windows: ['pinned native service'] },
+  'shared-public': { Linux: ['hardened pinned container/service with authenticated ingress'] },
+};
+const protectedBudgets = new Map([
+  ['persona-append-p95', ['<', 150, 28, 'ms']], ['persona-peak-rss', ['<=', 805306368, 1, 'bytes']],
+  ['persona-rss-growth', ['<=', 268435456, 1, 'bytes']], ['persona-append-flatness', ['<=', 2, 1, 'ratio']],
+  ['persona-total-collection', ['<=', 1248, 1, 'records']], ['persona-mailbox', ['<=', 500, 1, 'records']],
+  ['persona-activities', ['<=', 200, 1, 'records']], ['persona-dispatches', ['<=', 200, 1, 'records']],
+  ['persona-pins', ['<=', 200, 1, 'records']], ['persona-leases', ['<=', 50, 1, 'records']],
+  ['persona-recall-p95', ['<', 150, 20, 'ms']],
+]);
+const publishedBudgetIds = [
+  ...protectedBudgets.keys(), 'pilot-users', 'novice-success', 'novice-time', 'backup-maintainers', 'human-contributors',
+  'runtime-peak-rss', 'runtime-rss-growth', 'runtime-concurrency', 'recovery-rto', 'backup-rpo', 'duplicate-effects',
+  'unauthorized-access', 'high-findings', 'live-smoke', 'live-seven-days', 'live-28-days', 'live-success-rate', 'live-interventions', 'live-spend',
+];
+const supportedKeywords = new Set([
+  '$schema', '$id', '$defs', '$ref', 'title', 'description', 'type', 'const',
+  'enum', 'anyOf', 'properties', 'required', 'additionalProperties', 'items',
+  'minItems', 'maxItems', 'minLength', 'pattern', 'minimum', 'maximum', 'uniqueItems',
+]);
+
+function equalJson(left, right) {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  if (Array.isArray(left)) return left.length === right.length && left.every((item, index) => equalJson(item, right[index]));
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && equalJson(left[key], right[key]));
+}
+
+/** Deliberately small JSON Schema vocabulary; unsupported keywords fail closed. */
+export function validateShape(value, schema, root = schema, path = '$') {
+  for (const keyword of Object.keys(schema)) {
+    if (!supportedKeywords.has(keyword)) throw new Error('Unsupported schema keyword: ' + keyword);
+  }
+  if (schema.$ref) {
+    if (!schema.$ref.startsWith('#/$defs/')) throw new Error('Only local $defs references are supported');
+    const target = root.$defs[schema.$ref.slice(8)];
+    if (!target) throw new Error('Unknown schema reference: ' + schema.$ref);
+    return validateShape(value, target, root, path);
+  }
+  const errors = [];
+  const fail = message => errors.push(path + ': ' + message);
+  if (schema.anyOf && !schema.anyOf.some(option => validateShape(value, option, root, path).length === 0)) fail('does not match any allowed shape');
+  if ('const' in schema && !equalJson(value, schema.const)) fail('unexpected constant');
+  if (schema.enum && !schema.enum.includes(value)) fail('unknown enum value');
+  const types = {
+    object: value !== null && typeof value === 'object' && !Array.isArray(value),
+    array: Array.isArray(value), string: typeof value === 'string',
+    number: typeof value === 'number' && Number.isFinite(value),
+    integer: Number.isSafeInteger(value), boolean: typeof value === 'boolean', null: value === null,
+  };
+  if (schema.type && !types[schema.type]) {
+    fail('expected ' + schema.type);
+    return errors;
+  }
+  if (schema.type === 'object') {
+    for (const key of schema.required ?? []) if (!Object.hasOwn(value, key)) fail('missing ' + key);
+    for (const [key, child] of Object.entries(value)) {
+      if (Object.hasOwn(schema.properties ?? {}, key)) errors.push(...validateShape(child, schema.properties[key], root, path + '.' + key));
+      else if (schema.additionalProperties === false) fail('unknown field ' + key);
+    }
+  }
+  if (schema.type === 'array') {
+    if (value.length < (schema.minItems ?? 0)) fail('too few items');
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) fail('too many items');
+    if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) fail('duplicate items');
+    value.forEach((item, index) => errors.push(...validateShape(item, schema.items ?? {}, root, path + '[' + index + ']')));
+  }
+  if (schema.type === 'string') {
+    if (value.trim().length < (schema.minLength ?? 0)) fail('empty/short string');
+    if (schema.pattern && !new RegExp(schema.pattern).test(value)) fail('invalid pattern');
+  }
+  if (schema.type === 'number' || schema.type === 'integer') {
+    if (schema.minimum !== undefined && value < schema.minimum) fail('below minimum');
+    if (schema.maximum !== undefined && value > schema.maximum) fail('above maximum');
+  }
+  return errors;
+}
+
+function timestamp(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?Z$/.test(value)) return NaN;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19) ? parsed : NaN;
+}
+function satisfies(value, budget) {
+  if (!Number.isFinite(budget.limit)) return false;
+  return ({ '<': value < budget.limit, '<=': value <= budget.limit, '>=': value >= budget.limit, '>': value > budget.limit, '=': value === budget.limit })[budget.operator];
+}
+
+/** This checks records and declared evidence correspondence, never awards a grade. */
+export function validateScorecard(ledger, options = {}) {
+  const { root = repositoryRoot, schema = JSON.parse(readFileSync(defaultSchema, 'utf8')), verifyFiles = true } = options;
+  const overriddenClock = Object.hasOwn(options, 'now');
+  const now = overriddenClock ? options.now : Date.now();
+  const validationClock = { source: overriddenClock ? 'override' : 'wall-clock', epochMilliseconds: Number.isFinite(now) ? now : null };
+  const errors = validateShape(ledger, schema);
+  if (errors.length) return { errors, blockers: [], validationClock };
+  const fail = message => errors.push(message);
+  if (!Number.isFinite(now)) {
+    fail('Invalid validation clock');
+    return { errors, blockers: [], validationClock };
+  }
+  const contract = schema.$defs?.acceptanceContract?.const;
+  if (!contract || contract.contractVersion !== ledger.schemaVersion || !Array.isArray(contract.sourceMetricElapsedBudgets) ||
+      !Array.isArray(contract.retainedSourceFailures) || contract.retainedSourceFailures.length !== 2 ||
+      ![contract.metricUnits, contract.unitKinds, contract.budgetPolicies].every(value => value && typeof value === 'object' && !Array.isArray(value))) {
+    fail('Missing or mismatched reviewed acceptance contract version');
+    return { errors, blockers: [], validationClock };
+  }
+  const indexed = {};
+  for (const collection of ['owners', 'profiles', 'rubric', 'budgets', 'artifacts', 'evidence', 'gates', 'claims']) {
+    indexed[collection] = new Map();
+    for (const entry of ledger[collection]) {
+      if (indexed[collection].has(entry.id)) fail(collection + ': duplicate ID ' + entry.id);
+      indexed[collection].set(entry.id, entry);
+    }
+  }
+  function refs(ids, collection, context) {
+    if (new Set(ids).size !== ids.length) fail(context + ': duplicate references');
+    for (const id of ids) if (!indexed[collection].has(id)) fail(context + ': unknown ' + collection + ' ID ' + id);
+  }
+  function exact(actual, expected, context) {
+    if (actual.length !== expected.length || expected.some(id => !actual.includes(id))) fail(context + ': required complete set is ' + expected.join(', '));
+  }
+  refs(contract.sourceMetricElapsedBudgets, 'budgets', 'source metric elapsed contract');
+  refs(Object.keys(contract.metricUnits), 'budgets', 'metric unit contract');
+  function unitPolicy(unit) {
+    const policy = contract.unitKinds[unit];
+    if (!policy || !['integer', 'continuous', 'duration', 'ratio'].includes(policy.kind)) return null;
+    if (policy.kind === 'duration' && (!Number.isFinite(policy.millisecondsPerUnit) || policy.millisecondsPerUnit <= 0)) return null;
+    return policy;
+  }
+  function budgetPolicy(id) {
+    const policy = contract.budgetPolicies[id], observation = policy?.observation;
+    if (!policy || !['<', '<=', '>=', '>', '='].includes(policy.operator)
+        || !(policy.limit === null || Number.isFinite(policy.limit))
+        || !['unit', 'denominator', 'window', 'basis'].every(field => typeof policy[field] === 'string' && policy[field].trim())
+        || !observation || !['any', 'elapsed', 'simulated'].includes(observation.clock)
+        || !['minimumSeconds', 'minimumSimulatedDays', 'minimumDenominator'].every(field => Number.isFinite(observation[field]) && observation[field] >= 0)
+        || !Number.isSafeInteger(observation.minimumDenominator) || observation.minimumDenominator < 1
+        || typeof policy.allowNegative !== 'boolean'
+        || !(unitPolicy(policy.unit)?.kind === 'ratio' ? ['fraction', 'derived'].includes(policy.ratioMode) : policy.ratioMode === null)) return null;
+    return policy;
+  }
+  for (const id of publishedBudgetIds) {
+    const target = budgetPolicy(id);
+    if (!target || !indexed.budgets.has(id)) fail(id + ': published budget policy missing or omitted');
+    if (!target || contract.metricUnits[id] !== target.unit) fail(id + ': published unit table coverage missing or inconsistent');
+    if (!target || !unitPolicy(target.unit)) fail(id + ': published budget has no reviewed unit semantics');
+    if (!target || typeof target.allowNegative !== 'boolean' || ![null, 'fraction', 'derived'].includes(target.ratioMode)) fail(id + ': published metric semantics missing or invalid');
+  }
+  refs(Object.keys(contract.budgetPolicies), 'budgets', 'published budget policy');
+  exact(ledger.rubric.map(row => row.id), [...dimensions.keys()], 'rubric');
+  exact(ledger.profiles.map(profile => profile.id), profiles, 'profiles');
+  for (const id of ['rubric-agreement', 'release-acceptance', 'local-security', 'worker-operations', 'shared-profile', 'human-evidence', 'persona-current-soak', 'persona-manual', 'persona-live', 'cross-stream-contracts', 'independent-reassessment', 'dependency-audit', 'build-verification']) {
+    if (!indexed.gates.has(id)) fail('Required gate omitted: ' + id);
+  }
+  exact(ledger.issueReconciliation.map(issue => issue.issue), [520, 517, 526, 553, 547, 101, 527, 505, 435, 418, 212], 'issue reconciliation');
+  for (const row of ledger.rubric) {
+    const original = dimensions.get(row.id);
+    if (original && (row.dimension !== original[0] || row.originalGrade !== original[1])) fail(row.id + ': original dimension/grade changed');
+    refs([row.ownerId], 'owners', row.id);
+    for (const kind of contract.rubricEvidenceKinds[row.id] ?? []) {
+      if (!row.evidenceRequired.includes(kind)) fail(row.id + ': published rubric evidence kind omitted: ' + kind);
+    }
+  }
+  for (const profile of ledger.profiles) {
+    refs(profile.gateIds, 'gates', profile.id);
+    exact(profile.osInstallMatrix.map(row => row.platform), Object.keys(declaredPlatforms[profile.id] ?? {}), profile.id + ' platforms');
+    for (const row of profile.osInstallMatrix) {
+      exact(row.methods, declaredPlatforms[profile.id]?.[row.platform] ?? [], profile.id + '/' + row.platform + ' methods');
+      refs(row.evidenceIds, 'evidence', profile.id + '/' + row.platform);
+      for (const method of row.methods) if (!installArtifactKinds.has(method)) fail(profile.id + ': unknown install contract ' + method);
+    }
+  }
+  for (const budget of ledger.budgets) {
+    refs([budget.ownerId], 'owners', budget.id);
+    refs(budget.agreementEvidenceIds, 'evidence', budget.id);
+    if (!Number.isFinite(timestamp(budget.declaredAt))) fail(budget.id + ': invalid declaredAt');
+    const reviewedUnit = contract.metricUnits[budget.id];
+    if (reviewedUnit !== undefined && budget.unit !== reviewedUnit) fail(budget.id + ': reviewed unit contract changed; requires a separately reviewed contract version');
+    if (budget.status === 'agreed' && (reviewedUnit !== budget.unit || !unitPolicy(budget.unit) || !budgetPolicy(budget.id) || !Array.isArray(contract.metricEvidenceKinds[budget.id]) || !contract.metricEvidenceKinds[budget.id].length)) fail(budget.id + ': agreed budget needs reviewed unit and evidence carrier contracts and budget policy');
+    const target = budgetPolicy(budget.id);
+    if (target) {
+      if (['operator', 'limit', 'unit', 'denominator', 'window', 'basis'].some(field => budget[field] !== target[field])) fail(budget.id + ': published budget policy changed; requires a separately reviewed contract version');
+      if (budget.observation.clock !== target.observation.clock || ['minimumSeconds', 'minimumSimulatedDays', 'minimumDenominator'].some(field => budget.observation[field] < target.observation[field])) fail(budget.id + ': published budget observation policy weakened; requires a separately reviewed contract version');
+    }
+    if (budget.limit === null && budget.status !== 'proposed') fail(budget.id + ': unset envelope cannot be an agreed or existing numeric contract');
+    if (budget.status === 'agreed' && budget.agreementEvidenceIds.length === 0) fail(budget.id + ': agreed budget needs retained agreement evidence');
+    if (budget.status === 'agreed') {
+      const records = acceptedEvidence(budget.agreementEvidenceIds, budget.id);
+      if (!records.some(e => e.kind === 'external-agreement')) fail(budget.id + ': budget requires external agreement evidence');
+    }
+  }
+  for (const [id, [operator, limit, denominator, unit]] of protectedBudgets) {
+    const actual = indexed.budgets.get(id);
+    if (!actual || actual.operator !== operator || actual.limit !== limit || actual.unit !== unit || actual.status !== 'existing-contract') fail(id + ': existing numeric contract changed or omitted; requires a separately reviewed contract version');
+    if (actual && id !== 'persona-recall-p95' && (actual.observation.clock !== 'simulated' || actual.observation.minimumSimulatedDays !== 28)) fail(id + ': existing full 28-day workload changed');
+    if (actual && actual.observation.minimumDenominator !== denominator) fail(id + ': existing observation denominator contract changed; requires a separately reviewed contract version');
+  }
+  for (const [id, target] of Object.entries(contract.humanTargets)) {
+    const budget = indexed.budgets.get(id);
+    if (!budget || budget.operator !== target.operator || budget.limit !== target.limit || budget.unit !== target.unit) fail(id + ': published human target changed or omitted; requires a separately reviewed contract version');
+    if (!budget || ['denominator', 'window', 'basis'].some(field => budget[field] !== target[field])) fail(id + ': published human sampling contract changed or omitted; requires a separately reviewed contract version');
+    if (!budget || budget.observation.clock !== target.observation.clock || budget.observation.minimumSeconds < target.observation.minimumSeconds || budget.observation.minimumSimulatedDays < target.observation.minimumSimulatedDays || budget.observation.minimumDenominator < target.observation.minimumDenominator) fail(id + ': published human observation contract weakened or omitted');
+  }
+  for (const [role, agreement] of Object.entries(ledger.agreements)) {
+    if (role === 'disagreements') continue;
+    refs(agreement.evidenceIds, 'evidence', role);
+    if (agreement.status === 'agreed' && (!agreement.identity || !agreement.evidenceIds.length)) fail(role + ': agreement requires identified human and retained evidence');
+    if (agreement.status === 'agreed') {
+      const records = acceptedEvidence(agreement.evidenceIds, role);
+      if (!records.some(e => e.kind === 'external-agreement')) fail(role + ': wrong agreement evidence kind');
+    }
+  }
+  if (ledger.agreements.maintainer.identity && ledger.agreements.maintainer.identity === ledger.agreements.independentReviewer.identity) fail('Independent reviewer cannot be the accepting maintainer');
+  const verifiedPayloads = new Map();
+  const contentAccepted = new Set();
+  const contentReports = new Map();
+  for (const evidence of ledger.evidence) {
+    refs([evidence.ownerId], 'owners', evidence.id);
+    refs(evidence.budgetIds, 'budgets', evidence.id);
+    refs(evidence.profileIds, 'profiles', evidence.id);
+    if (evidence.artifactId) refs([evidence.artifactId], 'artifacts', evidence.id);
+    const observedAt = timestamp(evidence.observedAt);
+    if (!Number.isFinite(observedAt)) fail(evidence.id + ': invalid observedAt');
+    else if (observedAt > now) fail(evidence.id + ': observation is in the future relative to validation clock');
+    const window = evidence.window;
+    if (window.start !== null && !Number.isFinite(timestamp(window.start))) fail(evidence.id + ': invalid start timestamp');
+    if (window.kind !== 'elapsed' && window.end !== null) {
+      const end = timestamp(window.end);
+      if (!Number.isFinite(end)) fail(evidence.id + ': invalid non-elapsed end timestamp');
+      else {
+        if (end > observedAt) fail(evidence.id + ': non-elapsed end is later than observation');
+        if (window.start !== null && (!Number.isFinite(timestamp(window.start)) || end < timestamp(window.start))) fail(evidence.id + ': non-elapsed end precedes or has an invalid start');
+      }
+    }
+    if (window.kind === 'simulated' && !window.simulatedDays) fail(evidence.id + ': simulated window needs simulated days');
+    if (window.kind !== 'simulated' && window.simulatedDays !== null) fail(evidence.id + ': non-simulated window contains simulated days');
+    if (window.kind === 'elapsed') {
+      if (!Number.isFinite(timestamp(window.start)) || !Number.isFinite(timestamp(window.end)) || timestamp(window.end) <= timestamp(window.start)) fail(evidence.id + ': elapsed window requires ordered UTC start/end');
+      if (timestamp(window.end) > timestamp(evidence.observedAt)) fail(evidence.id + ': evidence observed before elapsed window ended');
+    }
+    if (['live-provider', 'human-study'].includes(evidence.kind) && window.kind !== 'elapsed') fail(evidence.id + ': live/human evidence requires actual elapsed window');
+    if (evidence.kind === 'offline-simulation' && window.kind !== 'simulated') fail(evidence.id + ': offline simulation must retain virtual-time distinction');
+    const artifact = indexed.artifacts.get(evidence.artifactId);
+    if (evidence.kind === 'installed-artifact' && (!artifact || artifact.kind === 'source' || (evidence.result === 'passed' && artifact.sourceSha !== evidence.sourceSha))) fail(evidence.id + ': installed result needs matching release artifact/source identity');
+    if (evidence.integrity === 'checksummed' && !evidence.raw.some(raw => raw.verification === 'local' && raw.sha256)) fail(evidence.id + ': checksummed evidence needs a retained local payload');
+    for (const raw of evidence.raw) {
+      if (raw.verification !== 'local') continue;
+      if (!raw.sha256) { fail(evidence.id + ': local evidence missing SHA-256'); continue; }
+      if (isAbsolute(raw.location) || raw.location.includes('\\') || /^[a-z]+:/i.test(raw.location)) { fail(evidence.id + ': local evidence location must be repository-relative'); continue; }
+      const path = resolve(root, raw.location);
+      const inside = target => { const rel = relative(root, target); return rel !== '..' && !rel.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) && !isAbsolute(rel); };
+      if (!inside(path)) { fail(evidence.id + ': evidence path escapes repository'); continue; }
+      if (verifyFiles) {
+        try {
+          const bytes = readScorecardEvidence(path, root);
+          const actual = createHash('sha256').update(bytes).digest('hex');
+          if (actual !== raw.sha256) fail(evidence.id + ': checksum mismatch for ' + raw.location);
+          else verifiedPayloads.set(raw.location + ':' + raw.sha256, bytes);
+        } catch (error) { fail(evidence.id + ': cannot verify ' + raw.location + ': ' + error.message); }
+      }
+    }
+    if (evidence.kind === 'installed-artifact' && evidence.result === 'passed' && evidence.integrity === 'checksummed' && !evidence.artifactProof) fail(evidence.id + ': installed acceptance needs a retained producer artifact report');
+    if (evidence.artifactProof) {
+      const witness = evidence.raw.find(raw => raw.location === evidence.artifactProof.location && raw.verification === 'local' && raw.sha256);
+      const bytes = witness && verifiedPayloads.get(witness.location + ':' + witness.sha256);
+      if (!bytes) fail(evidence.id + ': artifact report must be a checksum-verified local raw payload');
+      else {
+        try {
+          const report = JSON.parse(bytes.toString('utf8'));
+          const shape = validateShape(report, schema.$defs.artifactAcceptanceReport, schema);
+          if (shape.length) fail(evidence.id + ': invalid artifact report: ' + shape.join('; '));
+          else {
+            refs(report.profileIds, 'profiles', evidence.id + ' report');
+            if (!artifact || report.artifactId !== artifact.id || report.sourceSha !== artifact.sourceSha || report.sourceSha !== evidence.sourceSha || report.payloadSha256 !== artifact.payloadSha256) fail(evidence.id + ': artifact report identity/digest mismatch');
+            const keys = report.checks.map(check => [check.id, check.profileId, check.platform, check.installMethod].join(':'));
+            if (new Set(keys).size !== keys.length) fail(evidence.id + ': duplicate artifact report check');
+            for (const check of report.checks) {
+              if (check.profileId) refs([check.profileId], 'profiles', evidence.id + ' report check');
+              if (check.id === 'installed-runtime') {
+                const row = indexed.profiles.get(check.profileId)?.osInstallMatrix.find(row => row.platform === check.platform);
+                if (!row?.methods.includes(check.installMethod) || !installArtifactKinds.get(check.installMethod)?.includes(artifact?.kind)) fail(evidence.id + ': runtime row does not match declared platform/install artifact');
+              }
+            }
+            const common = ['content-digest', 'source-provenance'];
+            const complete = common.every(id => report.checks.some(c => c.id === id && c.profileId === null && c.platform === null && c.installMethod === null && c.required && c.result === 'passed'));
+            const installed = artifact?.kind === 'source' || evidence.profileIds.every(id => report.profileIds.includes(id) && report.checks.some(c => c.id === 'installed-runtime' && c.profileId === id && c.required && c.result === 'passed'));
+            if (evidence.result === 'passed') {
+              if (report.result !== 'passed' || !complete || !installed || report.checks.some(c => c.required && c.result !== 'passed')) fail(evidence.id + ': artifact report has missing/failed/skipped required content, provenance or runtime checks');
+              else if (artifact && report.artifactId === artifact.id && report.sourceSha === artifact.sourceSha && report.sourceSha === evidence.sourceSha && report.payloadSha256 === artifact.payloadSha256) {
+                contentAccepted.add(evidence.id);
+                contentReports.set(evidence.id, report);
+              }
+            }
+          }
+        } catch (error) { fail(evidence.id + ': cannot parse artifact report: ' + error.message); }
+      }
+    }
+    for (const metric of evidence.metrics) {
+      refs([metric.budgetId], 'budgets', evidence.id + ' metric');
+      const budget = indexed.budgets.get(metric.budgetId);
+      const policy = budget && unitPolicy(budget.unit);
+      if (budget?.limit === null) fail(evidence.id + ': envelope not declared for ' + metric.budgetId);
+      const metricPolicy = budgetPolicy(metric.budgetId);
+      if (metric.value < 0 && metricPolicy?.allowNegative !== true) fail(evidence.id + ': only reviewed measured growth may be negative');
+      if (policy?.kind === 'integer' && !Number.isSafeInteger(metric.value)) fail(evidence.id + ': count metric must be a whole number');
+      if (!evidence.budgetIds.includes(metric.budgetId)) fail(evidence.id + ': measured budget absent from budgetIds');
+      if (budget && evidence.result === 'passed' && !satisfies(metric.value, budget)) fail(evidence.id + ': passing result contradicts measured ' + metric.budgetId);
+      if (budget && evidence.result === 'passed' && evidence.integrity === 'checksummed') {
+        if (contract.metricUnits[metric.budgetId] !== budget.unit) fail(evidence.id + ': metric ' + metric.budgetId + ' has no matching reviewed unit contract');
+        if (!policy) fail(evidence.id + ': metric ' + metric.budgetId + ' has no reviewed unit semantics');
+        if (!metricPolicy) fail(evidence.id + ': metric ' + metric.budgetId + ' has no reviewed budget policy');
+        const metricKinds = contract.metricEvidenceKinds[metric.budgetId];
+        if (!Array.isArray(metricKinds) || !metricKinds.length) fail(evidence.id + ': metric ' + metric.budgetId + ' has no reviewed evidence carrier contract');
+        else if (!metricKinds.includes(evidence.kind)) fail(evidence.id + ': metric ' + metric.budgetId + ' requires evidence kind ' + metricKinds.join(', '));
+        if (evidence.kind === 'source-check' && contract.sourceMetricElapsedBudgets.includes(metric.budgetId) && window.kind !== 'elapsed') fail(evidence.id + ': metric ' + metric.budgetId + ' requires an elapsed source measurement window');
+        if (budget.status === 'proposed') fail(evidence.id + ': proposed budget cannot establish acceptance');
+        const measurementStart = timestamp(window.start);
+        if (budget.status !== 'proposed' && !Number.isFinite(measurementStart)) fail(evidence.id + ': acceptance under declared budget needs actual measurement start');
+        if (Number.isFinite(measurementStart)) {
+          if (timestamp(budget.declaredAt) > measurementStart) fail(evidence.id + ': budget declared after measurement began');
+          if (measurementStart > timestamp(evidence.observedAt)) fail(evidence.id + ': evidence observed before measurement began');
+        }
+        const elapsedMilliseconds = timestamp(window.end) - timestamp(window.start);
+        if (window.kind === 'elapsed' && policy?.kind === 'duration' && metric.value * policy.millisecondsPerUnit > elapsedMilliseconds) fail(evidence.id + ': duration metric exceeds actual elapsed time');
+        const observation = budget.observation;
+        if (observation.clock !== 'any' && window.kind !== observation.clock) fail(evidence.id + ': wrong observation clock for ' + metric.budgetId);
+        if (observation.minimumSeconds > 0 && (window.kind !== 'elapsed' || (timestamp(window.end) - timestamp(window.start)) / 1000 < observation.minimumSeconds)) fail(evidence.id + ': observation window too short for ' + metric.budgetId);
+        if (observation.minimumSimulatedDays > 0 && (window.kind !== 'simulated' || window.simulatedDays < observation.minimumSimulatedDays)) fail(evidence.id + ': simulated workload too short for ' + metric.budgetId);
+        if (metric.denominator < observation.minimumDenominator) fail(evidence.id + ': denominator below declared minimum for ' + metric.budgetId);
+        if (budget.status === 'agreed') {
+          for (const id of budget.agreementEvidenceIds) {
+            const agreement = indexed.evidence.get(id);
+            if (agreement && timestamp(agreement.observedAt) > timestamp(window.start)) fail(evidence.id + ': budget agreement occurred after measurement began');
+          }
+        }
+        if (policy?.kind === 'ratio' && metricPolicy?.ratioMode !== 'derived') {
+          if (!Number.isSafeInteger(metric.denominator) || metric.numerator === null || metric.numerator > metric.denominator || Math.abs(metric.value - metric.numerator / metric.denominator) > 1e-9) fail(evidence.id + ': ratio does not reconcile with integer numerator/denominator');
+        }
+      }
+    }
+  }
+  const history = indexed.evidence.get('persona-september16-failure');
+  if (!history || history.result !== 'failed' || history.kind !== 'offline-simulation' || history.sourceSha !== 'df485400e72f5772f50b1caa9674db22bfb3bf42' || !history.raw.some(raw => raw.location === 'docs/audits/scorecard-563/evidence/2026-09-16-persona-soak.json' && raw.sha256 === 'ee879bb3e0f9d7cb42b3162eacc3c625186b1941173bae8c824d1f8433af728d')) fail('Historical September 16 failed simulation must remain attributed and retained');
+  for (const retained of contract.retainedSourceFailures) {
+    const record = indexed.evidence.get(retained.id);
+    if (!record || record.result !== retained.result || record.kind !== retained.kind || record.sourceSha !== retained.sourceSha
+        || !record.raw.some(raw => raw.location === retained.location && raw.sha256 === retained.sha256)) fail(retained.id + ': historical source failure must remain attributed and retained');
+  }
+  function acceptedEvidence(ids, context) {
+    const records = ids.map(id => indexed.evidence.get(id)).filter(Boolean);
+    if (!records.length || records.some(e => e.result !== 'passed' || e.integrity !== 'checksummed')) fail(context + ': acceptance requires passing checksummed evidence, not reported metadata/failures');
+    return records;
+  }
+  for (const artifact of ledger.artifacts) {
+    refs(artifact.metadataEvidenceIds, 'evidence', artifact.id);
+    if (artifact.provenance === 'verified-content') {
+      if (!artifact.sourceSha || !artifact.payloadSha256) fail(artifact.id + ': verified content needs exact source and payload hash');
+      const content = ledger.evidence.filter(e => e.artifactId === artifact.id && e.sourceSha === artifact.sourceSha && e.kind === (artifact.kind === 'source' ? 'source-check' : 'installed-artifact') && e.result === 'passed' && e.integrity === 'checksummed' && contentAccepted.has(e.id));
+      if (!content.length) fail(artifact.id + ': verified content has no matching retained content acceptance');
+    }
+  }
+  for (const profile of ledger.profiles) {
+    for (const row of profile.osInstallMatrix.filter(row => row.acceptance === 'verified')) {
+      const records = acceptedEvidence(row.evidenceIds, profile.id + '/' + row.platform);
+      for (const method of row.methods) {
+        if (!records.some(e => e.kind === 'installed-artifact' && contentAccepted.has(e.id) && e.profileIds.includes(profile.id) && contentReports.get(e.id)?.checks.some(c => c.id === 'installed-runtime' && c.profileId === profile.id && c.platform === row.platform && c.installMethod === method && c.required && c.result === 'passed'))) fail(profile.id + '/' + row.platform + ': missing installed acceptance for method ' + method);
+      }
+    }
+  }
+  function requireGateSource(gate, sourceSha, context) {
+    // External rubric/consumer agreements may predate a release. Their policy
+    // applicability still needs review; runtime/source gates qualify one source.
+    if (!gate || gate.status !== 'passed' || gate.kind === 'external') return;
+    const expected = gateEvidenceKinds(gate);
+    const records = gate.evidenceIds.map(id => indexed.evidence.get(id)).filter(Boolean);
+    for (const profileId of gate.profileIds.length ? gate.profileIds : [null]) {
+      if (!records.some(e => e.result === 'passed' && e.integrity === 'checksummed' &&
+        expected.includes(e.kind) && e.sourceSha === sourceSha &&
+        (profileId === null || e.profileIds.includes(profileId)))) {
+        fail(context + ': gate ' + gate.id + ' lacks acceptance for source ' + sourceSha +
+          (profileId === null ? '' : ' and profile ' + profileId));
+      }
+    }
+  }
+  for (const gate of ledger.gates) {
+    refs([gate.ownerId], 'owners', gate.id);
+    refs(gate.profileIds, 'profiles', gate.id);
+    refs(gate.evidenceIds, 'evidence', gate.id);
+    if (sourceGateEvidenceKinds.has(gate.id) && gate.kind !== 'source') fail(gate.id + ': required source gate kind changed');
+    if (gate.status === 'passed') {
+      const records = acceptedEvidence(gate.evidenceIds, gate.id);
+      const expected = gateEvidenceKinds(gate);
+      if (!records.some(e => expected.includes(e.kind))) fail(gate.id + ': wrong evidence kind for gate');
+      for (const profileId of gate.profileIds) {
+        if (!records.some(e => expected.includes(e.kind) && e.profileIds.includes(profileId))) fail(gate.id + ': missing acceptance evidence for profile ' + profileId);
+      }
+    }
+  }
+  for (const claim of ledger.claims) {
+    refs([claim.dimensionId], 'rubric', claim.id);
+    refs([claim.profileId], 'profiles', claim.id);
+    refs(claim.evidenceIds, 'evidence', claim.id);
+    refs(claim.budgetIds, 'budgets', claim.id);
+    refs(claim.gateIds, 'gates', claim.id);
+    if (!['source-supported', 'release-supported'].includes(claim.status)) continue;
+    const records = acceptedEvidence(claim.evidenceIds, claim.id);
+    if (records.some(e => !e.profileIds.includes(claim.profileId))) fail(claim.id + ': evidence does not cover claimed profile');
+    for (const kind of claim.requiredKinds) if (!records.some(e => e.kind === kind)) fail(claim.id + ': missing required evidence kind ' + kind);
+    if (new Set(records.map(e => e.sourceSha)).size !== 1) fail(claim.id + ': mixed revisions cannot support one release claim');
+    if (claim.budgetIds.some(id => indexed.budgets.get(id)?.status === 'proposed')) fail(claim.id + ': proposed budgets cannot qualify claim');
+    for (const id of claim.budgetIds) {
+      if (!records.some(e => e.metrics.some(m => m.budgetId === id && satisfies(m.value, indexed.budgets.get(id) ?? { operator: '?', limit: 0 })))) fail(claim.id + ': missing passing measurement for budget ' + id);
+    }
+    if (claim.status === 'source-supported' && !records.some(e => e.kind === 'source-check')) fail(claim.id + ': source-supported claim needs source checks');
+    if (claim.status === 'release-supported') {
+      if (!records.some(e => e.kind === 'installed-artifact')) fail(claim.id + ': source checks cannot substitute for installed-artifact acceptance');
+      if (claim.gateIds.some(id => indexed.gates.get(id)?.status !== 'passed')) fail(claim.id + ': required gates remain open');
+      for (const id of claim.gateIds) requireGateSource(indexed.gates.get(id), records[0]?.sourceSha, claim.id);
+      for (const record of records.filter(e => e.kind === 'installed-artifact')) if (indexed.artifacts.get(record.artifactId)?.provenance !== 'verified-content') fail(claim.id + ': installed artifact content/provenance is unverified');
+    }
+  }
+  for (const required of contract.claims) {
+    const claim = indexed.claims.get(required.id);
+    if (!claim) { fail('Required primary claim omitted: ' + required.id); continue; }
+    if (claim.dimensionId !== required.dimensionId || claim.profileId !== required.profileId) fail(required.id + ': primary claim subject changed; requires a separately reviewed contract version');
+    if (claim.status === 'experimental' && !required.allowExperimental) fail(required.id + ': primary claim cannot be experimental');
+    for (const budgetId of required.budgetIds) {
+      if (!claim.budgetIds.includes(budgetId)) fail(required.id + ': required budget binding omitted: ' + budgetId);
+    }
+    const rubricKinds = required.rubricBound ? indexed.rubric.get(required.dimensionId)?.evidenceRequired ?? [] : [];
+    for (const kind of new Set([...required.requiredKinds, ...rubricKinds])) {
+      if (!claim.requiredKinds.includes(kind)) fail(required.id + ': required evidence kind binding omitted: ' + kind);
+    }
+    for (const gateId of required.gateIds) {
+      if (!claim.gateIds.includes(gateId)) fail(required.id + ': required gate binding omitted: ' + gateId);
+    }
+  }
+  for (const issue of ledger.issueReconciliation) refs(issue.evidenceIds, 'evidence', '#' + issue.issue);
+  for (const id of dimensions.keys()) {
+    if (!ledger.claims.some(claim => claim.dimensionId === id)) fail('Missing claim for dimension ' + id);
+  }
+  for (const profileId of profiles) {
+    if (!ledger.claims.some(claim => claim.dimensionId === 'production' && claim.profileId === profileId)) fail('Missing production claim for profile ' + profileId);
+  }
+  for (const dimensionId of ['engineering', 'docs', 'maturity']) {
+    if (!ledger.claims.some(claim => claim.dimensionId === dimensionId && claim.gateIds.includes('build-verification'))) fail(dimensionId + ': missing build-verification claim gate');
+  }
+  const assessment = ledger.assessment;
+  refs(assessment.artifactIds, 'artifacts', 'assessment');
+  refs(assessment.evidenceIds, 'evidence', 'assessment');
+  refs(assessment.acceptedExperimentalClaimIds, 'claims', 'assessment exclusions');
+  if (assessment.acceptedExperimentalClaimIds.some(id => indexed.claims.get(id)?.status !== 'experimental')) fail('Only experimental claims can be explicitly accepted as exclusions');
+  if (assessment.status === 'completed') {
+    if (!assessment.independent || !assessment.reviewer || !assessment.sourceSha || assessment.reviewer !== ledger.agreements.independentReviewer.identity) fail('Completed reassessment requires the agreed identified independent reviewer and exact release SHA');
+    exact(assessment.grades.map(row => row.dimensionId), [...dimensions.keys()], 'assessment grades');
+    const records = acceptedEvidence(assessment.evidenceIds, 'assessment');
+    if (!records.some(e => e.kind === 'independent-assessment')) fail('Reassessment lacks independent assessment evidence');
+    if (records.some(e => e.sourceSha !== assessment.sourceSha)) fail('Reassessment evidence does not match selected release SHA');
+    if (!assessment.artifactIds.length || assessment.artifactIds.some(id => { const a = indexed.artifacts.get(id); return !a || a.provenance !== 'verified-content' || a.sourceSha !== assessment.sourceSha; })) fail('Reassessment needs verified artifacts of the same selected release SHA');
+    for (const gate of ledger.gates) requireGateSource(gate, assessment.sourceSha, 'assessment');
+    for (const claim of ledger.claims.filter(c => ['source-supported', 'release-supported'].includes(c.status))) {
+      if (claim.evidenceIds.some(id => indexed.evidence.get(id)?.sourceSha !== assessment.sourceSha)) fail(claim.id + ': claim evidence does not match assessed release source');
+    }
+  }
+  const blockers = [];
+  if (ledger.agreements.maintainer.status !== 'agreed' || ledger.agreements.independentReviewer.status !== 'agreed' || ledger.agreements.disagreements.length) blockers.push('Rubric agreement/disagreements unresolved');
+  if (ledger.owners.some(owner => owner.acceptance !== 'accepted' || !owner.humanName)) blockers.push('Accountable human owner assignments pending');
+  if (ledger.budgets.some(b => b.status === 'proposed')) blockers.push('Proposed numeric contracts require prior agreement');
+  if (ledger.profiles.some(p => p.status !== 'accepted' || p.osInstallMatrix.some(m => m.acceptance !== 'verified'))) blockers.push('Declared profiles/OS/install acceptance incomplete');
+  for (const gate of ledger.gates) {
+    const acceptedExperimentalLive = gate.id === 'persona-live' && assessment.status === 'completed' && assessment.acceptedExperimentalClaimIds.includes('persona-unattended');
+    if (gate.status !== 'passed' && !acceptedExperimentalLive) blockers.push('Gate ' + gate.id + ': ' + gate.status);
+  }
+  if (ledger.claims.some(c => c.status === 'pending' || c.status === 'source-supported')) blockers.push('Release-bound claims are incomplete');
+  if (ledger.claims.some(c => c.status === 'experimental' && !assessment.acceptedExperimentalClaimIds.includes(c.id))) blockers.push('Experimental exclusions not explicitly accepted by independent reviewer');
+  if (assessment.status !== 'completed' || !assessment.independent || assessment.grades.length !== 9 || assessment.grades.some(g => !['A-', 'A', 'A+'].includes(g.grade))) blockers.push('All nine independent A- or better reassessments pending');
+  return { errors, blockers, validationClock };
+}
+
+export function runCli(args) {
+  const closure = args.includes('--closure');
+  const positional = args.filter(arg => arg !== '--closure');
+  if (positional.length > 1 || positional.some(arg => arg.startsWith('--'))) {
+    console.error('Usage: node scripts/validate-scorecard.mjs [ledger.json] [--closure]');
+    return 1;
+  }
+  try {
+    const ledger = JSON.parse(readFileSync(positional[0] ? resolve(positional[0]) : defaultLedger, 'utf8'));
+    const { errors, blockers, validationClock } = validateScorecard(ledger);
+    console.log('Validation clock: ' + validationClock.epochMilliseconds + ' (' + validationClock.source + ')');
+    if (errors.length) { console.error(errors.join('\n')); return 1; }
+    console.log('Scorecard structure, references and retained checksums valid. This is not grade acceptance.');
+    if (blockers.length) console.log('Closure blockers:\n- ' + blockers.join('\n- '));
+    return closure && blockers.length ? 2 : 0;
+  } catch (error) {
+    console.error('Scorecard validation failed: ' + error.message);
+    return 1;
+  }
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) process.exitCode = runCli(process.argv.slice(2));

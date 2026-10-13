@@ -7,6 +7,7 @@
 import {
   synthesizeQuickChatFlow,
   quickChatFlowId,
+  QUICK_CHAT_DISCOVERY_TOOLS,
 } from '@/utils/shared/quickChat';
 
 const context = {
@@ -29,9 +30,53 @@ function mcpNodes(flow: NonNullable<ReturnType<typeof synthesizeQuickChatFlow>['
   return flow.nodes.filter((n) => n.type === 'mcp');
 }
 
+const discoveryContext = {
+  ...context,
+  servers: [...context.servers, { name: 'My FLUJO' }],
+  serverTools: { ...context.serverTools, 'My FLUJO': [...QUICK_CHAT_DISCOVERY_TOOLS, 'propose_ui_action', 'delete_flow'] },
+  discoveryServer: 'My FLUJO',
+};
+
+describe('Quick Chat discovery bootstrap', () => {
+  it('exposes discovery and invocation without eagerly binding downstream apps', () => {
+    const { flow } = synthesizeQuickChatFlow({ conversationId: 'auto', modelId: 'model-1', systemPrompt: 'Be concise.' }, discoveryContext);
+    expect(mcpNodes(flow!)).toHaveLength(1);
+    expect(mcpNodes(flow!)[0].data.properties).toMatchObject({ boundServer: 'My FLUJO', enabledTools: [...QUICK_CHAT_DISCOVERY_TOOLS] });
+    expect(chatNode(flow!).data.properties?.promptTemplate).toContain('discover_capabilities');
+    expect(flow!.nodes.find(node => node.type === 'start')?.data.properties?.promptTemplate).toBe('Be concise.');
+  });
+
+  it('merges a page-action integration with the bootstrap without enabling unrelated tools', () => {
+    const { flow } = synthesizeQuickChatFlow({ conversationId: 'dock', modelId: 'model-1', servers: [{ name: 'My FLUJO', enabledTools: ['propose_ui_action'] }] }, discoveryContext);
+    expect(mcpNodes(flow!)).toHaveLength(1);
+    expect(mcpNodes(flow!)[0].data.properties?.enabledTools).toEqual(['propose_ui_action', ...QUICK_CHAT_DISCOVERY_TOOLS]);
+    expect(mcpNodes(flow!)[0].data.properties?.enabledTools).not.toContain('delete_flow');
+  });
+
+  it('keeps saved-agent conversion scoped to its explicit selection', () => {
+    const { flow } = synthesizeQuickChatFlow({ modelId: 'model-1', servers: [{ name: 'github', enabledTools: ['search'] }] }, discoveryContext, { flowId: 'saved-agent', flowName: 'Saved agent' });
+    expect(mcpNodes(flow!).map(node => node.data.properties?.boundServer)).toEqual(['github']);
+    expect(chatNode(flow!).data.properties?.promptTemplate).toBe('');
+  });
+});
+
 describe('quickChatFlowId', () => {
   it('namespaces by conversation id', () => {
     expect(quickChatFlowId('abc')).toBe('quickchat-abc');
+  });
+});
+
+describe('optional quick-chat run output', () => {
+  it('uses compiler-authored resource produce edges and leaves ordinary chats unchanged', () => {
+    const plain = synthesizeQuickChatFlow({ conversationId: 'plain', modelId: 'model-1' }, context).flow!;
+    expect(plain.nodes.some(node => node.type === 'resource')).toBe(false);
+    const withOutput = synthesizeQuickChatFlow({ conversationId: 'world', modelId: 'model-1', runArtifactName: 'world-result' }, context).flow!;
+    const resource = withOutput.nodes.find(node => node.type === 'resource')!;
+    expect(resource.data.properties).toMatchObject({ scope: 'run', runName: 'world-result' });
+    expect(withOutput.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: chatNode(withOutput).id, target: resource.id, type: 'resourceEdge' })]));
+  });
+  it('rejects invalid artifact names before producing a graph', () => {
+    expect(synthesizeQuickChatFlow({ conversationId: 'world', modelId: 'model-1', runArtifactName: '../private' }, context).flow).toBeNull();
   });
 });
 

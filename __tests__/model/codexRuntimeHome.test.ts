@@ -21,6 +21,7 @@ describe('Codex runtime home isolation', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
     delete process.env.FLUJO_CODEX_TEST_DATA_DIR;
@@ -56,5 +57,52 @@ describe('Codex runtime home isolation', () => {
     const runtime = await prepareCodexRuntimeEnvironment(false);
 
     await expect(fs.stat(path.join(runtime.home, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['db', 'db/codex-runtime'])('rejects a junction at %s before writing external config or auth', async relative => {
+    const external = path.join(root, 'external');
+    const sentinel = path.join(external, 'config.toml');
+    await fs.mkdir(external);
+    await fs.writeFile(sentinel, 'external sentinel');
+    const alias = path.join(process.env.FLUJO_CODEX_TEST_DATA_DIR!, relative);
+    await fs.mkdir(path.dirname(alias), { recursive: true });
+    await fs.symlink(external, alias, 'junction');
+    await fs.writeFile(path.join(process.env.CODEX_HOME!, 'auth.json'), '{"token":"synthetic"}');
+    await expect(prepareCodexRuntimeEnvironment(true)).rejects.toThrow('unsafe');
+    expect(await fs.readFile(sentinel, 'utf8')).toBe('external sentinel');
+    await expect(fs.stat(path.join(external, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['config.toml', 'auth.json'])('rejects a hard-linked managed %s and leaves the external sentinel unchanged', async name => {
+    const home = path.join(process.env.FLUJO_CODEX_TEST_DATA_DIR!, 'db', 'codex-runtime');
+    await fs.mkdir(home, { recursive: true, mode: 0o700 });
+    const sentinel = path.join(root, 'sentinel');
+    await fs.writeFile(sentinel, 'external sentinel', { mode: 0o600 });
+    await fs.link(sentinel, path.join(home, name));
+    await fs.writeFile(path.join(process.env.CODEX_HOME!, 'auth.json'), '{"token":"synthetic"}');
+    await expect(prepareCodexRuntimeEnvironment(true)).rejects.toThrow();
+    expect(await fs.readFile(sentinel, 'utf8')).toBe('external sentinel');
+  });
+
+  it('rejects a home substituted after the temporary config descriptor opens', async () => {
+    const home = path.join(process.env.FLUJO_CODEX_TEST_DATA_DIR!, 'db', 'codex-runtime');
+    const external = path.join(root, 'external');
+    await fs.mkdir(external);
+    await fs.writeFile(path.join(external, 'config.toml'), 'external sentinel');
+    const open = fs.open.bind(fs);
+    let swapped = false;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      if (!swapped && String(args[0]).includes('.flujo-restore-')) {
+        swapped = true;
+        await fs.rename(home, `${home}-retired`);
+        await fs.symlink(external, home, 'junction');
+      }
+      return handle;
+    });
+    await expect(prepareCodexRuntimeEnvironment(true)).rejects.toThrow();
+    expect(swapped).toBe(true);
+    expect(await fs.readFile(path.join(external, 'config.toml'), 'utf8')).toBe('external sentinel');
+    await expect(fs.stat(path.join(external, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

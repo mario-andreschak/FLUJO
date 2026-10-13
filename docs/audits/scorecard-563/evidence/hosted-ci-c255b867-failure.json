@@ -1,0 +1,57 @@
+{
+  "capturedAt": "2026-10-04T06:23:16.251Z",
+  "sourceSha": "c255b867b2fc1fe7696e7aa4dcef0f42c5ed256a",
+  "runId": 37181228613,
+  "status": "completed",
+  "conclusion": "failure",
+  "earlierObservationSha256": "8f33474ca2c5c8295323829473b85f235524fbc420592dfa99cc4ba948b846a9",
+  "jobs": [
+    {
+      "id": 111374064460,
+      "name": "Production build (windows-latest)",
+      "status": "completed",
+      "conclusion": "failure",
+      "startedAt": "2026-10-04T05:54:42Z",
+      "completedAt": "2026-10-04T06:08:23Z"
+    },
+    {
+      "id": 111374064504,
+      "name": "test-isolated",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T05:54:43Z",
+      "completedAt": "2026-10-04T05:57:28Z"
+    },
+    {
+      "id": 111374064512,
+      "name": "Production build (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T05:54:43Z",
+      "completedAt": "2026-10-04T05:59:23Z"
+    },
+    {
+      "id": 111374064532,
+      "name": "test",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-04T05:54:42Z",
+      "completedAt": "2026-10-04T06:20:14Z"
+    },
+    {
+      "id": 111377736005,
+      "name": "verification",
+      "status": "completed",
+      "conclusion": "failure",
+      "startedAt": "2026-10-04T06:20:55Z",
+      "completedAt": "2026-10-04T06:21:03Z"
+    }
+  ],
+  "retainedWindowsRawLogSha256": "711a3da51c6c11fd1d385e3c767c13df8a75a59ed6d4032977048e484c9b21e2",
+  "ordinaryJestRawLogSha256": "01ba85b8805b0e1c2e71cd490589383fb0cd082316a4253b7f14e7e89db16e17",
+  "counts": [
+    "2026-10-04T06:20:09.7083713Z Test Suites: 5 skipped, 893 passed, 893 of 898 total",
+    "2026-10-04T06:20:09.7084328Z Tests:       11 skipped, 8385 passed, 8396 total"
+  ],
+  "scope": "Terminal hosted verify results for #725. Ordinary Jest passed, Windows installed-process boundary failed and final verification failed. This workflow does not execute dedicated Docs source tests; no release, human/live or grade acceptance."
+}

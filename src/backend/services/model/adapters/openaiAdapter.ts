@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, createProtectedOpenAIClient, getProviderDefaultHeaders, PROTECTED_OPENAI_DEFAULT_BASE_URL, sendPinnedOpenAIFetch } from '../openaiClient';
-import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest, assertReadOnlyAssessmentInput } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
 import { extractAssistantMedia } from './messageUtils';
@@ -29,11 +29,11 @@ const OWNER_AUTH_PLACEHOLDER = 'owner-credential-not-present-in-flujo';
  * Kept as an allowlist rather than sent everywhere because this codebase has
  * already been bitten by strict OpenAI-compatible gateways 400-ing on parameters
  * they don't recognise (the Requesty investigation). The allowlist is only the
- * first gate though — `rejectedPromptCacheKey` below permanently disables the
+ * first gate though â€” `rejectedPromptCacheKey` below permanently disables the
  * parameter for any endpoint that turns out to reject it anyway, so a wrong guess
  * here costs one retried request, not a broken provider.
  */
-const PROMPT_CACHE_KEY_PROVIDERS = new Set(['openai', 'openrouter']);
+const PROMPT_CACHE_KEY_PROVIDERS = new Set(['openai', 'openrouter', 'litellm']);
 
 /**
  * Endpoints (provider + baseURL) that rejected `prompt_cache_key`. Populated at
@@ -276,14 +276,14 @@ function isPromptCacheControlsRejection(err: unknown): boolean {
 }
 
 /**
- * The OpenAI-compatible adapter — FLUJO's original completion path. Used by
+ * The OpenAI-compatible adapter â€” FLUJO's original completion path. Used by
  * OpenAI, OpenRouter, X.ai, Ollama, and the "OpenAI Format" variants of Gemini
  * and Anthropic. Uses the shared hardened client (keep-alive disabled) to avoid
  * the intermittent "Premature close" transport bug.
  *
  * A thin `withTransientRetry` wrapper re-issues the HTTP request (up to 3
- * total attempts, 500 ms → 1 s back-off) when the provider resets the
- * connection while reading the response body — the ECONNRESET / "Invalid
+ * total attempts, 500 ms â†’ 1 s back-off) when the provider resets the
+ * connection while reading the response body â€” the ECONNRESET / "Invalid
  * response body" window that the OpenAI SDK's own `maxRetries` cannot cover.
  */
 export class OpenAiAdapter implements CompletionAdapter {
@@ -296,7 +296,9 @@ export class OpenAiAdapter implements CompletionAdapter {
     });
   }
 
-  async createCompletion({
+  async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    assertReadOnlyAssessmentInput(input);
+    const {
     model,
     apiKey,
     messages,
@@ -311,12 +313,14 @@ export class OpenAiAdapter implements CompletionAdapter {
     promptCacheMode,
     toolNameMap,
     executionExtensionContext,
-  }: CompletionInput): Promise<CompletionResult> {
-    const singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
+    readOnlyAssessment,
+    } = input;
+    const brandedSinglePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
+    const singlePhysicalAttempt = Boolean(readOnlyAssessment || brandedSinglePhysicalAttempt);
     const signal = modelAbortSignal(executionExtensionContext, inputSignal);
     // A subclass may override createClient. Protected sends construct their
     // canonical SDK client only after the final body is detached below.
-    const openai = singlePhysicalAttempt ? undefined : this.createClient(model, apiKey);
+    const openai = brandedSinglePhysicalAttempt ? undefined : this.createClient(model, apiKey);
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const providerMessages = translateMessagesForProvider(messages, toolNames);
     const providerTools = translateToolsForProvider(tools, toolNames);
@@ -344,7 +348,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     );
 
     // Cache-routing hint. OpenAI's automatic prompt cache is sharded, and without
-    // this the routing hash comes from the prefix alone — so concurrent requests
+    // this the routing hash comes from the prefix alone â€” so concurrent requests
     // sharing a prefix can scatter across cold machines and miss a cache that is
     // in fact warm. Not in the installed SDK's param type (added after 4.x), so
     // it is attached through a cast; it travels as a plain JSON body field.
@@ -356,7 +360,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     const cacheControlsKey = `${endpoint}|${model.name}`;
     const sendCacheControls =
       promptCacheMode === 'explicit' &&
-      model.provider === 'openai' &&
+      (model.provider === 'openai' || model.provider === 'litellm') &&
       !rejectedPromptCacheControls.has(cacheControlsKey);
 
     log.debug('createCompletion via OpenAI-compatible API', {
@@ -370,8 +374,8 @@ export class OpenAiAdapter implements CompletionAdapter {
     // No `stream: true`, so the SDK resolves to a ChatCompletion. The abort
     // signal (Stop button) cancels the in-flight HTTP request.
     // withTransientRetry re-issues the entire request when a transient
-    // transport error (ECONNRESET, "Invalid response body", …) is detected
-    // while reading the response body — after the provider has already sent
+    // transport error (ECONNRESET, "Invalid response body", â€¦) is detected
+    // while reading the response body â€” after the provider has already sent
     // HTTP 200 OK, where the SDK's own maxRetries is no longer in the path.
     // Each attempt gets its own body object rather than mutating a shared one,
     // so the params already handed to the SDK are never rewritten underneath it.
@@ -396,18 +400,18 @@ export class OpenAiAdapter implements CompletionAdapter {
             request: body,
           },
           async () => {
-            await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
-            const prepared = singlePhysicalAttempt
+            await assertModelRequestPolicy(executionExtensionContext, model, brandedSinglePhysicalAttempt);
+            const prepared = brandedSinglePhysicalAttempt
               ? prepareProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create', apiKey, body)
               : { client: openai!, body };
-            if (singlePhysicalAttempt) assertExecutionExtensionAdapterCurrent(executionExtensionContext!);
+            if (brandedSinglePhysicalAttempt) assertExecutionExtensionAdapterCurrent(executionExtensionContext!);
             try {
               return await prepared.client.chat.completions.create(
                 prepared.body as OpenAI.Chat.ChatCompletionCreateParams,
                 singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
               );
             } catch (error) {
-              if (singlePhysicalAttempt) unwrapProtectedFetchError(error);
+              if (brandedSinglePhysicalAttempt) unwrapProtectedFetchError(error);
               throw error;
             }
           },
@@ -472,7 +476,9 @@ export class OpenAiAdapter implements CompletionAdapter {
     onSdkRequestResult,
     toolNameMap,
     executionExtensionContext,
+    readOnlyAssessment,
   }: CompletionInput): Promise<CompletionResult> {
+    if (readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
     const singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
     const signal = modelAbortSignal(executionExtensionContext, inputSignal);
     const openai = singlePhysicalAttempt ? undefined : this.createClient(model, apiKey);
@@ -505,7 +511,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     const cacheControlsKey = `${endpoint}|${model.name}`;
     const sendCacheControls =
       promptCacheMode === 'explicit' &&
-      model.provider === 'openai' &&
+      (model.provider === 'openai' || model.provider === 'litellm') &&
       !rejectedPromptCacheControls.has(cacheControlsKey);
     const liveMessageId = `stream_${uuidv4()}`;
 

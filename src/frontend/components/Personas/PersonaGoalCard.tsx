@@ -35,9 +35,11 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
   if (!goal) return null;
   const terminal = goal.state === 'completed' || goal.state === 'stopped';
   const currentSession = Boolean(goal.pendingTaskId) && (goal.nextRunAt === undefined || goal.nextRunAt <= Date.now());
-  const valid = criteria.trim().length > 0 && Number.isInteger(Number(cadence)) && Number(cadence) >= 10 && Number(cadence) <= 604_800
-    && (!limit || (Number.isInteger(Number(limit)) && Number(limit) > 0))
-    && Number.isInteger(Number(dailyLimit)) && Number(dailyLimit) >= 1 && Number(dailyLimit) <= 10_000;
+  const criteriaValid = criteria.trim().length > 0;
+  const cadenceValid = Number.isInteger(Number(cadence)) && Number(cadence) >= 10 && Number(cadence) <= 604_800;
+  const limitValid = !limit || (Number.isInteger(Number(limit)) && Number(limit) > 0);
+  const dailyLimitValid = Number.isInteger(Number(dailyLimit)) && Number(dailyLimit) >= 1 && Number(dailyLimit) <= 10_000;
+  const valid = criteriaValid && cadenceValid && limitValid && dailyLimitValid;
   const save = async () => {
     const saved = await mutate(() => personasService.updateWorkItem(item.personaId, item.id, {
       expectedUpdatedAt,
@@ -47,8 +49,8 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
   };
   return <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 3, minWidth: 0, overflowWrap: 'anywhere' }}>
     <Stack spacing={1.5}>
-      <Stack direction="row" justifyContent="space-between" gap={1} flexWrap="wrap">
-        <Typography variant="h6" fontWeight={760}>{item.title}</Typography>
+      <Stack direction="row" sx={{ justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+        <Typography variant="h6" sx={{ fontWeight: 760 }}>{item.title}</Typography>
         <Chip label={t(`personas.goal.${goal.state}`)} color={goal.state === 'active' ? 'info' : goal.state === 'completed' ? 'success' : goal.state === 'needs_input' ? 'warning' : 'default'} />
       </Stack>
       {item.description && <Typography color="text.secondary">{item.description}</Typography>}
@@ -58,7 +60,7 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
         {goal.state === 'active' && <Typography variant="subtitle2">{t('personas.goal.workingAroundDependency')}</Typography>}
         {goal.interventionReason}
       </Alert>}
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
         {goal.completionPolicy === 'until_stopped' && <Chip size="small" variant="outlined" label={t('personas.goal.untilStopped')} />}
         <Chip size="small" label={t('personas.goal.rounds', { count: goal.rounds })} />
         <Typography variant="body2" color="text.secondary">{t('personas.goal.dailyUsage', { count: goal.roundsInWindow, limit: goal.maxRoundsPerDay })}</Typography>
@@ -68,7 +70,7 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
           : goal.nextRunAt !== undefined && <Typography variant="body2">{t(goal.pendingTaskId ? 'personas.goal.nextAttempt' : 'personas.goal.nextWake', { date: formatDate(goal.nextRunAt, { dateStyle: 'medium', timeStyle: 'short' }) })}</Typography>)}
         {goal.lastProgressAt !== undefined && <Typography variant="body2" color="text.secondary">{t('personas.goal.lastProgress', { date: formatDate(goal.lastProgressAt, { dateStyle: 'medium', timeStyle: 'short' }) })}</Typography>}
       </Stack>
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
         {goal.state === 'active' && <Button disabled={busy} startIcon={<PauseCircleOutlineRounded />} onClick={() => void mutate(() => personasService.controlWorkItem(item.personaId, item.id, 'pause'), t('personas.tasks.paused'))}>{t('personas.tasks.pause')}</Button>}
         {(goal.state === 'paused' || goal.state === 'needs_input') && <Button disabled={busy || dirty} startIcon={<ReplayRounded />} onClick={() => void mutate(() => personasService.controlWorkItem(item.personaId, item.id, 'retry'), t('personas.tasks.restarted'))}>{t('personas.goal.continue')}</Button>}
         {!terminal && <Button color="error" disabled={busy} startIcon={<StopCircleRounded />} onClick={() => void mutate(() => personasService.controlWorkItem(item.personaId, item.id, 'stop'), t('personas.tasks.stopped'))}>{t('personas.tasks.stop')}</Button>}
@@ -78,16 +80,19 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
         <Box component="summary" sx={{ cursor: 'pointer', color: 'text.secondary' }}>{t('personas.goal.criteriaAndLimits')}</Box>
         <Stack spacing={2} sx={{ mt: 2 }}>
           <FormControlLabel control={<Checkbox checked={finishOnSuccess} disabled={busy || terminal} onChange={(_, checked) => { setFinishOnSuccess(checked); setDirty(true); }} />} label={t('personas.goal.finishOnSuccess')} />
-          <TextField multiline minRows={2} label={t('personas.goal.criteriaLabel')} value={criteria} disabled={busy || terminal} onChange={(event) => { setCriteria(event.target.value); setDirty(true); }} />
-          <TextField type="number" label={t('personas.goal.cadence')} value={cadence} disabled={busy || terminal} onChange={(event) => { setCadence(event.target.value); setDirty(true); }} slotProps={{ htmlInput: { min: 10, max: 604_800, step: 1 } }} />
-          <TextField type="number" label={t('personas.goal.dailyLimitCurrent')} helperText={t('personas.goal.dailyLimitCurrentHelp')} value={dailyLimit} disabled={busy || terminal} onChange={(event) => { setDailyLimit(event.target.value); setDirty(true); }} slotProps={{ htmlInput: { min: 1, max: 10_000, step: 1 } }} />
-          <TextField type="number" label={t('personas.goal.maxRounds')} helperText={t('personas.goal.maxRoundsHelp')} value={limit} disabled={busy || terminal} onChange={(event) => { setLimit(event.target.value); setDirty(true); }} slotProps={{ htmlInput: { min: 1, step: 1 } }} />
-          {dirty && <Stack direction="row" spacing={1}>
-            <Button disabled={busy || !valid} onClick={() => void save()}>{t('personas.action.save')}</Button>
-            <Button disabled={busy} onClick={() => setDirty(false)}>{t('personas.settings.reloadServer')}</Button>
-          </Stack>}
+          <TextField multiline minRows={2} label={t('personas.goal.criteriaLabel')} value={criteria} error={dirty && !criteriaValid} helperText={dirty && !criteriaValid ? t('personas.goal.criteriaInvalid') : undefined} disabled={busy || terminal} onChange={(event) => { setCriteria(event.target.value); setDirty(true); }} />
+          <TextField type="number" label={t('personas.goal.cadence')} value={cadence} error={dirty && !cadenceValid} helperText={dirty && !cadenceValid ? t('personas.goal.cadenceInvalid') : undefined} disabled={busy || terminal} onChange={(event) => { setCadence(event.target.value); setDirty(true); }} slotProps={{ htmlInput: { min: 10, max: 604_800, step: 1 } }} />
+          <TextField type="number" label={t('personas.goal.dailyLimitCurrent')} error={dirty && !dailyLimitValid} helperText={t(dirty && !dailyLimitValid ? 'personas.goal.dailyLimitInvalid' : 'personas.goal.dailyLimitCurrentHelp')} value={dailyLimit} disabled={busy || terminal} onChange={(event) => { setDailyLimit(event.target.value); setDirty(true); }} slotProps={{ htmlInput: { min: 1, max: 10_000, step: 1 } }} />
+          <TextField type="number" label={t('personas.goal.maxRounds')} error={dirty && !limitValid} helperText={t(dirty && !limitValid ? 'personas.goal.maxRoundsInvalid' : 'personas.goal.maxRoundsHelp')} value={limit} disabled={busy || terminal} onChange={(event) => { setLimit(event.target.value); setDirty(true); }} slotProps={{ htmlInput: { min: 1, step: 1 } }} />
         </Stack>
       </Box>
+      {dirty && <Stack spacing={1}>
+        <Typography role="status" color="text.secondary">{t('personas.settings.unsaved')}</Typography>
+        <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
+          <Button variant="contained" disabled={busy || !valid} onClick={() => void save()}>{t('personas.action.save')}</Button>
+          <Button disabled={busy} onClick={() => setDirty(false)}>{t('personas.goal.discardChanges')}</Button>
+        </Stack>
+      </Stack>}
     </Stack>
   </Paper>;
 }

@@ -1,16 +1,22 @@
-import { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
-import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens, OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
+import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens, OAuthClientInformationMixed } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { assertOAuthCredentialsAvailable, readOAuthClientInformation, readOAuthCodeVerifier, readOAuthTokens, sealOAuthCredential } from './oauthCredentialStorage';
 
 const log = createLogger('backend/services/mcp/oauth');
 
 /** Authorization callbacks older than this must start a fresh flow. */
 export const MCP_OAUTH_STATE_TTL_MS = 20 * 60 * 1000;
+
+/** Legacy credentials must complete a fresh authorization before they can be reused. */
+export function hasOAuthIssuer(credential: { issuer?: unknown } | undefined): boolean {
+  return typeof credential?.issuer === 'string' && credential.issuer.trim().length > 0;
+}
 
 /** Constant-time validation of the persisted, workspace-bound OAuth nonce. */
 export function matchesOAuthState(
@@ -40,15 +46,20 @@ export function matchesOAuthState(
 export class MCPOAuthClientProvider implements OAuthClientProvider {
   private config: MCPStreamableConfig;
   private _redirectUrl: string;
-  private _clientMetadata: OAuthClientMetadata;
+  private _clientMetadata: OAuthClientMetadata & { application_type: 'native' | 'web' };
+  private discovery?: OAuthDiscoveryState;
+  private observedIssuer?: string;
+  private issuerResponseSupported?: boolean;
 
-  constructor(config: MCPStreamableConfig, redirectUrl: string) {
+  constructor(config: MCPStreamableConfig, redirectUrl: string, authorizationDiscovery?: OAuthDiscoveryState) {
     this.config = config;
+    this.discovery = authorizationDiscovery;
     this._redirectUrl = redirectUrl;
     
     // Build client metadata from config
     this._clientMetadata = {
       redirect_uris: [redirectUrl],
+      application_type: ['localhost', '127.0.0.1', '[::1]'].includes(new URL(redirectUrl).hostname) ? 'native' : 'web',
       client_name: `FLUJO MCP Client - ${config.name}`,
       client_uri: 'https://github.com/mario-andreschak/FLUJO',
       grant_types: ['authorization_code', 'refresh_token'],
@@ -75,26 +86,80 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     this.config.oauthState = state;
     this.config.oauthStateWorkspace = getCurrentWorkspace();
     this.config.oauthStateCreatedAt = Date.now();
+    this.config.oauthStateDiscovery = this.discovery;
     return state;
   }
 
+  /** Preserve RFC9207 metadata also when the SDK's OIDC schema strips extra fields. */
+  readonly oauthFetch: typeof fetch = async (input, init) => {
+    const response = await fetch(input, init);
+    if (response.ok && response.headers.get('content-type')?.includes('json')) {
+      try {
+        const metadata = await response.clone().json() as Record<string, unknown>;
+        if (typeof metadata.issuer === 'string' && typeof metadata.authorization_endpoint === 'string'
+            && typeof metadata.token_endpoint === 'string') {
+          this.observedIssuer = metadata.issuer;
+          this.issuerResponseSupported = metadata.authorization_response_iss_parameter_supported === true;
+        }
+      } catch { /* SDK parsing remains authoritative for malformed responses. */ }
+    }
+    return response;
+  };
+
+  /** Keep discovery only for the current transaction, never as a cross-issuer cache. */
+  saveDiscoveryState(state: OAuthDiscoveryState): void {
+    if (state.authorizationServerMetadata?.issuer !== undefined
+        && state.authorizationServerMetadata.issuer !== String(state.authorizationServerUrl)) {
+      throw new Error('OAuth authorization metadata issuer does not match discovery');
+    }
+    this.discovery = this.observedIssuer === state.authorizationServerMetadata?.issuer
+      ? { ...state, authorizationServerMetadata: { ...state.authorizationServerMetadata, authorization_response_iss_parameter_supported: this.issuerResponseSupported } } as OAuthDiscoveryState
+      : state;
+  }
+
+  discoveryState(): OAuthDiscoveryState | undefined { return this.discovery; }
+
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
-    if (this.config.oauthClientInformation) {
+    const storedClient = await readOAuthClientInformation(this.config);
+    if (hasOAuthIssuer(storedClient)) {
       log.debug(`Returning stored client information for ${this.config.name}`);
-      return this.config.oauthClientInformation;
+      return storedClient;
     }
 
     // Manually pre-registered client (e.g. Asana V2, which disables dynamic registration).
     // The stored secret may be encrypted ("encrypted:...") or a "${global:VAR}" binding, so
     // resolve+decrypt it here — the plaintext only ever exists in the backend, at use time.
     if (this.config.oauthClientId) {
+      // This is operator configuration, never a value taken from MCP discovery or
+      // the v2 SDK's optional credential context. Validate without normalizing it.
+      const issuer = this.config.oauthIssuer;
+      let trustedIssuer = false;
+      try {
+        const url = new URL(issuer ?? '');
+        trustedIssuer = Boolean(issuer && issuer === issuer.trim()
+          && (url.protocol === 'https:' || url.protocol === 'http:')
+          && !url.username && !url.password && !url.search && !url.hash);
+      } catch { /* Missing or malformed trusted configuration cannot release a secret. */ }
+      if (!trustedIssuer) {
+        const error = new Error('OAuth authentication required. Set oauthIssuer in this server\'s JSON configuration to the trusted authorization issuer for the pre-registered client, then authenticate again.');
+        error.name = 'OAuthIssuerRequired';
+        throw error;
+      }
       const clientSecret = this.config.oauthClientSecret
-        ? (await resolveAndDecryptApiKey(this.config.oauthClientSecret)) ?? undefined
+        ? await (async () => {
+          await assertOAuthCredentialsAvailable();
+          const value = await resolveAndDecryptApiKey(this.config.oauthClientSecret!);
+          if (!value || value === '********' || value.startsWith('encrypted:') || value.includes('${global:')) {
+            throw new Error('Stored OAuth credentials are unavailable. Unlock this workspace or restore matching credentials.');
+          }
+          return value;
+        })()
         : undefined;
       log.debug(`Created client information from config for ${this.config.name}`);
       return {
         client_id: this.config.oauthClientId,
         client_secret: clientSecret,
+        issuer,
       };
     }
 
@@ -113,17 +178,22 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
    * the authorization server - which has already rotated past it - producing a permanent
    * "invalid refresh_token" failure that no amount of retrying can fix.
    */
-  private async persist(): Promise<void> {
-    const configs = await loadServerConfigs();
-    if (!Array.isArray(configs)) {
-      log.warn(`persist: failed to load server configs for ${this.config.name}, cannot persist OAuth state`);
-      return;
-    }
-    const configMap = new Map(configs.map(c => [c.name, c]));
-    configMap.set(this.config.name, this.config);
-    const result = await saveConfig(configMap);
-    if (!result.success) {
-      log.warn(`persist: failed to save OAuth state for ${this.config.name}: ${result.error}`);
+  private async persist(update: Partial<MCPStreamableConfig>): Promise<void> {
+    try {
+      const configs = await loadServerConfigs();
+      if (!Array.isArray(configs)) throw new Error('OAuth storage unavailable');
+      const configMap = new Map(configs.map(c => [c.name, c]));
+      // Stage replacements instead of mutating the active credentials before
+      // storage acknowledges the save. A failed refresh is not durable success.
+      configMap.set(this.config.name, { ...this.config, ...update });
+      const result = await saveConfig(configMap);
+      if (!result.success) throw new Error('OAuth storage unavailable');
+      Object.assign(this.config, update);
+    } catch {
+      // Storage/provider errors can contain credentials. Do not log their text
+      // or attach them as a cause that another logger might render.
+      log.warn(`OAuth credential persistence failed for ${this.config.name}`);
+      throw new Error('OAuth credential persistence failed. Authorization may need to be repeated after storage is available.');
     }
   }
 
@@ -133,62 +203,45 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
    */
   async invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): Promise<void> {
     log.info(`Invalidating OAuth credentials for ${this.config.name} (scope: ${scope})`);
+    const update: Partial<MCPStreamableConfig> = {};
 
     if (scope === 'all' || scope === 'tokens') {
-      this.config.oauthTokens = undefined;
+      update.oauthTokens = undefined;
     }
     if (scope === 'all' || scope === 'client') {
-      this.config.oauthClientInformation = undefined;
-      this.config.oauthClientMetadata = undefined;
+      update.oauthClientInformation = undefined;
+      update.oauthClientMetadata = undefined;
     }
     if (scope === 'all' || scope === 'verifier') {
-      this.config.oauthCodeVerifier = undefined;
-      this.config.oauthState = undefined;
-      this.config.oauthStateWorkspace = undefined;
-      this.config.oauthStateCreatedAt = undefined;
+      update.oauthCodeVerifier = undefined;
+      update.oauthState = undefined;
+      update.oauthStateWorkspace = undefined;
+      update.oauthStateCreatedAt = undefined;
+      update.oauthStateDiscovery = undefined;
     }
-    // Note: scope 'discovery' is a no-op — FLUJO does not cache OAuth discovery state;
-    // the SDK's auth() re-discovers (RFC 9728) on each call, so there is nothing to clear.
+    if (scope === 'all' || scope === 'discovery') this.discovery = undefined;
 
-    await this.persist();
+    await this.persist(update);
   }
 
-  async saveClientInformation(clientInformation: OAuthClientInformationFull): Promise<void> {
+  async saveClientInformation(clientInformation: OAuthClientInformationMixed): Promise<void> {
     log.info(`Saving client information for ${this.config.name}`);
-    log.verbose('Client information to save', JSON.stringify(clientInformation));
+    log.verbose('Client information to save', { hasClientSecret: Boolean(clientInformation.client_secret) });
     
-    // Store in config (this will need to be persisted to storage)
-    this.config.oauthClientInformation = {
-      client_id: clientInformation.client_id,
-      client_secret: clientInformation.client_secret,
-      client_id_issued_at: clientInformation.client_id_issued_at,
-      client_secret_expires_at: clientInformation.client_secret_expires_at,
-    };
-    
-    // Also store the full metadata
-    this.config.oauthClientMetadata = {
-      redirect_uris: clientInformation.redirect_uris,
-      client_name: clientInformation.client_name,
-      client_uri: clientInformation.client_uri,
-      grant_types: clientInformation.grant_types,
-      response_types: clientInformation.response_types,
-      token_endpoint_auth_method: clientInformation.token_endpoint_auth_method,
-      scope: clientInformation.scope,
-      contacts: clientInformation.contacts,
-      tos_uri: clientInformation.tos_uri,
-      policy_uri: clientInformation.policy_uri,
-      jwks_uri: clientInformation.jwks_uri,
-      jwks: clientInformation.jwks,
-      software_id: clientInformation.software_id,
-      software_version: clientInformation.software_version,
-    };
-
-    await this.persist();
+    // Merge a narrower SDK save without losing encrypted registration metadata.
+    const previous = await readOAuthClientInformation(this.config);
+    const sameClient = previous?.client_id === clientInformation.client_id && previous?.issuer === clientInformation.issuer;
+    const registration = sameClient
+      ? { ...this.config.oauthClientMetadata, ...previous, ...clientInformation }
+      : { ...clientInformation };
+    const oauthClientInformation = await sealOAuthCredential('client', registration);
+    await this.persist({ oauthClientInformation, oauthClientMetadata: undefined });
     log.info(`Client information saved for ${this.config.name}`);
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
-    if (this.config.oauthTokens) {
+    const tokens = await readOAuthTokens(this.config);
+    if (tokens && hasOAuthIssuer(tokens)) {
       log.debug(`Returning stored tokens for ${this.config.name}`);
 
       // An expired access token must still be returned WITH its refresh_token intact:
@@ -196,9 +249,9 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       // yields one. Clearing the token set here (as this method once did) destroys the
       // refresh token and forces a full interactive re-auth after every access-token
       // lifetime (~1h for Asana), even though the grant is still perfectly valid.
-      const issuedAt = (this.config.oauthTokens as OAuthTokens & { issued_at?: number }).issued_at;
-      if (this.config.oauthTokens.expires_in && issuedAt) {
-        const expiresIn = this.config.oauthTokens.expires_in;
+      const issuedAt = (tokens as OAuthTokens & { issued_at?: number }).issued_at;
+      if (tokens.expires_in && issuedAt) {
+        const expiresIn = tokens.expires_in;
         const currentTime = Math.floor(Date.now() / 1000);
         const expirationTime = issuedAt + expiresIn;
 
@@ -209,7 +262,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
         }
       }
 
-      return this.config.oauthTokens;
+      return tokens;
     }
 
     log.debug(`No tokens available for ${this.config.name}`);
@@ -218,11 +271,11 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     log.info(`Saving OAuth tokens for ${this.config.name}`);
-    log.verbose('Tokens to save', JSON.stringify({
-      ...tokens,
-      access_token: tokens.access_token ? '[REDACTED]' : undefined,
-      refresh_token: tokens.refresh_token ? '[REDACTED]' : undefined,
-    }));
+    // Unknown extension fields can also be secrets (for example id_token).
+    // Log fixed presence flags, never a spread of the provider payload.
+    log.verbose('Tokens to save', {
+      hasAccessToken: Boolean(tokens.access_token), hasRefreshToken: Boolean(tokens.refresh_token),
+    });
     
     // Add timestamp for token expiration tracking
     const tokensWithTimestamp = {
@@ -230,14 +283,12 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       issued_at: Math.floor(Date.now() / 1000), // Unix timestamp
     };
     
-    this.config.oauthTokens = tokensWithTimestamp;
-    await this.persist();
+    await this.persist({ oauthTokens: await sealOAuthCredential('tokens', tokensWithTimestamp) });
     log.info(`OAuth tokens saved for ${this.config.name}`);
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     log.info(`Authorization required for ${this.config.name}`);
-    log.info(`Authorization URL: ${authorizationUrl.toString()}`);
     
     // Store the authorization URL in the config for the frontend to use
     this.config.authorizationUrl = authorizationUrl.toString();
@@ -251,8 +302,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
     log.debug(`Saving code verifier for ${this.config.name}`);
-    this.config.oauthCodeVerifier = codeVerifier;
-    await this.persist();
+    await this.persist({ oauthCodeVerifier: await sealOAuthCredential('verifier', codeVerifier) });
     log.debug(`Code verifier saved for ${this.config.name}`);
   }
 
@@ -264,7 +314,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     }
     
     log.debug(`Returning code verifier for ${this.config.name}`);
-    return this.config.oauthCodeVerifier;
+    return readOAuthCodeVerifier(this.config);
   }
 }
 
@@ -273,7 +323,8 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
  */
 export function createOAuthClientProvider(
   config: MCPStreamableConfig,
-  redirectUrl: string = 'http://localhost:4200/api/oauth/callback'
+  redirectUrl: string = 'http://localhost:4200/api/oauth/callback',
+  authorizationDiscovery?: OAuthDiscoveryState,
 ): MCPOAuthClientProvider {
-  return new MCPOAuthClientProvider(config, redirectUrl);
+  return new MCPOAuthClientProvider(config, redirectUrl, authorizationDiscovery);
 }

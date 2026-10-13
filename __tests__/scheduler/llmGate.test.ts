@@ -11,12 +11,13 @@ import type { PlannedExecutionState } from '@/shared/types/plannedExecution';
 
 const createCompletionMock = jest.fn();
 const getModelMock = jest.fn();
+const resolveKeyMock = jest.fn();
 const runFlowMock = jest.fn();
 
 jest.mock('@/backend/services/model', () => ({
   modelService: {
     getModel: (...args: unknown[]) => getModelMock(...args),
-    resolveAndDecryptApiKey: jest.fn(async () => 'test-key'),
+    resolveAndDecryptApiKey: (...args: unknown[]) => resolveKeyMock(...args),
   },
 }));
 
@@ -45,6 +46,7 @@ const today = new Date().toISOString().slice(0, 10);
 
 beforeEach(() => {
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'small', ApiKey: 'enc' });
+  resolveKeyMock.mockReset().mockResolvedValue('test-key');
   createCompletionMock.mockReset().mockResolvedValue(modelAnswer('{"fire": true, "reason": "invoice found"}'));
 });
 
@@ -61,6 +63,32 @@ describe('parseVerdict', () => {
 });
 
 describe('evaluateLlmGate', () => {
+  it.each(['antigravity-cli', undefined])('uses local authentication for an Antigravity CLI gate with adapter %s', async adapter => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'default', provider: 'antigravity-cli', adapter, ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+    const result = await evaluateAiGate({ v: 2 }, gateConfig(), { lastHash: hashResult({ v: 1 }) });
+    expect(result.fire).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '' }));
+  });
+
+  it('rejects a failed Antigravity CLI key binding instead of using the local account for a gate', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'default', provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '${env:MISSING_KEY}' });
+    resolveKeyMock.mockResolvedValue(null);
+    const result = await evaluateAiGate({ v: 2 }, gateConfig(), { lastHash: hashResult({ v: 1 }) });
+    expect(result.fire).toBe(false);
+    expect(result.error).toBe('Could not resolve the AI-check model API key');
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
+  it('still requires an API key for a native Gemini gate', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'gemini-2.5-flash', provider: 'gemini', adapter: 'gemini', ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+    const result = await evaluateAiGate({ v: 2 }, gateConfig(), { lastHash: hashResult({ v: 1 }) });
+    expect(result.fire).toBe(false);
+    expect(result.error).toBe('Could not resolve the AI-check model API key');
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
   it('primes on first poll without calling the model', async () => {
     const result = await evaluateAiGate({ v: 1 }, gateConfig(), {});
     expect(result.fire).toBe(false);

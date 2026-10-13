@@ -9,6 +9,7 @@
 import type { Flow } from '@/shared/types/flow';
 import { compileFlowSpec } from '@/utils/shared/flowSpecCompiler';
 import { flowService } from './index';
+import { FlowAuthoringValidationError } from './authoringErrors';
 import {
   DEFAULT_GENERATED_SUBFLOW_DEPTH,
   GENERATED_FLOW_AUTHORING_POLICY,
@@ -206,7 +207,7 @@ export async function buildFlowGeneratorSnapshot(
       node.data?.properties?.systemRole === FLOW_GENERATOR_ROLE,
   );
   if (stages.length < 2) {
-    throw new Error(
+    throw new FlowAuthoringValidationError(
       'The editable Flow Generator is missing its architect/compiler stages. Restore the default generator or add the flow-generator roles back.',
     );
   }

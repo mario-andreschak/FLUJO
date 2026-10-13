@@ -15,6 +15,10 @@
  *     server card showed the orange auth badge after every restart >1h.
  */
 
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+beforeEach(async () => { privateFixture = await installPrivateProfileFixture(); });
+afterEach(async () => { await privateFixture?.restore(); });
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   resolveGlobalVars: jest.fn(async (v: unknown) => v),
   resolveAndDecryptApiKey: jest.fn(async (v: string) => v),
@@ -34,6 +38,8 @@ jest.mock('@/backend/services/mcp/tools', () => ({
 }));
 
 jest.mock('@/backend/services/mcp/connection', () => ({
+  McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
+  assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
   createNewClient: jest.fn(),
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
@@ -78,6 +84,7 @@ describe('MCPOAuthClientProvider.tokens() with an expired access token', () => {
     const config = streamableServer('asana', {
       access_token: 'expired-access',
       refresh_token: 'still-valid-refresh',
+      issuer: 'https://authorization.example.test',
       token_type: 'bearer',
       expires_in: 3600,
       issued_at: nowSeconds() - 7200, // expired two hours ago
@@ -112,6 +119,7 @@ describe('MCPService.getServerStatus with expired OAuth tokens', () => {
     serverConfigs.push(streamableServer('asana', {
       access_token: 'expired-access',
       refresh_token: 'still-valid-refresh',
+      issuer: 'https://authorization.example.test',
       token_type: 'bearer',
       expires_in: 3600,
       issued_at: nowSeconds() - 7200,
@@ -130,6 +138,7 @@ describe('MCPService.getServerStatus with expired OAuth tokens', () => {
     serverConfigs.push(streamableServer('asana', {
       access_token: 'expired-access',
       token_type: 'bearer',
+      issuer: 'https://authorization.example.test',
       expires_in: 3600,
       issued_at: nowSeconds() - 7200,
     }));
@@ -147,5 +156,17 @@ describe('MCPService.getServerStatus with expired OAuth tokens', () => {
     const status = await svc.getServerStatus('asana');
 
     expect(status.status).toBe('requires_authentication');
+  });
+
+  it('requires a fresh authentication for legacy unbound refresh credentials without deleting them', async () => {
+    const config = streamableServer('legacy', {
+      access_token: 'synthetic-legacy-access', refresh_token: 'synthetic-legacy-refresh', token_type: 'bearer',
+    });
+    serverConfigs.push(config);
+    global.__mcp_starting_up = true;
+    const status = await new MCPService().getServerStatus('legacy');
+    expect(status.status).toBe('requires_authentication');
+    expect(config.oauthTokens).toMatchObject({ refresh_token: 'synthetic-legacy-refresh' });
+    expect(saveConfig).not.toHaveBeenCalled();
   });
 });

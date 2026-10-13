@@ -1,5 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { getManagedTrustedHost } from './trustedHost';
+import { mcpProtocolError, mcpErrorStatus } from './protocolErrors';
+import { listResourcePages, listResourceTemplatePages } from './catalogPagination';
 import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import {
@@ -21,8 +23,9 @@ const log = createLogger('backend/services/mcp/resources');
  */
 export async function listServerResources(
   client: Client | undefined,
-  serverName: string
-): Promise<{ resources: MCPResource[]; error?: string }> {
+  serverName: string,
+  cursor?: string,
+): Promise<{ resources: MCPResource[]; nextCursor?: string; error?: string }> {
   log.debug('Entering listServerResources method');
   if (!client) {
     log.warn(`Server ${serverName} not connected`);
@@ -31,14 +34,14 @@ export async function listServerResources(
 
   try {
     log.info(`Listing resources for server ${serverName}`);
-    const response = await client.listResources();
+    const response = await listResourcePages(client, cursor, getManagedTrustedHost(client.transport) ? { timeout: 180_000 } : undefined);
     const resources = (response.resources || []) as MCPResource[];
     log.verbose('Processed resources:', resources);
-    return { resources };
+    return { resources, ...(response.nextCursor === undefined ? {} : { nextCursor: response.nextCursor }) };
   } catch (error) {
     // A server that doesn't implement resources answers with method-not-found (-32601).
     // That's not an error condition for FLUJO — the server simply has no resources.
-    if (error instanceof McpError && error.code === -32601) {
+    if (mcpProtocolError(error)?.code === -32601) {
       log.debug(`Server ${serverName} does not support resources/list`);
       return { resources: [] };
     }
@@ -59,8 +62,9 @@ export async function listServerResources(
  */
 export async function listServerResourceTemplates(
   client: Client | undefined,
-  serverName: string
-): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
+  serverName: string,
+  cursor?: string,
+): Promise<{ resourceTemplates: MCPResourceTemplate[]; nextCursor?: string; error?: string }> {
   log.debug('Entering listServerResourceTemplates method');
   if (!client) {
     log.warn(`Server ${serverName} not connected`);
@@ -69,11 +73,11 @@ export async function listServerResourceTemplates(
 
   try {
     log.info(`Listing resource templates for server ${serverName}`);
-    const response = await client.listResourceTemplates();
+    const response = await listResourceTemplatePages(client, cursor, getManagedTrustedHost(client.transport) ? { timeout: 180_000 } : undefined);
     const resourceTemplates = (response.resourceTemplates || []) as MCPResourceTemplate[];
-    return { resourceTemplates };
+    return { resourceTemplates, ...(response.nextCursor === undefined ? {} : { nextCursor: response.nextCursor }) };
   } catch (error) {
-    if (error instanceof McpError && error.code === -32601) {
+    if (mcpProtocolError(error)?.code === -32601) {
       log.debug(`Server ${serverName} does not support resources/templates/list`);
       return { resourceTemplates: [] };
     }
@@ -116,14 +120,15 @@ export async function readResource(
     let errorMessage = error instanceof Error ? error.message : 'Unknown error';
     let statusCode = 500;
 
-    if (error instanceof McpError) {
-      errorMessage = `Failed to read resource: ${errorMessage} (Code: ${error.code})`;
-      if (error.code === -32601) statusCode = 404; // Method not found
-      else if (error.code === -32602) statusCode = 400; // Invalid params
+    const protocolError = mcpProtocolError(error);
+    if (protocolError) {
+      errorMessage = `Failed to read resource: ${errorMessage} (Code: ${protocolError.code})`;
+      if (protocolError.code === -32601) statusCode = 404; // Method not found
+      else if (protocolError.code === -32602) statusCode = 400; // Invalid params
     } else {
       errorMessage = `Failed to read resource: ${errorMessage}`;
     }
 
-    return { success: false, error: errorMessage, statusCode };
+    return { success: false, error: errorMessage, statusCode: protocolError ? mcpErrorStatus(protocolError.code) : statusCode, ...(protocolError ? { protocolError } : {}) };
   }
 }

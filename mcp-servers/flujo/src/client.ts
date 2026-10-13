@@ -3,6 +3,26 @@ import {
   McpListSkillsResultSchema,
 } from './skills.js';
 
+// This is a distinct child-process capability, never an owner credential.
+const workloadCredential = (() => {
+  const token = process.env.FLUJO_MCP_WORKLOAD_TOKEN;
+  const audience = process.env.FLUJO_MCP_WORKLOAD_AUDIENCE;
+  if (token === undefined && audience === undefined) return undefined;
+  if (process.env.FLUJO_WORKER_MODE === '1' || !token || !/^flo_mcp1_[A-Za-z0-9_-]{43}$/.test(token)
+      || !audience) throw new Error('Invalid bundled FLUJO workload credentials.');
+  const url = new URL(audience);
+  if (!['http:', 'https:'].includes(url.protocol)
+      || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+      || url.origin !== audience || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+    throw new Error('The bundled FLUJO workload audience must be an exact loopback origin.');
+  }
+  const workspace = process.env.FLUJO_WORKSPACE;
+  if (!workspace || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(workspace)) {
+    throw new Error('Invalid bundled FLUJO workload workspace.');
+  }
+  return Object.freeze({ token, audience, workspace });
+})();
+
 export type FlujoOperation =
   | 'listTools'
   | 'callTool'
@@ -76,7 +96,10 @@ const STATE_TOOLS = new Set([
 
 export function flujoBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.FLUJO_BASE_URL?.trim();
-  const result = (configured || 'http://127.0.0.1:4200').replace(/\/+$/, '');
+  const base = configured || 'http://127.0.0.1:4200';
+  let end = base.length;
+  while (end > 0 && base.charCodeAt(end - 1) === 47) end -= 1;
+  const result = base.slice(0, end);
   if (env.FLUJO_WORKER_MODE === '1') {
     const url = new URL(result);
     if (!['http:', 'https:'].includes(url.protocol)
@@ -107,25 +130,40 @@ export function toolRoute(name: string): string {
 async function requestJson<T>(
   path: string,
   init: RequestInit = {},
-  timeoutMs = 30_000,
+  // Fresh package and private-authority fences run throughout authenticated requests.
+  timeoutMs = workloadCredential ? 120_000 : 30_000,
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   timeout.unref?.();
   try {
-    const response = await fetch(`${flujoBaseUrl()}${path}`, {
+    const baseUrl = flujoBaseUrl();
+    if (workloadCredential) {
+      if (baseUrl !== workloadCredential.audience || process.env.FLUJO_WORKER_MODE === '1'
+          || process.env.FLUJO_WORKSPACE !== workloadCredential.workspace) {
+        throw new Error('Bundled FLUJO workload destination or workspace changed.');
+      }
+    } else if (process.env.FLUJO_MCP_WORKLOAD_TOKEN !== undefined || process.env.FLUJO_MCP_WORKLOAD_AUDIENCE !== undefined) {
+      throw new Error('Bundled FLUJO workload credentials must be configured before client initialization.');
+    }
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+      'x-flujo-workspace': flujoWorkspace(),
+      ...(process.env.FLUJO_WORKER_MODE === '1' && process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN
+        ? { authorization: `Bearer ${process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN}` } : {}),
+      ...(init.body ? { 'content-type': 'application/json' } : {}),
+      ...Object.fromEntries(new Headers(init.headers).entries()),
+    };
+    if (workloadCredential) {
+      headers.authorization = `Bearer ${workloadCredential.token}`;
+      headers['x-flujo-workspace'] = workloadCredential.workspace;
+    }
+    const response = await fetch(`${baseUrl}${path}`, {
       ...init,
       cache: 'no-store',
       signal: controller.signal,
-      headers: {
-        accept: 'application/json',
-        'x-flujo-workspace': flujoWorkspace(),
-        ...(process.env.FLUJO_WORKER_MODE === '1' && process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN
-          ? { authorization: `Bearer ${process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN}` }
-          : {}),
-        ...(init.body ? { 'content-type': 'application/json' } : {}),
-        ...init.headers,
-      },
+      ...(workloadCredential ? { redirect: 'error' as const } : {}),
+      headers,
     } as RequestInit);
     const text = await response.text();
     let body: unknown = {};
@@ -205,8 +243,8 @@ export async function flujoRequest<T>(
   if (!name) throw new Error('A FLUJO tool name is required.');
   const requestedTimeout = Number(payload.args?.timeout);
   const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
-    ? Math.max(30_000, Math.ceil(requestedTimeout * 1000) + 5_000)
-    : 30_000;
+    ? Math.max(workloadCredential ? 120_000 : 30_000, Math.ceil(requestedTimeout * 1000) + 5_000)
+    : workloadCredential ? 120_000 : 30_000;
   return requestJson<T>(toolRoute(name), {
     method: 'POST',
     body: JSON.stringify({ name, args: payload.args ?? {} }),

@@ -312,3 +312,23 @@ describe('fetchOpenRouterModels capability discovery', () => {
     expect(model.supportsTools).toBe(true);
   });
 });
+
+describe('fetchOpenAIModels (vLLM catalogue)', () => {
+  it('reads max_model_len as the context window when context_length is absent', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        object: 'list',
+        data: [
+          { id: 'qwen3.8-27b', object: 'model', owned_by: 'vllm', max_model_len: 600000 },
+          { id: 'both', context_length: 131072, max_model_len: 600000 },
+        ],
+      }),
+    });
+
+    const models = await fetchOpenAIModels('key', 'https://vllm.example/v1');
+
+    expect(mockFetch).toHaveBeenCalledWith('https://vllm.example/v1/models', expect.anything());
+    expect(models.map((model) => model.contextWindow)).toEqual([600000, 131072]);
+  });
+});

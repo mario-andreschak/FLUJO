@@ -84,6 +84,26 @@ describe('Persona runtime event log incremental state (#454)', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it('rejects a directory substituted for a segment before the scan opens', async () => {
+    await runWithWorkspace(freshWorkspace('nonregular'), async () => {
+      const personaId = 'persona_nonregular_segment';
+      await appendPersonaRuntimeEvent(personaId, completedEvent(0));
+      const file = activeEventFile(personaId);
+      const originalOpen = fs.open.bind(fs);
+      let swapped = false;
+      jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        if (String(args[0]) === file && !swapped) {
+          swapped = true;
+          await fs.unlink(file);
+          await fs.mkdir(file);
+        }
+        return originalOpen(...args);
+      });
+      await expect(readPersonaRuntimeEvents(personaId)).rejects.toThrow();
+      expect(swapped).toBe(true);
+    });
+  });
+
   it('re-reads zero bytes on repeat appends (stat-gated cache hit path)', async () => {
     await runWithWorkspace(freshWorkspace('cachehit'), async () => {
       const personaId = 'persona_cache_hit';

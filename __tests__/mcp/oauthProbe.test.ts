@@ -1,4 +1,10 @@
 import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
+import * as publicRequests from '@/utils/mcp/publicOAuthRequest';
+
+jest.mock('node:dns/promises', () => ({ lookup: jest.fn(async () => [{ address: '1.1.1.1', family: 4 }]) }));
+jest.mock('@/utils/mcp/publicOAuthRequest', () => ({
+  ...jest.requireActual('@/utils/mcp/publicOAuthRequest'), requestPublicOAuth: jest.fn(),
+}));
 
 /**
  * probeOAuthSupport is the signal that lets the Test Run distinguish an OAuth/DCR server
@@ -7,10 +13,10 @@ import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
  * never-throws contract.
  */
 describe('probeOAuthSupport', () => {
-  const realFetch = global.fetch;
+  let requestMock: jest.SpyInstance;
+  beforeEach(() => jest.mocked(publicRequests.requestPublicOAuth).mockReset());
 
   afterEach(() => {
-    global.fetch = realFetch;
     jest.restoreAllMocks();
   });
 
@@ -21,17 +27,16 @@ describe('probeOAuthSupport', () => {
     headers?: Record<string, string>;
     json?: unknown;
   }) => {
-    global.fetch = jest.fn(async (input: any, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input.url;
-      const r = handler(url, init);
+    requestMock = jest.spyOn(publicRequests, 'requestPublicOAuth').mockImplementation(async (url, kind) => {
+      const r = handler(url, { method: kind === 'challenge' ? 'POST' : 'GET' });
       const headers = new Headers(r.headers || {});
       return {
         ok: r.ok ?? (r.status ? r.status < 400 : true),
         status: r.status ?? 200,
         headers,
         json: async () => r.json,
-      } as unknown as Response;
-    }) as unknown as typeof fetch;
+      };
+    });
   };
 
   it('detects OAuth from the WWW-Authenticate resource_metadata pointer', async () => {
@@ -120,7 +125,7 @@ describe('probeOAuthSupport', () => {
     const result = await probeOAuthSupport('https://mcp.example.com/mcp', { publicOnly: true });
 
     expect(result.oauthCapable).toBe(true); // Bearer remains a valid OAuth signal.
-    expect((global.fetch as jest.Mock).mock.calls.some(([url]) => String(url).includes('127.0.0.1'))).toBe(false);
+    expect(requestMock.mock.calls.some(([url]) => String(url).includes('127.0.0.1'))).toBe(false);
   });
 
   it('reports NOT capable for a static-bearer server (401, no Bearer challenge, no metadata)', async () => {
@@ -136,9 +141,9 @@ describe('probeOAuthSupport', () => {
   });
 
   it('never throws — a network failure resolves to not-capable', async () => {
-    global.fetch = jest.fn(async () => {
+    jest.spyOn(publicRequests, 'requestPublicOAuth').mockImplementation(async () => {
       throw new Error('ECONNREFUSED');
-    }) as unknown as typeof fetch;
+    });
 
     await expect(probeOAuthSupport('https://down.example.com/mcp')).resolves.toEqual({ oauthCapable: false });
   });
@@ -156,5 +161,26 @@ describe('probeOAuthSupport', () => {
 
     const result = await probeOAuthSupport('https://mcp.example.com/mcp');
     expect(result.oauthCapable).toBe(false);
+  });
+
+  it('never allows the compatibility publicOnly flag to disable private-network denial', async () => {
+    mockFetch(() => ({ status: 200 }));
+    await expect(probeOAuthSupport('https://127.0.0.1/mcp', { publicOnly: false })).resolves.toEqual({ oauthCapable: false });
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it('filters private issuers and registration links without exposing them to the caller', async () => {
+    mockFetch(url => {
+      if (url.endsWith('/mcp')) return { status: 401, headers: { 'www-authenticate': 'Bearer' } };
+      if (url.endsWith('/oauth-protected-resource')) return { json: {
+        resource: 'https://mcp.example.com', authorization_servers: ['https://127.0.0.1', 'https://auth.example.com'] } };
+      return { json: { registration_endpoint: 'https://169.254.169.254/private' } };
+    });
+    const result = await probeOAuthSupport('https://mcp.example.com/mcp');
+    expect(result.authorizationServers).toEqual(['https://auth.example.com']);
+    expect(result.dynamicClientRegistration).toBe(false);
+    expect(result.registrationEndpoint).toBeUndefined();
+    expect(requestMock.mock.calls.some(([url]) => String(url).includes('127.0.0.1') || String(url).includes('169.254.169.254'))).toBe(false);
+    expect(new Set(requestMock.mock.calls.map(([, , signal]) => signal)).size).toBe(1);
   });
 });

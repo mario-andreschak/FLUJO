@@ -1,6 +1,10 @@
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   resolveGlobalVars: jest.fn(async (value: unknown) => value),
 }));
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerConfigs: jest.fn(async () => [{ name: 'browser', transport: 'streamable',
+    serverUrl: 'https://owner-scope.example.test/mcp', disabled: false, enableMcpApps: true }]),
+}));
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: { isMcpAppAccessEnabled: jest.fn(async () => true) },
 }));

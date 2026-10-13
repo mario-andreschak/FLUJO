@@ -8,8 +8,7 @@ import { json } from '../_helpers';
 
 const log = createLogger('app/api/mcp/oauth-capability/route');
 
-// Node runtime: probeOAuthSupport uses Node fetch + AbortSignal.timeout and reaches an
-// arbitrary remote host, which the edge runtime restricts.
+// Node runtime: discovery resolves public addresses and uses a bound HTTPS request.
 export const runtime = 'nodejs';
 
 /**
@@ -31,8 +30,8 @@ async function POST_handler(request: NextRequest) {
   let serverUrl: string | undefined;
   try {
     ({ serverUrl } = (await request.json()) as { serverUrl?: string });
-  } catch (error) {
-    log.error('Failed to parse request body', error);
+  } catch {
+    log.error('Invalid OAuth capability request body');
     return json({ error: 'Invalid request body' }, 400);
   }
 

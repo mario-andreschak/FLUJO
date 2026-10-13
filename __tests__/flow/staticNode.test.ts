@@ -71,6 +71,19 @@ async function run(node: StaticNode, state: SharedState, p: StaticNodeParams): P
 }
 
 describe('StaticNode', () => {
+  it.each(['__proto__', 'constructor', 'toString'])('retains inject-once markers for a data-key node id %s', async nodeId => {
+    const node = nodeWithSuccessor();
+    const state = makeState({ logicalRunId: 'data-key-run', staticInjected: { stale: 'earlier-run' } });
+    const p = { ...params({ entries: [{ kind: 'message', role: 'user', content: 'once' }], injectOnce: true }), id: nodeId };
+    await run(node, state, p);
+    expect(Object.getPrototypeOf(state.staticInjected)).toBe(Object.prototype);
+    expect(Object.hasOwn(state.staticInjected!, nodeId)).toBe(true);
+    expect(state.staticInjected![nodeId]).toBe('data-key-run');
+    expect(Object.hasOwn(state.staticInjected!, 'stale')).toBe(false);
+    state.staticInjected = JSON.parse(JSON.stringify(state.staticInjected));
+    await run(node, state, p);
+    expect(state.messages).toHaveLength(1);
+  });
   it('appends authored messages in order, resolving run variables', async () => {
     const node = nodeWithSuccessor();
     const p = params({

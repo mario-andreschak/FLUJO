@@ -10,6 +10,7 @@
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import { seedLegacyDefault } from './fixtures/legacyDefault';
 
 // Each test drives the REAL crypto path, i.e. one-or-more PBKDF2(100k-iteration)
 // derivations, which is deliberately slow. Give generous headroom over the suite
@@ -131,9 +132,10 @@ describe('USER encryption with server unlock state', () => {
   });
 });
 
-describe('DEFAULT encryption mode is unchanged', () => {
+describe('existing DEFAULT encryption compatibility', () => {
   it('round-trips without any password and never throws the locked error', async () => {
     const { secure } = await loadModules();
+    await seedLegacyDefault();
     expect(await secure.initializeDefaultEncryption()).toBe(true);
 
     const enc = await secure.encryptWithPassword('hello world');
@@ -142,13 +144,11 @@ describe('DEFAULT encryption mode is unchanged', () => {
     expect(dec).toBe('hello world');
   });
 
-  it('initializes default encryption on the fly when no metadata exists', async () => {
+  it('refuses to initialize default encryption when no metadata exists', async () => {
     const { secure } = await loadModules();
-    // No initialize* call: getDEK should lazily set up DEFAULT encryption.
-    const enc = await secure.encryptWithPassword('lazy-default');
-    expect(enc).toBeTruthy();
-    const dec = await secure.decryptWithPassword(enc as string);
-    expect(dec).toBe('lazy-default');
+    expect(await secure.initializeDefaultEncryption()).toBe(false);
+    await expect(secure.encryptWithPassword('lazy-default')).rejects.toBeInstanceOf(secure.EncryptionLockedError);
+    expect(await secure.isEncryptionInitialized()).toBe(false);
   });
 });
 

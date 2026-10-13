@@ -143,14 +143,13 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
         value={search}
         onChange={(event) => setSearch(event.target.value)}
         placeholder={t('flows.mcpNode.searchTools')}
-        inputProps={{ 'aria-label': t('flows.mcpNode.searchTools') }}
-        InputProps={{
+        slotProps={{ htmlInput: { 'aria-label': t('flows.mcpNode.searchTools') }, input: {
           startAdornment: (
             <InputAdornment position="start">
               <SearchIcon fontSize="small" />
             </InputAdornment>
           ),
-        }}
+        } }}
         sx={{ mb: 2 }}
       />
 
@@ -165,7 +164,7 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
             return (
               <Box component="section" key={section.key} aria-labelledby={`mcp-tools-${section.key}`}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                  <Typography id={`mcp-tools-${section.key}`} variant="subtitle1" component="h4" fontWeight={700}>
+                  <Typography id={`mcp-tools-${section.key}`} variant="subtitle1" component="h4" sx={{ fontWeight: 700 }}>
                     {t(copy.title)}
                   </Typography>
                   <Chip size="small" color={sectionColor[section.key]} variant="outlined" label={section.tools.length} />
@@ -194,7 +193,7 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
                             size="small"
                             checked={isEnabled}
                             onChange={() => onToggle(tool.name)}
-                            inputProps={{ 'aria-label': t('flows.mcpNode.toggleTool', { tool: displayName }) }}
+                            slotProps={{ input: { 'aria-label': t('flows.mcpNode.toggleTool', { tool: displayName }) } }}
                             sx={{ mt: -0.25 }}
                           />
                           <Box sx={{ flex: 1, minWidth: 0 }}>

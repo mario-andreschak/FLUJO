@@ -211,7 +211,8 @@ export default function AskFlujoDock() {
 
   const pageContext = open ? getPageContext() : null;
   const enabledServers = useMemo(
-    () => tools.filter(tool => tool.enabled && tool.serverName).map(tool => ({ name: tool.serverName! })),
+    () => tools.filter(tool => tool.key === 'flujo' && tool.enabled && tool.serverName)
+      .map(tool => ({ name: tool.serverName!, enabledTools: ['propose_ui_action'] })),
     [tools],
   );
   const unavailableTools = tools.filter(tool => !tool.enabled);
@@ -376,7 +377,7 @@ export default function AskFlujoDock() {
       onClose={closeDock}
       sx={{ zIndex: theme.zIndex.modal + 20 }}
       ModalProps={{ keepMounted: true }}
-      PaperProps={{
+      slotProps={{ paper: {
         sx: {
           width: { xs: '100vw', sm: 470 },
           maxWidth: '100vw',
@@ -384,16 +385,16 @@ export default function AskFlujoDock() {
           borderColor: alpha(theme.palette.primary.main, 0.22),
           backgroundImage: `linear-gradient(160deg, ${alpha(theme.palette.primary.main, 0.08)}, transparent 38%)`,
         },
-      }}
+      } }}
     >
       <Box sx={{ display: 'flex', height: '100%', minHeight: 0, flexDirection: 'column' }}>
         <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-          <Stack direction="row" alignItems="center" spacing={1}>
+          <Stack direction="row" sx={{ alignItems: "center" }} spacing={1}>
             <Box sx={{ display: 'grid', width: 36, height: 36, placeItems: 'center', borderRadius: 2.5, color: '#fff', background: 'linear-gradient(135deg, #9b8cff, #6253e8 55%, #18b8d7)' }}>
               <AutoAwesomeRounded fontSize="small" />
             </Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Typography fontWeight={800}>Ask FLUJO</Typography>
+              <Typography sx={{ fontWeight: 800 }}>Ask FLUJO</Typography>
               <Typography variant="caption" color="text.secondary" noWrap>
                 {pageContext ? `${pageContext.pageType} · ${pageContext.title}` : 'Current page context'}
               </Typography>
@@ -410,7 +411,7 @@ export default function AskFlujoDock() {
         </Box>
 
         <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <FormControl size="small" fullWidth disabled={loadingSetup || models.length === 0}>
               <InputLabel id="ask-flujo-model-label">Model</InputLabel>
               <Select
@@ -420,10 +421,12 @@ export default function AskFlujoDock() {
                 onChange={event => void handleModelChange(event.target.value)}
                 MenuProps={{
                   sx: { zIndex: theme.zIndex.modal + 30 },
-                  PaperProps: {
-                    sx: {
-                      bgcolor: 'background.paper',
-                      color: 'text.primary',
+                  slotProps: {
+                    paper: {
+                      sx: {
+                        bgcolor: 'background.paper',
+                        color: 'text.primary',
+                      },
                     },
                   },
                 }}
@@ -439,7 +442,7 @@ export default function AskFlujoDock() {
               </IconButton>
             </Tooltip>
           </Stack>
-          <Stack direction="row" spacing={0.6} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
+          <Stack direction="row" spacing={0.6} useFlexGap sx={{ flexWrap: "wrap",  mt: 1 }}>
             {tools.map(tool => (
               <Tooltip key={tool.key} title={tool.enabled ? `Connected as ${tool.serverName}` : tool.configured ? 'Configured but disabled' : 'Not configured'}>
                 <Chip size="small" color={tool.enabled ? 'success' : 'default'} variant={tool.enabled ? 'filled' : 'outlined'} label={tool.label} />
@@ -525,12 +528,12 @@ export default function AskFlujoDock() {
                   <Stack spacing={0.8} sx={{ mt: 0.8 }}>
                     {message.actions.map(action => (
                       <Paper key={action.id} variant="outlined" sx={{ p: 1.1, borderColor: alpha(theme.palette.secondary.main, 0.28) }}>
-                        <Stack direction="row" spacing={1} alignItems="flex-start">
+                        <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
                           {action.type === 'highlight' ? <HighlightAltRounded color="secondary" fontSize="small" /> : <EditRounded color="primary" fontSize="small" />}
                           <Box sx={{ minWidth: 0, flex: 1 }}>
-                            <Typography variant="caption" fontWeight={750}>{action.label || (action.type === 'highlight' ? 'Show evidence' : 'Proposed change')}</Typography>
-                            {action.evidence && <Typography display="block" variant="caption" color="text.secondary">{action.evidence}</Typography>}
-                            {actionStatus[action.id] && <Typography display="block" variant="caption" color="text.secondary" sx={{ mt: 0.4 }}>{actionStatus[action.id]}</Typography>}
+                            <Typography variant="caption" sx={{ fontWeight: 750 }}>{action.label || (action.type === 'highlight' ? 'Show evidence' : 'Proposed change')}</Typography>
+                            {action.evidence && <Typography sx={{ display: "block" }} variant="caption" color="text.secondary">{action.evidence}</Typography>}
+                            {actionStatus[action.id] && <Typography variant="caption" color="text.secondary" sx={{ display: "block",  mt: 0.4 }}>{actionStatus[action.id]}</Typography>}
                           </Box>
                           <Button size="small" variant={action.type === 'set_value' ? 'contained' : 'text'} onClick={() => void runAction(action, message.scopeId)}>
                             {action.type === 'set_value' ? 'Apply' : 'Show'}
@@ -543,7 +546,7 @@ export default function AskFlujoDock() {
               </Box>
             ))}
             {sending && (
-              <Stack direction="row" spacing={1} alignItems="center" color="text.secondary">
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", color: "text.secondary" }}>
                 <CircularProgress size={16} />
                 <Typography variant="caption">Reading the page and running tools…</Typography>
               </Stack>
@@ -555,7 +558,7 @@ export default function AskFlujoDock() {
         <Divider />
         <Box sx={{ p: 1.5 }}>
           {error && <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 1 }}>{error}</Alert>}
-          <Stack direction="row" spacing={1} alignItems="flex-end">
+          <Stack direction="row" spacing={1} sx={{ alignItems: "flex-end" }}>
             <TextField
               fullWidth
               multiline

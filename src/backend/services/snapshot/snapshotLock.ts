@@ -1,8 +1,17 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { promises as fs } from 'node:fs';
+import { promises as fs, type BigIntStats } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { PlainFileReadError, readPlainFile } from '@/utils/readPlainFile';
+import type { RuntimeProcessIdentity } from '../enduringAgents/runtimeLock';
 
 export type SnapshotOperationKind = 'capture' | 'read' | 'revert' | 'cleanup' | 'migration';
+type ClosedOwnerField = 'shape' | 'dev' | 'ino' | 'mode' | 'uid' | 'gid' | 'nlink' | 'size';
+export type SnapshotLeaseFailure = `closed-owner:${ClosedOwnerField}`
+  | 'candidate-directory' | 'authored-owner-bytes' | 'published-owner' | 'release-owner'
+  | 'retirement-owner' | 'retirement-directory' | 'retirement-record' | 'contended' | 'queued'
+  | 'owner-directory' | 'owner-schema' | 'owner-unavailable'
+  | `owner-read:${PlainFileReadError['code']}` | `owner-read:${NonNullable<PlainFileReadError['detail']>}`;
 
 interface SnapshotLeaseContext {
   heldKeys: Set<string>;
@@ -12,6 +21,14 @@ interface SnapshotLeaseOwner {
   pid: number;
   startedAt: string;
   operation: SnapshotOperationKind;
+  ownerId?: string;
+  identity?: RuntimeProcessIdentity;
+}
+
+interface ObservedOwner {
+  owner: SnapshotLeaseOwner;
+  digest: string;
+  directory: BigIntStats;
 }
 
 declare global {
@@ -30,14 +47,15 @@ const activity = globalThis.__flujoSnapshotOperationActivity
 export class SnapshotLeaseBusyError extends Error {
   readonly code = 'SNAPSHOT_STORE_BUSY';
 
-  constructor() {
+  constructor(readonly detail?: SnapshotLeaseFailure) {
     super('Snapshot storage is temporarily busy');
     this.name = 'SnapshotLeaseBusyError';
   }
 }
 
 function keyFor(root: string): string {
-  return path.resolve(root).toLowerCase();
+  const resolved = path.resolve(root);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function lockDirectory(root: string): string {
@@ -49,27 +67,110 @@ function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
-async function readOwner(root: string): Promise<SnapshotLeaseOwner | undefined> {
+function sameDirectory(first: BigIntStats, second: BigIntStats): boolean {
+  return second.isDirectory() && !second.isSymbolicLink() && first.dev === second.dev && first.ino === second.ino
+    && first.mode === second.mode && first.uid === second.uid && first.gid === second.gid;
+}
+
+async function readOwner(root: string, diagnoseRefusal = false): Promise<ObservedOwner | undefined> {
+  const refuse = (detail: SnapshotLeaseFailure): undefined => {
+    if (diagnoseRefusal) throw new SnapshotLeaseBusyError(detail);
+    return undefined;
+  };
   try {
-    const value = JSON.parse(
-      await fs.readFile(path.join(lockDirectory(root), 'owner.json'), 'utf8'),
-    ) as Partial<SnapshotLeaseOwner>;
+    const lock = lockDirectory(root);
+    const directory = await fs.lstat(lock, { bigint: true });
+    if (!directory.isDirectory() || directory.isSymbolicLink()) return refuse('owner-directory');
+    const bytes = await readPlainFile(path.join(lock, 'owner.json'), { maxBytes: 4096, ownerOnly: true });
+    if (!sameDirectory(directory, await fs.lstat(lock, { bigint: true }))) return refuse('owner-directory');
+    const value = JSON.parse(bytes.toString('utf8')) as Partial<SnapshotLeaseOwner>;
     if (
       Number.isSafeInteger(value.pid)
+      && value.pid! > 0
       && typeof value.startedAt === 'string'
-      && typeof value.operation === 'string'
+      && Number.isFinite(Date.parse(value.startedAt))
+      && ['capture', 'read', 'revert', 'cleanup', 'migration'].includes(value.operation!)
+      && (value.ownerId === undefined || /^[a-f0-9-]{36}$/.test(value.ownerId))
+      && (value.identity === undefined || (value.identity.pid === value.pid
+        && typeof value.identity.processInstanceId === 'string'
+        && (value.identity.processBirthMarkerV2 === undefined || typeof value.identity.processBirthMarkerV2 === 'string')))
     ) {
-      return value as SnapshotLeaseOwner;
+      return { owner: value as SnapshotLeaseOwner, digest: createHash('sha256').update(bytes).digest('hex'), directory };
     }
-  } catch {
-    // A partial owner record is stale once no live process can be identified.
+    return refuse('owner-schema');
+  } catch (error) {
+    // Missing/partial/unreadable ownership is uncertainty, never proof of death.
+    if (diagnoseRefusal) {
+      if (error instanceof SnapshotLeaseBusyError) throw error;
+      if (error instanceof PlainFileReadError) throw new SnapshotLeaseBusyError(`owner-read:${error.detail ?? error.code}`);
+      throw new SnapshotLeaseBusyError('owner-unavailable');
+    }
   }
   return undefined;
+}
+
+async function withLeaseTransition<T>(root: string, task: (assertOwned: () => Promise<void>) => Promise<T>): Promise<T> {
+  // All publishers and reapers in the selected workspace use the existing
+  // owner-generation/recovery-intent protocol. A stale observation is checked
+  // again under that fence before it can create or remove an entry.
+  const { withWorkspaceRuntimeLock } = await import('../enduringAgents/runtimeLock');
+  const name = `snapshot_transition_${createHash('sha256').update(keyFor(root)).digest('hex').slice(0, 40)}`;
+  return withWorkspaceRuntimeLock(name, async fence => {
+    await fence.assertOwned();
+    return task(() => fence.assertOwned());
+  });
+}
+
+async function retireOwner(root: string, observed: ObservedOwner, requireDead = false): Promise<boolean> {
+  return withLeaseTransition(root, async assertOwned => {
+    const admitted = await readOwner(root);
+    if (!admitted || admitted.digest !== observed.digest || !sameDirectory(observed.directory, admitted.directory)) return false;
+    if (requireDead) {
+      const { isRuntimeProcessIdentityAlive } = await import('../enduringAgents/runtimeLock');
+      if (admitted.owner.identity ? await isRuntimeProcessIdentityAlive(admitted.owner.identity) : processAlive(admitted.owner.pid)) return false;
+    }
+    const lock = lockDirectory(root);
+    const retirementPath = path.join(lock, 'retire.json');
+    const nonce = randomUUID();
+    let handle;
+    await assertOwned();
+    try { handle = await fs.open(retirementPath, 'wx', 0o600); }
+    catch (error) {
+      if (['EEXIST', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '')) return false;
+      throw error;
+    }
+    try { await handle.writeFile(JSON.stringify({ nonce, targetDigest: observed.digest })); }
+    finally { await handle.close(); }
+    const current = await readOwner(root);
+    if (!current || current.digest !== observed.digest || !sameDirectory(observed.directory, current.directory)) {
+      // Do not unlink a pathname that may now belong to a successor.
+      return false;
+    }
+    // Only one retire.json can be installed in a published generation. The winner
+    // moves that complete directory away before a successor can publish. Competing
+    // reapers must re-read the owner after their exclusive claim, not reuse a PID.
+    const retired = `${lock}.retired-${nonce}`;
+    await assertOwned();
+    await fs.rename(lock, retired);
+    const moved = await fs.lstat(retired, { bigint: true });
+    if (!sameDirectory(observed.directory, moved)) throw new SnapshotLeaseBusyError('retirement-directory');
+    const ownerBytes = await readPlainFile(path.join(retired, 'owner.json'), { maxBytes: 4096, ownerOnly: true });
+    const retirement = JSON.parse((await readPlainFile(path.join(retired, 'retire.json'), { maxBytes: 4096, ownerOnly: true })).toString('utf8'));
+    if (createHash('sha256').update(ownerBytes).digest('hex') !== observed.digest || retirement.nonce !== nonce) {
+      throw new SnapshotLeaseBusyError('retirement-record');
+    }
+    // Never recursively delete a raced pathname or unexpected entries.
+    await assertOwned();
+    await fs.unlink(path.join(retired, 'owner.json'));
+    await fs.unlink(path.join(retired, 'retire.json'));
+    await fs.rmdir(retired);
+    return true;
+  });
 }
 
 async function acquireFilesystemLease(
@@ -78,37 +179,101 @@ async function acquireFilesystemLease(
 ): Promise<() => Promise<void>> {
   const lock = lockDirectory(root);
   await fs.mkdir(path.dirname(lock), { recursive: true });
-
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  const { getRuntimeProcessIdentity, isRuntimeProcessIdentityAlive } = await import('../enduringAgents/runtimeLock');
+  const owner: SnapshotLeaseOwner = {
+    pid: process.pid, startedAt: new Date().toISOString(), operation,
+    ownerId: randomUUID(), identity: await getRuntimeProcessIdentity(),
+  };
+  const ownerBytes = Buffer.from(JSON.stringify(owner), 'utf8');
+  const ownerDigest = createHash('sha256').update(ownerBytes).digest('hex');
+  // Publish a complete private directory atomically. No process observes a
+  // directory before its owner record exists, or executes shared temp contents.
+  const candidate = await fs.mkdtemp(`${lock}.candidate-`);
+  await fs.chmod(candidate, 0o700);
+  const candidateDirectory = await fs.lstat(candidate, { bigint: true });
+  const candidateOwnerPath = path.join(candidate, 'owner.json');
+  let candidateOwner: BigIntStats | undefined;
+  let published = false;
+  try {
+    const ownerHandle = await fs.open(candidateOwnerPath, 'wx', 0o600);
     try {
-      await fs.mkdir(lock);
-      const owner: SnapshotLeaseOwner = {
-        pid: process.pid,
-        startedAt: new Date().toISOString(),
-        operation,
-      };
-      await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify(owner), 'utf8');
-      return async () => {
-        const current = await readOwner(root);
-        if (current?.pid === process.pid) {
-          await fs.rm(lock, { recursive: true, force: true });
+      candidateOwner = await ownerHandle.stat({ bigint: true });
+      await ownerHandle.writeFile(ownerBytes);
+      await ownerHandle.sync();
+      candidateOwner = await ownerHandle.stat({ bigint: true });
+    }
+    finally { await ownerHandle.close(); }
+    // Windows may finalize write timestamps when the last writable handle
+    // closes. Bind the closed snapshot to our descriptor's exact stable identity
+    // before using its timestamps for subsequent read admission. The authored
+    // bytes are checked separately; a fresh pathname stat alone grants nothing.
+    const closedOwner = await fs.lstat(candidateOwnerPath, { bigint: true });
+    if (!candidateOwner || !closedOwner.isFile() || closedOwner.isSymbolicLink()
+        || closedOwner.dev !== candidateOwner.dev || closedOwner.ino !== candidateOwner.ino
+        || closedOwner.mode !== candidateOwner.mode || closedOwner.uid !== candidateOwner.uid || closedOwner.gid !== candidateOwner.gid
+        || closedOwner.nlink !== BigInt(1) || closedOwner.nlink !== candidateOwner.nlink
+        || closedOwner.size !== BigInt(ownerBytes.byteLength)) {
+      const field: ClosedOwnerField = !candidateOwner || !closedOwner.isFile() || closedOwner.isSymbolicLink() ? 'shape'
+        : closedOwner.nlink !== BigInt(1) ? 'nlink'
+        : (['dev', 'ino', 'mode', 'uid', 'gid', 'nlink'] as const).find(key => closedOwner[key] !== candidateOwner![key]) ?? 'size';
+      throw new SnapshotLeaseBusyError(`closed-owner:${field}`);
+    }
+    candidateOwner = closedOwner;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      let exists = false;
+      try { await fs.lstat(lock); exists = true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      if (!exists) {
+        try {
+          const release = await withLeaseTransition(root, async assertOwned => {
+            try { await fs.lstat(lock); return undefined; }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+            await assertOwned();
+            if (!sameDirectory(candidateDirectory, await fs.lstat(candidate, { bigint: true }))) throw new SnapshotLeaseBusyError('candidate-directory');
+            const written = await readPlainFile(candidateOwnerPath, { expected: candidateOwner, maxBytes: 4096, ownerOnly: true });
+            if (!written.equals(ownerBytes)) throw new SnapshotLeaseBusyError('authored-owner-bytes');
+            await assertOwned();
+            await fs.rename(candidate, lock);
+            published = true;
+            const admitted = await readOwner(root, true);
+            if (!admitted || admitted.owner.ownerId !== owner.ownerId || admitted.digest !== ownerDigest
+                || !sameDirectory(candidateDirectory, admitted.directory)) throw new SnapshotLeaseBusyError('published-owner');
+            return async () => {
+              const current = await readOwner(root);
+              if (!current || current.owner.ownerId !== owner.ownerId || current.digest !== admitted.digest
+                  || !sameDirectory(admitted.directory, current.directory)) throw new SnapshotLeaseBusyError('release-owner');
+              if (!await retireOwner(root, current)) throw new SnapshotLeaseBusyError('retirement-owner');
+            };
+          });
+          if (release) return release;
+        } catch (error) {
+          if (published || !['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
         }
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const owner = await readOwner(root);
-      if (!owner || !processAlive(owner.pid)) {
-        await fs.rm(lock, { recursive: true, force: true });
-        continue;
+      }
+      const previous = await readOwner(root);
+      if (previous && !(previous.owner.identity
+        ? await isRuntimeProcessIdentityAlive(previous.owner.identity)
+        : processAlive(previous.owner.pid))) {
+        if (await retireOwner(root, previous, true)) continue;
       }
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 50);
         timer.unref?.();
       });
     }
+    throw new SnapshotLeaseBusyError('contended');
+  } finally {
+    if (!published) {
+      try {
+        if (sameDirectory(candidateDirectory, await fs.lstat(candidate, { bigint: true }))) {
+          const current = await fs.lstat(candidateOwnerPath, { bigint: true }).catch(() => undefined);
+          if (candidateOwner && current?.isFile() && !current.isSymbolicLink()
+              && current.dev === candidateOwner.dev && current.ino === candidateOwner.ino) await fs.unlink(candidateOwnerPath);
+          if (sameDirectory(candidateDirectory, await fs.lstat(candidate, { bigint: true }))) await fs.rmdir(candidate);
+        }
+      } catch { /* preserve uncertain or unowned candidate entries */ }
+    }
   }
-
-  throw new SnapshotLeaseBusyError();
 }
 
 function changeActivity(root: string, operation: SnapshotOperationKind, delta: 1 | -1): void {
@@ -156,7 +321,7 @@ export async function withSnapshotStoreLease<T>(
     }
   }
 
-  if (options.failIfBusy && tails.has(key)) throw new SnapshotLeaseBusyError();
+  if (options.failIfBusy && tails.has(key)) throw new SnapshotLeaseBusyError('queued');
 
   const predecessor = tails.get(key) ?? Promise.resolve();
   let releaseQueue!: () => void;
@@ -177,9 +342,11 @@ export async function withSnapshotStoreLease<T>(
     return await context.run({ heldKeys }, task);
   } finally {
     changeActivity(root, operation, -1);
-    await releaseFilesystem();
-    releaseQueue();
-    if (tails.get(key) === tail) tails.delete(key);
+    try { await releaseFilesystem(); }
+    finally {
+      releaseQueue();
+      if (tails.get(key) === tail) tails.delete(key);
+    }
   }
 }
 

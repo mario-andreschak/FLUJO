@@ -20,13 +20,14 @@ export interface BridgeTool {
   inputSchema: Record<string, unknown> | undefined;
   /** Preserve real MCP hints when the caller has them; never invent safer hints. */
   annotations?: ToolAnnotations;
-  handler: (args: Record<string, unknown>) => Promise<CallToolResult>;
+  handler: (args: Record<string, unknown>, requestIdentity?: string) => Promise<CallToolResult>;
 }
 
 export interface CodexToolBridge {
   /** Streamable-HTTP MCP endpoint URL for the codex subprocess. */
   url: string;
   close(): Promise<void>;
+  bindNativeThread(threadId: string): void;
 }
 
 /**
@@ -47,9 +48,12 @@ export interface CodexToolBridge {
 export async function startCodexToolBridge(
   tools: BridgeTool[],
   instructions?: string,
+  requireStableToolIds = false,
+  requireOwnedThread = false,
 ): Promise<CodexToolBridge> {
   const token = randomBytes(16).toString('hex');
   const path = `/mcp/${token}`;
+  let boundNativeThreadId: string | undefined;
 
   const buildServer = (): Server => {
     const server = new Server(
@@ -71,7 +75,20 @@ export async function startCodexToolBridge(
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true };
       }
       try {
-        return await tool.handler((req.params.arguments ?? {}) as Record<string, unknown>);
+        const meta = req.params._meta as { callId?: unknown; threadId?: unknown } | undefined;
+        // The pinned Codex CLI sends the model's original callId in MCP
+        // params._meta. JSON-RPC id is a transport sequence and must never
+        // identify an effect. Thread ID prevents reuse across SDK threads.
+        let semanticId = typeof meta?.callId === 'string' && meta.callId.trim()
+          && typeof meta.threadId === 'string' && meta.threadId.trim()
+          ? meta.callId
+          : undefined;
+        if (requireStableToolIds && semanticId) {
+          if ((requireOwnedThread && !boundNativeThreadId) || (boundNativeThreadId && boundNativeThreadId !== meta!.threadId)) semanticId = undefined;
+          else boundNativeThreadId = meta!.threadId as string;
+        }
+        return await tool.handler((req.params.arguments ?? {}) as Record<string, unknown>,
+          requireStableToolIds ? semanticId : undefined);
       } catch (err) {
         // Surface handler failures as tool errors instead of a JSON-RPC fault,
         // so the model can react to them like any other failed call.
@@ -99,7 +116,21 @@ export async function startCodexToolBridge(
     });
     try {
       await server.connect(transport);
-      await transport.handleRequest(req, res);
+      if (requireStableToolIds && req.method === 'POST') {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of req) {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          size += buffer.byteLength;
+          if (size > 1024 * 1024) throw new Error('Native tool request exceeds the bridge bound.');
+          chunks.push(buffer);
+        }
+        const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid native tool request.');
+        await transport.handleRequest(req, res, body);
+      } else {
+        await transport.handleRequest(req, res);
+      }
     } catch (err) {
       log.error('Codex tool-bridge request failed', err);
       if (!res.headersSent) {
@@ -126,6 +157,11 @@ export async function startCodexToolBridge(
 
   return {
     url,
+    bindNativeThread: threadId => {
+      if (!requireStableToolIds || typeof threadId !== 'string' || !threadId.trim() || threadId.length > 256
+        || (boundNativeThreadId && boundNativeThreadId !== threadId)) throw new Error('Native Codex thread binding is unavailable.');
+      boundNativeThreadId = threadId;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         // Sever keep-alive connections too, or close() waits for the (dead)

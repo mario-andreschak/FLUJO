@@ -62,23 +62,32 @@ describe('searchRegistry', () => {
       servers: [
         npmEntry('io.github.acme/voice'),
         keyedEntry('io.github.acme/keyed-voice'),
-        { server: { name: 'io.github.acme/unsupported', packages: [] } },
+        { server: { name: 'io.github.acme/unsupported-voice', packages: [] } },
       ],
     });
     const hits = await searchRegistry('voice');
-    expect(hits).toEqual([
+    expect(hits).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'io.github.acme/voice', installable: true, requiredEnv: [] }),
       expect.objectContaining({ name: 'io.github.acme/keyed-voice', installable: true, requiredEnv: ['THE_API_KEY'] }),
-      expect.objectContaining({ name: 'io.github.acme/unsupported', installable: false }),
-    ]);
+      expect.objectContaining({ name: 'io.github.acme/unsupported-voice', installable: false }),
+    ]));
+    expect(hits).toHaveLength(3);
     // The registry matches names only; the query must reach the upstream URL.
-    const url = registryGetJsonMock.mock.calls[0][0] as URL;
-    expect(url.searchParams.get('search')).toBe('voice');
-    expect(url.searchParams.get('version')).toBe('latest');
+    const urls = registryGetJsonMock.mock.calls.map(call => call[0] as URL);
+    expect(urls.some(url => url.searchParams.get('search') === 'voice')).toBe(true);
+    expect(urls.every(url => url.searchParams.get('version') === 'latest')).toBe(true);
   });
 });
 
 describe('installRegistryServer', () => {
+  it('requires explicit configuration of a disabled existing record without reconnecting or changing it', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    loadServerConfigsMock.mockResolvedValue([{ name: 'voice', disabled: true, command: 'unrelated-owner-command' }]);
+    const result = await installRegistryServer('io.github.acme/voice');
+    expect(result).toMatchObject({ installed: false, alreadyExisted: true, needsConfiguration: true, existingServerName: 'voice' });
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+    expect(listServerToolsMock).not.toHaveBeenCalled();
+  });
   it('prepares a runtime even for an existing server without adopting, saving or connecting it', async () => {
     registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
     loadServerConfigsMock.mockResolvedValue([{ name: 'custom-voice', rootPath: 'C:\\old-path' }]);
@@ -270,6 +279,43 @@ describe('installRegistryServer', () => {
     expect(result.alreadyExisted).toBe(true);
     expect(updateServerConfigMock).not.toHaveBeenCalled();
     expect(listServerToolsMock).toHaveBeenCalledWith('voice');
+  });
+
+  it.each([
+    { name: 'voice', transport: 'stdio', command: 'another-command', args: [] },
+    { name: 'voice', disabled: false },
+    { name: 'voice', transport: 'stdio', command: 'npx', args: ['-y', '@example/voice@9.0.0'] },
+    { name: 'voice', transport: 'stdio', command: 'npx', args: ['-y', '@example/voice@1.0.0'], source: { type: 'registry', registryName: 'io.unrelated/voice' } },
+  ])('never adopts a mismatched or incomplete existing record under a reviewed exact plan: %j', async existing => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const prepared = await prepareRegistryServerRuntime('io.github.acme/voice');
+    loadServerConfigsMock.mockResolvedValue([existing]);
+    const result = await installRegistryServer('io.github.acme/voice', undefined, { expectedPlan: prepared.plan });
+    expect(result).toMatchObject({ installed: false, alreadyExisted: true, needsConfiguration: true, existingServerName: 'voice' });
+    expect(result.error).toContain('reviewed Registry plan');
+    expect(listServerToolsMock).not.toHaveBeenCalled();
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('reuses an existing exact runtime and source under its reviewed plan without writing configuration', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const prepared = await prepareRegistryServerRuntime('io.github.acme/voice');
+    loadServerConfigsMock.mockResolvedValue([{ ...prepared.config, disabled: false }]);
+    const result = await installRegistryServer('io.github.acme/voice', undefined, { expectedPlan: prepared.plan });
+    expect(result).toMatchObject({ installed: true, alreadyExisted: true, serverName: 'voice' });
+    expect(listServerToolsMock).toHaveBeenCalledTimes(1);
+    expect(listServerToolsMock).toHaveBeenCalledWith('voice');
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses an existing different remote endpoint under a reviewed remote plan', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [{ server: { name: 'io.github.acme/remote-voice', remotes: [{ type: 'streamable-http', url: 'https://voice.example.test/mcp' }] } }] });
+    const prepared = await prepareRegistryServerRuntime('io.github.acme/remote-voice');
+    loadServerConfigsMock.mockResolvedValue([{ ...prepared.config, serverUrl: 'https://unrelated.example.test/mcp' }]);
+    const result = await installRegistryServer('io.github.acme/remote-voice', undefined, { expectedPlan: prepared.plan });
+    expect(result).toMatchObject({ installed: false, needsConfiguration: true, existingServerName: prepared.serverName });
+    expect(listServerToolsMock).not.toHaveBeenCalled();
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
   });
 
   it('errors cleanly on unknown entries, unsupported entries, and registry failures', async () => {

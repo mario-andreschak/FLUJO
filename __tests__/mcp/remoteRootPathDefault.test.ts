@@ -1,3 +1,8 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+let mockPrivateMetadata: unknown;
+const mockStorageLoad = jest.fn();
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Tests for issue 52: remote servers must not default their "server root dir"
  * (rootPath) to '/'.
@@ -22,7 +27,7 @@ jest.mock('simple-git', () => {
   };
   return {
     __esModule: true,
-    default: jest.fn(() => git),
+    simpleGit: jest.fn(() => git),
     __git: git,
   };
 });
@@ -30,7 +35,7 @@ jest.mock('simple-git', () => {
 jest.mock('uuid', () => ({ v4: () => 'test-request-id' }));
 jest.mock('@/utils/mcp', () => ({ processPathLikeArgument: (p: string) => p }));
 jest.mock('@/utils/storage/backend', () => ({
-  loadItem: jest.fn(),
+  loadItem: (key: string, fallback: unknown) => key === 'encryption_key' ? mockPrivateMetadata : mockStorageLoad(key, fallback),
   saveItem: jest.fn(),
 }));
 
@@ -45,7 +50,7 @@ import { POST } from '@/app/api/git/route';
 import { getDataDir } from '@/utils/paths';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 
-const { loadItem } = jest.requireMock('@/utils/storage/backend') as { loadItem: jest.Mock };
+const loadItem = mockStorageLoad;
 const { __git: mockGit } = jest.requireMock('simple-git') as any;
 
 // The route enforces the localhost origin guard (#131), which reads
@@ -54,9 +59,10 @@ const { __git: mockGit } = jest.requireMock('simple-git') as any;
 const req = (body: unknown) =>
   ({ json: async () => body, headers: new Headers({ host: 'localhost:4200' }) }) as any;
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
   loadItem.mockReset().mockImplementation(async (_key: StorageKey, fallback: unknown) => fallback);
+  privateFixture = await installPrivateProfileFixture(metadata => { mockPrivateMetadata = metadata; });
 });
 
 describe('registry buildRemoteConfig rootPath default (issue 52)', () => {

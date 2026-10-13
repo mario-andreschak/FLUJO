@@ -31,6 +31,7 @@ import { ModelTestResult } from '@/shared/types/model/response';
 import { getModelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
 import ModelTestDialog from './ModelTestDialog';
+import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -447,6 +448,7 @@ export const ModelCard = ({
         >
           {body}
         </CardActionArea>
+        <AllowanceBar modelIds={model.fallbackPolicy?.modelIds ?? [model.id]} />
       </Card>
     );
   }
@@ -469,6 +471,7 @@ export const ModelCard = ({
     >
       {favoriteButton}
       {body}
+      <AllowanceBar modelIds={model.fallbackPolicy?.modelIds ?? [model.id]} />
       {modern ? (
         <CardActions
           disableSpacing

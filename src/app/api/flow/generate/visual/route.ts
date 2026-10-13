@@ -32,7 +32,7 @@ async function POST_handler(request: NextRequest) {
   };
   return createJsonEventStreamResponse<VisualGenerationEvent>(
     (emit, signal) => generateFlowVisually(input, emit, signal),
-    (error) => ({ type: 'error', error }),
+    () => ({ type: 'error', error: 'Visual flow generation failed. Please try again.' }),
     { signal: request.signal },
   );
 }

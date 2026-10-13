@@ -204,7 +204,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
               fullWidth
               placeholder={t('bugReport.titlePlaceholder')}
               inputRef={titleInputRef}
-              InputProps={{
+              slotProps={{ input: {
                 endAdornment: title ? (
                   <InputAdornment position="end">
                     <IconButton
@@ -220,7 +220,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
                     </IconButton>
                   </InputAdornment>
                 ) : undefined,
-              }}
+              } }}
             />
 
             <TextField
@@ -233,7 +233,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
               minRows={6}
               placeholder={t('bugReport.descriptionPlaceholder')}
               inputRef={descriptionInputRef}
-              InputProps={{
+              slotProps={{ input: {
                 endAdornment: description ? (
                   <InputAdornment position="end" sx={{ alignSelf: 'flex-start', mt: 1 }}>
                     <IconButton
@@ -248,7 +248,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
                     </IconButton>
                   </InputAdornment>
                 ) : undefined,
-              }}
+              } }}
             />
 
             <Typography variant="caption" color="text.secondary">
@@ -266,7 +266,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
                   {t('bugReport.noModels')}
                 </Typography>
               ) : (
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: "center" }}>
                   <TextField
                     select
                     label={t('common.model')}
@@ -304,7 +304,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
                 fullWidth
                 multiline
                 minRows={4}
-                InputProps={{ readOnly: true, sx: { fontFamily: 'var(--font-geist-mono)', fontSize: 12 } }}
+                slotProps={{ input: { readOnly: true, sx: { fontFamily: 'var(--font-geist-mono)', fontSize: 12 } } }}
               />
             </Box>
           </Stack>

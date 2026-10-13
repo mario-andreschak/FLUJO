@@ -285,14 +285,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       aria-label={beginnerMode && selectedNode ? t('flows.inspector.stepSettings') : beginnerMode ? t('flows.inspector.agentSettings') : t('flows.inspector.flowInspector')}
     >
       <Box sx={{ px: 1.5, pt: 1.25 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+        <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 1 }}>
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: '.12em' }}>
               {beginnerMode
                 ? selectedNode ? t('flows.inspector.editStep') : t('flows.inspector.agentSettings')
                 : t('flows.inspector.inspector')}
             </Typography>
-            <Typography variant="subtitle1" fontWeight={800} noWrap>
+            <Typography variant="subtitle1" sx={{ fontWeight: 800 }} noWrap>
               {selectedNode ? selectedNode.data.label : flowName}
             </Typography>
           </Box>
@@ -323,7 +323,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       <Box sx={{ p: 1.5, overflowY: 'auto', flex: 1 }}>
         {tab === 'node' && selectedNode ? (
           <Stack spacing={1.5}>
-            <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
+            <Stack direction="row" sx={{ alignItems: "center", gap: 1,  minWidth: 0 }}>
               <Chip
                 size="small"
                 sx={{ flexShrink: 0 }}
@@ -444,9 +444,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 })}
               >
                 {nodeSummary.map((item) => (
-                  <Stack key={item.label} direction="row" justifyContent="space-between" gap={1} mb={0.5}>
+                  <Stack key={item.label} direction="row" sx={{ justifyContent: "space-between", gap: 1, mb: 0.5 }}>
                     <Typography variant="caption" color="text.secondary">{item.label}</Typography>
-                    <Typography variant="caption" fontWeight={700} noWrap>{item.value}</Typography>
+                    <Typography variant="caption" sx={{ fontWeight: 700 }} noWrap>{item.value}</Typography>
                   </Stack>
                 ))}
               </Box>
@@ -566,10 +566,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </Stack>
         ) : (
           <Stack spacing={1.5}>
-            <Stack direction="row" gap={1} alignItems="center">
+            <Stack direction="row" sx={{ gap: 1, alignItems: "center" }}>
               <SettingsSuggestRoundedIcon color="primary" fontSize="small" />
               <Box>
-                <Typography variant="subtitle2" fontWeight={800}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
                   {beginnerMode ? t('flows.inspector.aboutAgent') : t('flows.inspector.flowDetails')}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -630,7 +630,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 }
                 label={authoringMode === 'advanced' ? t('flows.inspector.advanced') : t('flows.inspector.guided')}
               />
-              <Typography variant="caption" color="text.secondary" display="block">
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
                 {authoringMode === 'advanced'
                   ? t('flows.inspector.advancedHelp')
                   : t('flows.inspector.guidedHelp')}

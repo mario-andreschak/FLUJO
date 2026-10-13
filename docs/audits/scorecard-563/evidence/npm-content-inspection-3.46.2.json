@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-03T22:17:01.304Z",
+  "kind": "content-inspection-only",
+  "result": "passed",
+  "artifact": "flujo-ai@3.46.2",
+  "payloadBytes": 10286028,
+  "payloadSha256": "470605df68d8d2afb1db4895ec3d51e2be1a4d0ba93805becad86733ae71135c",
+  "payloadSha512": "4085f514128342f21904623a4d5c7bac704794efc5ca86d24e0a29f9185a630bed062ab886a6d936a7fbcad418723131052719e5f9fa02bb78b0979932cde5a9",
+  "integrity": "sha512-QIX1FBKDQvIZBGI6TVx7rHBHlO/FyobSTgop+RhaYwvtBiq4hqbZNqf7ytQYcjExBScZ5fn6Art4sJeZMs3lqQ==",
+  "declaredSourceSha": "320347356891aa1c24e0f2f9ce12719317e58bde",
+  "package": {
+    "name": "flujo-ai",
+    "version": "3.46.2",
+    "engines": {
+      "node": ">=22.0.0"
+    },
+    "next": "16.3.5"
+  },
+  "buildId": "EKDYzpGxkbGh7LjwGF_Ru",
+  "archiveFileCount": 1694,
+  "bundledMcpManifests": [
+    "package/mcp-servers/bash/package.json",
+    "package/mcp-servers/browser/package.json",
+    "package/mcp-servers/filesystem/package.json",
+    "package/mcp-servers/flujo/package.json",
+    "package/mcp-servers/shared/package.json"
+  ],
+  "statements": [
+    {
+      "_type": "https://in-toto.io/Statement/v0.1",
+      "subject": [
+        {
+          "name": "pkg:npm/flujo-ai@3.46.2",
+          "digest": {
+            "sha512": "4085f514128342f21904623a4d5c7bac704794efc5ca86d24e0a29f9185a630bed062ab886a6d936a7fbcad418723131052719e5f9fa02bb78b0979932cde5a9"
+          }
+        }
+      ],
+      "predicateType": "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+      "predicate": {
+        "name": "flujo-ai",
+        "version": "3.46.2",
+        "registry": "https://registry.npmjs.org"
+      }
+    },
+    {
+      "_type": "https://in-toto.io/Statement/v1",
+      "subject": [
+        {
+          "name": "pkg:npm/flujo-ai@3.46.2",
+          "digest": {
+            "sha512": "4085f514128342f21904623a4d5c7bac704794efc5ca86d24e0a29f9185a630bed062ab886a6d936a7fbcad418723131052719e5f9fa02bb78b0979932cde5a9"
+          }
+        }
+      ],
+      "predicateType": "https://slsa.dev/provenance/v1",
+      "predicate": {
+        "buildDefinition": {
+          "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+          "externalParameters": {
+            "workflow": {
+              "ref": "refs/heads/main",
+              "repository": "https://github.com/mario-andreschak/FLUJO",
+              "path": ".github/workflows/publish-npm.yml"
+            }
+          },
+          "internalParameters": {
+            "github": {
+              "event_name": "workflow_dispatch",
+              "repository_id": "939611454",
+              "repository_owner_id": "196235471"
+            }
+          },
+          "resolvedDependencies": [
+            {
+              "uri": "git+https://github.com/mario-andreschak/FLUJO@refs/heads/main",
+              "digest": {
+                "gitCommit": "320347356891aa1c24e0f2f9ce12719317e58bde"
+              }
+            }
+          ]
+        },
+        "runDetails": {
+          "builder": {
+            "id": "https://github.com/actions/runner/github-hosted"
+          },
+          "metadata": {
+            "invocationId": "https://github.com/mario-andreschak/FLUJO/actions/runs/37023576093/attempts/5"
+          }
+        }
+      }
+    }
+  ],
+  "redactions": [
+    "Registry response signedAccessSignatureUrl fields omitted; decoded signed statements retained without alteration."
+  ],
+  "commands": [
+    "Invoke-WebRequest https://registry.npmjs.org/-/npm/v1/attestations/flujo-ai@3.46.2",
+    "Invoke-WebRequest https://registry.npmjs.org/flujo-ai/-/flujo-ai-3.46.2.tgz",
+    "tar -tf <tarball>",
+    "tar -xOf <tarball> package/package.json",
+    "tar -xOf <tarball> package/.next/BUILD_ID",
+    "SHA-256/SHA-512 of downloaded bytes; compare SHA-512 to both decoded attestation subjects and registry integrity"
+  ],
+  "limits": [
+    "Attestation signatures, issuer identity, transparency inclusion and policy were NOT cryptographically verified.",
+    "Artifact bytes were inspected, not installed or executed. Source correspondence is declared provenance, not compiled-source verification.",
+    "No npm dependency install, app runtime, MCP process, account enrollment or model call occurred."
+  ]
+}

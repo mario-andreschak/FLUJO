@@ -3,25 +3,46 @@ import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { CompletionAdapter } from './types';
 import { OpenAiAdapter } from './openaiAdapter';
 import { OpenAiResponsesAdapter } from './openaiResponsesAdapter';
+import { OpenRouterAgentAdapter } from './openrouterAgentAdapter';
 import { AzureOpenAiAdapter } from './azureOpenAiAdapter';
 import { AnthropicAdapter } from './anthropicAdapter';
 import { GeminiAdapter } from './geminiAdapter';
 import { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
 import { CodexAdapter } from './codexAdapter';
+import { AntigravityCliAdapter } from './antigravityCliAdapter';
 import { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 import { FallbackAdapter } from './fallbackAdapter';
 import { resolveCompletionAdapterRoute, type CompletionAdapterRoute } from './completionRoute';
 import { assertOwnerCredentialAdapterRoute, ExecutionExtensionError } from '@/backend/execution/extensions';
 
+function denyAssessment(adapter: CompletionAdapter): CompletionAdapter {
+  // Preserve the adapter instance and its method receiver for ordinary calls.
+  const createCompletion = adapter.createCompletion.bind(adapter);
+  adapter.createCompletion = input => {
+    if (input.readOnlyAssessment) throw new Error('This adapter does not support read-only assessment.');
+    return createCompletion(input);
+  };
+  if (adapter.createStreamCompletion) {
+    const createStreamCompletion = adapter.createStreamCompletion.bind(adapter);
+    adapter.createStreamCompletion = input => {
+      if (input.readOnlyAssessment) throw new Error('This adapter does not support read-only assessment.');
+      return createStreamCompletion(input);
+    };
+  }
+  return adapter;
+}
+
 export * from './types';
 export { OpenAiAdapter } from './openaiAdapter';
 export { OpenAiResponsesAdapter } from './openaiResponsesAdapter';
+export { OpenRouterAgentAdapter } from './openrouterAgentAdapter';
 export { AzureOpenAiAdapter } from './azureOpenAiAdapter';
 export { AnthropicAdapter } from './anthropicAdapter';
 export { GeminiAdapter } from './geminiAdapter';
 export { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
 export { CodexAdapter } from './codexAdapter';
+export { AntigravityCliAdapter } from './antigravityCliAdapter';
 export { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 export {
   resolveOpenRouterMediaRoute,
@@ -46,21 +67,25 @@ export function getCompletionAdapter(model: Model, requiredRoute?: CompletionAda
   }
   switch (route) {
     case 'fallback-policy':
-      return new FallbackAdapter(getCompletionAdapter);
+      return denyAssessment(new FallbackAdapter(getCompletionAdapter));
     case 'openrouter-media':
-      return new OpenRouterMediaAdapter();
+      return denyAssessment(new OpenRouterMediaAdapter());
     case 'azure':
       return new AzureOpenAiAdapter();
     case 'openai-responses':
       return new OpenAiResponsesAdapter();
+    case 'openrouter-agent':
+      return denyAssessment(new OpenRouterAgentAdapter());
     case 'anthropic':
       return new AnthropicAdapter();
     case 'gemini':
       return new GeminiAdapter();
     case 'claude-cli':
-      return new ClaudeSubscriptionAdapter();
+      return denyAssessment(new ClaudeSubscriptionAdapter());
     case 'codex-cli':
-      return new CodexAdapter();
+      return denyAssessment(new CodexAdapter());
+    case 'antigravity-cli':
+      return denyAssessment(new AntigravityCliAdapter());
     case 'openai':
     default:
       return new OpenAiAdapter();
@@ -100,6 +125,8 @@ export function describeCompletionAdapter(model: Model): ResolvedAdapterInfo {
       };
     case 'openai-responses':
       return { adapterId: 'openai-responses', endpoint: '/responses', reason: mediaRoute.reason };
+    case 'openrouter-agent':
+      return { adapterId: 'openrouter-agent', endpoint: '/responses (Agent SDK)', reason: mediaRoute.reason };
     case 'anthropic':
       return { adapterId: 'anthropic', endpoint: 'native SDK', reason: mediaRoute.reason };
     case 'gemini':
@@ -108,6 +135,8 @@ export function describeCompletionAdapter(model: Model): ResolvedAdapterInfo {
       return { adapterId: 'claude-cli', endpoint: 'local CLI', reason: mediaRoute.reason };
     case 'codex-cli':
       return { adapterId: 'codex-cli', endpoint: 'local CLI', reason: mediaRoute.reason };
+    case 'antigravity-cli':
+      return { adapterId: 'antigravity-cli', endpoint: 'local CLI', reason: mediaRoute.reason };
     case 'openai':
     default:
       return { adapterId: 'openai', endpoint: '/chat/completions', reason: mediaRoute.reason };

@@ -55,6 +55,30 @@ describe('boundToolResult FLUJO boundary', () => {
     expect(writeRunResourceMock).not.toHaveBeenCalled();
   });
 
+  // ModelHandler serializes MCP JSON on one line. Exercise the shared helper's
+  // independent line bound with a multiline diagnostic below the byte limit.
+  it.each(['stored', 'refused'])('preserves diagnostic ends under the line limit with a %s spill below the byte limit', async (spill) => {
+    const content = ['START_DIAGNOSTIC', ...Array.from({ length: 8 }, (_, index) => `MIDDLE_${index} ${'café🙂'.repeat(30)}`), 'END_DIAGNOSTIC'].join('\n');
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(10_000);
+    writeRunResourceMock.mockResolvedValue(spill === 'stored'
+      ? { uri: 'flujo://run/conv-1/error-lines', size: Buffer.byteLength(content, 'utf8') } : { skipped: 'size-cap' });
+    const outcome = await boundToolResult({ ...baseInput(content), settings: {
+      ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: true, toolResultMaxBytes: 10_000, toolResultMaxLines: 2,
+    } });
+    expect(outcome.spilled).toBe(true);
+    expect(outcome.content.startsWith('START_DIAGNOSTIC')).toBe(true);
+    expect(outcome.content.endsWith('END_DIAGNOSTIC')).toBe(true);
+    expect(outcome.content).not.toContain('MIDDLE_');
+    expect(writeRunResourceMock).toHaveBeenCalledTimes(1);
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({ data: { text: content },
+      producedBy: expect.objectContaining({ toolCallId: 'call-1', payloadRole: 'tool-message' }) }));
+    if (spill === 'stored') expect(outcome.uri).toBe('flujo://run/conv-1/error-lines');
+    else {
+      expect(outcome.uri).toBeUndefined();
+      expect(outcome.content).toContain('the full result could not be stored');
+    }
+  });
+
   it('does not truncate when toolResultTruncationEnabled is false', async () => {
     const content = 'x'.repeat(300_000);
 

@@ -69,20 +69,40 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 jest.mock('@/utils/storage/backend', () => ({
   assertSafeCollectionId: jest.fn(),
   loadItem: jest.fn(async (key: string) => storedStates.get(key)),
+  withConversationSnapshot: async (id: string, consume: (state: unknown, token: unknown) => Promise<unknown>) => jest.requireActual('@/backend/execution/flow/conversationLogReadAdmission').withConversationLogReadAdmission(100, (token: unknown) => consume(storedStates.get(`conversations/${id}`), token)),
   saveItem: jest.fn(async (key: string, value: any) => {
     storedStates.set(key, JSON.parse(JSON.stringify(value)));
   }),
 }));
 
-jest.mock('@/backend/services/flow/index', () => ({
-  flowService: {
-    loadFlows: jest.fn(async () => [{ id: 'flow-1', name: 'TestFlow' }]),
-    getFlow: jest.fn(async () => ({ id: 'flow-1', name: 'TestFlow' })),
-  },
-}));
+jest.mock('@/backend/services/flow/index', () => {
+  // The real resolver returns a complete, schema-validated saved definition,
+  // including graph arrays, even when the execution engine is stubbed here.
+  const flow = {
+    id: 'flow-1', name: 'TestFlow',
+    nodes: [
+      {
+        id: '077cfac0-start', type: 'start', position: { x: 0, y: 0 },
+        data: { label: 'Start', type: 'start' },
+      },
+      {
+        id: 'ef2a3c01-process', type: 'process', position: { x: 100, y: 0 },
+        data: { label: 'Process', type: 'process' },
+      },
+    ],
+    edges: [{ id: '077cfac0-start->ef2a3c01-process', source: '077cfac0-start', target: 'ef2a3c01-process' }],
+  };
+  return {
+    flowService: {
+      loadFlows: jest.fn(async () => [flow]),
+      getFlow: jest.fn(async () => flow),
+    },
+  };
+});
 
 jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
+  validateFlowObjectForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
 }));
 
 import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';

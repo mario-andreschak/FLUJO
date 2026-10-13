@@ -47,6 +47,7 @@ it('rejects catalog edits during awaited Process preparation effects, then rejec
     sandboxRoot,
     dataDir: process.env.FLUJO_DATA_DIR!,
     rootsDir,
+    transpileCacheDir: path.join(sandboxRoot, 'transpile-cache'),
     workspaceId: 'default-workspace',
   };
   let worker: PersonaProcessClient | undefined;

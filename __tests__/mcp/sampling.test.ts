@@ -33,6 +33,7 @@ function captureHandler(config: any) {
 
 const sampleRequest = {
   params: {
+    maxTokens: 100,
     systemPrompt: 'You are helpful.',
     temperature: 0.3,
     messages: [
@@ -67,6 +68,39 @@ describe('samplingEnabled / samplingConfigKey', () => {
 });
 
 describe('sampling handler', () => {
+  it.each(['antigravity-cli', 'claude-cli', 'codex-cli'])('refuses adapter %s that cannot enforce a sampling token bound', async adapter => {
+    getModelMock.mockResolvedValue({ name: 'default', adapter, ApiKey: '' });
+    const handler = captureHandler(cfg({ enabled: true, modelId: 'm1' }));
+    await expect(handler(sampleRequest)).rejects.toThrow('supports an output-token limit');
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    expect(resolveKeyMock).not.toHaveBeenCalled();
+  });
+
+  it('honors the request, model and policy bounds and maps provider length completion', async () => {
+    getModelMock.mockResolvedValue({ name: 'gpt-4o', adapter: 'openai', ApiKey: 'enc', maxTokens: 32 });
+    createCompletionMock.mockResolvedValue({ completion: { choices: [{ message: { content: 'bounded' }, finish_reason: 'length' }] } });
+    const handler = captureHandler(cfg({ enabled: true, modelId: 'm1', maxTokens: 1024 }));
+    const result = await handler({ params: { ...sampleRequest.params, maxTokens: 16 } });
+    expect(createCompletionMock.mock.calls[0][0].maxTokens).toBe(16);
+    expect(result.stopReason).toBe('maxTokens');
+    await handler({ params: { ...sampleRequest.params, maxTokens: 64 } });
+    expect(createCompletionMock.mock.calls[1][0].maxTokens).toBe(32);
+  });
+
+  it('a stricter policy cap wins over the request', async () => {
+    const handler = captureHandler(cfg({ enabled: true, modelId: 'm1', maxTokens: 8 }));
+    await handler(sampleRequest);
+    expect(createCompletionMock.mock.calls[0][0].maxTokens).toBe(8);
+  });
+
+  it('still requires an API key for native Gemini sampling', async () => {
+    getModelMock.mockResolvedValue({ name: 'gemini-2.5-flash', provider: 'gemini', adapter: 'gemini', ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+    const handler = captureHandler(cfg({ enabled: true, modelId: 'm1' }));
+    await expect(handler(sampleRequest)).rejects.toThrow('Could not resolve the sampling model API key');
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
   it('converts the request, routes through the adapter, and returns a CreateMessageResult', async () => {
     const handler = captureHandler(cfg({ enabled: true, modelId: 'm1' }));
     const result = await handler(sampleRequest);

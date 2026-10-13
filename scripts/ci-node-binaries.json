@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "officialKeysCommit": "481637f813e912c4aa3622d7964ab426c97b8e8d",
+  "evidence": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/verified-node-binary-receipt.json",
+  "evidenceSha256": "5b811280324775f702b981a86434c17761dad34ae5201e42228e8d6339a52341",
+  "releaseIndexObservedAt": "2026-10-04T04:37:18.948Z",
+  "releaseIndexSha256": "700401a06eb352ec19100649afbf767f76db33f194b22a9b903b3ff48e3bc482",
+  "runtimes": {
+    "22.13.1": {
+      "uv": "1.49.2",
+      "lts": "Jod",
+      "role": "historical build only",
+      "signedChecksumsSha256": "308707f67db68e671979d8849f997f1bd9c7111b5d78ec1e49957dedb44d450f",
+      "signingFingerprint": "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+      "linuxArchive": "node-v22.13.1-linux-x64.tar.gz",
+      "linuxArchiveSha256": "666148b9fe0c7e1301cc1b029e33a45e9e4a893f68d2d2bb1cc88a931a88a004",
+      "executables": {
+        "linux": "a3627568bc920247f5edecc025a040bfa3c3f76bf3456ac424f6ac76aa5e6a47",
+        "win32": "8f6945c55a51c893691534e7163372e4cedb62c8ad80a2a975df3f14a19fba16"
+      }
+    },
+    "22.17.0": {
+      "uv": "1.51.0",
+      "lts": "Jod",
+      "role": "supported CI runtime",
+      "signedChecksumsSha256": "7519fede70def5e5afa6f723762341a6a7832a6459226f7a1619c683ff1155c4",
+      "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+      "linuxArchive": "node-v22.17.0-linux-x64.tar.gz",
+      "linuxArchiveSha256": "0fa01328a0f3d10800623f7107fbcd654a60ec178fab1ef5b9779e94e0419e1a",
+      "executables": {
+        "linux": "8071ae0fca095a272ad698a90c7061801a86fb6392ddb81e922b68a91a4374b9",
+        "win32": "39d45b5933f339d3ebdebd76474893dab5d7da1038920f65cf5bbcf0f20f3636"
+      }
+    },
+    "22.23.3": {
+      "uv": "1.51.0",
+      "lts": "Jod",
+      "role": "supported CI runtime",
+      "signedChecksumsSha256": "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a",
+      "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "linuxArchive": "node-v22.23.3-linux-x64.tar.gz",
+      "linuxArchiveSha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af",
+      "executables": {
+        "linux": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+        "win32": "9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e"
+      }
+    },
+    "24.2.0": {
+      "uv": "1.51.0",
+      "lts": false,
+      "role": "supported CI runtime",
+      "signedChecksumsSha256": "860e1b963a33add39ad3d259159fb6194ca8433d8ca1f5eaf0d3e384f28ddd6c",
+      "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+      "linuxArchive": "node-v24.2.0-linux-x64.tar.gz",
+      "linuxArchiveSha256": "074e93576f2b0f0f689d12b5d71314c5cdc384b6efc315e264120f6a9dd348af",
+      "executables": {
+        "linux": "3fe8fd0442065d39c6a875e0672c8aa198c96983bf099c0d3b0ffee70622ddd2",
+        "win32": "4f4c2bbda03106699e49ef2e7914c03d597c355a99a6b9a1b63dca19fe092c01"
+      }
+    },
+    "24.21.0": {
+      "uv": "1.52.1",
+      "lts": "Krypton",
+      "role": "supported CI runtime",
+      "signedChecksumsSha256": "f410428039e2c922a14058df067a4482691c9304a5c01a75847f9f3f2d3307f6",
+      "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "linuxArchive": "node-v24.21.0-linux-x64.tar.gz",
+      "linuxArchiveSha256": "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
+      "executables": {
+        "linux": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c",
+        "win32": "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32"
+      }
+    }
+  },
+  "containerBase": {
+    "reference": "public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c",
+    "metadataUrl": "https://hub.docker.com/v2/repositories/library/node/tags/22.23.3-bookworm-slim",
+    "metadataFile": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/docker-official-node-22.23.3-bookworm-slim.json",
+    "metadataSha256": "6788266cb9fe3669058a092daf9a23eb8ecdb7f9c03e86c3ae03f7367b60c246",
+    "qualification": "registry digest observed; contained Node executable must independently match the signed official binary before build and runtime packaging"
+  }
+}

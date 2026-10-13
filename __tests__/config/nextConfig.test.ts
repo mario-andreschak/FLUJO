@@ -37,7 +37,7 @@ describe('production TypeScript scope', () => {
     expect(build.errors).toEqual([]);
     expect(normalized.some(file => file.endsWith('/src/app/page.tsx'))).toBe(true);
     expect(normalized.some(file => file.endsWith('/src/proxy.ts'))).toBe(true);
-    expect(normalized.some(file => /\/__tests__\/|\.(test|spec)\.[^/]+$/.test(file))).toBe(false);
+    expect(normalized.some(file => file.includes('/__tests__/') || /\.(test|spec)\.[^/]+$/.test(file))).toBe(false);
     expect(full.fileNames.some(file => file.replaceAll('\\', '/').endsWith('/__tests__/config/nextConfig.test.ts'))).toBe(true);
     expect(build.options.strict).toBe(true);
     expect(build.options.noEmit).toBe(true);

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { parse as parseYaml } from "yaml";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { mcpProtocolError } from "./protocolErrors";
 import {
   MCP_SKILLS_EXTENSION_ID,
   MCP_SKILLS_SUPPORTED_REVISION,
@@ -40,7 +40,7 @@ export class McpSkillsUnsupportedError extends Error {
 }
 
 function isMethodNotFound(error: unknown): boolean {
-  return error instanceof McpError && error.code === -32601;
+  return mcpProtocolError(error)?.code === -32601;
 }
 
 export function getMcpSkillsCapability(
