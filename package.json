@@ -141,7 +141,7 @@
     "simple-git": "^4.0.2",
     "slate": "^0.126.0",
     "slate-dom": "^0.131.0",
-    "slate-history": "^0.115.0",
+    "slate-history": "^0.128.1",
     "slate-react": "^0.131.0",
     "smol-toml": "1.9.1",
     "undici": "^7.29.1",
