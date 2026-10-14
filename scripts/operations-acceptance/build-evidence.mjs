@@ -54,9 +54,10 @@ export async function verifyBuildEvidence(application, filename) {
 // Reproducible local build admission; this does not qualify a released artifact.
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  assert.ok(args.length === 2 && args[0] === '--report' && path.isAbsolute(args[1]),
-    'Usage: node scripts/operations-acceptance/build-evidence.mjs --report <new-absolute-build-receipt>');
-  const application = fileURLToPath(new URL('../../', import.meta.url));
+  assert.ok((args.length === 2 || args.length === 4 && args[2] === '--application' && path.isAbsolute(args[3]))
+    && args[0] === '--report' && path.isAbsolute(args[1]),
+    'Usage: node scripts/operations-acceptance/build-evidence.mjs --report <new-absolute-build-receipt> [--application <absolute-source-checkout>]');
+  const application = await fs.realpath(args.length === 4 ? args[3] : fileURLToPath(new URL('../../', import.meta.url)));
   const report = path.resolve(args[1]);
   await assert.rejects(fs.access(report), { code: 'ENOENT' });
   const manifest = JSON.parse(await fs.readFile(path.join(application, 'package.json'), 'utf8'));

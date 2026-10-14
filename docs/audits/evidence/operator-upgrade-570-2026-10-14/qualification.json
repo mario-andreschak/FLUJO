@@ -1,0 +1,59 @@
+{
+  "observedUtc": "2026-10-14T13:31:49.840Z",
+  "outcome": "passed",
+  "sourceAndBuiltInputsUnchangedAfterLive": true,
+  "liveSeconds": 25.929,
+  "sourceChecks": [
+    {
+      "seconds": 60.870407,
+      "exitCode": 0,
+      "command": "npm run typecheck"
+    },
+    {
+      "seconds": 97.6054652,
+      "exitCode": 0,
+      "command": "npm run lint"
+    }
+  ],
+  "equipment": {
+    "scripts/operations-acceptance/build-evidence.mjs": "f956be2065de2eec9a4b8f95db78b6f6b9b80b2680d2c5821b7c1d5b4afcbadd",
+    "scripts/operations-acceptance/operator-upgrade.mjs": "954eb01bc4b2741e11c6f6ccc07b3774f6c3e8c64929578f8ff43c270145582a",
+    "scripts/operations-acceptance/operator-upgrade.test.mjs": "2f033b98b923923be39d4bca1fe2d83a892016476b5d36ec8363f878081edcfa"
+  },
+  "evidenceSha256": {
+    "receipt.json": "cdfe88cd69d0fd332e6123068a8cf3470e0824deb543398c4ce44fea78dbd88f",
+    "candidate-upgrade.json": "8f25350b429b1e6be829607a3d80687453ef0c1181095d666d16a73a7dc7d872",
+    "candidate-restored.json": "283b6fedf9cd78d1b9b6ddcbafe24598157bd1c4531011adf4a852e5690065a5",
+    "equipment-checks.json": "f2e33557e4febde0ebc0aa4784cb5805d07171bc3067d93ddbb5d1d99b47e53e",
+    "source-checks.json": "c594d42c57f97b1e531c2cddfe9e4b4fbcb2a75ac78cb9591397299a86b68ca5"
+  },
+  "sourceBuilds": {
+    "baseline": {
+      "sourceRevision": "320347356891aa1c24e0f2f9ce12719317e58bde",
+      "sourceInputs": {
+        "files": 1391,
+        "sha256": "6adb99213c486535dbd701654893b30d778e9464529b2ea171ab87c8eeed7d0a"
+      },
+      "builtInputs": {
+        "files": 1436,
+        "sha256": "a7043f1a896a661046c8e8005ea5d4110443794d19ac87a17e73ad012d16a5e8"
+      },
+      "evidenceSha256": "54afdcc6b6de66b038b18eb9681fa38ef30ecb46f44b6aabc9426a2dd4bce670",
+      "seconds": 154.8333032
+    },
+    "candidate": {
+      "sourceRevision": "c6bd536c43a36a6e0571890dadf9da5846d08def",
+      "sourceInputs": {
+        "files": 1868,
+        "sha256": "f2ccacd69886cf14c310d5d56e385cecc1208acfdf7eb2e568841a2316338676"
+      },
+      "builtInputs": {
+        "files": 1539,
+        "sha256": "057d921b879c8d684316feed17ed592929881e621d82b70d219a97af47e5f703"
+      },
+      "evidenceSha256": "b644a095fb4205d9f34367e66c985f668f1bf09271f0a7a70018b2079020157e",
+      "seconds": 342.189793
+    }
+  },
+  "noFullRemoteContainerReleaseDispatch": true
+}
