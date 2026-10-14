@@ -1235,12 +1235,17 @@ function registerWorkspaceWriter(task: WorkspaceWriterRegistration['task']): Pro
         let failure: unknown;
         try {
           admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
-          for (const request of requests) {
+          const admissionLock = admission.lock;
+          // Each registration publishes its own writer lock. Hold capture
+          // admission until this bounded group settles, then release it before
+          // any mutation body starts. Independent writer publication need not
+          // wait for the preceding registration's filesystem round trips.
+          await Promise.all(requests.map(async (request: WorkspaceWriterRegistration) => {
             try {
-              await admission.lock.assertOwned();
-              await request.task(admission.lock);
+              await admissionLock.assertOwned();
+              await request.task(admissionLock);
             } catch (error) { outcomes.set(request, error); }
-          }
+          }));
         } catch (error) { failure = error; }
         finally {
           try { await admission?.release(); }

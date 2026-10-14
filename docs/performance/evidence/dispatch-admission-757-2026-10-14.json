@@ -1,0 +1,1104 @@
+{
+  "after": [
+    {
+      "label": "after",
+      "count": 1,
+      "repetition": 0,
+      "completed": 1,
+      "physicalHttpRequests": 1,
+      "firstDispatchFromInvocationMs": 400.91010000000006,
+      "preModelDispatch": {
+        "count": 1,
+        "sumMs": 304,
+        "p50Ms": 304,
+        "p95Ms": 304,
+        "maxMs": 304
+      },
+      "afterStartToHttp": {
+        "count": 1,
+        "sumMs": 332,
+        "p50Ms": 332,
+        "p95Ms": 332,
+        "maxMs": 332
+      },
+      "completedMs": 620.6729999999998,
+      "admission": {
+        "count": 27,
+        "sumMs": 670.0477000000014,
+        "p50Ms": 17.361,
+        "p95Ms": 61.936,
+        "maxMs": 82.04629999999997
+      },
+      "phases": {
+        "persistence": {
+          "count": 8,
+          "sumMs": 190.37770000000137,
+          "p50Ms": 23.275,
+          "p95Ms": 27.639,
+          "maxMs": 27.63920000000053
+        },
+        "writerAdmission": {
+          "count": 27,
+          "sumMs": 791.4452000000001,
+          "p50Ms": 23.224,
+          "p95Ms": 63.556,
+          "maxMs": 83.61639999999989
+        },
+        "recoveryTransition": {
+          "count": 2,
+          "sumMs": 83.5657000000001,
+          "p50Ms": 44.506,
+          "p95Ms": 44.506,
+          "maxMs": 44.505699999999706
+        },
+        "modelCatalogRead": {
+          "count": 6,
+          "sumMs": 6.5579000000007,
+          "p50Ms": 1.165,
+          "p95Ms": 1.229,
+          "maxMs": 1.228700000000572
+        },
+        "recoveryCheckpoint": {
+          "count": 4,
+          "sumMs": 211.95399999999972,
+          "p50Ms": 57.139,
+          "p95Ms": 60.938,
+          "maxMs": 60.9384
+        },
+        "modelCatalog": {
+          "count": 5,
+          "sumMs": 5.793399999999565,
+          "p50Ms": 1.177,
+          "p95Ms": 1.239,
+          "maxMs": 1.2394999999996799
+        },
+        "credentials": {
+          "count": 1,
+          "sumMs": 4.805699999999888,
+          "p50Ms": 4.806,
+          "p95Ms": 4.806,
+          "maxMs": 4.805699999999888
+        },
+        "archiveDispatch": {
+          "count": 1,
+          "sumMs": 54.202400000000125,
+          "p50Ms": 54.202,
+          "p95Ms": 54.202,
+          "maxMs": 54.202400000000125
+        }
+      },
+      "archivePeak": {
+        "bytes": 449370,
+        "writers": 1,
+        "waiters": 0
+      },
+      "eventLoop": {
+        "meanMs": 11.467145846153846,
+        "p99Ms": 34.897919,
+        "maxMs": 40.927231
+      }
+    },
+    {
+      "label": "after",
+      "count": 16,
+      "repetition": 1,
+      "completed": 16,
+      "physicalHttpRequests": 16,
+      "firstDispatchFromInvocationMs": 1251.4601999999995,
+      "preModelDispatch": {
+        "count": 16,
+        "sumMs": 23097,
+        "p50Ms": 1455,
+        "p95Ms": 1734,
+        "maxMs": 1734
+      },
+      "afterStartToHttp": {
+        "count": 16,
+        "sumMs": 23210,
+        "p50Ms": 1460,
+        "p95Ms": 1736,
+        "maxMs": 1736
+      },
+      "completedMs": 2431.3076,
+      "admission": {
+        "count": 432,
+        "sumMs": 45082.81100000001,
+        "p50Ms": 101.351,
+        "p95Ms": 167.099,
+        "maxMs": 311.6257999999998
+      },
+      "phases": {
+        "persistence": {
+          "count": 128,
+          "sumMs": 14269.590600000005,
+          "p50Ms": 111.405,
+          "p95Ms": 171.39,
+          "maxMs": 196.88850000000002
+        },
+        "writerAdmission": {
+          "count": 432,
+          "sumMs": 50161.97879999998,
+          "p50Ms": 111.371,
+          "p95Ms": 183.258,
+          "maxMs": 314.9991
+        },
+        "recoveryTransition": {
+          "count": 32,
+          "sumMs": 6383.687599999999,
+          "p50Ms": 205.299,
+          "p95Ms": 263.812,
+          "maxMs": 278.34630000000016
+        },
+        "modelCatalogRead": {
+          "count": 96,
+          "sumMs": 736.0187000000069,
+          "p50Ms": 5.93,
+          "p95Ms": 20.596,
+          "maxMs": 26.10870000000068
+        },
+        "recoveryCheckpoint": {
+          "count": 64,
+          "sumMs": 15391.263800000008,
+          "p50Ms": 259.274,
+          "p95Ms": 317,
+          "maxMs": 361.8802000000005
+        },
+        "modelCatalog": {
+          "count": 80,
+          "sumMs": 671.3238000000028,
+          "p50Ms": 6.401,
+          "p95Ms": 24.276,
+          "maxMs": 26.11740000000009
+        },
+        "credentials": {
+          "count": 16,
+          "sumMs": 1973.135500000003,
+          "p50Ms": 141.791,
+          "p95Ms": 213.369,
+          "maxMs": 213.3689000000004
+        },
+        "archiveDispatch": {
+          "count": 16,
+          "sumMs": 5462.534200000001,
+          "p50Ms": 333.771,
+          "p95Ms": 485.185,
+          "maxMs": 485.1853000000001
+        }
+      },
+      "archivePeak": {
+        "bytes": 5977524,
+        "writers": 4,
+        "waiters": 9
+      },
+      "eventLoop": {
+        "meanMs": 10.843698738738738,
+        "p99Ms": 21.020671,
+        "maxMs": 24.035327
+      }
+    },
+    {
+      "label": "after",
+      "count": 16,
+      "repetition": 2,
+      "completed": 16,
+      "physicalHttpRequests": 16,
+      "firstDispatchFromInvocationMs": 1252.4915,
+      "preModelDispatch": {
+        "count": 16,
+        "sumMs": 21559,
+        "p50Ms": 1381,
+        "p95Ms": 1602,
+        "maxMs": 1602
+      },
+      "afterStartToHttp": {
+        "count": 16,
+        "sumMs": 21651,
+        "p50Ms": 1395,
+        "p95Ms": 1605,
+        "maxMs": 1605
+      },
+      "completedMs": 2320.0141000000003,
+      "admission": {
+        "count": 432,
+        "sumMs": 42094.30819999996,
+        "p50Ms": 95.533,
+        "p95Ms": 158.989,
+        "maxMs": 265.6329000000005
+      },
+      "phases": {
+        "persistence": {
+          "count": 128,
+          "sumMs": 13772.972400000004,
+          "p50Ms": 106.53,
+          "p95Ms": 168.127,
+          "maxMs": 189.1099000000013
+        },
+        "writerAdmission": {
+          "count": 432,
+          "sumMs": 47166.704399999995,
+          "p50Ms": 105.306,
+          "p95Ms": 169.406,
+          "maxMs": 285.4259000000002
+        },
+        "recoveryTransition": {
+          "count": 32,
+          "sumMs": 6028.885499999997,
+          "p50Ms": 191.376,
+          "p95Ms": 231.98,
+          "maxMs": 247.58239999999932
+        },
+        "modelCatalogRead": {
+          "count": 96,
+          "sumMs": 688.0344000000041,
+          "p50Ms": 5.019,
+          "p95Ms": 26.68,
+          "maxMs": 27.435899999998583
+        },
+        "recoveryCheckpoint": {
+          "count": 64,
+          "sumMs": 14248.427999999996,
+          "p50Ms": 239.344,
+          "p95Ms": 286.307,
+          "maxMs": 331.1969000000008
+        },
+        "modelCatalog": {
+          "count": 80,
+          "sumMs": 623.9255000000067,
+          "p50Ms": 5.074,
+          "p95Ms": 26.735,
+          "maxMs": 27.441899999999805
+        },
+        "credentials": {
+          "count": 16,
+          "sumMs": 1868.0386999999992,
+          "p50Ms": 137.696,
+          "p95Ms": 192.534,
+          "maxMs": 192.53420000000006
+        },
+        "archiveDispatch": {
+          "count": 16,
+          "sumMs": 5328.878999999997,
+          "p50Ms": 341.312,
+          "p95Ms": 450.401,
+          "maxMs": 450.40059999999903
+        }
+      },
+      "archivePeak": {
+        "bytes": 6382316,
+        "writers": 4,
+        "waiters": 10
+      },
+      "eventLoop": {
+        "meanMs": 10.791568905660379,
+        "p99Ms": 22.675455,
+        "maxMs": 26.820607
+      }
+    }
+  ],
+  "sourceAndBuiltInputsUnchangedAfterFinalChecks": {
+    "passed": true,
+    "observedUtc": "2026-10-14T14:46:45.311Z",
+    "sourceInputs": {
+      "files": 1868,
+      "sha256": "06fe25a070bcd954321dbd31164dfd38ad0c0a505a8c526a229e7a80079c395d"
+    },
+    "builtInputs": {
+      "files": 1539,
+      "sha256": "4ae82efebcade4365c37596816b597d572b5f6bdc8be2b32517097cc1148f995"
+    }
+  },
+  "focused": {
+    "passed": 63,
+    "snapshotPublicationAndDrain": "passed",
+    "failedWriterPublicationRefusesItsEffect": "passed",
+    "suites": 6,
+    "failed": 0,
+    "lostAdmissionOwnershipRefusesEveryEffect": "passed",
+    "oldSequentialControl": {
+      "exitCode": 1,
+      "failed": 1,
+      "newSourceRestored": true
+    }
+  },
+  "comparison": [
+    {
+      "concurrency": 1,
+      "repetition": 0,
+      "beforeP95Ms": 337,
+      "afterP95Ms": 304,
+      "reductionPercent": 9.79,
+      "completed": 1,
+      "physicalRequests": 1
+    },
+    {
+      "concurrency": 16,
+      "repetition": 1,
+      "beforeP95Ms": 3014,
+      "afterP95Ms": 1734,
+      "reductionPercent": 42.47,
+      "completed": 16,
+      "physicalRequests": 16
+    },
+    {
+      "concurrency": 16,
+      "repetition": 2,
+      "beforeP95Ms": 2886,
+      "afterP95Ms": 1602,
+      "reductionPercent": 44.49,
+      "completed": 16,
+      "physicalRequests": 16
+    }
+  ],
+  "failedEquipmentAttempts": {
+    "invalidFlowIdInsteadOfAdvertisedName": 2,
+    "shutdownBeforeFinalLogBatchObservation": 1,
+    "successCredit": false,
+    "allOriginalExitAndPrivateCleanupObserved": true
+  },
+  "limits": [
+    "Profile phase spans overlap; sums are not wall time.",
+    "Before/after application behavior is unchanged by the subsequent type-only request annotation; final63 cases cover frozen source.",
+    "No original300/H100/vLLM throughput or cold503 diagnosis.",
+    "No MCP/tools, long-context, multiday, cloud inference/billing or Native/fleet acceptance.",
+    "No installed/Linux/container/full/remote/release workflow.",
+    "Observed direct Next exit143 and closed pipes do not qualify descendants or an isolated container."
+  ],
+  "outcome": "passed",
+  "observedUtc": "2026-10-14T14:47:47.6035768Z",
+  "before": [
+    {
+      "label": "before",
+      "count": 1,
+      "repetition": 0,
+      "completed": 1,
+      "physicalHttpRequests": 1,
+      "firstDispatchFromInvocationMs": 439.9337000000005,
+      "preModelDispatch": {
+        "count": 1,
+        "sumMs": 337,
+        "p50Ms": 337,
+        "p95Ms": 337,
+        "maxMs": 337
+      },
+      "afterStartToHttp": {
+        "count": 1,
+        "sumMs": 366,
+        "p50Ms": 366,
+        "p95Ms": 366,
+        "maxMs": 366
+      },
+      "completedMs": 715.0042000000003,
+      "admission": {
+        "count": 27,
+        "sumMs": 857.0019000000002,
+        "p50Ms": 23.458,
+        "p95Ms": 70.155,
+        "maxMs": 87.79690000000028
+      },
+      "phases": {
+        "persistence": {
+          "count": 8,
+          "sumMs": 210.89339999999902,
+          "p50Ms": 24.827,
+          "p95Ms": 35.246,
+          "maxMs": 35.246399999999994
+        },
+        "writerAdmission": {
+          "count": 27,
+          "sumMs": 987.8541999999989,
+          "p50Ms": 27.288,
+          "p95Ms": 73.398,
+          "maxMs": 89.52910000000065
+        },
+        "recoveryTransition": {
+          "count": 2,
+          "sumMs": 94.13310000000001,
+          "p50Ms": 51.771,
+          "p95Ms": 51.771,
+          "maxMs": 51.77129999999943
+        },
+        "modelCatalogRead": {
+          "count": 6,
+          "sumMs": 7.215199999999641,
+          "p50Ms": 1.255,
+          "p95Ms": 1.375,
+          "maxMs": 1.375
+        },
+        "recoveryCheckpoint": {
+          "count": 4,
+          "sumMs": 271.692399999999,
+          "p50Ms": 70.435,
+          "p95Ms": 96.516,
+          "maxMs": 96.51609999999982
+        },
+        "modelCatalog": {
+          "count": 5,
+          "sumMs": 6.466499999999542,
+          "p50Ms": 1.303,
+          "p95Ms": 1.397,
+          "maxMs": 1.3969999999999345
+        },
+        "credentials": {
+          "count": 1,
+          "sumMs": 5.002599999999802,
+          "p50Ms": 5.003,
+          "p95Ms": 5.003,
+          "maxMs": 5.002599999999802
+        },
+        "archiveDispatch": {
+          "count": 1,
+          "sumMs": 53.6867000000002,
+          "p50Ms": 53.687,
+          "p95Ms": 53.687,
+          "maxMs": 53.6867000000002
+        }
+      },
+      "archivePeak": {
+        "bytes": 449370,
+        "writers": 1,
+        "waiters": 0
+      },
+      "eventLoop": {
+        "meanMs": 11.268968918032789,
+        "p99Ms": 30.883839,
+        "maxMs": 38.043647
+      }
+    },
+    {
+      "label": "before",
+      "count": 16,
+      "repetition": 1,
+      "completed": 16,
+      "physicalHttpRequests": 16,
+      "firstDispatchFromInvocationMs": 2455.131300000001,
+      "preModelDispatch": {
+        "count": 16,
+        "sumMs": 40734,
+        "p50Ms": 2580,
+        "p95Ms": 3014,
+        "maxMs": 3014
+      },
+      "afterStartToHttp": {
+        "count": 16,
+        "sumMs": 40834,
+        "p50Ms": 2585,
+        "p95Ms": 3017,
+        "maxMs": 3017
+      },
+      "completedMs": 4513.066500000001,
+      "admission": {
+        "count": 432,
+        "sumMs": 96123.48250000001,
+        "p50Ms": 211.63,
+        "p95Ms": 351.984,
+        "maxMs": 435.54659999999967
+      },
+      "phases": {
+        "persistence": {
+          "count": 128,
+          "sumMs": 28003.790499999996,
+          "p50Ms": 213.439,
+          "p95Ms": 355.759,
+          "maxMs": 402.83660000000054
+        },
+        "writerAdmission": {
+          "count": 432,
+          "sumMs": 101228.48770000006,
+          "p50Ms": 221.846,
+          "p95Ms": 359.637,
+          "maxMs": 460.0444000000007
+        },
+        "recoveryTransition": {
+          "count": 32,
+          "sumMs": 13725.1089,
+          "p50Ms": 429.224,
+          "p95Ms": 570.059,
+          "maxMs": 630.8950000000004
+        },
+        "modelCatalogRead": {
+          "count": 96,
+          "sumMs": 299.97530000000006,
+          "p50Ms": 3.146,
+          "p95Ms": 4.824,
+          "maxMs": 6.6916999999994005
+        },
+        "recoveryCheckpoint": {
+          "count": 64,
+          "sumMs": 31384.51919999999,
+          "p50Ms": 548.557,
+          "p95Ms": 614.661,
+          "maxMs": 661.2991999999995
+        },
+        "modelCatalog": {
+          "count": 80,
+          "sumMs": 253.68319999998675,
+          "p50Ms": 3.206,
+          "p95Ms": 4.833,
+          "maxMs": 6.703400000000329
+        },
+        "credentials": {
+          "count": 16,
+          "sumMs": 800.8190000000013,
+          "p50Ms": 53.516,
+          "p95Ms": 114.595,
+          "maxMs": 114.59490000000005
+        },
+        "archiveDispatch": {
+          "count": 16,
+          "sumMs": 10168.1753,
+          "p50Ms": 651.421,
+          "p95Ms": 997.217,
+          "maxMs": 997.2173000000003
+        }
+      },
+      "archivePeak": {
+        "bytes": 7191900,
+        "writers": 4,
+        "waiters": 12
+      },
+      "eventLoop": {
+        "meanMs": 10.522383624413147,
+        "p99Ms": 20.905983,
+        "maxMs": 37.126143
+      }
+    },
+    {
+      "label": "before",
+      "count": 16,
+      "repetition": 2,
+      "completed": 16,
+      "physicalHttpRequests": 16,
+      "firstDispatchFromInvocationMs": 2305.3433000000005,
+      "preModelDispatch": {
+        "count": 16,
+        "sumMs": 39063,
+        "p50Ms": 2467,
+        "p95Ms": 2886,
+        "maxMs": 2886
+      },
+      "afterStartToHttp": {
+        "count": 16,
+        "sumMs": 39146,
+        "p50Ms": 2470,
+        "p95Ms": 2891,
+        "maxMs": 2891
+      },
+      "completedMs": 4353.643199999999,
+      "admission": {
+        "count": 432,
+        "sumMs": 93078.44710000003,
+        "p50Ms": 210.792,
+        "p95Ms": 339.715,
+        "maxMs": 403.1305000000011
+      },
+      "phases": {
+        "persistence": {
+          "count": 128,
+          "sumMs": 27269.007299999983,
+          "p50Ms": 204.803,
+          "p95Ms": 348.787,
+          "maxMs": 390.66319999999905
+        },
+        "writerAdmission": {
+          "count": 432,
+          "sumMs": 98071.55029999999,
+          "p50Ms": 219.337,
+          "p95Ms": 354.585,
+          "maxMs": 435.90050000000156
+        },
+        "recoveryTransition": {
+          "count": 32,
+          "sumMs": 13735.568500000012,
+          "p50Ms": 425.26,
+          "p95Ms": 597.489,
+          "maxMs": 656.6260999999977
+        },
+        "modelCatalogRead": {
+          "count": 96,
+          "sumMs": 240.61349999998856,
+          "p50Ms": 2.665,
+          "p95Ms": 3.371,
+          "maxMs": 4.32589999999982
+        },
+        "recoveryCheckpoint": {
+          "count": 64,
+          "sumMs": 30551.136399999996,
+          "p50Ms": 532.041,
+          "p95Ms": 603.213,
+          "maxMs": 673.4052999999985
+        },
+        "modelCatalog": {
+          "count": 80,
+          "sumMs": 202.4800000000032,
+          "p50Ms": 2.67,
+          "p95Ms": 3.376,
+          "maxMs": 3.94800000000032
+        },
+        "credentials": {
+          "count": 16,
+          "sumMs": 771.6749999999993,
+          "p50Ms": 53.082,
+          "p95Ms": 106.931,
+          "maxMs": 106.93080000000009
+        },
+        "archiveDispatch": {
+          "count": 16,
+          "sumMs": 9650.193999999998,
+          "p50Ms": 613.899,
+          "p95Ms": 945.422,
+          "maxMs": 945.4224999999988
+        }
+      },
+      "archivePeak": {
+        "bytes": 7191900,
+        "writers": 4,
+        "waiters": 12
+      },
+      "eventLoop": {
+        "meanMs": 10.498684271844661,
+        "p99Ms": 22.233087,
+        "maxMs": 33.914879
+      }
+    }
+  ],
+  "baseRevision": "79613462c05b9bf1e1db02c8b049365412ec648b",
+  "build": {
+    "recordSha256": "2b26e11c97f353859bc983a34eade27adb2180430bcdaf5023335fbae58a28dc",
+    "sourceRevisionIsBuildTimeBase": "79613462c05b9bf1e1db02c8b049365412ec648b",
+    "buildId": "nQrzNp5yr8afb7uJuKcKI",
+    "outcome": "passed",
+    "seconds": 326.1499769,
+    "builtInputs": {
+      "files": 1539,
+      "sha256": "4ae82efebcade4365c37596816b597d572b5f6bdc8be2b32517097cc1148f995"
+    },
+    "nonContainerCommand": "npm run build:mcp && next build --webpack",
+    "sourceInputs": {
+      "files": 1868,
+      "sha256": "06fe25a070bcd954321dbd31164dfd38ad0c0a505a8c526a229e7a80079c395d"
+    }
+  },
+  "schemaVersion": 1,
+  "applicationSourceSha256": "487e570d0b4912c96443295b00f625c65049bb2b3a79d218a0e12f62b00329d2",
+  "finalProfile": [
+    {
+      "label": "final",
+      "count": 1,
+      "repetition": 0,
+      "completed": 1,
+      "physicalHttpRequests": 1,
+      "firstDispatchFromInvocationMs": 413.7552999999998,
+      "preModelDispatch": {
+        "count": 1,
+        "sumMs": 313,
+        "p50Ms": 313,
+        "p95Ms": 313,
+        "maxMs": 313
+      },
+      "afterStartToHttp": {
+        "count": 1,
+        "sumMs": 344,
+        "p50Ms": 344,
+        "p95Ms": 344,
+        "maxMs": 344
+      },
+      "completedMs": 653.2855,
+      "admission": {
+        "count": 27,
+        "sumMs": 688.372900000003,
+        "p50Ms": 17.16,
+        "p95Ms": 63.721,
+        "maxMs": 94.53359999999975
+      },
+      "phases": {
+        "persistence": {
+          "count": 8,
+          "sumMs": 201.28800000000047,
+          "p50Ms": 24.798,
+          "p95Ms": 28.487,
+          "maxMs": 28.487300000000687
+        },
+        "writerAdmission": {
+          "count": 27,
+          "sumMs": 831.1187000000027,
+          "p50Ms": 24.739,
+          "p95Ms": 65.455,
+          "maxMs": 96.14109999999982
+        },
+        "recoveryTransition": {
+          "count": 2,
+          "sumMs": 84.36059999999998,
+          "p50Ms": 42.661,
+          "p95Ms": 42.661,
+          "maxMs": 42.66110000000026
+        },
+        "modelCatalogRead": {
+          "count": 6,
+          "sumMs": 6.3138000000008105,
+          "p50Ms": 1.063,
+          "p95Ms": 1.128,
+          "maxMs": 1.1278000000002066
+        },
+        "recoveryCheckpoint": {
+          "count": 4,
+          "sumMs": 226.5018000000009,
+          "p50Ms": 57.907,
+          "p95Ms": 68.111,
+          "maxMs": 68.11089999999967
+        },
+        "modelCatalog": {
+          "count": 5,
+          "sumMs": 5.576099999999315,
+          "p50Ms": 1.089,
+          "p95Ms": 1.212,
+          "maxMs": 1.2120999999997366
+        },
+        "credentials": {
+          "count": 1,
+          "sumMs": 4.849199999999655,
+          "p50Ms": 4.849,
+          "p95Ms": 4.849,
+          "maxMs": 4.849199999999655
+        },
+        "archiveDispatch": {
+          "count": 1,
+          "sumMs": 56.727200000000266,
+          "p50Ms": 56.727,
+          "p95Ms": 56.727,
+          "maxMs": 56.727200000000266
+        }
+      },
+      "archivePeak": {
+        "bytes": 449370,
+        "writers": 1,
+        "waiters": 0
+      },
+      "eventLoop": {
+        "meanMs": 11.63021274074074,
+        "p99Ms": 31.408127,
+        "maxMs": 45.088767
+      }
+    },
+    {
+      "label": "final",
+      "count": 16,
+      "repetition": 1,
+      "completed": 16,
+      "physicalHttpRequests": 16,
+      "firstDispatchFromInvocationMs": 1233.5887000000002,
+      "preModelDispatch": {
+        "count": 16,
+        "sumMs": 22986,
+        "p50Ms": 1449,
+        "p95Ms": 1730,
+        "maxMs": 1730
+      },
+      "afterStartToHttp": {
+        "count": 16,
+        "sumMs": 23103,
+        "p50Ms": 1455,
+        "p95Ms": 1734,
+        "maxMs": 1734
+      },
+      "completedMs": 2475.8705,
+      "admission": {
+        "count": 432,
+        "sumMs": 46794.294299999965,
+        "p50Ms": 103.955,
+        "p95Ms": 194.173,
+        "maxMs": 300.26780000000053
+      },
+      "phases": {
+        "persistence": {
+          "count": 128,
+          "sumMs": 14547.159399999999,
+          "p50Ms": 109.151,
+          "p95Ms": 188.882,
+          "maxMs": 220.09130000000005
+        },
+        "writerAdmission": {
+          "count": 432,
+          "sumMs": 52207.42399999999,
+          "p50Ms": 112.99,
+          "p95Ms": 208.596,
+          "maxMs": 322.9875000000002
+        },
+        "recoveryTransition": {
+          "count": 32,
+          "sumMs": 6387.250200000001,
+          "p50Ms": 201.228,
+          "p95Ms": 234.225,
+          "maxMs": 294.4180000000006
+        },
+        "modelCatalogRead": {
+          "count": 96,
+          "sumMs": 751.1504000000023,
+          "p50Ms": 5.438,
+          "p95Ms": 25.436,
+          "maxMs": 25.738999999999578
+        },
+        "recoveryCheckpoint": {
+          "count": 64,
+          "sumMs": 15681.904999999993,
+          "p50Ms": 267.252,
+          "p95Ms": 358.356,
+          "maxMs": 398.0167000000001
+        },
+        "modelCatalog": {
+          "count": 80,
+          "sumMs": 685.1535000000022,
+          "p50Ms": 6.184,
+          "p95Ms": 25.52,
+          "maxMs": 25.747299999999996
+        },
+        "credentials": {
+          "count": 16,
+          "sumMs": 2048.6546000000008,
+          "p50Ms": 146.948,
+          "p95Ms": 216.687,
+          "maxMs": 216.6866
+        },
+        "archiveDispatch": {
+          "count": 16,
+          "sumMs": 5576.1035,
+          "p50Ms": 341.907,
+          "p95Ms": 480.904,
+          "maxMs": 480.90390000000025
+        }
+      },
+      "archivePeak": {
+        "bytes": 5977524,
+        "writers": 4,
+        "waiters": 9
+      },
+      "eventLoop": {
+        "meanMs": 10.941549714285715,
+        "p99Ms": 23.134207,
+        "maxMs": 29.966335
+      }
+    },
+    {
+      "label": "final",
+      "count": 16,
+      "repetition": 2,
+      "completed": 16,
+      "physicalHttpRequests": 16,
+      "firstDispatchFromInvocationMs": 1242.690999999999,
+      "preModelDispatch": {
+        "count": 16,
+        "sumMs": 22846,
+        "p50Ms": 1436,
+        "p95Ms": 1706,
+        "maxMs": 1706
+      },
+      "afterStartToHttp": {
+        "count": 16,
+        "sumMs": 22939,
+        "p50Ms": 1446,
+        "p95Ms": 1708,
+        "maxMs": 1708
+      },
+      "completedMs": 2449.7083999999995,
+      "admission": {
+        "count": 432,
+        "sumMs": 46672.32019999999,
+        "p50Ms": 104.272,
+        "p95Ms": 172.873,
+        "maxMs": 279.28280000000086
+      },
+      "phases": {
+        "persistence": {
+          "count": 128,
+          "sumMs": 14763.974000000011,
+          "p50Ms": 110.402,
+          "p95Ms": 195.601,
+          "maxMs": 205.65149999999994
+        },
+        "writerAdmission": {
+          "count": 432,
+          "sumMs": 51996.11990000001,
+          "p50Ms": 114.892,
+          "p95Ms": 196.367,
+          "maxMs": 301.52030000000013
+        },
+        "recoveryTransition": {
+          "count": 32,
+          "sumMs": 6407.975000000002,
+          "p50Ms": 210.169,
+          "p95Ms": 233.163,
+          "maxMs": 262.6347000000005
+        },
+        "modelCatalogRead": {
+          "count": 96,
+          "sumMs": 764.8660999999847,
+          "p50Ms": 5.526,
+          "p95Ms": 27.67,
+          "maxMs": 28.5049999999992
+        },
+        "recoveryCheckpoint": {
+          "count": 64,
+          "sumMs": 15694.140399999993,
+          "p50Ms": 274.689,
+          "p95Ms": 321.918,
+          "maxMs": 372.4436999999998
+        },
+        "modelCatalog": {
+          "count": 80,
+          "sumMs": 707.3858000000091,
+          "p50Ms": 6.335,
+          "p95Ms": 28.194,
+          "maxMs": 28.512800000000425
+        },
+        "credentials": {
+          "count": 16,
+          "sumMs": 1873.7981999999956,
+          "p50Ms": 125.239,
+          "p95Ms": 193.455,
+          "maxMs": 193.45520000000033
+        },
+        "archiveDispatch": {
+          "count": 16,
+          "sumMs": 5328.1592,
+          "p50Ms": 329.688,
+          "p95Ms": 464.672,
+          "maxMs": 464.67239999999947
+        }
+      },
+      "archivePeak": {
+        "bytes": 5977444,
+        "writers": 4,
+        "waiters": 9
+      },
+      "eventLoop": {
+        "meanMs": 10.869792143497758,
+        "p99Ms": 21.299199,
+        "maxMs": 26.558463
+      }
+    }
+  ],
+  "development": {
+    "equipmentLint": 0,
+    "revision": "79613462c05b9bf1e1db02c8b049365412ec648b",
+    "sourceSha256": "487E570D0B4912C96443295B00F625C65049BB2B3A79D218A0E12F62B00329D2",
+    "startedAt": "2026-10-14T14:16:55.7440913Z",
+    "completedAt": "2026-10-14T14:19:27.4877522Z",
+    "typecheck": 0,
+    "sourceLint": 0
+  },
+  "profile": {
+    "platform": "win32",
+    "node": "v22.23.3",
+    "provider": "counted loopback OpenAI-format fixture",
+    "savedModelCatalogAndCredentialResolution": "actual implementation",
+    "architecture": "x64",
+    "scope": "bounded source; no original H100/vLLM or released profile qualification"
+  },
+  "kind": "bounded-writer-registration-source-qualification",
+  "http": {
+    "receiptSha256": "f2d12d9b57c5cd74eed4f7487bf9882b2a340f8a65f60121141c2a0a2bea8569",
+    "completedAt": "2026-10-14T14:41:39.013Z",
+    "startedAt": "2026-10-14T14:41:30.114Z",
+    "original": {
+      "generation": 1,
+      "pid": 36344,
+      "startedAt": "2026-10-14T14:41:30.137Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": 143,
+      "signal": null,
+      "crashRequested": false,
+      "ipcStopRequested": true,
+      "signalAttempts": [],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "exitedAt": "2026-10-14T14:41:38.963Z",
+      "closedAt": "2026-10-14T14:41:38.963Z"
+    },
+    "privateCleanupVerified": true,
+    "outcome": "passed",
+    "equipmentSha256": "c852875b4b1cfc95e2fb085374e09dc504d1fa8528082a81021b2c9bd2319c88",
+    "uniqueProviderRequests": 33,
+    "batches": [
+      {
+        "concurrency": 1,
+        "repetition": 0,
+        "completed": 1,
+        "uniqueReplies": 1,
+        "physicalHttpRequests": 1,
+        "responseMs": {
+          "count": 1,
+          "p50Ms": 531.8498,
+          "p95Ms": 531.8498,
+          "maxMs": 531.8498
+        },
+        "preModelDispatchMs": {
+          "count": 1,
+          "p50Ms": 262,
+          "p95Ms": 262,
+          "maxMs": 262
+        },
+        "startToProviderMs": {
+          "count": 1,
+          "p50Ms": 278,
+          "p95Ms": 278,
+          "maxMs": 278
+        }
+      },
+      {
+        "concurrency": 16,
+        "repetition": 1,
+        "completed": 16,
+        "uniqueReplies": 16,
+        "physicalHttpRequests": 16,
+        "responseMs": {
+          "count": 16,
+          "p50Ms": 2181.5960999999998,
+          "p95Ms": 2362.9372000000003,
+          "maxMs": 2362.9372000000003
+        },
+        "preModelDispatchMs": {
+          "count": 16,
+          "p50Ms": 1111,
+          "p95Ms": 1293,
+          "maxMs": 1293
+        },
+        "startToProviderMs": {
+          "count": 16,
+          "p50Ms": 1115,
+          "p95Ms": 1296,
+          "maxMs": 1296
+        }
+      },
+      {
+        "concurrency": 16,
+        "repetition": 2,
+        "completed": 16,
+        "uniqueReplies": 16,
+        "physicalHttpRequests": 16,
+        "responseMs": {
+          "count": 16,
+          "p50Ms": 2121.5746,
+          "p95Ms": 2309.9874,
+          "maxMs": 2309.9874
+        },
+        "preModelDispatchMs": {
+          "count": 16,
+          "p50Ms": 1132,
+          "p95Ms": 1342,
+          "maxMs": 1342
+        },
+        "startToProviderMs": {
+          "count": 16,
+          "p50Ms": 1134,
+          "p95Ms": 1344,
+          "maxMs": 1344
+        }
+      }
+    ],
+    "unauthorizedProviderRequests": 0,
+    "finalStatesSummariesAndTerminalLogs": "verified before shutdown and reread afterward",
+    "providerClosed": true
+  }
+}
