@@ -5,9 +5,10 @@ metadata sample for one workspace. The CLI below records it without executing a
 flow, reconciling a scheduler, accepting an approval, starting an MCP server,
 clearing recovery uncertainty or repairing storage.
 
-This is a source implementation for #570. Qualification of an exact released
-artifact, upgrade/rollback drills, a non-author operator and the independent #564
-scorecard review remain required. Shared deployment design #573 is proposed;
+This is a source implementation for #570. Qualification of exact released
+artifacts and their operator upgrade/rollback exercises, plus the independent
+#564 scorecard review, remain required. Independent source-profile acceptance
+is linked below. Shared deployment design #573 is proposed;
 #574/#575 and #212 do not become supported through this diagnostic endpoint.
 
 ## Choose and record the installation
@@ -248,6 +249,17 @@ Missing configured owner policy refuses startup; restore or repair that private
 policy with an active credential before restarting. Changing network exposure
 does not repair configured owner authority. This regular-file source fixture
 does not qualify an installed artifact or an upgrade/rollback.
+
+The [independent automated source operator drill](../audits/2026-10-14-independent-operator-upgrade-source-570.md)
+consumes exact 3.46.2 and 3.46.3 source builds through their normal Windows
+launcher. It verifies USER-encrypted profile startup, failed-job diagnosis,
+stopped complete backup, same-root upgrade, candidate restore and compatible
+baseline snapshot rollback. Original Next and launcher exits are observed;
+Windows termination is forced. Its provider ledger preserves the post-backup
+effect even when rollback restores older run history. The rollback retry is a
+separate explicit action: restoring files does not reverse external effects or
+retain changes made after the selected backup. Published packages, installers,
+Linux/container profiles and the remaining integrated criteria remain separate.
 
 A technically independent non-author operator must install the pinned candidate
 on its intended profile, diagnose a seeded failed schedule, authenticate, back

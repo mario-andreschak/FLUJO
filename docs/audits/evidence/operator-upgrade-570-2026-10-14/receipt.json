@@ -1,0 +1,547 @@
+{
+  "schemaVersion": 1,
+  "kind": "independent-automated-source-operator-upgrade",
+  "outcome": "passed",
+  "startedAt": "2026-10-14T13:28:59.437Z",
+  "completedAt": "2026-10-14T13:29:25.366Z",
+  "platform": "win32",
+  "arch": "x64",
+  "node": "v22.23.3",
+  "actor": {
+    "kind": "automated-technical-operator",
+    "humanOperated": false,
+    "productAuthorActions": false,
+    "issuerSourceSha256": "1f617e639f05341ba1d5ea17b16dd8b21b74de49d7e41ca8060072cbd3895075"
+  },
+  "builds": {
+    "baseline": {
+      "application": "C:\\Users\\Moe\\.codex\\worktrees\\subscription-allowance\\FLUJO",
+      "version": "3.46.2",
+      "sourceRevision": "320347356891aa1c24e0f2f9ce12719317e58bde",
+      "buildId": "YjHJthxEXaootDkQNrOS3",
+      "buildEvidenceSha256": "54afdcc6b6de66b038b18eb9681fa38ef30ecb46f44b6aabc9426a2dd4bce670",
+      "sourceInputs": {
+        "files": 1391,
+        "sha256": "6adb99213c486535dbd701654893b30d778e9464529b2ea171ab87c8eeed7d0a"
+      },
+      "builtInputs": {
+        "files": 1436,
+        "sha256": "a7043f1a896a661046c8e8005ea5d4110443794d19ac87a17e73ad012d16a5e8"
+      }
+    },
+    "candidate": {
+      "application": "C:\\Users\\Moe\\.codex\\worktrees\\transcript-react-window\\FLUJO",
+      "version": "3.46.3",
+      "sourceRevision": "c6bd536c43a36a6e0571890dadf9da5846d08def",
+      "buildId": "sSVM7xT4eNCgIsXwojB9j",
+      "buildEvidenceSha256": "b644a095fb4205d9f34367e66c985f668f1bf09271f0a7a70018b2079020157e",
+      "sourceInputs": {
+        "files": 1868,
+        "sha256": "f2ccacd69886cf14c310d5d56e385cecc1208acfdf7eb2e568841a2316338676"
+      },
+      "builtInputs": {
+        "files": 1539,
+        "sha256": "057d921b879c8d684316feed17ed592929881e621d82b70d219a97af47e5f703"
+      }
+    }
+  },
+  "fixture": {
+    "root": "C:\\Users\\Moe\\AppData\\Local\\flujo-smoke-operator-ZWMyQI",
+    "data": "C:\\Users\\Moe\\AppData\\Local\\flujo-smoke-operator-ZWMyQI\\data",
+    "workspace": "default-workspace",
+    "schedulerPaused": true,
+    "apps": "four-explicitly-disabled",
+    "provider": "counted-loopback-OpenAI-format-fixture"
+  },
+  "backups": [
+    {
+      "role": "baseline",
+      "sha256": "0898d87660df21086ad89ced373613833cb239508be137db6c889dbac65e9d86",
+      "bytes": 98466,
+      "inventorySha256": "50b8ac06f811929f300b8fcaa2c28a79abc641350b9177bf3487540589ba6322",
+      "members": 59
+    },
+    {
+      "role": "candidate",
+      "sha256": "1972da3375f52c0b697881f5b2bd9686386fffcf7bda70f39d8391bbdbc0b525",
+      "bytes": 99630,
+      "inventorySha256": "cabb55019a7d948c45e5d593064741f608f795ddf645415ef55c34079237eac9",
+      "members": 60
+    }
+  ],
+  "diagnoses": [
+    {
+      "label": "candidate-upgrade",
+      "path": "C:\\Users\\Moe\\.codex\\tmp\\flujo-operator-upgrade-570-20261014\\live-operator-qualified.json.candidate-upgrade.json",
+      "sha256": "8f25350b429b1e6be829607a3d80687453ef0c1181095d666d16a73a7dc7d872",
+      "sourceRevision": "c6bd536c43a36a6e0571890dadf9da5846d08def",
+      "exitCode": 2,
+      "revisionCheck": "self-report-matches",
+      "observationProcessId": "99d0e4be-e41a-47e8-b1c9-16f209e3eaf8",
+      "actor": {
+        "kind": "owner",
+        "ownerId": "packed-smoke-operator",
+        "credentialId": "cc2efc220237f2d7e0811fc2ec6e01a2"
+      },
+      "originalCli": {
+        "generation": "operator-cli-1",
+        "pid": 38296,
+        "startedAt": "2026-10-14T13:29:09.891Z",
+        "parentExitObserved": true,
+        "stdioCloseObserved": true,
+        "exitCode": 2,
+        "signal": null,
+        "crashRequested": false,
+        "ipcStopRequested": false,
+        "signalAttempts": [],
+        "abandoned": false,
+        "descendantExit": "unverified",
+        "ownership": "original-direct-child-only",
+        "failure": null,
+        "exitedAt": "2026-10-14T13:29:10.016Z",
+        "closedAt": "2026-10-14T13:29:10.016Z"
+      }
+    },
+    {
+      "label": "candidate-restored",
+      "path": "C:\\Users\\Moe\\.codex\\tmp\\flujo-operator-upgrade-570-20261014\\live-operator-qualified.json.candidate-restored.json",
+      "sha256": "283b6fedf9cd78d1b9b6ddcbafe24598157bd1c4531011adf4a852e5690065a5",
+      "sourceRevision": "c6bd536c43a36a6e0571890dadf9da5846d08def",
+      "exitCode": 2,
+      "revisionCheck": "self-report-matches",
+      "observationProcessId": "34ee9a32-926f-407a-8f5e-4298acecb5c5",
+      "actor": {
+        "kind": "owner",
+        "ownerId": "packed-smoke-operator",
+        "credentialId": "cc2efc220237f2d7e0811fc2ec6e01a2"
+      },
+      "originalCli": {
+        "generation": "operator-cli-2",
+        "pid": 38124,
+        "startedAt": "2026-10-14T13:29:14.797Z",
+        "parentExitObserved": true,
+        "stdioCloseObserved": true,
+        "exitCode": 2,
+        "signal": null,
+        "crashRequested": false,
+        "ipcStopRequested": false,
+        "signalAttempts": [],
+        "abandoned": false,
+        "descendantExit": "unverified",
+        "ownership": "original-direct-child-only",
+        "failure": null,
+        "exitedAt": "2026-10-14T13:29:14.930Z",
+        "closedAt": "2026-10-14T13:29:14.930Z"
+      }
+    }
+  ],
+  "originalFailedRun": {
+    "runId": "f016bc8e-f40a-46e8-b28e-387539d19721",
+    "status": "error"
+  },
+  "restoredRetry": {
+    "runId": "71c61468-c550-45e1-9456-c7fc65891a2a",
+    "status": "completed",
+    "effectSequence": 2
+  },
+  "rollbackRetry": {
+    "runId": "41b504ac-6316-44ee-a231-3fb92892d53f",
+    "status": "completed",
+    "effectSequence": 3
+  },
+  "requests": [
+    {
+      "sequence": 1,
+      "mode": "failure",
+      "generation": 1,
+      "observedUtc": "2026-10-14T13:29:05.017Z",
+      "credentialMatched": true
+    },
+    {
+      "sequence": 2,
+      "mode": "success",
+      "generation": 3,
+      "observedUtc": "2026-10-14T13:29:17.544Z",
+      "credentialMatched": true
+    },
+    {
+      "sequence": 3,
+      "mode": "success",
+      "generation": 4,
+      "observedUtc": "2026-10-14T13:29:24.841Z",
+      "credentialMatched": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "Actual baseline source launcher authenticates private USER credentials and diagnoses one counted fixture failure",
+      "generation": 1,
+      "observedUtc": "2026-10-14T13:29:05.266Z"
+    },
+    {
+      "name": "Both original baseline processes exited and encrypted complete-root/private-policy/passphrase backup verifies",
+      "generation": 1,
+      "observedUtc": "2026-10-14T13:29:05.373Z"
+    },
+    {
+      "name": "Actual candidate source launcher reads unchanged old encrypted records and diagnoses the original failed schedule without replay",
+      "generation": 2,
+      "observedUtc": "2026-10-14T13:29:10.049Z"
+    },
+    {
+      "name": "Corrupt/wrong-key/interrupted staging refuses publication and full candidate backup restores original paths",
+      "generation": 2,
+      "observedUtc": "2026-10-14T13:29:10.293Z"
+    },
+    {
+      "name": "Restored candidate retains owner session decisions and admits exactly one explicit credential-backed retry",
+      "generation": 3,
+      "observedUtc": "2026-10-14T13:29:17.938Z"
+    },
+    {
+      "name": "Rollback restores the compatible verified baseline data and private configuration before old code starts",
+      "generation": 3,
+      "observedUtc": "2026-10-14T13:29:18.070Z"
+    },
+    {
+      "name": "Actual baseline rollback launcher decrypts original records and executes only its explicit retry",
+      "generation": 4,
+      "observedUtc": "2026-10-14T13:29:25.322Z"
+    }
+  ],
+  "generations": [
+    {
+      "generation": 1,
+      "pid": 37580,
+      "startedAt": "2026-10-14T13:28:59.467Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": 4294967295,
+      "signal": null,
+      "crashRequested": false,
+      "ipcStopRequested": false,
+      "signalAttempts": [],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "role": "baseline",
+      "profile": "original-3.46.2-source-installation",
+      "command": [
+        "C:\\Users\\Moe\\AppData\\Local\\Programs\\nodejs\\node-v22.23.3-win-x64\\node.exe",
+        "C:\\Users\\Moe\\.codex\\worktrees\\subscription-allowance\\FLUJO\\scripts\\launch-next.mjs",
+        "start",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "50778"
+      ],
+      "cwd": "C:\\Users\\Moe\\.codex\\worktrees\\subscription-allowance\\FLUJO",
+      "sourceRevision": "320347356891aa1c24e0f2f9ce12719317e58bde",
+      "buildId": "YjHJthxEXaootDkQNrOS3",
+      "version": "3.46.2",
+      "launch": "normal-source-launcher",
+      "shutdown": "forced-original-Next-handle;launcher-exit-observed",
+      "nextPid": 35952,
+      "nextHandle": {
+        "pid": 35952,
+        "startedAt": "2026-10-14T13:28:59.7806452Z",
+        "launcherPid": 37580,
+        "kind": "original-next-handle"
+      },
+      "disabledAppsVerified": [
+        "bash",
+        "browser",
+        "filesystem",
+        "flujo"
+      ],
+      "exitedAt": "2026-10-14T13:29:05.296Z",
+      "closedAt": "2026-10-14T13:29:05.296Z",
+      "nextExit": {
+        "forced": true,
+        "exitCode": -1,
+        "pid": 35952,
+        "startedAt": "2026-10-14T13:28:59.7806452Z",
+        "kind": "original-next-exit"
+      },
+      "nextExitObserved": true,
+      "nextHandleObserver": {
+        "generation": "next-handle-1",
+        "pid": 19620,
+        "startedAt": "2026-10-14T13:29:00.678Z",
+        "parentExitObserved": true,
+        "stdioCloseObserved": true,
+        "exitCode": 0,
+        "signal": null,
+        "crashRequested": false,
+        "ipcStopRequested": false,
+        "signalAttempts": [],
+        "abandoned": false,
+        "descendantExit": "unverified",
+        "ownership": "original-direct-child-only",
+        "failure": null,
+        "exitedAt": "2026-10-14T13:29:05.308Z",
+        "closedAt": "2026-10-14T13:29:05.308Z"
+      },
+      "listenerClosed": true,
+      "registrationRemoved": true
+    },
+    {
+      "generation": 2,
+      "pid": 35912,
+      "startedAt": "2026-10-14T13:29:05.380Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": 4294967295,
+      "signal": null,
+      "crashRequested": false,
+      "ipcStopRequested": false,
+      "signalAttempts": [],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "role": "candidate",
+      "profile": "same-root-source-upgrade",
+      "command": [
+        "C:\\Users\\Moe\\AppData\\Local\\Programs\\nodejs\\node-v22.23.3-win-x64\\node.exe",
+        "C:\\Users\\Moe\\.codex\\worktrees\\transcript-react-window\\FLUJO\\scripts\\launch-next.mjs",
+        "start",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "50778"
+      ],
+      "cwd": "C:\\Users\\Moe\\.codex\\worktrees\\transcript-react-window\\FLUJO",
+      "sourceRevision": "c6bd536c43a36a6e0571890dadf9da5846d08def",
+      "buildId": "sSVM7xT4eNCgIsXwojB9j",
+      "version": "3.46.3",
+      "launch": "normal-source-launcher",
+      "shutdown": "forced-original-Next-handle;launcher-exit-observed",
+      "nextPid": 22732,
+      "nextHandle": {
+        "pid": 22732,
+        "startedAt": "2026-10-14T13:29:05.6797060Z",
+        "launcherPid": 35912,
+        "kind": "original-next-handle"
+      },
+      "disabledAppsVerified": [
+        "bash",
+        "browser",
+        "filesystem",
+        "flujo"
+      ],
+      "exitedAt": "2026-10-14T13:29:10.075Z",
+      "closedAt": "2026-10-14T13:29:10.075Z",
+      "nextExit": {
+        "forced": true,
+        "exitCode": -1,
+        "pid": 22732,
+        "startedAt": "2026-10-14T13:29:05.6797060Z",
+        "kind": "original-next-exit"
+      },
+      "nextExitObserved": true,
+      "nextHandleObserver": {
+        "generation": "next-handle-2",
+        "pid": 33156,
+        "startedAt": "2026-10-14T13:29:06.595Z",
+        "parentExitObserved": true,
+        "stdioCloseObserved": true,
+        "exitCode": 0,
+        "signal": null,
+        "crashRequested": false,
+        "ipcStopRequested": false,
+        "signalAttempts": [],
+        "abandoned": false,
+        "descendantExit": "unverified",
+        "ownership": "original-direct-child-only",
+        "failure": null,
+        "exitedAt": "2026-10-14T13:29:10.087Z",
+        "closedAt": "2026-10-14T13:29:10.087Z"
+      },
+      "listenerClosed": true,
+      "registrationRemoved": true
+    },
+    {
+      "generation": 3,
+      "pid": 37188,
+      "startedAt": "2026-10-14T13:29:10.299Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": 4294967295,
+      "signal": null,
+      "crashRequested": false,
+      "ipcStopRequested": false,
+      "signalAttempts": [],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "role": "candidate",
+      "profile": "restored-candidate-source-installation",
+      "command": [
+        "C:\\Users\\Moe\\AppData\\Local\\Programs\\nodejs\\node-v22.23.3-win-x64\\node.exe",
+        "C:\\Users\\Moe\\.codex\\worktrees\\transcript-react-window\\FLUJO\\scripts\\launch-next.mjs",
+        "start",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "50778"
+      ],
+      "cwd": "C:\\Users\\Moe\\.codex\\worktrees\\transcript-react-window\\FLUJO",
+      "sourceRevision": "c6bd536c43a36a6e0571890dadf9da5846d08def",
+      "buildId": "sSVM7xT4eNCgIsXwojB9j",
+      "version": "3.46.3",
+      "launch": "normal-source-launcher",
+      "shutdown": "forced-original-Next-handle;launcher-exit-observed",
+      "nextPid": 39932,
+      "nextHandle": {
+        "pid": 39932,
+        "startedAt": "2026-10-14T13:29:10.6084061Z",
+        "launcherPid": 37188,
+        "kind": "original-next-handle"
+      },
+      "disabledAppsVerified": [
+        "bash",
+        "browser",
+        "filesystem",
+        "flujo"
+      ],
+      "exitedAt": "2026-10-14T13:29:17.965Z",
+      "closedAt": "2026-10-14T13:29:17.965Z",
+      "nextExit": {
+        "forced": true,
+        "exitCode": -1,
+        "pid": 39932,
+        "startedAt": "2026-10-14T13:29:10.6084061Z",
+        "kind": "original-next-exit"
+      },
+      "nextExitObserved": true,
+      "nextHandleObserver": {
+        "generation": "next-handle-3",
+        "pid": 37152,
+        "startedAt": "2026-10-14T13:29:11.494Z",
+        "parentExitObserved": true,
+        "stdioCloseObserved": true,
+        "exitCode": 0,
+        "signal": null,
+        "crashRequested": false,
+        "ipcStopRequested": false,
+        "signalAttempts": [],
+        "abandoned": false,
+        "descendantExit": "unverified",
+        "ownership": "original-direct-child-only",
+        "failure": null,
+        "exitedAt": "2026-10-14T13:29:17.977Z",
+        "closedAt": "2026-10-14T13:29:17.977Z"
+      },
+      "listenerClosed": true,
+      "registrationRemoved": true
+    },
+    {
+      "generation": 4,
+      "pid": 40232,
+      "startedAt": "2026-10-14T13:29:18.075Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": 4294967295,
+      "signal": null,
+      "crashRequested": false,
+      "ipcStopRequested": false,
+      "signalAttempts": [],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "role": "baseline",
+      "profile": "compatible-snapshot-source-rollback",
+      "command": [
+        "C:\\Users\\Moe\\AppData\\Local\\Programs\\nodejs\\node-v22.23.3-win-x64\\node.exe",
+        "C:\\Users\\Moe\\.codex\\worktrees\\subscription-allowance\\FLUJO\\scripts\\launch-next.mjs",
+        "start",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "50778"
+      ],
+      "cwd": "C:\\Users\\Moe\\.codex\\worktrees\\subscription-allowance\\FLUJO",
+      "sourceRevision": "320347356891aa1c24e0f2f9ce12719317e58bde",
+      "buildId": "YjHJthxEXaootDkQNrOS3",
+      "version": "3.46.2",
+      "launch": "normal-source-launcher",
+      "shutdown": "forced-original-Next-handle;launcher-exit-observed",
+      "nextPid": 28840,
+      "nextHandle": {
+        "pid": 28840,
+        "startedAt": "2026-10-14T13:29:18.3833499Z",
+        "launcherPid": 40232,
+        "kind": "original-next-handle"
+      },
+      "disabledAppsVerified": [
+        "bash",
+        "browser",
+        "filesystem",
+        "flujo"
+      ],
+      "exitedAt": "2026-10-14T13:29:25.352Z",
+      "closedAt": "2026-10-14T13:29:25.352Z",
+      "nextExit": {
+        "forced": true,
+        "exitCode": -1,
+        "pid": 28840,
+        "startedAt": "2026-10-14T13:29:18.3833499Z",
+        "kind": "original-next-exit"
+      },
+      "nextExitObserved": true,
+      "nextHandleObserver": {
+        "generation": "next-handle-4",
+        "pid": 644,
+        "startedAt": "2026-10-14T13:29:19.265Z",
+        "parentExitObserved": true,
+        "stdioCloseObserved": true,
+        "exitCode": 0,
+        "signal": null,
+        "crashRequested": false,
+        "ipcStopRequested": false,
+        "signalAttempts": [],
+        "abandoned": false,
+        "descendantExit": "unverified",
+        "ownership": "original-direct-child-only",
+        "failure": null,
+        "exitedAt": "2026-10-14T13:29:25.365Z",
+        "closedAt": "2026-10-14T13:29:25.365Z"
+      },
+      "listenerClosed": true,
+      "registrationRemoved": true
+    }
+  ],
+  "budget": {
+    "elapsedMs": 25930.008,
+    "deadlineMs": 420000,
+    "outputBytes": 22651,
+    "maximumOutputBytes": 8388608,
+    "outcome": "within-budget"
+  },
+  "providerClosed": true,
+  "providerHandlersSettled": true,
+  "finalCensus": "exact-three-effects-seven-checkpoints-four-original-generations",
+  "cleanup": {
+    "privateRoot": "C:\\Users\\Moe\\AppData\\Local\\flujo-smoke-operator-ZWMyQI",
+    "ownership": "this-run-only",
+    "originalApplicationsExited": true,
+    "needsFlujoBashDeletion": true,
+    "filesystemDeletionsPerformedByThisHarness": false
+  },
+  "equipmentSha256": "954eb01bc4b2741e11c6f6ccc07b3774f6c3e8c64929578f8ff43c270145582a",
+  "failure": null,
+  "limits": [
+    "Two exact locally built source revisions with the actual Windows source launcher; no npm package/installer/container/released-artifact qualification.",
+    "Forced original-Next-handle shutdown, observed original launcher exit and stdio close; no graceful teardown, descendant generation or isolated-container-removal claim.",
+    "Stopped regular-file complete-root capture at the original canonical paths, same Windows account and one active installation; no linked/concurrent-writer/disk-full migration claim.",
+    "Baseline private USER passphrase compatibility; no public-default credential use, key-protection conversion or Security credential-migration acceptance claim.",
+    "The historical baseline has USER unlock and loopback admission, without the current scoped owner-bearer boundary; candidate bearer/session admission is observed separately.",
+    "Independent automated technical actor with source/byte-bound receipts and local provider effects; no human/genuine-provider/paid-account or independent scorecard judgment.",
+    "Paused ordinary schedule with failed-run and restored live/revoked owner-session decisions; recurring worker uncertainty and pending tool approval remain in their separate drills.",
+    "Fixture archives/private roots are disposable owned equipment; source-build hashes do not establish published-package identity."
+  ]
+}
