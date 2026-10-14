@@ -13,6 +13,7 @@ import {
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/storage';
 import type { Flow } from '@/shared/types/flow';
+import type { RestoreSelectionResult } from '@/shared/types/backup';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
@@ -27,6 +28,7 @@ const log = createLogger('app/api/restore/route');
 const mcpServersDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
 interface StorageRestorePlan {
+  selection: string;
   storageKey: StorageKey;
   archivePath: string;
   data: unknown;
@@ -96,15 +98,24 @@ async function POST_handler(request: NextRequest) {
   try {
     // Parse the multipart form data
     const formData = await request.formData();
-    const file = formData.get('file') as File | null;
-    const selectionsJson = formData.get('selections') as string | null;
+    const file = formData.get('file');
+    const selectionsJson = formData.get('selections');
     
-    if (!file || !selectionsJson) {
+    if (!file || typeof file === 'string' || typeof selectionsJson !== 'string' || !selectionsJson) {
       log.error(`Missing file or selections [${requestId}]`);
       return NextResponse.json({ error: 'Missing file or selections' }, { status: 400 });
     }
     
-    const selections = JSON.parse(selectionsJson);
+    let requestedSelections: unknown;
+    try {
+      requestedSelections = JSON.parse(selectionsJson);
+    } catch {
+      return NextResponse.json({ success: false, error: 'Invalid selections' }, { status: 400 });
+    }
+    const selections = Array.isArray(requestedSelections)
+      ? [...new Set(requestedSelections.filter((selection): selection is string =>
+        typeof selection === 'string' && (selection === 'mcpServersFolder' || storageKeyForSelection(selection) !== undefined)))]
+      : [];
     log.debug(`Restore selections [${requestId}]:`, selections);
     
     if (!selections || !Array.isArray(selections) || selections.length === 0) {
@@ -117,7 +128,12 @@ async function POST_handler(request: NextRequest) {
     
     // Load the zip file
     log.debug(`Loading zip file [${requestId}]`);
-    const zip = await JSZip.loadAsync(fileBuffer);
+    let zip: JSZip;
+    try {
+      zip = await JSZip.loadAsync(fileBuffer);
+    } catch {
+      return NextResponse.json({ success: false, error: 'Invalid backup file' }, { status: 400 });
+    }
     
     // Verify backup metadata
     const metadataFile = zip.file('backup-info.json');
@@ -126,8 +142,23 @@ async function POST_handler(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid backup file: missing metadata' }, { status: 400 });
     }
     
-    const metadata = JSON.parse(await metadataFile.async('string'));
+    let metadata: unknown;
+    try {
+      metadata = JSON.parse(await metadataFile.async('string'));
+      if (!isRecord(metadata)) throw new Error('Invalid metadata');
+    } catch {
+      return NextResponse.json({ success: false, error: 'Invalid backup metadata' }, { status: 400 });
+    }
     log.debug(`Backup metadata [${requestId}]:`, metadata);
+    const selectionResults: Record<string, RestoreSelectionResult> = Object.fromEntries(
+      selections.map(selection => [selection, {
+        restored: 0,
+        // Partial exports can contain good entries AND omitted records. Keep
+        // that evidence even when every surviving entry restores successfully.
+        failed: isRecord(metadata) && isRecord(metadata.selectionResults)
+          && metadata.selectionResults[selection] === 'failed' ? 1 : 0,
+      }]),
+    );
     
     // Build a complete, immutable restore plan before the first write. This is
     // the safety transaction boundary: a Persona-owned entry found late in the
@@ -142,6 +173,7 @@ async function POST_handler(request: NextRequest) {
         const zipFile = zip.file(archivePath);
         if (!zipFile) {
           log.warn(`File not found in backup [${requestId}]:`, archivePath);
+          // Older and credential-omitting archives legitimately lack keys.
           continue;
         }
         const data: unknown = JSON.parse(await zipFile.async('string'));
@@ -154,11 +186,13 @@ async function POST_handler(request: NextRequest) {
             { status: 400 },
           );
         }
-        storageRestorePlan.push({ storageKey, archivePath, data });
+        if (storageKey === StorageKey.FLOWS && !Array.isArray(data)) {
+          throw new Error('Invalid flow collection');
+        }
+        storageRestorePlan.push({ selection, storageKey, archivePath, data });
       } catch (error) {
         log.error(`Error preflighting restore file [${requestId}]:`, error);
-        // Preserve the existing tolerant archive semantics for malformed or
-        // missing non-Persona entries, while still performing no writes yet.
+        selectionResults[selection].failed++;
       }
     }
 
@@ -174,6 +208,7 @@ async function POST_handler(request: NextRequest) {
           const relativePath = entryPath.slice(conversationPrefix.length);
           if (!relativePath.endsWith('.json') || relativePath.includes('/')) {
             log.warn(`Skipped unsafe conversation archive entry [${requestId}]:`, entryPath);
+            selectionResults.chatHistory.failed++;
             continue;
           }
           const conversationId = relativePath.slice(0, -'.json'.length);
@@ -181,6 +216,7 @@ async function POST_handler(request: NextRequest) {
           const parsed: unknown = JSON.parse(await zip.files[entryPath].async('string'));
           if (!isRecord(parsed) || parsed.conversationId !== conversationId) {
             log.warn(`Skipped conversation with mismatched id [${requestId}]:`, entryPath);
+            selectionResults.chatHistory.failed++;
             continue;
           }
           assertSafeCollectionId(parsed.conversationId);
@@ -190,20 +226,21 @@ async function POST_handler(request: NextRequest) {
               { status: 400 },
             );
           }
-          const existing = await loadCollectionItem<Record<string, unknown> | null>(
-            'conversations',
-            conversationId,
-            null,
-          );
-          if (isPersonaConversationSnapshot(existing)) {
-            return NextResponse.json(
-              { error: 'Restore cannot overwrite an existing Persona conversation.' },
-              { status: 409 },
-            );
-          }
           conversationRestorePlan.push({ conversationId, conversation: parsed });
         } catch (error) {
           log.error(`Error preflighting conversation [${requestId}] from ${entryPath}:`, error);
+          selectionResults.chatHistory.failed++;
+        }
+      }
+      for (const { conversationId } of conversationRestorePlan) {
+        // Failure to inspect the destination is an authority failure, not a
+        // malformed archive entry that may be skipped before other writes.
+        const existing = await loadCollectionItem<Record<string, unknown> | null>('conversations', conversationId, null);
+        if (isPersonaConversationSnapshot(existing)) {
+          return NextResponse.json(
+            { error: 'Restore cannot overwrite an existing Persona conversation.' },
+            { status: 409 },
+          );
         }
       }
     }
@@ -241,21 +278,31 @@ async function POST_handler(request: NextRequest) {
 
     // Persona safety preflight is complete; ordinary tolerant restore semantics
     // begin only after this point.
-    for (const { storageKey, archivePath, data } of storageRestorePlan) {
+    for (const { selection, storageKey, archivePath, data } of storageRestorePlan) {
       try {
         if (storageKey === StorageKey.FLOWS) {
-          const flows: Flow[] = Array.isArray(data) ? data : [];
+          const flows = data as Flow[];
           for (const flow of flows) {
-            const result = await flowService.saveFlow(flow);
-            if (!result.success) {
-              log.warn(`Skipped restoring a flow [${requestId}]:`, result.error);
+            try {
+              const result = await flowService.saveFlow(flow);
+              if (!result.success) {
+                selectionResults[selection].failed++;
+                log.warn(`Skipped restoring a flow [${requestId}]:`, result.error);
+              } else {
+                selectionResults[selection].restored++;
+              }
+            } catch (error) {
+              selectionResults[selection].failed++;
+              log.error(`Error restoring a flow [${requestId}]:`, error);
             }
           }
         } else {
           await saveItem(storageKey, data);
+          selectionResults[selection].restored++;
         }
         log.debug(`Restored file [${requestId}]:`, archivePath);
       } catch (error) {
+        selectionResults[selection].failed++;
         log.error(`Error restoring file [${requestId}]:`, error);
       }
     }
@@ -263,35 +310,49 @@ async function POST_handler(request: NextRequest) {
     for (const { conversationId, conversation } of conversationRestorePlan) {
       try {
         await saveCollectionItem('conversations', conversationId, conversation);
+        selectionResults.chatHistory.restored++;
         log.debug(`Restored conversation [${requestId}]:`, conversationId);
       } catch (error) {
+        selectionResults.chatHistory.failed++;
         log.error(`Error restoring conversation [${requestId}]:`, error);
       }
     }
 
     // Restore MCP servers folder if selected
     if (selections.includes('mcpServersFolder')) {
-      try {
-        log.debug(`Restoring MCP servers folder [${requestId}]`);
-        await restoreFolderFromZipLinkSafe(
-          zip,
-          'mcp-servers',
-          mcpServersDir(),
-          getWorkspaceDataDir(),
-          (entryPath, reason) => log.warn(`Skipped unsafe MCP restore entry ${entryPath}: ${reason}`),
-        );
-        log.debug(`Restored MCP servers folder [${requestId}]`);
-      } catch (error) {
-        log.error(`Error restoring MCP servers folder [${requestId}]:`, error);
-        // Continue with other files
+      const hasFolder = Object.keys(zip.files).some(entryPath => entryPath.startsWith('mcp-servers/'));
+      if (hasFolder) {
+        try {
+          log.debug(`Restoring MCP servers folder [${requestId}]`);
+          await restoreFolderFromZipLinkSafe(
+            zip,
+            'mcp-servers',
+            mcpServersDir(),
+            getWorkspaceDataDir(),
+            (entryPath, reason) => {
+              selectionResults.mcpServersFolder.failed++;
+              log.warn(`Skipped unsafe MCP restore entry ${entryPath}: ${reason}`);
+            },
+            { onRestored: () => { selectionResults.mcpServersFolder.restored++; } },
+          );
+          log.debug(`Restored MCP servers folder [${requestId}]`);
+        } catch (error) {
+          selectionResults.mcpServersFolder.failed++;
+          log.error(`Error restoring MCP servers folder [${requestId}]:`, error);
+        }
       }
     }
-    
-    log.info(`Restore completed successfully [${requestId}]`);
-    return NextResponse.json({ success: true });
+
+    const restored = Object.values(selectionResults).reduce((total, result) => total + result.restored, 0);
+    const failed = Object.values(selectionResults).reduce((total, result) => total + result.failed, 0);
+    const status = failed ? (restored ? 'partial' : 'failed') : (restored ? 'complete' : 'empty');
+    log.info(`Restore finished (${status}) [${requestId}]`);
+    return NextResponse.json({ success: status === 'complete', status, selectionResults }, {
+      status: status === 'failed' ? 500 : status === 'empty' ? 400 : 200,
+    });
   } catch (error) {
     log.error(`Error restoring from backup [${requestId}]:`, error);
-    return NextResponse.json({ error: 'Failed to restore from backup' }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Failed to restore from backup' }, { status: 500 });
   }
 }
 

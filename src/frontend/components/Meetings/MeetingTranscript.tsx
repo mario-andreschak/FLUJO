@@ -30,7 +30,7 @@ import {
   RecordVoiceOverRounded,
   ReplayRounded,
 } from '@mui/icons-material';
-import { VariableSizeList, type ListChildComponentProps } from 'react-window';
+import { List, type ListImperativeAPI, type RowComponentProps } from 'react-window';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { MeetingEvent, MeetingRecord } from '@/shared/types/meeting';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -124,19 +124,19 @@ interface RowData {
   meeting: MeetingRecord;
   collapsedSpeakers: Set<string>;
   toggleSpeaker: (participantId: string) => void;
-  measureRow: (rowId: string, index: number, height: number) => void;
+  measureRow: (rowId: string, height: number) => void;
   formatDate: ReturnType<typeof useI18n>['formatDate'];
 }
 
 interface MeasuredTranscriptRowProps {
   children: ReactNode;
   data: RowData;
-  index: number;
   rowId: string;
-  style: ListChildComponentProps<RowData>['style'];
+  style: RowComponentProps<{ data: RowData }>['style'];
+  ariaAttributes: RowComponentProps<{ data: RowData }>['ariaAttributes'];
 }
 
-function MeasuredTranscriptRow({ children, data, index, rowId, style }: MeasuredTranscriptRowProps) {
+function MeasuredTranscriptRow({ children, data, rowId, style, ariaAttributes }: MeasuredTranscriptRowProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const { measureRow } = data;
 
@@ -146,7 +146,7 @@ function MeasuredTranscriptRow({ children, data, index, rowId, style }: Measured
 
     const measure = () => {
       const height = Math.ceil(content.getBoundingClientRect().height);
-      if (height > 0) measureRow(rowId, index, height);
+      if (height > 0) measureRow(rowId, height);
     };
 
     measure();
@@ -154,10 +154,10 @@ function MeasuredTranscriptRow({ children, data, index, rowId, style }: Measured
     const observer = new ResizeObserver(measure);
     observer.observe(content);
     return () => observer.disconnect();
-  }, [index, measureRow, rowId]);
+  }, [measureRow, rowId]);
 
   return (
-    <Box style={style}>
+    <Box style={style} {...ariaAttributes}>
       <Box ref={contentRef} sx={{ width: '100%', boxSizing: 'border-box' }}>
         {children}
       </Box>
@@ -165,13 +165,13 @@ function MeasuredTranscriptRow({ children, data, index, rowId, style }: Measured
   );
 }
 
-function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowData>) {
+function TranscriptListRow({ index, style, data, ariaAttributes }: RowComponentProps<{ data: RowData }>) {
   const theme = useTheme();
   const { t } = useI18n();
   const row = data.rows[index];
   if (row.kind === 'round') {
     return (
-      <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
+      <MeasuredTranscriptRow data={data} rowId={row.id} style={style} ariaAttributes={ariaAttributes}>
         <Box sx={{ px: 1.5, height: 46, display: 'flex', alignItems: 'center' }}>
           <Divider sx={{ flex: 1 }} />
           <Chip size="small" color={row.number === data.meeting.roundNumber && data.meeting.status === 'running' ? 'primary' : 'default'} label={t('meetings.transcript.round', { count: row.number })} sx={{ mx: 1, fontWeight: 750 }} />
@@ -186,7 +186,7 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
     const initials = event.participantName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
     const expanded = !data.collapsedSpeakers.has(event.participantId);
     return (
-      <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
+      <MeasuredTranscriptRow data={data} rowId={row.id} style={style} ariaAttributes={ariaAttributes}>
         <Box sx={{ px: 1.5, py: 0.6 }}>
           <Stack direction="row" spacing={1.2} sx={{ alignItems: "flex-start" }}>
             <Avatar sx={{ mt: 0.6, width: 36, height: 36, flexShrink: 0, fontSize: '0.72rem', fontWeight: 800, background: participant?.role === 'moderator' ? `linear-gradient(145deg, ${theme.palette.secondary.main}, ${theme.palette.primary.dark})` : `linear-gradient(145deg, ${theme.palette.primary.main}, ${theme.palette.primary.dark})` }}>{initials}</Avatar>
@@ -230,7 +230,7 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
   }
   if (event.type === 'moderator:intervention') {
     return (
-      <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
+      <MeasuredTranscriptRow data={data} rowId={row.id} style={style} ariaAttributes={ariaAttributes}>
         <Box sx={{ px: 1.5, py: 0.6 }}>
           <Stack direction="row" sx={{ justifyContent: "flex-end" }}>
             <Paper
@@ -262,7 +262,7 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
     const sender = data.meeting.participants.find((person) => person.id === event.fromParticipantId);
     const recipients = event.toParticipantIds.map((id) => data.meeting.participants.find((person) => person.id === id)?.name).filter(Boolean).join(', ');
     return (
-      <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
+      <MeasuredTranscriptRow data={data} rowId={row.id} style={style} ariaAttributes={ariaAttributes}>
         <Box sx={{ px: 1.5, py: 0.6 }}>
           <Paper variant="outlined" sx={{ p: 1.5, ml: { sm: 6 }, borderStyle: 'dashed', bgcolor: alpha(theme.palette.secondary.main, 0.035) }}>
             <Stack direction="row" spacing={0.8} sx={{ alignItems: "center",  mb: 0.7 }}><LockRounded sx={{ fontSize: 16, color: 'secondary.main' }} /><Typography variant="caption" sx={{ fontWeight: 750 }}>{t('meetings.transcript.privateFrom', { from: sender?.name ?? t('meetings.transcript.unknown'), to: recipients })}</Typography></Stack>
@@ -274,7 +274,7 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
     );
   }
   return (
-    <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
+    <MeasuredTranscriptRow data={data} rowId={row.id} style={style} ariaAttributes={ariaAttributes}>
       <Box sx={{ px: 1.5, py: 0.4, minHeight: 52, boxSizing: 'border-box' }}><SystemEvent event={event} /></Box>
     </MeasuredTranscriptRow>
   );
@@ -283,8 +283,10 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
 export default function MeetingTranscript({ meeting, events }: MeetingTranscriptProps) {
   const { t, formatDate } = useI18n();
   const theme = useTheme();
-  const listRef = useRef<VariableSizeList<RowData>>(null);
-  const measuredHeightsRef = useRef<Map<string, number>>(new Map());
+  const listRef = useRef<ListImperativeAPI>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [measurementWidth, setMeasurementWidth] = useState<number>();
+  const [measuredHeights, setMeasuredHeights] = useState<Map<string, { width: number | undefined; height: number }>>(new Map());
   const [live, setLive] = useState(true);
   const [speakerIds, setSpeakerIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<LogFilter>('all');
@@ -323,7 +325,7 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
       if (next.has(participantId)) next.delete(participantId); else next.add(participantId);
       return next;
     });
-    requestAnimationFrame(() => listRef.current?.resetAfterIndex(0));
+    setMeasuredHeights(new Map());
   }, []);
 
   const estimatedRowHeight = useCallback((index: number) => {
@@ -342,22 +344,43 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
 
   const rowHeight = useCallback((index: number) => {
     const row = rows[index];
-    return measuredHeightsRef.current.get(row.id) ?? estimatedRowHeight(index);
-  }, [estimatedRowHeight, rows]);
+    const measured = measuredHeights.get(row.id);
+    return measured && measured.width === measurementWidth ? measured.height : estimatedRowHeight(index);
+  }, [estimatedRowHeight, measuredHeights, measurementWidth, rows]);
 
-  const measureRow = useCallback((rowId: string, index: number, height: number) => {
-    const previous = measuredHeightsRef.current.get(rowId);
-    if (previous === height) return;
-    measuredHeightsRef.current.set(rowId, height);
-    listRef.current?.resetAfterIndex(index);
-  }, []);
+  const measureRow = useCallback((rowId: string, height: number) => {
+    // v2 recalculates bounds when the rowHeight callback changes.
+    setMeasuredHeights((current) => {
+      const measured = current.get(rowId);
+      if (measured?.height === height && measured.width === measurementWidth) return current;
+      return new Map(current).set(rowId, { width: measurementWidth, height });
+    });
+  }, [measurementWidth]);
 
   const rowData = useMemo<RowData>(() => ({ rows, meeting, collapsedSpeakers, toggleSpeaker: toggleSpeakerCollapse, measureRow, formatDate }), [collapsedSpeakers, formatDate, measureRow, meeting, rows, toggleSpeakerCollapse]);
+  const rowProps = useMemo(() => ({ data: rowData }), [rowData]);
+  const rowKey = useCallback((index: number, { data }: { data: RowData }) => data.rows[index].id, []);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const measureWidth = () => {
+      const width = container.getBoundingClientRect().width;
+      if (width <= 0) return;
+      setMeasurementWidth(width);
+    };
+    measureWidth();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measureWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
-    listRef.current?.resetAfterIndex(0);
-    if (live && rows.length) requestAnimationFrame(() => listRef.current?.scrollToItem(rows.length - 1, 'end'));
-  }, [live, rows]);
+    if (!live || !rows.length) return undefined;
+    const frame = requestAnimationFrame(() => listRef.current?.scrollToRow({ index: rows.length - 1, align: 'end' }));
+    return () => cancelAnimationFrame(frame);
+  }, [live, measuredHeights, measurementWidth, rows]);
 
   const newest = [...rows].reverse().find((row): row is Extract<TranscriptRow, { kind: 'event' }> => row.kind === 'event');
   const totalHeight = rows.reduce((sum, _, index) => sum + rowHeight(index), 0);
@@ -365,7 +388,7 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
   const noFilters = speakerIds.size === 0 && filter === 'all';
 
   return (
-    <Box>
+    <Box ref={containerRef}>
       <Paper variant="outlined" sx={{ position: 'sticky', top: 0, zIndex: 2, mb: 1, p: 1, bgcolor: alpha(theme.palette.background.paper, 0.96), backdropFilter: 'blur(14px)' }}>
         <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
           <Chip
@@ -391,7 +414,7 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
       </Paper>
 
       {live && newest && (
-        <Box role="status" aria-live="polite" aria-atomic="true" sx={{ position: 'absolute', width: 1, height: 1, p: 0, m: -1, overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0 }}>
+        <Box role="status" aria-live="polite" aria-atomic="true" sx={{ position: 'absolute', width: '1px', height: '1px', p: 0, m: -1, overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0 }}>
           {eventAnnouncement(newest.event)}
         </Box>
       )}
@@ -403,18 +426,18 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
           <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 420 }}>{noFilters ? t('meetings.transcript.waiting') : t('meetings.transcript.noMatchesHelp')}</Typography>
         </Stack>
       ) : (
-        <VariableSizeList<RowData>
-          ref={listRef}
-          height={listHeight}
-          width="100%"
-          itemCount={rows.length}
-          itemData={rowData}
-          itemKey={(index, data) => data.rows[index].id}
-          itemSize={rowHeight}
+        <List
+          aria-label={t('meetings.transcript.title')}
+          listRef={listRef}
+          style={{ height: listHeight, width: '100%' }}
+          defaultHeight={listHeight}
+          rowCount={rows.length}
+          rowProps={rowProps}
+          rowKey={rowKey}
+          rowHeight={rowHeight}
+          rowComponent={TranscriptListRow}
           overscanCount={4}
-        >
-          {TranscriptListRow}
-        </VariableSizeList>
+        />
       )}
     </Box>
   );
