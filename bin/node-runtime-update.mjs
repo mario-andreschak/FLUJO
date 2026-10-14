@@ -30,7 +30,8 @@ export function latestSupportedRelease(releases, major) {
     const minor = Number(match[2]);
     const patch = Number(match[3]);
     if (!Number.isSafeInteger(minor) || !Number.isSafeInteger(patch)
-        || minor > 2147483647 || patch > 2147483647 || minor < (major === 22 ? 17 : 2)) return [];
+        || minor > 2147483647 || patch > 2147483647
+        || !isSupportedNodeRuntime(`${major}.${minor}.${patch}`)) return [];
     return [{ minor, patch }];
   });
   versions.sort((a, b) => b.minor - a.minor || b.patch - a.patch);

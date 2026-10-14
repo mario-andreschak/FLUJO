@@ -98,7 +98,8 @@ describe('GlobalReferenceEditor paste and undo', () => {
 
   it('ignores an untrusted synthetic paste without changing the prompt or its history', async () => {
     const onChange = jest.fn();
-    render(<GlobalReferenceEditor value="Keep this" onChange={onChange} ariaLabel="composer" />);
+    const onPaste = jest.fn();
+    render(<GlobalReferenceEditor value="Keep this" onChange={onChange} onPaste={onPaste} ariaLabel="composer" />);
     const textbox = screen.getByRole('textbox');
     Object.defineProperty(textbox, 'isContentEditable', { value: true });
     await edit(() => Transforms.select(mockEditor, Editor.end(mockEditor, [])));
@@ -110,6 +111,7 @@ describe('GlobalReferenceEditor paste and undo', () => {
     expect(serializeReferenceValue(mockEditor.children)).toBe('Keep this');
     expect(mockEditor.history.undos).toHaveLength(0);
     expect(onChange).not.toHaveBeenCalled();
+    expect(onPaste).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'Remove global:API_KEY' })).not.toBeInTheDocument();
   });
 });

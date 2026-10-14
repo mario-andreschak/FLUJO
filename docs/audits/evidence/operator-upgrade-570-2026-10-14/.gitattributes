@@ -1,0 +1,2 @@
+# These captured JSON bytes are joined by SHA256; preserve their original endings.
+*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "kind": "source-application-build",
+  "outcome": "passed",
+  "sourceRevision": "c6bd536c43a36a6e0571890dadf9da5846d08def",
+  "application": "C:\\Users\\Moe\\.codex\\worktrees\\transcript-react-window\\FLUJO",
+  "startedAt": "2026-10-14T13:08:42.617Z",
+  "completedAt": "2026-10-14T13:14:24.807Z",
+  "seconds": 342.189793,
+  "sourceInputs": {
+    "files": 1868,
+    "sha256": "f2ccacd69886cf14c310d5d56e385cecc1208acfdf7eb2e568841a2316338676"
+  },
+  "builtInputs": {
+    "files": 1539,
+    "sha256": "057d921b879c8d684316feed17ed592929881e621d82b70d219a97af47e5f703"
+  },
+  "buildId": "sSVM7xT4eNCgIsXwojB9j",
+  "command": [
+    "C:\\Users\\Moe\\AppData\\Local\\Programs\\nodejs\\node-v22.23.3-win-x64\\node_modules\\npm\\bin\\npm-cli.js",
+    "run",
+    "build"
+  ],
+  "logSha256": "0d36f3fbd96c9b471cdf93206b8f03adb3e1d7b40063b23f5231443119e64fe7"
+}

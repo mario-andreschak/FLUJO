@@ -18,11 +18,11 @@ jest.mock('@/backend/services/flow/index', () => ({
   flowService: { getFlow: jest.fn(async (id: string) => ({ id, name: `flow-${id}` })) },
 }));
 
-import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
+import { SubflowNode, runSubflowLanes } from '@/backend/execution/flow/nodes/SubflowNode';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ERROR_ACTION } from '@/backend/execution/flow/types';
-import type { SharedState, SubflowNodeParams } from '@/backend/execution/flow/types';
+import type { SharedState, SubflowNodeParams, SubflowNodePrepResult } from '@/backend/execution/flow/types';
 
 const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 function deferred() {
@@ -63,6 +63,45 @@ beforeEach(() => {
 });
 
 describe('SubflowNode fan-out (issue #102)', () => {
+  it('rejects fabricated lane prep from a protected parent before starting any child', async () => {
+    const parent = makeShared({ conversationId: 'protected-lane-parent', executionExtensionOwned: true });
+    FlowExecutor.conversationStates.set(parent.conversationId!, parent);
+    try {
+      await expect(runSubflowLanes({
+        nodeId: 'sub-1', nodeType: 'subflow', depth: 1, parentRunId: parent.conversationId,
+        showSteps: false, lanes: [{ subflowId: 'child', input: { prompt: 'private input' } }],
+      } as unknown as SubflowNodePrepResult, runFlowMock, { nodeId: 'sub-1', nodeType: 'subflow' }, { prompt: 'private input' }))
+        .rejects.toMatchObject({ code: 'execution_subflow_child_authority_required' });
+      expect(runFlowMock).not.toHaveBeenCalled();
+    } finally {
+      FlowExecutor.conversationStates.delete(parent.conversationId!);
+    }
+  });
+
+  it('rejects protected lane prep even when its parent is no longer in memory', async () => {
+    await expect(runSubflowLanes({
+      nodeId: 'sub-1', nodeType: 'subflow', depth: 1, parentRunId: 'missing-parent',
+      executionExtensionOwned: true, showSteps: false,
+      lanes: [{ subflowId: 'child', input: { prompt: 'private input' } }],
+    } as unknown as SubflowNodePrepResult, runFlowMock, { nodeId: 'sub-1', nodeType: 'subflow' }, { prompt: 'private input' }))
+      .rejects.toMatchObject({ code: 'execution_subflow_child_authority_required' });
+    expect(runFlowMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { subflowId: 'child' },
+    { parallelSubflowIds: ['child-a', 'child-b'] },
+  ])('refuses protected parent child admission before either run path', async properties => {
+    const shared = makeShared({
+      executionExtensionContext: {} as never,
+      handoffInput: { targetNodeId: 'sub-1', prompt: 'private parent input' },
+    });
+    await expect(makeNode().prep(shared, makeParams(properties)))
+      .rejects.toMatchObject({ code: 'execution_subflow_child_authority_required' });
+    expect(shared.handoffInput).toMatchObject({ prompt: 'private parent input' });
+    expect(runFlowMock).not.toHaveBeenCalled();
+  });
+
   it('falls back to the configured prompt when a parallel handoff omits prompt', async () => {
     const node = makeNode();
     const shared = makeShared({

@@ -1,7 +1,7 @@
 # CI runtime identity and qualification
 
 The canonical application/MCP policy is exported by `bin/node-runtime.mjs`:
-`^22.17.0 || ^24.2.0`. Its six engine declarations, independent MCP embedding,
+`^22.19.0 || ^24.2.0`. Its six engine declarations, independent MCP embedding,
 entry refusal and installer migration belong to the paired runtime source
 change. CI consumes that policy rather than implementing another eligibility
 rule. Production successor `1486796b411351a3ade9291b85d195df6b7b41ad`
@@ -11,7 +11,7 @@ adds the early Unix refusal before bootstrap and log writes; the earlier
 | Profile | Exact Node | libuv | Required purpose |
 | --- | --- | --- | --- |
 | Historical | 22.13.1 | 1.49.2 | Original ordinary default-heap build only |
-| Minimum 22 | 22.17.0 | 1.51.0 | Build, workspace types and actual packed-process checks |
+| Minimum 22 | 22.19.0 | 1.51.0 | Build, workspace types and actual packed-process checks |
 | Current 22 | 22.23.3 | 1.51.0 | Build, workspace types and actual packed-process checks |
 | Minimum 24 | 24.2.0 | 1.51.0 | Build, workspace types and actual packed-process checks |
 | Current 24 | 24.21.0 | 1.52.1 | Build, workspace types and actual packed-process checks |
@@ -74,6 +74,53 @@ records five real GnuPG signature verifications, all exit 0, against the officia
 public keyring, disabled automatic key retrieval and retained raw signature
 status, stderr, signatures and checksum files without newline conversion.
 No global/private keyring was imported or changed.
+
+The [supplemental Node 22.19 packet](../audits/scorecard-563/evidence/official-node-minimum22-2026-10-14/verified-node-binary-receipt.json)
+qualifies the current minimum on the 22.x line using the same pinned public
+key source. Its official Linux archive, executable member and libuv header
+were verified separately against the signed checksums; its Windows executable
+hash comes from the signed `win-x64/node.exe` entry. Each selected runtime in
+`scripts/ci-node-binaries.json` explicitly names its evidence packet and hash.
+The original packet and its bad-signature control remain unchanged. Binary
+identity evidence does not establish installed app or container acceptance.
+
+### Undici 8 source qualification — 2026-10-14
+
+Existing [PR #1140](https://github.com/mario-andreschak/FLUJO/pull/1140)
+updates Undici to 8.11.2 and aligns the canonical guard, six package engines,
+both installers, automatic updater and minimum-22 release jobs with Node
+22.19.0. Node 24.2.0 remains the minimum on the 24.x line. Node 22.17/22.18
+now fail before dependencies load and receive the existing supported update
+and PATH recovery instructions. The updater uses the canonical predicate.
+
+The candidate preserves main `d87b26b71278a65ad7a79167e7a6bb83b258690d`'s
+other installed package versions. Local source typecheck (65.071s), five MCP
+typechecks (9.032s), source lint (103.315s), changed-script lint (3.294s), 153
+runtime/workflow regressions (10.104s), five-MCP build (8.852s) and the inspected
+non-container application build (322.133s) passed on Node 22.23.3 with the
+ordinary heap. Phases overlapped; these are measured individual durations.
+The 17 official identity/verifier cases passed with their input hashes bound.
+
+Six real loopback HTTP transport cases passed in each actual Node 22.19.0 and
+24.2.0 process: JSON replies/usage/connection-close, streamed reply, 429 retry,
+400 refusal, SDK timeout and stopped-stream cancellation. The production
+factory and its actual configuration imports are compiled for these native
+Node tests; the existing runtime-contract gate includes them. All nine
+existing OpenAI SDK compatibility cases also passed on each minimum.
+
+Build `Ud795yKDavLSgM20lP7EZ` passed six built-app checks per minimum: owner
+refusal, fresh protected profile initialization/unlock, rendered application
+page, actual model connection plus its diagnostic tool round-trip, provider
+400 and successful retained-connection retry. Each profile made ten requests
+to its owned loopback provider, exited with observed code 143 and had its
+private fixture removed. The initial provider fixture lacked the diagnostic
+tool response; the fixture was corrected without changing application gates.
+
+This is source development qualification. Genuine cloud-provider inference,
+Linux/installed distribution acceptance, full or remote CI and container or
+release validation were not repeated. Those remain release pre-flight under
+the global pause; the existing CI definitions and assertions are preserved.
+Issue #570 retains its original broader operator/recovery acceptance.
 
 The unchanged upstream README's relative links resolve to the 29 retained
 [public key files](../audits/scorecard-563/evidence/official-node-integrity-2026-10-04/keys/).

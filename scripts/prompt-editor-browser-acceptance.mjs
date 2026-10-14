@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
+import { createSmokeOperator } from './smoke-bundled-operator.mjs';
 
 // Run against an already-built checkout, with an isolated first-use data root:
 // node scripts/prompt-editor-browser-acceptance.mjs <checkout> <port> <evidence>
@@ -13,6 +14,8 @@ const root = path.resolve(process.argv[2]);
 const port = Number(process.argv[3] ?? 4397);
 const evidence = path.resolve(process.argv[4]);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid port');
+// Check before allocating private fixture data or starting a process.
+await fs.access(path.join(root, '.next/BUILD_ID'));
 const require = createRequire(path.join(root, 'package.json'));
 const { chromium, expect } = require('@playwright/test');
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-calendar-refresh-journey-'));
@@ -33,6 +36,9 @@ for (const name of ['.env', '.env.local', '.env.production', '.env.production.lo
   try { await fs.access(path.join(root, name)); } catch(error) { if(error.code === 'ENOENT') continue; throw error; }
   throw new Error('Refuse candidate dotenv configuration');
 }
+const operator = await createSmokeOperator();
+Object.assign(env, operator.env, { FLUJO_EXPOSURE_MODE: 'localhost', FLUJO_APP_ROOT: root });
+const headers = { authorization: `Bearer ${operator.token}` };
 const ownedRoots = new Map([[data, await fs.realpath(data)], [secretDir, await fs.realpath(secretDir)]]);
 for (const name of ['FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKSPACE', 'NEXT_MANUAL_SIG_HANDLE']) delete env[name];
 const log = createWriteStream(path.join(evidence, 'app.log'));
@@ -45,10 +51,11 @@ const receipt = { startedAt: new Date().toISOString(), root, baseURL, dataDir: d
   slateReactVersion: require('slate-react/package.json').version,
   lockSha256: createHash('sha256').update(await fs.readFile(path.join(root, 'package-lock.json'))).digest('hex'),
   runtime: process.version, executable: process.execPath, checks: [], pageErrors: [], externalRequests: [] };
+receipt.issuerSourceSha256 = operator.issuerSourceSha256;
 let browser;
 const request = async (route, body) => {
   const response = await fetch(baseURL + route, { method: body === undefined ? 'GET' : 'POST',
-    headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    headers: { ...headers, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`${route}: ${response.status}`);
   return response.json();
@@ -76,12 +83,22 @@ try {
   await request('/api/storage', { key: 'speech_settings', value: { ...settings.value,
     telemetry: { enabled: false, notifyDaily: false }, onboarding: { completed: true } } });
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true,
+    ...(process.env.FLUJO_ACCEPTANCE_BROWSER_EXECUTABLE
+      ? { executablePath: process.env.FLUJO_ACCEPTANCE_BROWSER_EXECUTABLE } : {}),
+  });
+  receipt.browserVersion = browser.version();
   receipt.providerRequests = [];
   receipt.observations = [];
   for (const locale of ['en', 'es']) {
     for (const [size,width,height] of [['desktop',1440,1000],['phone',390,844]]) {
-      const context = await browser.newContext({viewport:{width,height},locale:locale==='en'?'en-US':'es-CO',permissions:['clipboard-read','clipboard-write']});
+      const context = await browser.newContext({viewport:{width,height},locale:locale==='en'?'en-US':'es-CO',permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers});
+      // Keep the fixture's owner credential confined to this loopback app.
+      await context.route('**/*', route => {
+        const url = new URL(route.request().url());
+        return ['http:', 'https:'].includes(url.protocol) && url.origin !== baseURL
+          ? route.abort() : route.continue();
+      });
       await context.addInitScript(value => localStorage.setItem('flujo.locale',value),locale);
       const page = await context.newPage();
       page.on('pageerror',error=>receipt.pageErrors.push(error.message));
@@ -251,6 +268,7 @@ try {
     if (![0, 143].includes(child.exitCode)) throw new Error(`App exit ${child.exitCode}/${child.signalCode}`);
   } catch (error) { cleanupError(error); }
   await new Promise(resolve => log.end(resolve));
+  try { await operator.restore(); receipt.operatorCleanup = true; } catch (error) { cleanupError(error); }
   if (!receipt.cleanupErrors.length && !receipt.error) {
     for (const [target, expected] of ownedRoots) {
       try {

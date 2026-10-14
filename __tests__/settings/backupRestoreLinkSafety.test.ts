@@ -29,6 +29,20 @@ describe('MCP backup/restore link safety', () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  it('counts only actual file writes and reports failed targets to the caller', async () => {
+    await fs.mkdir(path.join(mcpRoot, 'blocked.json'));
+    const zip = new JSZip();
+    zip.file('mcp-servers/blocked.json', 'cannot replace directory');
+    zip.file('mcp-servers/good.json', 'restored');
+    const restored: string[] = [];
+    const failed: string[] = [];
+    await restoreFolderFromZipLinkSafe(zip, 'mcp-servers', mcpRoot, workspaceRoot,
+      entry => failed.push(entry), { onRestored: entry => restored.push(entry) });
+    expect(restored).toEqual(['mcp-servers/good.json']);
+    expect(failed).toEqual(['mcp-servers/blocked.json']);
+    expect(await fs.readFile(path.join(mcpRoot, 'good.json'), 'utf8')).toBe('restored');
+  });
+
   it('refuses publication when ownership retires during the final target inspection', async () => {
     const destination = path.join(mcpRoot, 'owned.json');
     await fs.writeFile(destination, 'original');

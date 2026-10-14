@@ -112,6 +112,12 @@ export async function enhanceBugReport(params: EnhanceParams): Promise<EnhanceSe
 
   const model = await modelService.getModel(modelId);
   if (!model) return { success: false, statusCode: 404, error: 'Model not found' };
+  // This route selects a saved model by ID, but the direct-completion service
+  // resolves its public alias again. Do not let a bound model's technical name
+  // resolve to a different, locally credentialed model with that display name.
+  if (model.ownerCredentialBinding !== undefined) {
+    return { success: true, statusCode: 200, result: fallback };
+  }
   const identifier = (model.displayName?.trim() || model.name || '').trim();
 
   const userText =

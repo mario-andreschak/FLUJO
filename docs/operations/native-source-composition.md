@@ -56,9 +56,36 @@ replay/restart/revocation reconciliation and the requested Worker/attached-child
 journey require the actual producer. Full, remote, packed/installed and container
 validation remains release pre-flight.
 
+The Original model-step sender and Native attached-child scope use separate
+private capabilities. Integrating them must preserve Original account routing,
+single-request claims, historical read authority and the actual Persona fence.
+An attached Native child keeps its own bound conversation and logical run while
+sharing the Parent mutation fence; it cannot turn that scope into an Original
+owner credential or a root admission. Asynchronous handoff decisions must finish
+before Process advertises the permitted tools.
+
+The current restricted Codex runtime forces ChatGPT login and transfers that
+subscription authentication into its private home. A Parent profile attestation
+does not change this backend, and an OpenRouter account cannot qualify it.
+Integrations requiring OpenRouter inference need a compatible, independently
+qualified provider path before invoking Native or claiming connected acceptance.
+
 The October 14 consumer correction reproduced both the observer leak and lost
 cleanup-error path before the repair. All 34 cases in the five affected
 client/adapter/tool/build-selection suites, canonical typecheck, whole-source
 lint and zero-warning changed-test/config lint passed afterward. These checks
 exercise deterministic Parent controls; the genuine producer and connected
 Worker/attached-child journey remain unfinished.
+
+The subsequent integration with main `0411a199` preserves Original account
+routing, model-step issuance and sending, historical read authority, and the
+Persona fence alongside Native child scopes. The Native host regression fixture
+now saves its selected native model before dispatcher capture, matching the
+catalog admission required by production Process execution. All 44 Native host
+cases and 167 other affected cases passed; one Unix permission control was
+skipped on Windows. The unchanged built Original path also passed a genuine
+`openrouter/free` goal through its saved sender receipt, completion marker,
+archive and Chat result, including restart durability. These results qualify
+that integration and Original path; they do not supply the missing Native
+producer or connected Worker acceptance. See the
+[qualification receipt](evidence/native-source-main-integration-2026-10-14.json).

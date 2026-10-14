@@ -1,5 +1,8 @@
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { modelService } from '@/backend/services/model';
+import { MAX_EXECUTION_MODEL_STEP_ORDINAL, registerExecutionExtension } from '@/backend/execution/extensions';
+import { bindExecutionModelStepOrdinals, takeExecutionModelStepOrdinal } from '@/backend/execution/flow/modelStepOrdinals';
+import { fixtureAdapter, mintFixture } from '../executionExtensions/fixtureAdapter';
 import { FinishNode, ProcessNode } from '@/backend/execution/flow/nodes';
 import type {
   ProcessNodeParams,
@@ -21,7 +24,7 @@ const message = (
   id: string
 ): FlujoChatMessage => ({ role, content, id, timestamp: 1 } as FlujoChatMessage);
 
-function prep(availableTools: ToolDefinition[] = [handoffTool()]): ProcessNodePrepResult {
+function prep(availableTools: ToolDefinition[] = [handoffTool()], runState = ordinalState()): ProcessNodePrepResult {
   return {
     nodeId: 'proc',
     nodeType: 'process',
@@ -29,6 +32,8 @@ function prep(availableTools: ToolDefinition[] = [handoffTool()]): ProcessNodePr
     boundModel: 'image-model',
     availableTools,
     messages: [message('user', 'Generate a banana ice cream image', 'u1')],
+    runId: runState.logicalRunId,
+    takeModelStepOrdinal: () => takeExecutionModelStepOrdinal(runState, 'proc', runState.logicalRunId),
   };
 }
 
@@ -53,6 +58,13 @@ function state(): SharedState {
     createdAt: 1,
     updatedAt: 1,
   } as SharedState;
+}
+
+function ordinalState(): SharedState {
+  const runState = state();
+  runState.logicalRunId = 'logical-run';
+  bindExecutionModelStepOrdinals(runState, undefined);
+  return runState;
 }
 
 function nodeWithFinish(): ProcessNode {
@@ -124,6 +136,96 @@ describe('ProcessNode unsupported-tool fallback', () => {
     await expect(node.post(prep(), exec, state(), nodeParams)).resolves.toBe('e-finish');
   });
 
+  it('denies a protected OpenRouter route before credential-bearing catalogue discovery', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'legacy-openrouter-model',
+      ApiKey: 'encrypted:protected',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      adapter: 'openai',
+    });
+    const fetchProviderModels = jest.spyOn(modelService, 'fetchProviderModels').mockResolvedValue([]);
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockResolvedValue(successfulCompletion as any);
+    const adapter = fixtureAdapter({ modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }) });
+    const restore = registerExecutionExtension(adapter);
+    try {
+      await expect(nodeWithFinish().execCore({ ...prep(), mcpNodesForDispatch: [], executionExtensionContext: mintFixture(adapter) }, params()))
+        .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
+      expect(fetchProviderModels).not.toHaveBeenCalled();
+      expect(callModel).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('skips catalogue discovery for a branded owner with no model-attempt policy', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'legacy-openrouter-model',
+      ApiKey: 'encrypted:ordinary',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      adapter: 'openai',
+    });
+    const fetchProviderModels = jest.spyOn(modelService, 'fetchProviderModels').mockResolvedValue([]);
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockResolvedValue(successfulCompletion as any);
+    const adapter = fixtureAdapter();
+    const restore = registerExecutionExtension(adapter);
+    try {
+      const exec = await nodeWithFinish().execCore({ ...prep(), mcpNodesForDispatch: [], executionExtensionContext: mintFixture(adapter) }, params());
+      expect(exec.success).toBe(true);
+      expect(fetchProviderModels).not.toHaveBeenCalled();
+      expect(callModel).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('uses the existing tool-free fallback when a branded ordinary run skips catalogue discovery', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'legacy-openrouter-model',
+      ApiKey: 'encrypted:ordinary',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      adapter: 'openai',
+    });
+    const fetchProviderModels = jest.spyOn(modelService, 'fetchProviderModels').mockResolvedValue([]);
+    const callModel = jest.spyOn(ModelHandler, 'callModel')
+      .mockResolvedValueOnce(unsupportedTools as any)
+      .mockResolvedValueOnce(successfulCompletion as any);
+    const adapter = fixtureAdapter();
+    const restore = registerExecutionExtension(adapter);
+    try {
+      const exec = await nodeWithFinish().execCore({ ...prep(), mcpNodesForDispatch: [], executionExtensionContext: mintFixture(adapter) }, params());
+      expect(exec.success).toBe(true);
+      expect(fetchProviderModels).not.toHaveBeenCalled();
+      expect(callModel).toHaveBeenCalledTimes(2);
+      expect(callModel.mock.calls[0][0].tools).toHaveLength(1);
+      expect(callModel.mock.calls[1][0].tools).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it('retains catalogue discovery for an unbranded ordinary run', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'legacy-openrouter-model',
+      ApiKey: 'encrypted:ordinary',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      adapter: 'openai',
+    });
+    const fetchProviderModels = jest.spyOn(modelService, 'fetchProviderModels').mockResolvedValue([]);
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockResolvedValue(successfulCompletion as any);
+    const exec = await nodeWithFinish().execCore(prep(), params());
+    expect(exec.success).toBe(true);
+    expect(fetchProviderModels).toHaveBeenCalledTimes(1);
+    expect(callModel).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a provider response that arrives after Persona authority is lost', async () => {
     const leaseLost = new Error('Persona lease is no longer current');
     const assertCurrent = jest
@@ -162,6 +264,84 @@ describe('ProcessNode unsupported-tool fallback', () => {
     expect(callModel.mock.calls[0][0].tools).toHaveLength(1);
     expect(callModel.mock.calls[1][0].tools).toBeUndefined();
     await expect(node.post(prep(), exec, state(), nodeParams)).resolves.toBe('e-finish');
+  });
+
+  it('keeps the actual Process node and one ordinal source across the fallback', async () => {
+    const runState = ordinalState();
+    const slots: Array<{ nodeId: string; ordinal: number }> = [];
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      slots.push({ nodeId: input.nodeId, ordinal: input.takeModelStepOrdinal!() });
+      return slots.length === 1 ? unsupportedTools as any : successfulCompletion as any;
+    });
+    const node = nodeWithFinish();
+    const nodeParams = params();
+
+    const result = await node.execCore(prep([handoffTool()], runState), nodeParams);
+
+    expect(result.success).toBe(true);
+    expect(callModel).toHaveBeenCalledTimes(2);
+    expect(slots).toEqual([{ nodeId: 'proc', ordinal: 0 }, { nodeId: 'proc', ordinal: 1 }]);
+    expect(callModel.mock.calls[0][0].takeModelStepOrdinal)
+      .toBe(callModel.mock.calls[1][0].takeModelStepOrdinal);
+    await node.execCore(prep([], runState), nodeParams);
+    expect(slots).toEqual([
+      { nodeId: 'proc', ordinal: 0 },
+      { nodeId: 'proc', ordinal: 1 },
+      { nodeId: 'proc', ordinal: 2 },
+    ]);
+  });
+
+  it('continues the same Process slot sequence on a later visit', async () => {
+    const runState = ordinalState();
+    const slots: Array<{ nodeId: string; ordinal: number }> = [];
+    jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      slots.push({ nodeId: input.nodeId, ordinal: input.takeModelStepOrdinal!() });
+      return successfulCompletion as any;
+    });
+    const node = nodeWithFinish();
+    await node.execCore(prep([], runState), params());
+    await node.execCore(prep([], runState), params());
+    expect(slots).toEqual([{ nodeId: 'proc', ordinal: 0 }, { nodeId: 'proc', ordinal: 1 }]);
+  });
+
+  it('continues the same Process slot after a saved-state resume', async () => {
+    const runState = ordinalState();
+    const slots: number[] = [];
+    jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      slots.push(input.takeModelStepOrdinal!());
+      return successfulCompletion as any;
+    });
+    const node = nodeWithFinish();
+    await node.execCore(prep([], runState), params());
+    const reloaded = JSON.parse(JSON.stringify(runState)) as SharedState;
+    bindExecutionModelStepOrdinals(reloaded, reloaded.logicalRunId);
+    await node.execCore(prep([], reloaded), params());
+    expect(slots).toEqual([0, 1]);
+  });
+
+  it('refuses a changed Process node identity before taking an owner ordinal', async () => {
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      input.takeModelStepOrdinal!();
+      return successfulCompletion as any;
+    });
+    await expect(nodeWithFinish().execCore({ ...prep(), nodeId: 'different' }, params()))
+      .rejects.toMatchObject({ code: 'execution_model_step_slot_required' });
+    expect(callModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('exhausts the Process ordinal range before returning a reused slot', async () => {
+    let takeOrdinal: (() => number) | undefined;
+    jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      takeOrdinal = input.takeModelStepOrdinal;
+      return successfulCompletion as any;
+    });
+    await nodeWithFinish().execCore(prep([]), params());
+    expect(takeOrdinal).toBeDefined();
+    for (let ordinal = 0; ordinal < MAX_EXECUTION_MODEL_STEP_ORDINAL; ordinal++) {
+      takeOrdinal!();
+    }
+    expect(takeOrdinal!()).toBe(MAX_EXECUTION_MODEL_STEP_ORDINAL);
+    expect(takeOrdinal!).toThrow(expect.objectContaining({ code: 'execution_model_step_slot_exhausted' }));
   });
 
   it('retries handoff-only tools when conditioned edges own the routing decision', async () => {

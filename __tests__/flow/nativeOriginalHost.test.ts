@@ -106,7 +106,8 @@ import { createRoleVersion, getPersonaWorkItem, savePersonaWorkItem } from '@/ba
 import { stopPersonaGoalRuntime } from '@/backend/services/enduringAgents/goalRuntime';
 import { buildTestRoleVersion, createPersonaFromRole, ensureTestRole } from '../enduringAgents/fixtures/personaFactory';
 import { runWithWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
-import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
+import { loadCollectionItem, saveCollectionItem, saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { createOwnedCodexThread } from '@/backend/services/model/adapters/codexOwnedThread';
@@ -293,6 +294,10 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       phase('role authored');
     }
     const { persona } = await createPersonaFromRole({ name: 'Native host fixture', idempotencyKey: 'native-host-persona', autonomyLevel: 'locked', roleVersionId });
+    // Process admits the actual saved catalog under its filesystem lease. The
+    // shared Persona factory seeds an ordinary OpenAI model; install this
+    // suite's selected native model before genuine dispatcher capture.
+    await saveItem(StorageKey.MODELS, [{ ...selectedModel }]);
     phase('persona created');
     const goal = await createPersonaWorkItem({ personaId: persona.id, title: 'Offline host contract',
       goal: { successCriteria: 'Offline lifecycle proof', continuationIntervalMs: 10000 } });

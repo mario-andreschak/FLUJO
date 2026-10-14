@@ -10,6 +10,7 @@ import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { parseDataUrl } from './messageUtils';
 import { supportsExplicitOpenAiPromptCaching } from './openaiPromptCaching';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -621,8 +622,10 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     promptCacheKey,
     promptCacheMode,
     toolNameMap,
+    executionExtensionContext,
     readOnlyAssessment,
     } = assessmentInput;
+    await assertExecutionExtensionConcreteAdapter(executionExtensionContext, model, 'openai-responses');
     const openai = createOpenAIClient({
       apiKey,
       baseURL: model.baseUrl,
@@ -749,9 +752,11 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     onSdkRequest,
     onSdkRequestResult,
     toolNameMap,
+    executionExtensionContext,
     readOnlyAssessment,
   }: CompletionInput): Promise<CompletionResult> {
     if (readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
+    await assertExecutionExtensionConcreteAdapter(executionExtensionContext, model, 'openai-responses');
     const openai = createOpenAIClient({
       apiKey,
       baseURL: model.baseUrl,

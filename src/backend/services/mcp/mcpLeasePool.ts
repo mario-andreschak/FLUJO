@@ -156,6 +156,7 @@ function makeLease(serverName: string, client: Client, generation: number): McpL
 export async function acquireLease(
   backend: LeaseBackend,
   serverName: string,
+  connectServer: (serverName: string) => Promise<{ success: boolean; error?: string }> = (name) => backend.connectServer(name),
 ): Promise<AcquireResult> {
   counters().acquires += 1;
 
@@ -174,7 +175,7 @@ export async function acquireLease(
   }
 
   counters().connects += 1;
-  const result = await backend.connectServer(serverName);
+  const result = await connectServer(serverName);
   const client = backend.getClient(serverName);
   if (!result.success || !client) {
     counters().failures += 1;

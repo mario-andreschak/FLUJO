@@ -78,9 +78,9 @@ resumable bulk migration with preflight/backup/integrity verification, credentia
 free ordinary exports, encrypted recipient transfer, complete operator rotation,
 and worker restore under each declared profile. A restored operator profile
 requires its independently provisioned matching mount; a snapshot alone supplies
-no replacement protection secret. The existing snapshot capture path still
-expects an interactive unlock capability; operator capture/transfer integration
-is pending and must not substitute the mount secret into snapshot material.
+no replacement protection secret. Deliberate operator worker capture validates
+the matching independent mount against the captured metadata, as described below;
+it must not substitute the mount secret into snapshot material.
 Source tests and temporary source processes
 do not establish installed-artifact, human or independent external acceptance.
 

@@ -332,9 +332,9 @@ function Test-FlujoNodeVersion {
     $parts = $result.Version.Split('.')
     $major = [int]$parts[0]
     $minor = [int]$parts[1]
-    $supported = ($major -eq 22 -and $minor -ge 17) -or ($major -eq 24 -and $minor -ge 2)
+    $supported = ($major -eq 22 -and $minor -ge 19) -or ($major -eq 24 -and $minor -ge 2)
     $result.Status = if ($supported) { 'Supported' } else { 'Outdated' }
-    $result.Message = 'FLUJO requires Node.js 22.17+ within 22.x, or 24.2+ within 24.x; use a current patched release on either line.'
+    $result.Message = 'FLUJO requires Node.js 22.19+ within 22.x, or 24.2+ within 24.x; use a current patched release on either line.'
     return $result
 }
 
