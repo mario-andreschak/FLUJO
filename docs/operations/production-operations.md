@@ -181,7 +181,7 @@ Use the format appropriate to the operation:
 
 | Backup/restore | Meaning and limit |
 | --- | --- |
-| Selective `/api/backup` → `/api/restore` | Legacy `backup-info.json` version `1.0`, selected storage/MCP files for one workspace. It is not a complete installation or scheduler/approval recovery backup. Sensitive selections include keys/env/model/MCP credentials; protect them and do not share the archive as evidence. |
+| Selective `/api/backup` → `/api/restore` | `backup-info.json` version `1.0`, selected ordinary records for one workspace. Current exports omit encryption metadata, raw server folders and recognized model/MCP/environment credentials; connections need reconfiguration after restore. Older archives can still contain credentials, and secrets in user-authored prose/code are not detected. Review and protect archives before sharing. This is not a complete installation or scheduler/approval recovery backup. |
 | Snapshot format 2 | The [coherent snapshot protocol](../features/hot-clone-workspace.md) has a capture barrier, manifest/member digests, layout/protocol/version checks and explicit sensitive transfer. Download and verify before finalize. Restore is a controlled workspace fork, not live bidirectional replication. Copied schedules stay suppressed; installation-local provenance is excluded. |
 | Offline complete data-root + external private configuration | Installation disaster recovery includes all namespace and installation-private state plus separately backed-up protected key/policy/authority material. Keep a single active restored installation. A complete duplicate with identical authority is not fenced by local HMAC provenance alone. |
 
@@ -239,6 +239,15 @@ retain its run/approval, let the model propose a fresh current tool call and mak
 an explicit decision on that proposal. The stale call must not execute. This
 source drill records actual counted effects and keeps the broader acceptance
 below open.
+
+The [complete installation source restore drill](../audits/2026-10-14-installation-restore-source-570.md)
+verifies a stopped encrypted full-root capture with separate owner/key/session
+material, original-path publication, missing/mismatched protection refusal,
+retained session decisions and one explicit retry using the restored credential.
+Missing configured owner policy refuses startup; restore or repair that private
+policy with an active credential before restarting. Changing network exposure
+does not repair configured owner authority. This regular-file source fixture
+does not qualify an installed artifact or an upgrade/rollback.
 
 A technically independent non-author operator must install the pinned candidate
 on its intended profile, diagnose a seeded failed schedule, authenticate, back

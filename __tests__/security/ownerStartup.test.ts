@@ -50,6 +50,35 @@ test.each(['network', 'public'])('admits %s with an active scoped policy at star
   process.env.FLUJO_OWNER_AUTH_FILE = filename;
   expect(() => assertOwnerStartup(2000)).not.toThrow();
 });
+test.each(['localhost', 'network', 'public'])('missing configured %s policy explains authority recovery before any startup work', async mode => {
+  process.env.FLUJO_EXPOSURE_MODE = mode;
+  process.env.FLUJO_OWNER_AUTH_FILE = filename;
+  fs.unlinkSync(filename);
+  const recovery = 'Restore or repair the matching private owner policy at FLUJO_OWNER_AUTH_FILE';
+  expect(() => assertOwnerStartup(2000)).toThrow(recovery);
+  await expect(initializeNodeRuntime()).rejects.toThrow(recovery);
+  expect(mockLayout).not.toHaveBeenCalled();
+  try { assertOwnerStartup(2000); } catch (error) {
+    expect(String(error)).not.toContain('Restart with FLUJO_EXPOSURE_MODE=localhost');
+    expect(String(error)).not.toContain(filename);
+    expect(String(error)).not.toContain(policy.credentials[0].digest);
+  }
+});
+test.each(['corrupt', 'expired', 'revoked'])('configured localhost %s policy requires active authority and stays fail-closed', variant => {
+  process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+  process.env.FLUJO_OWNER_AUTH_FILE = filename;
+  if (variant === 'revoked') policy.credentials[0].revokedAt = 1500;
+  persist();
+  if (variant === 'corrupt') fs.writeFileSync(filename, 'private-corrupt-policy-content');
+  const now = variant === 'expired' ? 10_000 : 2000;
+  expect(() => assertOwnerStartup(now)).toThrow('with a current active owner credential');
+  try { assertOwnerStartup(now); } catch (error) {
+    expect(String(error)).not.toContain('Restart with FLUJO_EXPOSURE_MODE=localhost');
+    expect(String(error)).not.toContain(filename);
+    expect(String(error)).not.toContain('private-corrupt-policy-content');
+    expect(String(error)).not.toContain(policy.credentials[0].digest);
+  }
+});
 test.each(['empty', 'expired', 'future', 'revoked', 'corrupt', 'missing'])('refuses %s authority with a redacted recovery error', variant => {
   process.env.FLUJO_EXPOSURE_MODE = 'public';
   process.env.FLUJO_OWNER_AUTH_FILE = filename;
