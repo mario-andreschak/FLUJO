@@ -1,5 +1,6 @@
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
+import { ExecutionExtensionError, isExecutionProtectedState } from '@/backend/execution/extensions';
 import {
   SharedState,
   SubflowNodeParams,
@@ -684,6 +685,11 @@ function buildChildEmit(
  */
 export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, SubflowNodePrepResult, SubflowNodeExecResult> {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
+    // Child runs do not yet receive an owner-issued execution context. Stop
+    // before prompt projection, durable invocation, or either child run path.
+    if (sharedState.executionExtensionContext || isExecutionProtectedState(sharedState)) {
+      throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+    }
     const subflowId = node_params?.properties?.subflowId;
     const existingInvocation = activeInvocationForNode(sharedState, node_params?.id);
     if (existingInvocation) {
@@ -1525,6 +1531,13 @@ export async function runSubflowLanes(
     const parentState = prepResult.parentRunId
       ? FlowExecutor.conversationStates.get(prepResult.parentRunId)
       : undefined;
+    // Every lane entry point converges here, including synthetic inline and
+    // detached tools that do not call SubflowNode.prep. A protected parent
+    // cannot mint a child run by presenting a fabricated prep result.
+    if (prepResult.executionExtensionContext || isExecutionProtectedState(prepResult)
+      || (parentState && (parentState.executionExtensionContext || isExecutionProtectedState(parentState)))) {
+      throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+    }
     const invocation = prepResult.invocationId && parentState
       ? parentState.subflowInvocations?.[prepResult.invocationId]
       : undefined;

@@ -82,9 +82,23 @@ The `selections` array can include any combination of the following items:
 
 ```json
 {
-  "success": true
+  "success": true,
+  "status": "complete",
+  "selectionResults": { "models": { "restored": 1, "failed": 0 } }
 }
 ```
+
+Only a complete restore returns `success: true`. A partial restore returns HTTP
+200 with `success: false` and `status: "partial"`; successful writes remain saved.
+All failed entries return HTTP 500 with `status: "failed"`; no selected data
+returns HTTP 400 with `status: "empty"`. Invalid ZIPs, metadata or selections
+return HTTP 400. Per-selection counts cover confirmed writes, skipped/failed
+entries and failure markers carried from partial backups. Missing optional
+legacy keys are empty. Outcomes do not include exception details or file paths.
+
+Restore is not a multi-record transaction. Keep the uploaded file after an
+incomplete result; retry upserts selected data and may overwrite earlier
+successful ordinary restores. Omitted backup data cannot be reconstructed.
 
 ## Restore Process
 
@@ -158,12 +172,13 @@ const response = await fetch('/api/restore', {
   body: formData
 });
 
-if (response.ok) {
-  const data = await response.json();
+const data = await response.json();
+if (response.ok && data.success === true) {
   console.log('Restore completed successfully');
+} else if (data.status === 'partial') {
+  console.warn('Some items were restored; keep the backup and review failed selections.', data.selectionResults);
 } else {
-  const errorData = await response.json();
-  console.error(`Error restoring from backup: ${errorData.error}`);
+  console.error('Restore incomplete. Keep the backup for retry.', data.status || data.error);
 }
 ```
 

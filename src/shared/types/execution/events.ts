@@ -127,7 +127,9 @@ export type ExecutionEventType =
   | 'run:awaiting_approval'
   | 'run:awaiting_elicitation'
   | 'run:elicitation_cancelled'
+  | 'run:elicitation_resolved'
   | 'run:awaiting_question'
+  | 'run:question_resolved'
   | 'run:done'
   | 'recovery:checkpoint'
   | 'recovery:transition'
@@ -217,6 +219,11 @@ export interface RunElicitationCancelledEvent extends ExecutionEventBase {
   type: 'run:elicitation_cancelled';
   elicitationId: string;
 }
+export interface RunElicitationResolvedEvent extends ExecutionEventBase {
+  type: 'run:elicitation_resolved';
+  elicitationId: string;
+  action: 'accept' | 'decline' | 'cancel';
+}
 export interface RunAwaitingElicitationEvent extends ExecutionEventBase {
   type: 'run:awaiting_elicitation';
   /** Stable ID for correlating the SSE event to the /respond route call. */
@@ -250,6 +257,18 @@ export interface RunAwaitingQuestionEvent extends ExecutionEventBase {
   questionId: string;
   /** The questions to ask, in order. */
   questions: QuestionPrompt[];
+}
+export interface RunQuestionResolvedEvent extends ExecutionEventBase {
+  type: 'run:question_resolved';
+  questionId: string;
+  action: 'answer' | 'decline' | 'timeout';
+}
+/** Live, conversation-owned mailboxes. These do not survive a process restart. */
+export interface PendingInputSnapshot {
+  /** Next sequence observed with the synchronous mailbox snapshot. */
+  nextSeq: number;
+  questions: Array<{ questionId: string; questions: QuestionPrompt[]; createdAt: number; node?: NodeRef }>;
+  elicitations: Array<{ elicitationId: string; message: string; requestedSchema: Record<string, unknown>; createdAt: number; node?: NodeRef }>;
 }
 export interface RunDoneEvent extends ExecutionEventBase {
   type: 'run:done';
@@ -569,7 +588,9 @@ export type ExecutionEvent =
   | RunAwaitingApprovalEvent
   | RunAwaitingElicitationEvent
   | RunElicitationCancelledEvent
+  | RunElicitationResolvedEvent
   | RunAwaitingQuestionEvent
+  | RunQuestionResolvedEvent
   | RunDoneEvent
   | RecoveryCheckpointEvent
   | RecoveryTransitionEvent

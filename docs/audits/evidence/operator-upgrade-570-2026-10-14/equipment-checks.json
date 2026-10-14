@@ -1,0 +1,12 @@
+{
+  "equipment": {
+    "scripts/operations-acceptance/build-evidence.mjs": "f956be2065de2eec9a4b8f95db78b6f6b9b80b2680d2c5821b7c1d5b4afcbadd",
+    "scripts/operations-acceptance/operator-upgrade.mjs": "954eb01bc4b2741e11c6f6ccc07b3774f6c3e8c64929578f8ff43c270145582a",
+    "scripts/operations-acceptance/operator-upgrade.test.mjs": "2f033b98b923923be39d4bca1fe2d83a892016476b5d36ec8363f878081edcfa"
+  },
+  "lintExit": 0,
+  "seconds": 3.3165672,
+  "testExit": 0,
+  "startedAt": "2026-10-14T13:31:44.3296211Z",
+  "completedAt": "2026-10-14T13:31:47.6447924Z"
+}

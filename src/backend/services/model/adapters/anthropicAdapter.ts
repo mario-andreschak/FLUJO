@@ -14,6 +14,7 @@ import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import { v4 as uuidv4 } from 'uuid';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
+import { assertOwnerCredentialAdapterRoute } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
@@ -660,6 +661,7 @@ export class AnthropicAdapter implements CompletionAdapter {
   ): Promise<CompletionResult> {
     assertReadOnlyAssessmentInput(input);
     const { model, apiKey, messages, tools, temperature, maxTokens, signal, onSdkRequest, onSdkRequestResult, readOnlyAssessment } = input;
+    assertOwnerCredentialAdapterRoute(model, 'anthropic');
     const client = new Anthropic({
       ...(model.provider === 'openrouter'
         ? { apiKey: null, authToken: apiKey }

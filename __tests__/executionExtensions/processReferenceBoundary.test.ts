@@ -6,12 +6,17 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { registerExecutionExtension } from '@/backend/execution/extensions';
 import { fixtureAdapter, fixtureRun, mintFixture } from './fixtureAdapter';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), verbose: jest.fn() }) }));
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConversationState: jest.fn() }));
 
 describe('bound normal Process references and late provider results', () => {
   let restore: () => void;
+  beforeEach(async () => {
+    await saveItem(StorageKey.MODELS, [{ id: 'model-1', name: 'Fixture', provider: 'openai', adapter: 'openai', ApiKey: '' }]);
+  });
   afterEach(() => { restore?.(); jest.restoreAllMocks(); jest.mocked(loadConversationState).mockClear(); });
   function setup() {
     const adapter = fixtureAdapter(); restore = registerExecutionExtension(adapter);

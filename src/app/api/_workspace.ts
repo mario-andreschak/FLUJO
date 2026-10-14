@@ -250,12 +250,17 @@ export function withWorkspaceRoute<
       }
     }
     return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
-      const selected = await withWorkspace(admittedRequest, () => Promise.resolve(
-        invoke(
+      const selected = await withWorkspace(admittedRequest, async () => {
+        const run = () => invoke(
           admittedRequest === (request ?? normalizedRequest) ? handlerRequest : admittedRequest,
           ...rest,
-        ),
-      ));
+        );
+        if (ownerAuthorization && admittedRequest.method === 'GET' && !isWorkerMode()) {
+          const { withOriginalOwnerHistoryAccess } = await import('@/backend/services/originalOwner/history');
+          return withOriginalOwnerHistoryAccess(admittedRequest, run);
+        }
+        return run();
+      });
       return ownerAuthorization && selected instanceof Response
         ? bindOwnerStream(selected, ownerAuthorization, transportRequest.signal)
         : selected;

@@ -17,7 +17,7 @@ docker image inspect --format '{{.Id}}' flujo-skillspector:2.12.0
 
 Set `FLUJO_SKILLSPECTOR_IMAGE` to that **full local `sha256:…` configuration ID** and restart FLUJO. Mutable image tags and missing/mismatched images are refused. Review never pulls images or installs software. The build fetches NVIDIA's immutable source archive and release wheel, checks both SHA256 hashes, uses the upstream frozen `uv.lock` graph, and refuses source-distribution dependency builds. Python and uv builder images are digest-pinned. Keep the local image until all reviews using it have finished.
 
-Run the local engine acceptance separately from CI (supported Node 22.17+ or 24.2+):
+Run the local engine acceptance separately from CI (supported Node 22.19+ or 24.2+):
 
 ```sh
 node --experimental-strip-types scripts/smoke-skillspector.mjs sha256:YOUR_FULL_LOCAL_IMAGE_ID

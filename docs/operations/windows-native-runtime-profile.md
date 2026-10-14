@@ -40,7 +40,10 @@ changes Node/libuv together and does not prove installed startup.
 
 This source proposal changes all five public packages and the internal shared
 workspace from their former Node 20+/22+ ranges to the closed range
-`^22.17.0 || ^24.2.0`. These are six tracked engine declarations; the public
+`^22.19.0 || ^24.2.0`. The Node 22 floor also meets Undici 8's
+[declared minimum](https://github.com/nodejs/undici/blob/v8.11.2/package.json);
+22.17/22.18 users must activate a current patched Node 22.x or 24.x before starting.
+The historical filesystem evidence below still describes its measured 22.17 runtime. These are six tracked engine declarations; the public
 release set remains the app plus four MCP packages. It excludes
 older Node 22, Node 23, early Node 24 and every other major. Node 22.17.0 and
 24.2.0 both contain libuv 1.51.0 ([Node 22 source](https://github.com/nodejs/node/blob/v22.17.0/deps/uv/include/uv/version.h),

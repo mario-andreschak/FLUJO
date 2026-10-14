@@ -15,11 +15,15 @@ import type OpenAI from 'openai';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { registerPendingApproval, listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
 import { hidePresetParameters } from '@/utils/shared/toolParameterPresets';
+import { executeQuestionTool } from '@/backend/execution/flow/handlers/runQuestionTool';
+import { declinePendingQuestion } from '@/backend/services/questionRegistry';
 
 const codexCtorMock = jest.fn();
 jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({
@@ -31,6 +35,38 @@ jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({
 // Ordinary RPC lifecycle is exercised separately in codexAppServerThread.test.ts.
 const previousAppServer = process.env.FLUJO_CODEX_APP_SERVER;
 beforeEach(() => { process.env.FLUJO_CODEX_APP_SERVER = '0'; });
+
+it('cancels only a direct question approval when its individual request is revoked', async () => {
+  const controller = new AbortController(), conversationId = 'direct-question-approval';
+  const sibling = { id: 'sibling', type: 'function' as const, function: { name: 'sibling', arguments: '{}' } };
+  const siblingResolved = jest.fn(), execute = jest.fn();
+  const transcript: FlujoChatMessage[] = [];
+  let registered!: () => void; const seen = new Promise<void>(resolve => { registered = resolve; });
+  registerPendingApproval(conversationId, sibling, siblingResolved);
+  runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+    await capturedBridgeTools[0].handler({ questions: [{ prompt: 'Color?', options: ['Blue'] }] }, undefined, controller.signal);
+  })() }));
+  const running = new CodexAdapter().createCompletion(baseInput({ conversationId,
+    onTranscriptMessage: message => { transcript.push(message); },
+    tools: [{ type: 'function', function: { name: 'question', description: 'Ask', parameters: { type: 'object' } } }],
+    localToolExecutors: { question: execute },
+    requestToolApproval: call => new Promise<boolean>(resolve => {
+      registerPendingApproval(conversationId, { id: call.id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) } }, resolve);
+      registered();
+    }),
+  }));
+  try {
+    await seen;
+    expect(listPendingToolCalls(conversationId)).toHaveLength(2);
+    controller.abort();
+    await expect(running).rejects.toThrow();
+    expect(execute).not.toHaveBeenCalled();
+    expect(transcript.filter(message => message.role === 'tool')).toHaveLength(1);
+    expect(transcript.find(message => message.role === 'tool')?.content).toContain('no answer was submitted');
+    expect(listPendingToolCalls(conversationId)).toEqual([sibling]);
+    expect(siblingResolved).not.toHaveBeenCalled();
+  } finally { clearPendingApprovals(conversationId); }
+});
 afterAll(() => {
   if (previousAppServer === undefined) delete process.env.FLUJO_CODEX_APP_SERVER;
   else process.env.FLUJO_CODEX_APP_SERVER = previousAppServer;
@@ -42,6 +78,10 @@ jest.mock('@/backend/services/model/adapters/codexSessionStore', () => ({
 const startThreadMock = jest.fn();
 const resumeThreadMock = jest.fn();
 const runStreamedMock = jest.fn();
+const appServerThreadMock = jest.fn();
+jest.mock('@/backend/services/model/adapters/codexAppServerThread', () => ({
+  createCodexAppServerThread: (...args: unknown[]) => appServerThreadMock(...args),
+}));
 const readTokenSnapshotMock = jest.fn();
 jest.mock('@/backend/services/model/adapters/codexContextUsage', () => ({
   readCodexTokenSnapshot: (...args: unknown[]) => readTokenSnapshotMock(...args),
@@ -164,6 +204,10 @@ beforeEach(() => {
   startThreadMock.mockReset();
   resumeThreadMock.mockReset();
   runStreamedMock.mockReset();
+  appServerThreadMock.mockReset().mockImplementation(() => ({
+    runStreamed: runStreamedMock, close: jest.fn(async () => {}),
+    usage: () => undefined, canSteer: () => false, steer: jest.fn(async () => false),
+  }));
   readTokenSnapshotMock.mockReset().mockResolvedValue(undefined);
   modelCatalogCleanupMock.mockReset().mockResolvedValue(undefined);
   prepareModelCatalogMock.mockReset().mockResolvedValue({
@@ -198,7 +242,93 @@ beforeEach(() => {
   }));
 });
 
+it.each([false, true])('allows the MCP computation host while denying native operations with ordinary questions enabled=%s', async enabled => {
+  process.env.FLUJO_CODEX_APP_SERVER = '1';
+  await new CodexAdapter().createCompletion(baseInput({ apiKey: '',
+    ...(enabled ? {
+      tools: [{ type: 'function', function: { name: 'question', description: 'Ask', parameters: { type: 'object' } } }],
+      localToolExecutors: { question: jest.fn(async () => 'Blue') },
+    } : {}),
+  }));
+  expect(codexCtorMock).not.toHaveBeenCalled();
+  const options = appServerThreadMock.mock.calls[0][0];
+  expect(options.config.features).toMatchObject({ shell_tool: false, unified_exec: false,
+    code_mode_host: true, code_mode: false, multi_agent: false,
+    default_mode_request_user_input: enabled });
+  expect(options.config.tools).toMatchObject({ view_image: false,
+    experimental_request_user_input: { enabled } });
+  expect(options.config.web_search).toBe('disabled');
+  expect(typeof options.onQuestion === 'function').toBe(enabled);
+  expect(typeof options.onAsyncQuestion === 'function').toBe(enabled);
+});
+
 describe('CodexAdapter — catalog snapshot lifetime', () => {
+  it.each(['pacing', 'fence'])('settles an individually cancelled question once during %s', async phase => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    const controller = new AbortController(), transcript: FlujoChatMessage[] = [], execute = jest.fn();
+    appServerThreadMock.mockImplementationOnce(options => ({
+      runStreamed: async () => ({ events: (async function* () {
+        await options.onQuestion([{ id: 'choice', header: 'Color', question: 'Choose a color. ' + 'x'.repeat(500),
+          isSecret: false, isOther: true, options: [{ label: 'Blue' }, { label: 'Green' }] }], controller.signal);
+      })() }), close: jest.fn(async () => {}), canSteer: () => false, usage: () => undefined,
+    }));
+    await expect(new CodexAdapter().createCompletion(baseInput({ apiKey: '',
+      tools: [{ type: 'function', function: { name: 'question', description: 'Ask', parameters: { type: 'object' } } }],
+      localToolExecutors: { question: execute }, requestToolApproval: async () => true,
+      beforeToolDispatch: async () => { if (phase === 'fence') controller.abort(); },
+      onModelDelta: delta => { if (phase === 'pacing' && delta.toolCallDelta?.argumentsDelta) controller.abort(); },
+      onTranscriptMessage: message => { transcript.push(message); },
+    }))).rejects.toBeDefined();
+    expect(execute).not.toHaveBeenCalled();
+    expect(transcript.filter(message => message.tool_calls?.length)).toHaveLength(1);
+    const results = transcript.filter(message => message.role === 'tool');
+    expect(results).toHaveLength(1); expect(results[0].content).toContain('no answer was submitted');
+  });
+
+  it('invalidates the reusable session when an async question is explicitly declined', async () => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    const conversationId = 'declined-native-session', onCodexSessionChange = jest.fn();
+    appServerThreadMock.mockImplementationOnce(options => ({
+      runStreamed: async () => ({ events: (async function* () {
+        yield { type: 'thread.started', thread_id: 'declined-thread' };
+        expect(await options.onAsyncQuestion([{ title: 'Which color?', options: ['Blue', 'Green'] }], new AbortController().signal))
+          .toEqual({ action: 'decline' });
+        yield turnCompleted({ input_tokens: 100, output_tokens: 20 });
+      })() }), close: jest.fn(async () => {}), canSteer: () => false, usage: () => ({ input_tokens: 100, output_tokens: 20 }),
+    }));
+    await new CodexAdapter().createCompletion(baseInput({ apiKey: '', conversationId, nodeId: 'process',
+      sessionResume: true, onCodexSessionChange,
+      tools: [{ type: 'function', function: { name: 'question', description: 'Ask', parameters: { type: 'object' } } }],
+      localToolExecutors: { question: args => executeQuestionTool(args, { conversationId,
+        emit: event => { if (event.type === 'run:awaiting_question') declinePendingQuestion(conversationId, event.questionId); },
+      }) },
+    }));
+    expect(onCodexSessionChange).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('retains executable and snapshot until a failed ordinary close receives actual close proof', async () => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    let closed!: () => void;
+    const proof = new Promise<void>(resolve => { closed = resolve; });
+    const failure = new Error('Owned closure remains unconfirmed');
+    appServerThreadMock.mockReturnValueOnce({ runStreamed: runStreamedMock,
+      close: jest.fn(async () => { throw failure; }), whenClosed: () => proof,
+      canSteer: () => false, usage: () => undefined });
+    await expect(new CodexAdapter().createCompletion(baseInput({ apiKey: '' }))).rejects.toBe(failure);
+    const acquired = await jest.requireMock('@/backend/services/model/adapters/codexRuntimeUpdate').acquireOrdinaryCodexExecutable.mock.results.at(-1).value;
+    expect(modelCatalogCleanupMock).not.toHaveBeenCalled(); expect(acquired.release).not.toHaveBeenCalled();
+    closed();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(modelCatalogCleanupMock).toHaveBeenCalledTimes(1); expect(acquired.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the current model-dispatch fence into ordinary answer continuations', async () => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    const beforeModelDispatch = jest.fn(async () => {});
+    await new CodexAdapter().createCompletion(baseInput({ apiKey: '', beforeModelDispatch }));
+    expect(appServerThreadMock.mock.calls[0][0].beforeContinuation).toBe(beforeModelDispatch);
+  });
+
   it('keeps the snapshot through lazy SDK iteration and cleans up only after termination', async () => {
     runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
       expect(modelCatalogCleanupMock).not.toHaveBeenCalled();
@@ -273,6 +403,29 @@ describe('CodexAdapter — catalog snapshot lifetime', () => {
 });
 
 describe('CodexAdapter — thread setup', () => {
+  it('rejects a direct owner-bound call before runtime setup or SDK construction', async () => {
+    const runtime = (jest.requireMock('@/backend/services/model/adapters/codexRuntimeHome') as {
+      prepareCodexRuntimeEnvironment: jest.Mock;
+    }).prepareCodexRuntimeEnvironment;
+    const catalog = prepareModelCatalogMock;
+    runtime.mockClear();
+    catalog.mockClear();
+
+    await expect(new CodexAdapter().createCompletion(baseInput({
+      model: {
+        id: 'owner-model', name: 'gpt-5.5', ApiKey: '', provider: 'codex', adapter: 'openai',
+        ownerCredentialBinding: { ownerId: 'owner', credentialId: 'credential' },
+      },
+      apiKey: 'local-secret',
+    }))).rejects.toMatchObject({ code: 'execution_owner_model_adapter_unsupported' });
+
+    expect(runtime).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+    expect(codexCtorMock).not.toHaveBeenCalled();
+    expect(startThreadMock).not.toHaveBeenCalled();
+    expect(runStreamedMock).not.toHaveBeenCalled();
+  });
+
   it('does not call or retry the SDK after archive authority is lost', async () => {
     const lost = new FlowExecutionAuthorityError('Persona was deleted');
     await expect(new CodexAdapter().createCompletion(baseInput({
@@ -1281,6 +1434,74 @@ describe('CodexAdapter — tool bridging', () => {
 });
 
 describe('CodexAdapter — SDK thread reuse', () => {
+  it.each(['known', 'missing', 'corrupt', 'oversized', 'incomplete', 'regressed', 'changed thread',
+    'invalid completed plain event', 'invalid completed compressed event'])
+  ('preserves the answer/context and reports only known invocation usage (%s baseline)', async (condition) => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-sdk-compressed-usage-'));
+    const directory = path.join(home, 'sessions/2026/10/13');
+    await fs.mkdir(directory, { recursive: true });
+    const threadId = '01a0ba76-e5e0-7a12-823b-5eed320794ca';
+    const secondId = condition === 'changed thread' ? '01a0ba76-e5e0-7a12-823b-5eed320794cb' : threadId;
+    const rollout = (id: string) => path.join(directory, `rollout-2026-10-13T00-00-00-${id}.jsonl`);
+    const firstUsage = { input_tokens: 10, output_tokens: 2, cached_input_tokens: 3,
+      cache_write_input_tokens: 0, reasoning_output_tokens: 1 };
+    const secondUsage = { input_tokens: 30, output_tokens: 6, cached_input_tokens: 9,
+      cache_write_input_tokens: 0, reasoning_output_tokens: 2 };
+    const line = (total: Record<string, number>, prompt: number, output: number) => JSON.stringify({
+      timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', info: {
+        total_token_usage: total, last_token_usage: { input_tokens: prompt, output_tokens: output,
+          total_tokens: prompt + output }, model_context_window: 258400,
+      } },
+    }) + '\n';
+    const reader = jest.requireActual<typeof import('@/backend/services/model/adapters/codexContextUsage')>(
+      '@/backend/services/model/adapters/codexContextUsage').readCodexTokenSnapshot;
+    readTokenSnapshotMock.mockImplementation((_runtimeHome: string, id: string) => reader(home, id));
+    runStreamedMock
+      .mockImplementationOnce(async () => {
+        await fs.writeFile(rollout(threadId), line(firstUsage, 10, 2));
+        return { events: eventStream([threadStarted(threadId), agentMessage('FIRST'), turnCompleted(firstUsage)])() };
+      })
+      .mockImplementationOnce(async () => {
+        await fs.writeFile(rollout(secondId), line(secondUsage, 20, 4));
+        return { events: eventStream([threadStarted(secondId), agentMessage('SECOND'), turnCompleted(secondUsage)])() };
+      });
+    const identity = { conversationId: 'compressed-usage-' + condition, nodeId: 'process', sessionResume: true };
+    try {
+      const first = await new CodexAdapter().createCompletion(baseInput(identity));
+      expect(first.completion.usage).toMatchObject({ prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 });
+      let encoded = zstdCompressSync(await fs.readFile(rollout(threadId)));
+      if (condition === 'corrupt') encoded = Buffer.from('corrupt');
+      if (condition === 'oversized') encoded = Buffer.alloc(8 * 1024 * 1024 + 1);
+      if (condition === 'incomplete') encoded = zstdCompressSync(line({ input_tokens: 10 }, 10, 2));
+      if (condition === 'regressed') encoded = zstdCompressSync(line({ ...firstUsage, input_tokens: 31, output_tokens: 7 }, 10, 2));
+      if (condition.startsWith('invalid completed')) {
+        const invalid = JSON.parse(line({ ...firstUsage, input_tokens: 20, output_tokens: 4 }, 20, 4));
+        invalid.payload.info.last_token_usage.total_tokens = 1;
+        const body = (await fs.readFile(rollout(threadId), 'utf8')) + JSON.stringify(invalid) + '\n';
+        if (condition === 'invalid completed plain event') await fs.writeFile(rollout(threadId), body);
+        else encoded = zstdCompressSync(body);
+      }
+      if (condition !== 'invalid completed plain event') {
+        if (condition !== 'missing') await fs.writeFile(rollout(threadId) + '.zst', encoded);
+        await fs.rm(rollout(threadId));
+      }
+      const result = await new CodexAdapter().createCompletion(baseInput({ ...identity, messages: [
+        { role: 'user', content: 'hi' }, { role: 'assistant', content: 'FIRST' }, { role: 'user', content: 'next' },
+      ] }));
+      expect(resumeThreadMock).toHaveBeenCalledTimes(1);
+      expect(result.transcript?.some(message => message.role === 'assistant' && message.content === 'SECOND')).toBe(true);
+      expect(result.completion.choices[0].message.content).toBe('SECOND');
+      expect(result.contextUsage).toMatchObject({ promptTokens: 20, completionTokens: 4, totalTokens: 24,
+        contextWindow: 258400, contextWindowSource: 'runtime' });
+      if (condition === 'known') expect(result.completion.usage).toMatchObject({
+        prompt_tokens: 20, completion_tokens: 4, total_tokens: 24,
+        prompt_tokens_details: { cached_tokens: 6, cache_write_tokens: 0 },
+        completion_tokens_details: { reasoning_tokens: 1 },
+      });
+      else expect(result.completion).not.toHaveProperty('usage');
+    } finally { await fs.rm(home, { recursive: true, force: true }); }
+  });
+
   it.each([false, true])('subtracts previous native totals on resume (final snapshot missing: %s)', async (missingFinalSnapshot) => {
     const threadId = '01a0ba76-e5e0-7a12-823b-5eed320794ca';
     const firstUsage = { input_tokens: 5000, cached_input_tokens: 4000, output_tokens: 100 };

@@ -143,6 +143,7 @@ export async function callTool(
   callerNodeId?: string,
   ownerScope?: string,
   executionExtensionContext?: ExecutionExtensionContext,
+  verifyProtectedRecipient?: () => Promise<void>,
   trustedConversationId?: string,
 ): Promise<MCPServiceResponse> {
   const originatingInputContext = trustedConversationId ? getElicitationContext(serverName) : undefined;
@@ -175,6 +176,7 @@ export async function callTool(
     // the exact client belonging to the frame's server; listing and dispatch
     // both happen on that same client object, so authorization cannot be
     // borrowed from another server connection.
+    if (privateExecution) await verifyProtectedRecipient?.();
     if (source === "app" || source === "model") {
       const listed = await listServerTools(client, serverName, "all");
       if (listed.error) {
@@ -279,6 +281,7 @@ export async function callTool(
           }
         : {}),
     };
+    if (privateExecution) await verifyProtectedRecipient?.();
     await assertMcpIsolationDispatch(client, serverName);
     await assertBundledFlujoWorkloadEffectCurrent();
     const modernTasks = taskDecision.request && taskDecision.negotiation.generation === '2026-07-28'

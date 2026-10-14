@@ -1,9 +1,12 @@
-import { applyExecutionRunInput, validateExecutionExtensionRun, validateExecutionLoadedState,
-  installExecutionExtensionContext, assertExecutionStateAccess, ExecutionExtensionError } from '@/backend/execution/extensions';
+import { applyExecutionRunInput, applyOriginalOwnerRunInput, validateExecutionExtensionRun, validateExecutionLoadedState,
+  installExecutionExtensionContext, assertExecutionStateAccess, ExecutionExtensionError,
+  executionExtensionSharesPersonaAuthority, runWithExecutionConversationAccess,
+  assertExecutionExtensionCurrent } from '@/backend/execution/extensions';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { bindExecutionModelStepOrdinals } from '@/backend/execution/flow/modelStepOrdinals';
 import {
   forget as forgetConversationCacheEntry,
   markTerminal as markConversationTerminal,
@@ -505,7 +508,7 @@ export interface FlowRunResult {
  * scheduler) can run flows without the HTTP/OpenAI coupling.
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
-  input = applyExecutionRunInput(input);
+  input = await applyOriginalOwnerRunInput(applyExecutionRunInput(input));
   await validateExecutionExtensionRun(input);
   const ownerSignal = combineAbortSignals(input.abortSignal, input.executionAuthority?.signal);
   const registration = await registerCancellableRun({
@@ -519,6 +522,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   };
   try {
     if (!registeredInput.conversationId) return runFlowUnlocked(registeredInput);
+    const run = () => withConversationExecutionLock(registeredInput.conversationId!, () => runFlowUnlocked(registeredInput));
+    if (executionExtensionSharesPersonaAuthority(registeredInput.executionExtensionContext, registeredInput.executionAuthority)) {
+      return await runWithExecutionConversationAccess(registeredInput.conversationId,
+        () => assertExecutionExtensionCurrent(registeredInput.executionExtensionContext), run);
+    }
     return await withConversationExecutionLock(
       registeredInput.conversationId,
       () => runFlowUnlocked(registeredInput),
@@ -1197,6 +1205,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // 'pause' run keeps re-pausing (not failing) on later tool calls.
   sharedState.onApprovalRequired = input.onApprovalRequired ?? sharedState.onApprovalRequired ?? 'auto';
 
+  const previousLogicalRunId = sharedState.logicalRunId;
   if (!resumingPausedLogicalRun) {
     // Subflow sessions are scoped to one logical parent run. Old handles stay in
     // their saved child conversations but must not leak into a later user turn.
@@ -1214,6 +1223,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const logicalRunId = sharedState.logicalRunId ?? input.runId ?? crypto.randomUUID();
   sharedState.logicalRunId = logicalRunId;
   if (input.executionExtensionContext) {
+    bindExecutionModelStepOrdinals(sharedState, previousLogicalRunId);
     const { bindExecutionExtensionRun } = await import('@/backend/execution/extensions');
     await bindExecutionExtensionRun(input.executionExtensionContext, effectiveConvId, logicalRunId);
   }

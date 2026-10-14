@@ -47,6 +47,16 @@ function arrangeChat(options: { args?: string; wrongName?: boolean; wrongReceipt
 }
 
 describe('FLUJO model tool diagnostic', () => {
+  it('refuses an owner-bound model before starting a provider round trip', async () => {
+    const result = await testModelToolConnection({
+      ...model, ownerCredentialBinding: { ownerId: 'factory', credentialId: 'slot' },
+    }, 'local-override');
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toContain('authorized model-step transport');
+    expect(mockChatCreate).not.toHaveBeenCalled();
+    expect(mockResponsesCreate).not.toHaveBeenCalled();
+  });
+
   it('prepares a real MCP schema, dispatches validated arguments, and returns the matching tool result', async () => {
     arrangeChat();
     const result = await testModelToolConnection(model, 'test-key');

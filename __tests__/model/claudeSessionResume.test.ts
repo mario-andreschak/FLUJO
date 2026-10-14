@@ -295,6 +295,24 @@ describe('ClaudeSubscriptionAdapter — session resume (#154)', () => {
     })());
     await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput())).rejects.toThrow('tool_deferred');
   });
+  it('rejects a direct owner-bound call before preparing the runtime or invoking the SDK', async () => {
+    const runtime = (jest.requireMock('@/backend/services/model/adapters/claudeRuntimeHome') as {
+      prepareClaudeRuntimeEnvironment: jest.Mock;
+    }).prepareClaudeRuntimeEnvironment;
+    runtime.mockClear();
+
+    await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      model: {
+        id: 'owner-model', name: 'sonnet', ApiKey: '', provider: 'claude-subscription', adapter: 'openai',
+        ownerCredentialBinding: { ownerId: 'owner', credentialId: 'credential' },
+      },
+      apiKey: 'local-secret',
+    }))).rejects.toMatchObject({ code: 'execution_owner_model_adapter_unsupported' });
+
+    expect(runtime).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
   it('resumes with only the delta on the second turn when the flag is ON', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
 

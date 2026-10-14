@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-14T20:42:23.0551418Z",
+  "scope": "PR1124 main integration; source and isolated built-app configuration-error recovery",
+  "qualificationTree": "bf24734e16a71eaf1ba9aaf6841286dc7168a75b",
+  "previousHead": "36b67406da423fb07d2a2e11b6fe32f47041c168",
+  "mainParent": "0411a1993105ac54018e4f4c99eccacdc993e2ea",
+  "buildId": "41c3R4DfLbjhchWea-zMs",
+  "validation": {
+    "sourceLint": {
+      "exit": 0,
+      "seconds": 96.3060843,
+      "utc": "2026-10-14T20:14:46.5185392Z"
+    },
+    "typecheck": {
+      "exit": 0,
+      "seconds": 9.9767246,
+      "utc": "2026-10-14T20:23:02.542505Z"
+    },
+    "nonContainerBuild": {
+      "exit": 0,
+      "seconds": 330.0361274,
+      "utc": "2026-10-14T20:28:32.5843505Z"
+    },
+    "focused": {
+      "repairedSuites": 2,
+      "nativeHostSuiteSeconds": 285.017,
+      "earlierRepairEquipmentFailure": "Jest cannot assign a read-only platform property; native descriptor setup repaired without altering production policy",
+      "finalTree": "bf24734e16a71eaf1ba9aaf6841286dc7168a75b",
+      "initialFailed": 3,
+      "initialPassed": 276,
+      "initialSuites": 15,
+      "reusedUnchangedPassingSuites": 13,
+      "reuseBoundary": "Only two test fixtures changed after the initial run; all production source and other tests were identical",
+      "repairPassed": 22,
+      "uniqueQualifiedCases": 279,
+      "repairFailed": 0,
+      "initialTree": "4a9dd504210ed187d41e80b3d91454a62e43c62e"
+    },
+    "changedTestLint": {
+      "exit": 0,
+      "seconds": 9.3978264,
+      "utc": "2026-10-14T20:22:52.5633283Z"
+    }
+  },
+  "integration": {
+    "childStartup": "Retains main explicit 10000ms owned startup and 900ms foreign observation limits with bounded retries and invalid-identity refusal",
+    "catalog": "Both native-host and prompt-policy fixtures install the actual saved model before production catalog admission",
+    "preserved": "Original sender/account/catalog authority and concurrent writer publication"
+  },
+  "phone": {
+    "claudeCredentialsRead": false,
+    "checks": [
+      {
+        "width": 320,
+        "bounds": {
+          "viewport": 320,
+          "documentWidth": 320,
+          "controls": [
+            {
+              "label": "Open navigation menu",
+              "left": 8,
+              "right": 50,
+              "width": 42,
+              "height": 42
+            },
+            {
+              "label": "Copy link to this chat",
+              "left": 112,
+              "right": 150,
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "Ask FLUJO",
+              "left": 152,
+              "right": 190,
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "Change language",
+              "left": 192,
+              "right": 230,
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "Report a bug",
+              "left": 232,
+              "right": 272,
+              "width": 40,
+              "height": 40
+            },
+            {
+              "label": "Switch to dark mode",
+              "left": 274,
+              "right": 312,
+              "width": 38,
+              "height": 38
+            }
+          ]
+        },
+        "errorVisibleAfterReload": true,
+        "aiSetupRecoveryNavigation": true
+      },
+      {
+        "width": 390,
+        "bounds": {
+          "viewport": 390,
+          "documentWidth": 390,
+          "controls": [
+            {
+              "label": "Open navigation menu",
+              "left": 8,
+              "right": 50,
+              "width": 42,
+              "height": 42
+            },
+            {
+              "label": "Copy link to this chat",
+              "left": 182,
+              "right": 220,
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "Ask FLUJO",
+              "left": 222,
+              "right": 260,
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "Change language",
+              "left": 262,
+              "right": 300,
+              "width": 38,
+              "height": 38
+            },
+            {
+              "label": "Report a bug",
+              "left": 302,
+              "right": 342,
+              "width": 40,
+              "height": 40
+            },
+            {
+              "label": "Switch to dark mode",
+              "left": 344,
+              "right": 382,
+              "width": 38,
+              "height": 38
+            }
+          ]
+        },
+        "errorVisibleAfterReload": true,
+        "aiSetupRecoveryNavigation": true
+      }
+    ],
+    "providerCalls": 0,
+    "normalOwnerPairing": true,
+    "appExit": {
+      "code": 143,
+      "signal": null,
+      "at": "2026-10-14T20:40:59.927Z"
+    },
+    "status": "passed",
+    "elapsedSeconds": 13.3070429,
+    "chatHttpStatus": 500,
+    "pipesClosed": true,
+    "executionAuthority": {
+      "issuer": "canonical production issuer",
+      "scopes": [
+        "openai:read",
+        "openai:execute"
+      ],
+      "privatePolicyOnly": true,
+      "credentialRetained": "memory only",
+      "freshBrowserSession": true
+    },
+    "modelTurnCount": 0,
+    "actualBuiltApp": true,
+    "earlierEquipmentAttempts": "Six failed attempts retained without acceptance credit: missing Origin, composer submission timing, missing explicit OpenAI scopes and inherited disabled MCP nodes",
+    "screenshots": "320/390 pixel screenshots inspected in local evidence",
+    "expectedModelError": "api_key_error / Failed to resolve or decrypt API key"
+  },
+  "limits": [
+    "No live authenticated Claude SDK lifecycle, effective instruction or billing acceptance",
+    "No installed Windows, relocated Linux, full/remote CI, container or release acceptance",
+    "The existing eight translated prompt-control cases remain historical evidence; this run rechecks the affected error/recovery screens",
+    "No provider inference or Claude credential discovery performed"
+  ]
+}

@@ -623,6 +623,10 @@ export async function prepareSemanticRecall(
   ]);
   const model = await modelService.getModel(settings.semanticEmbeddingModelId);
   if (!model) return semanticFallback('model_not_found', settings.semanticFloor);
+  // A cached vector must not let a contextless caller reuse an owner-bound model.
+  if (model.ownerCredentialBinding !== undefined) {
+    return semanticFallback('owner_bound_model', settings.semanticFloor);
+  }
   if (!supportsEmbeddings(model.adapter)) {
     return semanticFallback('unsupported_adapter', settings.semanticFloor);
   }

@@ -4,6 +4,8 @@ import { modelService } from '@/backend/services/model';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import type { ProcessNodeParams, SharedState } from '@/backend/execution/flow/types';
 import type { Flow } from '@/shared/types/flow';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 afterEach(() => jest.restoreAllMocks());
 
@@ -17,7 +19,9 @@ it('materializes fresh authority from actual ProcessNode preparation and passes 
   } as SharedState;
   jest.spyOn(promptRenderer, 'renderPrompt').mockResolvedValue('new instructions');
   jest.spyOn(promptRenderer, 'resolveChatMessageReferences').mockImplementation(async text => text);
-  jest.spyOn(modelService, 'getModel').mockResolvedValue({ id: 'model', name: 'Model', adapter: 'claude-cli' } as Awaited<ReturnType<typeof modelService.getModel>>);
+  const model = { id: 'model', name: 'Model', adapter: 'claude-cli', provider: 'claude-subscription', ApiKey: '' } as const;
+  await saveItem(StorageKey.MODELS, [model]);
+  jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
   jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(false);
   const params: ProcessNodeParams = { id: 'process', label: 'Process', type: 'process', properties: { boundModel: 'model', systemPromptPolicy: 'per-turn' } };
   const node = new ProcessNode();

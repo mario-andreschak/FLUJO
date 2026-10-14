@@ -56,10 +56,10 @@ async function POST_handler(request: NextRequest) {
 
     const result = await modelAdapter.addModel(model);
     if (!result.success) {
-      // A name collision is a conflict (409); everything else is invalid input (400).
+      // A name collision or an active catalog reader is a conflict (409).
       const isDuplicate = typeof result.error === 'string' && result.error.includes('already exists');
-      return new Response(JSON.stringify({ error: result.error }), {
-        status: isDuplicate ? 409 : 400,
+      return new Response(JSON.stringify({ error: result.error, ...(result.code ? { code: result.code } : {}) }), {
+        status: result.code === 'MODEL_CATALOG_BUSY' || isDuplicate ? 409 : 400,
         headers: { 'Content-Type': 'application/json' },
       });
     }

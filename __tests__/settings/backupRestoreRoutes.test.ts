@@ -11,6 +11,7 @@
 import type { NextRequest } from 'next/server';
 import JSZip from 'jszip';
 import { StorageKey } from '@/shared/types/storage';
+import { withModelCatalogLease } from '@/backend/services/model/catalogAdmission';
 
 // These fixtures test archive content and Persona preflight after unlocking.
 // Real private-profile lock enforcement has its own API/lock suites.
@@ -73,6 +74,11 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
 
 import { POST as backupPost } from '@/app/api/backup/route';
 import { POST as restorePost } from '@/app/api/restore/route';
+const restoreFolderMock = jest.fn();
+jest.mock('@/backend/services/workspace/backupRestoreFs', () => ({
+  ...jest.requireActual('@/backend/services/workspace/backupRestoreFs'),
+  restoreFolderFromZipLinkSafe: (...args: unknown[]) => restoreFolderMock(...args),
+}));
 
 const modelsData = [{ id: 'model-1', name: 'Test Model' }];
 // Flows now carry server-managed timestamps (#108); include them so loadFlows'
@@ -112,6 +118,7 @@ const callRestore = (zipBuffer: ArrayBuffer, selections: string[]) => {
 };
 
 beforeEach(() => {
+  restoreFolderMock.mockReset();
   saveItemMock.mockReset().mockResolvedValue(undefined);
   saveCollectionItemMock.mockReset().mockImplementation(async (collection: string, id: string, val: unknown) => {
     (collection === 'conversations' ? conversationFiles : flowFiles).set(id, val);
@@ -135,6 +142,7 @@ beforeEach(() => {
   (global as unknown as { __flujo_flowsCache: unknown }).__flujo_flowsCache = null;
   (global as unknown as { __flujo_flowsMigration: unknown }).__flujo_flowsMigration = undefined;
 });
+afterEach(() => jest.restoreAllMocks());
 
 describe('backup route', () => {
   it('marks failed selections without leaking loader errors', async () => {
@@ -402,6 +410,131 @@ describe('backup route', () => {
 });
 
 describe('backup → restore round-trip', () => {
+  it('refuses to report success after a disk-full storage write', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0' }));
+    zip.file('storage/models.json', JSON.stringify(modelsData));
+    saveItemMock.mockRejectedValue(Object.assign(new Error('private-path/secret ENOSPC'), { code: 'ENOSPC' }));
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['models']);
+    expect(response.status).toBe(500);
+    const result = await response.json();
+    expect(result).toMatchObject({ success: false, status: 'failed', selectionResults: { models: { restored: 0, failed: 1 } } });
+    expect(JSON.stringify(result)).not.toContain('private-path');
+  });
+
+  it('reports completed writes separately from failed selections', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0' }));
+    zip.file('storage/models.json', JSON.stringify(modelsData));
+    zip.file('storage/theme.json', JSON.stringify('dark'));
+    saveItemMock.mockImplementation(async (key: StorageKey) => {
+      if (key === StorageKey.THEME) throw new Error('write refused');
+    });
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['models', 'settings']);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      success: false, status: 'partial',
+      selectionResults: { models: { restored: 1, failed: 0 }, settings: { restored: 0, failed: 1 } },
+    });
+  });
+
+  it('reports rejected Flow saves and still restores the next valid Flow', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0' }));
+    zip.file('storage/flows.json', JSON.stringify([
+      { id: 'bad-flow', name: 'Bad', nodes: [], edges: [] },
+      { id: 'good-flow', name: 'Good', nodes: [], edges: [] },
+    ]));
+    saveCollectionItemMock.mockImplementation(async (collection: string, id: string, value: unknown) => {
+      if (id === 'bad-flow') throw new Error('write refused');
+      flowFiles.set(id, value);
+    });
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['flows']);
+    expect(await response.json()).toMatchObject({ success: false, status: 'partial', selectionResults: { flows: { restored: 1, failed: 1 } } });
+    expect(flowFiles.has('good-flow')).toBe(true);
+    expect(flowFiles.has('bad-flow')).toBe(false);
+  });
+
+  it('does not call a malformed selection or a metadata-only archive restored', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0' }));
+    zip.file('storage/models.json', '{');
+    const failed = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['models']);
+    expect((await failed.json()).success).toBe(false);
+    const empty = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['settings']);
+    expect(empty.status).toBe(400);
+    expect(await empty.json()).toMatchObject({ success: false, status: 'empty' });
+    expect(saveItemMock).not.toHaveBeenCalled();
+  });
+
+  it('reports conversation write failures without hiding the successfully restored conversation', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0' }));
+    for (const conversationId of ['blocked-chat', 'good-chat']) {
+      zip.file(`storage/conversations/${conversationId}.json`, JSON.stringify({ conversationId, messages: [] }));
+    }
+    saveCollectionItemMock.mockImplementation(async (_collection: string, id: string, value: unknown) => {
+      if (id === 'blocked-chat') throw new Error('write refused');
+      conversationFiles.set(id, value);
+    });
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['chatHistory']);
+    expect(await response.json()).toMatchObject({ success: false, status: 'partial', selectionResults: { chatHistory: { restored: 1, failed: 1 } } });
+    expect(conversationFiles.has('good-chat')).toBe(true);
+  });
+
+  it('aborts before any write when an existing conversation cannot be inspected', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0' }));
+    zip.file('storage/models.json', JSON.stringify(modelsData));
+    zip.file('storage/conversations/unreadable.json', JSON.stringify({ conversationId: 'unreadable', messages: [] }));
+    loadCollectionItemMock.mockRejectedValue(new Error('unreadable destination'));
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['models', 'chatHistory']);
+    expect(response.status).toBe(500);
+    expect(saveItemMock).not.toHaveBeenCalled();
+    expect(saveCollectionItemMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps explicitly failed backup selections visible on restore', async () => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selectionResults: { models: 'failed', settings: 'completed' } }));
+    zip.file('storage/theme.json', JSON.stringify('dark'));
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['models', 'settings']);
+    expect(await response.json()).toMatchObject({ success: false, status: 'partial', selectionResults: { models: { restored: 0, failed: 1 }, settings: { restored: 1, failed: 0 } } });
+  });
+
+  it('never promotes a produced partial archive to a complete restore', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey) =>
+      key === StorageKey.CHAT_HISTORY ? [{ id: 'legacy-chat' }] : null);
+    conversationFiles.set('invalid-record', { conversationId: 'different-id', messages: [] });
+    const backup = await callBackup(['chatHistory']);
+    expect(backup.headers.get('X-Flujo-Backup-Status')).toBe('partial');
+    const buffer = await backup.arrayBuffer();
+    expect((await JSZip.loadAsync(buffer)).file('storage/history.json')).not.toBeNull();
+    const response = await callRestore(buffer, ['chatHistory']);
+    expect(await response.json()).toMatchObject({
+      success: false, status: 'partial', selectionResults: { chatHistory: { restored: 3, failed: 1 } },
+    });
+  });
+
+  it.each([0, 1])('propagates folder failures with %i successful file writes', async restored => {
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0' }));
+    zip.file('mcp-servers/file.json', '{}');
+    restoreFolderMock.mockImplementation(
+      async (_zip: JSZip, _prefix: string, _target: string, _boundary: string,
+        onSkip?: (entry: string, reason: string) => void, options?: { onRestored?: (entry: string) => void }) => {
+        if (restored) options?.onRestored?.('mcp-servers/good.json');
+        onSkip?.('mcp-servers/blocked.json', 'write refused');
+      },
+    );
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['mcpServersFolder']);
+    expect(response.status).toBe(restored ? 200 : 500);
+    expect(await response.json()).toMatchObject({
+      success: false, status: restored ? 'partial' : 'failed',
+      selectionResults: { mcpServersFolder: { restored, failed: 1 } },
+    });
+  });
+
   it('restores the produced zip through saveItem with the original data', async () => {
     const backupResponse = await callBackup(['models', 'flows']);
     expect(backupResponse.status).toBe(200);
@@ -409,7 +542,7 @@ describe('backup → restore round-trip', () => {
 
     const restoreResponse = await callRestore(zipBuffer, ['models', 'flows']);
     expect(restoreResponse.status).toBe(200);
-    expect(await restoreResponse.json()).toEqual({ success: true });
+    expect(await restoreResponse.json()).toMatchObject({ success: true, status: 'complete' });
 
     expect(saveItemMock).toHaveBeenCalledWith(StorageKey.MODELS, modelsData);
     // Flows are restored one-file-per-flow via flowService.saveFlow, which
@@ -421,6 +554,21 @@ describe('backup → restore round-trip', () => {
       'flow-1',
       expect.objectContaining({ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [], createdAt: 1000 }),
     );
+  });
+
+  it('reports a partial 409 when an active model call prevents restoring models', async () => {
+    const zip = new JSZip();
+    const theme = { mode: 'dark' };
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['settings', 'models'] }));
+    zip.file(`storage/${StorageKey.THEME}.json`, JSON.stringify(theme));
+    zip.file(`storage/${StorageKey.MODELS}.json`, JSON.stringify(modelsData));
+    const zipBuffer = await zip.generateAsync({ type: 'arraybuffer' });
+
+    const response = await withModelCatalogLease(() => callRestore(zipBuffer, ['settings', 'models']));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_CATALOG_BUSY', partial: true });
+    expect(saveItemMock).toHaveBeenCalledWith(StorageKey.THEME, theme);
+    expect(saveItemMock).not.toHaveBeenCalledWith(StorageKey.MODELS, modelsData);
   });
 
   it('restores modern and legacy conversations independently and skips unsafe entries', async () => {

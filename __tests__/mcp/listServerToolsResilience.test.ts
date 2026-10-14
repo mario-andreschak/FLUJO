@@ -62,6 +62,19 @@ beforeEach(() => {
 });
 
 describe('MCPService.listServerTools', () => {
+  it('keeps an ordinary page cursor through a stale-client reconnect', async () => {
+    createNewClientMock.mockImplementation(() => makeClient());
+    const svc = new MCPService();
+    await svc.connectServer('srv');
+    listToolsMock.mockResolvedValueOnce({ tools: [], error: 'stale session' })
+      .mockResolvedValueOnce({ tools: [], nextCursor: 'page-3' });
+
+    await expect(svc.listServerTools('srv', 'all', 'page-2')).resolves.toEqual({ tools: [], nextCursor: 'page-3' });
+    expect(createNewClientMock).toHaveBeenCalledTimes(2);
+    expect(listToolsMock.mock.calls.map(args => args.slice(1))).toEqual([
+      ['srv', 'all', 'page-2'], ['srv', 'all', 'page-2'],
+    ]);
+  });
   it('returns tools directly when the connection is healthy', async () => {
     createNewClientMock.mockReturnValue(makeClient());
     const svc = new MCPService();

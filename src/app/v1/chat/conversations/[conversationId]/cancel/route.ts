@@ -11,6 +11,8 @@ import { persistConversationState } from '@/backend/execution/flow/persistConver
 import { StorageKey } from '@/shared/types/storage';
 import { listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
 import { cancelAllToolCalls } from '@/backend/execution/flow/toolCancelRegistry';
+import { clearPendingQuestions } from '@/backend/services/questionRegistry';
+import { clearPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { clearSteeringInbox } from '@/backend/execution/flow/steeringInbox';
@@ -98,6 +100,8 @@ async function POST_handler(
       // finalization and Activity cancellation remain dispatcher-owned.
       clearSteeringInbox(conversationId);
       cancelAllToolCalls(conversationId);
+      clearPendingQuestions(conversationId);
+      clearPendingElicitations(conversationId);
       if (listPendingToolCalls(conversationId).length > 0) {
         clearPendingApprovals(conversationId);
       }
@@ -137,6 +141,8 @@ async function POST_handler(
     }, executionEventBus.emitterFor(conversationId));
     log.info(`Setting cancellation flag for conversation`, { requestId, conversationId });
     sharedState.isCancelled = true;
+    clearPendingQuestions(conversationId);
+    clearPendingElicitations(conversationId);
 
     // Stopping the run also discards any mid-run steering message that has not
     // been folded in yet: the user stopped this run, so a correction aimed at it

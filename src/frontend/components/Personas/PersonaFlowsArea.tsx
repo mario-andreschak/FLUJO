@@ -40,6 +40,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { flowService } from '@/frontend/services/flow';
 import {
+  PersonasApiError,
   personasService,
   type PersonaDetail,
 } from '@/frontend/services/personas';
@@ -110,8 +111,8 @@ export default function PersonaFlowsArea({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
     setError(null);
     try {
       const [nextComposition, nextFlows] = await Promise.all([
@@ -120,10 +121,12 @@ export default function PersonaFlowsArea({
       ]);
       setComposition(nextComposition);
       setFlows(nextFlows);
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('personas.flows.loadFailed'));
+      return false;
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [detail.persona.id, t]);
 
@@ -162,8 +165,13 @@ export default function PersonaFlowsArea({
       setRename(null);
       await onChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('personas.action.failed'));
-      await load();
+      // Refresh the concurrency guard without unmounting the open draft or
+      // clearing its failure guidance after a successful refresh.
+      if (await load(true)) {
+        setError(cause instanceof PersonasApiError && cause.status === 409
+          ? t('personas.flows.changed')
+          : cause instanceof Error ? cause.message : t('personas.action.failed'));
+      }
     } finally {
       setBusy(false);
     }
@@ -436,7 +444,10 @@ export default function PersonaFlowsArea({
         open={picker !== null}
         onClose={() => setPicker(null)}
         title={t('personas.behaviors.chooseFlow')}
-        description={t('personas.behaviors.chooseHelp')}
+        description={<>
+          {error && <Box component="span" role="alert" sx={{ display: 'block', color: 'error.main', mb: 1 }}>{error}</Box>}
+          {t('personas.behaviors.chooseHelp')}
+        </>}
         searchable
         searchTerm={pickerModel.searchTerm}
         onSearchChange={pickerModel.setSearchTerm}
@@ -449,6 +460,7 @@ export default function PersonaFlowsArea({
       <Dialog open={rename !== null} onClose={() => setRename(null)} fullWidth maxWidth="sm">
         <DialogTitle>{t('personas.behaviors.rename')}</DialogTitle>
         <DialogContent dividers>
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <TextField autoFocus fullWidth label={t('personas.behaviors.name')} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
         </DialogContent>
         <DialogActions>

@@ -5,9 +5,10 @@ metadata sample for one workspace. The CLI below records it without executing a
 flow, reconciling a scheduler, accepting an approval, starting an MCP server,
 clearing recovery uncertainty or repairing storage.
 
-This is a source implementation for #570. Qualification of an exact released
-artifact, upgrade/rollback drills, a non-author operator and the independent #564
-scorecard review remain required. Shared deployment design #573 is proposed;
+This is a source implementation for #570. Qualification of exact released
+artifacts and their operator upgrade/rollback exercises, plus the independent
+#564 scorecard review, remain required. Independent source-profile acceptance
+is linked below. Shared deployment design #573 is proposed;
 #574/#575 and #212 do not become supported through this diagnostic endpoint.
 
 ## Choose and record the installation
@@ -20,7 +21,7 @@ does not identify the exact bytes that were installed.
 
 | Profile | Launch and persistent storage | Qualification still needed |
 | --- | --- | --- |
-| npm, Windows or Linux | Use an explicitly pinned `flujo-ai` version with a Node runtime admitted by that package's `engines` (`^22.17.0` or `^24.2.0` in this source). The installed `flujo` command accepts `--no-open --port 4200`; set `FLUJO_DATA_DIR` to a dedicated protected directory. Retain npm's SRI and the source/release mapping. | Exact package startup, owner authentication, diagnosis, upgrade and restored-data checks on both OS profiles. |
+| npm, Windows or Linux | Use an explicitly pinned `flujo-ai` version with a Node runtime admitted by that package's `engines` (`^22.19.0` or `^24.2.0` in this source). The installed `flujo` command accepts `--no-open --port 4200`; set `FLUJO_DATA_DIR` to a dedicated protected directory. Retain npm's SRI and the source/release mapping. | Exact package startup, owner authentication, diagnosis, upgrade and restored-data checks on both OS profiles. |
 | Windows stable installer | Use the exact versioned release asset and verify its digest. Retain its installation manifest and revision/channel. Keep application checkout and `FLUJO_DATA_DIR` separate; run as the installation's dedicated user. | Networked bootstrapper plus runtime upgrade/rollback on a non-author machine. A script fetched from `main` is a development-channel install. |
 | Linux source installation | Check out the pinned commit in a dedicated application directory, use its lockfile with `npm ci --include=dev`, build once, and supervise `npm start -- --hostname 127.0.0.1 --port 4200` under the installation account. Keep the complete data root outside the source checkout. | Exact source/build mapping, service stop/restart, descendants, browser/MCP dependencies and distribution-specific service integration. |
 | Container, Windows/Linux Docker host | Pull an independently recorded immutable image digest. Run its non-root application user and mount the complete `/app/data` root. Bind both application and MCP Apps listeners to host loopback unless the authenticated ingress profile has been qualified. | Exact image, platform, mounts, OS enforcement, resource limits, MCP grant/removal, reboot and recovery. Image labels and self-reported revision alone are insufficient. |
@@ -181,9 +182,31 @@ Use the format appropriate to the operation:
 
 | Backup/restore | Meaning and limit |
 | --- | --- |
-| Selective `/api/backup` → `/api/restore` | Legacy `backup-info.json` version `1.0`, selected storage/MCP files for one workspace. It is not a complete installation or scheduler/approval recovery backup. Sensitive selections include keys/env/model/MCP credentials; protect them and do not share the archive as evidence. |
+| Selective `/api/backup` → `/api/restore` | `backup-info.json` version `1.0`, selected ordinary records for one workspace. Current exports omit encryption metadata, raw server folders and recognized model/MCP/environment credentials; connections need reconfiguration after restore. Older archives can still contain credentials, and secrets in user-authored prose/code are not detected. Review and protect archives before sharing. This is not a complete installation or scheduler/approval recovery backup. |
 | Snapshot format 2 | The [coherent snapshot protocol](../features/hot-clone-workspace.md) has a capture barrier, manifest/member digests, layout/protocol/version checks and explicit sensitive transfer. Download and verify before finalize. Restore is a controlled workspace fork, not live bidirectional replication. Copied schedules stay suppressed; installation-local provenance is excluded. |
 | Offline complete data-root + external private configuration | Installation disaster recovery includes all namespace and installation-private state plus separately backed-up protected key/policy/authority material. Keep a single active restored installation. A complete duplicate with identical authority is not fenced by local HMAC provenance alone. |
+
+If workspace migration reports an incomplete move, keep the complete data root
+and stop the installation. Free disk space or repair storage access, then restart
+the same application against that root. Workspace requests and readiness stay
+unavailable until required moves, link remapping and configuration writes finish.
+The existing initialization button does not retry a failed layout in the same
+process. A successful earlier file move is retained; there is no whole-migration
+rollback. Ordinary file collisions atomically take the legacy source contents.
+An incompatible file/directory/link collision keeps both entries and requires
+choosing the intended contents before restart. An unsafe legacy root is left
+untouched with a warning.
+
+Keep `workspaces/.workspace-layout.links.json` while recovery is pending. It
+records changed links before folder moves and permits restart after interruption
+between unlink and recreation, including Windows junctions. It is removed only
+after required work and completion-marker publication succeed. Do not edit it or
+remove it to force readiness. A changed link identity or unavailable Windows
+junction target requires fixing the obstruction first. Old
+`.workspace-migrations` staging that still contains payload is preserved with
+its journals; recover it with the previous artifact/instructions before upgrading.
+These controls preserve interrupted operations; they do not fence a second
+independently active installation or establish an installed-release qualification.
 
 Preflight the selected candidate's schema/layout and protected-credential
 migration. Restore an encrypted, verified backup into a separate owned staging
@@ -208,6 +231,35 @@ provider/filesystem error. Retain report digests and reviewer access to original
 Do not describe them as a signed or tamper-proof audit trail.
 
 ## Acceptance record for #570
+
+The [source operations recovery drill](../audits/2026-10-14-operations-recovery-source-570.md)
+provides integrated built-app evidence for provider-reported 408/429/400 errors,
+explicit retry, expired owner access, retained approval, graceful restart and
+generation-bound Bash teardown. Restart can invalidate a pending tool binding:
+retain its run/approval, let the model propose a fresh current tool call and make
+an explicit decision on that proposal. The stale call must not execute. This
+source drill records actual counted effects and keeps the broader acceptance
+below open.
+
+The [complete installation source restore drill](../audits/2026-10-14-installation-restore-source-570.md)
+verifies a stopped encrypted full-root capture with separate owner/key/session
+material, original-path publication, missing/mismatched protection refusal,
+retained session decisions and one explicit retry using the restored credential.
+Missing configured owner policy refuses startup; restore or repair that private
+policy with an active credential before restarting. Changing network exposure
+does not repair configured owner authority. This regular-file source fixture
+does not qualify an installed artifact or an upgrade/rollback.
+
+The [independent automated source operator drill](../audits/2026-10-14-independent-operator-upgrade-source-570.md)
+consumes exact 3.46.2 and 3.46.3 source builds through their normal Windows
+launcher. It verifies USER-encrypted profile startup, failed-job diagnosis,
+stopped complete backup, same-root upgrade, candidate restore and compatible
+baseline snapshot rollback. Original Next and launcher exits are observed;
+Windows termination is forced. Its provider ledger preserves the post-backup
+effect even when rollback restores older run history. The rollback retry is a
+separate explicit action: restoring files does not reverse external effects or
+retain changes made after the selected backup. Published packages, installers,
+Linux/container profiles and the remaining integrated criteria remain separate.
 
 A technically independent non-author operator must install the pinned candidate
 on its intended profile, diagnose a seeded failed schedule, authenticate, back

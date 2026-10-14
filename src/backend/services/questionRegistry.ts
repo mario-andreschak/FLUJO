@@ -1,5 +1,7 @@
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import type { EmitFn, NodeRef } from '@/shared/types/execution/events';
 
 const log = createLogger('backend/services/questionRegistry');
 
@@ -22,6 +24,9 @@ const log = createLogger('backend/services/questionRegistry');
  */
 
 const QUESTION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_PENDING_PER_CONVERSATION = 8;
+const MAX_PENDING_PROCESS = 128;
+const MAX_PROMPT_BYTES = 32 * 1024;
 
 /** One prompt the model asked, plus its offered options. */
 export interface QuestionSpec {
@@ -47,8 +52,28 @@ interface PendingQuestion {
   questionId: string;
   questions: QuestionSpec[];
   createdAt: number;
+  node?: NodeRef;
+  emit?: EmitFn;
   resolve: (result: QuestionResolution) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+export class InvalidQuestionAnswerError extends Error {
+  constructor() { super('Answers must match the pending questions and their selection rules.'); }
+}
+
+/** Only the captured mailbox may settle; an older timer cannot clear a replacement. */
+function settle(key: string, pending: PendingQuestion, result: QuestionResolution): boolean {
+  if (registry.get(key) !== pending) return false;
+  clearTimeout(pending.timer);
+  registry.delete(key);
+  pending.emit?.({ type: 'run:question_resolved', questionId: pending.questionId, action: result.action });
+  pending.resolve(result);
+  return true;
+}
+
+function cloneQuestions(questions: QuestionSpec[]): QuestionSpec[] {
+  return questions.map(question => ({ ...question, options: [...question.options] }));
 }
 
 const globalForRegistry = globalThis as unknown as {
@@ -63,6 +88,10 @@ function keyOf(conversationId: string, questionId: string): string {
   return workspaceCacheKey(conversationId, questionId);
 }
 
+export function hasPendingQuestion(conversationId: string, questionId: string): boolean {
+  return registry.has(keyOf(conversationId, questionId));
+}
+
 /**
  * Register a pending question and return a promise that resolves when the user
  * answers, declines, or the request times out (default 5 minutes — prevents a
@@ -73,25 +102,41 @@ export function registerPendingQuestion(
   questionId: string,
   questions: QuestionSpec[],
   timeoutMs: number = QUESTION_TIMEOUT_MS,
+  metadata: { node?: NodeRef } = {},
 ): Promise<QuestionResolution> {
   const key = keyOf(conversationId, questionId);
+  if (registry.has(key) || registry.size >= MAX_PENDING_PROCESS
+    || listPendingQuestions(conversationId).length >= MAX_PENDING_PER_CONVERSATION) {
+    throw new Error('Too many pending questions or duplicate question ID.');
+  }
+  if (!Array.isArray(questions) || questions.length < 1 || questions.length > 16
+    || questions.some(question => typeof question.prompt !== 'string' || !question.prompt.trim()
+      || !Array.isArray(question.options) || question.options.length < 1 || question.options.length > 32
+      || question.options.some(option => typeof option !== 'string' || !option.trim()))
+    || Buffer.byteLength(JSON.stringify({ questions, node: metadata.node })) > MAX_PROMPT_BYTES) {
+    throw new Error('Question prompt exceeds the supported input limits.');
+  }
+  const workspace = getCurrentWorkspace();
+  const emit = executionEventBus.emitterFor(conversationId);
   return new Promise<QuestionResolution>((resolve) => {
     const timer = setTimeout(() => {
-      if (registry.has(key)) {
+      if (registry.get(key) === pending) {
         log.warn(`Question ${questionId} (conv ${conversationId}) timed out after ${timeoutMs}ms`);
-        registry.delete(key);
-        resolve({ action: 'timeout' });
+        settle(key, pending, { action: 'timeout' });
       }
     }, timeoutMs);
-    registry.set(key, {
-      workspace: getCurrentWorkspace(),
+    const pending: PendingQuestion = {
+      workspace,
       conversationId,
       questionId,
-      questions,
+      questions: cloneQuestions(questions),
       createdAt: Date.now(),
+      ...(metadata.node ? { node: { ...metadata.node } } : {}),
+      emit,
       resolve,
       timer,
-    });
+    };
+    registry.set(key, pending);
   });
 }
 
@@ -108,10 +153,16 @@ export function resolvePendingQuestion(
   const key = keyOf(conversationId, questionId);
   const pending = registry.get(key);
   if (!pending) return false;
-  clearTimeout(pending.timer);
-  registry.delete(key);
-  pending.resolve({ action: 'answer', answers });
-  return true;
+  if (!Array.isArray(answers) || answers.length !== pending.questions.length
+    || answers.some((selected, index) => !Array.isArray(selected) || selected.length < 1
+      || selected.length > (pending.questions[index].multiple ? 32 : 1)
+      || new Set(selected).size !== selected.length
+      || selected.some(answer => typeof answer !== 'string' || !answer.trim() || answer.length > 8192
+        || (pending.questions[index].custom === false && !pending.questions[index].options.includes(answer))))
+    || Buffer.byteLength(JSON.stringify(answers)) > MAX_PROMPT_BYTES) {
+    throw new InvalidQuestionAnswerError();
+  }
+  return settle(key, pending, { action: 'answer', answers: answers.map(selected => [...selected]) });
 }
 
 /** Decline a pending question (the user chose not to answer). */
@@ -119,10 +170,7 @@ export function declinePendingQuestion(conversationId: string, questionId: strin
   const key = keyOf(conversationId, questionId);
   const pending = registry.get(key);
   if (!pending) return false;
-  clearTimeout(pending.timer);
-  registry.delete(key);
-  pending.resolve({ action: 'decline' });
-  return true;
+  return settle(key, pending, { action: 'decline' });
 }
 
 /** List the pending questions for one conversation (metadata + specs). */
@@ -130,11 +178,13 @@ export function listPendingQuestions(conversationId: string): Array<{
   questionId: string;
   questions: QuestionSpec[];
   createdAt: number;
+  node?: NodeRef;
 }> {
-  const out: Array<{ questionId: string; questions: QuestionSpec[]; createdAt: number }> = [];
+  const out: Array<{ questionId: string; questions: QuestionSpec[]; createdAt: number; node?: NodeRef }> = [];
   for (const p of registry.values()) {
     if (p.workspace === getCurrentWorkspace() && p.conversationId === conversationId) {
-      out.push({ questionId: p.questionId, questions: p.questions, createdAt: p.createdAt });
+      out.push({ questionId: p.questionId, questions: cloneQuestions(p.questions), createdAt: p.createdAt,
+        ...(p.node ? { node: { ...p.node } } : {}) });
     }
   }
   return out;
@@ -151,7 +201,7 @@ export function listAllPendingQuestions(): Array<{
   return Array.from(registry.values()).filter((p) => p.workspace === workspace).map((p) => ({
     conversationId: p.conversationId,
     questionId: p.questionId,
-    questions: p.questions,
+    questions: cloneQuestions(p.questions),
     createdAt: p.createdAt,
   }));
 }
@@ -161,9 +211,7 @@ export function clearPendingQuestions(conversationId: string): void {
   const workspace = getCurrentWorkspace();
   for (const [key, p] of registry.entries()) {
     if (p.workspace === workspace && p.conversationId === conversationId) {
-      clearTimeout(p.timer);
-      registry.delete(key);
-      p.resolve({ action: 'decline' });
+      settle(key, p, { action: 'decline' });
     }
   }
 }

@@ -25,6 +25,7 @@ jest.mock('@/utils/workspace', () => ({
 }));
 
 const marker = 'win32-v2:638927322190000000';
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
 let savedIdentity: Promise<string | null> | undefined;
 let savedClock: PersonaRuntimeClock | undefined;
 let savedSystemRoot: string | undefined;
@@ -47,6 +48,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Object.defineProperty(process, 'platform', platformDescriptor);
   global.__flujo_enduring_agent_process_birth_marker_v2 = savedIdentity;
   _setPersonaRuntimeLockProcessBirthProbeForTests();
   _setPersonaRuntimeLockProcessBirthProbeRunnerForTests();
@@ -58,28 +60,29 @@ afterEach(() => {
 
 describe('Persona runtime own-process birth identity', () => {
   it('uses bounded startup probes for a new owned child and retains fail-closed exhaustion', async () => {
+    // Keep the production platform/startup selection; replace only its OS runner.
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
     const childPid = process.pid + 1;
     const runner = jest.fn()
       .mockRejectedValueOnce(Object.assign(new Error('cold startup'), { killed: true }))
       .mockResolvedValueOnce({ stdout: '638927322190000000\r\n' });
     _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
-    _setPersonaRuntimeLockProcessBirthProbeForTests(pid => _queryWindowsProcessBirthMarkerForTests(pid));
     await expect(captureRuntimeChildIdentity(childPid)).resolves.toMatchObject({ pid: childPid, processBirthMarkerV2: marker });
-    expect(runner.mock.calls.map(call => call[2].timeout)).toEqual([3_000, 3_000]);
+    expect(runner.mock.calls.map(call => call[2].timeout)).toEqual([10_000, 10_000]);
     runner.mockReset().mockResolvedValue({ stdout: 'invalid observation' });
     await expect(captureRuntimeChildIdentity(childPid)).rejects.toThrow('Child process birth identity is unavailable.');
     expect(runner).toHaveBeenCalledTimes(3);
   });
 
   it('keeps concurrent foreign-owner observations short while owned child establishment waits', async () => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
     let resolveChild!: (value: { stdout: string }) => void;
     const runner = jest.fn().mockImplementationOnce(() => new Promise<{ stdout: string }>(resolve => { resolveChild = resolve; }))
       .mockResolvedValue({ stdout: '638927322190000000' });
     _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
-    _setPersonaRuntimeLockProcessBirthProbeForTests(pid => _queryWindowsProcessBirthMarkerForTests(pid));
     const child = captureRuntimeChildIdentity(process.pid + 1);
     await expect(_queryWindowsProcessBirthMarkerForTests(process.pid + 2)).resolves.toBe(marker);
-    expect(runner.mock.calls.map(call => call[2].timeout)).toEqual([3_000, 900]);
+    expect(runner.mock.calls.map(call => call[2].timeout)).toEqual([10_000, 900]);
     resolveChild({ stdout: '638927322190000000' });
     await expect(child).resolves.toMatchObject({ processBirthMarkerV2: marker });
   });
@@ -214,13 +217,47 @@ describe('Persona runtime own-process birth identity', () => {
     );
   });
 
-  it('allows 3 seconds for its own Windows probe while keeping foreign probes at 900 ms', async () => {
+  it('allows 10 seconds for its own Windows probe while keeping foreign probes at 900 ms', async () => {
     const runner = jest.fn().mockResolvedValue({ stdout: '638927322190000000\r\n' });
     _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
     await expect(_queryWindowsProcessBirthMarkerForTests(process.pid)).resolves.toBe(marker);
     await expect(_queryWindowsProcessBirthMarkerForTests(process.pid + 1)).resolves.toBe(marker);
-    expect(runner.mock.calls[0][2]).toMatchObject({ timeout: 3_000, windowsHide: true });
+    expect(runner.mock.calls[0][2]).toMatchObject({ timeout: 10_000, windowsHide: true });
     expect(runner.mock.calls[1][2]).toMatchObject({ timeout: 900, windowsHide: true });
+  });
+
+  it('establishes a valid identity after a cold Windows startup longer than three seconds', async () => {
+    const startupMs = 4_831;
+    const runner = jest.fn(async (_executable: string, _args: string[], options: { timeout: number }) => {
+      if (options.timeout < startupMs) throw Object.assign(new Error('timeout'), { killed: true });
+      return { stdout: '638927322190000000\r\n' };
+    });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
+    _setPersonaRuntimeLockProcessBirthProbeForTests(_queryWindowsProcessBirthMarkerForTests);
+
+    await expect(initializePersonaRuntimeLockProcessIdentity()).resolves.toBeUndefined();
+    await expect(_getPersonaRuntimeLockProcessBirthMarkerForTests(process.pid)).resolves.toBe(marker);
+    expect(runner).toHaveBeenCalledTimes(1);
+    // The longer bootstrap must never turn a timed-out foreign observation
+    // into evidence that another owner's lock can be retired.
+    await expect(_queryWindowsProcessBirthMarkerForTests(process.pid + 1)).resolves.toBeNull();
+    expect(runner.mock.calls[1][2]).toMatchObject({ timeout: 900 });
+  });
+
+  (process.platform === 'win32' ? it : it.skip)('allows cold owned-child admission but rejects an invalid identity without relaxing foreign observations', async () => {
+    const runner = jest.fn(async (_executable: string, _args: string[], options: { timeout: number }) => {
+      if (options.timeout < 4_831) throw Object.assign(new Error('timeout'), { killed: true });
+      return { stdout: '638927322190000000\r\n' };
+    });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
+    await expect(captureRuntimeChildIdentity(process.pid + 1)).resolves.toMatchObject({
+      pid: process.pid + 1, processBirthMarkerV2: marker,
+    });
+    expect(runner.mock.calls[0][2]).toMatchObject({ timeout: 10_000, windowsHide: true });
+    await expect(_queryWindowsProcessBirthMarkerForTests(process.pid + 1)).resolves.toBeNull();
+    expect(runner.mock.calls[1][2]).toMatchObject({ timeout: 900 });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(jest.fn().mockResolvedValue({ stdout: 'not-an-identity' }));
+    await expect(captureRuntimeChildIdentity(process.pid + 1)).rejects.toThrow('Child process birth identity is unavailable.');
   });
 
   it.each(['', '0', '-123', '1.5', '123\n456', 'warning: process lookup\n123'])(

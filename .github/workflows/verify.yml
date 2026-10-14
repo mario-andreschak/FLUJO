@@ -110,12 +110,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         if: steps.application-change.outputs.changed == 'true'
         with:
-          node-version: '22.17.0'
+          node-version: '22.19.0'
           cache: npm
       - name: Verify exact official Node runtime
         if: steps.application-change.outputs.changed == 'true'
-        run: node scripts/verify-ci-node.mjs 22.17.0 --record
-      - name: Qualify installed app and packed MCP packages on Node 22.17.0
+        run: node scripts/verify-ci-node.mjs 22.19.0 --record
+      - name: Qualify installed app and packed MCP packages on Node 22.19.0
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |

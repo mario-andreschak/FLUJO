@@ -12,6 +12,8 @@ import {
 } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 import { writeFileAtomic } from '@/utils/storage/backend';
+import { readPlainFile } from '@/utils/readPlainFile';
+import { atomicWriteWithoutLinks, assertLinkFreeFileParent } from './backupRestoreFs';
 import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import {
   failWorkspaceLayoutPreparation,
@@ -33,6 +35,8 @@ const LOCK_DIR = '.workspace-layout.lock';
 const JOURNAL_FILE = '.workspace-layout.transaction.json';
 const FAST_JOURNAL_FILE = '.workspace-layout.fast-transaction.json';
 const TRANSACTIONS_DIR = '.workspace-migrations';
+const LINK_RECOVERY_FILE = '.workspace-layout.links.json';
+const LINK_RECOVERY_MAX_BYTES = 8 * 1024 * 1024;
 const APP_OWNED_MCP_ENTRIES = new Set([
   'readme.md',
   'embed-shared.mjs',
@@ -84,12 +88,17 @@ type MoveCandidate = {
 type PathMapping = {
   source: string;
   destination: string;
+  excludeAppOwned?: boolean;
 };
 
 type SavedLink = {
+  source: string;
   destination: string;
+  originalTarget: string;
   target: string;
   directory: boolean;
+  dev: string;
+  ino: string;
 };
 
 type MigrationNarration = {
@@ -129,6 +138,14 @@ export class WorkspaceMigrationUnsafePathError extends Error {
   readonly code = 'WORKSPACE_MIGRATION_UNSAFE_PATH';
 }
 
+export class WorkspaceMigrationIncompleteError extends Error {
+  readonly code = 'WORKSPACE_MIGRATION_INCOMPLETE';
+
+  constructor() {
+    super('Workspace migration is incomplete. Free disk space or fix storage access, then restart FLUJO. Existing files and recovery records were kept.');
+  }
+}
+
 function markerPath(): string {
   return path.join(getWorkspacesDir(), MARKER_FILE);
 }
@@ -149,12 +166,17 @@ function transactionsPath(): string {
   return path.join(getWorkspacesDir(), TRANSACTIONS_DIR);
 }
 
+function linkRecoveryPath(): string {
+  return path.join(getWorkspacesDir(), LINK_RECOVERY_FILE);
+}
+
 export function _workspaceMigrationPathsForTests(): {
   marker: string;
   journal: string;
   fastJournal: string;
   lock: string;
   transactions: string;
+  links: string;
 } {
   return {
     marker: markerPath(),
@@ -162,6 +184,7 @@ export function _workspaceMigrationPathsForTests(): {
     fastJournal: fastJournalPath(),
     lock: lockPath(),
     transactions: transactionsPath(),
+    links: linkRecoveryPath(),
   };
 }
 
@@ -185,9 +208,16 @@ function contained(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function mappingContains(mapping: PathMapping, candidate: string): boolean {
+  const relative = path.relative(mapping.source, candidate);
+  return contained(mapping.source, candidate)
+    && !(mapping.excludeAppOwned && (!relative
+      || APP_OWNED_MCP_ENTRIES.has(relative.split(path.sep)[0].toLowerCase())));
+}
+
 function mapPath(candidate: string, mappings: PathMapping[]): string {
   const mapping = mappings
-    .filter(item => contained(item.source, candidate))
+    .filter(item => mappingContains(item, candidate))
     .sort((left, right) => right.source.length - left.source.length)[0];
   if (!mapping) return candidate;
   return path.join(mapping.destination, path.relative(mapping.source, candidate));
@@ -211,10 +241,7 @@ async function readMarker(): Promise<WorkspaceLayoutMarker | undefined> {
 }
 
 async function writeMarker(marker: WorkspaceLayoutMarker): Promise<void> {
-  const temporary = `${markerPath()}.tmp-${process.pid}`;
-  await fs.writeFile(temporary, JSON.stringify(marker, null, 2), 'utf8');
-  await fs.rm(markerPath(), { force: true });
-  await fs.rename(temporary, markerPath());
+  await atomicWriteWithoutLinks(getWorkspacesDir(), markerPath(), Buffer.from(JSON.stringify(marker, null, 2)));
 }
 
 function processAlive(pid: number): boolean {
@@ -259,6 +286,21 @@ async function clearOldTransactionArtifacts(
   errors: string[],
   narration: MigrationNarration[],
 ): Promise<void> {
+  // Retired journals can still accompany the only remaining copy of a payload.
+  // Only empty staging directories are obsolete; recovery belongs to the old
+  // artifact/instructions when bytes remain, rather than deleting their record.
+  const containsPayload = async (directory: string): Promise<boolean> => {
+    const stat = await lstatOptional(directory);
+    if (!stat) return false;
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return true;
+    for (const entry of await fs.readdir(directory)) {
+      if (await containsPayload(path.join(directory, entry))) return true;
+    }
+    return false;
+  };
+  if (await containsPayload(transactionsPath())) {
+    throw new Error('Previous workspace migration staging contains data. Keep it and its journals, and recover with the previous application before upgrading.');
+  }
   for (const artifact of [journalPath(), fastJournalPath(), transactionsPath()]) {
     try {
       const existed = Boolean(await lstatOptional(artifact));
@@ -275,12 +317,13 @@ async function clearOldTransactionArtifacts(
   }
 }
 
-async function collectAndRemoveLinks(
+async function collectLinks(
   root: string,
   destinationRoot: string,
   mappings: PathMapping[],
   saved: SavedLink[],
   errors: string[],
+  pending: ReadonlyArray<SavedLink> = [],
 ): Promise<void> {
   let entries: Array<{
     name: string;
@@ -305,31 +348,39 @@ async function collectAndRemoveLinks(
           ? path.resolve(rawTarget)
           : path.resolve(path.dirname(source), rawTarget);
         const mappedTarget = mapPath(absoluteTarget, mappings);
-        const targetStat = await fs.stat(source).catch(() => undefined);
-        saved.push({
-          destination,
-          target: path.isAbsolute(rawTarget)
-            ? mappedTarget
-            : path.relative(path.dirname(destination), mappedTarget),
-          directory: Boolean(targetStat?.isDirectory()),
+        const target = path.isAbsolute(rawTarget)
+          ? mappedTarget : path.relative(path.dirname(destination), mappedTarget) || '.';
+        // Relative links entirely within one moved tree remain valid without
+        // replacing them. Only changed link text needs a durable remap record.
+        if (rawTarget === target) continue;
+        const identity = await fs.lstat(source, { bigint: true });
+        const recorded = pending.find(link => link.source === source && link.destination === destination
+          && link.originalTarget === rawTarget && link.dev === String(identity.dev) && link.ino === String(identity.ino));
+        // Another subtree may already have moved, making the original junction
+        // temporarily dangling. A matching durable witness retains its known
+        // kind; a fresh or changed junction still needs target inspection.
+        const targetStat = recorded ? undefined : await fs.stat(source).catch(error => {
+          // POSIX recreates a dangling link without needing its target kind.
+          // Windows needs the junction/directory kind before replacing it;
+          // retain an unknown reparse point and require target recovery first.
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT' && process.platform !== 'win32') return undefined;
+          throw error;
         });
-        await fs.unlink(source);
+        saved.push({
+          source,
+          destination,
+          originalTarget: rawTarget,
+          target,
+          directory: recorded ? recorded.directory : Boolean(targetStat?.isDirectory()),
+          dev: String(identity.dev),
+          ino: String(identity.ino),
+        });
       } catch (error) {
         errors.push(`Could not relocate link ${source}: ${String(error)}`);
       }
     } else if (entry.isDirectory()) {
-      await collectAndRemoveLinks(source, destination, mappings, saved, errors);
+      await collectLinks(source, destination, mappings, saved, errors, pending);
     }
-  }
-}
-
-async function removeForOverwrite(candidate: string): Promise<void> {
-  const stat = await lstatOptional(candidate);
-  if (!stat) return;
-  if (stat.isDirectory() && !stat.isSymbolicLink()) {
-    await fs.rm(candidate, { recursive: true, force: true });
-  } else {
-    await fs.unlink(candidate);
   }
 }
 
@@ -386,7 +437,14 @@ async function moveMerge(
       return 'merged';
     }
 
-    await removeForOverwrite(destination);
+    // rename atomically replaces an ordinary file on supported hosts. Never
+    // erase the target first: ENOSPC, EXDEV or a crash must retain both copies.
+    // Incompatible kinds require an operator decision, rather than recursive
+    // deletion of an existing destination tree or following a link collision.
+    if (!sourceStat.isFile() || !destinationStat.isFile()
+        || sourceStat.isSymbolicLink() || destinationStat.isSymbolicLink()) {
+      throw new WorkspaceMigrationConflictError('Migration destination has an incompatible entry type. Keep both entries and resolve the collision before restarting.');
+    }
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);
     return 'moved';
@@ -396,17 +454,83 @@ async function moveMerge(
   }
 }
 
+async function readLinkRecovery(mappings: PathMapping[]): Promise<SavedLink[]> {
+  const file = linkRecoveryPath();
+  const stat = await fs.lstat(file, { bigint: true }).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (!stat) return [];
+  const value: unknown = JSON.parse((await readPlainFile(file, {
+    expected: stat, maxBytes: LINK_RECOVERY_MAX_BYTES,
+    verifyPath: () => assertLinkFreeFileParent(getWorkspacesDir(), file),
+  })).toString('utf8'));
+  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.links)) {
+    throw new Error('Workspace link recovery record is invalid. Keep it for recovery.');
+  }
+  const destinations = new Set<string>();
+  for (const link of value.links) {
+    if (!isRecord(link) || typeof link.source !== 'string' || typeof link.destination !== 'string'
+        || typeof link.originalTarget !== 'string' || typeof link.target !== 'string'
+        || typeof link.directory !== 'boolean' || typeof link.dev !== 'string' || typeof link.ino !== 'string'
+        || !/^\d+$/.test(link.dev) || !/^\d+$/.test(link.ino)
+        || !path.isAbsolute(link.source) || !path.isAbsolute(link.destination)
+        || !mappings.some(mapping => mappingContains(mapping, link.source as string)
+          && link.destination === path.join(mapping.destination, path.relative(mapping.source, link.source as string)))
+        || destinations.has(link.destination) || link.originalTarget.includes('\0') || link.target.includes('\0')) {
+      throw new Error('Workspace link recovery record has an unsafe entry. Keep it for recovery.');
+    }
+    // Derive the intended target from the recorded raw link, never trust an
+    // arbitrary replacement target supplied in the journal.
+    const absolute = path.resolve(path.dirname(link.source), link.originalTarget);
+    const mapped = mapPath(absolute, mappings);
+    const expected = path.isAbsolute(link.originalTarget) ? mapped : path.relative(path.dirname(link.destination), mapped) || '.';
+    if (link.target !== expected) throw new Error('Workspace link recovery target does not match its mapping.');
+    destinations.add(link.destination);
+  }
+  return value.links as SavedLink[];
+}
+
+async function writeLinkRecovery(links: SavedLink[]): Promise<void> {
+  if (!links.length) return;
+  const bytes = Buffer.from(JSON.stringify({ version: 1, links }));
+  if (bytes.length > LINK_RECOVERY_MAX_BYTES) throw new Error('Workspace link recovery record exceeds its size limit.');
+  await atomicWriteWithoutLinks(getWorkspacesDir(), linkRecoveryPath(), bytes);
+}
+
 async function restoreLinks(saved: SavedLink[], errors: string[]): Promise<number> {
   let restored = 0;
   for (const link of saved) {
     try {
-      await fs.mkdir(path.dirname(link.destination), { recursive: true });
-      await removeForOverwrite(link.destination);
+      // A failed move leaves the original link in place. Do not duplicate it at
+      // a destination that has not been published yet.
+      if (await lstatOptional(link.source)) throw new Error('Original migration link has not moved.');
+      await assertLinkFreeFileParent(getWorkspaceDir(DEFAULT_WORKSPACE), link.destination);
+      const current = await fs.lstat(link.destination, { bigint: true }).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      });
+      const expected = process.platform === 'win32' && link.directory
+        ? path.resolve(path.dirname(link.destination), link.target) : link.target;
+      if (current) {
+        if (!current.isSymbolicLink()) throw new Error('Migration link was replaced by a different entry.');
+        const raw = await fs.readlink(link.destination);
+        if (raw === link.target || raw === expected) { restored++; continue; }
+        if (raw !== link.originalTarget || String(current.dev) !== link.dev || String(current.ino) !== link.ino) {
+          throw new Error('Migration link identity changed. Keep the recovery record.');
+        }
+        // The synced journal survives the unlink/recreate window, including a
+        // SIGKILL here. Restart can recreate an absent link without rescanning
+        // moved payload trees, and never removes an unrelated replacement.
+        await fs.unlink(link.destination);
+      }
       await fs.symlink(
         link.target,
         link.destination,
         process.platform === 'win32' ? (link.directory ? 'junction' : 'file') : undefined,
       );
+      const created = await fs.readlink(link.destination);
+      if (created !== expected && created !== link.target) throw new Error('Recreated migration link target differs.');
       restored++;
     } catch (error) {
       errors.push(`Could not recreate link ${link.destination}: ${String(error)}`);
@@ -626,10 +750,24 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
   const snapshotRoots = [snapshotStore.rootPath()];
   return await snapshotStore.withMigrationAccess(snapshotRoots, async () => {
     const errors: string[] = [];
+    const warnings: string[] = [];
     const narration: MigrationNarration[] = [];
     lastNarration = narration;
-    await clearOldTransactionArtifacts(errors, narration);
     const planned = await candidates(errors, narration);
+    const mappings: PathMapping[] = planned.map(({ source, destination }) => ({ source, destination }));
+    // A per-server legacy entry may already have moved before an interruption.
+    // Keep its root mapping available without scanning moved payload trees.
+    mappings.push({ source: path.join(getDataDir(), 'mcp-servers'),
+      destination: path.join(getWorkspaceDir(DEFAULT_WORKSPACE), 'mcp-servers'),
+      excludeAppOwned: await applicationSharesDataRoot() });
+    const pendingLinks = await readLinkRecovery(mappings);
+    await clearOldTransactionArtifacts(errors, narration);
+    const requireComplete = () => {
+      if (errors.length) {
+        log.error('Workspace migration requires recovery', errors);
+        throw new WorkspaceMigrationIncompleteError();
+      }
+    };
     const current = await readMarker();
     const legacySourcesPresent = (await Promise.all(planned.map(async candidate => ({
       candidate,
@@ -638,8 +776,10 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
         return undefined;
       })),
     })))).filter(item => item.present);
-    if (current && legacySourcesPresent.length === 0) {
+    requireComplete();
+    if (current && legacySourcesPresent.length === 0 && pendingLinks.length === 0) {
       await rewritePersistedMcpServerPaths(errors, narration);
+      requireComplete();
       narration.push({
         status: 'SKIPPED',
         subject: 'workspace layout',
@@ -650,7 +790,6 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
       migrationConsole('layout already current; no data move required', {
         workspaceRoot: getWorkspaceDir(DEFAULT_WORKSPACE),
       });
-      if (errors.length > 0) log.warn('Could not remove every obsolete migration artifact', errors);
       return current;
     }
     if (current && legacySourcesPresent.length > 0) {
@@ -666,8 +805,26 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
       candidates: planned.length,
       strategy: 'direct rename/merge',
     });
-    const mappings = planned.map(({ source, destination }) => ({ source, destination }));
-    const savedLinks: SavedLink[] = [];
+    const collectedLinks: SavedLink[] = [];
+    for (const candidate of planned) {
+      const stat = await lstatOptional(candidate.source);
+      if (stat?.isDirectory() && !stat.isSymbolicLink()) {
+        await collectLinks(candidate.source, candidate.destination, mappings, collectedLinks, errors, pendingLinks);
+      }
+    }
+    requireComplete();
+    const linkByDestination = new Map(pendingLinks.map(link => [link.destination, link]));
+    for (const link of collectedLinks) {
+      const pending = linkByDestination.get(link.destination);
+      if (pending && (pending.source !== link.source || pending.originalTarget !== link.originalTarget
+          || pending.dev !== link.dev || pending.ino !== link.ino)) {
+        throw new Error('Original migration link changed while recovery was pending. Keep both the link and recovery record.');
+      }
+      linkByDestination.set(link.destination, pending ?? link);
+    }
+    const savedLinks = [...linkByDestination.values()];
+    // Persist and sync every required remap before the first directory rename.
+    await writeLinkRecovery(savedLinks);
     const moved = new Set<string>();
     const merged = new Set<string>();
     const present = new Set<string>();
@@ -700,7 +857,7 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
       }
       present.add(candidate.subtree);
       if (stat.isSymbolicLink() || (candidate.requireDirectory !== false && !stat.isDirectory())) {
-        errors.push(`Skipped unsafe legacy root ${candidate.source}`);
+        warnings.push(`Skipped unsafe legacy root ${candidate.source}`);
         narration.push({
           status: 'SKIPPED',
           subject: candidate.subtree,
@@ -715,15 +872,6 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
         outcome: 'moved',
         strategy: 'direct rename/merge',
       });
-      if (stat.isDirectory()) {
-        await collectAndRemoveLinks(
-          candidate.source,
-          candidate.destination,
-          mappings,
-          savedLinks,
-          errors,
-        );
-      }
       // Keep the workspace mcp-servers container in place, but prefer moving
       // each server folder below it wholesale. This matters for pre-created
       // workspace/volume roots and still lets populated name collisions use the
@@ -760,11 +908,13 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
       status: restoredLinks === savedLinks.length ? 'MOVED' : 'SKIPPED',
       subject: `${restoredLinks}/${savedLinks.length} symbolic links`,
       reason: restoredLinks === savedLinks.length
-        ? 'removed before folder moves and recreated with workspace-relative targets'
-        : 'some links could not be recreated; details are listed under errors',
+        ? 'retained during folder moves and remapped from durable recovery records'
+        : 'some links remain pending in the durable recovery record',
     });
+    requireComplete();
     await ensureWorkspaceDirs(DEFAULT_WORKSPACE);
     await rewritePersistedMcpServerPaths(errors, narration);
+    requireComplete();
 
     const subtrees = Object.fromEntries(WORKSPACE_SUBTREES.map(subtree => [
       subtree,
@@ -781,14 +931,18 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
       completedAt: new Date().toISOString(),
       defaultWorkspace: DEFAULT_WORKSPACE,
       subtrees,
-      ...(errors.length > 0 ? { errors } : {}),
+      ...(warnings.length > 0 ? { errors: warnings } : {}),
     };
     await writeMarker(marker);
+    if (savedLinks.length) {
+      await assertLinkFreeFileParent(getWorkspacesDir(), linkRecoveryPath());
+      await fs.unlink(linkRecoveryPath());
+    }
     migrationConsole('completion marker published', {
       marker: markerPath(),
       strategy: 'direct rename/merge',
     });
-    if (errors.length > 0) log.warn('Workspace move completed with skipped errors', errors);
+    if (warnings.length > 0) log.warn('Workspace move completed with unsafe roots left untouched', warnings);
     else log.info('Workspace folders moved directly', { workspace: getWorkspaceDir(DEFAULT_WORKSPACE) });
     return marker;
   });
@@ -816,7 +970,7 @@ export function migrateWorkspaceLayout(): Promise<WorkspaceLayoutMarker> {
     })
     : runDirectMigration();
   const promise = preparation.catch(error => {
-    migrationConsole('FAILED - no conflicting data was overwritten', {
+    migrationConsole('FAILED - migration incomplete; recovery data retained', {
       elapsed: `${((Date.now() - startedAt) / 1_000).toFixed(1)}s`,
       error: error instanceof Error ? error.message : String(error),
     }, 'error');
@@ -891,7 +1045,7 @@ function printCompletionSummary(marker: WorkspaceLayoutMarker, elapsed: string):
   }
   for (const error of marker.errors ?? []) {
     lines.push(`[FLUJO] ERROR   ${error}`);
-    lines.push('[FLUJO]         Why: the direct mover continued instead of blocking application startup');
+    lines.push('[FLUJO]         Why: this unsafe legacy root was left untouched');
   }
   lines.push(
     '[FLUJO] Workspace migration summary',

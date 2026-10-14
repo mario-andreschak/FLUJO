@@ -2,6 +2,8 @@ import { ProcessNode, FinishNode } from '@/backend/execution/flow/nodes';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { ToolHandler } from '@/backend/execution/flow/handlers/ToolHandler';
 import { modelService } from '@/backend/services/model';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 import { mcpService } from '@/backend/services/mcp';
 import { registerExecutionExtension } from '@/backend/execution/extensions';
 import { fixtureAdapter, fixtureRun, mintFixture } from './fixtureAdapter';
@@ -22,7 +24,8 @@ const spec: FlowSpec = { name: 'Terminal', nodes: [
 ], edges: [{ from: 'start', to: 'process' }, { from: 'process', to: 'finish' }] };
 const context = { models: [{ id: 'model', name: 'model' }], servers: [] };
 let restore: (() => void) | undefined;
-beforeEach(() => {
+beforeEach(async () => {
+  await saveItem(StorageKey.MODELS, [{ id: 'model', name: 'fixture', provider: 'openai', adapter: 'openai', ApiKey: '' }]);
   jest.clearAllMocks();
   mockCompletion.mockReset().mockImplementation(async () => { throw new Error('Offline provider fixture must be configured'); });
   jest.spyOn(modelService, 'getModel').mockResolvedValue({ id: 'model', name: 'fixture', provider: 'openai', ApiKey: '' } as never);
@@ -132,6 +135,7 @@ test('rejects late advertised and model-invented tool calls', async () => {
 
 test.each(['claude-cli', 'codex-cli', 'antigravity-cli'])('leaves native %s profile responsibility with its adapter', async adapter => {
   const { node, params, shared, authorizeHandoffs } = fixture();
+  await saveItem(StorageKey.MODELS, [{ id: 'model', name: 'fixture', provider: 'openai', adapter, ApiKey: '' }]);
   jest.spyOn(modelService, 'getModel').mockResolvedValue({ id: 'model', name: 'fixture', provider: 'openai', adapter, ApiKey: '' } as never);
   expect((await node.prep(shared, params)).availableTools).toEqual([]);
   expect(authorizeHandoffs).toHaveBeenCalledWith(expect.anything(), []);

@@ -111,6 +111,18 @@ describe('enhanceBugReport', () => {
     expect(res).toMatchObject({ success: false, statusCode: 404 });
   });
 
+  it('does not re-resolve a selected owner-bound model through a colliding public alias', async () => {
+    getModelMock.mockResolvedValue({
+      id: 'bound', name: 'gpt-test', ApiKey: '',
+      ownerCredentialBinding: { ownerId: 'factory', credentialId: 'slot' },
+    });
+    const res = await enhanceBugReport({ modelId: 'bound', title: 'crash', description: 'original text' });
+    expect(res).toMatchObject({ success: true, statusCode: 200, result: {
+      title: 'crash', body: 'original text', enhanced: false,
+    } });
+    expect(generateChatCompletionMock).not.toHaveBeenCalled();
+  });
+
   it('returns a parsed, label-filtered enhancement on success', async () => {
     generateChatCompletionMock.mockResolvedValue(
       completionWith(
