@@ -7,17 +7,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 // The existing runtime-contract CI gate also covers the opt-in application updater.
 import './node-runtime-update.test.mjs';
+import './undici-runtime-transport.test.cjs';
 import { assertSupportedNodeRuntime, isSupportedNodeRuntime, SUPPORTED_NODE_RANGE } from '../bin/node-runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const servers = ['bash', 'browser', 'filesystem', 'flujo'];
 const versions = [
   ['20.19.0', false], ['22.0.0', false], ['22.13.1', false], ['22.16.9', false],
-  ['22.17.0', true], ['v22.17.0', true], ['22.18.1', true], ['22.99.99', true],
+  ['22.17.0', false], ['v22.17.0', false], ['22.18.0', false], ['22.18.99', false],
+  ['22.19.0', true], ['v22.19.0', true], ['22.19.1', true], ['22.99.99', true],
   ['23.0.0', false], ['23.11.0', false], ['24.0.0', false], ['24.1.9', false],
   ['24.2.0', true], ['24.21.0', true], ['25.0.0', false], ['26.0.0', false],
-  ['100.0.0', false], ['22.17', false], ['022.17.0', false], ['22.017.0', false],
-  ['22.17.0-rc.1', false], ['22.17.0+custom', false], ['22.17.2147483648', false],
+  ['100.0.0', false], ['22.19', false], ['022.19.0', false], ['22.017.0', false],
+  ['22.19.0-rc.1', false], ['22.19.0+custom', false], ['22.19.2147483648', false],
   ['', false], [undefined, false], [22, false],
 ];
 
@@ -55,7 +57,7 @@ test('runtime errors contain bounded migration guidance without interpolating pr
 });
 
 test('all six tracked engines and corresponding lock entries declare the closed runtime range', () => {
-  assert.equal(SUPPORTED_NODE_RANGE, '^22.17.0 || ^24.2.0');
+  assert.equal(SUPPORTED_NODE_RANGE, '^22.19.0 || ^24.2.0');
   const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
   for (const directory of ['', ...[...servers, 'shared'].map((server) => `mcp-servers/${server}`)]) {
     const manifest = JSON.parse(readFileSync(path.join(root, directory, 'package.json'), 'utf8'));
@@ -131,7 +133,7 @@ test('preflight refuses unsupported versions before a fixture dependency can per
     assert.equal(existsSync(marker), false);
   }
   // A synthetic version admits only this harmless fixture; it does not qualify another native runtime.
-  const accepted = spawnSync(process.execPath, ['--input-type=module', '--eval', `Object.defineProperty(process.versions, 'node', { value: '22.17.0' }); await import(${JSON.stringify(pathToFileURL(entry).href)});`], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+  const accepted = spawnSync(process.execPath, ['--input-type=module', '--eval', `Object.defineProperty(process.versions, 'node', { value: '22.19.0' }); await import(${JSON.stringify(pathToFileURL(entry).href)});`], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
   assert.ifError(accepted.error);
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.equal(readFileSync(marker, 'utf8'), 'owned fixture');
@@ -161,7 +163,7 @@ $originalProbe = (Get-Command Test-FlujoNodeVersion).ScriptBlock
 function Write-Step { param($Text) }
 function Write-Ok { param($Text) }
 function Write-Warn2 { param($Text) }
-foreach ($value in @('22.13.1', '23.11.0', '24.1.9', '25.0.0', '26.0.0', '22.17.0', '24.2.0')) {
+foreach ($value in @('22.13.1', '23.11.0', '24.1.9', '25.0.0', '26.0.0', '22.17.0', '22.18.99', '22.19.0', '24.2.0')) {
  $script:fixtureProbe = & $originalProbe -CommandResolver { 'fixture' } -VersionResolver { $value }
  function Test-FlujoNodeVersion { return $script:fixtureProbe }
  $refused = $false
@@ -187,7 +189,7 @@ test('Unix Node-installation stage refuses unsupported existing Node after prere
   assert.ok(validator && stage.includes('node_version_ok'));
   const entry = path.join(directory, 'installer-stage.sh');
   const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
-  for (const [version, supported] of [['22.13.1', false], ['23.11.0', false], ['24.1.9', false], ['26.0.0', false], ['22.17.0', true], ['24.2.0', true]]) {
+  for (const [version, supported] of [['22.13.1', false], ['23.11.0', false], ['24.1.9', false], ['26.0.0', false], ['22.17.0', false], ['22.18.99', false], ['22.19.0', true], ['24.2.0', true]]) {
     writeFileSync(entry, `set -euo pipefail
 have() { [ "$1" = node ]; }
 node() { printf '%s\\n' '${version}'; }
@@ -257,10 +259,10 @@ curl() {
 `);
     let caseIndex = 0;
     for (const [version, exitCode, present, refused] of [
-      ['22.13.1', 0, true, true], ['23.11.0', 0, true, true],
+      ['22.13.1', 0, true, true], ['22.17.0', 0, true, true], ['22.18.99', 0, true, true], ['23.11.0', 0, true, true],
       ['24.1.9', 0, true, true], ['25.0.0', 0, true, true], ['26.0.0', 0, true, true],
-      ['22.17.x', 0, true, true], ['22.17.0', 1, true, true],
-      ['22.17.0', 0, true, false], ['24.2.0', 0, true, false], ['', 0, false, false],
+      ['22.19.x', 0, true, true], ['22.19.0', 1, true, true],
+      ['22.19.0', 0, true, false], ['24.2.0', 0, true, false], ['', 0, false, false],
     ]) {
       if (existsSync(marker)) rmSync(marker);
       const fixtureHome = path.join(directory, `case-${caseIndex++}`);

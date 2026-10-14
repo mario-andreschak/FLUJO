@@ -47,7 +47,7 @@ irm https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/instal
 curl -fsSL https://raw.githubusercontent.com/mario-andreschak/FLUJO/main/scripts/install.sh | bash
 ```
 
-**Already have Node.js 22.17+ within 22.x, or 24.2+ within 24.x?** Run the published package:
+**Already have Node.js 22.19+ within 22.x, or 24.2+ within 24.x?** Run the published package:
 
 ```bash
 npx flujo-ai@latest

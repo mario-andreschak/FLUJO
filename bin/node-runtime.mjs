@@ -1,12 +1,12 @@
-/** The public app and MCP packages require the corrected Windows libuv metadata. */
-export const SUPPORTED_NODE_RANGE = '^22.17.0 || ^24.2.0';
+/** The public app and MCP packages share the filesystem and Undici runtime floor. */
+export const SUPPORTED_NODE_RANGE = '^22.19.0 || ^24.2.0';
 
 export function nodeRuntimeDiagnostic(version = process.versions.node, executable = process.execPath) {
   const displayVersion = typeof version === 'string' && /^v?\d+\.\d+\.\d+$/.test(version)
     ? `v${version.replace(/^v/, '').slice(0, 64)}` : 'an unrecognized version';
   const displayPath = String(executable).replace(/[\x00-\x1f\x7f-\x9f]/g, '?').slice(0, 512);
   return `FLUJO cannot start with Node.js ${displayVersion}.\nActive executable: ${displayPath}\n`
-    + 'Use a current patched release of Node.js 22.x (22.17+) or 24.x (24.2+) for native filesystem compatibility.';
+    + 'Use a current patched release of Node.js 22.x (22.19+) or 24.x (24.2+) for filesystem and model-connection compatibility.';
 }
 
 export function nodeRuntimeManualSteps(platform = process.platform) {
@@ -27,7 +27,7 @@ export function isSupportedNodeRuntime(version) {
   if (typeof version !== 'string' || !/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) return false;
   const [major, minor, patch] = version.replace(/^v/, '').split('.').map(Number);
   if (![major, minor, patch].every((part) => Number.isSafeInteger(part) && part <= 2_147_483_647)) return false;
-  return (major === 22 && minor >= 17) || (major === 24 && minor >= 2);
+  return (major === 22 && minor >= 19) || (major === 24 && minor >= 2);
 }
 
 export function assertSupportedNodeRuntime(version = process.versions.node) {

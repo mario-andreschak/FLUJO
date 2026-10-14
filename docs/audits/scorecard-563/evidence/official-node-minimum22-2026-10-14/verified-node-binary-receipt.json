@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-14T06:03:20.017Z",
+  "keySource": {
+    "repository": "https://github.com/nodejs/release-keys",
+    "commit": "481637f813e912c4aa3622d7964ab426c97b8e8d",
+    "evidence": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/verified-node-binary-receipt.json",
+    "evidenceSha256": "5b811280324775f702b981a86434c17761dad34ae5201e42228e8d6339a52341"
+  },
+  "gpgVersion": [
+    "gpg (GnuPG) 2.4.5-unknown",
+    "libgcrypt 1.9.4-unknown"
+  ],
+  "operator": "AI assistant; official artifact verification",
+  "executableExecution": false,
+  "qualificationScope": "signed official binary identity only; no installed application or container acceptance",
+  "versions": [
+    {
+      "version": "22.19.0",
+      "signedChecksumsSha256": "de2602986573174f8815e5c66a157950132166113edddd9124c30784303ede31",
+      "signatureExitCode": 0,
+      "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "validSignatureStatus": "[GNUPG:] VALIDSIG 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356 2025-08-28 1756415548 0 4 0 22 8 00 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "linux": {
+        "archive": "node-v22.19.0-linux-x64.tar.gz",
+        "archiveSha256": "d36e56998220085782c0ca965f9d51b7726335aed2f5fc7321c6c0ad233aa96d",
+        "member": "node-v22.19.0-linux-x64/bin/node",
+        "bytes": 121674800,
+        "sha256": "596b5144ff242737f1c1be6a5f0ccb3907dbba2482344143cb1a6898633402a9"
+      },
+      "windows": {
+        "member": "win-x64/node.exe",
+        "bytes": 85268464,
+        "sha256": "995a3fb3cefad590cd3f4b321532a4b9582fb9c6575320ed2e3e894caac3e362"
+      },
+      "libuv": {
+        "version": "1.51.0",
+        "member": "node-v22.19.0-linux-x64/include/node/uv/version.h",
+        "bytes": 1831,
+        "sha256": "aef7fb55ffcece76db9cb7f87d0632e432369747f329679779616cd0721981da"
+      }
+    }
+  ],
+  "inventory": [
+    {
+      "url": "https://nodejs.org/dist/v22.19.0/SHASUMS256.txt",
+      "file": "v22.19.0/SHASUMS256.txt",
+      "bytes": 3777,
+      "sha256": "de2602986573174f8815e5c66a157950132166113edddd9124c30784303ede31"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.19.0/SHASUMS256.txt.sig",
+      "file": "v22.19.0/SHASUMS256.txt.sig",
+      "bytes": 119,
+      "sha256": "a707e2c47cc87728a7664a1f215d806b14b29cd116fcb4e2f4662325a0ce3298"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz",
+      "file": "v22.19.0/node-v22.19.0-linux-x64.tar.gz",
+      "bytes": 54907188,
+      "sha256": "d36e56998220085782c0ca965f9d51b7726335aed2f5fc7321c6c0ad233aa96d",
+      "retained": false
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.19.0/win-x64/node.exe",
+      "file": "v22.19.0/node.exe",
+      "bytes": 85268464,
+      "sha256": "995a3fb3cefad590cd3f4b321532a4b9582fb9c6575320ed2e3e894caac3e362",
+      "retained": false
+    },
+    {
+      "file": "v22.19.0/signature-status.txt",
+      "bytes": 469,
+      "sha256": "6da256def06c175e929d9323a26b9d837e4ec31be6d24adb147d165d2e53e673",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v22.19.0/signature-stderr.txt",
+      "bytes": 520,
+      "sha256": "45e3f55427cabe937c1d895ef3c1623c28251665e9f0d8de3f1338a4ea0c2515",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v22.19.0/uv-version.h",
+      "bytes": 1831,
+      "sha256": "aef7fb55ffcece76db9cb7f87d0632e432369747f329679779616cd0721981da",
+      "source": "member node-v22.19.0-linux-x64/include/node/uv/version.h of verified official archive"
+    }
+  ]
+}

@@ -17,19 +17,23 @@
       "executables": {
         "linux": "a3627568bc920247f5edecc025a040bfa3c3f76bf3456ac424f6ac76aa5e6a47",
         "win32": "8f6945c55a51c893691534e7163372e4cedb62c8ad80a2a975df3f14a19fba16"
-      }
+      },
+      "evidence": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/verified-node-binary-receipt.json",
+      "evidenceSha256": "5b811280324775f702b981a86434c17761dad34ae5201e42228e8d6339a52341"
     },
-    "22.17.0": {
+    "22.19.0": {
       "uv": "1.51.0",
       "lts": "Jod",
       "role": "supported CI runtime",
-      "signedChecksumsSha256": "7519fede70def5e5afa6f723762341a6a7832a6459226f7a1619c683ff1155c4",
-      "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
-      "linuxArchive": "node-v22.17.0-linux-x64.tar.gz",
-      "linuxArchiveSha256": "0fa01328a0f3d10800623f7107fbcd654a60ec178fab1ef5b9779e94e0419e1a",
+      "evidence": "docs/audits/scorecard-563/evidence/official-node-minimum22-2026-10-14/verified-node-binary-receipt.json",
+      "evidenceSha256": "d150984b05c62482a38346286aed621d9aad5e59d39529f16458fd921898955b",
+      "signedChecksumsSha256": "de2602986573174f8815e5c66a157950132166113edddd9124c30784303ede31",
+      "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "linuxArchive": "node-v22.19.0-linux-x64.tar.gz",
+      "linuxArchiveSha256": "d36e56998220085782c0ca965f9d51b7726335aed2f5fc7321c6c0ad233aa96d",
       "executables": {
-        "linux": "8071ae0fca095a272ad698a90c7061801a86fb6392ddb81e922b68a91a4374b9",
-        "win32": "39d45b5933f339d3ebdebd76474893dab5d7da1038920f65cf5bbcf0f20f3636"
+        "linux": "596b5144ff242737f1c1be6a5f0ccb3907dbba2482344143cb1a6898633402a9",
+        "win32": "995a3fb3cefad590cd3f4b321532a4b9582fb9c6575320ed2e3e894caac3e362"
       }
     },
     "22.23.3": {
@@ -43,7 +47,9 @@
       "executables": {
         "linux": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
         "win32": "9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e"
-      }
+      },
+      "evidence": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/verified-node-binary-receipt.json",
+      "evidenceSha256": "5b811280324775f702b981a86434c17761dad34ae5201e42228e8d6339a52341"
     },
     "24.2.0": {
       "uv": "1.51.0",
@@ -56,7 +62,9 @@
       "executables": {
         "linux": "3fe8fd0442065d39c6a875e0672c8aa198c96983bf099c0d3b0ffee70622ddd2",
         "win32": "4f4c2bbda03106699e49ef2e7914c03d597c355a99a6b9a1b63dca19fe092c01"
-      }
+      },
+      "evidence": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/verified-node-binary-receipt.json",
+      "evidenceSha256": "5b811280324775f702b981a86434c17761dad34ae5201e42228e8d6339a52341"
     },
     "24.21.0": {
       "uv": "1.52.1",
@@ -69,7 +77,9 @@
       "executables": {
         "linux": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c",
         "win32": "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32"
-      }
+      },
+      "evidence": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/verified-node-binary-receipt.json",
+      "evidenceSha256": "5b811280324775f702b981a86434c17761dad34ae5201e42228e8d6339a52341"
     }
   },
   "containerBase": {
