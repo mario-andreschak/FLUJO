@@ -67,11 +67,25 @@ Journalled native, execution-authority, extension and Persona dispatches retain 
 existing immediate-refusal behavior. The queue does not bypass workspace
 capture or durable ownership fences, and it does not change canonical history.
 Local workspace writer registrations coalesce in batches of at most eight under
-one physical capture-admission lease. Each writer still owns a separate lock;
+one physical capture-admission lease. Independent writer locks are published
+concurrently within that bounded batch. All registration attempts settle before
+the admission lease releases, including failed publication and ownership checks.
+Each writer still owns a separate lock;
 mutation bodies start only after that lease releases, and capture still drains
 all active writers. This reduces repeated registration overhead without making
 mutation bodies run serially. The synthetic local reproduction does not establish
 the original production deployment's latency or resolve every #757 finding.
+
+The [October 14 source qualification](evidence/dispatch-admission-757-2026-10-14.json)
+uses actual saved-model lookup, credential decryption, storage, recovery and SDK
+calls with a counted loopback provider. At concurrency 16, two repetitions
+reduced `run:start` to `model:dispatch` p95 from 3014/2886 ms to 1734/1602 ms.
+Every unique reply, final conversation, summary and terminal event was checked.
+The focused publication/capture regression fails with sequential registration;
+publication failure and lost admission ownership still refuse their effects.
+Phase spans can overlap and their summed times are not wall-clock latency.
+The record separates this bounded Windows source result from original
+300-request H100/vLLM, tools, long-context and release-profile acceptance.
 
 ## Consumer compatibility and recovery
 
