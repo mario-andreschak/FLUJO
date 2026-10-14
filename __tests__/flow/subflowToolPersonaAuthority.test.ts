@@ -46,6 +46,24 @@ describe('callable subflow Persona authority', () => {
     capturedPreparation = undefined;
   });
 
+  it.each([
+    { executionExtensionOwned: true },
+    { executionExtensionContext: {} },
+  ])('refuses a synthetic child from protected parent state before flow lookup or lane execution', async protectedFields => {
+    conversationStates.set('protected-parent', {
+      conversationId: 'protected-parent',
+      flowId: 'parent-flow',
+      subflowToolNameMap: { call_subflow_worker: 'subflow-node' },
+      ...protectedFields,
+    } as unknown as SharedState);
+
+    await expect(executeSubflowToolCall('call_subflow_worker', { task: 'private input' }, {
+      conversationId: 'protected-parent',
+    })).resolves.toEqual({ success: false, error: 'execution_subflow_child_authority_required' });
+    expect(getFlowMock).not.toHaveBeenCalled();
+    expect(runSubflowLanesMock).not.toHaveBeenCalled();
+  });
+
   it('passes trusted attribution, immutable dependency snapshots and only the child fence into lanes', async () => {
     const authority = {
       signal: new AbortController().signal,

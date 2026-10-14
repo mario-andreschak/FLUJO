@@ -14,6 +14,8 @@ export interface ToolPreparationResult {
 // Input for MCP node processing
 export interface MCPNodeProcessingInput {
   mcpNodes: MCPNodeReference[];
+  /** Current owner capability for protected discovery and root-update suppression. */
+  executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
 }
 
 // Result of MCP node processing

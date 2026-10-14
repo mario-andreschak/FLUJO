@@ -1,8 +1,13 @@
 import { ProcessNode } from '@/backend/execution/flow/nodes';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { flowService } from '@/backend/services/flow';
-import { modelService } from '@/backend/services/model';
 import type { Flow } from '@/shared/types/flow';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
+
+beforeEach(async () => {
+  await saveItem(StorageKey.MODELS, [{ id: 'model-1', name: 'Pinned model', provider: 'openai', adapter: 'openai', ApiKey: '', promptTemplate: 'Pinned Model instruction.' }]);
+});
 
 afterEach(() => {
   jest.restoreAllMocks();
@@ -58,11 +63,6 @@ describe('ProcessNode immutable snapshot authority', () => {
       },
     } as SharedState;
 
-    jest.spyOn(modelService, 'getModel').mockResolvedValue({
-      id: 'model-1',
-      name: 'Pinned model',
-      promptTemplate: 'Pinned Model instruction.',
-    } as Awaited<ReturnType<typeof modelService.getModel>>);
     const getFlow = jest.spyOn(flowService, 'getFlow').mockRejectedValue(
       new Error('Persona-private snapshot must not fall back to the mutable Flow store'),
     );

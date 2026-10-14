@@ -68,7 +68,7 @@ async function POST_handler(request: NextRequest) {
     const { key, value } = await request.json();
     log.debug(`Request body [${requestId}]`, { key });
 
-    if (!isGenericStorageKey(key)) {
+    if (!isGenericStorageKey(key) || key === StorageKey.MODELS) {
       log.error(`Invalid storage key: ${key} [${requestId}]`);
       return NextResponse.json({ error: 'Invalid storage key' }, { status: 400 });
     }
@@ -95,7 +95,7 @@ async function DELETE_handler(request: NextRequest) {
   
   log.debug(`Request parameters [${requestId}]`, { key });
 
-  if (!isGenericStorageKey(key)) {
+  if (!isGenericStorageKey(key) || key === StorageKey.MODELS) {
     log.error(`Invalid storage key: ${key} [${requestId}]`);
     return NextResponse.json({ error: 'Invalid storage key' }, { status: 400 });
   }

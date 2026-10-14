@@ -102,6 +102,13 @@ async function POST_handler(request: NextRequest) {
         404,
       );
     }
+    if (model.ownerCredentialBinding !== undefined) {
+      return errorResponse(
+        'Owner-bound models require an authorized model-step transport.',
+        'owner-bound-model',
+        403,
+      );
+    }
     if (
       !supportsOpenAITranscription(model.adapter) ||
       model.provider === 'azure'

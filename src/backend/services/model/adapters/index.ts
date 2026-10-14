@@ -1,4 +1,4 @@
-import { Model } from '@/shared/types/model';
+import type { Model } from '@/shared/types/model';
 import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { CompletionAdapter } from './types';
 import { OpenAiAdapter } from './openaiAdapter';
@@ -13,6 +13,8 @@ import { AntigravityCliAdapter } from './antigravityCliAdapter';
 import { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 import { FallbackAdapter } from './fallbackAdapter';
+import { resolveCompletionAdapterRoute, type CompletionAdapterRoute } from './completionRoute';
+import { assertOwnerCredentialAdapterRoute, ExecutionExtensionError } from '@/backend/execution/extensions';
 
 function denyAssessment(adapter: CompletionAdapter): CompletionAdapter {
   // Preserve the adapter instance and its method receiver for ordinary calls.
@@ -55,12 +57,19 @@ export type {
  * Pick the completion adapter for a model based on its `adapter` field.
  * Gateway profiles also resolve older Chat Completions records to Responses.
  */
-export function getCompletionAdapter(model: Model): CompletionAdapter {
-  if (model.fallbackPolicy) return denyAssessment(new FallbackAdapter(getCompletionAdapter));
-  if (resolveOpenRouterMediaRoute(model).useMediaRoute) {
-    return denyAssessment(new OpenRouterMediaAdapter());
+export function getCompletionAdapter(model: Model, requiredRoute?: CompletionAdapterRoute): CompletionAdapter {
+  // Resolve once for this factory call. A protected ModelHandler supplies the
+  // qualified route after its async preparation, before any native adapter can run.
+  const route = resolveCompletionAdapterRoute(model);
+  assertOwnerCredentialAdapterRoute(model, route);
+  if (requiredRoute && route !== requiredRoute) {
+    throw new ExecutionExtensionError('execution_single_attempt_adapter_unsupported');
   }
-  switch (resolveModelAdapter(model.provider, model.adapter)) {
+  switch (route) {
+    case 'fallback-policy':
+      return denyAssessment(new FallbackAdapter(getCompletionAdapter));
+    case 'openrouter-media':
+      return denyAssessment(new OpenRouterMediaAdapter());
     case 'azure':
       return new AzureOpenAiAdapter();
     case 'openai-responses':

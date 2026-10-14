@@ -119,6 +119,9 @@ export function createSamplingHandler(
     if (!model) {
       throw new McpError(ErrorCode.InternalError, `Sampling model not found: ${policy.modelId}`);
     }
+    if (model.ownerCredentialBinding !== undefined) {
+      throw new McpError(ErrorCode.InvalidRequest, 'Owner-bound models require an authorized model-step transport.');
+    }
     if (model.fallbackPolicy || !getModelConfigurationCapabilities(model.provider, model.adapter, model.name).maxOutputTokens) {
       throw new McpError(ErrorCode.InvalidRequest, 'Sampling requires a model that supports an output-token limit');
     }

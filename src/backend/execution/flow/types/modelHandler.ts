@@ -18,6 +18,8 @@ import type { ModelInputSnapshot } from '../types';
 // Input for model call
 export interface ModelCallInput {
   modelId: string;
+  /** Process preparation's detached model, held to dispatch by a catalog fence. */
+  modelCatalogAdmission?: import('@/backend/services/model/catalogAdmission').ModelCatalogAdmission;
   prompt: string;
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
   /**
@@ -60,6 +62,8 @@ export interface ModelCallInput {
   modelInputForArchive?: ModelInputSnapshot;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
+  /** Runtime-only Process execution counter. Only owner-bound calls consume it. */
+  takeModelStepOrdinal?: () => number;
   /**
    * Maps model-facing MCP tool names back to (server, tool). Forwarded to
    * adapters that run their own agentic tool loop (Claude subscription) so they

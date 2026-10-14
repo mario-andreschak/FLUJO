@@ -2,7 +2,7 @@ import { reserveArchiveSnapshot, estimateArchivePayload,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
 import { createHash, randomUUID } from 'node:crypto';
-import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
+import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, issueExecutionModelStepContext, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
@@ -40,6 +40,7 @@ import {
 } from './modelInputCompaction';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
+import { assertCatalogAdmissionCurrent, assertModelCatalogLeaseOwned, withModelCatalogLease, type ModelCatalogAdmission } from '@/backend/services/model/catalogAdmission';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import {
   filterUnsupportedMediaInputs,
@@ -64,7 +65,7 @@ import {
   COMPACTION_PROJECTION_VERSION,
   type CompactionProjectionIdentity,
 } from '../compaction/types';
-import { normalizeMaxTokens, type Model } from '@/shared/types/model';
+import { isOwnerCredentialBoundModel, normalizeMaxTokens, validateOwnerCredentialBinding, type Model } from '@/shared/types/model';
 import { isSelfOrchestratingAdapter, normalizeModelTemperature, resolveModelAdapter, supportsLocalModelAuth, type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
@@ -553,6 +554,7 @@ export class ModelHandler {
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
     durableContext: FlowDurableMutationContext = {},
     tools?: OpenAI.ChatCompletionFunctionTool[],
+    modelCatalogAdmission?: ModelCatalogAdmission,
   ): Promise<CompactHistoryResult | null> {
     try {
       if (!conversationId || source.length < 4) return null;
@@ -614,6 +616,7 @@ export class ModelHandler {
           { id: uuidv4(), role: 'user', content: prompt.user, timestamp: Date.now() } as FlujoChatMessage,
         ];
         const response = await ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
+          modelCatalogAdmission,
           maxTokens: Math.min(effectiveMaxTokens ?? 4000, 4000),
           beforeModelDispatch: durableContext.executionAuthority?.assertCurrent,
           durableContext,
@@ -1154,6 +1157,21 @@ export class ModelHandler {
    * Does NOT handle tool execution loops internally.
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
+    if (input.modelCatalogAdmission && input.modelCatalogAdmission.model.id !== input.modelId) {
+      throw new ExecutionExtensionError('execution_model_binding_changed');
+    }
+    if (!input.modelCatalogAdmission) return this.callModelCore(input);
+    try {
+      return await withModelCatalogLease(async () => {
+        await assertCatalogAdmissionCurrent(input.modelCatalogAdmission!);
+        return this.callModelCore(input);
+      });
+    } catch (error) {
+      return this.shapeCompletionError(error, input.modelId, false);
+    }
+  }
+
+  private static async callModelCore(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
     const durableContext: FlowDurableMutationContext = {
@@ -1175,7 +1193,7 @@ export class ModelHandler {
     let modelCompactionProvider: ModelProvider | undefined;
     const nodeDisplayName = nodeName;
     try {
-      const model = await modelService.getModel(modelId);
+      const model = input.modelCatalogAdmission?.model ?? await modelService.getModel(modelId);
       if (model) {
         modelDisplayName = model.displayName || model.name;
         modelTechnicalName = model.name;
@@ -1637,6 +1655,7 @@ export class ModelHandler {
       { compactionMode, compactionKeepTokens },
       durableContext,
       tools,
+      input.modelCatalogAdmission,
     );
     const effectiveMessages = compaction?.wireMessages ?? projectedMessages;
     const effectiveModelInput = cloneModelInputSnapshot(input.modelInputForArchive);
@@ -1660,6 +1679,7 @@ export class ModelHandler {
 
     // Call generateCompletion once with the materialized provider projection.
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
+      modelCatalogAdmission: input.modelCatalogAdmission,
       nativeBrokerAuthority: input.nativeBrokerAuthority,
       nativeInvocationSessionHook: input.nativeInvocationSessionHook,
       nativeOriginalProcessHost: input.nativeOriginalHost?.process,
@@ -1676,6 +1696,7 @@ export class ModelHandler {
       conversationId,
       runId,
       nodeId,
+      takeModelStepOrdinal: input.takeModelStepOrdinal,
       codexSession,
       onCodexSessionChange,
       localToolExecutors,
@@ -1918,11 +1939,30 @@ export class ModelHandler {
    * Generate completion using model service - pure function
    */
   private static async generateCompletion(
+    ...args: Parameters<typeof ModelHandler.generateCompletionCore>
+  ): Promise<Result<ModelCallResult>> {
+    const admission = args[4]?.modelCatalogAdmission;
+    if (!admission) return this.generateCompletionCore(...args);
+    try {
+      if (admission.model.id !== args[0]) {
+        throw new ExecutionExtensionError('execution_model_binding_changed');
+      }
+      return await withModelCatalogLease(async () => {
+        await assertCatalogAdmissionCurrent(admission);
+        return this.generateCompletionCore(...args);
+      });
+    } catch (error) {
+      return ModelHandler.shapeCompletionError(error, args[0], false);
+    }
+  }
+
+  private static async generateCompletionCore(
     modelId: string,
     prompt: string,
     messages: FlujoChatMessage[], // Expect FlujoChatMessage
     tools?: OpenAI.ChatCompletionFunctionTool[],
     opts?: {
+      modelCatalogAdmission?: ModelCatalogAdmission;
       toolNameMap?: Record<string, DecodedTool>;
       maxTurns?: number;
       /** Effective per-completion output-token cap, already resolved by callModel
@@ -1946,6 +1986,8 @@ export class ModelHandler {
       conversationId?: string;
       runId?: string;
       nodeId?: string;
+      /** One-use ordinal from the active Process execution, not request metadata. */
+      takeModelStepOrdinal?: () => number;
       codexSession?: import('../types').CodexSessionMetadata;
       onCodexSessionChange?: (session: import('../types').CodexSessionMetadata | undefined) => void;
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
@@ -2035,7 +2077,7 @@ export class ModelHandler {
         await assertExecutionExtensionCurrent(opts.executionExtensionContext);
       }
       // Get the model
-      const model = await modelService.getModel(modelId);
+      const model = opts?.modelCatalogAdmission?.model ?? await modelService.getModel(modelId);
       await assertFlowExecutionCurrent(opts?.durableContext ?? {});
       // Native adapters require a trusted, verified restriction profile. Claude
       // and Antigravity remain excluded from authenticated private execution.
@@ -2068,7 +2110,27 @@ export class ModelHandler {
         if (!opts.nativeBrokerAuthority) throw new Error('Native session publication requires broker authority.');
       }
 
-      singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(opts?.executionExtensionContext, model);
+      const ownerBound = isOwnerCredentialBoundModel(model);
+      if (ownerBound && validateOwnerCredentialBinding(model)) {
+        throw new ExecutionExtensionError('owner_credential_binding_invalid');
+      }
+      if (ownerBound && !opts?.executionExtensionContext) {
+        throw new ExecutionExtensionError('execution_model_step_context_required');
+      }
+      if (model.fallbackPolicy && opts?.executionExtensionContext) {
+        throw new ExecutionExtensionError('execution_model_fallback_forbidden');
+      }
+      // The parent run context covers tools and durable state. Every bound
+      // provider call gets a separate owner-issued child that can dispatch once.
+      if (ownerBound && (!opts?.nodeId || typeof opts.takeModelStepOrdinal !== 'function')) {
+        throw new ExecutionExtensionError('execution_model_step_slot_required');
+      }
+      const modelStepContext = ownerBound
+        ? await issueExecutionModelStepContext(opts!.executionExtensionContext!, model, {
+          nodeId: opts!.nodeId!, ordinal: opts!.takeModelStepOrdinal!(),
+        })
+        : opts?.executionExtensionContext;
+      singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(modelStepContext, model);
 
       // Extract model settings. Malformed persisted values are omitted so NaN
       // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
@@ -2082,8 +2144,9 @@ export class ModelHandler {
 
       // Resolve and decrypt the API key. Local-auth adapters accept an empty
       // key to use the host CLI's supported login; each adapter owns that auth.
-      const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-      const decryptedApiKey =
+      if (opts?.modelCatalogAdmission) await assertModelCatalogLeaseOwned();
+      const resolvedKey = ownerBound ? '' : await modelService.resolveAndDecryptApiKey(model.ApiKey);
+      const decryptedApiKey = ownerBound ? '' :
         resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {
         return {
@@ -2529,7 +2592,7 @@ export class ModelHandler {
       // native adapters (Anthropic, Gemini, Claude CLI) translate to/from their
       // own APIs but return the same OpenAI-shaped response, so everything below
       // is provider-agnostic.
-      const adapter = getCompletionAdapter(model);
+      const adapter = getCompletionAdapter(model, singlePhysicalAttempt ? 'openai' : undefined);
 
       log.debug(`calling chatcompletion`)
       log.verbose('calling chatcompletion now with ADAPTER', model.adapter || 'openai')
@@ -2542,7 +2605,7 @@ export class ModelHandler {
       // --- Auto-unload Ollama: resolve setting and root URL once, before the
       // attempt closure captures them.  The lock is per root URL so parallel
       // fan-out lanes that target DIFFERENT servers are not serialised. ---
-      const autoUnloadOllama = (model.provider === 'ollama' && Boolean(model.baseUrl))
+      const autoUnloadOllama = (!ownerBound && model.provider === 'ollama' && Boolean(model.baseUrl))
         ? await ModelHandler.isAutoUnloadOllamaEnabled()
         : false;
       const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
@@ -2832,7 +2895,7 @@ export class ModelHandler {
               model,
               apiKey: decryptedApiKey,
               beforeModelDispatch: async () => {
-                if (opts?.executionExtensionContext) await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+                if (modelStepContext) await assertExecutionExtensionCurrent(modelStepContext);
                 await opts?.beforeModelDispatch?.();
               },
               temperatureOverride: opts?.temperatureOverride !== undefined
@@ -3045,7 +3108,7 @@ export class ModelHandler {
               onToolProgress: nativeToolPort ? undefined : onToolProgress,
               signal: abortController.signal,
               beforeToolDispatch: nativeToolPort ? undefined : opts?.beforeToolDispatch,
-              executionExtensionContext: opts?.executionExtensionContext,
+              executionExtensionContext: modelStepContext,
               authorizePersonaCoreMcp: nativeToolPort ? undefined : opts?.authorizePersonaCoreMcp,
               afterToolDispatch: nativeToolPort ? undefined : () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
               commitDurableMutation: nativeToolPort ? undefined : <T>(task: () => Promise<T>) =>
@@ -3071,8 +3134,9 @@ export class ModelHandler {
               // compaction, media hydration) is complete.  Check the current
               // lease/generation at the final dispatch boundary for EVERY
               // attempt, including bounded retries and summary calls.
-              if (opts?.executionExtensionContext) {
-                await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+              if (opts?.modelCatalogAdmission) await assertModelCatalogLeaseOwned();
+              if (modelStepContext) {
+                await assertExecutionExtensionCurrent(modelStepContext);
               }
               if (!model.fallbackPolicy) await opts?.beforeModelDispatch?.();
               const nativeResult = await (opts?.onModelDelta && adapter.createStreamCompletion
@@ -3094,6 +3158,7 @@ export class ModelHandler {
                 async () => {
                   const prev = getLoadedModel(ollamaRootForUnload);
                   if (prev && prev !== model.name) {
+                    if (opts?.modelCatalogAdmission) await assertModelCatalogLeaseOwned();
                     await opts?.beforeModelDispatch?.();
                     log.info(
                       `[ModelHandler] Auto-unloading Ollama model "${prev}" to free VRAM for "${model.name}" on ${ollamaRootForUnload}`
@@ -4131,6 +4196,10 @@ export class ModelHandler {
           // Fixed server/node arguments are resolved only at dispatch time and
           // win over anything the model attempted to provide. They were removed
           // from the advertised schema, so the model never sees or controls them.
+          if (input.executionExtensionContext && decoded.presetArgs
+            && Object.keys(decoded.presetArgs).length > 0) {
+            throw new ExecutionExtensionError('execution_tool_presets_forbidden');
+          }
           args = await applyPresetArguments(args, decoded.presetArgs, decoded.context);
 
           emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });

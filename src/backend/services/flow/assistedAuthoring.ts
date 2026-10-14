@@ -81,6 +81,9 @@ async function authoringCompletion(
 ): Promise<string> {
   const model = await modelService.getModel(modelId);
   if (!model) throw new FlowAuthoringValidationError(`AI model not found: ${modelId}`);
+  if (model.ownerCredentialBinding !== undefined) {
+    throw new FlowAuthoringValidationError('Owner-bound models require an authorized model-step transport.');
+  }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new FlowAuthoringValidationError('Could not resolve the selected AI model credentials.');

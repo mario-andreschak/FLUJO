@@ -107,6 +107,9 @@ async function aiCompletion(modelId: string, messages: OpenAI.ChatCompletionMess
   researchSignal?.throwIfAborted();
   const model = await modelService.getModel(modelId);
   if (!model) throw new Error(`AI model not found: ${modelId}`);
+  if (model.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   if (researchSignal && !supportsMcpModelRiskAssessment(model)) throw new Error('Research requires a supported, tool-free text model.');
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
@@ -554,7 +557,11 @@ export async function researchMcpServers(input: {
   }
   if (!input.modelId.trim()) throw new Error('No relevant bundled server was found. Choose a supported text model for research or use manual setup.');
   const selectedModel = await modelService.getModel(input.modelId);
-  if (!selectedModel || !supportsMcpModelRiskAssessment(selectedModel)) throw new Error('Research requires a supported, tool-free text model.');
+  if (!selectedModel) throw new Error(`AI model not found or unavailable: ${input.modelId}`);
+  if (!supportsMcpModelRiskAssessment(selectedModel)) throw new Error('Research requires a supported, tool-free text model.');
+  if (selectedModel.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   const progress = async (stage: Extract<McpAssistantResearchEvent, { type: 'progress' }>['stage'], message: string) => {
     signal.throwIfAborted();
     await input.onProgress?.({ type: 'progress', stage, message });
@@ -899,6 +906,11 @@ async function troubleshootingResearch(config: McpTroubleshootContext['config'])
 
 export async function troubleshootMcpInstall(input: McpTroubleshootContext): Promise<McpTroubleshootResult> {
   if (!input.modelId) throw new Error('Choose an AI model for troubleshooting.');
+  const troubleshootModel = await modelService.getModel(input.modelId);
+  if (!troubleshootModel) throw new Error(`AI model not found or unavailable: ${input.modelId}`);
+  if (troubleshootModel?.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   const context = {
     ...input.config,
     args: input.config.args?.slice(0, 40).map((arg) => arg.slice(0, 500)),

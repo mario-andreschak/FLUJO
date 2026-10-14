@@ -883,6 +883,12 @@ export interface SharedState extends DebuggerStateView {
     /** Stable logical execution id used only for metadata-only statistics. It is
      * preserved while approval/debug is paused, then replaced for a new turn. */
     logicalRunId?: string;
+    /** Persisted call-site ordinal cursor for owner-bound Process model steps.
+     * The owner still durably deduplicates slots under its private run identity. */
+    executionModelStepOrdinals?: {
+        logicalRunId: string;
+        nextByNode: Record<string, number>;
+    };
     /**
      * Additive durable recovery metadata (issue #355). Legacy status values stay
      * authoritative for compatibility; this versioned record supplies the more
@@ -1468,6 +1474,10 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     nativeFlowSnapshot?: Flow;
     currentPrompt: string;
     boundModel: string;
+    /** Detached model and catalog generation admitted before preparation effects. */
+    modelCatalogAdmission?: import('@/backend/services/model/catalogAdmission').ModelCatalogAdmission;
+    /** MCP bindings admitted during prep; model dispatch must not reread mutable node params. */
+    mcpNodesForDispatch?: MCPNodeReference[];
     modelDisplayName?: string;
     availableTools?: ToolDefinition[];
     mcpContext?: MCPContext;
@@ -1517,6 +1527,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Runtime-only guard checked before provider and tool dispatch. */
     executionAuthority?: FlowExecutionAuthority;
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
+    /** Runtime-only reservation against SharedState's run-bound ordinal cursor. */
+    takeModelStepOrdinal?: () => number;
     /** Runtime-only run cancellation forwarded to the in-flight model call. */
     abortSignal?: AbortSignal;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */

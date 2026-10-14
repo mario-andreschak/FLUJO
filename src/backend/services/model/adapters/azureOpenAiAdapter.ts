@@ -5,6 +5,8 @@ import {
   createAzureOpenAIClient,
 } from '../openaiClient';
 import { OpenAiAdapter } from './openaiAdapter';
+import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
+import type { CompletionInput, CompletionResult } from './types';
 
 /**
  * Azure OpenAI keeps the Chat Completions payload shape but changes routing and
@@ -14,6 +16,16 @@ import { OpenAiAdapter } from './openaiAdapter';
  * streaming, retries, usage, and media exactly like the regular OpenAI path.
  */
 export class AzureOpenAiAdapter extends OpenAiAdapter {
+  override async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    await assertExecutionExtensionConcreteAdapter(input.executionExtensionContext, input.model, 'azure');
+    return super.createCompletion(input);
+  }
+
+  override async createStreamCompletion(input: CompletionInput): Promise<CompletionResult> {
+    await assertExecutionExtensionConcreteAdapter(input.executionExtensionContext, input.model, 'azure');
+    return super.createStreamCompletion(input);
+  }
+
   protected override createClient(model: Model, apiKey: string): OpenAI {
     const endpoint = model.baseUrl?.trim();
     if (!endpoint) throw new Error('Azure OpenAI endpoint is required');

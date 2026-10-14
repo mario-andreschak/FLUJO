@@ -978,6 +978,9 @@ export async function generateFlowVisually(
   ));
   const model = await modelService.getModel(input.modelId);
   if (!model) throw new Error(`Generator model not found: ${input.modelId}`);
+  if (model.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the generator model API key.');

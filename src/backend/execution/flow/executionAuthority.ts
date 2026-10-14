@@ -1,7 +1,8 @@
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import type { FlowExecutionAuthority } from './types';
 import { inheritNativeOriginalAuthority } from './nativeOriginalAuthorityInheritance';
-import { assertExecutionExtensionCurrent, commitExecutionExtensionMutation, type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { assertExecutionExtensionCurrent, commitExecutionExtensionMutation,
+  executionExtensionSharesPersonaAuthority, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 /**
  * A tagged run-level failure used at durable Flow mutation boundaries.
@@ -84,6 +85,7 @@ export async function assertFlowExecutionCurrent(
   if (context.executionExtensionContext) {
     try { await assertExecutionExtensionCurrent(context.executionExtensionContext); }
     catch { throw new FlowExecutionAuthorityError('Private execution authority was lost.'); }
+    if (executionExtensionSharesPersonaAuthority(context.executionExtensionContext, executionAuthority)) return;
   }
   if (personaAttribution && !executionAuthority) throw missingAuthorityError();
   if (!executionAuthority) return;
@@ -109,6 +111,9 @@ export async function commitFlowDurableMutation<T>(
   task: () => Promise<T>,
 ): Promise<T> {
   if (context.executionExtensionContext) {
+    if (executionExtensionSharesPersonaAuthority(context.executionExtensionContext, context.executionAuthority)) {
+      return commitExecutionExtensionMutation(context.executionExtensionContext, task);
+    }
     return commitExecutionExtensionMutation(context.executionExtensionContext, () => commitFlowDurableMutation(
       { ...context, executionExtensionContext: undefined }, task));
   }

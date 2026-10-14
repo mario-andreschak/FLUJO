@@ -34,7 +34,9 @@ const WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 900;
 // Allow cold Windows PowerShell startup more time without slowing foreign-PID
 // observations in the contention loop. All supported platforms share a bounded
 // retry sequence; only the Windows per-probe timeout changes for our own PID.
-const OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 3_000;
+// A cold shell can take more than three seconds on a busy Windows host. This
+// one-time bootstrap remains bounded and must still produce a valid identity.
+const OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 10_000;
 const OWN_PROCESS_BIRTH_PROBE_ATTEMPTS = 3;
 const OWN_PROCESS_BIRTH_PROBE_RETRY_MS = 100;
 const PROCESS_BIRTH_MARKER_SUPPORTED = ['darwin', 'linux', 'win32'].includes(process.platform);
@@ -80,6 +82,12 @@ declare global {
   > | undefined;
   var __flujo_enduring_agent_deferred_lock_cleanups: Set<string> | undefined;
   var __flujo_workspace_writer_admission_chains: Map<string, Promise<void>> | undefined;
+  var __flujo_model_catalog_lease_scope: AsyncLocalStorage<{
+    lock: PersonaRuntimeLock;
+    workspace: string;
+    writer: boolean;
+    readerId?: string;
+  }> | undefined;
 }
 
 const PROCESS_INSTANCE_ID = global.__flujo_enduring_agent_process_instance_id ??= randomUUID();
@@ -88,6 +96,8 @@ const ISSUED_RUNTIME_LOCKS = global.__flujo_enduring_agent_issued_runtime_lock_s
   ??= new WeakMap<object, IssuedRuntimeLockScope>();
 const DEFERRED_CLEANUP_KEYS = global.__flujo_enduring_agent_deferred_lock_cleanups
   ??= new Set<string>();
+const modelCatalogLeaseScope = global.__flujo_model_catalog_lease_scope
+  ??= new AsyncLocalStorage<{ lock: PersonaRuntimeLock; workspace: string; writer: boolean; readerId?: string }>();
 const processBirthCache = new Map<number, { checkedAt: number; marker: string | null }>();
 const processBirthInFlight = new Map<number, Promise<string | null>>();
 
@@ -175,6 +185,15 @@ export class PersonaRuntimeLockTimeoutError extends Error {
   constructor(readonly personaId: string) {
     super(`Timed out acquiring the runtime lock for Persona ${JSON.stringify(personaId)}.`);
     this.name = 'PersonaRuntimeLockTimeoutError';
+  }
+}
+
+export class ModelCatalogBusyError extends Error {
+  readonly code = 'MODEL_CATALOG_BUSY' as const;
+
+  constructor() {
+    super('Cannot edit the model catalog during an active model call; retry after it finishes.');
+    this.name = 'ModelCatalogBusyError';
   }
 }
 
@@ -398,7 +417,10 @@ async function getLinuxBootId(): Promise<string | null> {
   return bootId;
 }
 
-async function queryWindowsProcessBirthMarker(pid: number): Promise<string | null> {
+async function queryWindowsProcessBirthMarker(
+  pid: number,
+  timeoutMs = pid === process.pid ? OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS : WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS,
+): Promise<string | null> {
   const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) return null;
   const normalizedSystemRoot = path.win32.normalize(systemRoot);
@@ -417,9 +439,7 @@ async function queryWindowsProcessBirthMarker(pid: number): Promise<string | nul
     `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`,
   ], {
     encoding: 'utf8',
-    timeout: pid === process.pid
-      ? OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS
-      : WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS,
+    timeout: timeoutMs,
     windowsHide: true,
   });
   const value = stdout.trim();
@@ -475,9 +495,11 @@ interface ProcessBirthObservation {
   failure?: string;
 }
 
-async function observeProcessBirthMarker(pid: number): Promise<ProcessBirthObservation> {
+async function observeProcessBirthMarker(pid: number, ownedStartup = false): Promise<ProcessBirthObservation> {
   try {
-    const marker = await processBirthMarkerProbe(pid);
+    const marker = ownedStartup && process.platform === 'win32' && processBirthMarkerProbe === queryPlatformProcessBirthMarker
+      ? await queryWindowsProcessBirthMarker(pid, OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS)
+      : await processBirthMarkerProbe(pid);
     return marker ? { marker } : { marker: null, failure: 'probe returned no valid birth identity' };
   } catch (error) {
     // Probe failures and timeouts are uncertainty. Callers must remain fail
@@ -493,8 +515,8 @@ async function observeProcessBirthMarker(pid: number): Promise<ProcessBirthObser
   }
 }
 
-async function queryProcessBirthMarker(pid: number): Promise<string | null> {
-  return (await observeProcessBirthMarker(pid)).marker;
+async function queryProcessBirthMarker(pid: number, ownedStartup = false): Promise<string | null> {
+  return (await observeProcessBirthMarker(pid, ownedStartup)).marker;
 }
 
 async function establishOwnProcessBirthMarkerV2(): Promise<string | null> {
@@ -706,7 +728,10 @@ export interface RuntimeProcessIdentity {
 /** Bind a newly spawned child to an OS birth observation, never to PID alone. */
 export async function captureRuntimeChildIdentity(pid: number): Promise<RuntimeProcessIdentity> {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid child PID.');
-  const birth = await queryProcessBirthMarker(pid);
+  // Fresh owned-child admission must establish a real incarnation before any
+  // protocol traffic. It can incur the same cold shell startup as our own PID;
+  // contention-loop observations keep their short uncertainty/fail-closed bound.
+  const birth = await queryProcessBirthMarker(pid, true);
   if (!birth || !birthMarkerVersion(birth)) throw new Error('Child process birth identity is unavailable.');
   return { pid, processInstanceId: randomUUID(), processBirthMarkerV2: birth };
 }
@@ -970,7 +995,7 @@ function scheduleOwnedCanonicalRetirement(
   });
 }
 
-async function acquireFilesystemLock(personaId: string): Promise<{
+async function acquireFilesystemLock(personaId: string, timeoutMs = LOCK_ACQUIRE_TIMEOUT_MS): Promise<{
   lock: PersonaRuntimeLock;
   release: () => Promise<void>;
 }> {
@@ -1006,7 +1031,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
           await cleanupAbandonmentMarker(abandonmentMarkerPath(lockPath, recovery.ownerId));
         }));
       if (liveRecoveries.length > 0) {
-        if (clockForLock().monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
+        if (clockForLock().monotonicNow() - acquireStartedAt >= timeoutMs) {
           throw new PersonaRuntimeLockTimeoutError(personaId);
         }
         await delay(LOCK_RETRY_MS);
@@ -1074,7 +1099,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
         });
         continue;
       }
-      if (clockForLock().monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
+      if (clockForLock().monotonicNow() - acquireStartedAt >= timeoutMs) {
         throw new PersonaRuntimeLockTimeoutError(personaId);
       }
       await delay(LOCK_RETRY_MS);
@@ -1183,6 +1208,105 @@ export function withWorkspaceRuntimeLock<T>(
       await acquired.release();
     }
   });
+}
+
+/**
+ * Cross-process shared readers / exclusive writer for the whole models file.
+ * A reader registers a unique owned lock under a short admission gate, then
+ * releases the gate during prompt preparation or a provider call. A writer
+ * closes admission and refuses the edit if any live reader remains before
+ * replacing models.json.
+ * None of this enters the workspace mutation gate: preparation can still write
+ * run resources while a workspace snapshot is pending.
+ */
+const MODEL_CATALOG_LOCK = '.model-catalog-admission';
+const MODEL_CATALOG_READER_PREFIX = '.model-catalog-reader-';
+const MODEL_CATALOG_READER_LOCK = /^\.model-catalog-reader-[0-9a-f-]{36}\.lock$/;
+const MODEL_CATALOG_WAIT_MS = 120_000;
+
+async function withModelCatalogPhysicalLease<T>(
+  task: () => Promise<T>,
+  writer: boolean,
+): Promise<T> {
+  const inherited = modelCatalogLeaseScope.getStore();
+  if (inherited?.workspace === getCurrentWorkspace()) {
+    // An agentic model call can synchronously start a child Process. It shares
+    // the parent's lease rather than waiting on its own physical lock. Editing
+    // the catalog inside that call would invalidate its admitted snapshot.
+    if (writer) throw new ModelCatalogBusyError();
+    if (inherited.writer) throw new Error('Cannot prepare a model during a model catalog edit.');
+    return withIssuedPersonaRuntimeLockOperation(
+      inherited.lock,
+      inherited.writer ? MODEL_CATALOG_LOCK : inherited.readerId!,
+      task,
+    );
+  }
+  return systemLockTime.run(true, async () => {
+    if (writer) {
+      const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
+      try {
+        const root = await ensureRuntimeLockRoot();
+        await admission.lock.assertOwned();
+        const readers = (await fs.readdir(root)).filter(name => MODEL_CATALOG_READER_LOCK.test(name));
+        for (const name of readers) {
+          const readerPath = path.join(root, name);
+          const owner = await readOwner(readerPath);
+          if (!owner) continue;
+          if (owner.workspace !== getCurrentWorkspace()) throw new Error('Model catalog reader has foreign ownership.');
+          const abandoned = await listAbandonedOwnerIds(root, readerPath);
+          if (await isOwnerProcessAlive(owner, abandoned)) throw new ModelCatalogBusyError();
+          const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
+          await retired.release();
+        }
+        await admission.lock.assertOwned();
+        return await modelCatalogLeaseScope.run(
+          { lock: admission.lock, workspace: getCurrentWorkspace(), writer: true },
+          task,
+        );
+      } finally {
+        await admission.release();
+      }
+    }
+    const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
+    let reader: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
+    const readerId = `${MODEL_CATALOG_READER_PREFIX}${randomUUID()}`;
+    try {
+      await admission.lock.assertOwned();
+      reader = await acquireFilesystemLock(readerId, MODEL_CATALOG_WAIT_MS);
+    } finally {
+      try {
+        await admission.release();
+      } catch (error) {
+        await reader?.release();
+        throw error;
+      }
+    }
+    try {
+      await reader!.lock.assertOwned();
+      return await modelCatalogLeaseScope.run(
+        { lock: reader!.lock, workspace: getCurrentWorkspace(), writer: false, readerId },
+        task,
+      );
+    } finally {
+      await reader?.release();
+    }
+  });
+}
+
+export function withModelCatalogFilesystemLease<T>(task: () => Promise<T>): Promise<T> {
+  return withModelCatalogPhysicalLease(task, false);
+}
+
+export function withModelCatalogFilesystemWriteLease<T>(task: () => Promise<T>): Promise<T> {
+  return withModelCatalogPhysicalLease(task, true);
+}
+
+export async function assertModelCatalogFilesystemLeaseOwned(): Promise<void> {
+  const inherited = modelCatalogLeaseScope.getStore();
+  if (!inherited || inherited.workspace !== getCurrentWorkspace()) {
+    throw new Error('Model catalog lease is missing.');
+  }
+  await inherited.lock.assertOwned();
 }
 
 /** Serialize Role-version allocation and Role reference creation by definition. */

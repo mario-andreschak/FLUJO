@@ -1,9 +1,25 @@
 import { createHash, randomUUID } from 'crypto';
 import { bindPersonaNativeOriginalAuthority } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { captureOriginalOwnerAuthority } from '@/backend/services/originalOwner/producer';
+import { ownerDigest } from '@/backend/services/originalOwner/types';
 import { createHeldReadScope } from '@/backend/execution/flow/heldReadScope';
 
 const authorityRegistryRoot = globalThis as typeof globalThis & { __flujoPersonaFlowAuthorities?: WeakSet<object> };
 const personaFlowAuthorities = authorityRegistryRoot.__flujoPersonaFlowAuthorities ??= new WeakSet<object>();
+export interface PersonaFlowAuthorityIdentity {
+  readonly workspaceId: string; readonly personaId: string; readonly activityId: string;
+  readonly dispatchId: string; readonly taskId?: string; readonly revisionId: string;
+  readonly leaseEpoch: string; readonly conversationId: string; readonly runId: string; readonly flowDigest: string;
+}
+const identityRoot = globalThis as typeof globalThis & {
+  __flujoPersonaFlowAuthorityIdentities?: WeakMap<object, Readonly<PersonaFlowAuthorityIdentity>>;
+};
+const flowAuthorityIdentities = identityRoot.__flujoPersonaFlowAuthorityIdentities ??= new WeakMap();
+/** Read-only intrinsic identity; only the live dispatcher writes this registry. */
+export function getPersonaFlowAuthorityIdentity(authority: FlowExecutionAuthority): Readonly<PersonaFlowAuthorityIdentity> | undefined {
+  assertPersonaFlowExecutionAuthority(authority);
+  return flowAuthorityIdentities.get(authority);
+}
 export type HeldFlowReadAssertion = (additionalCheck?: () => Promise<void>) => Promise<void>;
 type HeldFlowReadRunner = <T>(task: (assertCurrent: HeldFlowReadAssertion) => Promise<T>) => Promise<T>;
 const heldFlowReadRunners = new WeakMap<object, HeldFlowReadRunner>();
@@ -3161,12 +3177,19 @@ export class PersonaFlowDispatcher {
             coreAppRefs,
             structuredClone(revision.flowSnapshot),
           ));
-      await this.inWorkspace(() => bindPersonaNativeOriginalAuthority(authority, {
+      const originalInput = {
         personaId: record.personaId, activityId: claim.activity.id, dispatchId: record.id,
         taskId: record.admission.kind === 'assignment' ? record.admission.source.sourceId : undefined,
         revisionId: revision.id, leaseEpoch: sha256(canonicalJson(fence)),
         conversationId, runId, flow: coreFlowDefinition,
+      };
+      flowAuthorityIdentities.set(authority, Object.freeze({
+        workspaceId: this.workspaceId, personaId: originalInput.personaId, activityId: originalInput.activityId,
+        dispatchId: originalInput.dispatchId, taskId: originalInput.taskId, revisionId: originalInput.revisionId,
+        leaseEpoch: originalInput.leaseEpoch, conversationId, runId, flowDigest: ownerDigest(coreFlowDefinition),
       }));
+      await this.inWorkspace(() => bindPersonaNativeOriginalAuthority(authority, originalInput));
+      await this.inWorkspace(() => captureOriginalOwnerAuthority(authority, originalInput));
       result = await this.inWorkspace(() => this.dependencies.runFlow({
         ...flowInput,
         // Persona Apps are projected only into this Activity-local Core clone.

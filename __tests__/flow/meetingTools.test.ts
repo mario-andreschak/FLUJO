@@ -1,5 +1,7 @@
 import type OpenAI from 'openai';
 import type { SharedState, ProcessNodeParams, ToolDefinition } from '@/backend/execution/flow/types';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 const liveStates = new Map<string, Partial<SharedState>>();
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
@@ -134,7 +136,8 @@ function completion(content = 'Public contribution.') {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await saveItem(StorageKey.MODELS, [{ id: 'model-1', name: 'meeting-model', provider: 'openai', adapter: 'openai', ApiKey: 'encrypted:fixture' }]);
   liveStates.clear();
   renderPromptMock.mockReset().mockResolvedValue('Base participant instructions.');
   getFlowMock.mockReset().mockResolvedValue({ id: 'flow-1', name: 'Flow', nodes: [], edges: [] });

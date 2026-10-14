@@ -65,8 +65,8 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
 
     const result = await modelAdapter.updateModel(model);
     if (!result.success) {
-      const status = result.error === 'Model not found' ? 404 : 400;
-      return new Response(JSON.stringify({ error: result.error }), {
+      const status = result.code === 'MODEL_CATALOG_BUSY' ? 409 : result.error === 'Model not found' ? 404 : 400;
+      return new Response(JSON.stringify({ error: result.error, ...(result.code ? { code: result.code } : {}) }), {
         status,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -98,8 +98,8 @@ async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
 
     const result = await modelAdapter.deleteModel(id);
     if (!result.success) {
-      const status = result.error === 'Model not found' ? 404 : 400;
-      return new Response(JSON.stringify({ error: result.error }), {
+      const status = result.code === 'MODEL_CATALOG_BUSY' ? 409 : result.error === 'Model not found' ? 404 : 400;
+      return new Response(JSON.stringify({ error: result.error, ...(result.code ? { code: result.code } : {}) }), {
         status,
         headers: { 'Content-Type': 'application/json' },
       });

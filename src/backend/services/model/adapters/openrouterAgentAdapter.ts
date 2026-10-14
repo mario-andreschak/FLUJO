@@ -8,6 +8,7 @@ import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnA
 import { redactErrorDetails } from '@/backend/execution/flow/normalizeError';
 import type { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { assertReadOnlyAssessmentInput } from './types';
+import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
 import { contextUsageFromCompletion } from './contextUsage';
 import { toAnthropicToolSchema } from './anthropicToolSchema';
 import {
@@ -113,6 +114,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
   }
 
   private async complete(input: CompletionInput, streaming: boolean): Promise<CompletionResult> {
+    await assertExecutionExtensionConcreteAdapter(input.executionExtensionContext, input.model, 'openrouter-agent');
     // Agent requests remain outside the restricted repository assessment route.
     assertReadOnlyAssessmentInput(input);
     input.signal?.throwIfAborted();

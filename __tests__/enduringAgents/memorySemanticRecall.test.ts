@@ -121,6 +121,17 @@ describe('semantic memory recall integration (issue #471)', () => {
     expect(mockListEmbeddings).not.toHaveBeenCalled();
   });
 
+  it('does not reuse cached embeddings from an owner-bound model', async () => {
+    mockGetModel.mockResolvedValue({ ...model, ownerCredentialBinding: null } as unknown as Model);
+
+    const context = await prepareSemanticRecall(personaId, 'release', [item]);
+
+    expect(context.semanticWeight).toBe(0);
+    expect(context.scores.size).toBe(0);
+    expect(mockGetProvider).not.toHaveBeenCalled();
+    expect(mockListEmbeddings).not.toHaveBeenCalled();
+  });
+
   it('contains query embedding failures and returns lexical fallback context', async () => {
     embed.mockRejectedValue(new Error('provider unavailable'));
 

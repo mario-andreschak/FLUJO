@@ -6,6 +6,7 @@ import {
   _setPersonaRuntimeLockProcessBirthProbeForTests,
   _setPersonaRuntimeLockProcessBirthProbeRunnerForTests,
   initializePersonaRuntimeLockProcessIdentity,
+  captureRuntimeChildIdentity,
   withPersonaRuntimeLock,
 } from '@/backend/services/enduringAgents/runtimeLock';
 import {
@@ -187,13 +188,47 @@ describe('Persona runtime own-process birth identity', () => {
     );
   });
 
-  it('allows 3 seconds for its own Windows probe while keeping foreign probes at 900 ms', async () => {
+  it('allows 10 seconds for its own Windows probe while keeping foreign probes at 900 ms', async () => {
     const runner = jest.fn().mockResolvedValue({ stdout: '638927322190000000\r\n' });
     _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
     await expect(_queryWindowsProcessBirthMarkerForTests(process.pid)).resolves.toBe(marker);
     await expect(_queryWindowsProcessBirthMarkerForTests(process.pid + 1)).resolves.toBe(marker);
-    expect(runner.mock.calls[0][2]).toMatchObject({ timeout: 3_000, windowsHide: true });
+    expect(runner.mock.calls[0][2]).toMatchObject({ timeout: 10_000, windowsHide: true });
     expect(runner.mock.calls[1][2]).toMatchObject({ timeout: 900, windowsHide: true });
+  });
+
+  it('establishes a valid identity after a cold Windows startup longer than three seconds', async () => {
+    const startupMs = 4_831;
+    const runner = jest.fn(async (_executable: string, _args: string[], options: { timeout: number }) => {
+      if (options.timeout < startupMs) throw Object.assign(new Error('timeout'), { killed: true });
+      return { stdout: '638927322190000000\r\n' };
+    });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
+    _setPersonaRuntimeLockProcessBirthProbeForTests(_queryWindowsProcessBirthMarkerForTests);
+
+    await expect(initializePersonaRuntimeLockProcessIdentity()).resolves.toBeUndefined();
+    await expect(_getPersonaRuntimeLockProcessBirthMarkerForTests(process.pid)).resolves.toBe(marker);
+    expect(runner).toHaveBeenCalledTimes(1);
+    // The longer bootstrap must never turn a timed-out foreign observation
+    // into evidence that another owner's lock can be retired.
+    await expect(_queryWindowsProcessBirthMarkerForTests(process.pid + 1)).resolves.toBeNull();
+    expect(runner.mock.calls[1][2]).toMatchObject({ timeout: 900 });
+  });
+
+  (process.platform === 'win32' ? it : it.skip)('allows cold owned-child admission but rejects an invalid identity without relaxing foreign observations', async () => {
+    const runner = jest.fn(async (_executable: string, _args: string[], options: { timeout: number }) => {
+      if (options.timeout < 4_831) throw Object.assign(new Error('timeout'), { killed: true });
+      return { stdout: '638927322190000000\r\n' };
+    });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
+    await expect(captureRuntimeChildIdentity(process.pid + 1)).resolves.toMatchObject({
+      pid: process.pid + 1, processBirthMarkerV2: marker,
+    });
+    expect(runner.mock.calls[0][2]).toMatchObject({ timeout: 10_000, windowsHide: true });
+    await expect(_queryWindowsProcessBirthMarkerForTests(process.pid + 1)).resolves.toBeNull();
+    expect(runner.mock.calls[1][2]).toMatchObject({ timeout: 900 });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(jest.fn().mockResolvedValue({ stdout: 'not-an-identity' }));
+    await expect(captureRuntimeChildIdentity(process.pid + 1)).rejects.toThrow('Child process birth identity is unavailable.');
   });
 
   it.each(['', '0', '-123', '1.5', '123\n456', 'warning: process lookup\n123'])(

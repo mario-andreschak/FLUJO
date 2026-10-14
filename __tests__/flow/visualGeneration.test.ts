@@ -39,6 +39,7 @@ jest.mock('@/backend/services/mcp/autoInstall', () => ({
 }));
 
 import { generateFlowVisually } from '@/backend/services/flow/visualGeneration';
+import { modelService } from '@/backend/services/model';
 import type { VisualGenerationEvent } from '@/shared/types/flow/visualGeneration';
 
 const toolReply = (name: string, args: Record<string, unknown>, id: string) => ({
@@ -128,6 +129,19 @@ beforeEach(() => {
 });
 
 describe('visual flow generation controller', () => {
+  it('denies an owner-bound model before starting a session or provider request', async () => {
+    jest.mocked(modelService.getModel).mockResolvedValueOnce({
+      id: 'model-1', name: 'bound', ApiKey: '', ownerCredentialBinding: null,
+    } as unknown as Awaited<ReturnType<typeof modelService.getModel>>);
+    const events: VisualGenerationEvent[] = [];
+
+    await expect(generateFlowVisually({
+      description: 'Create a writer', modelId: 'model-1', maxDepth: 4,
+    }, (event) => events.push(event), new AbortController().signal))
+      .rejects.toThrow(/authorized model-step transport/i);
+    expect(events).toEqual([]);
+    expect(completionMock).not.toHaveBeenCalled();
+  });
   it('streams real guided mutations, suggestion decisions, and a compiled unsaved result', async () => {
     const events: VisualGenerationEvent[] = [];
     await generateFlowVisually({

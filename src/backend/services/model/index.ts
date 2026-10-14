@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { Model, normalizeMaxTokens } from '@/shared/types/model';
+import { Model, isOwnerCredentialBoundModel, normalizeMaxTokens, validateOwnerCredentialBinding } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
@@ -41,9 +41,20 @@ import { sameCatalogueEndpoint } from './catalogueDestination';
 import { testModelConnection } from './testConnection';
 import { ModelTestResult } from '@/shared/types/model/response';
 import { getCompletionAdapter } from './adapters';
+import { resolveCompletionAdapterRoute } from './adapters/completionRoute';
 import type { ModelMediaPart } from '@/shared/types/model/media';
-import { materializeFallbackPolicy, validateFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
+import { hasOwnerBoundFallbackMember, materializeFallbackPolicy, validateFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import { FallbackRoutingError } from './adapters/fallbackAdapter';
+import { withModelCatalogWriteLease } from './catalogAdmission';
+import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtimeLock';
+
+function catalogWriteFailure(error: unknown): ModelServiceResponse {
+  return {
+    success: false,
+    error: error instanceof Error ? error.message : 'Model catalog is unavailable',
+    ...(error instanceof ModelCatalogBusyError ? { code: error.code } : {}),
+  };
+}
 
 /**
  * Result of a direct (single-turn) chat completion through ModelService.
@@ -98,6 +109,10 @@ class ModelService {
       
       if (model) {
         log.debug(`getModel: Model ${modelId} found`);
+        if (hasOwnerBoundFallbackMember(model, models)) {
+          log.warn(`getModel: Owner-bound fallback member refused for ${modelId}`);
+          return null;
+        }
         return materializeFallbackPolicy(model, models);
       }
       
@@ -113,11 +128,24 @@ class ModelService {
    * Add a new model
    */
   async addModel(model: Model): Promise<ModelOperationResponse> {
+    try {
+      return await withModelCatalogWriteLease(() => this.addModelWithinLease(model));
+    } catch (error) {
+      return catalogWriteFailure(error);
+    }
+  }
+
+  private async addModelWithinLease(model: Model): Promise<ModelOperationResponse> {
     log.debug('addModel: Entering method');
     try {
       const configurationError = validateModelConfiguration(model);
       if (configurationError) {
         return { success: false, error: configurationError };
+      }
+      const ownerBindingError = validateOwnerCredentialBinding(model);
+      if (ownerBindingError) return { success: false, error: ownerBindingError };
+      if (isOwnerCredentialBoundModel(model) && resolveCompletionAdapterRoute(model) !== 'openai') {
+        return { success: false, error: 'Owner-bound models require the OpenAI-compatible completion route' };
       }
 
       // Load current models
@@ -208,6 +236,28 @@ class ModelService {
    * Update an existing model
    */
   async updateModel(model: Model): Promise<ModelOperationResponse> {
+    try {
+      return await withModelCatalogWriteLease(() => this.updateModelWithinLease(model));
+    } catch (error) {
+      return catalogWriteFailure(error);
+    }
+  }
+
+  /** Compose the private owner journal with a catalog edit in catalog→journal
+   * order. The updater cannot escape this exclusive lease or upgrade a reader. */
+  async withOwnerCatalogUpdate<T>(task: (update: (model: Model) => Promise<ModelOperationResponse>) => Promise<T>): Promise<T> {
+    return withModelCatalogWriteLease(async () => {
+      let active = true;
+      try {
+        return await task(async model => {
+          if (!active) throw new Error('The model catalog update has finished.');
+          return this.updateModelWithinLease(model);
+        });
+      } finally { active = false; }
+    });
+  }
+
+  private async updateModelWithinLease(model: Model): Promise<ModelOperationResponse> {
     log.debug('updateModel: Entering method');
     try {
       log.debug('updateModel: validating model metadata', {
@@ -285,6 +335,11 @@ class ModelService {
       // placeholder coming from the frontend means "unchanged" and must preserve the
       // existing key rather than be encrypted on top of it.
       updatedModel.ApiKey = await this.resolveApiKeyForSave(model.ApiKey, existingModel.ApiKey);
+      const ownerBindingError = validateOwnerCredentialBinding(updatedModel);
+      if (ownerBindingError) return { success: false, error: ownerBindingError };
+      if (isOwnerCredentialBoundModel(updatedModel) && resolveCompletionAdapterRoute(updatedModel) !== 'openai') {
+        return { success: false, error: 'Owner-bound models require the OpenAI-compatible completion route' };
+      }
 
       // Update all the models
       const updatedModels = models.map(m => 
@@ -325,6 +380,14 @@ class ModelService {
    * Delete a model by ID
    */
   async deleteModel(id: string): Promise<ModelServiceResponse> {
+    try {
+      return await withModelCatalogWriteLease(() => this.deleteModelWithinLease(id));
+    } catch (error) {
+      return catalogWriteFailure(error);
+    }
+  }
+
+  private async deleteModelWithinLease(id: string): Promise<ModelServiceResponse> {
     log.debug('deleteModel: Entering method');
     try {
       // Validate required fields
@@ -428,6 +491,9 @@ class ModelService {
       hasSearch: Boolean(searchTerm),
     });
 
+    // Local admission errors are safe to expose. Keep them separate from the
+    // provider catch, which must continue to sanitize all remote error text.
+    let ownerTransportRequired = false;
     try {
       const profile = profileId ? getProviderProfileById(profileId) : undefined;
       if (profileId && !profile) {
@@ -441,6 +507,14 @@ class ModelService {
       if (modelId) {
         const models = await this.loadModels();
         storedModel = models.find(model => model.id === modelId);
+        if (storedModel && hasOwnerBoundFallbackMember(storedModel, models)) {
+          ownerTransportRequired = true;
+          throw new Error('Owner-bound models require an authorized model-step transport.');
+        }
+      }
+      if (storedModel && isOwnerCredentialBoundModel(storedModel)) {
+        ownerTransportRequired = true;
+        throw new Error('Owner-bound models require an authorized model-step transport.');
       }
 
       const provider: ModelProvider =
@@ -548,6 +622,9 @@ class ModelService {
 
       return allModels;
     } catch {
+      if (ownerTransportRequired) {
+        throw new Error('Owner-bound models require an authorized model-step transport.');
+      }
       log.error('fetchProviderModels: Provider catalogue fetch failed');
       throw new Error('Provider catalogue request failed');
     }
@@ -571,6 +648,13 @@ class ModelService {
     adapter?: ModelAdapter;
   }): Promise<ModelTestResult> {
     const { modelId, apiKey } = params;
+    if (modelId) {
+      const models = await this.loadModels();
+      const selected = models.find(model => model.id === modelId);
+      if (selected && (isOwnerCredentialBoundModel(selected) || hasOwnerBoundFallbackMember(selected, models))) {
+        throw new Error('Owner-bound models require an authorized model-step transport.');
+      }
+    }
 
     let modelName = params.name;
     let baseUrl = params.baseUrl;
@@ -588,6 +672,9 @@ class ModelService {
     if (modelId) {
       storedModel = await this.getModel(modelId);
       if (storedModel) {
+        if (isOwnerCredentialBoundModel(storedModel)) {
+          throw new Error('Owner-bound models require an authorized model-step transport.');
+        }
         if (storedModel.fallbackPolicy) {
           const started = Date.now();
           const result = await this.generateChatCompletion({
@@ -699,6 +786,24 @@ class ModelService {
       const models = await this.loadModels();
       const needle = modelIdentifier.trim().toLowerCase();
 
+      // Public identifiers are aliases, not model IDs. A display name can
+      // shadow another model's technical name, so check every matching alias
+      // before display-name precedence can select a locally credentialed model.
+      if (needle && models.some(m => isOwnerCredentialBoundModel(m) &&
+          ((m.displayName?.trim().toLowerCase() || '') === needle ||
+           (m.name || '').trim().toLowerCase() === needle))) {
+        return {
+          success: false,
+          error: {
+            message: 'Owner-bound models require an authorized model-step transport.',
+            type: 'permission_error',
+            code: 'owner_model_step_required',
+            param: 'model',
+          },
+          statusCode: 403,
+        };
+      }
+
       let candidates = modelIdentifier.startsWith('policy/')
         ? models.filter(m => m.fallbackPolicy && m.name.toLowerCase() === needle)
         : models.filter(m => (m.displayName?.trim().toLowerCase() || '') === needle);
@@ -733,6 +838,18 @@ class ModelService {
         };
       }
       const model = materializeFallbackPolicy(candidates[0], models);
+      if (isOwnerCredentialBoundModel(model) || hasOwnerBoundFallbackMember(model, models)) {
+        return {
+          success: false,
+          error: {
+            message: 'Owner-bound models require an authorized model-step transport.',
+            type: 'permission_error',
+            code: 'owner_model_step_required',
+            param: 'model',
+          },
+          statusCode: 403,
+        };
+      }
 
       // The self-orchestrating adapters (Claude subscription / Codex) run an
       // agentic loop when given tools, which diverges from standard OpenAI tool

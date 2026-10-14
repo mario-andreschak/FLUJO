@@ -19,6 +19,8 @@ import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
 import { restoreFolderFromZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
+import { withModelCatalogWriteLease } from '@/backend/services/model/catalogAdmission';
+import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtimeLock';
 
 const log = createLogger('app/api/restore/route');
 
@@ -278,6 +280,7 @@ async function POST_handler(request: NextRequest) {
 
     // Persona safety preflight is complete; ordinary tolerant restore semantics
     // begin only after this point.
+    let modelCatalogBusy = false;
     for (const { selection, storageKey, archivePath, data } of storageRestorePlan) {
       try {
         if (storageKey === StorageKey.FLOWS) {
@@ -296,6 +299,9 @@ async function POST_handler(request: NextRequest) {
               log.error(`Error restoring a flow [${requestId}]:`, error);
             }
           }
+        } else if (storageKey === StorageKey.MODELS) {
+          await withModelCatalogWriteLease(() => saveItem(storageKey, data));
+          selectionResults[selection].restored++;
         } else {
           await saveItem(storageKey, data);
           selectionResults[selection].restored++;
@@ -303,6 +309,9 @@ async function POST_handler(request: NextRequest) {
         log.debug(`Restored file [${requestId}]:`, archivePath);
       } catch (error) {
         selectionResults[selection].failed++;
+        if (storageKey === StorageKey.MODELS && error instanceof ModelCatalogBusyError) {
+          modelCatalogBusy = true;
+        }
         log.error(`Error restoring file [${requestId}]:`, error);
       }
     }
@@ -342,11 +351,18 @@ async function POST_handler(request: NextRequest) {
         }
       }
     }
-
     const restored = Object.values(selectionResults).reduce((total, result) => total + result.restored, 0);
     const failed = Object.values(selectionResults).reduce((total, result) => total + result.failed, 0);
     const status = failed ? (restored ? 'partial' : 'failed') : (restored ? 'complete' : 'empty');
     log.info(`Restore finished (${status}) [${requestId}]`);
+    if (modelCatalogBusy) {
+      return NextResponse.json({
+        success: false, status, selectionResults,
+        error: 'Models were not restored because the catalog is in use by an active model call; retry after it finishes.',
+        code: 'MODEL_CATALOG_BUSY',
+        partial: true,
+      }, { status: 409 });
+    }
     return NextResponse.json({ success: status === 'complete', status, selectionResults }, {
       status: status === 'failed' ? 500 : status === 'empty' ? 400 : 200,
     });

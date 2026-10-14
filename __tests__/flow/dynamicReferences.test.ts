@@ -34,6 +34,7 @@ import { loadConversationState } from '@/backend/execution/flow/loadConversation
 import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { promises as fs } from 'fs';
+import type { Model } from '@/shared/types/model';
 import {
   applyPresetArguments,
   resolvePromptDynamicReferences,
@@ -78,6 +79,41 @@ describe('dynamic @ reference resolution', () => {
   });
 
   const context = { conversationId: 'slack-team-thread-1', flowId: 'flow-1', nodeId: 'node-1', modelId: 'model-1', appId: 'bank' };
+
+  it('preserves authored data keys while resolving nested references from the admitted model', async () => {
+    const admitted: Model = {
+      id: 'model-1', name: 'admitted-model', displayName: 'Admitted model',
+      provider: 'openai', adapter: 'openai', ApiKey: '',
+    };
+    const value = JSON.parse('{"__proto__":{"name":"@current.model.name"},"constructor":"@current.model.name","toString":"literal","nested":[{"__proto__":"@current.model.id"}]}');
+    const result = await resolvePromptDynamicReferences(value, context, admitted) as Record<string, unknown>;
+
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(Object.hasOwn(result, '__proto__')).toBe(true);
+    expect(result['__proto__']).toEqual({ name: 'Admitted model' });
+    expect(result['constructor']).toBe('Admitted model');
+    expect(result['toString']).toBe('literal');
+    const nested = (result.nested as Record<string, unknown>[])[0];
+    expect(Object.getPrototypeOf(nested)).toBe(Object.prototype);
+    expect(Object.hasOwn(nested, '__proto__')).toBe(true);
+    expect(nested['__proto__']).toBe(admitted.id);
+    expect(Object.hasOwn(Object.prototype, 'name')).toBe(false);
+    expect(modelService.getModel).not.toHaveBeenCalled();
+  });
+
+  it('uses the admitted model only for matching references', async () => {
+    const admitted: Model = {
+      id: 'model-1', name: 'admitted-model', displayName: 'Admitted model',
+      provider: 'openai', adapter: 'openai', ApiKey: '',
+    };
+    (modelService.getModel as jest.Mock).mockResolvedValue({ id: 'other-model', displayName: 'Other model' });
+    await expect(resolvePromptDynamicReferences(
+      ['@current.model.name', '@model[other-model].name'], context, admitted,
+    )).resolves.toEqual(['Admitted model', 'Other model']);
+    expect(modelService.getModel).toHaveBeenCalledTimes(1);
+    expect(modelService.getModel).toHaveBeenCalledWith('other-model');
+  });
+
   const entities = [
     ['conversation', ['slack-team-thread-1', 'Quarterly planning', 300, 400]],
     ['flow', ['flow-1', 'Daily report', 100, 200]],
