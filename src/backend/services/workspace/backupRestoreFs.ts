@@ -357,7 +357,7 @@ export async function restoreFolderFromZipLinkSafe(
   targetPath: string,
   boundaryPath: string,
   onSkip: ArchiveSkipReporter = () => undefined,
-  options: { maxFileBytes?: number; preserveMode?: boolean } = {},
+  options: { maxFileBytes?: number; preserveMode?: boolean; onRestored?: (entryPath: string) => void } = {},
 ): Promise<void> {
   const targetRoot = path.resolve(targetPath);
   await ensureLinkFreeDirectory(boundaryPath, targetRoot, true);
@@ -403,6 +403,7 @@ export async function restoreFolderFromZipLinkSafe(
       await atomicWriteWithoutLinks(boundaryPath, destination, content, {
         mode: options.preserveMode ? Number(item.entry.unixPermissions) : undefined,
       });
+      options.onRestored?.(item.entryPath);
     } catch (error) {
       onSkip(item.entryPath, error instanceof Error ? error.message : String(error));
     }
