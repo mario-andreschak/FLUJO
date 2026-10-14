@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -22,6 +22,7 @@ import { createLogger } from '@/utils/logger';
 import { StorageKey } from '@/shared/types/storage';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
+import type { RestoreResponse } from '@/shared/types/backup';
 import PersonaRecoverySettings from './PersonaRecoverySettings';
 import CredentialTransferSettings from './CredentialTransferSettings';
 
@@ -64,9 +65,13 @@ export default function BackupSettings() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // UI state
-  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info' | 'warning'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info' | 'warning'; text: string; scope?: 'restore' } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
+  const restoreMessageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (message?.scope === 'restore') restoreMessageRef.current?.focus();
+  }, [message]);
   
   // Handle checkbox changes
   const handleBackupCheckboxChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -169,6 +174,7 @@ export default function BackupSettings() {
       setMessage({
         type: 'error',
         text: t('settings.backup.fileRequired'),
+        scope: 'restore',
       });
       return;
     }
@@ -182,6 +188,7 @@ export default function BackupSettings() {
       setMessage({
         type: 'error',
         text: t('settings.backup.selectRestoreOne'),
+        scope: 'restore',
       });
       return;
     }
@@ -214,14 +221,28 @@ export default function BackupSettings() {
         body: formData,
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || t('settings.backup.restoreFailed'));
+      const result = await response.json() as RestoreResponse;
+      if (!response.ok || result.success !== true) {
+        const failedItems = backupOptions
+          .filter(option => (result.selectionResults?.[option.key]?.failed ?? 0) > 0)
+          .map(option => t(option.labelKey));
+        const text = result.status === 'partial'
+          ? t('settings.backup.restorePartial')
+          : result.status === 'empty'
+            ? t('settings.backup.restoreEmpty')
+            : result.error || t('settings.backup.restoreIncomplete');
+        setMessage({
+          type: result.status === 'partial' ? 'warning' : 'error',
+          text: failedItems.length ? `${text} ${t('settings.backup.restoreNeedsAttention', { items: failedItems.join(', ') })}` : text,
+          scope: 'restore',
+        });
+        return;
       }
       
       setMessage({
         type: 'success',
         text: t('settings.backup.restored'),
+        scope: 'restore',
       });
       
       // Reset file input
@@ -233,7 +254,8 @@ export default function BackupSettings() {
       log.error('Error restoring from backup:', error);
       setMessage({
         type: 'error',
-        text: error instanceof Error ? error.message : t('settings.backup.restoreFailed'),
+        text: t('settings.backup.restoreIncomplete'),
+        scope: 'restore',
       });
     } finally {
       setIsLoading(false);
@@ -266,7 +288,7 @@ export default function BackupSettings() {
         {t('settings.backup.personaScope')}
       </Alert>
 
-      {message && (
+      {message && message.scope !== 'restore' && (
         <Alert severity={message.type} sx={{ mb: 2 }}>
           {message.text}
         </Alert>
@@ -333,7 +355,7 @@ export default function BackupSettings() {
       </Paper>
 
       {/* Restore Section */}
-      <Paper sx={{ p: 3 }}>
+      <Paper sx={{ p: { xs: 2, sm: 3 } }}>
         <Typography variant="subtitle1" component="h3" gutterBottom sx={{ fontWeight: "bold" }}>
           {t('settings.backup.restore')}
         </Typography>
@@ -341,25 +363,35 @@ export default function BackupSettings() {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {t('settings.backup.restoreHelp')}
         </Typography>
+
+        {message?.scope === 'restore' && (
+          <Alert ref={restoreMessageRef} tabIndex={-1} severity={message.type}
+            role={message.type === 'success' ? 'status' : 'alert'} sx={{ mb: 2 }}>
+            {message.text}
+          </Alert>
+        )}
         
         <Box sx={{ mb: 3 }}>
           <Button
             variant="outlined"
             component="label"
-            sx={{ mb: 2 }}
+            disabled={isLoading}
+            sx={{ mb: 2, minHeight: 44 }}
           >
             {t('settings.backup.selectFile')}
             <input
               type="file"
               hidden
               accept=".zip"
+              aria-label={t('settings.backup.selectFile')}
+              disabled={isLoading}
               onChange={handleFileSelect}
               ref={fileInputRef}
             />
           </Button>
           
           {selectedFile && (
-            <Typography variant="body2" sx={{ ml: 1 }}>
+            <Typography variant="body2" sx={{ ml: 1, overflowWrap: 'anywhere' }}>
               {t('settings.backup.selectedFile', { name: selectedFile.name })}
             </Typography>
           )}
@@ -371,17 +403,20 @@ export default function BackupSettings() {
           {t('settings.backup.restoreOptions')}
         </Typography>
         
-        <Box sx={{ mb: 2 }}>
+        <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           <Button 
             size="small" 
             onClick={() => selectAllRestore(true)}
-            sx={{ mr: 1 }}
+            disabled={isLoading}
+            sx={{ minHeight: 44 }}
           >
             {t('settings.backup.selectAll')}
           </Button>
           <Button 
             size="small" 
             onClick={() => selectAllRestore(false)}
+            disabled={isLoading}
+            sx={{ minHeight: 44 }}
           >
             {t('settings.backup.deselectAll')}
           </Button>
@@ -394,6 +429,7 @@ export default function BackupSettings() {
               control={
                 <Checkbox
                   checked={restoreSelections[option.key]}
+                  disabled={isLoading}
                   onChange={handleRestoreCheckboxChange}
                   name={option.key}
                 />
@@ -414,6 +450,7 @@ export default function BackupSettings() {
           variant="contained"
           color="warning"
           onClick={handleRestore}
+          sx={{ minHeight: 44 }}
           disabled={isLoading || !selectedFile || Object.values(restoreSelections).every(v => !v)}
           startIcon={isLoading ? <CircularProgress size={20} /> : null}
         >
@@ -425,16 +462,17 @@ export default function BackupSettings() {
       <Dialog
         open={showRestoreConfirm}
         onClose={() => setShowRestoreConfirm(false)}
+        aria-labelledby="restore-confirm-title"
       >
-        <DialogTitle>{t('settings.backup.confirmTitle')}</DialogTitle>
+        <DialogTitle id="restore-confirm-title">{t('settings.backup.confirmTitle')}</DialogTitle>
         <DialogContent>
           <DialogContentText>
             {t('settings.backup.confirmBody')}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowRestoreConfirm(false)}>{t('common.cancel')}</Button>
-          <Button onClick={confirmRestore} color="warning" variant="contained">
+          <Button onClick={() => setShowRestoreConfirm(false)} sx={{ minHeight: 44 }}>{t('common.cancel')}</Button>
+          <Button onClick={confirmRestore} color="warning" variant="contained" sx={{ minHeight: 44 }}>
             {t('settings.backup.restoreAction')}
           </Button>
         </DialogActions>
