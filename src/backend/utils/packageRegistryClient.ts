@@ -9,7 +9,7 @@
  *   POST /v1/auth/login               { email, password }
  *   POST /v1/auth/refresh             { refresh_token }
  *   POST /v1/auth/resend-confirmation { email }
- *   POST /v1/auth/forgot-password     { email }         (TBD per #196 contract)
+ *   POST /v1/auth/forgot-password     { email }         (#206 hosted recovery)
  *   GET  /v1/auth/oauth/:provider/authorize                (browser redirect; #207/#224)
  *   POST /v1/auth/oauth/token         { code, code_verifier, redirect_uri, provider } (#207/#224)
  *   POST /v1/packages                 <manifest JSON>   (Authorization: Bearer)
@@ -254,9 +254,7 @@ export function resendConfirmation(email: string, registryBaseUrl: string) {
  * the registry's own hosted page reached via the emailed link, so no reset token
  * or new-password form is ever handled inside FLUJO. No auth header is sent.
  *
- * NOTE: the exact pathname is owned by the hosted registry (#196) and is
- * currently "TBD per #196 contract"; it is isolated here so only this one line
- * needs updating once the contract is finalized.
+ * The hosted registry owns the recovery email and password form (#206).
  */
 export function requestPasswordReset(email: string) {
   return postJson<RegistryAuthPayload>('/v1/auth/forgot-password', { email });
