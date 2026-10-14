@@ -14,6 +14,16 @@ updates:
     schedule:
       interval: daily
     open-pull-requests-limit: 10
+    ignore:
+      # TypeScript7 has no compiler API; the locked parser supports versions below6.1.
+      - dependency-name: typescript
+        versions: ['7.x']
+      # The current React/import plugins exclude ESLint10 from their peer ranges.
+      - dependency-name: eslint
+        versions: ['10.x']
+      # Type declarations track the oldest supported runtime, Node22.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       development-tools:
         dependency-type: development
