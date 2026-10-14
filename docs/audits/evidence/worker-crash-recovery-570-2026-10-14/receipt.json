@@ -1,0 +1,409 @@
+{
+  "schemaVersion": 1,
+  "scenario": "source-worker-recovery-570",
+  "outcome": "passed",
+  "startedAt": "2026-10-14T10:16:11.764Z",
+  "completedAt": "2026-10-14T10:17:40.946Z",
+  "node": "v22.23.3",
+  "platform": "win32",
+  "sourceRevision": "2a7ab53c0f21e8a4452440e5c560b8dab0ab36c2",
+  "buildId": "Rw7dmmzNBuXLBUQCfpYn9",
+  "sourceInputs": {
+    "files": 1868,
+    "sha256": "10119edef8c365438152aea9b3930f1b7365734e32a055774a063700785d1dc0"
+  },
+  "builtInputs": {
+    "files": 1539,
+    "sha256": "57b79b72a3cd6412a298c3f9166869f523e99c83add8d95dd4668f660b2f64c1"
+  },
+  "buildEvidenceSha256": "2be6c4f9bc13710fb88ac8551031c14057198ccb5c47dfa4f4f45c060121d17f",
+  "ownerIssuerSourceSha256": "1f617e639f05341ba1d5ea17b16dd8b21b74de49d7e41ca8060072cbd3895075",
+  "observations": [
+    {
+      "check": "actual-worker-bootstrap-ready",
+      "generation": 1,
+      "epoch": 1,
+      "workspace": "operations-worker-fixture",
+      "readyAt": "2026-10-14T10:16:15.773Z",
+      "mcpProcessCount": 0
+    },
+    {
+      "check": "copied-and-unenrolled-suppression",
+      "providerDispatches": 0,
+      "observedMs": 11000
+    },
+    {
+      "check": "actual-worker-bootstrap-ready",
+      "generation": 2,
+      "epoch": 1,
+      "workspace": "operations-worker-fixture",
+      "readyAt": "2026-10-14T10:16:44.708Z",
+      "mcpProcessCount": 0
+    },
+    {
+      "check": "actual-local-tick-and-same-worker-catchup",
+      "generationId": "a126b702-97d4-46e7-b1ae-b0d2dbf961db",
+      "originalRunId": "6bdb17c2-245b-4a6f-9a57-b536dde69277",
+      "catchupRunId": "0a08f181-c337-454a-aadc-6917d77d5242",
+      "catchupAdmissions": 1,
+      "catchupObservedAt": "2026-10-14T10:16:44.990Z",
+      "resumedOrdinaryTickRunId": "59f3286a-56a3-48c3-ae80-e7588c33c1c7",
+      "resumedOrdinaryTickFiredAt": "2026-10-14T10:16:45.089Z",
+      "resumedOrdinaryTickFinishedAt": "2026-10-14T10:16:45.120Z",
+      "completedEngineRuns": 3,
+      "note": "Additional ordinary ticks, if present, are retained; completed engine outcomes are distinct from external/descendant exit."
+    },
+    {
+      "check": "actual-worker-bootstrap-ready",
+      "generation": 3,
+      "epoch": 1,
+      "workspace": "operations-worker-fixture",
+      "readyAt": "2026-10-14T10:17:04.371Z",
+      "mcpProcessCount": 0
+    },
+    {
+      "check": "interrupted-dispatch-retained-without-replay",
+      "generationId": "47c211e7-2022-4060-856a-20dc000ccb9d",
+      "pendingRunId": "179e7ef3-b5df-4b49-a86a-437e6399e534",
+      "receivedProviderDispatches": 1,
+      "replacementDispatches": 0,
+      "privateRecordSha256": "78dda717934f9c299cf83fbc67d67740a4989f1d2e10899617f4cf6a2a815e1c",
+      "observedMs": 22000,
+      "outcome": "uncertain-provider-dispatch; no successful-effect or process-exit claim"
+    },
+    {
+      "check": "actual-worker-bootstrap-ready",
+      "generation": 4,
+      "epoch": 2,
+      "workspace": "operations-worker-fixture",
+      "readyAt": "2026-10-14T10:17:29.890Z",
+      "mcpProcessCount": 0
+    },
+    {
+      "check": "changed-epoch-fences-private-admission",
+      "changedEpoch": 2,
+      "replacementDispatches": 0,
+      "observedMs": 11000,
+      "retainedPrivateRecordSha256": "78dda717934f9c299cf83fbc67d67740a4989f1d2e10899617f4cf6a2a815e1c"
+    },
+    {
+      "check": "durable-provider-effect-journal-matches-received-dispatches",
+      "effects": 4,
+      "completedResponses": 3,
+      "heldUncertainDispatches": 1,
+      "sha256": "a44cb42478836792876fd4d025566296d355c90ff77d868378c426845702ddb4"
+    }
+  ],
+  "requests": [
+    {
+      "sequence": 1,
+      "mode": "success",
+      "stream": true,
+      "receivedAt": "2026-10-14T10:16:30.180Z",
+      "outcome": "response-issued"
+    },
+    {
+      "sequence": 2,
+      "mode": "success",
+      "stream": true,
+      "receivedAt": "2026-10-14T10:16:44.364Z",
+      "outcome": "response-issued"
+    },
+    {
+      "sequence": 3,
+      "mode": "success",
+      "stream": true,
+      "receivedAt": "2026-10-14T10:16:45.116Z",
+      "outcome": "response-issued"
+    },
+    {
+      "sequence": 4,
+      "mode": "hold",
+      "stream": true,
+      "receivedAt": "2026-10-14T10:16:50.105Z",
+      "outcome": "held-response-uncertain",
+      "connectionClosedAt": "2026-10-14T10:16:50.150Z"
+    }
+  ],
+  "recovery": {
+    "schemaVersion": 1,
+    "scenario": "worker-local-recurring-recovery",
+    "observedAt": "2026-10-14T10:17:40.920Z",
+    "runtimeIdentitySelfReport": {
+      "applicationVersion": "3.46.3",
+      "snapshotEncryption": {
+        "format": "flujo-workspace-encrypted",
+        "cipher": "aes-256-gcm",
+        "writeVersion": 2,
+        "readVersions": [
+          1,
+          2
+        ],
+        "legacyPlaintextRead": true,
+        "recipientKeyRequired": true,
+        "recipientKeyBytes": 32,
+        "recipientKeyEncoding": "base64",
+        "v2Aad": "flujo:workspace-snapshot:v2",
+        "v2Digest": "sha256-encrypted-wire",
+        "v1Digest": "sha256-plaintext-zip"
+      },
+      "snapshotLimits": {
+        "maxFileBytes": 268435456,
+        "maxUncompressedBytes": 1073741824,
+        "maxManifestBytes": 8388608,
+        "maxArchiveBytes": 1082130432,
+        "maxEncryptedBytes": 1442844672,
+        "maxMembers": 65534
+      },
+      "snapshotFormatVersion": 2,
+      "layoutVersion": 2,
+      "workerProtocolVersion": 1,
+      "workerSnapshotSourceVersion": 1,
+      "revision": "2a7ab53c0f21e8a4452440e5c560b8dab0ab36c2"
+    },
+    "workspace": "operations-worker-fixture",
+    "cron": "*/5 * * * * *",
+    "observationContract": "read-only-operations-sample",
+    "observations": [
+      {
+        "check": "copied-and-unenrolled-suppression",
+        "providerDispatches": 0,
+        "observedMs": 11000
+      },
+      {
+        "check": "actual-local-tick-and-same-worker-catchup",
+        "generationId": "a126b702-97d4-46e7-b1ae-b0d2dbf961db",
+        "originalRunId": "6bdb17c2-245b-4a6f-9a57-b536dde69277",
+        "catchupRunId": "0a08f181-c337-454a-aadc-6917d77d5242",
+        "catchupAdmissions": 1,
+        "catchupObservedAt": "2026-10-14T10:16:44.990Z",
+        "resumedOrdinaryTickRunId": "59f3286a-56a3-48c3-ae80-e7588c33c1c7",
+        "resumedOrdinaryTickFiredAt": "2026-10-14T10:16:45.089Z",
+        "resumedOrdinaryTickFinishedAt": "2026-10-14T10:16:45.120Z",
+        "completedEngineRuns": 3,
+        "note": "Additional ordinary ticks, if present, are retained; completed engine outcomes are distinct from external/descendant exit."
+      },
+      {
+        "check": "interrupted-dispatch-retained-without-replay",
+        "generationId": "47c211e7-2022-4060-856a-20dc000ccb9d",
+        "pendingRunId": "179e7ef3-b5df-4b49-a86a-437e6399e534",
+        "receivedProviderDispatches": 1,
+        "replacementDispatches": 0,
+        "privateRecordSha256": "78dda717934f9c299cf83fbc67d67740a4989f1d2e10899617f4cf6a2a815e1c",
+        "observedMs": 22000,
+        "outcome": "uncertain-provider-dispatch; no successful-effect or process-exit claim"
+      },
+      {
+        "check": "changed-epoch-fences-private-admission",
+        "changedEpoch": 2,
+        "replacementDispatches": 0,
+        "observedMs": 11000,
+        "retainedPrivateRecordSha256": "78dda717934f9c299cf83fbc67d67740a4989f1d2e10899617f4cf6a2a815e1c"
+      }
+    ],
+    "provider": {
+      "kind": "loopback-synthetic",
+      "totalReceivedDispatches": 4,
+      "originalPaidProviderCalls": 0
+    },
+    "limits": [
+      "Engine/HTTP/cron behavior only; installed artifact identity requires independent source/build/image evidence.",
+      "No human operator/independent review; no exactly-once remote effects; no descendant or isolated-container removal proof.",
+      "Held provider dispatch remains uncertain and retained; this fixture never force-clears its admission.",
+      "Auth expiry, provider timeout/429/400, disk full, migration/upgrade/rollback are separate acceptance cases."
+    ]
+  },
+  "attempt": {
+    "schemaVersion": 1,
+    "scenario": "worker-local-recurring-recovery-attempt",
+    "startedAt": "2026-10-14T10:16:15.789Z",
+    "outcome": "passed",
+    "observations": [
+      {
+        "check": "copied-and-unenrolled-suppression",
+        "providerDispatches": 0,
+        "observedMs": 11000
+      },
+      {
+        "check": "actual-local-tick-and-same-worker-catchup",
+        "generationId": "a126b702-97d4-46e7-b1ae-b0d2dbf961db",
+        "originalRunId": "6bdb17c2-245b-4a6f-9a57-b536dde69277",
+        "catchupRunId": "0a08f181-c337-454a-aadc-6917d77d5242",
+        "catchupAdmissions": 1,
+        "catchupObservedAt": "2026-10-14T10:16:44.990Z",
+        "resumedOrdinaryTickRunId": "59f3286a-56a3-48c3-ae80-e7588c33c1c7",
+        "resumedOrdinaryTickFiredAt": "2026-10-14T10:16:45.089Z",
+        "resumedOrdinaryTickFinishedAt": "2026-10-14T10:16:45.120Z",
+        "completedEngineRuns": 3,
+        "note": "Additional ordinary ticks, if present, are retained; completed engine outcomes are distinct from external/descendant exit."
+      },
+      {
+        "check": "interrupted-dispatch-retained-without-replay",
+        "generationId": "47c211e7-2022-4060-856a-20dc000ccb9d",
+        "pendingRunId": "179e7ef3-b5df-4b49-a86a-437e6399e534",
+        "receivedProviderDispatches": 1,
+        "replacementDispatches": 0,
+        "privateRecordSha256": "78dda717934f9c299cf83fbc67d67740a4989f1d2e10899617f4cf6a2a815e1c",
+        "observedMs": 22000,
+        "outcome": "uncertain-provider-dispatch; no successful-effect or process-exit claim"
+      },
+      {
+        "check": "changed-epoch-fences-private-admission",
+        "changedEpoch": 2,
+        "replacementDispatches": 0,
+        "observedMs": 11000,
+        "retainedPrivateRecordSha256": "78dda717934f9c299cf83fbc67d67740a4989f1d2e10899617f4cf6a2a815e1c"
+      }
+    ],
+    "qualification": "stage-witnesses-only; artifact-and-operator-acceptance-not-established",
+    "completedAt": "2026-10-14T10:17:40.920Z"
+  },
+  "generations": [
+    {
+      "generation": 1,
+      "pid": 39324,
+      "startedAt": "2026-10-14T10:16:12.535Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": null,
+      "signal": "SIGKILL",
+      "crashRequested": true,
+      "ipcStopRequested": false,
+      "signalAttempts": [
+        {
+          "signal": "SIGKILL",
+          "delivered": true
+        }
+      ],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "epoch": 1,
+      "outputBytes": 5921,
+      "exitedAt": "2026-10-14T10:16:30.505Z",
+      "closedAt": "2026-10-14T10:16:30.505Z"
+    },
+    {
+      "generation": 2,
+      "pid": 37344,
+      "startedAt": "2026-10-14T10:16:41.511Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": null,
+      "signal": "SIGKILL",
+      "crashRequested": true,
+      "ipcStopRequested": false,
+      "signalAttempts": [
+        {
+          "signal": "SIGKILL",
+          "delivered": true
+        }
+      ],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "epoch": 1,
+      "outputBytes": 1647,
+      "exitedAt": "2026-10-14T10:16:50.166Z",
+      "closedAt": "2026-10-14T10:16:50.166Z"
+    },
+    {
+      "generation": 3,
+      "pid": 34320,
+      "startedAt": "2026-10-14T10:17:01.173Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": null,
+      "signal": "SIGKILL",
+      "crashRequested": true,
+      "ipcStopRequested": false,
+      "signalAttempts": [
+        {
+          "signal": "SIGKILL",
+          "delivered": true
+        }
+      ],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "epoch": 1,
+      "outputBytes": 1647,
+      "exitedAt": "2026-10-14T10:17:26.672Z",
+      "closedAt": "2026-10-14T10:17:26.672Z"
+    },
+    {
+      "generation": 4,
+      "pid": 19684,
+      "startedAt": "2026-10-14T10:17:26.678Z",
+      "parentExitObserved": true,
+      "stdioCloseObserved": true,
+      "exitCode": 143,
+      "signal": null,
+      "crashRequested": false,
+      "ipcStopRequested": true,
+      "signalAttempts": [],
+      "abandoned": false,
+      "descendantExit": "unverified",
+      "ownership": "original-direct-child-only",
+      "failure": null,
+      "epoch": 2,
+      "outputBytes": 1647,
+      "exitedAt": "2026-10-14T10:17:40.938Z",
+      "closedAt": "2026-10-14T10:17:40.938Z"
+    }
+  ],
+  "budget": {
+    "elapsedMs": 89181.27320000001,
+    "deadlineMs": 1800000,
+    "outputBytes": 10862,
+    "maximumOutputBytes": 8388608,
+    "outcome": "within-budget"
+  },
+  "providerCloseObserved": true,
+  "cleanupVerified": true,
+  "limits": [
+    "Source-built application only; no installed/container/release qualification.",
+    "Empty MCP configuration; MCP preparation and generation-bound stdio exit use their separate acceptance.",
+    "Loopback model and counted synthetic provider effect; no cloud billing or exactly-once external-effect promise.",
+    "Original direct Next child exit/stdio only; no detached-descendant or isolated-container removal inference.",
+    "Paused/disabled/retired/stop/corrupt provenance use focused contracts; this live drill covers copied/local/crash/epoch.",
+    "Disk-full/migration/snapshot disaster restore, independent operator and exact release profiles remain open."
+  ],
+  "equipment": [
+    {
+      "name": "scripts/operations-acceptance/worker-recovery.mjs",
+      "sha256": "d16d76d60f3af41a73168d9d44ccbc12a3c2124e63fd684eaaa8f4ad1bfd45ea"
+    },
+    {
+      "name": "scripts/worker-recovery-acceptance.mjs",
+      "sha256": "683be4d779eddf7fb7aaf35526bbf1afd4872433e1cd72789c9cdccf225c3e38"
+    },
+    {
+      "name": "scripts/worker-recovery-runtime.mjs",
+      "sha256": "1b56e84a326d46a40f0560c7fcef32d349d8829912c42438d2df4dabc634105e"
+    },
+    {
+      "name": "scripts/smoke-cloud-worker-profile.mjs",
+      "sha256": "82d1fe95fe1b1aac8d31c97b64311bb9bf700faf0991d016d41a0b6704139efe"
+    },
+    {
+      "name": "scripts/persona-browser-acceptance/next-process.cjs",
+      "sha256": "7ea7c29a572bf6eebfb1ba98612a15577d7b896e0ce5f4b26435208e8bd7d1b2"
+    },
+    {
+      "name": "scripts/smoke-bundled-operator.mjs",
+      "sha256": "7f9327db7ec2002a84790c1bb1e14479f8c3e449fd57d635cb4f36206b9905b0"
+    },
+    {
+      "name": "scripts/mcp-smoke-cleanup.mjs",
+      "sha256": "17ac42d1e1c3f28d78673622f5cf7d96a5d37a64daeef215595a6c1569d0370f"
+    },
+    {
+      "name": "scripts/operations-acceptance/build-evidence.mjs",
+      "sha256": "1e180da51bd33ffdd72a63d7a6e4d3eaaee9ab565d81067bd084f7653f905e45"
+    }
+  ]
+}
