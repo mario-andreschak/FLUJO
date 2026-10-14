@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js 22.17+ within 22.x, or 24.2+ within 24.x ([runtime compatibility evidence](../../docs/operations/windows-native-runtime-profile.md))
+- Node.js 22.19+ within 22.x, or 24.2+ within 24.x ([runtime compatibility evidence](../../docs/operations/windows-native-runtime-profile.md))
 - claude code (optional, if you want to use Anthropic Subscription)
 - python (optional, if you want to use python-based MCP servers)
 - pip (optional, if you want to use python-based MCP servers that build with pip)
