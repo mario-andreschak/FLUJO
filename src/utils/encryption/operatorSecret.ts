@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { getDataDir } from '@/utils/paths';
 
 const MAX_BYTES = 1024;
@@ -8,8 +9,8 @@ function sameFile(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
     .every(field => a[field as keyof fs.BigIntStats] === b[field as keyof fs.BigIntStats]);
 }
 
-/** Operator-provisioned secret mount, never a generated key beside ciphertext. */
-export function readOperatorSecret(): string | null {
+/** Returned only after a fresh bounded read and all file/permission checks. */
+export function readVerifiedOperatorSecret(): { secret: string; identity: string } | null {
   const configured = process.env.FLUJO_ENCRYPTION_SECRET_FILE;
   if (configured === undefined) return null;
   if (!path.isAbsolute(configured)) throw new Error('Private encryption secret is unavailable');
@@ -44,6 +45,15 @@ export function readOperatorSecret(): string | null {
         || path.relative(fs.realpathSync(file), file) !== '') throw new Error('Private encryption secret changed');
     const secret = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length)).replace(/\r?\n$/, '');
     if (!/^[A-Za-z0-9_-]{43,512}$/.test(secret)) throw new Error('Private encryption secret is invalid');
-    return secret;
+    const identity = createHash('sha256').update(JSON.stringify([file,
+      ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink']
+        .map(field => String(opened[field as keyof fs.BigIntStats])),
+    ])).digest('hex');
+    return { secret, identity };
   } finally { fs.closeSync(fd); }
+}
+
+/** Operator-provisioned secret mount, never a generated key beside ciphertext. */
+export function readOperatorSecret(): string | null {
+  return readVerifiedOperatorSecret()?.secret ?? null;
 }

@@ -22,7 +22,7 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
   const [loading, setLoading] = useState(mode === 'edit');
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<'roles.loadFailed' | 'roles.saveFailed' | 'roles.changed' | null>(null);
   const discovery = useMcpAppsDiscovery({ active: pickerOpen, includeAllServers: true });
 
   useEffect(() => {
@@ -32,10 +32,10 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
       setPrompt(role.prompt);
       setCurrentVersionId(role.currentVersionId);
       setSelectedApps(role.suggestedApps.map((app) => app.mcpServerName));
-    }).catch((caught) => {
-      setError(caught instanceof RolesApiError ? caught.message : t('roles.loadFailed'));
+    }).catch(() => {
+      setError('roles.loadFailed');
     }).finally(() => setLoading(false));
-  }, [mode, roleId, t]);
+  }, [mode, roleId]);
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
@@ -91,13 +91,13 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
       setDirty(false);
       router.push(`/roles/${encodeURIComponent(role.id)}`);
     } catch (caught) {
-      setError(caught instanceof RolesApiError ? caught.message : t('roles.saveFailed'));
+      setError(caught instanceof RolesApiError && caught.status === 409 ? 'roles.changed' : 'roles.saveFailed');
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) return <Stack sx={{ alignItems: "center",  p: 6 }}><CircularProgress /></Stack>;
+  if (loading) return <Stack sx={{ alignItems: "center",  p: 6 }}><CircularProgress aria-label={t('roles.loading')} /></Stack>;
 
   return (
     <Box sx={{
@@ -106,7 +106,7 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
     }}>
       <Typography variant="h4" component="h1">{mode === 'create' ? t('roles.createTitle') : t('roles.editTitle')}</Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>{t('roles.editorDescription')}</Typography>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{t(error)}</Alert>}
       <Box component="form" onSubmit={submit}>
         <Stack spacing={3}>
           <TextField

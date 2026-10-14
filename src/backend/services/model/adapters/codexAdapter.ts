@@ -35,7 +35,7 @@ import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
 import { acquireOrdinaryCodexExecutable, readCodexRuntimeCompatibility } from './codexRuntimeUpdate';
 import { createCodexAppServerThread } from './codexAppServerThread';
 import { answerCodexUserInput, answerCodexAsyncUserInput } from './codexUserInput';
-import { mapCodexUsage, subtractCodexUsage, type CodexUsageLike } from './codexUsage';
+import { mapCodexUsage, subtractCodexUsage, subtractKnownCodexUsage, type CodexUsageLike } from './codexUsage';
 import { readCodexTokenSnapshot, type CodexTokenSnapshot } from './codexContextUsage';
 import {
   codexSessionKey,
@@ -761,6 +761,7 @@ export class CodexAdapter implements CompletionAdapter {
     let inputSystemPrompt = systemPrompt;
     const ordinaryThreadPath = !nativeToolPort && !executionExtensionContext && !nativeOriginalProcessHost && !apiKey
       && process.env.FLUJO_CODEX_APP_SERVER !== '0';
+    const sdkFallbackPath = !nativeToolPort && !executionExtensionContext && !nativeOriginalProcessHost && !ordinaryThreadPath;
     if (ordinaryThreadPath) configuration.developerInstructions +=
       '\nWhen calling FLUJO MCP tools from code-mode exec, capture the result and emit the relevant returned content with text(...) or image(...) for image blocks. Put that emission after await in the same exec script, including calls that yield and resume with wait. Use the emitted result to produce the requested final response.';
     const ordinaryQuestion = ordinaryThreadPath ? bridgeTools.find(tool => tool.name === 'question') : undefined;
@@ -783,6 +784,7 @@ export class CodexAdapter implements CompletionAdapter {
     let bridge: Awaited<ReturnType<typeof startCodexToolBridge>> | undefined;
     let resultText = '';
     let usage: CodexUsageLike | undefined;
+    let unknownResumedSdkUsage = Boolean(sdkFallbackPath && resumeThreadId);
     let streamedText = false;
     let failure: string | undefined;
     let completedTurn = false;
@@ -1365,11 +1367,16 @@ export class CodexAdapter implements CompletionAdapter {
             // Also captures work before steering/retries and intentional handoffs.
             usage = snapshot.totalUsage;
           }
-          if (usage && baselineSnapshot) {
+          if (!sdkFallbackPath && usage && baselineSnapshot) {
             // The terminal SDK event can still supply totals if the final rollout
             // snapshot is unavailable. Never count the known baseline twice.
             usage = subtractCodexUsage(usage, baselineSnapshot.totalUsage);
           }
+        }
+        if (sdkFallbackPath && resumeThreadId) {
+          usage = capturedThreadId === resumeThreadId
+            ? subtractKnownCodexUsage(usage, baselineSnapshot?.totalUsage) : undefined;
+          unknownResumedSdkUsage = usage === undefined;
         }
         if (scratchDir && !ordinaryClosureFailure) await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
       } finally {
@@ -1475,7 +1482,7 @@ export class CodexAdapter implements CompletionAdapter {
           },
         },
       ],
-      usage: {
+      ...(!unknownResumedSdkUsage ? { usage: {
         prompt_tokens: mappedUsage.promptTokens,
         completion_tokens: mappedUsage.completionTokens,
         total_tokens: mappedUsage.totalTokens,
@@ -1492,7 +1499,7 @@ export class CodexAdapter implements CompletionAdapter {
               }
             : {}
         ),
-      },
+      } } : {}),
     };
 
     return { completion, transcript, contextUsage,

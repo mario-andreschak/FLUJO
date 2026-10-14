@@ -15,6 +15,7 @@ import {
 import { assertCredentialMigrationReady, isCredentialMigrationPending } from './credentialMigrationState';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { readOperatorSecret } from './operatorSecret';
+import { invalidateOperatorKeyring, OperatorKeyringContextChangedError, verifiedOperatorKeyring } from './operatorKeyringCache';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { getDataDir } from '@/utils/paths';
 import { assertLinkFreeFileParent } from '@/backend/services/workspace/backupRestoreFs';
@@ -80,6 +81,7 @@ async function readMetadata(): Promise<EncryptionMetadata | null> {
 
 async function persist(ring: Keyring, type: EncryptionType, password: string,
   protection?: EncryptionMetadata['key_protection'], fresh = false): Promise<EncryptionMetadata> {
+  invalidateOperatorKeyring();
   await assertCredentialMigrationReady();
   const metadata = await wrapKeyring(ring, type, password, protection);
   if (fresh) {
@@ -244,11 +246,9 @@ async function getKeys(passwordOrToken?: string, isToken = false, allowInitializ
     if (metadata.key_protection === 'operator-file') {
       const transferred = await transferredWorkerKeys(metadata);
       if (transferred) return transferred;
-      const secret = readOperatorSecret();
-      if (!secret) throw new EncryptionLockedError('Private encryption operator secret is unavailable');
-      // Re-read the independent mount even after the process was unlocked.
-      return unwrapKeyring(metadata, secret);
+      return verifiedOperatorKeyring(metadata, readMetadata);
     }
+    invalidateOperatorKeyring();
     if (metadata.encryption_type !== 'user') return unwrapAndUpgrade(metadata, DEFAULT_PASSWORD);
     // An explicit password is verified even if the process is already unlocked.
     if (passwordOrToken && !isToken) return unwrapAndUpgrade(metadata, passwordOrToken);
@@ -264,6 +264,10 @@ async function getKeys(passwordOrToken?: string, isToken = false, allowInitializ
       throw new EncryptionLockedError('Encryption metadata changed; unlock this workspace again');
     }
     return ring;
+  }).catch(error => {
+    invalidateOperatorKeyring();
+    if (error instanceof OperatorKeyringContextChangedError) throw new EncryptionLockedError(error.message);
+    throw error;
   });
 }
 
@@ -339,10 +343,12 @@ export async function getOperatorWorkerBootstrapKey(capturedMetadata: Encryption
     }
     const transferred = await transferredWorkerKeys(metadata);
     if (transferred) return serializeKeyring(transferred, metadataRevision(metadata));
-    const secret = readOperatorSecret();
-    if (!secret) throw new EncryptionLockedError('Private encryption operator secret is unavailable');
-    const ring = await unwrapKeyring(metadata, secret);
+    const ring = await verifiedOperatorKeyring(metadata, readMetadata);
     return serializeKeyring(ring, metadataRevision(metadata));
+  }).catch(error => {
+    invalidateOperatorKeyring();
+    if (error instanceof OperatorKeyringContextChangedError) throw new EncryptionLockedError(error.message);
+    throw error;
   });
 }
 
@@ -351,31 +357,35 @@ export async function isUserEncryptionEnabled(): Promise<boolean> {
   return metadata?.encryption_type === 'user' && metadata.key_protection !== 'operator-file';
 }
 
-export async function isEncryptionLocked(): Promise<boolean> {
-  if (await isCredentialMigrationPending()) return true;
+async function encryptionLockState(): Promise<boolean> {
+  if (await isCredentialMigrationPending()) { invalidateOperatorKeyring(); return true; }
   let metadata = await readMetadata();
   if (!metadata && process.env.FLUJO_ENCRYPTION_SECRET_FILE !== undefined) {
     try { metadata = await withMetadataLock(metadataOrInitialize); } catch { return true; }
   }
-  if (!metadata) return true;
+  if (!metadata) { invalidateOperatorKeyring(); return true; }
   const cached = getServerDek();
   if (cached) {
     try {
       const ring = parseSessionKey(cached);
       if ('activeKey' in ring && ring.metadataRevision !== undefined
-          && ring.metadataRevision !== metadataRevision(metadata)) return true;
-    } catch { return true; }
+          && ring.metadataRevision !== metadataRevision(metadata)) { invalidateOperatorKeyring(); return true; }
+    } catch { invalidateOperatorKeyring(); return true; }
   }
   if (metadata.key_protection === 'operator-file') {
     try {
       if (await transferredWorkerKeys(metadata)) return false;
-      const secret = readOperatorSecret();
-      if (!secret) return true;
-      await unwrapKeyring(metadata, secret);
+      await verifiedOperatorKeyring(metadata, readMetadata);
       return false;
-    } catch { return true; }
+    } catch { invalidateOperatorKeyring(); return true; }
   }
+  invalidateOperatorKeyring();
   return (await isUserEncryptionEnabled()) && isServerLocked();
+}
+
+export async function isEncryptionLocked(): Promise<boolean> {
+  try { return await encryptionLockState(); }
+  catch (error) { invalidateOperatorKeyring(); throw error; }
 }
 
 export async function getEncryptionType(): Promise<EncryptionType | null> {

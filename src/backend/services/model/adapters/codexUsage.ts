@@ -18,6 +18,32 @@ export function subtractCodexUsage(total: CodexUsageLike, baseline: CodexUsageLi
   );
 }
 
+/** A resumed cumulative counter is not an invocation count without a known baseline. */
+export function subtractKnownCodexUsage(total: CodexUsageLike | undefined, baseline: CodexUsageLike | undefined): CodexUsageLike | undefined {
+  if (!total || !baseline) return undefined;
+  for (const usage of [total, baseline]) {
+    for (const field of ['input_tokens', 'output_tokens'] as const) {
+      if (!Number.isSafeInteger(usage[field]) || usage[field]! < 0) return undefined;
+    }
+    if (!Number.isSafeInteger(usage.input_tokens! + usage.output_tokens!)) return undefined;
+    for (const [field, parent] of [['cached_input_tokens', 'input_tokens'], ['cache_write_input_tokens', 'input_tokens'],
+      ['reasoning_output_tokens', 'output_tokens']] as const) {
+      if (usage[field] != null && (!Number.isSafeInteger(usage[field]) || usage[field]! < 0 || usage[field]! > usage[parent]!)) return undefined;
+    }
+  }
+  for (const field of ['input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'reasoning_output_tokens'] as const) {
+    if (baseline[field] != null && (total[field] == null || total[field]! < baseline[field]!)) return undefined;
+    if (total[field] != null && baseline[field] == null) return undefined;
+  }
+  const increment = subtractCodexUsage(total, baseline);
+  if (!Number.isSafeInteger(increment.input_tokens! + increment.output_tokens!)) return undefined;
+  for (const [field, parent] of [['cached_input_tokens', 'input_tokens'], ['cache_write_input_tokens', 'input_tokens'],
+    ['reasoning_output_tokens', 'output_tokens']] as const) {
+    if (increment[field] != null && increment[field]! > increment[parent]!) return undefined;
+  }
+  return increment;
+}
+
 /** Normalize Codex SDK usage to the same contract as Chat Completions. */
 export function mapCodexUsage(usage: CodexUsageLike | undefined): MappedOpenAiUsage {
   const promptTokens = usage?.input_tokens ?? 0;

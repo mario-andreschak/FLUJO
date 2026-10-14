@@ -5,6 +5,7 @@ import { applyExecutionRunInput, createExecutionExtensionContext, ExecutionExten
   type ExecutionExtensionAdapter, type ExecutionExtensionContext, type ExecutionNativeWorkerRoot,
   type ExecutionNativeWorkerRootRequest } from './index';
 import { createControllerNativeToolGateway, type ControllerNativeToolTransport } from './controllerNativeTools';
+import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
 
 type Claim = Readonly<{ runId: string; rootConversationId: string; goalId: string; workspace: string }>;
 type Plan = Readonly<{ flowId: string; flowDigest: string; modelId: string; modelDigest: string }>;
@@ -19,6 +20,8 @@ export interface ControllerNativeTransport {
   readRoot(context: object, expected: ExecutionNativeWorkerRootRequest): Promise<ExecutionNativeWorkerRoot>;
   commit<T>(context: object, task: () => Promise<T>): Promise<T>;
   observe(context: object): Promise<{ signal: AbortSignal; close(): Promise<void> }>;
+  /** Supplied only by the trusted Parent composition, never by Worker input. */
+  codexProfile?(context: object): Promise<RestrictedCodexProfile>;
 }
 type Gateway = Pick<ExecutionExtensionAdapter, 'isProtectedServer' | 'assertServerConfig' | 'protectedServer' |
   'authorizeHandoffs' | 'assertModelTool' | 'assertDispatch' | 'normalizeArguments' | 'requestMeta' | 'validateResult'>;
@@ -171,6 +174,13 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
       else await transport.bindRun(selected.remote,conversation,run);
     },
     signal(context) { return item(context).watch.signal; },
+    async codexProfile(context) {
+      const selected = item(context);
+      await current(selected);
+      const profile = await transport.codexProfile?.(selected.remote);
+      await current(selected);
+      return profile;
+    },
     async commit(context, task) {
       const selected=item(context); await current(selected);
       return transport.commit(selected.remote,async()=>{await current(selected); const result=await task(); await current(selected); return result;});
@@ -283,27 +293,40 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
       if (closed || typeof task!=='function' || active.size>=100 || conversations.size>=256) throw denied();
       const captured=Object.freeze(structuredClone(claim));
       const remote=await transport.admit(workerAuthorization,captured);
-      const plan=checkedPlan(await transport.readPlan(remote));
-      const children=checkedChildren(await transport.readChildren?.(remote)??[]);
       const observed=await transport.observe(remote);
       const watch=signal?{...observed,signal:AbortSignal.any([observed.signal,signal])}:observed;
-      if (closed || active.size>=100 || conversations.size>=256) { await watch.close(); throw denied(); }
-      const selected:Active={remote,claim:captured,plan,children,watch,handoffs:new Set()};
-      const value=Object.freeze({}); contexts.set(value,selected); active.add(selected); conversations.add(captured.rootConversationId);
-      const context=createExecutionExtensionContext(adapter,value);
-      selected.context=context;
+      let selected: Active | undefined;
+      const value = Object.freeze({});
+      let failed = false, primary: unknown;
       try {
+        if (closed || active.size>=100 || conversations.size>=256) throw denied();
+        const plan=checkedPlan(await transport.readPlan(remote));
+        const children=checkedChildren(await transport.readChildren?.(remote)??[]);
+        selected={remote,claim:captured,plan,children,watch,handoffs:new Set()};
+        contexts.set(value,selected); active.add(selected); conversations.add(captured.rootConversationId);
+        const context=createExecutionExtensionContext(adapter,value);
+        selected.context=context;
         await current(selected);
         const result=await runWithExecutionInput({source:'internal',executionExtensionContext:context,conversationId:captured.rootConversationId,flowId:plan.flowId},()=>task(context));
         await current(selected);
         return result;
-      } finally {contexts.delete(value);active.delete(selected);await watch.close();}
+      } catch (error) { failed = true; primary = error; throw error; }
+      finally {
+        contexts.delete(value); if (selected) active.delete(selected);
+        try { await watch.close(); }
+        catch (error) {
+          if (failed) throw new AggregateError([primary,error],'Controller run and observer cleanup failed.');
+          throw error;
+        }
+      }
     },
     async close() {
       if (closed) return; closed=true;
-      await Promise.all([...active].map(selected=>selected.watch.close()));
+      const results = await Promise.allSettled([...active].map(selected=>selected.watch.close()));
       credential?.fill(0);
       if (adapters.get(transport.bindingId)?.composed===composed) adapters.delete(transport.bindingId);
+      const failures = results.filter(result=>result.status==='rejected').map(result=>result.reason);
+      if (failures.length) throw new AggregateError(failures,'Controller observers failed to close.');
     },
   });
   adapters.set(transport.bindingId,{composed,requesterDigest}); return composed;

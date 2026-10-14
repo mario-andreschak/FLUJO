@@ -4,6 +4,10 @@ import { createHash } from 'node:crypto';
 import { ReadableStream } from 'node:stream/web';
 import { TextDecoder } from 'node:util';
 import { readModelTurnInspection } from '@/frontend/services/chat/modelTurnInspection';
+import { I18nProvider } from '@/frontend/contexts/I18nContext';
+import { translate } from '@/frontend/i18n/core';
+import { SUPPORTED_LOCALES } from '@/frontend/i18n/locales';
+import type { PendingElicitation, PendingQuestion } from '@/frontend/components/Chat/ChatMessages';
 
 const mockLoadFlows = jest.fn();
 const mockListConversations = jest.fn();
@@ -27,6 +31,7 @@ async function inspectionFixture(value: unknown) {
 }
 const mockSubscribeToEvents = jest.fn();
 const mockSubscribeToSidebarEvents = jest.fn();
+const mockStartCompletion = jest.fn();
 let mockInitialConversationId: string | null = 'conversation-current';
 let mockPhoneLayout = false;
 
@@ -106,7 +111,7 @@ jest.mock('openai', () => {
   class OpenAIError extends Error {}
   class APIError extends OpenAIError {}
   class OpenAI {
-    chat = { completions: { create: jest.fn() } };
+    chat = { completions: { create: mockStartCompletion } };
   }
   return { __esModule: true, default: OpenAI, OpenAIError, APIError };
 });
@@ -153,8 +158,26 @@ jest.mock('@/frontend/components/Chat/McpAppFrame', () => ({
 jest.mock('@/frontend/components/Chat/ChatHistory', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/Chat/ChatMessages', () => ({
   __esModule: true,
-  default: ({ messages }: { messages?: unknown[] }) => (
-    <div data-testid="rendered-message-count">{messages?.length ?? 0}</div>
+  default: ({ messages, pendingQuestion, pendingElicitation, onAnswerQuestion, onDeclineQuestion, onSubmitElicitation, onCancelElicitation }: {
+    messages?: unknown[];
+    pendingQuestion?: PendingQuestion | null;
+    pendingElicitation?: PendingElicitation | null;
+    onAnswerQuestion: (id: string, answers: string[][]) => void;
+    onDeclineQuestion: (id: string) => void;
+    onSubmitElicitation: (id: string, content: Record<string, string>) => void;
+    onCancelElicitation: (id: string) => void;
+  }) => (
+    <>
+      <div data-testid="rendered-message-count">{messages?.length ?? 0}</div>
+      {pendingQuestion && <>
+        <button type="button" onClick={() => onAnswerQuestion(pendingQuestion.questionId, [['Retained answer']])}>Answer pending question</button>
+        <button type="button" onClick={() => onDeclineQuestion(pendingQuestion.questionId)}>Decline pending question</button>
+      </>}
+      {pendingElicitation && <>
+        <button type="button" onClick={() => onSubmitElicitation(pendingElicitation.elicitationId, { note: 'Retained form' })}>Submit pending form</button>
+        <button type="button" onClick={() => onCancelElicitation(pendingElicitation.elicitationId)}>Cancel pending form</button>
+      </>}
+    </>
   ),
 }));
 jest.mock('@/frontend/components/Chat/ChatInput', () => {
@@ -255,6 +278,7 @@ describe('Talk conversation Agent switch terminology', () => {
     mockGetModelTurnInspection.mockReset();
     mockSubscribeToEvents.mockReset().mockImplementation(() => ({ close: jest.fn() }));
     mockSubscribeToSidebarEvents.mockReset().mockImplementation(() => ({ close: jest.fn() }));
+    mockStartCompletion.mockReset();
   });
 
   it('recovers the viewed snapshot before reconnecting and cancels recovery on unmount', async () => {
@@ -600,5 +624,117 @@ describe('Talk conversation Agent switch terminology', () => {
     render(<Chat />);
 
     await waitFor(() => expect(screen.getByTestId('chat-input')).toHaveAttribute('data-disabled', 'false'));
+  });
+
+  const pendingConversation = {
+    ...detailedConversation, status: 'running', flowId: null, personaId: 'persona-ada',
+    pendingInputs: { nextSeq: 1,
+      questions: [{ questionId: 'pending-question', createdAt: 1, questions: [{ prompt: 'Choose', options: ['Retained answer'] }] }],
+      elicitations: [{ elicitationId: 'pending-form', createdAt: 1, message: 'Review', requestedSchema: { properties: { note: { type: 'string' } } } }],
+    },
+  };
+
+  it.each(SUPPORTED_LOCALES.map(({ code }) => code))('localizes a failed Persona input in %s without offering a new run', async locale => {
+    const originalFetch = globalThis.fetch;
+    const response = jest.fn(async () => ({ ok: false, status: 400, json: async () => ({ error: 'Raw English validation error' }) }));
+    globalThis.fetch = response as unknown as typeof fetch;
+    localStorage.setItem('flujo.locale', locale);
+    mockListConversations.mockResolvedValue([pendingConversation]);
+    mockGetConversation.mockResolvedValue(pendingConversation);
+    const view = render(<I18nProvider><Chat /></I18nProvider>);
+    try {
+      const answer = await screen.findByRole('button', { name: 'Answer pending question' });
+      if (locale === 'en') {
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+        const handlers = mockSubscribeToEvents.mock.calls[0][1] as EventStreamHandlers;
+        act(() => handlers.onEvent({ type: 'error', conversationId: 'conversation-current', seq: 1, timestamp: 1,
+          message: 'Previous run failure', error: { message: 'Previous normalized failure', code: 'PREVIOUS' } }));
+        expect(screen.getByText('Previous normalized failure')).toBeInTheDocument();
+      }
+      fireEvent.click(answer);
+      const guidance = translate(locale, 'chat.page.inputResponseFailed');
+      expect(await screen.findByText(guidance)).toBeInTheDocument();
+      expect(within(screen.getByRole('alert')).queryByRole('button', { name: translate(locale, 'chat.page.retry') })).not.toBeInTheDocument();
+      expect(screen.queryByText('Raw English validation error')).not.toBeInTheDocument();
+      expect(screen.queryByText('Previous normalized failure')).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveAttribute('aria-atomic', 'true');
+      expect(screen.getByRole('button', { name: 'Answer pending question' })).toBeInTheDocument();
+      const detailReads = mockGetConversation.mock.calls.length;
+      const nextLocale = locale === 'de' ? 'es' : 'de';
+      fireEvent(window, new StorageEvent('storage', { key: 'flujo.locale', newValue: nextLocale }));
+      expect(await screen.findByText(translate(nextLocale, 'chat.page.inputResponseFailed'))).toBeInTheDocument();
+      expect(mockGetConversation).toHaveBeenCalledTimes(detailReads);
+      expect(mockCreateConversation).not.toHaveBeenCalled();
+      expect(mockStartCompletion).not.toHaveBeenCalled();
+    } finally { view.unmount(); globalThis.fetch = originalFetch; localStorage.clear(); }
+  });
+
+  it.each([
+    ['Answer pending question', 'question-answer', { questionId: 'pending-question', answers: [['Retained answer']] }, 'chat.page.inputResponseFailed'],
+    ['Decline pending question', 'question-decline', { questionId: 'pending-question' }, 'chat.page.inputDeclineFailed'],
+    ['Submit pending form', 'elicitation-submit', { elicitationId: 'pending-form', content: { note: 'Retained form' } }, 'chat.page.inputSubmitFailed'],
+    ['Cancel pending form', 'elicitation-cancel', { elicitationId: 'pending-form' }, 'chat.page.inputCancelFailed'],
+  ] as const)('retries %s through the current mailbox and clears the failure after success', async (name, action, payload, errorKey) => {
+    const originalFetch = globalThis.fetch;
+    let succeed = false;
+    const responses: unknown[] = [];
+    globalThis.fetch = jest.fn(async (url, init) => {
+      if (String(url).includes('/respond')) responses.push(JSON.parse(String(init?.body)));
+      return { ok: succeed, status: succeed ? 200 : 404, json: async () => ({ error: 'Stale input' }) } as Response;
+    });
+    mockListConversations.mockResolvedValue([pendingConversation]);
+    mockGetConversation.mockResolvedValue(pendingConversation);
+    const view = render(<Chat />);
+    try {
+      const control = await screen.findByRole('button', { name: String(name) });
+      fireEvent.click(control);
+      expect(await screen.findByText(translate('en', errorKey))).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      succeed = true;
+      const empty = { ...pendingConversation, pendingInputs: { nextSeq: 2, questions: [], elicitations: [] } };
+      mockGetConversation.mockResolvedValue(empty);
+      fireEvent.click(screen.getByRole('button', { name: String(name) }));
+      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByRole('button', { name: String(name) })).not.toBeInTheDocument());
+      expect(responses).toEqual([{ action, ...payload as object }, { action, ...payload as object }]);
+      expect(mockCreateConversation).not.toHaveBeenCalled();
+      expect(mockStartCompletion).not.toHaveBeenCalled();
+    } finally { view.unmount(); globalThis.fetch = originalFetch; }
+  });
+
+  it.each(['network', 'non-json'])('handles a %s response failure with usable guidance', async failure => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn(async () => {
+      if (failure === 'network') throw new TypeError('Failed to fetch');
+      return { ok: false, status: 503, json: async () => { throw new SyntaxError('HTML response'); } } as unknown as Response;
+    });
+    mockListConversations.mockResolvedValue([pendingConversation]);
+    mockGetConversation.mockResolvedValue(pendingConversation);
+    const view = render(<Chat />);
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'Answer pending question' }));
+      expect(await screen.findByText(translate('en', 'chat.page.inputResponseFailed'))).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Answer pending question' })).toBeInTheDocument();
+    } finally { view.unmount(); globalThis.fetch = originalFetch; }
+  });
+
+  it('exposes a fresh live alert for identical failures batched with their clear', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn(async () => ({ ok: false, json: async () => ({ error: 'Same failed response' }) } as Response));
+    mockListConversations.mockResolvedValue([pendingConversation]);
+    mockGetConversation.mockResolvedValue(pendingConversation);
+    const view = render(<Chat />);
+    try {
+      const control = await screen.findByRole('button', { name: 'Answer pending question' });
+      control.focus();
+      await act(async () => { fireEvent.click(control); });
+      const first = screen.getByRole('alert');
+      await act(async () => { fireEvent.click(control); });
+      expect(screen.getByRole('alert')).not.toBe(first);
+      expect(screen.getByRole('alert')).toHaveTextContent(translate('en', 'chat.page.inputResponseFailed'));
+      expect(document.activeElement).toBe(control);
+      expect(mockStartCompletion).not.toHaveBeenCalled();
+    } finally { view.unmount(); globalThis.fetch = originalFetch; }
   });
 });

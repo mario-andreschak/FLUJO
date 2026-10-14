@@ -98,7 +98,25 @@ const nextConfig = {
   webpack: (config, { dev, isServer }) => {
     // Trusted build-time composition, not a runtime plugin loader. Ordinary
     // builds keep the empty adapter and retain their existing behavior.
-    const adapterModule = process.env.FLUJO_EXECUTION_ADAPTER_MODULE;
+    const parentModule = process.env.FLUJO_NATIVE_PARENT_MODULE;
+    if (parentModule && process.env.FLUJO_EXECUTION_ADAPTER_MODULE) {
+      throw new Error('Select one trusted execution composition.');
+    }
+    const adapterModule = parentModule && isServer
+      ? path.join(__dirname, 'src/backend/execution/extensions/configuredNativeSource.ts')
+      : parentModule ? undefined : process.env.FLUJO_EXECUTION_ADAPTER_MODULE;
+    if (parentModule && isServer) {
+      if (!path.isAbsolute(parentModule) || !statSync(parentModule).isFile()) {
+        throw new Error('FLUJO_NATIVE_PARENT_MODULE must name an existing absolute server module.');
+      }
+      const defaultParentModule = path.join(__dirname, 'src/backend/execution/extensions/configuredNativeParent');
+      config.resolve ??= {};
+      config.resolve.alias = { ...config.resolve.alias,
+        '@/backend/execution/extensions/configuredNativeParent$': parentModule,
+        [`${defaultParentModule}$`]: parentModule,
+        [`${defaultParentModule}.ts$`]: parentModule,
+      };
+    }
     if (adapterModule) {
       if (!path.isAbsolute(adapterModule) || !statSync(adapterModule).isFile()) {
         throw new Error('FLUJO_EXECUTION_ADAPTER_MODULE must name an existing absolute server module.');
