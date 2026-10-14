@@ -304,6 +304,15 @@ describe('improveFlow — repair loop', () => {
 // ---------------------------------------------------------------------------
 
 describe('improveFlow — input validation & failures', () => {
+  it('denies an owner-bound improver before key resolution or provider traffic', async () => {
+    getModelMock.mockResolvedValueOnce({ ...generatorModel, ownerCredentialBinding: null });
+
+    const result = await improveFlow({ flow: makeExistingFlow(), description: 'rename it', modelId: 'model-gen' });
+
+    expect(result).toMatchObject({ success: false, statusCode: 403, error: expect.stringMatching(/authorized model-step transport/i) });
+    expect(resolveKeyMock).not.toHaveBeenCalled();
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
   it('400 on a missing change description', async () => {
     expect(await improveFlow({ flow: makeExistingFlow(), description: '  ', modelId: 'model-gen' })).toEqual(
       expect.objectContaining({ success: false, statusCode: 400 })

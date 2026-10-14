@@ -53,13 +53,14 @@ jest.mock('@/backend/services/model/adapters', () => ({
 jest.mock('@/backend/services/model/testConnection', () => ({ testModelConnection: jest.fn() }));
 
 import { modelService } from '@/backend/services/model';
-import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { resolveAndDecryptApiKey } from '@/backend/services/model/encryption';
+import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { testModelConnection } from '@/backend/services/model/testConnection';
 import { GET as listModels } from '@/app/v1/models/route';
 import { StorageKey } from '@/shared/types/storage';
 
 const SECRET = 'sk-super-secret-key-123';
+const ownerBinding = { ownerId: 'factory', credentialId: 'original-model-slot' };
 
 const modelFixture = (over: Partial<Model> = {}): Model => ({
   id: 'm1',
@@ -93,6 +94,26 @@ beforeEach(async () => {
   jest.mocked(testModelConnection).mockClear();
 });
 
+describe('owner-bound model storage', () => {
+  it('persists only a binding and refuses a mixed local credential', async () => {
+    const bound = modelFixture({ ApiKey: '', ownerCredentialBinding: ownerBinding });
+    expect(await modelService.addModel(bound)).toMatchObject({ success: true });
+    expect((store[StorageKey.MODELS] as Model[])[0]).toMatchObject({
+      ApiKey: '', ownerCredentialBinding: ownerBinding,
+    });
+    expect(await modelService.updateModel({ ...bound, ApiKey: 'new-local-key' }))
+      .toMatchObject({ success: false });
+    expect((store[StorageKey.MODELS] as Model[])[0].ApiKey).toBe('');
+    expect(await modelService.addModel(modelFixture({
+      id: 'mixed', displayName: 'Mixed', ownerCredentialBinding: ownerBinding,
+    }))).toMatchObject({ success: false });
+    expect(await modelService.addModel(modelFixture({
+      id: 'wrong-route', displayName: 'Wrong route', ApiKey: '',
+      provider: 'openrouter', adapter: 'openai', ownerCredentialBinding: ownerBinding,
+    }))).toMatchObject({ success: false });
+  });
+});
+
 describe('fallback policy lifecycle', () => {
   const policy = (): Model => ({ id: 'policy', name: 'policy/prod', ApiKey: '', fallbackPolicy: { modelIds: ['m1', 'm2'] } });
   beforeEach(() => { store[StorageKey.MODELS] = [modelFixture(), modelFixture({ id: 'm2', displayName: 'Backup' })]; });
@@ -109,6 +130,13 @@ describe('fallback policy lifecycle', () => {
     expect((await modelService.deleteModel('m1')).success).toBe(false);
     expect((await modelService.deleteModel('policy')).success).toBe(true);
     expect((await modelService.deleteModel('m1')).success).toBe(true);
+  });
+  it('refuses an owner-bound fallback member on save', async () => {
+    store[StorageKey.MODELS] = [
+      modelFixture({ ApiKey: '', ownerCredentialBinding: ownerBinding }),
+      modelFixture({ id: 'm2', displayName: 'Backup' }),
+    ];
+    expect(await modelService.addModel(policy())).toMatchObject({ success: false });
   });
   it('resolves the policy alias independently of other display names and keeps the actual-model receipt', async () => {
     await modelService.addModel(policy());
@@ -253,6 +281,55 @@ describe('ModelService.generateChatCompletion — resolution', () => {
     expect(input.messages).toEqual(messages);
     expect(input.temperature).toBe(0.5); // model default when the request has none
     expect(input.maxTurns).toBe(1); // single-turn semantics
+  });
+
+  it('refuses an owner-bound model before any direct adapter call', async () => {
+    store[StorageKey.MODELS] = [modelFixture({ ApiKey: '', ownerCredentialBinding: ownerBinding })];
+    const result = await modelService.generateChatCompletion({ modelIdentifier: 'GPT Test', messages });
+    expect(result).toMatchObject({ success: false, statusCode: 403,
+      error: { code: 'owner_model_step_required' } });
+    expect(mockCreateCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('refuses a bound technical-name/display-name collision before local key resolution (bound first: %s)', async boundFirst => {
+    const bound = modelFixture({ id: 'bound', displayName: undefined, ApiKey: '', ownerCredentialBinding: ownerBinding });
+    const ordinary = modelFixture({ id: 'ordinary', name: 'other-model', displayName: 'gpt-test' });
+    store[StorageKey.MODELS] = boundFirst ? [bound, ordinary] : [ordinary, bound];
+    (resolveAndDecryptApiKey as jest.Mock).mockClear();
+
+    const result = await modelService.generateChatCompletion({ modelIdentifier: 'gpt-test', messages });
+
+    expect(result).toMatchObject({ success: false, statusCode: 403,
+      error: { code: 'owner_model_step_required' } });
+    expect(resolveAndDecryptApiKey).not.toHaveBeenCalled();
+    expect(mockCreateCompletion).not.toHaveBeenCalled();
+  });
+
+  it('keeps a distinct ordinary display alias usable beside a bound model', async () => {
+    store[StorageKey.MODELS] = [
+      modelFixture({ id: 'bound', displayName: undefined, ApiKey: '', ownerCredentialBinding: ownerBinding }),
+      modelFixture({ id: 'ordinary', name: 'other-model', displayName: 'Ordinary' }),
+    ];
+    mockCreateCompletion.mockResolvedValue({ completion: completionFixture() });
+
+    const result = await modelService.generateChatCompletion({ modelIdentifier: 'Ordinary', messages });
+
+    expect(result.success).toBe(true);
+    expect(mockCreateCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.objectContaining({ id: 'ordinary' }), apiKey: SECRET,
+    }));
+  });
+
+  it('refuses a persisted policy with an owner-bound member before routing', async () => {
+    store[StorageKey.MODELS] = [
+      modelFixture({ ApiKey: '', ownerCredentialBinding: ownerBinding }),
+      modelFixture({ id: 'm2', displayName: 'Backup' }),
+      { id: 'policy', name: 'policy/prod', ApiKey: '', fallbackPolicy: { modelIds: ['m1', 'm2'] } },
+    ];
+    const result = await modelService.generateChatCompletion({ modelIdentifier: 'policy/prod', messages });
+    expect(result).toMatchObject({ success: false, statusCode: 403,
+      error: { code: 'owner_model_step_required' } });
+    expect(mockCreateCompletion).not.toHaveBeenCalled();
   });
 
   it('falls back to the technical name when no display name matches', async () => {

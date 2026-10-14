@@ -7,6 +7,8 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import { registerExecutionExtension } from '@/backend/execution/extensions';
 import { fixtureAdapter, fixtureRun, mintFixture } from './fixtureAdapter';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 const mockCtor = jest.fn();
 const mockStream = jest.fn();
@@ -47,7 +49,8 @@ describe('private Process tool offers reach the real restricted Codex adapter', 
   const profile = { verifiedCliVersion: '0.153.3', verifiedCliSha256: 'a'.repeat(64),
     verifiedModelCatalogPath: 'fixture-models.json', verifiedModelCatalogSha256: 'b'.repeat(64) };
   const params = { id: 'process', label: 'Process', type: 'process' as const, properties: { boundModel: 'model-1' } };
-  beforeEach(() => {
+  beforeEach(async () => {
+    await saveItem(StorageKey.MODELS, [{ id: 'model-1', name: 'gpt-6-sol', provider: 'codex', adapter: 'codex-cli', ApiKey: '', contextWindow: 100_000 }]);
     jest.clearAllMocks(); mockBridgeTools = [];
     jest.spyOn(modelService, 'getModel').mockResolvedValue({ id: 'model-1', name: 'gpt-6-sol',
       provider: 'codex', adapter: 'codex-cli', ApiKey: '', contextWindow: 100_000 } as never);

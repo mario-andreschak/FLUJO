@@ -10,6 +10,7 @@ import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import type { FlujoFunctionToolCall } from '@/shared/types/openai';
+import { assertOwnerCredentialAdapterRoute } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/services/model/adapters/geminiAdapter');
 
@@ -336,6 +337,7 @@ function toChatCompletion(
  */
 export class GeminiAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    assertOwnerCredentialAdapterRoute(input.model, 'gemini');
     assertReadOnlyAssessmentInput(input);
     if (input.readOnlyAssessment) return this.createAssessment(input);
     const {
@@ -478,6 +480,7 @@ export class GeminiAdapter implements CompletionAdapter {
     onSdkRequestResult,
     readOnlyAssessment,
   }: CompletionInput): Promise<CompletionResult> {
+    assertOwnerCredentialAdapterRoute(model, 'gemini');
     if (readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
     const { systemInstruction, contents } = await toGeminiContents(messages, signal);

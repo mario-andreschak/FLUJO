@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import type { PersonaBehaviorComposition } from '@/shared/types/enduringAgent';
 import type { EmitFn } from '@/shared/types/execution/events';
 import { createLogger } from '@/utils/logger';
+import { isExecutionProtectedState } from '@/backend/execution/extensions';
 
 import type { ToolDefinition } from '../types';
 
@@ -115,6 +116,11 @@ export async function executeBehaviorToolCall(
     const sharedState = FlowExecutor.conversationStates.get(ctx.conversationId);
     if (!sharedState) {
       return { success: false, error: 'Live Persona state not found for this Behavior call.' };
+    }
+    // A Behavior tool starts a child Flow directly, bypassing SubflowNode.prep.
+    // No owner-issued child context or credential budget can be inherited yet.
+    if (sharedState.executionExtensionContext || isExecutionProtectedState(sharedState)) {
+      return { success: false, error: 'execution_subflow_child_authority_required' };
     }
 
     const target = sharedState.behaviorToolRegistry?.[name];

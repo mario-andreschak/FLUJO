@@ -28,7 +28,7 @@ import { MCPSSEConfig } from "@/shared/types/mcp/mcp";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { createHash } from "crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { RuntimeDirectoryAdmission } from './runtimeDirectoryAdmission';
 import { createLogger } from "@/utils/logger";
 import { assertMcpTransport, McpTransportError } from './transportAdmission';
@@ -103,6 +103,24 @@ import {
 // list_changed) — so no roots change may ever force a client rebuild (issue 46).
 interface ClientWithCapKey {
   __flujoCapKey?: string;
+  __flujoProtectedConfigFingerprint?: string;
+}
+
+// Configs can contain low-entropy secrets. This process-private key prevents
+// the equality token from becoming an offline password-guessing oracle. Share
+// it across Next server graphs just like the process-owned client registry.
+const fingerprintRoot = globalThis as typeof globalThis & {
+  __flujoProtectedConfigFingerprintKey?: Uint8Array;
+};
+const fingerprintKey = fingerprintRoot.__flujoProtectedConfigFingerprintKey ??= randomBytes(32);
+
+/** Process-local equality token, never password storage or authorization. */
+export function protectedConfigFingerprint(config: MCPServerConfig): string {
+  return createHmac('sha256', fingerprintKey).update(JSON.stringify(config)).digest('hex');
+}
+
+export function clientProtectedConfigFingerprint(client: Client): string | undefined {
+  return (client as ClientWithCapKey).__flujoProtectedConfigFingerprint;
 }
 
 /** Key of config that drives connect-time client capabilities. */
@@ -444,6 +462,9 @@ export function createNewClient(config: MCPServerConfig): Client {
     // The configured private integration accepts only synchronous tool calls.
     const client = new CompleteToolDiscoveryClient({ name: `flujo-${config.name}-client`, version: '3.46.3' }, { capabilities: {} });
     (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
+    Object.defineProperty(client, '__flujoProtectedConfigFingerprint', {
+      value: protectedConfigFingerprint(config), enumerable: false,
+    });
     return client;
   }
 

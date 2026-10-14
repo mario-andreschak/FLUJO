@@ -15,6 +15,7 @@ import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import OpenAI from 'openai';
 import { hidePresetParameters, mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
 import type { MCPServerConfig } from '@/shared/types/mcp';
+import { ExecutionExtensionError, assertExecutionExtensionCurrent, executionExtensionProtectedServer } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
 
@@ -201,9 +202,14 @@ export class ToolHandler {
     input: MCPNodeProcessingInput
   ): Promise<Result<MCPNodeProcessingResult>> {
     const { mcpNodes } = input;
+    const assertCurrent = async () => {
+      if (input.executionExtensionContext) {
+        await assertExecutionExtensionCurrent(input.executionExtensionContext);
+      }
+    };
     
     // Add verbose logging of the input
-    log.verbose('processMCPNodes input', JSON.stringify(input));
+    if (!input.executionExtensionContext) log.verbose('processMCPNodes input', JSON.stringify(input));
     
     if (!mcpNodes || mcpNodes.length === 0) {
       const emptyResult: Result<MCPNodeProcessingResult> = {
@@ -218,6 +224,7 @@ export class ToolHandler {
     }
     
     try {
+      await assertCurrent();
       const allTools: ToolDefinition[] = [];
       let serverConfigs: MCPServerConfig[] = [];
       try {
@@ -234,7 +241,12 @@ export class ToolHandler {
         const properties = mcpNode.properties;
         
         if (properties && properties.boundServer) {
+          await assertCurrent();
           const boundServer = properties.boundServer;
+          if (input.executionExtensionContext
+            && boundServer !== executionExtensionProtectedServer(input.executionExtensionContext)) {
+            throw new ExecutionExtensionError('execution_mcp_server_forbidden');
+          }
           const enabledTools = properties.enabledTools || [];
           const toolTimeout = properties.toolTimeout;
           const serverConfig = serverConfigs.find((config) => config.name === boundServer);
@@ -244,13 +256,16 @@ export class ToolHandler {
           // node-level roots from the first request on. Roots never rebuild the client
           // (the capability is always declared); an already-connected server is told via
           // notifications/roots/list_changed. An empty list clears this node's overlay.
-          mcpService.setNodeRoots(boundServer, mcpNode.id, properties.roots);
+          if (!input.executionExtensionContext) {
+            mcpService.setNodeRoots(boundServer, mcpNode.id, properties.roots);
+          }
 
           // Ensure the server is connected. connectServer recreates a client whose config
           // changed; listServerTools below additionally self-heals a dead transport by
           // reconnecting and retrying. We deliberately do NOT gate this on getServerStatus:
           // that only reports map presence, not liveness, so it cannot detect a stale session.
-          const connectResult = await mcpService.connectServer(boundServer);
+          const connectResult = await mcpService.connectServer(boundServer, input.executionExtensionContext);
+          await assertCurrent();
 
           if (!connectResult.success) {
             // A node is explicitly wired to this MCP server, so its tools are not optional.
@@ -269,7 +284,8 @@ export class ToolHandler {
           }
 
           // List server tools
-          const toolsResult = await mcpService.listServerTools(boundServer);
+          const toolsResult = await mcpService.listServerTools(boundServer, 'model', input.executionExtensionContext);
+          await assertCurrent();
 
           // Distinguish a genuine failure from a legitimately empty tool list. An error means
           // we could not retrieve the tools (even after the reconnect/retry inside
@@ -296,6 +312,9 @@ export class ToolHandler {
                 properties.toolParameterPresets,
                 tool.name,
               );
+              if (input.executionExtensionContext && Object.keys(presetArgs).length > 0) {
+                throw new ExecutionExtensionError('execution_tool_presets_forbidden');
+              }
               // Issue #255: capture the tool's identity at advertise time so a
               // later dispatch can detect that the server reconnected or the
               // schema changed. Record the current schema hash as the advertised
@@ -330,15 +349,18 @@ export class ToolHandler {
       // Build the list_mcp_resources synthetic tool (issue #239).
       // This is additive (read-only); a listing failure logs a warning but does
       // NOT abort the step — tool availability must not be blocked by resources.
-      try {
-        const resourceTools = await buildMCPResourceTools(mcpNodes);
-        for (const rt of resourceTools) {
-          if (!allTools.some((t) => t.name === rt.name)) {
-            allTools.push(rt);
+      await assertCurrent();
+      if (!input.executionExtensionContext) {
+        try {
+          const resourceTools = await buildMCPResourceTools(mcpNodes);
+          for (const rt of resourceTools) {
+            if (!allTools.some((t) => t.name === rt.name)) {
+              allTools.push(rt);
+            }
           }
+        } catch (resourceErr) {
+          log.warn('processMCPNodes: buildMCPResourceTools failed, skipping resource tool', { resourceErr });
         }
-      } catch (resourceErr) {
-        log.warn('processMCPNodes: buildMCPResourceTools failed, skipping resource tool', { resourceErr });
       }
 
       const result: Result<MCPNodeProcessingResult> = {
@@ -351,6 +373,7 @@ export class ToolHandler {
       
       return result;
     } catch (error) {
+      if (input.executionExtensionContext) throw error;
       const errorResult: Result<MCPNodeProcessingResult> = {
         success: false,
         error: createMCPError(

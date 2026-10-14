@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
-import { ExecutionExtensionError } from '@/backend/execution/extensions';
+import { assertOwnerCredentialAdapterRoute, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
@@ -81,6 +81,7 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
 /** Official Antigravity CLI owns the model loop; FLUJO owns every exposed tool. */
 export class AntigravityCliAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    assertOwnerCredentialAdapterRoute(input.model, 'antigravity-cli');
     // Ordinary MCP-only isolation is not an attested banking restriction profile.
     // Reject direct callers before reading messages, credentials or configuration.
     if (input.executionExtensionContext) {

@@ -129,6 +129,9 @@ async function askModel(modelId: string, task: string): Promise<string> {
   if (!model) {
     throw new Error(`config: The AI-check model no longer exists (${modelId})`);
   }
+  if (model.ownerCredentialBinding !== undefined) {
+    throw new Error('config: Owner-bound models require an authorized model-step transport.');
+  }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) {

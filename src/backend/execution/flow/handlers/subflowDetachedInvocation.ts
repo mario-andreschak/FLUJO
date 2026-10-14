@@ -29,6 +29,7 @@ import { assertFlowExecutionCurrent, commitFlowDurableMutation, rethrowFlowExecu
 import { pinnedSubflowDefinition } from '../subflowDependencies';
 import { isCancelledByAncestry } from '../cancellation';
 import { publishSubflowCompletion } from '../subflowCommunication';
+import { isExecutionProtectedState } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/flow/execution/handlers/subflowDetachedInvocation');
 export const SUBFLOW_DETACHED_TOOL_PREFIX = 'start_subflow_';
@@ -184,6 +185,12 @@ async function startDetachedSubflow(
   try {
     const { FlowExecutor } = await import('../FlowExecutor');
     const shared = FlowExecutor.conversationStates.get(originConversationId);
+    // A detached start persists a task before it fabricates SubflowNode prep.
+    // Protected parents have no owner-issued child authority yet, so stop before
+    // either the task mutation or prompt projection, including stale tool maps.
+    if (shared && (shared.executionExtensionContext || isExecutionProtectedState(shared))) {
+      return { success: false, error: 'execution_subflow_child_authority_required' };
+    }
     const targetNodeId = shared?.subflowDetachedToolNameMap?.[name];
     if (!shared || !targetNodeId) return { success: false, error: `Unknown detached subflow tool "${name}".` };
     await assertFlowExecutionCurrent(shared);

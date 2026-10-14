@@ -99,6 +99,18 @@ beforeEach(() => {
   detachedJobRegistry.clear(); _clearSubflowTaskSettingsCache(); jest.clearAllMocks();
 });
 
+it.each([
+  { executionExtensionOwned: true },
+  { executionExtensionContext: {} },
+])('refuses a protected detached child before persisting a task or starting a lane', async protectedFields => runWithWorkspace('worker', async () => {
+  Object.assign(parent(), protectedFields);
+  const outcome = await executeDetachedSubflowStart('start_subflow_child', { task: 'private input' }, { conversationId: 'parent' });
+  expect(outcome).toEqual({ success: false, error: 'execution_subflow_child_authority_required' });
+  expect(await listTasks()).toEqual([]);
+  expect(runSubflowLanes).not.toHaveBeenCalled();
+  expect(detachedJobRegistry.size).toBe(0);
+}));
+
 it('makes HTTP and model getters agree on exact durable interruption, with an auditable manual recovery reason', async () => runWithWorkspace('worker', async () => {
   parent();
   const httpTask = await seed('http-child');

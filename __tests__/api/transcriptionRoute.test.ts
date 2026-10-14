@@ -150,6 +150,23 @@ describe('POST /api/transcription', () => {
     expect(resolveApiKeyMock).not.toHaveBeenCalled();
   });
 
+  it('rejects an owner-bound model before decrypting or sending audio', async () => {
+    getModelMock.mockResolvedValueOnce({
+      ...configuredModel,
+      ownerCredentialBinding: null,
+    });
+    const response = await POST(requestWith({
+      file: new File(['audio'], 'recording.webm', { type: 'audio/webm' }),
+      modelId: configuredModel.id,
+    }));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: 'owner-bound-model' });
+    expect(resolveApiKeyMock).not.toHaveBeenCalled();
+    expect(createOpenAIClientMock).not.toHaveBeenCalled();
+    expect(transcriptionCreateMock).not.toHaveBeenCalled();
+  });
+
   it('turns empty provider output into an explicit recoverable failure', async () => {
     transcriptionCreateMock.mockResolvedValue({ text: '   ' });
 

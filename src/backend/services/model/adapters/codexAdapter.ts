@@ -52,7 +52,13 @@ import {
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
 import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
-import { assertExecutionExtensionCurrent, assertExecutionModelTool, executionExtensionCodexProfile, ExecutionExtensionError } from '@/backend/execution/extensions';
+import {
+  assertExecutionExtensionCurrent,
+  assertExecutionModelTool,
+  assertOwnerCredentialAdapterRoute,
+  executionExtensionCodexProfile,
+  ExecutionExtensionError,
+} from '@/backend/execution/extensions';
 import {
   assertRestrictedCodexProfile,
   prepareRestrictedCodexRuntimeEnvironment,
@@ -193,6 +199,7 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
  */
 export class CodexAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    assertOwnerCredentialAdapterRoute(input.model, 'codex-cli');
     const invocationStartedAt = Date.now();
     const {
       model,
