@@ -197,7 +197,15 @@ try {
     tag: cipher.getAuthTag().toString('base64'), data: ciphertext.toString('base64') }));
   const archiveHash = hash(await fs.readFile(archive));
   const failedWorker = await start(workerData, { worker: true, fault: 'enospc-snapshot', archive, digest });
-  const status = await request('/api/worker/status', 503, { worker: true }); assert.equal(status.state, 'error');
+  let status;
+  const failureDeadline = Date.now() + 30_000;
+  do {
+    status = await request('/api/worker/status', 503, { worker: true });
+    if (status.state === 'error') break;
+    if (Date.now() >= failureDeadline) throw new Error('Snapshot failure did not finish cleanup and report error.');
+    await delay(100);
+  } while (true);
+  failedWorker.receipt.snapshotFailureState = status.state;
   await health(false);
   assert.ok(failedWorker.receipt.faultObservations.some(row => row.phase === 'snapshot-partial-write' && row.bytesWritten > 0));
   assert.equal(await exists(path.join(workerData, 'workspaces', workerWorkspace)), false);
@@ -221,7 +229,10 @@ finally {
     await operator.restore(); assert.equal(await exists(root), false); cleanupVerified = true;
   } catch (error) { failure = failure ? new AggregateError([failure, error]) : error; }
   for (const secret of secrets) serverLog = serverLog.split(secret).join('[redacted]');
+  let failureMessage = failure ? String(failure.message).slice(0, 1000) : null;
+  for (const secret of secrets) if (failureMessage) failureMessage = failureMessage.split(secret).join('[redacted]');
   const receipt = { schemaVersion: 1, outcome: failure ? 'failed' : 'passed', completedUtc: new Date().toISOString(),
+    failureMessage,
     node: process.version, platform: process.platform, sourceRevision: build.sourceRevision, buildId: build.buildId,
     sourceInputs: build.sourceInputs, builtInputs: build.builtInputs, checks, generations: generations.map(row => row.receipt),
     cleanup: { privateRoot: root, verifiedAbsent: cleanupVerified }, window: budget.receipt(),
