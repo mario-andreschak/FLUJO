@@ -728,6 +728,17 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     updateCompletion();
   }, [onChange, updateCompletion]);
 
+  const handlePaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    // Slate can handle synthetic paste events itself. Keep the editor and any
+    // caller's paste effects behind the same native clipboard event boundary.
+    if (!event.nativeEvent.isTrusted) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+    onPaste?.(event);
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     // Native Select All / mouse selection can be newer than Slate's throttled
     // selectionchange handler. Reconcile it before Slate moves the caret, so a
@@ -875,7 +886,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
             role="textbox"
             aria-multiline={multiline}
             onKeyDown={handleKeyDown}
-            onPaste={onPaste}
+            onPaste={handlePaste}
             style={{
               minHeight: editorMinHeight,
               maxHeight: editorMaxHeight,

@@ -519,11 +519,11 @@ describe('ModelConnectionWizard', () => {
     fireEvent.change(screen.getByLabelText('Gemini API key'), { target: { value: '  gemini-api-test  ' } });
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByText('Antigravity Gemini 3.8 Flash (Medium)')).toBeInTheDocument();
-    expect(screen.getByText('Antigravity Gemini 3.1 Pro (High)')).toBeInTheDocument();
+    expect(screen.getByText('Antigravity Gemini 3.8 Flash (High)')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /create my(?: \d+)? models?/i }));
     await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
     const models = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
-    expect(models.map(model => model.name)).toEqual(['default', 'gemini-3.8-flash-medium', 'gemini-3.1-pro-high']);
+    expect(models.map(model => model.name)).toEqual(['default', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high']);
     expect(models.every(model => model.ApiKey === 'gemini-api-test' && model.adapter === 'antigravity-cli')).toBe(true);
   });
 
