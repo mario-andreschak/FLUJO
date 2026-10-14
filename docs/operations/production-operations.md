@@ -185,6 +185,28 @@ Use the format appropriate to the operation:
 | Snapshot format 2 | The [coherent snapshot protocol](../features/hot-clone-workspace.md) has a capture barrier, manifest/member digests, layout/protocol/version checks and explicit sensitive transfer. Download and verify before finalize. Restore is a controlled workspace fork, not live bidirectional replication. Copied schedules stay suppressed; installation-local provenance is excluded. |
 | Offline complete data-root + external private configuration | Installation disaster recovery includes all namespace and installation-private state plus separately backed-up protected key/policy/authority material. Keep a single active restored installation. A complete duplicate with identical authority is not fenced by local HMAC provenance alone. |
 
+If workspace migration reports an incomplete move, keep the complete data root
+and stop the installation. Free disk space or repair storage access, then restart
+the same application against that root. Workspace requests and readiness stay
+unavailable until required moves, link remapping and configuration writes finish.
+The existing initialization button does not retry a failed layout in the same
+process. A successful earlier file move is retained; there is no whole-migration
+rollback. Ordinary file collisions atomically take the legacy source contents.
+An incompatible file/directory/link collision keeps both entries and requires
+choosing the intended contents before restart. An unsafe legacy root is left
+untouched with a warning.
+
+Keep `workspaces/.workspace-layout.links.json` while recovery is pending. It
+records changed links before folder moves and permits restart after interruption
+between unlink and recreation, including Windows junctions. It is removed only
+after required work and completion-marker publication succeed. Do not edit it or
+remove it to force readiness. A changed link identity or unavailable Windows
+junction target requires fixing the obstruction first. Old
+`.workspace-migrations` staging that still contains payload is preserved with
+its journals; recover it with the previous artifact/instructions before upgrading.
+These controls preserve interrupted operations; they do not fence a second
+independently active installation or establish an installed-release qualification.
+
 Preflight the selected candidate's schema/layout and protected-credential
 migration. Restore an encrypted, verified backup into a separate owned staging
 root; keep its original account/domain/IDs and uncertainty bindings. Verify
