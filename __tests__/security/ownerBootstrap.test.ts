@@ -43,7 +43,7 @@ test('pending private pairing admits only exact endpoint, not data access or non
   expect(assertOwnerRequest(request())).toBeNull();
   expect(assertOwnerRequest(request({ url: 'http://localhost:4200/api/models' }))?.status).toBe(503);
   process.env.FLUJO_EXPOSURE_MODE = 'network';
-  expect(() => assertOwnerStartup()).toThrow('Restart with FLUJO_EXPOSURE_MODE=localhost');
+  expect(() => assertOwnerStartup()).toThrow('Restore or repair the matching private owner policy at FLUJO_OWNER_AUTH_FILE');
   expect(isOwnerBootstrapAvailable()).toBe(false);
 });
 test('confirmed pairing commits one owner, returns a new token once and mints a restart-safe session', async () => {
