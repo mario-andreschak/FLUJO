@@ -1,12 +1,12 @@
 import { z } from 'zod/v4';
 
 /**
- * Experimental MCP Skills wire contract used by the standalone FLUJO server.
+ * Optional MCP Skills wire contract used by the standalone FLUJO server.
  * Frozen to the same SEP revision and validation limits as the host adapter.
  */
 export const MCP_SKILLS_EXTENSION_ID = 'io.modelcontextprotocol/skills';
 export const MCP_SKILLS_SUPPORTED_REVISION =
-  'SEP-2640@a3e147ca2710f68214247aecc729731ee1ae8d03';
+  'SEP-2640@b0a66b133ddfaf193a70b526a31bc2aa7172f28a';
 export const MCP_SKILLS_MAX_RESOURCES = 512;
 export const MCP_SKILLS_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 
