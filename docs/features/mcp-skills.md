@@ -63,7 +63,7 @@ is present. The proxy remains localhost-only, encryption-lock gated, and
 stateless; it forwards discovery and optional directory reads but owns no
 approval state.
 
-The standalone `mcp-flujo` process implements the same frozen draft revision. Its
+The standalone `mcp-flujo` process implements the same Final revision. Its
 localhost control route aggregates enabled downstream catalogs with bounded
 pagination, validates the final catalog with the host schema, and rewrites
 server-qualified URIs. The standalone client also validates list/get responses
