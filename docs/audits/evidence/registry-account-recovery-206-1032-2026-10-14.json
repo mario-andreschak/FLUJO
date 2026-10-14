@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-14",
+  "scope": "Existing206 and1032 account reset refusal and recovery",
+  "baseRevision": "2a9e63bebdbf7a01f0bfa55007742f04b34695d1",
+  "registryRepair": "https://github.com/flujo-app/flujo-registry/pull/2",
+  "registryMain": "f730b535ab6c86af9715c61c2420ff5a621c9021",
+  "baseline": "Real hosted forgot-password404 was shown as sent-email success",
+  "checks": {
+    "exactPrivateBuildAndModelCanaryFindings": 0,
+    "servedAssets": 373,
+    "phone": [
+      {
+        "pageWidth": 380,
+        "viewport": 390,
+        "visibleError": true,
+        "resetEnabled": true,
+        "inputEvidence": "Screenshot; text-field values are privacy filtered by browser inspection"
+      },
+      {
+        "pageWidth": 320,
+        "viewport": 320,
+        "visibleError": true,
+        "resetEnabled": true,
+        "inputEvidence": "Screenshot"
+      }
+    ],
+    "credentialMaterialFindings": 0,
+    "nonContainerBuild": {
+      "step": "app-build-final",
+      "exitCode": 0,
+      "seconds": 304.4773881
+    },
+    "sourceLint": "passed",
+    "typecheck": "passed",
+    "focusedCases": 13,
+    "changedTestLint": "passed"
+  },
+  "failureEquipment": "Initial suite selection and browser-environment attempts retained separately, not credited as successful qualification",
+  "source": [
+    {
+      "file": "src/frontend/components/Packages/RegistryAccountSettings.tsx",
+      "sha256": "7b039881f8d569b7170b501c6411f8ecefa9c10e0a4ed06f9e2040ba3be96ebe"
+    },
+    {
+      "file": "src/frontend/services/registry/index.ts",
+      "sha256": "5dbe5cfb3aae4aa3a3f35087a3985702a1f2d49e848ded49bd34f0c2455c5f0e"
+    },
+    {
+      "file": "src/backend/utils/packageRegistryClient.ts",
+      "sha256": "69f582382c04bbadc810ad590d0ebfdc9e0a648b76d1eeda4f880c551508dff7"
+    },
+    {
+      "file": "__tests__/frontend/components/RegistryAccountSettings.test.tsx",
+      "sha256": "4b4cf63d42f7f4fa0a242018fb5e72a06a870553935622ba84dcaf32c514edb8"
+    },
+    {
+      "file": "__tests__/frontend/services/registryReset.test.ts",
+      "sha256": "275873c89bba6dc8fa8ec4a696ce8d13598c75c1f98b54a4a7c408118a7fd88f"
+    }
+  ],
+  "liveEmail": "Actual signup inbox delivery and sender SPF/DKIM/DMARC passed. New registry recovery deployment/real reset acceptance remains a separate release step; no issue closure is claimed by this receipt.",
+  "modelProviderCalls": 0,
+  "remoteCI": false,
+  "fullFlujoSuite": false
+}

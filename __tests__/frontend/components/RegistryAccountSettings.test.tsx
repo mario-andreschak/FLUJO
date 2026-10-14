@@ -7,6 +7,7 @@ const getStatusMock = jest.fn();
 const getSettingsMock = jest.fn();
 const resendConfirmationMock = jest.fn();
 const saveSettingsMock = jest.fn();
+const requestPasswordResetMock = jest.fn();
 
 jest.mock('@/frontend/services/registry', () => ({
   registryService: {
@@ -14,6 +15,7 @@ jest.mock('@/frontend/services/registry', () => ({
     getSettings: (...args: unknown[]) => getSettingsMock(...args),
     resendConfirmation: (...args: unknown[]) => resendConfirmationMock(...args),
     saveSettings: (...args: unknown[]) => saveSettingsMock(...args),
+    requestPasswordReset: (...args: unknown[]) => requestPasswordResetMock(...args),
   },
 }));
 
@@ -34,13 +36,38 @@ describe.each([
   {
     locale: 'en', resend: 'Resend confirmation email', resendFailed: 'Failed to resend confirmation.',
     sent: 'Confirmation email sent.', save: 'Save', saveFailed: 'Failed to save.', saved: 'Registry URL saved.',
+    email: 'Email', password: 'Password', forgot: 'Forgot password?', resetFailed: 'Failed to request a password reset.',
   },
   {
     locale: 'es', resend: 'Reenviar correo de confirmación', resendFailed: 'No se pudo reenviar la confirmación.',
     sent: 'Correo de confirmación enviado.', save: 'Guardar', saveFailed: 'No se pudo guardar.', saved: 'URL del registro guardada.',
+    email: 'Correo electrónico', password: 'Contraseña', forgot: '¿Olvidaste la contraseña?', resetFailed: 'No se pudo solicitar el restablecimiento de contraseña.',
   },
 ])('catalogue account recovery in $locale', (copy) => {
   beforeEach(() => window.localStorage.setItem(LOCALE_STORAGE_KEY, copy.locale));
+
+  test.each(['refused', 'disconnected'])('a %s reset shows an error, retains the form and permits retry', async (failure) => {
+    getStatusMock.mockResolvedValue({ signedIn: false, email: '', isConfirmed: false, hasToken: false });
+    if (failure === 'refused') requestPasswordResetMock.mockResolvedValueOnce({ success: false, message: 'not found' });
+    else requestPasswordResetMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    requestPasswordResetMock.mockResolvedValueOnce({ success: true });
+    render(<I18nProvider><RegistryAccountSettings /></I18nProvider>);
+    const email = await screen.findByRole('textbox', { name: copy.email });
+    const password = screen.getByLabelText(copy.password);
+    fireEvent.change(email, { target: { value: 'new@example.com' } });
+    fireEvent.change(password, { target: { value: 'a-retained-form-value' } });
+    const button = screen.getByRole('button', { name: copy.forgot });
+    fireEvent.click(button);
+    expect(await screen.findByText(copy.resetFailed)).toBeInTheDocument();
+    expect(email).toHaveValue('new@example.com');
+    expect(password).toHaveValue('a-retained-form-value');
+    expect(button).toBeEnabled();
+    expect(screen.queryByText('not found')).not.toBeInTheDocument();
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText(copy.resetFailed)).not.toBeInTheDocument());
+    expect(requestPasswordResetMock).toHaveBeenCalledTimes(2);
+    expect(button).toBeEnabled();
+  });
 
   test('a failed confirmation request keeps the account visible and can be retried', async () => {
     let rejectRequest!: (cause: Error) => void;
