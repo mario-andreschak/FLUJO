@@ -591,7 +591,7 @@ export const API_GROUPS: ApiGroup[] = [
         summary: 'Create a zip backup of selected items and download it.',
         paramsLabel: 'Body',
         params: [{ name: 'selections', type: 'string[]', required: true, description: 'e.g. models, mcpServers, flows, chatHistory, settings.' }],
-        notes: ['A backup may include the encryption key and secrets — handle the downloaded file carefully.'],
+        notes: ['Ordinary backups omit recognized credentials and encryption keys. Review user-authored text before sharing.'],
       },
       {
         method: 'POST',
@@ -602,6 +602,7 @@ export const API_GROUPS: ApiGroup[] = [
           { name: 'file', type: 'File (zip)', required: true, description: 'Backup archive.' },
           { name: 'selections', type: 'JSON string[]', required: true, description: 'Which items to restore.' },
         ],
+        notes: ['Check success, not only the HTTP status: partial restores return HTTP 200 with success:false. Status is complete, partial, failed or empty; selectionResults reports confirmed writes and failures. Keep the file after an incomplete result. Successful writes are not rolled back.'],
       },
     ],
   },
