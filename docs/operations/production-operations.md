@@ -209,6 +209,15 @@ Do not describe them as a signed or tamper-proof audit trail.
 
 ## Acceptance record for #570
 
+The [source operations recovery drill](../audits/2026-10-14-operations-recovery-source-570.md)
+provides integrated built-app evidence for provider-reported 408/429/400 errors,
+explicit retry, expired owner access, retained approval, graceful restart and
+generation-bound Bash teardown. Restart can invalidate a pending tool binding:
+retain its run/approval, let the model propose a fresh current tool call and make
+an explicit decision on that proposal. The stale call must not execute. This
+source drill records actual counted effects and keeps the broader acceptance
+below open.
+
 A technically independent non-author operator must install the pinned candidate
 on its intended profile, diagnose a seeded failed schedule, authenticate, back
 up, upgrade, restore and roll back while retaining actual artifacts and
