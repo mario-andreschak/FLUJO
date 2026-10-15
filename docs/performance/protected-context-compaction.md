@@ -58,6 +58,28 @@ text route. Its existing image carrier uses a user-role message; source-authorit
 acceptance and measured quality/cost remain open before treating this experiment
 as a qualified native compaction route.
 
+Complete projection fingerprints stream the existing canonical JSON bytes into
+SHA-256 instead of cloning the whole graph and materializing its JSON string.
+String encoding uses 16,384-code-unit slices and a 32,768-code-unit hash-buffer
+target; canonical sorting still retains each active object's entries. Numeric
+property order, omitted values, Unicode pairs and lone-surrogate escaping retain
+their previous hashes. Non-JSON callable `toJSON` values retain the legacy
+materialization path. No artifact or projection version changes.
+
+The October 15 Windows/Node 22.23.3 source check hashes the same approximately
+48 MiB international-text transcript with unchanged input and SHA-256. Observed
+transient heap growth falls from 101,168,288 to 1,330,752 bytes; peak RSS falls
+from 242,996 to 54,484 KiB. Single-run digest times are 313.239 and 247.294 ms,
+respectively. These are measurements of this controlled case, not estimates of
+whole-flow memory or latency. The old source fails the focused allocation
+envelope; the corrected source passes. This negative control is an allocation
+assertion failure, not an observed OOM. Three repeated child batches, 128 mixed
+JSON comparisons and the existing compaction checks preserve saved hashes,
+source content and metadata invalidation. The [frozen source evidence](
+compaction-digest-2026-10-15.json) records inputs and validation scope.
+The emitted production digest factory also passes the same hash and allocation
+envelope with its actual emitted Node crypto external.
+
 Local regression coverage is source/runtime plumbing evidence. It is not
 real-model fidelity, native opaque-window/signature roundtrip, original
 [#520](https://github.com/mario-andreschak/FLUJO/issues/520) crash confirmation,

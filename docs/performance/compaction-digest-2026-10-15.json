@@ -1,0 +1,107 @@
+{
+  "issueNumbers": [
+    569,
+    1091
+  ],
+  "baseRevision": "1e9cd8db7bdc9290a9cb985db2070a0ed328f139",
+  "recordedUtc": "2026-10-15T09:52:17.0666328Z",
+  "environment": {
+    "platform": "Windows",
+    "node": "v22.23.3",
+    "next": "16.4.1",
+    "oldSpaceMiB": 32,
+    "semiSpaceMiB": 1,
+    "reportedV8HeapLimitBytes": 36700160,
+    "heapSettingIsNotAProcessRSSLimit": true
+  },
+  "sourceSha256": "6c12039b6137e1704808bd11f3f39d34cb9b6aa3112ccd10ba8469625fb8fe67",
+  "testSha256": "0cabad412e7e462ee1e908d873680d5e72654112d4e17593a79755aa83f708c8",
+  "probeSha256": "43b995015a576eb79b9f01d85b51780ed708cca0c6d2a95d90b5e5747ed8d53d",
+  "workload": {
+    "messages": 24,
+    "payloadCodeUnitsPerMessage": 2097145,
+    "payloadIncludes": "International text, escaping, paired and lone surrogates; shared immutable payload",
+    "sourceUnchanged": true,
+    "expectedDigest": "ae1e7cc4701f31d711eccdbee488a31e34328ae470e754c80e99ad6693e01264"
+  },
+  "observations": {
+    "baseline": {
+      "digest": "ae1e7cc4701f31d711eccdbee488a31e34328ae470e754c80e99ad6693e01264",
+      "elapsedMs": 313.2386,
+      "heapGrowthBytes": 101168288,
+      "rssGrowthBytes": 101101568,
+      "peakRssKiB": 242996,
+      "envelopeExitCode": 1
+    },
+    "streamed": {
+      "digest": "ae1e7cc4701f31d711eccdbee488a31e34328ae470e754c80e99ad6693e01264",
+      "elapsedMs": 247.29360000000003,
+      "heapGrowthBytes": 1330752,
+      "rssGrowthBytes": 4517888,
+      "peakRssKiB": 54484,
+      "envelopeExitCode": 0
+    },
+    "failure": "Old source exceeds the focused allocation assertion; no OOM was observed"
+  },
+  "validation": {
+    "typecheckExitCode": 0,
+    "typecheckSeconds": 9.9975884,
+    "sourceLintExitCode": 0,
+    "changedTestLintExitCode": 0,
+    "focusedDistinctCases": 49,
+    "finalDigestCases": 15,
+    "mixedJsonComparisons": 128,
+    "repeatedLargeTranscriptBatches": 3,
+    "unchangedCompactionSuitesReused": 2,
+    "legacyHashesPreserved": true,
+    "firstTypecheck": "Failed on a fixture role-union type; corrected; final typecheck passes",
+    "build": {
+      "exitCode": 0,
+      "elapsedSeconds": 327.9186747,
+      "buildId": "LYulWVxLGLiMwsfz55r5G",
+      "sourceSha256": "6c12039b6137e1704808bd11f3f39d34cb9b6aa3112ccd10ba8469625fb8fe67",
+      "testSha256": "0cabad412e7e462ee1e908d873680d5e72654112d4e17593a79755aa83f708c8",
+      "command": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "fiveBundledMcpBuilds": true,
+      "containerBuild": false
+    },
+    "emittedDigest": {
+      "exitCode": 0,
+      "digest": "ae1e7cc4701f31d711eccdbee488a31e34328ae470e754c80e99ad6693e01264",
+      "sourceUnchanged": true,
+      "heapGrowthBytes": 1318200,
+      "rssGrowthBytes": 3911680,
+      "elapsedMs": 255.7575,
+      "provenance": {
+        "buildId": "LYulWVxLGLiMwsfz55r5G",
+        "moduleId": 493729,
+        "artifacts": [
+          {
+            "path": ".next/server/chunks/15662.js",
+            "sha256": "307749bc74cfc4051b223e2c0232b176de2f9327b4626fd7d261563f10c621b3"
+          },
+          {
+            "path": ".next/server/app/chain-chat/page.js",
+            "sha256": "6c2c3ce18dbfb26caabd888737d4a9cbc0072f03aeb9671f937629c276923571"
+          },
+          {
+            "path": ".next/server/webpack-runtime.js",
+            "sha256": "af3c7527d7d028d987f97c086addbb069b48f667c4c37ce8ecc36a203c69a7f6"
+          }
+        ],
+        "digestFactorySha256": "5be006cc04f96522355d361c18d881a06f02137e7060cfe75840169f791dc233",
+        "cryptoExternalFactorySha256": "470eb77dab183958c298b034d55c8623b53e131ec3d3498477164cd4d9ef441d"
+      },
+      "scope": "Actual emitted factory with its emitted Node crypto external, no app/provider effect"
+    }
+  },
+  "modelCalls": 0,
+  "workflowDispatches": 0,
+  "containerBuilds": 0,
+  "limits": [
+    "One controlled source hashing workload, not whole-flow or retained-memory endurance",
+    "Callable toJSON retains the legacy allocation path",
+    "No original520 workload or live-provider/native fidelity claim",
+    "No Linux/installed/container/release qualification"
+  ]
+}
