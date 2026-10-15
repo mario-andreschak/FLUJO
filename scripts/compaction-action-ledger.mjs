@@ -9,7 +9,7 @@ import path from 'node:path';
 
 export const ACTION_IDS = ['acción-completa-ñ', 'acción-incierta-ñ'];
 
-export async function startActionLedger({ directory, repo }) {
+export async function startActionLedger({ directory, repo, parallelBatch = false }) {
   const require = createRequire(path.join(repo, 'package.json'));
   const express = require('express');
   const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
@@ -21,6 +21,8 @@ export async function startActionLedger({ directory, repo }) {
   const calls = [];
   const token = randomBytes(32).toString('base64url');
   let writeTail = Promise.resolve();
+  let activeCommits = 0, peakConcurrentCommits = 0, releaseFirst;
+  const secondCompleted = parallelBatch ? new Promise(resolve => { releaseFirst = resolve; }) : null;
   async function rows() {
     await writeTail;
     return (await fs.readFile(filename, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -32,6 +34,11 @@ export async function startActionLedger({ directory, repo }) {
     calls.push(invocation);
     let result;
     if (name === 'commit_action') {
+      if (parallelBatch) {
+        invocation.startedAtMs = performance.now();
+        activeCommits++;
+        peakConcurrentCommits = Math.max(peakConcurrentCommits, activeCommits);
+      }
       const row = { actionId: args.actionId, receiptId: randomUUID(), committedUtc: new Date().toISOString() };
       const append = writeTail.then(async () => {
         const handle = await fs.open(filename, 'a');
@@ -40,6 +47,20 @@ export async function startActionLedger({ directory, repo }) {
       });
       writeTail = append;
       await append;
+      if (parallelBatch) {
+        invocation.fsyncedAtMs = performance.now();
+        if (args.actionId === ACTION_IDS[0]) {
+          // An actual overlapping second invocation must finish first. A
+          // sequential caller times out instead of passing a parallel proof.
+          let timer;
+          try {
+            await Promise.race([secondCompleted, new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error('Parallel second commit did not arrive')), 15000);
+            })]);
+            await new Promise(resolve => setTimeout(resolve, 75));
+          } finally { clearTimeout(timer); }
+        }
+      }
       if (args.actionId === ACTION_IDS[1]) {
         invocation.acknowledgement = 'suppressed-after-fsync';
         result = { isError: true, content: [{ type: 'text', text: JSON.stringify({ actionId: args.actionId,
@@ -54,6 +75,11 @@ export async function startActionLedger({ directory, repo }) {
         status: matching.length ? 'completed' : 'not_found', count: matching.length, receipts: matching }) }] };
     }
     invocation.result = result;
+    if (parallelBatch && name === 'commit_action') {
+      invocation.completedAtMs = performance.now();
+      activeCommits--;
+      if (args.actionId === ACTION_IDS[1]) releaseFirst();
+    }
     return result;
   }
   const clients = new Set();
@@ -96,6 +122,7 @@ export async function startActionLedger({ directory, repo }) {
     async snapshot() {
       const current = await rows();
       return { rows: current, calls: structuredClone(calls),
+        ...(parallelBatch ? { peakConcurrentCommits } : {}),
         fileSha256: createHash('sha256').update(await fs.readFile(filename)).digest('hex') };
     },
     async close() {

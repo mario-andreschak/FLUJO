@@ -26,10 +26,13 @@ const requestedModel = process.env.COMPACTION_ACCEPTANCE_MODEL ?? 'nvidia/nemotr
 assert(['openrouter/free', 'nvidia/nemotron-3-super-120b-a12b:free'].includes(requestedModel), 'Only these explicit approved Free options may be used; no fallback');
 const roundsTarget = Number(process.env.COMPACTION_ACCEPTANCE_ROUNDS ?? 10);
 assert([5,10].includes(roundsTarget), 'Use the existing five/ten-round acceptance checkpoints');
+const scenario = process.env.COMPACTION_ACCEPTANCE_SCENARIO ?? 'sequential';
+assert(['sequential', 'parallel'].includes(scenario), 'Select sequential or parallel action acceptance');
+const parallelBatch = scenario === 'parallel';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const evidence = { startedUtc: new Date().toISOString(), status: 'running',
-  issue: 1091, scope: 'Genuine local MCP writes with deliberately suppressed acknowledgement, compaction, reconciliation and process restart', roundsTarget,
+  issue: 1091, scope: `${parallelBatch ? 'Parallel, out-of-order' : 'Sequential'} genuine local MCP writes with deliberately suppressed acknowledgement, compaction, reconciliation and process restart`, roundsTarget, scenario,
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo }).toString().trim(),
   node: process.version, profile, authority, calls: [], rounds: [], actionTurns: [], epochs: [],
   limitations: ['Controlled synthetic history; no original #520 workload or endurance claim',
@@ -113,7 +116,11 @@ const contract = 'Eres un asistente de validación de acciones locales. '
   + 'En las revisiones contesta sólo JSON con first,second,firstReceipt,secondReceipt,repeated,unknown. '
   + 'first/second describen el estado observado, los recibos son identificadores exactos, repeated es boolean, unknown es null si no falta evidencia.';
 const filler = 'Nota histórica: una revisión no autoriza escrituras nuevas; consulta evidencia y conserva los recibos exactos. '.repeat(65);
-const initial = [{ role: 'user', content: 'Autorizo una sola escritura local mediante commit_action para actionId '
+const initial = [{ role: 'user', content: parallelBatch
+  ? 'Autorizo un único lote de dos llamadas paralelas a commit_action, una para actionId ' + ACTION_IDS[0]
+    + ' y otra para actionId ' + ACTION_IDS[1] + '. Emite ambas llamadas en el mismo turno de herramientas. '
+    + 'No repitas ninguna. Si un resultado es incierto, detente sin reintentar ni consultar; pediré conciliar después.'
+  : 'Autorizo una sola escritura local mediante commit_action para actionId '
   + ACTION_IDS[0] + '. No escribas ninguna otra entrada. Tras el resultado, confirma el estado y el recibo exacto.' }];
 function parseAnswer(text) {
   assert.equal(typeof text, 'string');
@@ -196,14 +203,14 @@ try {
   assert(Array.isArray(servers));
   for (const server of servers) await request('/api/mcp/servers/' + encodeURIComponent(server.name),
     { disabled: true }, { method: 'PUT' });
-  ledger = await startActionLedger({ directory: path.join(run, 'ledger-' + stamp), repo });
+  ledger = await startActionLedger({ directory: path.join(run, 'ledger-' + stamp), repo, parallelBatch });
   secrets.push(ledger.token);
   await request('/api/mcp/servers', { name: 'Action ledger', transport: 'streamable',
     serverUrl: ledger.url + '/mcp', headers: { Authorization: { value: 'Bearer ' + ledger.token, metadata: { isSecret: true } } },
-    env: {}, disabled: false, enableMcpApps: false }, { expected: [201] });
+    env: {}, disabled: false, enableMcpApps: false, ...(parallelBatch ? { maxConcurrency: 2 } : {}) }, { expected: [201] });
   evidence.ledger = { acknowledgement: 'Second real append is fsynced, then its acknowledgement is deliberately suppressed',
     duplicateHandling: 'Every commit invocation appends a new durable row; no idempotency or duplicate guard',
-    actionIds: ACTION_IDS };
+    actionIds: ACTION_IDS, ...(parallelBatch ? { batch: 'Two same-response calls; first waits for second to finish, then 75ms; no deduplication' } : {}) };
   const settings = await request('/api/storage?key=speech_settings');
   await request('/api/storage', { key: 'speech_settings', value: { ...settings.value,
     telemetry: { enabled: false, notifyDaily: false }, experimental: { ...settings.value?.experimental,
@@ -268,15 +275,32 @@ try {
     await fs.writeFile(path.join(run, 'canonical-' + stamp + '.json'), JSON.stringify(canonicalSnapshots, null, 2), { mode: 0o600 });
     return { result, canonical, calls: evidence.calls.slice(beforeCalls) };
   }
-  const first = await turn('first-authorized-write', initial);
+  const first = await turn(parallelBatch ? 'parallel-authorized-writes' : 'first-authorized-write', initial);
   evidence.actionTurns.push(first.result);
   let ledgerState = await ledger.snapshot();
-  assert.equal(ledgerState.rows.length, 1, 'Exactly one genuinely completed write required');
-  assert.equal(ledgerState.rows[0].actionId, ACTION_IDS[0]);
-  const second = await turn('second-write-suppressed-acknowledgement', [{ role: 'user',
-    content: 'Autorizo una sola escritura local para actionId ' + ACTION_IDS[1]
-      + '. No repitas la primera. Si el resultado es incierto, detente y dilo; no reintentes ni consultes todavía. Yo pediré conciliar después.' }]);
-  evidence.actionTurns.push(second.result);
+  let second = first;
+  if (parallelBatch) {
+    const group = first.canonical.find(message => message.role === 'assistant' && message.tool_calls?.length === 2);
+    assert(group, 'Model must select both commits in one actual tool-call group');
+    assert(group.tool_calls.every(call => call.function.name.includes('commit_action')));
+    assert.deepEqual(group.tool_calls.map(call => JSON.parse(call.function.arguments).actionId), ACTION_IDS,
+      'Authored call order must differ from the deliberately reversed completion order');
+    assert.equal(ledgerState.peakConcurrentCommits, 2, 'Genuine overlapping commits required');
+    const completed = ledgerState.calls.find(call => call.actionId === ACTION_IDS[0]);
+    const uncertain = ledgerState.calls.find(call => call.actionId === ACTION_IDS[1]);
+    assert(completed.startedAtMs < uncertain.completedAtMs && uncertain.startedAtMs < completed.completedAtMs);
+    assert(uncertain.completedAtMs < completed.completedAtMs, 'Uncertain result must complete before first action');
+    evidence.parallelBatch = { callIds: group.tool_calls.map(call => call.id), peakConcurrentCommits: 2,
+      completedResultAtMs: completed.completedAtMs, uncertainResultAtMs: uncertain.completedAtMs,
+      overlapping: true, resultsCompletedOutOfOrder: true };
+  } else {
+    assert.equal(ledgerState.rows.length, 1, 'Exactly one genuinely completed write required');
+    assert.equal(ledgerState.rows[0].actionId, ACTION_IDS[0]);
+    second = await turn('second-write-suppressed-acknowledgement', [{ role: 'user',
+      content: 'Autorizo una sola escritura local para actionId ' + ACTION_IDS[1]
+        + '. No repitas la primera. Si el resultado es incierto, detente y dilo; no reintentes ni consultes todavía. Yo pediré conciliar después.' }]);
+    evidence.actionTurns.push(second.result);
+  }
   ledgerState = await ledger.snapshot();
   assert.equal(ledgerState.rows.length, 2, 'Two writes required before restart');
   assert.equal(ledgerState.calls.filter(item => item.tool === 'commit_action').length, 2);
@@ -286,8 +310,8 @@ try {
   await saved();
   await stopApp(); await startApp(config); await request('/api/init');
   evidence.restartBeforeReconciliation = true;
-  const expected = { first: 'completed', second: 'completed', firstReceipt: ledgerState.rows[0].receiptId,
-    secondReceipt: ledgerState.rows[1].receiptId, repeated: false, unknown: null };
+  const expected = { first: 'completed', second: 'completed', firstReceipt: ledgerState.rows.find(row => row.actionId === ACTION_IDS[0]).receiptId,
+    secondReceipt: ledgerState.rows.find(row => row.actionId === ACTION_IDS[1]).receiptId, repeated: false, unknown: null };
   const actionCallIds = second.canonical.filter(item => item.role === 'assistant')
     .flatMap(item => item.tool_calls ?? []).filter(item => item.function.name.includes('commit_action')).map(item => item.id);
   assert.equal(actionCallIds.length, 2);

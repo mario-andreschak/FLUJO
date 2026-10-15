@@ -384,6 +384,42 @@ describe('compactHistory orchestrator (issue #248)', () => {
     expect(failed).toBeNull();
   });
 
+  it.each(['parallel-first', 'parallel-second'])('protects a partially resolved parallel group until %s resolves', async (pendingId) => {
+    const ids = ['parallel-first', 'parallel-second'];
+    const source = [user('No repitas ninguna escritura. Conserva recibo-ñ-002.'),
+      assistant('', { tool_calls: ids.map(id => ({ id, type: 'function',
+        function: { name: 'commit_action', arguments: JSON.stringify({ actionId: id }) } })) }),
+      toolResult(ids.find(id => id !== pendingId)!, '{"receiptId":"recibo-ñ-002","status":"completed"}')];
+    const original = JSON.stringify(source);
+    const summarize = jest.fn(async () => anchored('Both results observed.'));
+    const writeAnchor = jest.fn(async () => 'flujo://run/conv1/parallel-source');
+    for (let round = 1; round <= 10; round++) {
+      source.push(assistant(bulk(8_000)), user('Revisión ' + round + ': no reintentes la operación pendiente.'));
+      const before = JSON.stringify(source);
+      expect(await compactHistory(source, options(), { summarize, writeAnchor })).toBeNull();
+      expect(JSON.stringify(source)).toBe(before);
+      const refit = emergencyRefitMessages(toApiMessages(source), { target: 1,
+        measure: messages => JSON.stringify(messages).length, keepRecentMessages: 2 });
+      expect(refit.capacityExceeded).toBe(true);
+      expect(refit.messages).toContainEqual(toApiMessages(source)[1]);
+      expect(refit.messages).toContainEqual(toApiMessages(source)[2]);
+      expect(refit.truncatedMessageIndexes).toEqual([]);
+    }
+    expect(summarize).not.toHaveBeenCalled();
+    expect(writeAnchor).not.toHaveBeenCalled();
+    expect(JSON.stringify(source.slice(0, 3))).toBe(original);
+    // Recovery completes the original group before the summary may consume it.
+    source.splice(3, 0, toolResult(pendingId, '{"status":"unknown","retryAllowed":false}'));
+    const recovered = JSON.stringify(source);
+    const result = await compactHistory(source, options(), { summarize, writeAnchor });
+    expect(result).not.toBeNull();
+    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(writeAnchor).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(source)).toBe(recovered);
+    expect(String(summaryOf(result!).content)).toContain('parallel-first');
+    expect(String(summaryOf(result!).content)).toContain('parallel-second');
+  });
+
   it('retains a bounded current projection cache without accumulating each summary generation', async () => {
     const result = await compactHistory(longHistory(), options(), deps(anchored('Current.')));
     let artifacts = [result!.artifact];
