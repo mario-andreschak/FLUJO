@@ -79,9 +79,10 @@ test counts as feature adoption or an A- outcome.
 ## MCP protocol adapters (#1093)
 
 The [October 12 support matrix](../mcp-conformance-1093-2026-10-12.md) records the
-legacy/modern boundaries, source repairs and focused qualification. Release retains
-real OAuth/provider sampling, strict HTTP/MRTR/subscription traces, Apps browser
-origin/CSP/consent/teardown and separate installed Windows/Linux identities. Current
+legacy/modern boundaries, source repairs and focused qualification. Measured
+source-production sampling, subscription and Tool Tester browser evidence is
+recorded there. Genuine OAuth and separate hosted/installed Windows/Linux and
+combined release qualification remain open. Current
 Windows packaged listing passed on #1056; #1050's original intermittent cause remains
 unidentified. A later pass cannot establish its historical cause.
 
@@ -93,9 +94,20 @@ and cancellation of real pending tool work. It fixes a safe link opening with no
 opener while incorrectly returning an error. No provider call is required by this
 tool-only journey.
 
-The measured local profile retains automatic loopback port widening, which does
-not establish the specification's exact-origin no-loosening contract. Repairing
-that behavior while preserving the existing ephemeral-port restart regression is
-unfinished #1093 implementation work. Genuine OAuth and separate hosted/installed
-release qualification remain open. Browser local-network permission was granted
+The later [exact-port and restart evidence](../../audits/evidence/mcp-apps-exact-ports-1093-2026-10-15.json)
+supersedes the earlier loopback widening exception. [PR #1161](https://github.com/mario-andreschak/FLUJO/pull/1161)
+preserves declared fixed ports and supports ephemeral-port changes through
+**Reload app**, including failed-read retry and pending-call cancellation. Both
+SDK generations pass two actual listener restarts each. Genuine OAuth and separate
+hosted/installed release qualification remain open. Browser local-network permission was granted
 only for each owned sandbox origin; no App CSP/permission setting was relaxed.
+
+October 15 [live OAuth preparation](../../audits/evidence/mcp-oauth-preparation-1093-2026-10-15.json)
+adds genuine BankingMCP registration and real Slack consent-screen preparation,
+with encrypted PKCE/client persistence and 16 constructed callback rejection/
+replay checks on the production routes. No authorization-code exchange or real
+refresh has completed. Slack's existing app is awaiting the action-time terms
+confirmation in the current chat; BankingMCP instead requires a paid-trial
+entitlement. Neither prerequisite is acceptance success, and no paid account is
+required merely because that provider was examined. Both private app profiles
+close and are removed; the shared connection configuration remains unchanged.

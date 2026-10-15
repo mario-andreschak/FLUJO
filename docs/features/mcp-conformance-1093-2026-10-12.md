@@ -32,14 +32,15 @@ and lane08 handover. Source/fixture evidence is distinct from release qualificat
 | Flows ingress | Legacy synchronous route; strict modern HTTP when protocol-beta or Tasks serving is enabled | Modern routing headers are mandatory. Core serving does not require optional Tasks. Explicit owner bearer/workspace admission and per-task policy remain. |
 | Per-server proxy | Legacy sessionless HTTP | Tools/resources/templates/Apps/Skills forwarding, complete default inventories and explicit catalog cursors. No advertised modern/Tasks serving; no blanket modern conformance. |
 | Skills | Final SEP-2640 transport shapes under local opt-in, both client generations | Direct URI retrieval, SHA256/frontmatter verification, 512 files/16MiB, scoped consent retained. Dynamic skills and unsupported URI shapes remain explicit host restrictions. Nested supporting files do not inherit activation authority. |
-| Apps | 2026-01-26 wire on Apps 2.0.3 | Outer separate-origin iframe has `allow-scripts allow-same-origin`; inner permissions/CSP remain consented. The SDK version alone does not qualify the integrated browser journey; candidate browser acceptance remains release pre-flight. |
+| Apps | 2026-01-26 wire on Apps 2.0.3 | Outer separate-origin iframe has `allow-scripts allow-same-origin`; inner permissions/CSP remain consented. The October 15 source-production Tool Tester profile qualifies SDK1 desktop and SDK2 phone origin/CSP/consent/teardown, exact ports and runtime restart recovery. Other embeddings and hosted/installed profiles are not inferred. |
 
 ## Remaining release acceptance
 
-#1093 remains open for identified candidate/provider/browser/installed acceptance.
-Real OAuth, Apps browser
-origin/CSP/consent/teardown and installed Windows/Linux profiles belong to release
-pre-flight under the current pause. Existing #404 evidence stays credited only for
+#1093 remains open for genuine OAuth and separate hosted/installed Windows/Linux
+and combined release qualification. The focused source-production sampling,
+subscription and Tool Tester browser checks below retain their measured scope;
+they are no longer wholly unperformed acceptance. Installed and combined checks
+belong to release pre-flight under the current pause. Existing #404 evidence stays credited only for
 unchanged inputs; changed adapter inputs require applicable requalification. CIMD is
 recommended optional interoperability work, not a mandatory core closure gate.
 
@@ -229,3 +230,47 @@ installed Windows/Linux and combined release qualification remain open; #1093 is
 not closed. No full/remote CI, container/image build, installed/packed suite or
 release workflow ran. Prior unchanged Skills/Tasks/sampling/subscription evidence
 retains its scope.
+
+## Live OAuth registration and callback preparation — October 15, 2026
+
+The actual source-production application now has live provider evidence for the
+OAuth preparation path. BankingMCP returns HTTP201 for dynamic registration with
+a native loopback client. FLUJO persists the registration and PKCE verifier as
+authenticated ciphertext and binds the nonce to the exact discovered issuer,
+resource and workspace. An existing manually registered Slack client also reaches
+its real consent screen. Its requested scopes fit its previously granted scope
+set; old unbound tokens are never copied or stamped. The existing encrypted client
+secret is read with canonical format functions, held in memory, and resealed only
+inside the disposable application profile. Shared configuration is unchanged.
+
+Eight constructed callback checks per provider pass on the real built routes:
+GET/POST code and error issuer mismatch, invalid state, exact-issuer denial and
+consumed-state replay. Every case makes zero token requests. Both providers omit
+mandatory issuer-response support; the existing required-missing-issuer fixtures
+retain their unchanged scope. These constructed callbacks are not provider
+responses and do not establish a successful grant.
+
+**The authorization-code exchange and real refresh are still unperformed.**
+BankingMCP sign-in completes through the authorized account's existing mailbox
+session, but its authorization page requires a Stripe-backed trial that becomes
+EUR5/month. No trial, bank connection, consent or payment is submitted. The existing
+Slack app is the available alternative. Its Allow button also accepts FLUJO terms;
+the current computer-use policy requires action-time user confirmation. The exact
+screen and concise permission question are in the current chat. This is the
+concrete remaining action, not a claim that routine authentication cannot work.
+
+The [sanitized receipt](../audits/evidence/mcp-oauth-preparation-1093-2026-10-15.json)
+binds application and equipment hashes, source build ID, protocol statuses and
+limits. Both final preparation runs stop deliberately before consent and report
+`realProviderAcceptancePassed: false`; their apps and private profiles close
+before preparation success. A focused cryptographic/private-file regression
+verifies retention of a future real grant under the existing recovery key before
+temporary-profile cleanup, including opaque fields and issuer/workspace/purpose
+refusal. An earlier equipment-only encrypted-secret mismatch receives no
+acceptance credit and made zero registration/token requests.
+
+Local typecheck, whole-source/final-equipment lint and the inspected non-container
+application build pass; the build takes 329.263s. The frozen BankingMCP and Slack
+preparation runs take 6.547s and 6.858s separately. Application and dependency
+inputs remain those of main 984c17a5. Zero model calls, remote/full CI, container
+builds or installed/release qualification are performed. #1093 remains open.
