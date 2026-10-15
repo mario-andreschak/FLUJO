@@ -379,3 +379,54 @@ Git normalizes the two touched TypeScript files from CRLF to LF. Both accepted
 and published fingerprints are recorded; normalized source and emitted
 JavaScript match exactly. The application source tree matches the qualified
 build and accepted runtime; the harness and complete trace are byte-identical.
+
+### Concurrent edits and persistence-failure recovery
+
+The [frozen persistence result](compaction-persistence-recovery-2026-10-15.json)
+extends the existing #1091 acceptance through the built application's normal
+conversation and debugger routes. An edit attempted while a real summary is
+in flight returns 409 without changing history. Attaching the debugger reaches
+a safe pause, where the same edit succeeds. After restarting the application,
+five fresh summaries must use the corrected observation and reject the old
+artifact. All five complete source archives are independently hash-verified;
+eleven canonical snapshots retain the original messages and the permitted edit.
+
+Two genuine filesystem failures occur after the provider returns a summary:
+a regular file prevents creating the source archive directory, and an empty
+directory prevents atomic rename onto the conversation metadata file. The
+previous files are held inside the disposable profile and restored before the
+continuation finishes. The actual outgoing requests must contain full canonical
+history, the exact corrected observation and the original prohibition, with no
+summary marker. Failed generations cannot replace the last durable artifact.
+Normal retries then generate and persist fresh summaries successfully.
+
+All seven receipt replies, including both fallback replies, pass exact-field
+checks. The three accepted application processes and the earlier failed setup
+process close. The metadata rename's actual EPERM appears in the application
+log. Production defaults suppress warning logs; the archive refusal is verified
+through its awaited filesystem barrier, discarded summary, canonical provider
+request and preserved durable cache. No production repair was needed.
+
+Run `scripts/compaction-recovery-acceptance.mjs` through flujo-bash with an
+already qualified application build, a private `COMPACTION_ACCEPTANCE_RUN_DIR`,
+unused adjacent local ports, and the existing approved OpenRouter credential
+mechanism. It accepts the same explicit Free model allowlist as the action
+harness, with no fallback. Set `COMPACTION_ACCEPTANCE_ROUNDS=5` for this result;
+the owner removes the disposable profile and credentials through flujo-bash.
+
+The accepted journey takes 251.206 seconds, separately from the 331.392-second
+application build. Its 16 requests (eight summaries and eight continuations)
+report USD 0 with no missing costs. The
+[complete provider trace](compaction-persistence-provider-trace-2026-10-15.json.gz)
+also retains the first setup attempt: its observation stayed in the recent tail,
+so compaction did not run and the pause assertion failed. Adding a bulky recent
+observation moves the original observation into the summarizable prefix while
+preserving every assertion. All 17 requests, including that attempt, report USD 0.
+
+Local typecheck, source/touched lint, the non-container application build and
+16 focused cases pass. Three new cases cover mutation during generation,
+archive failure and metadata failure, including recovery and safe cache reuse.
+The unchanged 29 summary cases retain their earlier evidence. The result does
+not qualify arbitrary out-of-band mutation, crash-midcommit atomicity, all
+projection/configuration changes, native sessions/signatures, visual benefit or
+release acceptance. #1091 remains open for those existing criteria.

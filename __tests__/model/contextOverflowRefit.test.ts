@@ -84,6 +84,7 @@ jest.mock('@/backend/services/model/adapters', () => ({
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -135,6 +136,7 @@ beforeEach(() => {
   readRunResourceBoundedMock.mockReset();
   loadItemMock.mockReset().mockImplementation(async (_key: unknown, fallback: unknown) => fallback);
   conversationStates.clear();
+  jest.mocked(persistConversationState).mockReset().mockResolvedValue(undefined);
   calls = [];
   createCompletionMock.mockReset().mockImplementation(defaultCreateCompletion);
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai' });
@@ -239,6 +241,64 @@ describe('runtime compaction policy settings', () => {
     expect(await runtime.maybeCompactWire(source, 'truncated-test', 'node-1', 'full-history',
       { id: 'model-1', compactionThreshold: 1_000 }, 100)).toBeNull();
     expect(writeRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('discards a summary generated across a source edit and retries from the changed history', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('edited-during-summary');
+    const source: SharedState['messages'] = [
+      { id: 'u1', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: 'old observation '.repeat(800), timestamp: 2 },
+      { id: 'a2', role: 'assistant', content: 'recent', timestamp: 3 },
+      { id: 'u2', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    state.messages = source;
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockImplementationOnce(async () => {
+      source[1].content = 'corrected observation '.repeat(800);
+      return { success: true, value: { content: summary } };
+    }).mockResolvedValue({ success: true, value: { content: summary } });
+    const model = { id: 'model-1', compactionThreshold: 1_000 };
+    expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history', model, 100)).toBeNull();
+    expect(state.compactionState).toBeUndefined();
+    expect(persistConversationState).not.toHaveBeenCalled();
+    const corrected = JSON.stringify(source);
+    expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history', model, 100)).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(state.compactionState?.artifacts).toHaveLength(1);
+    expect(JSON.stringify(source)).toBe(corrected);
+  });
+
+  it.each(['anchor', 'metadata'])('keeps the last durable artifact after %s persistence fails and can recover', async failure => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('persistence-' + failure);
+    const source: SharedState['messages'] = [
+      { id: 'u1', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: 'old observation '.repeat(800), timestamp: 2 },
+      { id: 'a2', role: 'assistant', content: 'recent', timestamp: 3 },
+      { id: 'u2', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    state.messages = source;
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    const model = { id: 'model-1', compactionThreshold: 1_000 };
+    const args = [state.conversationId, 'node-1', 'full-history', model, 100];
+    expect(await runtime.maybeCompactWire(source, ...args)).not.toBeNull();
+    const previous = state.compactionState;
+    source[1].content = 'updated observation '.repeat(800);
+    const canonical = JSON.stringify(source);
+    if (failure === 'anchor') writeRunResourceMock.mockRejectedValueOnce(new Error('Disk unavailable'));
+    else jest.mocked(persistConversationState).mockRejectedValueOnce(new Error('Disk unavailable'));
+    expect(await runtime.maybeCompactWire(source, ...args)).toBeNull();
+    expect(state.compactionState).toBe(previous);
+    expect(JSON.stringify(source)).toBe(canonical);
+    expect(await runtime.maybeCompactWire(source, ...args)).not.toBeNull();
+    expect(state.compactionState?.artifacts).toHaveLength(1);
+    expect(state.compactionState?.artifacts[0].artifactId).not.toBe(previous?.artifacts[0].artifactId);
+    expect(JSON.stringify(source)).toBe(canonical);
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(await runtime.maybeCompactWire(source, ...args)).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(3);
   });
 });
 
