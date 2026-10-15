@@ -233,22 +233,27 @@ describe('isLoopbackCspOrigin', () => {
 });
 
 describe('canonicalizeLoopbackCspOrigin', () => {
-  it('collapses an explicit port to the port wildcard', () => {
-    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1:59503')).toBe('http://127.0.0.1:*');
-    expect(canonicalizeLoopbackCspOrigin('ws://127.0.0.1:59503')).toBe('ws://127.0.0.1:*');
-    expect(canonicalizeLoopbackCspOrigin('http://localhost:4300')).toBe('http://localhost:*');
-    expect(canonicalizeLoopbackCspOrigin('http://[::1]:4300')).toBe('http://[::1]:*');
+  it('preserves each explicit port without widening the grant', () => {
+    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1:59503')).toBe('http://127.0.0.1:59503');
+    expect(canonicalizeLoopbackCspOrigin('ws://127.0.0.1:59503')).toBe('ws://127.0.0.1:59503');
+    expect(canonicalizeLoopbackCspOrigin('http://localhost:4300')).toBe('http://localhost:4300');
+    expect(canonicalizeLoopbackCspOrigin('http://[::1]:4300')).toBe('http://[::1]:4300');
   });
 
   it('normalizes scheme and host case and is idempotent', () => {
-    expect(canonicalizeLoopbackCspOrigin('HTTP://LOCALHOST:4300')).toBe('http://localhost:*');
+    expect(canonicalizeLoopbackCspOrigin('HTTP://LOCALHOST:4300')).toBe('http://localhost:4300');
     const once = canonicalizeLoopbackCspOrigin('http://127.0.0.1:4300');
     expect(canonicalizeLoopbackCspOrigin(once)).toBe(once);
   });
 
+  it('keeps a port wildcard only when the resource explicitly declares it', () => {
+    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1:*')).toBe('http://127.0.0.1:*');
+    expect(canonicalizeLoopbackCspOrigin('ws://localhost:*')).toBe('ws://localhost:*');
+  });
+
   it('honors the per-directive scheme restriction', () => {
     expect(canonicalizeLoopbackCspOrigin('ws://127.0.0.1:4300', ['http'])).toBeUndefined();
-    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1:4300', ['http'])).toBe('http://127.0.0.1:*');
+    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1:4300', ['http'])).toBe('http://127.0.0.1:4300');
   });
 
   it('returns undefined for anything the validator rejects', () => {

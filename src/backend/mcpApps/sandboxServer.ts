@@ -560,13 +560,7 @@ function isValidCspOrigin(
   return port === undefined || (Number.isInteger(port) && port >= 1 && port <= 65535);
 }
 
-/**
- * Resolve one declared origin to the exact source expression the policy should
- * carry, or `undefined` to drop it. Secure origins are emitted verbatim; the
- * loopback exception is collapsed to its port-wildcard form so a local App
- * server's ephemeral-port restart cannot invalidate an already-committed CSP
- * (see canonicalizeLoopbackCspOrigin).
- */
+/** Preserve the resource's exact loopback port in the enforced policy. */
 function normalizeCspOrigin(
   source: unknown,
   allowedSchemes: readonly CspScheme[],
@@ -582,9 +576,8 @@ function normalizeCspOrigin(
 
 /**
  * Drop invalid entries rather than attempting to repair them. De-duplicating
- * also keeps the response header bounded and deterministic — and, because
- * loopback origins are normalized first, several ports on the same loopback host
- * collapse into a single wildcard source.
+ * also keeps the response header bounded and deterministic. Separately declared
+ * ports remain separate sources; they never imply access to another port.
  */
 function sanitizeCspDomains(
   domains: unknown,

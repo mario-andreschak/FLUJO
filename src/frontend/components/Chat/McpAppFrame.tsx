@@ -509,10 +509,9 @@ function sanitizeCspOrigins(
       continue;
     }
     // ws: may widen only connect-style directives, mirroring wss:.
-    // Loopback grants collapse to their port-wildcard form so a local App
-    // server's ephemeral-port restart cannot invalidate the committed policy;
-    // this must stay byte-identical to the sandbox server's normalizeCspOrigin,
-    // otherwise ui/initialize advertises a grant the enforcer does not apply.
+    // Keep the exact declared port, matching the sandbox server's policy and
+    // the grant advertised in ui/initialize. Restart recovery reads the resource
+    // again and replaces the document instead of widening this live policy.
     const loopback = allowLoopback
       ? canonicalizeLoopbackCspOrigin(value, schemes.includes('wss') ? ['http', 'ws'] : ['http'])
       : undefined;
@@ -887,6 +886,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   );
   const [consentSaving, setConsentSaving] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
+  const reloadAllowedRef = useRef(false);
+  reloadAllowedRef.current = consentPolicyReady
+    && (consentStatus === 'internal' || consentStatus === 'granted')
+    && (docked || expanded);
   // #375: mirrors `error` without triggering re-renders, so async continuations
   // (handshake handoff) can cheaply check "did this frame already fail?".
   const errorRef = useRef<string | null>(null);
@@ -1637,6 +1640,23 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     t,
   ]);
 
+  // A restart can change an App's ephemeral port. Re-read its HTML/metadata and
+  // replace both iframes so the response header, inner policy and initialized
+  // grant agree. Never rerun the tool that originally opened this View.
+  const reloadApp = useCallback(() => {
+    if (loading || !reloadAllowedRef.current) return;
+    setLoading(true);
+    setError(null);
+    errorRef.current = null;
+    void teardown().then(() => {
+      if (!componentAliveRef.current || !reloadAllowedRef.current) return;
+      sandboxEndpointCache.delete(mcpAppSandboxCacheKey(
+        getSelectedWorkspace(), serverName, uri, conversationId,
+      ));
+      void mount();
+    });
+  }, [conversationId, loading, mount, serverName, teardown, uri]);
+
   const handleToggle = useCallback(() => {
     const next = !expanded;
     if (!next && displayModeRef.current === 'fullscreen') {
@@ -1811,6 +1831,12 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     };
   }, [teardown]);
 
+  const reloadControl = (consentStatus === 'internal' || consentStatus === 'granted') && (
+    <Button disabled={loading} onClick={reloadApp} sx={{ minHeight: 44, flexShrink: 0 }}>
+      {t('chat.app.reload')}
+    </Button>
+  );
+
   // #216: docked host — no collapse chrome (the dock owns the tab UI), fills its
   // container, and toggles visibility via CSS only (never unmounts on switch).
   if (docked) {
@@ -1826,6 +1852,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           flexDirection: 'column',
         }}
       >
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>{reloadControl}</Box>
         {consentPolicyReady && consentRequired && consentStatus === 'loading' && <Typography variant="body2" sx={{ p: 2 }}>{t('chat.app.consentChecking')}</Typography>}
         {consentStatus === 'prompt' && (
           <Box sx={{ p: 2 }}>
@@ -1911,6 +1938,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           bgcolor: 'action.hover',
           cursor: displayMode === 'fullscreen' ? 'move' : 'default',
           userSelect: 'none',
+          flexWrap: 'wrap',
           flexShrink: 0,
         }}
       >
@@ -1927,6 +1955,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           <ShieldOutlinedIcon fontSize="small" color="action" />
         </Tooltip>
         <Box sx={{ flex: 1 }} />
+        {expanded && reloadControl}
         {expanded && canRequestDock && (
           <Button
             size="small"

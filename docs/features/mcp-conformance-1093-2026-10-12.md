@@ -192,3 +192,40 @@ Declared connections work; undeclared-host connection/frame attempts are blocked
 [Exact-tree receipt and sanitized browser/protocol observations](../audits/evidence/mcp-apps-browser-1093-2026-10-15.json) bind tested tree 8016eaa3da344b9c230f6f994b9cdf28bd5e2fd6, local typecheck/lint/non-container build, 37 focused frame checks, original failing safe-link proof and successful browser/profile cleanup. Zero external provider calls were made. Earlier equipment failures are retained without acceptance credit.
 
 This advances APP-1 for the measured profile, not full conformance or #1093 closure. The stable specification defines CSP entries as origins and forbids loosening. Automatic fixed-port-to-wildcard expansion remains unfinished implementation work under #1093; its repair must preserve the existing ephemeral-port restart regression. Genuine OAuth, hosted/installed Windows/Linux identities and release-level combined qualification also remain open. Chat/canvas-specific embedding, optional per-resource click policy, permissive settings and independent human accessibility are not inferred. No full/remote CI, packed/installed suite, container/image build or release workflow ran.
+
+
+## October 15 exact-port enforcement and restart recovery
+
+The later #1093 repair supersedes the loopback widening exception described in the
+previous entry. Fixed ports remain exact in initialized capabilities, the sandbox
+response header and the inner policy. Port wildcards survive only when a resource
+explicitly declares them. The existing localhost/network gate, public restrictions,
+scheme validation and injection protection remain covered.
+
+**Reload app** provides recovery when an ephemeral runtime moves to a new port.
+It completes bounded teardown, cancels pending work, re-reads the current resource
+and endpoint, and creates a fresh proxy/View under the same App origin. It never
+reruns the opening tool. Loading disables duplicate reloads; a failed read retires
+the old View, shows an error, and permits retry. The localized control has a 44px
+minimum height; the inline header wraps on narrow screens.
+
+[Exact-tree evidence](../audits/evidence/mcp-apps-exact-ports-1093-2026-10-15.json) binds the
+source and equipment tree, application/dependency hashes and build ID. Nine new
+port assertions failed on base 9c1e8d22; the repaired focused batch passes all
+117 checks in five suites. Local typecheck/lint and the inspected non-container
+five-MCP/Next application build pass (322.020s). The actual production
+Tool Tester passes SDK1 sessionful HTTP at 1440px and SDK2 modern HTTP at 390px:
+two real runtime listener restarts each, declared fetch/frame/image access,
+same-host undeclared/retired-port refusal before listener effects, initialized
+policy parity, fresh View identity, unchanged sandbox origin, pending cancellation,
+no tool rerun, and failed-read retry. Previous initialization/tool visibility,
+resource/link/download, revocation and teardown checks remain in the browser run.
+Script lint plus browser runtime measured 32.978s; app,
+browser, reference listeners and private profiles close before success. There
+were zero external provider calls.
+
+This qualifies the measured source profile. Genuine OAuth and separate hosted/
+installed Windows/Linux and combined release qualification remain open; #1093 is
+not closed. No full/remote CI, container/image build, installed/packed suite or
+release workflow ran. Prior unchanged Skills/Tasks/sampling/subscription evidence
+retains its scope.
