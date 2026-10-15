@@ -1383,8 +1383,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           return { isError: true };
         }
         const opened = window.open(safeUrl, '_blank', 'noopener,noreferrer');
-        if (!opened) return { isError: true };
-        opened.opener = null;
+        // noopener intentionally returns null even when the destination opens.
+        // A missing WindowProxy cannot distinguish that success from a blocker.
+        if (opened) opened.opener = null;
         return {};
       };
       // Sandboxed iframes can't trigger downloads; the app delegates to the host

@@ -84,3 +84,18 @@ real OAuth/provider sampling, strict HTTP/MRTR/subscription traces, Apps browser
 origin/CSP/consent/teardown and separate installed Windows/Linux identities. Current
 Windows packaged listing passed on #1056; #1050's original intermittent cause remains
 unidentified. A later pass cannot establish its historical cause.
+
+October 15 [Tool Tester browser evidence](../../audits/evidence/mcp-apps-browser-1093-2026-10-15.json)
+covers source-production SDK1 HTTP at 1440px and SDK2 modern HTTP at 390px. It
+proves initialization/input/result ordering, same-server visibility, safe-link
+success reporting, downloads, undeclared-host/frame refusal, revocation/remount
+and cancellation of real pending tool work. It fixes a safe link opening with no
+opener while incorrectly returning an error. No provider call is required by this
+tool-only journey.
+
+The measured local profile retains automatic loopback port widening, which does
+not establish the specification's exact-origin no-loosening contract. Repairing
+that behavior while preserving the existing ephemeral-port restart regression is
+unfinished #1093 implementation work. Genuine OAuth and separate hosted/installed
+release qualification remain open. Browser local-network permission was granted
+only for each owned sandbox origin; no App CSP/permission setting was relaxed.
