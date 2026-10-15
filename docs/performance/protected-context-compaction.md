@@ -211,3 +211,65 @@ Free requests report $0, with no missing reported-cost values. These results
 qualify bounded observation retention on this fixture; universal exact-state,
 native/session/signature, visual and genuine side-effect acceptance remain open
 in #1091.
+
+## Focused tool-action recovery — October 15, 2026
+
+The [frozen result](compaction-actions-2026-10-15.json) qualifies this controlled
+local-write scenario on the unchanged `f02f18d8` application source. Ten reviews
+retain both exact generated receipts, with two physical writes, two commit
+invocations, two reconciliation reads and zero duplicates. The agent stops after
+the uncertain result; reconciliation follows a fresh application process.
+Both five/ten checkpoints pass, including a second restart after review five.
+Canonical history, tool pairing and complete archived action results remain
+intact, and all three application processes close.
+
+All 29 approved Free provider requests (13 summaries and 16 continuations)
+report $0, with no missing reported costs. The live journey takes 682.105 seconds;
+the inspected non-container application build takes 327.312 seconds, measured
+separately. Local types, source lint, harness syntax/lint and the independent
+ledger check pass. The existing 50 unchanged runtime regressions are reused.
+The [complete provider trace](compaction-actions-provider-trace-2026-10-15.json.gz)
+is gzip-compressed UTF-8 JSON; its compressed/uncompressed SHA-256 values and
+per-call request/response digests are in the result. It contains the actual
+requests and replies, without provider authorization headers.
+
+`scripts/compaction-action-acceptance.mjs` runs the built application in a private
+profile through its ordinary owner enrollment, model, MCP-server, flow and chat
+APIs. Run it through flujo-bash because the application retires temporary files.
+Build the application first. Create a task-owned run directory and set
+`COMPACTION_ACCEPTANCE_RUN_DIR` to its absolute path. Supply an OpenRouter key
+through `OPENROUTER_API_KEY`, then run
+`node scripts/compaction-action-acceptance.mjs`. Never put credentials in source,
+command arguments or committed evidence. The automation can instead use an
+absolute `COMPACTION_ACCEPTANCE_PROVIDER_MODULE` exporting
+`loadConfiguredProvider(accountId, repo)` and an explicit
+`COMPACTION_ACCEPTANCE_ACCOUNT_ID`; that loader decrypts one selected existing
+OpenRouter Free account only in memory.
+
+The default model is explicitly
+`nvidia/nemotron-3-super-120b-a12b:free`. The harness allows only that Free model
+or `openrouter/free`, rejects relay requests changing the selected model, and
+does not substitute answers or fall back. `COMPACTION_ACCEPTANCE_ROUNDS` may be
+5 or 10; the default is 10. Ports 5481/5482 must be available; the application
+port can be set with `COMPACTION_ACCEPTANCE_PORT`.
+
+The local MCP ledger appends and fsyncs a real row for every `commit_action`
+invocation. The first action returns its generated receipt. The second writes
+its row, deliberately suppresses the receipt and returns an uncertain outcome.
+The user asks the agent to stop before reconciliation. After a fresh application
+process starts, a new user request asks it to reconcile with `lookup_action`.
+Every review adds history and requires a fresh real summary; another application
+restart follows review five. The write tool stays available. The ledger has no
+idempotency or duplicate suppression: an extra invocation creates another row
+and fails acceptance. A separate SDK check deliberately repeats a commit and
+confirms the extra row is observable.
+
+The harness checks actual calls and durable rows, exact model-returned receipts,
+canonical-history integrity, tool pairing, complete source-archive hashes and
+unchanged archived action results. It records source/harness fingerprints, build
+ID, provider requests/replies, timings and reported costs. The generated private
+profile and authority files need owned cleanup through flujo-bash after evidence
+is frozen. This controlled local-write scenario does not establish third-party
+delivery, crash-midcommit atomicity, arbitrary concurrent/unresolved tool groups,
+every provider or transform, native session/signature recovery, visual benefit
+or release acceptance. Those broader #1091 criteria remain open.
