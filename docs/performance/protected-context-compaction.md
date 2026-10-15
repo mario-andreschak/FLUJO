@@ -80,6 +80,46 @@ compaction-digest-2026-10-15.json) records inputs and validation scope.
 The emitted production digest factory also passes the same hash and allocation
 envelope with its actual emitted Node crypto external.
 
+Token estimation and resource-URI preservation also inspect persisted message
+JSON without materializing each complete serialized message. The estimator
+retains the exact native JSON UTF-16 length and existing per-message char/4
+rounding, including escaped control characters and paired/lone surrogates.
+Encoding uses 16,384-code-unit slices. URI discovery visits serialized keys and
+string values in native order, preserving the existing URI alphabet, deduplication
+and summary wording; omitted properties contribute no resources. A failed
+inspection discards partial URI discoveries before applying the previous native
+serialization/content fallback. Accessors, custom `toJSON` and non-JSON objects
+retain native serialization compatibility, including its allocation cost.
+Resource discovery uses prefix/ASCII scanning and copies matched URI bytes so
+neither the RegExp input cache nor a small sliced URI holds a complete source
+message through a cached summary.
+Traversal stores the active object's keys and ancestors; resource bookkeeping
+and output scale with the resources actually found. Archive writes and provider
+serialization keep their existing complete-payload behavior.
+
+The controlled Windows/Node 22.23.3 preparation check uses one flattened tool
+message with about 25.2 million UTF-16 code units (the exact size and fingerprint
+are in the [preparation evidence](compaction-preparation-2026-10-15.json)). Under the
+same 192 MiB old-space budget, the previous token/URI paths each allocate about
+48 MiB of extra heap; the corrected paths each remain below 0.7 MiB across three
+rounds. The previous URI path retains about 48 MiB after collection; corrected
+retained growth stays below 40 KiB in this source run. Both native token estimates and
+resource text/order match, and canonical input remains unchanged. The committed
+allocation regression fails on the original source with
+`Full-message allocation returned`; this is not an observed OOM. Another 4,096
+seeded mixed JSON comparisons retain counts, URI output and source content.
+A separate released-source case returns a 120-character resource summary
+without retaining its large source message. The emitted negative control before
+detached URI copies retains about 48 MiB in all three rounds; its build and
+factory fingerprints are recorded in the preparation evidence. The source
+regression covers that release boundary as well as transient allocation.
+The corrected emitted compaction factory also passes three count/resource and
+source-release rounds, with retained heap growth of 31,048–33,224 bytes. This
+uses an injected deterministic summary and no archive writer to isolate
+preparation; it does not measure summarizer fidelity or persistence. The final
+five-MCP/Next 16.4.1 application build passes in 355.639 seconds. Factory/build
+fingerprints and exact validation inputs are in the preparation evidence.
+
 Local regression coverage is source/runtime plumbing evidence. It is not
 real-model fidelity, native opaque-window/signature roundtrip, original
 [#520](https://github.com/mario-andreschak/FLUJO/issues/520) crash confirmation,
