@@ -4,7 +4,7 @@ import Module, { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensurePrivateDirectory } from './local-instance.mjs';
+import { ensurePrivateDirectory, writePrivateJson } from './local-instance.mjs';
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -56,7 +56,7 @@ export async function createSmokeOperator() {
     const issued = issuer.issueOwnerCredential(['control:admin', 'mcp:access', 'secrets:read'], Date.now() + 15 * 60_000);
     const policy = issuer.ownerPolicySchema.parse({ schemaVersion: 1, ownerId: 'packed-smoke-operator', credentials: [issued.record] });
     const ownerFile = path.join(directory, 'owner.json');
-    await fs.writeFile(ownerFile, JSON.stringify(policy), { flag: 'wx', mode: 0o600 });
+    await writePrivateJson(ownerFile, policy, { exclusive: true });
     return { token: issued.token, issuerSourceSha256, issuerCompiledSha256, issuerEquipment, env: { FLUJO_OWNER_AUTH_FILE: ownerFile,
       FLUJO_MCP_TRUSTED_HOST_FILE: path.join(directory, 'approval.json') }, restore };
   } catch (error) {
