@@ -13,7 +13,7 @@ and lane08 handover. Source/fixture evidence is distinct from release qualificat
 | --- | --- | --- |
 | AUTH-1/2 | Bind discovery/expected issuer to the nonce; compare `iss` exactly before errors or exchange; require it when RFC9207 support is advertised. Pin original discovery during exchange. Preserve OIDC extra metadata before SDK parsing. | GET/POST mismatch, missing/optional/exact issuer and zero exchange assertions; retained issuer-bound credential regressions. |
 | AUTH-3 | DCR includes native application type for loopback callbacks, web for hosted callbacks. Existing encrypted credentials and issuer binding remain. | Provider metadata and issuer-bound SDK discovery/refresh fixtures. Genuine provider exchange remains release pre-flight. |
-| SAMPLE-1 | Minimum of requested/policy/model token caps; length completion maps to `maxTokens`. Refuse CLI/fallback models that cannot enforce an output-token bound. | Adapter request capture at 16/32 tokens and stricter 8-token policy; refusal before key/provider use. Genuine provider bound remains release pre-flight. |
+| SAMPLE-1 | Minimum of requested/policy/model token caps; length completion maps to `maxTokens`. Refuse CLI/fallback models that cannot enforce an output-token bound. | Adapter request capture at 16/32 tokens and stricter 8-token policy; refusal before key/provider use. Eight actual built-app OpenRouter Free Responses cases now verify live bounds and stop reasons through legacy and modern MCP; see the sampling receipt below. |
 | ARGS-1 | Preserve explicit null, omit undefined object members, reject non-JSON/accessor/cyclic/sparse-array data without guessed defaults. | Nested/null/prototype-sensitive key fixtures. |
 | ERR-1 | Preserve SDK1/split-SDK/extension JSON-RPC code/data. Recognize local request timers separately; keep operational `isError` results. | Equivalent errors, proxy error propagation and timeout regressions. |
 | TASK-1 | Bounded initial MRTR to immediate result or task, exact opaque state, fresh IDs, attended input, cancellation and no ambiguous retry. | Actual split-SDK negotiation and native Node ESM coexistence; input-to-immediate/task and abort fixtures. |
@@ -37,8 +37,7 @@ and lane08 handover. Source/fixture evidence is distinct from release qualificat
 ## Remaining release acceptance
 
 #1093 remains open for identified candidate/provider/browser/installed acceptance.
-Real OAuth, provider sampling token/stop behavior, strict modern HTTP header failures,
-subscription correlation/teardown, Apps browser
+Real OAuth, deployed subscription correlation/teardown, Apps browser
 origin/CSP/consent/teardown and installed Windows/Linux profiles belong to release
 pre-flight under the current pause. Existing #404 evidence stays credited only for
 unchanged inputs; changed adapter inputs require applicable requalification. CIMD is
@@ -108,3 +107,44 @@ fixture and zero external provider calls. Genuine provider/OAuth behavior, deplo
 subscription correlation, Apps browser behavior and installed Windows/Linux
 qualification remain release pre-flight; this source-tree result does not replace
 those profiles. Existing unchanged focused regression evidence remains credited.
+
+## Live sampling token bounds — October 14, 2026
+
+The existing sampling implementation is now qualified against genuine OpenRouter
+Free inference through the current Responses adapter. The production application
+was built from unchanged application inputs at `ed5e573f`; only reusable acceptance
+equipment and evidence were added. Both the SDK1 sessionful HTTP reference server
+and the split-SDK modern HTTP/MRTR reference server request text sampling through
+FLUJO's saved, explicitly enabled server policies.
+
+For each generation, request, policy and saved-model caps independently constrain
+generation to 32, 24 and 16 tokens. The relay verifies the actual outbound
+`max_output_tokens`; provider-reported output tokens fit each cap. Responses
+`incomplete/max_output_tokens` becomes MCP `maxTokens`. A separate short answer
+completes naturally and becomes `endTurn`. All eight cases pass. Two HTTP429
+responses recover through ordinary retries of `openrouter/free`; ten requests
+produce eight successful generations, with no model fallback and reported cost
+zero for every successful generation.
+
+The real credential is read from one existing encrypted account using canonical
+read-only format functions, held in relay memory, and sent only to the exact
+OpenRouter HTTPS endpoint with redirects refused. FLUJO saves only a synthetic
+relay credential in a fresh private workspace. The owned application exits and
+its private workspace/authority directory is removed before success is emitted.
+
+Four initial equipment attempts wrongly expected Chat Completions, while the
+current OpenRouter profile resolves that saved adapter to Responses. The relay
+refused them before any external call; all four have zero acceptance credit and
+verified private-profile cleanup. The corrected equipment uses the actual
+Responses route. No production behavior was changed to satisfy the smoke.
+
+The [sanitized exact-tree receipt](../audits/evidence/mcp-sampling-1093-2026-10-14.json)
+records all caps, statuses, provider usage, retry counts, local checks and the
+failed equipment attempts. The non-container application build took 329.275s;
+the final script lint plus live runtime took 89.521s, measured separately. Prior
+focused regressions remain valid for unchanged application inputs. This completes
+the missing live sampling token/stop check for this profile. It does not qualify
+other providers, sampling with tools, genuine OAuth, deployed subscriptions,
+Apps browser behavior or installed artifacts. #1093 remains open for the existing
+uncompleted acceptance listed above. No full/remote CI, container/image build,
+installed/packed or release suite was run.
