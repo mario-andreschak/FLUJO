@@ -50,10 +50,11 @@ describe('buildCompactionPrompt (issue #248)', () => {
     expect(u).not.toContain('<previous-summary>');
   });
 
-  it('update-previous-summary mode wraps the prior summary in <previous-summary> tags', () => {
-    const { user: u } = buildCompactionPrompt({ previousSummary: 'old anchor text' });
-    expect(u).toContain('<previous-summary>');
-    expect(u).toContain('old anchor text');
+  it('keeps the previous summary separate from the trusted compaction controls', () => {
+    const { system, user: u, previousSummary } = buildCompactionPrompt({ previousSummary: 'old anchor text' });
+    expect(previousSummary).toBe('old anchor text');
+    expect(system).not.toContain('old anchor text');
+    expect(u).not.toContain('old anchor text');
     expect(u).toMatch(/UPDATE it/);
   });
 });
@@ -226,7 +227,7 @@ describe('compactHistory orchestrator (issue #248)', () => {
       assistant(bulk(4000)),
       user('recent'),
     ];
-    const summarize = jest.fn(async (_m: FlujoChatMessage[], _p: { system: string; user: string }) => anchored('merged anchor'));
+    const summarize = jest.fn(async (_m: FlujoChatMessage[], _p: ReturnType<typeof buildCompactionPrompt>) => anchored('merged anchor'));
     const writeAnchor = jest.fn(async (_messages: readonly FlujoChatMessage[]) => 'flujo://run/conv1/anchor-1');
     const result = await compactHistory(messages, options(), {
       summarize,
@@ -236,7 +237,8 @@ describe('compactHistory orchestrator (issue #248)', () => {
     });
     // The prompt handed to summarize must carry the previous summary.
     const promptArg = summarize.mock.calls[0][1];
-    expect(promptArg!.user).toContain('old facts');
+    expect(promptArg!.previousSummary).toContain('old facts');
+    expect(promptArg!.user).not.toContain('old facts');
     // The anchor URI must be embedded in the head for recoverability.
     expect(summaryOf(result!).content).toContain('flujo://run/conv1/anchor-1');
     expect(writeAnchor).toHaveBeenCalledTimes(1);
@@ -258,8 +260,8 @@ describe('compactHistory orchestrator (issue #248)', () => {
       options({ sourceDigest: 'source-digest-2' }),
       {
         // A well-behaved model preserves the still-true fact from <previous-summary>.
-        summarize: jest.fn(async (_m: FlujoChatMessage[], prompt: { system: string; user: string }) => {
-          expect(prompt.user).toContain('FACT_A: /etc/config.yaml');
+        summarize: jest.fn(async (_m: FlujoChatMessage[], prompt: ReturnType<typeof buildCompactionPrompt>) => {
+          expect(prompt.previousSummary).toContain('FACT_A: /etc/config.yaml');
           return anchored('- FACT_A: /etc/config.yaml\n- FACT_B: new');
         }),
         now: () => 2,

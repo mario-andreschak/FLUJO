@@ -430,3 +430,66 @@ The unchanged 29 summary cases retain their earlier evidence. The result does
 not qualify arbitrary out-of-band mutation, crash-midcommit atomicity, all
 projection/configuration changes, native sessions/signatures, visual benefit or
 release acceptance. #1091 remains open for those existing criteria.
+
+### Plaintext identifiers and their source relationships
+
+A retained compatibility failure kept the exact receipt identifier but detached
+it from its defining observation. The continuation then returned surrounding
+description as the receipt. That summary also incorrectly described preparing
+the summary as the underlying task. The compaction prompt now keeps labels,
+subjects and defining relationships together, distinguishes current values from
+superseded observations, and describes the source task rather than its own
+compaction controls. `summary-v4-source-relations` invalidates artifacts from
+the previous prompt; canonical history remains authoritative.
+
+Compaction requests are system controls instead of synthetic source user turns.
+Previous generated anchors are passed separately as assistant data and never
+inserted into a trusted control. The prompt identifies the current value for a
+subject explicitly instead of grouping it with superseded values.
+
+The existing compatibility harness accepts
+`COMPACTION_ACCEPTANCE_MODE=reference-fidelity` for ten fresh summaries using
+the original receipt question without an identifier-prefix hint. Each later
+round changes the observed receipt. It verifies exact replies, preserved user
+instructions, complete source-archive hashes and canonical history, with
+application restarts after rounds five and ten. The optional
+`COMPACTION_ACCEPTANCE_REFERENCE_BASELINE` selects the retained failed JSON
+trace and requires the first summary's source and original review to match it
+exactly. The source after the first round uses smaller recent context to keep
+this focused check bounded. Run through flujo-bash with the same qualified-build,
+private-profile and approved-provider setup as the compatibility harness.
+
+These prompt instructions do not provide deterministic general semantic or
+exact-field validation. Native sessions/signatures, every-transform guarantees,
+experimental visual benefit and release acceptance retain their existing scope
+in #1091.
+
+The [frozen reference result](compaction-reference-fidelity-2026-10-15.json)
+retains the original wrong-description reply and the wording-only candidate's
+round-four stale receipt and task-state contamination. After separating controls
+from source turns and naming current values explicitly, ten review rounds on the explicit
+Ultra Free route pass
+the original question without a prefix hint. All ten receipt replies and 9 source
+archive hashes pass, as do twelve canonical snapshots and restarts after rounds
+five and ten. The source and review in the first round match the original failure;
+the accepted provider selection also changes from Super Free to Ultra Free. The final
+source still fails Super Free at round five, so this is not a same-model causal
+comparison or cross-model qualification. Task-state excerpts
+and actual control roles are recorded for each accepted round.
+
+Local typecheck, source/touched/final-harness lint and 68 focused cases pass.
+Twelve separate journey-guard regressions retain real task-contamination failures and
+allow the captured correct negative statement; that stopped run is retained.
+Three new runtime cases cover previous-policy invalidation and source/control authority
+with and without an older generated summary. Both stale-cache reuse and the
+synthetic user-turn regression fail before their respective repairs. The final
+non-container application build takes 341.881 seconds and its live journey
+368.215 seconds, measured separately. All 58 new approved pinned Free
+requests, including both failed Super candidates, report USD 0. Every
+application process closes. The accepted run has 9 persisted summaries and
+1 complete-canonical fallbacks; the earlier captured fenced-summary
+fallback independently preserves all 20 source messages and the previous durable cache. Separate failed-candidate timings and complete
+requests/replies, source payloads and canonical snapshots are retained in the
+[compressed trace](compaction-reference-provider-trace-2026-10-15.json.gz).
+No full suite, remote CI, container or release check was dispatched. This remains
+a stochastic controlled result; #1091's broader criteria remain open.
