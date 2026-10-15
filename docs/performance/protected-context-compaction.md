@@ -126,3 +126,50 @@ real-model fidelity, native opaque-window/signature roundtrip, original
 cross-platform/default-heap endurance, or an installed-release acceptance claim.
 Those issue criteria remain open. Broader/provider/release suites follow release
 pre-flight policy; the existing capped-child/HTTP-400 fixes are not reimplemented.
+
+## Focused real-model fidelity — October 15, 2026
+
+The summary prompt now explicitly preserves untranslated identifiers and decoded
+JSON string values, with an example distinguishing a Windows path from its JSON
+escape spelling. It also asks to retain JSON value types. These are model
+instructions; deterministic exact-field validation remains unfinished in #1091.
+
+The [frozen results](compaction-fidelity-2026-10-15.json) compare the actual built
+Windows application on main `ae263f4c` with this prompt change. Both runs use the
+production OpenRouter Responses route, the explicit
+`nvidia/nemotron-3-super-120b-a12b:free` model and identical source after the first
+summary's system instruction. The strict relay forwards real provider requests
+and replies. It neither substitutes answers nor changes models. The existing
+encrypted provider credential stays in memory; the isolated app stores a
+disposable relay credential through its normal model API.
+
+| Observation | Baseline, five rounds | Candidate, ten rounds |
+| --- | --- | --- |
+| Exact operating values, including path, ID, hash, configuration, corrections and unknown answer | 0/5 | 10/10 |
+| Permission/prohibition meaning | 5/5 | 10/10 |
+| Every field and its original JSON type | 0/5 | 4/10 |
+| Canonical history and complete source-archive hashes | Preserved | Preserved |
+
+The six remaining strict candidate failures render a permission array as a
+comma-separated string. The original strict failures remain recorded; the
+separate permission-meaning metric does not turn them into typed-state passes.
+The earlier `openrouter/free` router also renamed an operating ID, and its
+continuation repeated the changed value. That failure and the distinct equipment
+errors remain in the evidence. This controlled, stochastic comparison supports
+the scoped prompt improvement; it does not establish universal model fidelity.
+
+The candidate restarts after round five and continues through the accepted
+destination and owner corrections. A further fresh app process returns the
+identical canonical transcript and exact 768-byte tails of the round-five and
+round-ten archives, with independent complete-file SHA-256 verification and HTTP
+416 beyond EOF. Its stdout, stderr, exit and close witnesses settle. These HTTP
+byte-range observations retain their own scope alongside the existing UTF-16
+`read_resource` regressions.
+
+Local types, whole-source lint, 39 affected cases and the inspected non-container
+five-MCP/Next application build pass. The candidate build takes 324.279 seconds;
+its live journey takes 493.723 seconds, measured separately. All 40 real provider
+requests across baseline, candidate and retained failed attempts report zero
+cost. No full suite, remote workflow, container or release check is dispatched.
+Native sessions/signatures, visual benefit, real side-effect replay, original
+#520 workload confirmation and the remaining exact-state criteria stay open.

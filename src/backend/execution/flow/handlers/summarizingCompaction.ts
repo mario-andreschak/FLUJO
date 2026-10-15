@@ -96,6 +96,13 @@ export function buildCompactionPrompt(opts?: BuildCompactionPromptOptions): {
     '- Use terse bullet points.\n' +
     '- Preserve EXACT file paths, symbol names, shell commands, URLs, IDs and error ' +
     'strings VERBATIM — never paraphrase or abbreviate them.\n' +
+    '- Never translate, spell-correct, expand or rename an identifier, even when ' +
+    'part of it resembles an ordinary word in another language.\n' +
+    '- When extracting a string value from JSON into prose, decode its JSON escapes ' +
+    'exactly once. For example, {"path":"C:\\\\work\\\\a.txt"} records the path ' +
+    'C:\\work\\a.txt, not a path with doubled backslashes. When retaining a JSON ' +
+    'object, keep valid JSON with the original decoded values and value types; ' +
+    'arrays remain arrays, booleans remain booleans, and null remains null.\n' +
     '- "Work State" has three labelled groups: Completed / Active / Blocked.\n' +
     '- "Relevant Files" lists paths touched or referenced, one per line.\n' +
     '- Keep any `flujo://run/...` resource URIs verbatim so they remain readable.';
