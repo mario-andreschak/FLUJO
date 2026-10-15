@@ -1,7 +1,9 @@
+import { Buffer } from 'node:buffer';
 import { createLogger } from '@/utils/logger';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { CompactionProjectionIdentity, WireSummaryArtifact } from '../compaction/types';
+import { inspectJson } from '../compaction/jsonInspection';
 
 const log = createLogger('backend/execution/flow/handlers/summarizingCompaction');
 
@@ -49,9 +51,13 @@ export const COMPACTION_SUMMARY_SECTIONS = [
 export function estimateMessageTokens(m: FlujoChatMessage): number {
   let chars = 0;
   try {
-    chars = JSON.stringify(m).length;
+    chars = inspectJson(m);
   } catch {
-    chars = typeof m.content === 'string' ? m.content.length : 0;
+    try {
+      chars = JSON.stringify(m).length;
+    } catch {
+      chars = typeof m.content === 'string' ? m.content.length : 0;
+    }
   }
   return Math.ceil(chars / 4);
 }
@@ -239,17 +245,42 @@ export function preserveResourceUris(
   summaryText: string,
   summarizedMessages: FlujoChatMessage[],
 ): string {
-  const uriRe = new RegExp(`${RUN_RESOURCE_SCHEME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\w./-]+`, 'g');
+  const isUriChar = (code: number) => (code >= 48 && code <= 57)
+    || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+    || code === 95 || code === 46 || code === 47 || code === 45;
   const found = new Set<string>();
   for (const m of summarizedMessages) {
-    let serialized = '';
+    const messageUris = new Set<string>();
+    const collect = (text: string) => {
+      // JSON escaping cannot create or extend this ASCII-only URI alphabet.
+      // Inspect complete source strings so a URI may cross encoding chunks.
+      let cursor = 0;
+      while (cursor < text.length) {
+        const start = text.indexOf(RUN_RESOURCE_SCHEME, cursor);
+        if (start < 0) break;
+        const suffix = start + RUN_RESOURCE_SCHEME.length;
+        let end = suffix;
+        while (end < text.length && isUriChar(text.charCodeAt(end))) end += 1;
+        if (end > suffix) {
+          // A tiny sliced URI can otherwise retain the complete tool result
+          // inside a cached summary. Copy only its ASCII bytes, and avoid the
+          // legacy RegExp input cache retaining the large source string.
+          messageUris.add(Buffer.from(text.slice(start, end), 'utf8').toString('utf8'));
+        }
+        cursor = end;
+      }
+    };
     try {
-      serialized = JSON.stringify(m);
+      inspectJson(m, collect);
     } catch {
-      serialized = typeof m.content === 'string' ? m.content : '';
+      messageUris.clear();
+      try {
+        collect(JSON.stringify(m));
+      } catch {
+        collect(typeof m.content === 'string' ? m.content : '');
+      }
     }
-    const matches = serialized.match(uriRe);
-    if (matches) for (const u of matches) found.add(u);
+    for (const uri of messageUris) found.add(uri);
   }
   if (found.size === 0) return summaryText;
 
