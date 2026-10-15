@@ -4,6 +4,7 @@ import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { CompactionProjectionIdentity, WireSummaryArtifact } from '../compaction/types';
 import { inspectJson } from '../compaction/jsonInspection';
+import { buildStructuredObservationBlock } from '../compaction/structuredObservations';
 
 const log = createLogger('backend/execution/flow/handlers/summarizingCompaction');
 
@@ -416,6 +417,10 @@ export async function compactHistory(
 
   // Preserve dereferenceable resource URIs from the summarized slice.
   summaryBody = preserveResourceUris(summaryBody, split.toSummarize);
+  let incompleteObservations = false;
+  summaryBody += buildStructuredObservationBlock(split.toSummarize, isCompactionSummary,
+    () => { incompleteObservations = true; });
+  if (incompleteObservations && !deps.writeAnchor) return null;
   summaryBody = preserveExecutionReceipts(summaryBody, split.toSummarize);
   // Validate achieved reduction after exact instruction/receipt restoration,
   // before writing an artifact. Refuse a cosmetic summary that makes the wire

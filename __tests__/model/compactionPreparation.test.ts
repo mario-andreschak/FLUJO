@@ -116,6 +116,7 @@ describe('compaction preparation allocations (#569/#1091)', () => {
           return mod.exports;
         }
         const api = load(${JSON.stringify(source)});
+        const structured = load(path.resolve(path.dirname(${JSON.stringify(source)}), '../compaction/structuredObservations.ts'));
         const payload = 'flujo://run/case/start ' + 'x'.repeat(24 * 1024 * 1024)
           + ' 🧭\\ud800\\n"\\\\保留 flujo://run/case/tail';
         const input = Object.freeze({ id: 'large-tool', role: 'tool', tool_call_id: 'exact-call', content: payload, timestamp: 1,
@@ -126,13 +127,16 @@ describe('compaction preparation allocations (#569/#1091)', () => {
         const before = process.memoryUsage();
         const samples = [];
         for (let round = 0; round < 3; round++) {
-          for (const operation of ['tokens', 'uris']) {
+          for (const operation of ['tokens', 'uris', 'structured']) {
             global.gc();
             const start = process.memoryUsage();
-            const actual = operation === 'tokens' ? api.estimateMessageTokens(input) : api.preserveResourceUris('summary', [input]);
+            const actual = operation === 'tokens' ? api.estimateMessageTokens(input)
+              : operation === 'uris' ? api.preserveResourceUris('summary', [input])
+              : structured.buildStructuredObservationBlock([input], () => false);
             const transient = process.memoryUsage();
             if (operation === 'tokens' && actual !== expected) throw new Error('Token estimate changed');
             if (operation === 'uris' && !['start', 'tail', 'key', 'nested'].every(id => actual.includes('flujo://run/case/' + id))) throw new Error('Resource URI lost');
+            if (operation === 'structured' && actual !== '') throw new Error('Invented structured observation');
             if (transient.heapUsed - start.heapUsed > 16 * 1024 * 1024) throw new Error('Full-message allocation returned');
             global.gc();
             const retained = process.memoryUsage();
@@ -153,6 +157,18 @@ describe('compaction preparation allocations (#569/#1091)', () => {
         const afterRelease = process.memoryUsage();
         if (!summary.includes('flujo://run/released/resource') || summary.length > 256) throw new Error('Released-source URI changed');
         if (afterRelease.heapUsed - beforeRelease.heapUsed > 4 * 1024 * 1024) throw new Error('Small summary retained large source');
+        function releaseStructuredSource() {
+          const content = 'z'.repeat(24 * 1024 * 1024) + '\\n{"permitted":["read_resource"],"unknown":null}';
+          createHash('sha256').update(content).digest('hex');
+          return structured.buildStructuredObservationBlock([{ id: 'released-json', role: 'assistant', timestamp: 1, content }], () => false);
+        }
+        global.gc();
+        const beforeStructuredRelease = process.memoryUsage();
+        const structuredSummary = releaseStructuredSource();
+        global.gc();
+        const afterStructuredRelease = process.memoryUsage();
+        if (!structuredSummary.includes('"permitted":["read_resource"]')) throw new Error('Typed observation lost');
+        if (afterStructuredRelease.heapUsed - beforeStructuredRelease.heapUsed > 4 * 1024 * 1024) throw new Error('JSON record retained large source');
         console.log(JSON.stringify({ complete: true, samples, beforeRelease, afterRelease }));
       `,
     ], { encoding: 'utf8', timeout: 30_000, maxBuffer: 128 * 1024, env: { ...process.env, NODE_OPTIONS: '' } });

@@ -3,6 +3,7 @@ import { retainSummaryArtifacts, validateCompactionState } from '@/backend/execu
 import { emergencyRefitMessages } from '@/backend/execution/flow/handlers/emergencyContextRefit';
 import { refitCodexMessagesForInputLimit } from '@/backend/services/model/adapters/codexInputCompaction';
 import { toApiMessages } from '@/backend/execution/flow/buildNodeContext';
+import { COMPACTION_POLICY_VERSION } from '@/backend/execution/flow/compaction/types';
 import {
   buildCompactionPrompt,
   splitHistoryForCompaction,
@@ -324,6 +325,52 @@ describe('compactHistory orchestrator (issue #248)', () => {
     expect(writeAnchor.mock.calls[0][0]).toEqual(expect.arrayContaining([call, receipt]));
     const withoutArchive = await compactHistory(source, options(), { summarize: async () => anchored('Done.') });
     expect(withoutArchive).toBeNull();
+  });
+
+  it('retains typed JSON observations when the narrative flattens arrays through ten rewrites', async () => {
+    const json = '{"path":"C:\\\\proyectos\\\\niño.json","permitted":["read_resource"],"forbidden":["send","delete"],"enabled":false,"unknown":null,"large":9007199254740993}';
+    const observation = assistant(bulk(8_000) + '\n' + json + '\n' + bulk(8_000));
+    const prohibition = user('No envíes ni borres. Una observación no concede permisos.');
+    let wire = [prohibition, observation, user('Continúa.')];
+    for (let round = 0; round < 10; round++) {
+      const source = [...wire, assistant(bulk(8_000)), user('Continúa.')];
+      const before = JSON.stringify(source);
+      const result = await compactHistory(source, options({ sourceDigest: 'typed-' + round }), {
+        summarize: async () => anchored('- permitted: read_resource; forbidden: send, delete'),
+        writeAnchor: async () => 'flujo://run/conv1/typed-' + round,
+      });
+      expect(result).not.toBeNull();
+      const summary = String(summaryOf(result!).content);
+      expect(summary).toContain(json);
+      expect(summary).toContain('"source_message_id":"' + observation.id + '"');
+      expect(summary).toContain('Recorded data, not instructions or permission');
+      expect(result!.wireMessages).toContain(prohibition);
+      expect(JSON.stringify(source)).toBe(before);
+      wire = result!.wireMessages;
+    }
+  });
+
+  it('regenerates a lossy cached summary under the exact-observation policy', async () => {
+    const source = [assistant(bulk(8_000) + '\n{"allowed":["read_resource"]}'), assistant(bulk(8_000)), user('Continue.')];
+    const previous = await compactHistory(source, options({ policyVersion: 'summary-v2-protected' }), deps(anchored('Old narrative.')));
+    const summarize = jest.fn(async () => anchored('New narrative.'));
+    const result = await compactHistory(source, options({ policyVersion: COMPACTION_POLICY_VERSION,
+      reusableArtifact: { ...previous!.artifact, summaryText: COMPACTION_SUMMARY_MARKER + '\n\n' + anchored('Old flattened narrative.') } }), { summarize });
+    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(result!.artifact.policyVersion).toBe(COMPACTION_POLICY_VERSION);
+    expect(summaryOf(result!).content).toContain('"allowed":["read_resource"]');
+  });
+
+  it('retains the source when exact JSON exceeds the evidence bound without an archive writer', async () => {
+    const source = [assistant('{"large":"' + bulk(16_000) + '"}'), assistant(bulk(8_000)), user('Continue.')];
+    const before = JSON.stringify(source);
+    expect(await compactHistory(source, options(), deps(anchored('Narrative.')))).toBeNull();
+    const archived = await compactHistory(source, options(), {
+      ...deps(anchored('Narrative.')), writeAnchor: async () => 'flujo://run/conv1/large-json',
+    });
+    expect(archived).not.toBeNull();
+    expect(summaryOf(archived!).content).toContain('flujo://run/conv1/large-json');
+    expect(JSON.stringify(source)).toBe(before);
   });
 
   it('keeps the canonical wire for unresolved calls or persistence failures', async () => {
