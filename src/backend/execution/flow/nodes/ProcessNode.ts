@@ -870,11 +870,14 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     prepResult.currentPrompt = systemPromptContent;
 
     // Create our own system message with the (frozen) prompt as FlujoChatMessage
+    // This injected projection is not a new conversation event. Stable identity
+    // lets an unchanged archived prefix reuse its summary across steps/restarts;
+    // changed prompt content still invalidates the complete source digest.
     const systemMessage: FlujoChatMessage = {
-      id: uuidv4(), // Generate unique ID
+      id: `process-system:${nodeId}`,
       role: 'system',
       content: systemPromptContent,
-      timestamp: Date.now() // Add timestamp
+      timestamp: sharedState.createdAt,
     };
 
     log.info('Added system message from prompt template', {
