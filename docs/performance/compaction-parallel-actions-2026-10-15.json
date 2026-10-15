@@ -1,0 +1,1716 @@
+{
+  "schemaVersion": 1,
+  "issue": 1091,
+  "recordedUtc": "2026-10-15T16:00:32.712Z",
+  "scope": "Parallel, out-of-order genuine local MCP writes with deliberately suppressed acknowledgement, compaction, reconciliation and process restart",
+  "sourceRevision": "c8d70d68a81c1a8885be32e15f4d189658af6811",
+  "applicationSourceTree": "8a5c95014a22c7a3afeed46705b65fefa35fd76d",
+  "harnessSha256": {
+    "scripts/compaction-action-acceptance.mjs": "b1a2b154dcd6123af3c051a24a68d46ffb1e1310279fdab27d270d9d503eb724",
+    "scripts/compaction-action-ledger.mjs": "bc91a62388aceb53d533df19211841415c924a9c35829d261e7ea53775abfd0e"
+  },
+  "publishedHarnessSha256": {
+    "scripts/compaction-action-acceptance.mjs": "b1a2b154dcd6123af3c051a24a68d46ffb1e1310279fdab27d270d9d503eb724",
+    "scripts/compaction-action-ledger.mjs": "bc91a62388aceb53d533df19211841415c924a9c35829d261e7ea53775abfd0e"
+  },
+  "rawReceiptSha256": "de7427b389625916b9649d9b1e3cd920ff12cf6c1c2a7d2b0c1f4c402695e24d",
+  "canonicalSnapshotsSha256": "7d4e9960645865cb77fb8adaef21e5704e7f0bea0649c4eafcdaa8cd7486c041",
+  "equipment": {
+    "platform": "win32",
+    "node": "v22.23.3",
+    "buildId": "LRKlch-xZ5kNHq8PV5lIx",
+    "model": "nvidia/nemotron-3-super-120b-a12b:free",
+    "actualModels": [
+      "nvidia/nemotron-3-super-120b-a12b:free"
+    ],
+    "inference": {
+      "adapter": "actual built OpenAiResponsesAdapter, selected by production OpenRouter routing",
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "destination": "https://openrouter.ai/api/v1/responses",
+      "relay": "strict exact-model forwarding; no replacement answers or fallback",
+      "providerCredential": "memory only; application receives a private local relay token"
+    },
+    "credentialMethod": {
+      "method": "one explicitly selected existing encrypted account; canonical read-only format",
+      "configuredModelId": "24618177-b739-44a3-b79d-b459ba9151a2",
+      "configuredModel": "openrouter/free",
+      "baseHost": "openrouter.ai",
+      "credentialRetained": "memory only",
+      "configuredInputFilesUnchanged": true,
+      "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+      "configuredInputCount": 2
+    },
+    "authority": {
+      "method": "shipped owner pairing and canonical private OS-owner scoped issuer",
+      "scopes": [
+        "openai:read",
+        "openai:execute"
+      ]
+    },
+    "workload": {
+      "acknowledgement": "Second real append is fsynced, then its acknowledgement is deliberately suppressed",
+      "duplicateHandling": "Every commit invocation appends a new durable row; no idempotency or duplicate guard",
+      "actionIds": [
+        "acción-completa-ñ",
+        "acción-incierta-ñ"
+      ],
+      "batch": "Two same-response calls; first waits for second to finish, then 75ms; no deduplication"
+    },
+    "instructionsAndInputs": "Exact Spanish contract, changed observations and real tool schemas in the pinned harness; complete actual requests/replies in the linked gzip trace",
+    "expectedReceipts": "Read independently from fsynced ledger rows after genuine model-selected commits; never seeded into user requests"
+  },
+  "result": {
+    "status": "passed-focused-scope",
+    "startedUtc": "2026-10-15T15:50:30.815Z",
+    "finishedUtc": "2026-10-15T15:59:27.479Z",
+    "providerRequests": 24,
+    "summaryRequests": 11,
+    "continuationRequests": 13,
+    "strictReceiptReplies": 10,
+    "reviews": 10,
+    "physicalWrites": 2,
+    "commitInvocations": 2,
+    "lookupInvocations": 1,
+    "duplicatePhysicalWrites": 0,
+    "retryBeforeReconciliation": false,
+    "restartBeforeReconciliation": true,
+    "checkpoints": [
+      {
+        "round": 5,
+        "passed": true,
+        "writes": 2,
+        "commitInvocations": 2
+      },
+      {
+        "round": 10,
+        "passed": true,
+        "writes": 2,
+        "commitInvocations": 2
+      }
+    ],
+    "totalUsage": {
+      "inputTokens": 235081,
+      "outputTokens": 18805,
+      "reportedCost": 0,
+      "callsWithoutReportedCost": 0
+    },
+    "latency": {
+      "summary": {
+        "calls": 11,
+        "p50Ms": 36718.864300000016,
+        "p95Ms": 54308.542400000006,
+        "method": "nearest rank, strict relay buffers actual provider body"
+      },
+      "continuation": {
+        "calls": 13,
+        "p50Ms": 8950.0472,
+        "p95Ms": 13723.327699999994,
+        "method": "nearest rank, strict relay buffers actual provider body"
+      }
+    },
+    "canonicalPreserved": true,
+    "toolPairingValid": true,
+    "completeActionArchivesVerified": true,
+    "parallelBatch": {
+      "callIds": [
+        "call-922d47cd-b5b1-4f93-9639-492246f37b0b",
+        "call-573f580f-ac57-4e53-8751-8a2b8cca87e3"
+      ],
+      "peakConcurrentCommits": 2,
+      "completedResultAtMs": 10506.486,
+      "uncertainResultAtMs": 10430.2903,
+      "overlapping": true,
+      "resultsCompletedOutOfOrder": true
+    },
+    "applicationProcesses": [
+      {
+        "pid": 47492,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "utc": "2026-10-15T15:50:55.057Z"
+        },
+        "closedUtc": "2026-10-15T15:50:55.057Z"
+      },
+      {
+        "pid": 36600,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "utc": "2026-10-15T15:55:37.245Z"
+        },
+        "closedUtc": "2026-10-15T15:55:37.245Z"
+      },
+      {
+        "pid": 34776,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "utc": "2026-10-15T15:59:27.478Z"
+        },
+        "closedUtc": "2026-10-15T15:59:27.478Z"
+      }
+    ],
+    "applicationClosed": true
+  },
+  "actionTurns": [
+    {
+      "scenario": "parallel-authorized-writes",
+      "elapsedMs": 18852.486,
+      "response": "He ejecutado el lote de dos llamadas paralelas a `commit_action` según su autorización:\n\n- **acción-completa-ñ**  \n  - Estado: **completed**  \n  - `receiptId`: `7bc8160b-33f9-437d-a897-901c755bf32f`  \n  - `committedUtc`: `2026-10-15T15:50:41.183Z`\n\n- **acción-incierta-ñ**  \n  - Estado: **unknown**  \n  - Mensaje: *“Acknowledgement unavailable. Do not retry. Reconcile with lookup_action when requested.”*  \n  - (Se devolvió un error; no se reintentó ni se consultó, conforme a sus instrucciones.)\n\nNo se repitió ninguna acción. Quedo a la espera de su posible solicitud de conciliación mediante `lookup_action` cuando lo considere oportuno.",
+      "calls": [
+        1,
+        2
+      ],
+      "canonicalMessages": 5,
+      "canonicalSha256": "c1998156375f159a1c3baf05fde6b238aad94b642f8218603f54859e776bc9e4",
+      "canonicalPreserved": true,
+      "toolPairingValid": true
+    }
+  ],
+  "actionCallIds": [
+    "call-922d47cd-b5b1-4f93-9639-492246f37b0b",
+    "call-573f580f-ac57-4e53-8751-8a2b8cca87e3"
+  ],
+  "preRestartLedger": {
+    "rows": [
+      {
+        "actionId": "acción-completa-ñ",
+        "receiptId": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "committedUtc": "2026-10-15T15:50:41.183Z"
+      },
+      {
+        "actionId": "acción-incierta-ñ",
+        "receiptId": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "committedUtc": "2026-10-15T15:50:41.184Z"
+      }
+    ],
+    "calls": [
+      {
+        "number": 1,
+        "utc": "2026-10-15T15:50:41.183Z",
+        "tool": "commit_action",
+        "actionId": "acción-completa-ñ",
+        "startedAtMs": 10422.5035,
+        "fsyncedAtMs": 10427.808,
+        "acknowledgement": "completed",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"7bc8160b-33f9-437d-a897-901c755bf32f\",\"committedUtc\":\"2026-10-15T15:50:41.183Z\",\"status\":\"completed\"}"
+            }
+          ]
+        },
+        "completedAtMs": 10506.486
+      },
+      {
+        "number": 2,
+        "utc": "2026-10-15T15:50:41.184Z",
+        "tool": "commit_action",
+        "actionId": "acción-incierta-ñ",
+        "startedAtMs": 10423.5791,
+        "fsyncedAtMs": 10430.26,
+        "acknowledgement": "suppressed-after-fsync",
+        "result": {
+          "isError": true,
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"actionId\":\"acción-incierta-ñ\",\"status\":\"unknown\",\"message\":\"Acknowledgement unavailable. Do not retry. Reconcile with lookup_action when requested.\"}"
+            }
+          ]
+        },
+        "completedAtMs": 10430.2903
+      }
+    ],
+    "peakConcurrentCommits": 2,
+    "fileSha256": "54a8216e285f8679e9bbebc963d809a1009b77afd6ff604bc452495f60a14c17"
+  },
+  "finalLedger": {
+    "rows": [
+      {
+        "actionId": "acción-completa-ñ",
+        "receiptId": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "committedUtc": "2026-10-15T15:50:41.183Z"
+      },
+      {
+        "actionId": "acción-incierta-ñ",
+        "receiptId": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "committedUtc": "2026-10-15T15:50:41.184Z"
+      }
+    ],
+    "calls": [
+      {
+        "number": 1,
+        "utc": "2026-10-15T15:50:41.183Z",
+        "tool": "commit_action",
+        "actionId": "acción-completa-ñ",
+        "startedAtMs": 10422.5035,
+        "fsyncedAtMs": 10427.808,
+        "acknowledgement": "completed",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"7bc8160b-33f9-437d-a897-901c755bf32f\",\"committedUtc\":\"2026-10-15T15:50:41.183Z\",\"status\":\"completed\"}"
+            }
+          ]
+        },
+        "completedAtMs": 10506.486
+      },
+      {
+        "number": 2,
+        "utc": "2026-10-15T15:50:41.184Z",
+        "tool": "commit_action",
+        "actionId": "acción-incierta-ñ",
+        "startedAtMs": 10423.5791,
+        "fsyncedAtMs": 10430.26,
+        "acknowledgement": "suppressed-after-fsync",
+        "result": {
+          "isError": true,
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"actionId\":\"acción-incierta-ñ\",\"status\":\"unknown\",\"message\":\"Acknowledgement unavailable. Do not retry. Reconcile with lookup_action when requested.\"}"
+            }
+          ]
+        },
+        "completedAtMs": 10430.2903
+      },
+      {
+        "number": 3,
+        "utc": "2026-10-15T15:51:27.567Z",
+        "tool": "lookup_action",
+        "actionId": "acción-incierta-ñ",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"actionId\":\"acción-incierta-ñ\",\"status\":\"completed\",\"count\":1,\"receipts\":[{\"actionId\":\"acción-incierta-ñ\",\"receiptId\":\"eddbe9d1-9215-4b5c-aece-60d000923e45\",\"committedUtc\":\"2026-10-15T15:50:41.184Z\"}]}"
+            }
+          ]
+        }
+      }
+    ],
+    "peakConcurrentCommits": 2,
+    "fileSha256": "54a8216e285f8679e9bbebc963d809a1009b77afd6ff604bc452495f60a14c17"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "elapsedMs": 76837.98049999999,
+      "summaryCalls": 2,
+      "continuationCalls": 2,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 10,
+      "canonicalSha256": "96075cd9295080a9c564e601c6b9dc51b9f6f7279be876c01805be6c468d705b",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/701233e5-c9c3-4c1a-8891-28a87cc3835e",
+        "sha256": "ee441f7b77bacdb96b3ef882e1a4c89dfbebabe029526a941165cf4188d19ce9",
+        "size": 18491,
+        "verified": true
+      },
+      "artifactId": "ba8d0524-8451-4539-9432-f299232fcb40",
+      "processRestartAfterCheckpoint": false
+    },
+    {
+      "round": 2,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        7,
+        8
+      ],
+      "elapsedMs": 36987.2619,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 13,
+      "canonicalSha256": "64365c4f481a06d608f695df749ba12e87a7b6f60eb7772965161167e0aae063",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/f0738c03-dcd8-4e91-aec1-649802f3f5a3",
+        "sha256": "19338718dbc07d79044a519c808c3e40d3a998b78b00b079e43043a8e2bded17",
+        "size": 20286,
+        "verified": true
+      },
+      "artifactId": "d74c7f79-ff98-4b30-a5b7-946438d2df83",
+      "processRestartAfterCheckpoint": false
+    },
+    {
+      "round": 3,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        9,
+        10
+      ],
+      "elapsedMs": 51395.87420000002,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 16,
+      "canonicalSha256": "02184c7e0dee2f00769f290e851e3df0370472ed8342f262f6c03532ef945466",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/49a8dfd6-46b6-499d-ac88-11cc9c6aede3",
+        "sha256": "ad8286212e27cc4365d3061c9979dc248c8ad308ca3a59cdaa0b08bd6456c496",
+        "size": 35923,
+        "verified": true
+      },
+      "artifactId": "d904298b-952a-4161-a743-183a4df8e884",
+      "processRestartAfterCheckpoint": false
+    },
+    {
+      "round": 4,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        11,
+        12
+      ],
+      "elapsedMs": 47756.23449999999,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 19,
+      "canonicalSha256": "c21b50803c5ed5bb8c3c9c370b0cf0a57ab8fd6936638e871067a505e5cbf7da",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/554bf061-b9e1-4a28-9d15-83dc152c8f2a",
+        "sha256": "6e7a2d53506a0cc590af7336c9794f3490f7fe335ebd502dfd50e7cef1cb56b7",
+        "size": 51560,
+        "verified": true
+      },
+      "artifactId": "3079afe0-ebd4-4c33-9bae-509fa0cac47e",
+      "processRestartAfterCheckpoint": false
+    },
+    {
+      "round": 5,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        13,
+        14
+      ],
+      "elapsedMs": 65736.9657,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 22,
+      "canonicalSha256": "e8fc9087628329eadb1da6a9901478e8103a0972fb4358508d1f075c56919c8f",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/7983ae5e-219d-49c7-bb8b-b64b3ae03759",
+        "sha256": "2713e31fa2e5cf822de5350edc00095aaaf0b799b6ba22a4679bc8e87a2916ad",
+        "size": 67197,
+        "verified": true
+      },
+      "artifactId": "ad81bf13-64d2-4280-9880-1d5f7d19ac26",
+      "processRestartAfterCheckpoint": true
+    },
+    {
+      "round": 6,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        15,
+        16
+      ],
+      "elapsedMs": 51637.28330000001,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 25,
+      "canonicalSha256": "874127d49b0208e4da1e1496e7ec5d86eb6ce14ee714090936ea36f5316fe611",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/7bde38df-594d-4e84-b1b6-eecdbc7442f4",
+        "sha256": "84d256cda385a7ee1f1de68b32bac71e7819eb20a313cfcc95ff15f6731b1357",
+        "size": 82834,
+        "verified": true
+      },
+      "artifactId": "9bd694f8-a6c1-44ca-908b-6bc1f3e2dc7a",
+      "processRestartAfterCheckpoint": false
+    },
+    {
+      "round": 7,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        17,
+        18
+      ],
+      "elapsedMs": 48188.02149999997,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 28,
+      "canonicalSha256": "c46a2ab32a99e37b04af86eb7f1f47d814742afd30d63e88508c8473a6c9942b",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/1e4b3e8b-dd48-44e8-ba96-aa871f99caa6",
+        "sha256": "9d3cfa959184880e1f5921659e5d81a618645b4564ded3dd57f3f0e48e17d9d8",
+        "size": 98471,
+        "verified": true
+      },
+      "artifactId": "68efcc66-6e83-46d4-80cc-bd1f6ae8f11c",
+      "processRestartAfterCheckpoint": false
+    },
+    {
+      "round": 8,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        19,
+        20
+      ],
+      "elapsedMs": 41193.884499999986,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 31,
+      "canonicalSha256": "27d34644f43fdb6871a590ea18512f57a5b5f71144df31429671425597b532c9",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/cd0eb2ec-fa32-44b1-8328-9ca111df86e0",
+        "sha256": "fda55d1923fa301f7e02dafd0e0b338e8d8d9bcb90176c9ca5f35e2a4454cf55",
+        "size": 114108,
+        "verified": true
+      },
+      "artifactId": "891486a1-0fc8-4a8f-81fe-c380e5320523",
+      "processRestartAfterCheckpoint": false
+    },
+    {
+      "round": 9,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        21,
+        22
+      ],
+      "elapsedMs": 41384.139199999976,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 34,
+      "canonicalSha256": "27084fb3ff25d12f77f5904d5e90c0c010a4fb31728d5a87d0767099a6950f96",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/71b0c6d1-1d33-4161-93f7-0e6b62d4f484",
+        "sha256": "b1439e0bda2d3172182010708093b0cf029a3c3c72a2ba6d64c5229e03a416dd",
+        "size": 129745,
+        "verified": true
+      },
+      "artifactId": "5ba0d3f0-fcf5-42a3-a819-e70f75509f32",
+      "processRestartAfterCheckpoint": false
+    },
+    {
+      "round": 10,
+      "response": "{\n  \"first\": \"completed\",\n  \"second\": \"completed\",\n  \"firstReceipt\": \"7bc8160b-33f9-437d-a897-901c755bf32f\",\n  \"secondReceipt\": \"eddbe9d1-9215-4b5c-aece-60d000923e45\",\n  \"repeated\": false,\n  \"unknown\": null\n}",
+      "answer": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "expected": {
+        "first": "completed",
+        "second": "completed",
+        "firstReceipt": "7bc8160b-33f9-437d-a897-901c755bf32f",
+        "secondReceipt": "eddbe9d1-9215-4b5c-aece-60d000923e45",
+        "repeated": false,
+        "unknown": null
+      },
+      "exactFieldsPassed": true,
+      "calls": [
+        23,
+        24
+      ],
+      "elapsedMs": 44284.26659999997,
+      "summaryCalls": 1,
+      "continuationCalls": 1,
+      "writes": 2,
+      "commitInvocations": 2,
+      "lookupInvocations": 1,
+      "canonicalMessages": 37,
+      "canonicalSha256": "454e15c2137b016d06102d8d1989a026af91dad3e5e30f75cc0727921fbfd04c",
+      "canonicalPreserved": true,
+      "toolPairingValid": true,
+      "sourceArchive": {
+        "uri": "flujo://run/ffc08fa0-5ece-4bb7-a77f-d1d401601799/d376eb5e-148d-4b33-a121-3a2955537587",
+        "sha256": "91bdea6059098fc6490fdc9ae087ffcda24b511dcfd8fe79a0b4850cf02b669b",
+        "size": 145382,
+        "verified": true
+      },
+      "artifactId": "414c1130-c1ef-4393-a962-5906b2387ef7",
+      "processRestartAfterCheckpoint": false
+    }
+  ],
+  "providerTrace": {
+    "path": "compaction-parallel-actions-provider-trace-2026-10-15.json.gz",
+    "encoding": "gzip of UTF-8 JSON",
+    "compressedBytes": 76223,
+    "compressedSha256": "c2e1d8f259d822795ae0c602322b9771c92b4aef8a60fa836810c22dca147d98",
+    "uncompressedBytes": 1192593,
+    "uncompressedSha256": "4d7d8e35ee9ebd2f3a6bf0f93d137585190dec86410b84fc3b1e78e072120a83",
+    "calls": 24
+  },
+  "providerCalls": [
+    {
+      "number": 1,
+      "scenario": "parallel-authorized-writes",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:50:36.617Z",
+      "status": 200,
+      "elapsedMs": 4379.926299999999,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079436-OHLWQfoIYETwPWbTR8gp",
+      "requestSha256": "351eaefccc2dec403648cb1e09a225723b9b1ad1521b740be54fe5c12fb42db8",
+      "responseSha256": "5af5b642a5fc26c4e4b353e77d48204725fb1be3ac1697198259bbd8904d4ba9",
+      "usage": {
+        "input_tokens": 1378,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 177,
+        "output_tokens_details": {
+          "reasoning_tokens": 107
+        },
+        "total_tokens": 1555,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 1378,
+        "completion_tokens": 177
+      }
+    },
+    {
+      "number": 2,
+      "scenario": "parallel-authorized-writes",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:50:41.453Z",
+      "status": 200,
+      "elapsedMs": 13384.8768,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079440-eqxCSYGUZzN0DglG7MOB",
+      "requestSha256": "0ade0cb4c8a8b81185277aa78022a441626ad0c2708052b46cd193e2a2b9a6c0",
+      "responseSha256": "b3e24bfa4f7c70a94c6d67fad7aa85599bd232396b50fbd0fcf8944072973f1a",
+      "usage": {
+        "input_tokens": 1719,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 561,
+        "output_tokens_details": {
+          "reasoning_tokens": 335
+        },
+        "total_tokens": 2280,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 1719,
+        "completion_tokens": 561
+      }
+    },
+    {
+      "number": 3,
+      "scenario": "compaction-review-1",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:50:58.763Z",
+      "status": 200,
+      "elapsedMs": 19620.043100000003,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079457-ZCy9JOTrv3IJ1ySVWBoK",
+      "requestSha256": "7c2c4fe1bc598eeea248d951afa4f3ec5f6278681b06242376a65dac5705e6aa",
+      "responseSha256": "9b74ac2124ba6e4567445881dc9a96aad23f926181dc9bcfc377e2f0b956f3c9",
+      "usage": {
+        "input_tokens": 1504,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 744,
+        "output_tokens_details": {
+          "reasoning_tokens": 521
+        },
+        "total_tokens": 2248,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 1504,
+        "completion_tokens": 744
+      }
+    },
+    {
+      "number": 4,
+      "scenario": "compaction-review-1",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:51:18.501Z",
+      "status": 200,
+      "elapsedMs": 8950.0472,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079477-GafNiRQV0WemgIvb79aR",
+      "requestSha256": "d57e32a90d9553e2bcdbe1b2981de88d74db2f49b8ff9486edcca755af9a1070",
+      "responseSha256": "629b2d728866afa462aa888febfccbf631be3d917a654666252e6effdb83915c",
+      "usage": {
+        "input_tokens": 5305,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 453,
+        "output_tokens_details": {
+          "reasoning_tokens": 418
+        },
+        "total_tokens": 5758,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 5305,
+        "completion_tokens": 453
+      }
+    },
+    {
+      "number": 5,
+      "scenario": "compaction-review-1",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:51:27.695Z",
+      "status": 200,
+      "elapsedMs": 33531.3053,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079486-0OS9jIvbeaoUQ7wtTSOb",
+      "requestSha256": "2fe304ed04a544b6404538268f82d1c9df9ba3e6d2dad339ff58f8905f5e29bd",
+      "responseSha256": "4f121ac3f72eba5e652e360afb1fc94ffd4581f37f5142703227f89230f30d08",
+      "usage": {
+        "input_tokens": 4556,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 732,
+        "output_tokens_details": {
+          "reasoning_tokens": 451
+        },
+        "total_tokens": 5288,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 4556,
+        "completion_tokens": 732
+      }
+    },
+    {
+      "number": 6,
+      "scenario": "compaction-review-1",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:52:01.315Z",
+      "status": 200,
+      "elapsedMs": 13723.327699999994,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079520-5AuFAzYdsvBrrrVmbZay",
+      "requestSha256": "62ed7a39ac8621add4cb924051458856716ea6e8c8744af6dba0635d02e87755",
+      "responseSha256": "1de5f86d507f2cd22ea06dd25945230305d8aeb5a2eb7dd783e7bdfc6428f963",
+      "usage": {
+        "input_tokens": 2572,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 628,
+        "output_tokens_details": {
+          "reasoning_tokens": 518
+        },
+        "total_tokens": 3200,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 2572,
+        "completion_tokens": 628
+      }
+    },
+    {
+      "number": 7,
+      "scenario": "compaction-review-2",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:52:15.553Z",
+      "status": 200,
+      "elapsedMs": 24723.932,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079534-pNldQNO2CFHzu621Bf9u",
+      "requestSha256": "c91e5acc1ceb970a57cfebb0b1ec4bdbd45fd8d1597e4cc4f080ab999b7a04c8",
+      "responseSha256": "54102a17bddcb1bcd71febdd9e699f757a3a79170eb15e0d1e1ebadcf9743a26",
+      "usage": {
+        "input_tokens": 4890,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 1197,
+        "output_tokens_details": {
+          "reasoning_tokens": 896
+        },
+        "total_tokens": 6087,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 4890,
+        "completion_tokens": 1197
+      }
+    },
+    {
+      "number": 8,
+      "scenario": "compaction-review-2",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:52:40.373Z",
+      "status": 200,
+      "elapsedMs": 11680.829099999988,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079559-PwDIHymfjHhvAJTc439O",
+      "requestSha256": "411549ce152f3cf05c7dfa373d90c10c4c5a3a7749d53ee8f1ad712d96b63f83",
+      "responseSha256": "cb9605b624efd2f017e72734eacbe1f8e7f644106a25d0ed0bf47564996858a5",
+      "usage": {
+        "input_tokens": 5848,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 347,
+        "output_tokens_details": {
+          "reasoning_tokens": 237
+        },
+        "total_tokens": 6195,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 5848,
+        "completion_tokens": 347
+      }
+    },
+    {
+      "number": 9,
+      "scenario": "compaction-review-3",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:52:52.564Z",
+      "status": 200,
+      "elapsedMs": 40709.69589999999,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079571-LWHbpfnSEMPT6RL7yHRI",
+      "requestSha256": "973d3b8a4d5558fb94eb0e094a81cd37b0173ac0f0339a68d859104440c51cd6",
+      "responseSha256": "3c75bbc9d77e647464a93b7474b1506abb3e8e64c1e3fb7bffc81b208152288e",
+      "usage": {
+        "input_tokens": 8045,
+        "input_tokens_details": {
+          "cached_tokens": 4576
+        },
+        "output_tokens": 1372,
+        "output_tokens_details": {
+          "reasoning_tokens": 975
+        },
+        "total_tokens": 9417,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 8045,
+        "completion_tokens": 1372
+      }
+    },
+    {
+      "number": 10,
+      "scenario": "compaction-review-3",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:53:33.366Z",
+      "status": 200,
+      "elapsedMs": 10111.120599999995,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079612-cxqagAId0OcRMwUUb59v",
+      "requestSha256": "4f362626496450f820e731311231108913a38801f57f68dde2c0a11aed3dc054",
+      "responseSha256": "15b6dc58ef086d0a29e731282abf43c3770abc47e4bea00328b6792f998f3b50",
+      "usage": {
+        "input_tokens": 6141,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 340,
+        "output_tokens_details": {
+          "reasoning_tokens": 230
+        },
+        "total_tokens": 6481,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 6141,
+        "completion_tokens": 340
+      }
+    },
+    {
+      "number": 11,
+      "scenario": "compaction-review-4",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:53:44.003Z",
+      "status": 200,
+      "elapsedMs": 41307.3235,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079623-FAVub0pCD90gnvQ1cx8X",
+      "requestSha256": "c613aba64b679772b3748ba712d5c8c37a910e85e6d23704d174cfb8415d41d2",
+      "responseSha256": "208c9b6a0b83067fbe54c44729ccad6694c0cd4946feb5ec3af2ef799b26fb87",
+      "usage": {
+        "input_tokens": 11200,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 1844,
+        "output_tokens_details": {
+          "reasoning_tokens": 1384
+        },
+        "total_tokens": 13044,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 11200,
+        "completion_tokens": 1844
+      }
+    },
+    {
+      "number": 12,
+      "scenario": "compaction-review-4",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:54:25.414Z",
+      "status": 200,
+      "elapsedMs": 5839.043200000015,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079664-9cf70dqu7Kpp2rwp5XBv",
+      "requestSha256": "8f79397fb61e6345ff545b6b2a5da0a298c856762d24b35f416dcf8709e43b4f",
+      "responseSha256": "f73603b3028556911a87e06610be0a49e70663886e7aef0860d34d58a1fa00d8",
+      "usage": {
+        "input_tokens": 6404,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 156,
+        "output_tokens_details": {
+          "reasoning_tokens": 46
+        },
+        "total_tokens": 6560,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 6404,
+        "completion_tokens": 156
+      }
+    },
+    {
+      "number": 13,
+      "scenario": "compaction-review-5",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:54:31.839Z",
+      "status": 200,
+      "elapsedMs": 54308.542400000006,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079670-p7Uu3Yac9LJgKscfqsbr",
+      "requestSha256": "e469a4ef63145c87ffcf627c3facf0da764f2326ef58f9f35b3a38ae78e05775",
+      "responseSha256": "d7fd6fa7e21586aa393f6a6f6d431871c323b448676e517bc3ce1823b10de172",
+      "usage": {
+        "input_tokens": 14355,
+        "input_tokens_details": {
+          "cached_tokens": 9152
+        },
+        "output_tokens": 1366,
+        "output_tokens_details": {
+          "reasoning_tokens": 986
+        },
+        "total_tokens": 15721,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 14355,
+        "completion_tokens": 1366
+      }
+    },
+    {
+      "number": 14,
+      "scenario": "compaction-review-5",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:55:26.248Z",
+      "status": 200,
+      "elapsedMs": 10776.559200000018,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079725-ImGENQ1ykVUh0kJUv4SM",
+      "requestSha256": "a9020450998350d23a2bb65a7d06851e9707bfd6dd374be2ae72e04f66563ff7",
+      "responseSha256": "3b44a1e03bc7b844b525e24c866b9e021b322244815cbab232b96d4f8f4e35d4",
+      "usage": {
+        "input_tokens": 6519,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 388,
+        "output_tokens_details": {
+          "reasoning_tokens": 278
+        },
+        "total_tokens": 6907,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 6519,
+        "completion_tokens": 388
+      }
+    },
+    {
+      "number": 15,
+      "scenario": "compaction-review-6",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:55:40.987Z",
+      "status": 200,
+      "elapsedMs": 42683.994600000035,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079739-Ga6lN8ngi7Tfb14fLZRN",
+      "requestSha256": "ead3a763966e78693b7bb0583001d37121ee9a7350baf91c0d0a0383e70d2ef6",
+      "responseSha256": "bd5c8981c3f172fd574fb1ecc4d3b450e8658a383703bfbf4cc3be076dede737",
+      "usage": {
+        "input_tokens": 17510,
+        "input_tokens_details": {
+          "cached_tokens": 13728
+        },
+        "output_tokens": 1711,
+        "output_tokens_details": {
+          "reasoning_tokens": 1319
+        },
+        "total_tokens": 19221,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 17510,
+        "completion_tokens": 1711
+      }
+    },
+    {
+      "number": 16,
+      "scenario": "compaction-review-6",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:56:23.817Z",
+      "status": 200,
+      "elapsedMs": 8175.3288000000175,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079782-4zVhNWprU16QQ9TUq0O9",
+      "requestSha256": "5fdff44629d05de5935f28e6567b53099229fb1ecba5b8e9133fb7fa3505a99b",
+      "responseSha256": "60c8d289fc25607856cfca6c273db4f9f5f874e8f1c4f0c15541672fa0de9b01",
+      "usage": {
+        "input_tokens": 6723,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 341,
+        "output_tokens_details": {
+          "reasoning_tokens": 231
+        },
+        "total_tokens": 7064,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 6723,
+        "completion_tokens": 341
+      }
+    },
+    {
+      "number": 17,
+      "scenario": "compaction-review-7",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:56:32.610Z",
+      "status": 200,
+      "elapsedMs": 41312.41039999999,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079791-9WdeJEd3E9saTpxiuZht",
+      "requestSha256": "44c59293ca0876cc5ff1a373d3fb9dd2948586e64793a26254ee40fba2569314",
+      "responseSha256": "e1d983beee6ff4420062bd7a0c40260f43c4f7c215f00ca6ee94e5cf61574caa",
+      "usage": {
+        "input_tokens": 20665,
+        "input_tokens_details": {
+          "cached_tokens": 13728
+        },
+        "output_tokens": 1350,
+        "output_tokens_details": {
+          "reasoning_tokens": 1053
+        },
+        "total_tokens": 22015,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 20665,
+        "completion_tokens": 1350
+      }
+    },
+    {
+      "number": 18,
+      "scenario": "compaction-review-7",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:57:14.033Z",
+      "status": 200,
+      "elapsedMs": 6214.664300000004,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079833-VChgFPcZWycHNWE1y430",
+      "requestSha256": "3d0143e1a727dc841b704f8d70c82e0bbfbd711726979ce5986c5cf2af714ab3",
+      "responseSha256": "b2a056bfb25d31954a0354508faf7e62835c7f81bbf3b1f06539727d04c5daee",
+      "usage": {
+        "input_tokens": 6827,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 277,
+        "output_tokens_details": {
+          "reasoning_tokens": 167
+        },
+        "total_tokens": 7104,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 6827,
+        "completion_tokens": 277
+      }
+    },
+    {
+      "number": 19,
+      "scenario": "compaction-review-8",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:57:20.814Z",
+      "status": 200,
+      "elapsedMs": 36718.864300000016,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079839-qQx61EctbZoXe251LRf4",
+      "requestSha256": "6e2c49fccab245a641b43dde75662248145f8bfe8ac6b3cb3c8d1317e05f0ec7",
+      "responseSha256": "472838357f24d2088e5ade429acd97f73ebe7fb3ffa339ee5b913a492a06bbe6",
+      "usage": {
+        "input_tokens": 23820,
+        "input_tokens_details": {
+          "cached_tokens": 18304
+        },
+        "output_tokens": 1358,
+        "output_tokens_details": {
+          "reasoning_tokens": 940
+        },
+        "total_tokens": 25178,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 23820,
+        "completion_tokens": 1358
+      }
+    },
+    {
+      "number": 20,
+      "scenario": "compaction-review-8",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:57:57.649Z",
+      "status": 200,
+      "elapsedMs": 3840.840099999972,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079876-NRL1kUPBUZmTbaSkheA4",
+      "requestSha256": "4fd54b179172c5967a2beab5988e522e0775772bf6066c0a54227a24d118b74b",
+      "responseSha256": "f7a1071d3d45b452365f9845bb670b49da2ab95e16e2df7a0159c99ed88ec470",
+      "usage": {
+        "input_tokens": 7141,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 154,
+        "output_tokens_details": {
+          "reasoning_tokens": 44
+        },
+        "total_tokens": 7295,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 7141,
+        "completion_tokens": 154
+      }
+    },
+    {
+      "number": 21,
+      "scenario": "compaction-review-9",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:58:02.045Z",
+      "status": 200,
+      "elapsedMs": 35569.81970000005,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079881-iX5QfXQe3GAXkkoy4580",
+      "requestSha256": "47cf641a7b1e65775adc0e1149f1f08f9e95e241d8957d32fdf2065515c1f6e4",
+      "responseSha256": "51532caca739b9798a59e13b79a92603d9094e9275ab379ba89963c8f4783ba5",
+      "usage": {
+        "input_tokens": 26975,
+        "input_tokens_details": {
+          "cached_tokens": 22880
+        },
+        "output_tokens": 1472,
+        "output_tokens_details": {
+          "reasoning_tokens": 1023
+        },
+        "total_tokens": 28447,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 26975,
+        "completion_tokens": 1472
+      }
+    },
+    {
+      "number": 22,
+      "scenario": "compaction-review-9",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:58:37.748Z",
+      "status": 200,
+      "elapsedMs": 5163.222400000028,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079916-6CFQc22d96RWZ9biGEnX",
+      "requestSha256": "9d91e43bfe3888f12dbec83f5be16e371601fdc9da76e22cc528d1cf9a5a6a4a",
+      "responseSha256": "531efc4485a757921161eef4deec9ac6d01791c6fead443bee90dcac164712bd",
+      "usage": {
+        "input_tokens": 7375,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 243,
+        "output_tokens_details": {
+          "reasoning_tokens": 133
+        },
+        "total_tokens": 7618,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 7375,
+        "completion_tokens": 243
+      }
+    },
+    {
+      "number": 23,
+      "scenario": "compaction-review-10",
+      "kind": "summary",
+      "startedUtc": "2026-10-15T15:58:43.489Z",
+      "status": 200,
+      "elapsedMs": 33770.880400000024,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079922-hRhjwoa7snGophGkUl5K",
+      "requestSha256": "6c2243f03798acc64468825f7f2ed61dc7bf3c9fe3eec7f3b73e920e5f5a8910",
+      "responseSha256": "079fc19d63082423e1f81454cae4a167b8bdc79352ae4edf4de1b85169571516",
+      "usage": {
+        "input_tokens": 30130,
+        "input_tokens_details": {
+          "cached_tokens": 22880
+        },
+        "output_tokens": 1306,
+        "output_tokens_details": {
+          "reasoning_tokens": 948
+        },
+        "total_tokens": 31436,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 30130,
+        "completion_tokens": 1306
+      }
+    },
+    {
+      "number": 24,
+      "scenario": "compaction-review-10",
+      "kind": "continuation",
+      "startedUtc": "2026-10-15T15:59:17.383Z",
+      "status": 200,
+      "elapsedMs": 9857.140800000052,
+      "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "actualModel": "nvidia/nemotron-3-super-120b-a12b:free",
+      "generationId": "gen-1792079956-Q8bOJpdvkRyQ6wZcUYQT",
+      "requestSha256": "787b8cff43b1d41c197087f5cfd416d51ad6f04314f0b9019c7eab58dedab173",
+      "responseSha256": "2870a2ee6ead18d2d70a47c869d99bf9a2f078d1b71464e9aa44720bdccfd309",
+      "usage": {
+        "input_tokens": 7479,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 288,
+        "output_tokens_details": {
+          "reasoning_tokens": 178
+        },
+        "total_tokens": 7767,
+        "cost": 0,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 0,
+          "upstream_inference_input_cost": 0,
+          "upstream_inference_output_cost": 0
+        },
+        "prompt_tokens": 7479,
+        "completion_tokens": 288
+      }
+    }
+  ],
+  "validation": {
+    "typecheck": {
+      "utc": "2026-10-15T15:42:54.9603292Z",
+      "step": "typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 59.7459907,
+      "revision": "c8d70d68a81c1a8885be32e15f4d189658af6811",
+      "command": "next typegen && tsc --noEmit -p tsconfig.json"
+    },
+    "sourceLint": {
+      "utc": "2026-10-15T15:44:31.3222267Z",
+      "step": "lint",
+      "exitCode": 0,
+      "elapsedSeconds": 96.299543,
+      "revision": "c8d70d68a81c1a8885be32e15f4d189658af6811",
+      "command": "eslint src"
+    },
+    "harnessLint": {
+      "utc": "2026-10-15T16:00:20.9952528Z",
+      "exitCode": 0,
+      "files": [
+        "scripts/compaction-action-acceptance.mjs",
+        "scripts/compaction-action-ledger.mjs",
+        "__tests__/model/summarizingCompaction.test.ts"
+      ],
+      "sha256": [
+        "b1a2b154dcd6123af3c051a24a68d46ffb1e1310279fdab27d270d9d503eb724",
+        "bc91a62388aceb53d533df19211841415c924a9c35829d261e7ea53775abfd0e",
+        "2783bfb9e86e08c7b4a055f5df5eb38870f84bf1ee9093de223e5c81fb8e6470"
+      ]
+    },
+    "inspectedNonContainerBuild": {
+      "utc": "2026-10-15T15:50:04.9468254Z",
+      "step": "build",
+      "exitCode": 0,
+      "elapsedSeconds": 333.5841249,
+      "revision": "c8d70d68a81c1a8885be32e15f4d189658af6811",
+      "command": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "buildId": "LRKlch-xZ5kNHq8PV5lIx"
+    },
+    "instrumentation": {
+      "utc": "2026-10-15T15:43:03.781Z",
+      "passed": true,
+      "completedOrder": [
+        1,
+        0
+      ],
+      "peakConcurrentCommits": 2,
+      "observedDuplicateAppend": true,
+      "suppressedAcknowledgementHasNoReceipt": true,
+      "actual": {
+        "rows": [
+          {
+            "actionId": "acción-completa-ñ",
+            "receiptId": "657c65c3-bced-4337-9b5d-53d437a7a80b",
+            "committedUtc": "2026-10-15T15:43:03.604Z"
+          },
+          {
+            "actionId": "acción-incierta-ñ",
+            "receiptId": "3763134f-cbbf-4bb3-a7b9-5f2b91deb41c",
+            "committedUtc": "2026-10-15T15:43:03.606Z"
+          },
+          {
+            "actionId": "acción-completa-ñ",
+            "receiptId": "924f3972-da63-4331-95e5-3128a3c48b28",
+            "committedUtc": "2026-10-15T15:43:03.694Z"
+          }
+        ],
+        "calls": [
+          {
+            "number": 1,
+            "utc": "2026-10-15T15:43:03.604Z",
+            "tool": "commit_action",
+            "actionId": "acción-completa-ñ",
+            "startedAtMs": 634.3142,
+            "fsyncedAtMs": 639.7537,
+            "acknowledgement": "completed",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"657c65c3-bced-4337-9b5d-53d437a7a80b\",\"committedUtc\":\"2026-10-15T15:43:03.604Z\",\"status\":\"completed\"}"
+                }
+              ]
+            },
+            "completedAtMs": 718.5779
+          },
+          {
+            "number": 2,
+            "utc": "2026-10-15T15:43:03.606Z",
+            "tool": "commit_action",
+            "actionId": "acción-incierta-ñ",
+            "startedAtMs": 635.8212,
+            "fsyncedAtMs": 642.4844,
+            "acknowledgement": "suppressed-after-fsync",
+            "result": {
+              "isError": true,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"actionId\":\"acción-incierta-ñ\",\"status\":\"unknown\",\"message\":\"Acknowledgement unavailable. Do not retry. Reconcile with lookup_action when requested.\"}"
+                }
+              ]
+            },
+            "completedAtMs": 642.5198
+          },
+          {
+            "number": 3,
+            "utc": "2026-10-15T15:43:03.694Z",
+            "tool": "commit_action",
+            "actionId": "acción-completa-ñ",
+            "startedAtMs": 723.408,
+            "fsyncedAtMs": 725.9561,
+            "acknowledgement": "completed",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"924f3972-da63-4331-95e5-3128a3c48b28\",\"committedUtc\":\"2026-10-15T15:43:03.694Z\",\"status\":\"completed\"}"
+                }
+              ]
+            },
+            "completedAtMs": 803.5796
+          },
+          {
+            "number": 4,
+            "utc": "2026-10-15T15:43:03.777Z",
+            "tool": "lookup_action",
+            "actionId": "acción-completa-ñ",
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"actionId\":\"acción-completa-ñ\",\"status\":\"completed\",\"count\":2,\"receipts\":[{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"657c65c3-bced-4337-9b5d-53d437a7a80b\",\"committedUtc\":\"2026-10-15T15:43:03.604Z\"},{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"924f3972-da63-4331-95e5-3128a3c48b28\",\"committedUtc\":\"2026-10-15T15:43:03.694Z\"}]}"
+                }
+              ]
+            }
+          }
+        ],
+        "peakConcurrentCommits": 2,
+        "fileSha256": "d8a69db3577e7e2ef31e6fe17ca3f6df6ee941a6b6b65e13e576bb627324502f"
+      }
+    },
+    "liveJourney": {
+      "utc": "2026-10-15T15:59:27.5037125Z",
+      "step": "genuine-tool-action-compaction-acceptance",
+      "exitCode": 0,
+      "elapsedSeconds": 536.7572477
+    },
+    "partialParallelGroupRegression": {
+      "utc": "2026-10-15T16:00:15.1627190Z",
+      "step": "partial-parallel-group-regression",
+      "exitCode": 0,
+      "elapsedSeconds": 2.0363636,
+      "revision": "c8d70d68a81c1a8885be32e15f4d189658af6811",
+      "sourceSha256": "2783bfb9e86e08c7b4a055f5df5eb38870f84bf1ee9093de223e5c81fb8e6470",
+      "passed": true,
+      "cases": 29,
+      "suites": 1,
+      "scope": "Either missing result in a two-call group: ten attempts refuse summary generation/archive; emergency refit protects both calls and observed result, reports infeasible capacity; once resolved, summarization resumes without canonical mutation",
+      "limitation": "Focused local regression with an injected narrative; not real-model/crash-in-flight unresolved recovery"
+    },
+    "unchangedRuntimeRegressions": {
+      "evidence": "https://github.com/mario-andreschak/FLUJO/blob/f02f18d84a00409dd1e7085069cf1ea0d00b7b49/docs/performance/compaction-structured-observations-2026-10-15.json",
+      "reusedForUnchangedApplicationSource": true,
+      "cases": 50,
+      "suites": 3,
+      "scope": "Original regression, repeated exact JSON, cache migration, bounded allocation and source release"
+    }
+  },
+  "limits": [
+    "Real model-selected local filesystem appends; acknowledgement is deliberately suppressed after fsync, not third-party delivery or a transport/crash-midcommit atomicity test",
+    "One explicit approved Free model and controlled workload, without a paired before/after implementation claim or universal duplicate-execution guarantee",
+    "The ledger and prompt describe reconciliation; the result does not establish safety when a model ignores instructions or a runtime crashes inside commit",
+    "Partially resolved parallel groups have local regression qualification; real-model process interruption with unresolved groups remains open",
+    "Native compaction/window/session/signature, arbitrary concurrency, every-transform fidelity, visual benefit and installed/release acceptance remain open"
+  ],
+  "remoteWorkflowDispatches": 0,
+  "containerBuilds": 0,
+  "fullSuiteRuns": 0
+}

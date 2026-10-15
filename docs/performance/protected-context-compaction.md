@@ -273,3 +273,43 @@ is frozen. This controlled local-write scenario does not establish third-party
 delivery, crash-midcommit atomicity, arbitrary concurrent/unresolved tool groups,
 every provider or transform, native session/signature recovery, visual benefit
 or release acceptance. Those broader #1091 criteria remain open.
+
+### Parallel action acceptance and partially resolved groups
+
+Set `COMPACTION_ACCEPTANCE_SCENARIO=parallel` to exercise two model-selected
+`commit_action` calls in one assistant tool-call group. The MCP server uses a
+concurrency limit of two. The first action waits for the second to finish and
+then waits another 75 milliseconds; both calls must overlap, and their result
+completion order must differ from the authored call order. A sequential caller
+times out and fails this acceptance. Every commit still appends and fsyncs a
+new row; the ledger does not suppress duplicates.
+
+The uncertain second acknowledgement, later read reconciliation, ten fresh
+summaries, exact receipt checks, complete archived results and two application
+restarts use the same checks as the sequential scenario. Receipts come from the
+actual ledger after execution and are never supplied in user requests. Default
+execution remains the existing sequential scenario.
+
+Two focused local regressions also cover either missing result in a two-call
+group. Across ten attempts, summary generation and archive writes remain
+disabled; an infeasible emergency refit keeps both calls and the observed
+result intact. Supplying the missing result permits summarization again without
+changing canonical history. These tests use an injected narrative and establish
+local projection behavior; live interruption with unresolved tools, arbitrary
+concurrency and crash-midcommit recovery remain open acceptance work.
+
+The [frozen parallel result](compaction-parallel-actions-2026-10-15.json) passes
+ten exact-receipt reviews with two commit invocations, two physical writes and
+zero duplicate writes. Both five/ten checkpoints pass, all three application
+processes close, canonical history and tool pairing remain intact, and every
+complete action archive is hash-verified. The two actual commit calls overlap
+and finish in reverse authored order.
+
+The live journey takes 536.757 seconds, measured separately from the
+333.584-second application build. All 24 approved Free requests (11 summaries
+and 13 continuations) report $0 with no missing costs. The
+[complete parallel provider trace](compaction-parallel-actions-provider-trace-2026-10-15.json.gz)
+contains actual requests/replies; compressed and uncompressed hashes are in the
+result. Local typecheck, source/touched lint, 29 focused cases and independent
+MCP concurrency/duplicate instrumentation pass. This scoped result extends the
+earlier sequential proof; it does not close the remaining #1091 criteria.
