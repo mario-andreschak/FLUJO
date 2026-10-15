@@ -38,7 +38,7 @@ and lane08 handover. Source/fixture evidence is distinct from release qualificat
 
 #1093 remains open for identified candidate/provider/browser/installed acceptance.
 Real OAuth, provider sampling token/stop behavior, strict modern HTTP header failures,
-subscription correlation/teardown, durable Tasks restart/owner revocation, Apps browser
+subscription correlation/teardown, Apps browser
 origin/CSP/consent/teardown and installed Windows/Linux profiles belong to release
 pre-flight under the current pause. Existing #404 evidence stays credited only for
 unchanged inputs; changed adapter inputs require applicable requalification. CIMD is
@@ -79,3 +79,32 @@ reference results are source runtime proof, not installed/provider/browser certi
 Sanitized [built-app receipt](../audits/evidence/mcp-conformance-1093-2026-10-12/built-app.json)
 and [HTTP wire receipt](../audits/evidence/mcp-conformance-1093-2026-10-12/http-wire.json)
 retain the checked assertions without credentials or fixture paths.
+
+## Built-app Tasks recovery — October 14, 2026
+
+The existing production Tasks smoke now verifies live owner-credential revocation
+while an authored Flow is waiting on a loopback provider request and a second task
+is waiting on confirmation. The production private-policy writer revokes the
+credential atomically. The active request closes, both records fail with
+`TASK_AUTH_REVOKED`, both execution leases settle, and private payloads are removed.
+Get, update, cancel and new tool calls return HTTP 401. The remaining valid
+credential cannot retrieve either task. No confirmation or work is replayed.
+
+The first attempt stopped at the private-file guard: the smoke issuer's policy
+file inherited Windows ACLs rather than carrying explicit file protection. The
+fixture now issues its policy through the existing private atomic JSON writer;
+focused source/compiled-issuer regressions verify private read and revocation.
+The failed attempt is retained in the receipt and has no acceptance credit.
+
+The same actual built application also verifies completed encrypted results after
+process restart, `TASK_INTERRUPTED` without replay, duplicate confirmation inputs,
+decline without generation, cancellation, workspace/credential isolation, and
+legacy/disabled-feature behavior. Its sanitized machine receipt is emitted only
+after application closure and verified deletion of the owned runtime/authority
+directories. See the [exact-tree qualification and sanitized protocol statuses](../audits/evidence/mcp-tasks-recovery-1093-2026-10-14.json).
+
+This advances the local Tasks portion of #1093 using a private loopback model
+fixture and zero external provider calls. Genuine provider/OAuth behavior, deployed
+subscription correlation, Apps browser behavior and installed Windows/Linux
+qualification remain release pre-flight; this source-tree result does not replace
+those profiles. Existing unchanged focused regression evidence remains credited.
