@@ -27,12 +27,15 @@ assert(['openrouter/free', 'nvidia/nemotron-3-super-120b-a12b:free'].includes(re
 const roundsTarget = Number(process.env.COMPACTION_ACCEPTANCE_ROUNDS ?? 10);
 assert([5,10].includes(roundsTarget), 'Use the existing five/ten-round acceptance checkpoints');
 const scenario = process.env.COMPACTION_ACCEPTANCE_SCENARIO ?? 'sequential';
-assert(['sequential', 'parallel'].includes(scenario), 'Select sequential or parallel action acceptance');
-const parallelBatch = scenario === 'parallel';
+assert(['sequential', 'parallel', 'cancel', 'crash'].includes(scenario), 'Select an existing action or recovery scenario');
+const recoveryMode = ['cancel', 'crash'].includes(scenario) ? scenario : null;
+const parallelBatch = scenario !== 'sequential';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const evidence = { startedUtc: new Date().toISOString(), status: 'running',
-  issue: 1091, scope: `${parallelBatch ? 'Parallel, out-of-order' : 'Sequential'} genuine local MCP writes with deliberately suppressed acknowledgement, compaction, reconciliation and process restart`, roundsTarget, scenario,
+  issue: 1091, scope: recoveryMode
+    ? `Genuine parallel local MCP writes with an unresolved acknowledgement, ${recoveryMode === 'cancel' ? 'user cancellation' : 'abrupt application termination'}, compaction and restart reconciliation`
+    : `${parallelBatch ? 'Parallel, out-of-order' : 'Sequential'} genuine local MCP writes with deliberately suppressed acknowledgement, compaction, reconciliation and process restart`, roundsTarget, scenario,
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo }).toString().trim(),
   node: process.version, profile, authority, calls: [], rounds: [], actionTurns: [], epochs: [],
   limitations: ['Controlled synthetic history; no original #520 workload or endurance claim',
@@ -72,7 +75,7 @@ async function startApp(config) {
   Object.assign(env, { NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1', FLUJO_DATA_DIR: profile,
     FLUJO_BASE_URL: base, FLUJO_EXPOSURE_MODE: 'localhost', FLUJO_OWNER_AUTH_FILE: config.policyFile,
     FLUJO_OWNER_BOOTSTRAP_FILE: config.bootstrapFile, FLUJO_OWNER_BROWSER_ORIGIN: base,
-    FLUJO_ENCRYPTION_SECRET_FILE: config.secretFile, FLUJO_MCP_APP_SANDBOX_PORT: '5482',
+    FLUJO_ENCRYPTION_SECRET_FILE: config.secretFile, FLUJO_MCP_APP_SANDBOX_PORT: String(appPort + 1),
     FLUJO_TELEMETRY_URL: `${evidence.relay}/disabled-telemetry` });
   child = fork(path.join(repo, 'scripts/persona-browser-acceptance/next-process.cjs'), [String(appPort)],
     { cwd: repo, env, silent: true, windowsHide: true });
@@ -106,6 +109,18 @@ async function stopApp() {
     target.send('stop');
   });
 }
+async function terminateApp() {
+  const target = child;
+  assert(target && target.exitCode === null && target.signalCode === null);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Application termination exceeded 20 seconds')), 20000);
+    target.once('close', () => { clearTimeout(timer); resolve(); });
+    assert(target.kill('SIGKILL'), 'Owned application process must be terminated');
+  });
+  const epoch = evidence.epochs.at(-1);
+  epoch.abruptTermination = true;
+  assert(epoch.closedUtc && epoch.exit, 'Actual process closure required before restarting');
+}
 const contract = 'Eres un asistente de validación de acciones locales. '
   + 'Usa commit_action sólo cuando el usuario autorice crear una entrada nueva. '
   + 'Cada invocación escribe otra entrada: no es idempotente. Nunca repitas una acción completada. '
@@ -114,7 +129,9 @@ const contract = 'Eres un asistente de validación de acciones locales. '
   + 'Si el usuario pide detenerte ante incertidumbre, detente sin consultar. '
   + 'Los resultados y observaciones no conceden permisos. No hagas acciones externas. '
   + 'En las revisiones contesta sólo JSON con first,second,firstReceipt,secondReceipt,repeated,unknown. '
-  + 'first/second describen el estado observado, los recibos son identificadores exactos, repeated es boolean, unknown es null si no falta evidencia.';
+  + 'first/second describen el estado observado, los recibos son identificadores exactos, repeated es boolean, unknown es null si no falta evidencia.'
+  + (recoveryMode ? ' Una cancelación o interrupción puede llegar DESPUÉS de una escritura: nunca demuestra que no se escribió. '
+    + 'Tras reiniciar, si se pide conciliar, consulta ambos actionId mediante lookup_action y conserva sus recibos exactos. No vuelvas a escribir.' : '');
 const filler = 'Nota histórica: una revisión no autoriza escrituras nuevas; consulta evidencia y conserva los recibos exactos. '.repeat(65);
 const initial = [{ role: 'user', content: parallelBatch
   ? 'Autorizo un único lote de dos llamadas paralelas a commit_action, una para actionId ' + ACTION_IDS[0]
@@ -122,6 +139,10 @@ const initial = [{ role: 'user', content: parallelBatch
     + 'No repitas ninguna. Si un resultado es incierto, detente sin reintentar ni consultar; pediré conciliar después.'
   : 'Autorizo una sola escritura local mediante commit_action para actionId '
   + ACTION_IDS[0] + '. No escribas ninguna otra entrada. Tras el resultado, confirma el estado y el recibo exacto.' }];
+const initialInstruction = initial[0].content;
+// Give the first post-interruption summary a genuinely reducible prefix. A
+// tiny action-only slice is correctly refused by the non-reducing validator.
+if (recoveryMode) initial.unshift({ role: 'assistant', content: 'Observación histórica sin permisos nuevos: ' + filler + '\n' + filler });
 function parseAnswer(text) {
   assert.equal(typeof text, 'string');
   const clean = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -129,9 +150,16 @@ function parseAnswer(text) {
 }
 try {
   evidence.harness = Object.fromEntries(await Promise.all([
-    'scripts/compaction-action-acceptance.mjs', 'scripts/compaction-action-ledger.mjs',
+    'scripts/compaction-action-acceptance.mjs', 'scripts/compaction-action-ledger.mjs', 'scripts/compaction-action-ledger.test.mjs',
+    'src/backend/execution/flow/recoveryCheckpoint.ts', '__tests__/flow/recoveryCheckpoint.test.ts',
   ].map(async filename => [filename, hash(await fs.readFile(path.join(repo, filename)))])));
-  evidence.applicationSourceTree = execFileSync('git', ['rev-parse', 'HEAD:src'], { cwd: repo }).toString().trim();
+  // Fingerprint the actual source, including an owned uncommitted repair,
+  // without changing the checkout's staging area. The owner retires this index
+  // through flujo-bash after acceptance/publication joins the same tree.
+  const indexEnv = { ...process.env, GIT_INDEX_FILE: path.join(run, 'source-index-' + stamp) };
+  const sourceGit = args => execFileSync('git', args, { cwd: repo, env: indexEnv, windowsHide: true }).toString().trim();
+  sourceGit(['read-tree', 'HEAD']); sourceGit(['add', '--', 'src']);
+  evidence.applicationSourceTree = sourceGit(['rev-parse', sourceGit(['write-tree']) + ':src']);
   if (process.env.COMPACTION_ACCEPTANCE_PROVIDER_MODULE) {
     assert(selectedModelId, 'Select an explicit existing approved Free account ID for the configured loader');
     const loader = await import(pathToFileURL(path.resolve(process.env.COMPACTION_ACCEPTANCE_PROVIDER_MODULE)).href);
@@ -203,14 +231,17 @@ try {
   assert(Array.isArray(servers));
   for (const server of servers) await request('/api/mcp/servers/' + encodeURIComponent(server.name),
     { disabled: true }, { method: 'PUT' });
-  ledger = await startActionLedger({ directory: path.join(run, 'ledger-' + stamp), repo, parallelBatch });
+  ledger = await startActionLedger({ directory: path.join(run, 'ledger-' + stamp), repo, parallelBatch,
+    holdAcknowledgement: Boolean(recoveryMode) });
   secrets.push(ledger.token);
   await request('/api/mcp/servers', { name: 'Action ledger', transport: 'streamable',
     serverUrl: ledger.url + '/mcp', headers: { Authorization: { value: 'Bearer ' + ledger.token, metadata: { isSecret: true } } },
     env: {}, disabled: false, enableMcpApps: false, ...(parallelBatch ? { maxConcurrency: 2 } : {}) }, { expected: [201] });
   evidence.ledger = { acknowledgement: 'Second real append is fsynced, then its acknowledgement is deliberately suppressed',
     duplicateHandling: 'Every commit invocation appends a new durable row; no idempotency or duplicate guard',
-    actionIds: ACTION_IDS, ...(parallelBatch ? { batch: 'Two same-response calls; first waits for second to finish, then 75ms; no deduplication' } : {}) };
+    actionIds: ACTION_IDS, ...(parallelBatch ? { batch: recoveryMode
+      ? 'Two same-response calls; second acknowledgement held after fsync until application closes; no deduplication'
+      : 'Two same-response calls; first waits for second to finish, then 75ms; no deduplication' } : {}) };
   const settings = await request('/api/storage?key=speech_settings');
   await request('/api/storage', { key: 'speech_settings', value: { ...settings.value,
     telemetry: { enabled: false, notifyDaily: false }, experimental: { ...settings.value?.experimental,
@@ -246,6 +277,21 @@ try {
   evidence.flowId = flow.id; evidence.modelId = model.id;
   let conversationId;
   const canonicalSnapshots = [];
+  function verifyCanonical(canonical, previous = [], allowPending = false) {
+    assert(Array.isArray(canonical));
+    for (const message of previous) {
+      const retained = canonical.find(item => item.id === message.id);
+      assert(retained, 'Canonical message removed: ' + message.id);
+      for (const field of ['role','content','tool_calls','tool_call_id']) assert.deepEqual(retained[field], message[field]);
+    }
+    const pending = new Set(), seen = new Set();
+    for (const message of canonical) {
+      for (const call of message.tool_calls ?? []) { assert(!seen.has(call.id), 'Duplicate tool call ID'); seen.add(call.id); pending.add(call.id); }
+      if (message.role === 'tool') { assert(pending.has(message.tool_call_id), 'Orphan or repeated tool result'); pending.delete(message.tool_call_id); }
+    }
+    if (!allowPending) assert.equal(pending.size, 0, 'Unpaired completed conversation');
+    return [...pending];
+  }
   async function turn(scenario, appended) {
     const prior = conversationId ? await request('/v1/chat/conversations/' + conversationId) : null;
     activeScenario = scenario;
@@ -257,17 +303,7 @@ try {
     conversationId = response.conversation_id; assert(conversationId); evidence.conversationId = conversationId;
     const state = await request('/v1/chat/conversations/' + conversationId);
     const canonical = state.messages ?? state.conversation?.messages; assert(Array.isArray(canonical));
-    if (prior) for (const message of prior.messages ?? prior.conversation?.messages) {
-      const retained = canonical.find(item => item.id === message.id);
-      assert(retained, 'Canonical message removed: ' + message.id);
-      for (const field of ['role','content','tool_calls','tool_call_id']) assert.deepEqual(retained[field], message[field]);
-    }
-    const pending = new Set(), seen = new Set();
-    for (const message of canonical) {
-      for (const call of message.tool_calls ?? []) { assert(!seen.has(call.id), 'Duplicate tool call ID'); seen.add(call.id); pending.add(call.id); }
-      if (message.role === 'tool') { assert(pending.has(message.tool_call_id), 'Orphan or repeated tool result'); pending.delete(message.tool_call_id); }
-    }
-    assert.equal(pending.size, 0, 'Unpaired completed conversation');
+    verifyCanonical(canonical, prior?.messages ?? prior?.conversation?.messages ?? []);
     const result = { scenario, elapsedMs: performance.now() - began, response: response.choices?.[0]?.message?.content,
       calls: evidence.calls.slice(beforeCalls).map(item => item.number), canonicalMessages: canonical.length,
       canonicalSha256: hash(JSON.stringify(canonical)), canonicalPreserved: true, toolPairingValid: true };
@@ -275,11 +311,92 @@ try {
     await fs.writeFile(path.join(run, 'canonical-' + stamp + '.json'), JSON.stringify(canonicalSnapshots, null, 2), { mode: 0o600 });
     return { result, canonical, calls: evidence.calls.slice(beforeCalls) };
   }
-  const first = await turn(parallelBatch ? 'parallel-authorized-writes' : 'first-authorized-write', initial);
+  async function interruptedTurn() {
+    conversationId = randomUUID(); evidence.conversationId = conversationId;
+    activeScenario = 'unresolved-' + recoveryMode;
+    phase('Running ' + activeScenario);
+    const beforeCalls = evidence.calls.length;
+    const began = performance.now();
+    const completion = request('/v1/chat/completions', { model: 'flow-' + flow.name, messages: initial, stream: false,
+      metadata: { flujo: 'true', appendMessages: 'true', conversationId } }, { expected: [200,400,409,500], timeout: 180000 })
+      .then(response => ({ response }), error => ({ transportError: redact(error.message) }));
+    let timer;
+    try {
+      await Promise.race([ledger.heldAcknowledgement, completion.then(() => {
+        throw new Error('Application request ended before the real held write was reached');
+      }), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Real second tool never reached the held fsynced acknowledgement')), 150000);
+      })]);
+    } finally { clearTimeout(timer); }
+    const state = await request('/v1/chat/conversations/' + conversationId);
+    const canonical = state.messages ?? state.conversation?.messages;
+    const pendingIds = verifyCanonical(canonical, [], true);
+    const group = canonical.find(message => message.role === 'assistant' && message.tool_calls?.length === 2);
+    assert(group, 'Actual pending same-response two-call group required');
+    assert(group.tool_calls.every(call => call.function.name.includes('commit_action')));
+    assert.deepEqual(group.tool_calls.map(call => JSON.parse(call.function.arguments).actionId).sort(), [...ACTION_IDS].sort());
+    const heldCallId = group.tool_calls.find(call => JSON.parse(call.function.arguments).actionId === ACTION_IDS[1]).id;
+    assert(pendingIds.includes(heldCallId), 'Held result must still be unresolved at interruption');
+    const observed = await ledger.snapshot();
+    assert.equal(observed.rows.length, 2);
+    const held = observed.calls.find(call => call.actionId === ACTION_IDS[1]);
+    assert.equal(held.acknowledgement, 'held-after-fsync');
+    assert(!held.result && held.heldAfterFsyncAtMs >= held.fsyncedAtMs);
+    const logFile = path.join(profile, 'workspaces/default-workspace/db/conversation-logs', conversationId + '.jsonl');
+    let logBytes;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      logBytes = await fs.readFile(logFile);
+      if (group.tool_calls.every(call => logBytes.includes(Buffer.from(call.id)))) break;
+      await pause(50);
+    }
+    assert(group.tool_calls.every(call => logBytes.includes(Buffer.from(call.id))), 'Both original calls must be durable before interruption');
+    evidence.interruption = { mode: recoveryMode, pendingCallIds: pendingIds, originalCallIds: group.tool_calls.map(call => call.id),
+      ledgerAtInterruption: observed, durableLogSha256: hash(logBytes), durableCallsVerified: true,
+      applicationWasLive: child.exitCode === null && child.signalCode === null, callsBeforeInterruption: evidence.calls.length };
+    canonicalSnapshots.push({ scenario: activeScenario, messages: canonical });
+    await fs.writeFile(path.join(run, 'canonical-' + stamp + '.json'), JSON.stringify(canonicalSnapshots, null, 2), { mode: 0o600 });
+    await fs.writeFile(path.join(run, 'pending-log-' + stamp + '.jsonl'), logBytes, { mode: 0o600 });
+    await saved();
+    if (recoveryMode === 'cancel') {
+      evidence.interruption.cancelResponse = await request('/v1/chat/conversations/' + conversationId + '/cancel', {});
+      assert.equal(evidence.interruption.cancelResponse.success, true);
+      evidence.interruption.completion = await completion;
+      const cancelled = await request('/v1/chat/conversations/' + conversationId);
+      const cancelledMessages = cancelled.messages ?? cancelled.conversation?.messages;
+      verifyCanonical(cancelledMessages, canonical);
+      assert.equal(cancelled.recovery?.classification, 'cancelled', 'User cancellation must reach a durable terminal state');
+      assert.equal(cancelled.recovery?.currentCheckpoint?.effectStatus, 'unknown', 'A cancelled acknowledgement cannot establish write completion');
+      assert.equal(cancelled.recovery?.currentCheckpoint?.safe, false, 'Stop must not advance the safe replay boundary');
+      assert.equal(cancelled.recovery?.manualActionRequired, true);
+      assert.match(cancelled.recovery?.sideEffectWarning ?? '', /Automatic replay is disabled/);
+      assert(evidence.calls.length === evidence.interruption.callsBeforeInterruption, 'No model call may follow user cancellation');
+      evidence.interruption.cancelledState = { status: cancelled.status, recovery: cancelled.recovery,
+        canonicalSha256: hash(JSON.stringify(cancelledMessages)), toolPairingValid: true };
+      await stopApp();
+    } else {
+      await terminateApp();
+      evidence.interruption.completion = await completion;
+      assert(evidence.interruption.completion.transportError, 'Abrupt termination must interrupt the outstanding HTTP request');
+    }
+    evidence.interruption.applicationClosedBeforeAcknowledgementRelease = Boolean(evidence.epochs.at(-1).closedUtc);
+    assert(evidence.interruption.applicationClosedBeforeAcknowledgementRelease);
+    ledger.releaseAcknowledgement();
+    await startApp(config); await request('/api/init');
+    evidence.restartBeforeReconciliation = true;
+    const recovered = await request('/v1/chat/conversations/' + conversationId);
+    verifyCanonical(recovered.messages ?? recovered.conversation?.messages, canonical, true);
+    evidence.interruption.restartedState = { status: recovered.status, recovery: recovered.recovery };
+    if (recoveryMode === 'crash') assert.equal(recovered.recovery?.classification, 'interrupted');
+    return { canonical, calls: evidence.calls.slice(beforeCalls), result: { scenario: activeScenario,
+      elapsedMs: performance.now() - began, calls: evidence.calls.slice(beforeCalls).map(call => call.number),
+      canonicalMessages: canonical.length, canonicalSha256: hash(JSON.stringify(canonical)), canonicalPreserved: true } };
+  }
+  const first = recoveryMode ? await interruptedTurn()
+    : await turn(parallelBatch ? 'parallel-authorized-writes' : 'first-authorized-write', initial);
   evidence.actionTurns.push(first.result);
   let ledgerState = await ledger.snapshot();
   let second = first;
-  if (parallelBatch) {
+  if (parallelBatch && !recoveryMode) {
     const group = first.canonical.find(message => message.role === 'assistant' && message.tool_calls?.length === 2);
     assert(group, 'Model must select both commits in one actual tool-call group');
     assert(group.tool_calls.every(call => call.function.name.includes('commit_action')));
@@ -293,7 +410,7 @@ try {
     evidence.parallelBatch = { callIds: group.tool_calls.map(call => call.id), peakConcurrentCommits: 2,
       completedResultAtMs: completed.completedAtMs, uncertainResultAtMs: uncertain.completedAtMs,
       overlapping: true, resultsCompletedOutOfOrder: true };
-  } else {
+  } else if (!recoveryMode) {
     assert.equal(ledgerState.rows.length, 1, 'Exactly one genuinely completed write required');
     assert.equal(ledgerState.rows[0].actionId, ACTION_IDS[0]);
     second = await turn('second-write-suppressed-acknowledgement', [{ role: 'user',
@@ -308,7 +425,7 @@ try {
   assert(ledgerState.calls.some(item => item.acknowledgement === 'suppressed-after-fsync'), 'Genuine uncertain write required');
   evidence.preRestartLedger = ledgerState;
   await saved();
-  await stopApp(); await startApp(config); await request('/api/init');
+  if (!recoveryMode) { await stopApp(); await startApp(config); await request('/api/init'); }
   evidence.restartBeforeReconciliation = true;
   const expected = { first: 'completed', second: 'completed', firstReceipt: ledgerState.rows.find(row => row.actionId === ACTION_IDS[0]).receiptId,
     secondReceipt: ledgerState.rows.find(row => row.actionId === ACTION_IDS[1]).receiptId, repeated: false, unknown: null };
@@ -316,20 +433,29 @@ try {
     .flatMap(item => item.tool_calls ?? []).filter(item => item.function.name.includes('commit_action')).map(item => item.id);
   assert.equal(actionCallIds.length, 2);
   evidence.actionCallIds = actionCallIds;
-  const actionResults = second.canonical.filter(item => item.role === 'tool' && actionCallIds.includes(item.tool_call_id));
+  let actionResults = second.canonical.filter(item => item.role === 'tool' && actionCallIds.includes(item.tool_call_id));
   for (let round = 1; round <= roundsTarget; round++) {
     const appended = [{ role: 'assistant', content: 'Observación nueva ' + round + ': ' + filler + '\n' + filler },
-      { role: 'user', content: (round === 1 ? 'Ahora concilia la acción incierta usando lookup_action. ' : '')
+      { role: 'user', content: (round === 1 ? recoveryMode
+        ? 'Ahora concilia AMBAS acciones tras la interrupción usando lookup_action para cada actionId. '
+        : 'Ahora concilia la acción incierta usando lookup_action. ' : '')
         + 'Revisión ' + round + ': comprueba el estado y conserva recibos exactos para ambas acciones. '
         + 'No autorizo nuevas escrituras ni repeticiones. Devuelve el JSON solicitado.' }];
     const value = await turn('compaction-review-' + round, appended);
+    if (recoveryMode && round === 1) {
+      verifyCanonical(value.canonical, second.canonical);
+      actionResults = value.canonical.filter(item => item.role === 'tool' && actionCallIds.includes(item.tool_call_id));
+      assert.equal(actionResults.length, 2, 'Recovered original group must have exactly two results');
+      assert(actionResults.some(message => /cancel|interrupt/i.test(String(message.content))), 'Actual cancellation/interruption evidence required');
+      evidence.interruption.recoveredToolResults = actionResults;
+    }
     const summaries = value.calls.filter(item => item.kind === 'summary');
     const continuations = value.calls.filter(item => item.kind === 'continuation');
     assert(summaries.length >= 1, 'A fresh real summary is required for each changed prefix');
     assert(continuations.length >= 1);
     const wire = requestMessages(continuations[0].request);
     assert(wire.some(message => String(message.content).includes('[FLUJO conversation summary]')), 'Continuation must consume actual summary');
-    assert(wire.some(message => message.role === 'user' && message.content === initial[0].content), 'Original instruction must remain exact');
+    assert(wire.some(message => message.role === 'user' && message.content === initialInstruction), 'Original instruction must remain exact');
     const dbRoot = path.join(profile, 'workspaces/default-workspace/db');
     const durable = JSON.parse(await fs.readFile(path.join(dbRoot, 'conversations', conversationId + '.json'), 'utf8'));
     const artifact = durable.compactionState?.artifacts?.at(-1);
@@ -351,6 +477,8 @@ try {
     assert.equal(ledgerState.calls.filter(item => item.tool === 'commit_action').length, 2, 'Completed or uncertain action replayed');
     assert(ledgerState.calls.some(item => item.tool === 'lookup_action' && item.actionId === ACTION_IDS[1]),
       'Real reconciliation read required');
+    if (recoveryMode) for (const actionId of ACTION_IDS) assert(ledgerState.calls.some(item => item.tool === 'lookup_action' && item.actionId === actionId),
+      'Both actions must be reconciled after interruption');
     const result = { ...value.result, round, summaryCalls: summaries.length, continuationCalls: continuations.length,
       artifact, expected, sourceArchive: { uri: resource.uri, sha256: resource.sha256, size: resource.size, verified: true },
       writes: ledgerState.rows.length, commitInvocations: ledgerState.calls.filter(item => item.tool === 'commit_action').length,

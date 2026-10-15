@@ -9,7 +9,8 @@ import path from 'node:path';
 
 export const ACTION_IDS = ['acción-completa-ñ', 'acción-incierta-ñ'];
 
-export async function startActionLedger({ directory, repo, parallelBatch = false }) {
+export async function startActionLedger({ directory, repo, parallelBatch = false, holdAcknowledgement = false }) {
+  assert(!holdAcknowledgement || parallelBatch, 'Held acknowledgements require the parallel recovery scenario');
   const require = createRequire(path.join(repo, 'package.json'));
   const express = require('express');
   const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
@@ -23,6 +24,9 @@ export async function startActionLedger({ directory, repo, parallelBatch = false
   let writeTail = Promise.resolve();
   let activeCommits = 0, peakConcurrentCommits = 0, releaseFirst;
   const secondCompleted = parallelBatch ? new Promise(resolve => { releaseFirst = resolve; }) : null;
+  let releaseHeld, notifyHeld;
+  const heldAcknowledgement = new Promise(resolve => { notifyHeld = resolve; });
+  const acknowledgementGate = new Promise(resolve => { releaseHeld = resolve; });
   async function rows() {
     await writeTail;
     return (await fs.readFile(filename, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -49,7 +53,7 @@ export async function startActionLedger({ directory, repo, parallelBatch = false
       await append;
       if (parallelBatch) {
         invocation.fsyncedAtMs = performance.now();
-        if (args.actionId === ACTION_IDS[0]) {
+        if (args.actionId === ACTION_IDS[0] && !holdAcknowledgement) {
           // An actual overlapping second invocation must finish first. A
           // sequential caller times out instead of passing a parallel proof.
           let timer;
@@ -62,6 +66,13 @@ export async function startActionLedger({ directory, repo, parallelBatch = false
         }
       }
       if (args.actionId === ACTION_IDS[1]) {
+        if (holdAcknowledgement) {
+          invocation.acknowledgement = 'held-after-fsync';
+          invocation.heldAfterFsyncAtMs = performance.now();
+          notifyHeld();
+          await acknowledgementGate;
+          invocation.releasedAtMs = performance.now();
+        }
         invocation.acknowledgement = 'suppressed-after-fsync';
         result = { isError: true, content: [{ type: 'text', text: JSON.stringify({ actionId: args.actionId,
           status: 'unknown', message: 'Acknowledgement unavailable. Do not retry. Reconcile with lookup_action when requested.' }) }] };
@@ -119,6 +130,8 @@ export async function startActionLedger({ directory, repo, parallelBatch = false
   const http = createServer(app);
   await new Promise((resolve, reject) => { http.once('error', reject); http.listen(0, '127.0.0.1', resolve); });
   return { url: 'http://127.0.0.1:' + http.address().port, token,
+    heldAcknowledgement,
+    releaseAcknowledgement() { releaseHeld(); },
     async snapshot() {
       const current = await rows();
       return { rows: current, calls: structuredClone(calls),
@@ -126,6 +139,7 @@ export async function startActionLedger({ directory, repo, parallelBatch = false
         fileSha256: createHash('sha256').update(await fs.readFile(filename)).digest('hex') };
     },
     async close() {
+      releaseHeld();
       await Promise.allSettled([...clients].map(server => server.close()));
       http.closeAllConnections();
       await new Promise((resolve, reject) => http.close(error => error ? reject(error) : resolve()));

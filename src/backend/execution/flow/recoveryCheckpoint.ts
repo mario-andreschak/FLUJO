@@ -243,11 +243,15 @@ export async function commitToolCheckpoint(
   const tools = describeToolEffects(state, toolCalls);
   // Read-only tools can be retried safely and do not need an effect checkpoint.
   if (!tools.some((tool) => !tool.readOnly)) return;
+  // A cancelled request can return a tool result after the remote write has
+  // committed. Finishing that batch does not establish its effects, so Stop
+  // must not advance the safe replay boundary or clear the reconciliation warning.
+  const effectivePhase = phase === 'completed' && state.isCancelled ? 'unknown' : phase;
   await commitRecoveryCheckpoint(storageKey, state, {
-    phase: phase === 'before' ? 'tool:before' : phase === 'completed' ? 'tool:after' : 'tool:unknown',
+    phase: effectivePhase === 'before' ? 'tool:before' : effectivePhase === 'completed' ? 'tool:after' : 'tool:unknown',
     nodeId: state.currentNodeId,
-    safe: phase === 'completed',
-    effectStatus: phase === 'before' ? 'pending' : phase === 'completed' ? 'completed' : 'unknown',
+    safe: effectivePhase === 'completed',
+    effectStatus: effectivePhase === 'before' ? 'pending' : effectivePhase === 'completed' ? 'completed' : 'unknown',
     tools,
   }, emit);
 }
