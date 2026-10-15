@@ -313,3 +313,69 @@ contains actual requests/replies; compressed and uncompressed hashes are in the
 result. Local typecheck, source/touched lint, 29 focused cases and independent
 MCP concurrency/duplicate instrumentation pass. This scoped result extends the
 earlier sequential proof; it does not close the remaining #1091 criteria.
+
+### Unresolved write interruption and restart acceptance
+
+A live cancellation first exposed a recovery checkpoint defect: a tool
+batch could return a cancellation result after a write committed, then mark
+that batch completed and safe. Cancelled write batches now retain unknown
+effects and the existing reconciliation warning without advancing the safe
+replay boundary. Normal completed writes and read-only cancellation retain
+their existing behavior. The new regression fails before repair; all nine
+focused recovery cases pass afterward.
+
+Set `COMPACTION_ACCEPTANCE_SCENARIO=cancel` or `crash` for the remaining
+generic interruption path. Both start actual parallel, model-selected local
+writes. The ledger fsyncs both rows but holds the second acknowledgement
+without returning a success, error or receipt. Before interruption, the harness
+requires the original calls in the durable event log and an unanswered tool
+result in the canonical transcript. No ledger idempotency can hide repeats.
+
+The cancel scenario calls the normal conversation Stop endpoint, requires
+terminal `cancelled` recovery and valid tool pairing, and rejects any model
+call after Stop. The crash scenario terminates the owned application process
+abruptly with SIGKILL/Windows TerminateProcess, requires the outstanding HTTP
+request to fail and observes `interrupted` after restart. In both cases the
+held acknowledgement is released only after the original app process closes.
+
+A new application process uses the same private data. The user authorizes
+read reconciliation of both action IDs; the model must actually call
+`lookup_action` for each. Five fresh real summaries per scenario must preserve
+the original calls and recovered results, exact model-returned receipt IDs,
+canonical history and complete hash-verified source archives. The private
+ledger is checked independently for exactly two commit invocations and rows
+per scenario. A further app restart follows checkpoint five.
+
+The [frozen recovery result](compaction-interruption-recovery-2026-10-15.json)
+passes 10/10 exact receipt reviews across both scenarios, with four
+physical writes, four commit invocations and zero duplicates. All 6 application
+processes close. The actual built OpenRouter Responses route makes
+42 requests (20 summaries), all to the pinned approved Free model,
+reporting USD 0 with no missing costs. The live journeys take
+866.559 seconds, measured separately from the
+329.088-second non-container build.
+
+The [complete recovery trace](compaction-interruption-provider-trace-2026-10-15.json.gz)
+includes actual provider requests/replies, durable pre-interruption events,
+canonical snapshots and recovery receipts. Both compressed and uncompressed
+hashes are recorded. Two real-SDK regressions verify held fsynced writes
+survive request cancellation/server closure; a deliberate repeated commit
+must create a duplicate physical row. Local types, source/touched lint and
+the application build pass. The unchanged 29 summary cases are reused.
+
+The trace also retains the first stopped acceptance attempt (7 requests),
+which exposed the checkpoint defect and an undersized synthetic history
+prefix. FLUJO correctly refused a non-reducing summary in that attempt. The
+prefix was lengthened while keeping the summary-consumption assertion. Its
+separate measured runtime and costs remain in the result; all 49
+requests including that attempt report USD 0.
+
+This establishes the controlled post-fsync interruption/reconciliation path.
+It does not establish crash-midcommit atomicity, external delivery, concurrent
+edits or persistence-failure acceptance, every-transform guarantees, native
+sessions/signatures, visual benefit or release acceptance. #1091 stays open.
+
+Git normalizes the two touched TypeScript files from CRLF to LF. Both accepted
+and published fingerprints are recorded; normalized source and emitted
+JavaScript match exactly. The application source tree matches the qualified
+build and accepted runtime; the harness and complete trace are byte-identical.
