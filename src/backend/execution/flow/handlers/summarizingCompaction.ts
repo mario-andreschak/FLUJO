@@ -316,7 +316,7 @@ export interface CompactHistoryDeps {
   ) => Promise<string>;
   /** Persist an immutable, complete projected-source artifact. */
   writeAnchor?: (
-    text: string,
+    messages: readonly FlujoChatMessage[],
     metadata: { artifactId: string; sourceDigest: string; projectionDigest: string },
   ) => Promise<string | undefined>;
   now?: () => number;
@@ -428,7 +428,7 @@ export async function compactHistory(
   let anchorUri: string | undefined;
   if (deps.writeAnchor) {
     try {
-      anchorUri = await deps.writeAnchor(JSON.stringify(split.toSummarize), {
+      anchorUri = await deps.writeAnchor(split.toSummarize, {
         artifactId,
         sourceDigest: opts.sourceDigest,
         projectionDigest: opts.projectionDigest,
