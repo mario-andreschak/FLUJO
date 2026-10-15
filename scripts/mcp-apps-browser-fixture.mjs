@@ -20,14 +20,14 @@ export async function unusedPort() {
 }
 
 /** Reference View sends real browser postMessage RPC; no host APIs are mocked. */
-function viewHtml(origin, deniedOrigin) {
+function viewHtml(origin, deniedOrigin, runtimeOrigin, retiredOrigin) {
   return `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Apps acceptance View</title>
 <style>body{font:16px system-ui;margin:12px;overflow-wrap:anywhere}button{min-height:44px;margin:4px;max-width:100%}pre{white-space:pre-wrap}h1{font-size:20px}</style>
 <h1>Apps acceptance View</h1><p id="status" role="status">Initializing</p><code id="mount"></code>
 <div id="controls"></div><pre id="receipt"></pre>
 <script>(()=>{
- const origin=${JSON.stringify(origin)},denied=${JSON.stringify(deniedOrigin)};
+ const origin=${JSON.stringify(origin)},denied=${JSON.stringify(deniedOrigin)},runtime=${JSON.stringify(runtimeOrigin)},retired=${JSON.stringify(retiredOrigin)};
  const state=window.appReceipt={mount:crypto.randomUUID(),events:[],results:{},started:{},clicks:[],violations:[]};
  document.getElementById('mount').textContent=state.mount;
  const pending=new Map();let serial=0;
@@ -43,10 +43,17 @@ function viewHtml(origin, deniedOrigin) {
  add('Call another server','foreign',()=>call('apps-other__app_echo','foreign'));
  add('Read allowed resource','resource',()=>rpc('resources/read',{uri:${JSON.stringify(resourceUri)}}));
  add('Check network and frames','csp',async()=>{
-   const allowed=await fetch(origin+'/allowed',{signal:AbortSignal.timeout(3000)}).then(response=>response.text());
+   const allowed=await fetch(runtime+'/allowed',{signal:AbortSignal.timeout(3000)}).then(response=>response.text());
    let blocked=false;try{await fetch(denied+'/blocked',{signal:AbortSignal.timeout(3000)});}catch{blocked=true;}
    const frame=document.createElement('iframe');frame.title='Undeclared frame';frame.src=denied+'/frame';document.body.append(frame);
-   return {allowed,blocked};
+   const declaredFrame=document.createElement('iframe');declaredFrame.title='Declared runtime frame';declaredFrame.src=runtime+'/frame';document.body.append(declaredFrame);
+   const image=document.createElement('img');image.id='runtime-image';image.alt='Declared runtime image';image.src=runtime+'/image';document.body.append(image);
+   const deniedImage=document.createElement('img');deniedImage.alt='Undeclared image';deniedImage.src=denied+'/image';document.body.append(deniedImage);
+   let retiredBlocked=null;
+   if(retired){try{await fetch(retired+'/blocked',{signal:AbortSignal.timeout(3000)});retiredBlocked=false;}catch{retiredBlocked=true;}
+     const staleFrame=document.createElement('iframe');staleFrame.title='Retired runtime frame';staleFrame.src=retired+'/frame';document.body.append(staleFrame);
+     const staleImage=document.createElement('img');staleImage.alt='Retired runtime image';staleImage.src=retired+'/image';document.body.append(staleImage);}
+   return {allowed,blocked,runtime,retired,retiredBlocked};
  });
  add('Open safe link','safe',()=>rpc('ui/open-link',{url:origin+'/safe-link'}));
  add('Reject unsafe link','unsafe',()=>rpc('ui/open-link',{url:'javascript:window.badLinkExecuted=true'}));
@@ -77,15 +84,34 @@ function viewHtml(origin, deniedOrigin) {
 
 export async function createAppsFixture() {
   const sessions = new Map(), activeWaits = new Set();
-  const state = { calls: [], reads: [], observations: [], deniedRequests: 0, allowedRequests: 0, cancelledWaits: 0 };
+  const state = { calls: [], reads: [], observations: [], deniedRequests: 0, allowedRequests: 0, cancelledWaits: 0,
+    runtimeOrigins: [], runtimeRequests: [], retiredRequests: 0, resourceUnavailable: false };
   const denied = http.createServer((request, response) => {
     if (request.url === '/health') { response.end('Healthy deny target'); return; }
     state.deniedRequests++; response.end('Unexpected request');
   });
-  // Local grants deliberately normalize ports to '*'. Use a different hostname
-  // to probe undeclared access rather than misrepresenting that existing policy.
-  const deniedOrigin = `http://localhost:${await listen(denied)}`;
+  // The undeclared target is healthy and on the SAME hostname as declared
+  // origins. An automatic ':*' widening must fail this browser acceptance.
+  const deniedOrigin = `http://127.0.0.1:${await listen(denied)}`;
   assert.equal(await (await fetch(deniedOrigin + '/health')).text(), 'Healthy deny target');
+  let runtime, runtimeOrigin, retiredOrigin;
+  const retiredListeners = [];
+  const startRuntime = async () => {
+    runtime = http.createServer((request, response) => {
+      response.setHeader('access-control-allow-origin', '*');
+      state.runtimeRequests.push({ origin: runtimeOrigin, path: request.url });
+      if (request.url === '/allowed') { response.end('Declared connection works'); return; }
+      if (request.url === '/frame') { response.setHeader('content-type', 'text/html'); response.end('<p>Declared runtime frame works</p>'); return; }
+      if (request.url === '/image') {
+        response.setHeader('content-type', 'image/png');
+        response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64')); return;
+      }
+      response.end('Runtime healthy');
+    });
+    runtimeOrigin = `http://127.0.0.1:${await listen(runtime)}`;
+    state.runtimeOrigins.push(runtimeOrigin);
+  };
+  await startRuntime();
   let origin;
   const tools = [
     { name: 'open_view', inputSchema: { type: 'object', properties: {} }, _meta: { ui: { resourceUri: appUri } } },
@@ -95,11 +121,12 @@ export async function createAppsFixture() {
   ];
   const catalog = () => ({ resources: [{ name: 'Apps acceptance View', uri: appUri, mimeType: 'text/html;profile=mcp-app' }] });
   const read = (generation, uri) => {
-    state.reads.push({ generation, uri });
+    state.reads.push({ generation, uri, runtimeOrigin, available: !state.resourceUnavailable });
     if (uri === resourceUri) return { contents: [{ uri, mimeType: 'text/plain', text: 'Actual server resource' }] };
     assert.equal(uri, appUri);
-    return { contents: [{ uri, mimeType: 'text/html;profile=mcp-app', text: viewHtml(origin, deniedOrigin),
-      _meta: { ui: { csp: { connectDomains: [origin], resourceDomains: [], frameDomains: [] } } } }] };
+    if (state.resourceUnavailable) throw new Error('Reference App is restarting');
+    return { contents: [{ uri, mimeType: 'text/html;profile=mcp-app', text: viewHtml(origin, deniedOrigin, runtimeOrigin, retiredOrigin),
+      _meta: { ui: { csp: { connectDomains: [origin, runtimeOrigin], resourceDomains: [runtimeOrigin], frameDomains: [runtimeOrigin] } } } }] };
   };
   const call = async (generation, params, signal) => {
     assert.ok(signal instanceof AbortSignal, 'Reference tool handler must receive the SDK generation\'s real request signal');
@@ -158,10 +185,29 @@ export async function createAppsFixture() {
     } catch (error) { if (!response.headersSent) response.writeHead(500); response.end(String(error)); }
   });
   origin = `http://127.0.0.1:${await listen(server)}`;
-  return { origin, deniedOrigin, state, activeWaits, async close() {
+  return { origin, deniedOrigin, state, activeWaits, get runtimeOrigin() { return runtimeOrigin; },
+    async restartRuntime() {
+      retiredOrigin = runtimeOrigin;
+      runtime.closeAllConnections(); await new Promise(resolve => runtime.close(resolve));
+      // Reuse the retired port as a healthy sentinel before allocating the new
+      // runtime. The replacement View must not be able to reach this listener.
+      const sentinel = http.createServer((request, response) => {
+        response.setHeader('access-control-allow-origin', '*');
+        if (request.url !== '/health') state.retiredRequests++;
+        response.end('Retired port is healthy');
+      });
+      await new Promise((resolve, reject) => {
+        sentinel.once('error', reject); sentinel.listen(Number(new URL(retiredOrigin).port), '127.0.0.1', resolve);
+      });
+      retiredListeners.push(sentinel);
+      assert.equal(await (await fetch(retiredOrigin + '/health')).text(), 'Retired port is healthy');
+      await startRuntime();
+      assert.notEqual(runtimeOrigin, retiredOrigin);
+      return { runtimeOrigin, retiredOrigin };
+    }, async close() {
     for (const stop of activeWaits) stop();
     for (const session of sessions.values()) await session.server.close();
     await modern.close();
-    for (const listener of [server, denied]) { listener.closeAllConnections(); await new Promise(resolve => listener.close(resolve)); }
+    for (const listener of [server, denied, runtime, ...retiredListeners]) { listener.closeAllConnections(); await new Promise(resolve => listener.close(resolve)); }
   } };
 }

@@ -25,7 +25,6 @@ const receipt = { schemaVersion: 1, startedUtc: new Date().toISOString(), buildI
   externalProviderCalls: 0, groups: [], pageErrors: [], unexpectedRequests: [],
   limitations: ['Source production localhost profile with SDK reference servers; not installed/public deployment acceptance',
     'Default restrictive sandbox and per-server Apps opt-in; permissive settings and optional per-resource click policy are not qualified',
-    'Existing declared loopback grants are hostname-wide across ports; undeclared-host refusal is tested separately',
     'Automated Chromium browser observation, not independent human accessibility acceptance'] };
 let operator, fixture, child, closed, browser, base, failure, serverLog = '';
 const password = randomBytes(32).toString('hex');
@@ -97,11 +96,20 @@ try {
       const url = new URL(route.request().url()), headers = { ...route.request().headers() };
       if (url.origin === base) headers.authorization = `Bearer ${operator.token}`;
       const allowed = url.origin === base || url.origin === fixture.origin || url.origin === fixture.deniedOrigin
+        || fixture.state.runtimeOrigins.includes(url.origin)
         || (url.hostname.endsWith('.localhost') && url.port === String(sandboxPort)) || ['data:', 'blob:', 'about:'].includes(url.protocol);
       if (!allowed) { receipt.unexpectedRequests.push(url.origin + url.pathname); return route.abort(); }
       return route.continue({ headers });
     });
     const page = await context.newPage();
+    const proxyPolicies = new Map();
+    page.on('response', response => {
+      const url = new URL(response.url());
+      if (url.hostname.endsWith('.localhost') && url.port === String(sandboxPort) && url.searchParams.has('csp')) {
+        proxyPolicies.set(url.origin, { requested: JSON.parse(url.searchParams.get('csp')),
+          header: response.headers()['content-security-policy'] });
+      }
+    });
     page.on('pageerror', error => receipt.pageErrors.push(error.message));
     const open = async () => {
       const before = fixture.state.calls.length;
@@ -142,9 +150,72 @@ try {
     assert.equal(fixture.state.calls.filter(call => call.generation === 'other').length, 0, 'The separately connected server must receive no call');
     assert.deepEqual(fixture.state.calls.filter(call => call.generation === generation).map(call => call.name), ['open_view', 'app_echo', 'open_view']);
     const resource = await click(frame, 'resource'); assert.equal(resource.result.contents[0].text, 'Actual server resource');
-    const csp = await click(frame, 'csp'); assert.equal(csp.allowed, 'Declared connection works'); assert.equal(csp.blocked, true);
-    await expect.poll(() => frame.evaluate(() => window.appReceipt.violations)).toEqual(expect.arrayContaining(['connect-src', 'frame-src']));
+    const checkCsp = async (currentFrame) => {
+      const result = await click(currentFrame, 'csp');
+      assert.equal(result.allowed, 'Declared connection works'); assert.equal(result.blocked, true);
+      if (result.retired) assert.equal(result.retiredBlocked, true);
+      await expect.poll(() => currentFrame.evaluate(() => window.appReceipt.violations)).toEqual(expect.arrayContaining(['connect-src', 'frame-src', 'img-src']));
+      await expect.poll(() => currentFrame.locator('#runtime-image').evaluate(image => image.naturalWidth)).toBe(1);
+      await expect.poll(() => page.frames().some(candidate => candidate.url() === fixture.runtimeOrigin + '/frame')).toBe(true);
+      const declared = page.frames().find(candidate => candidate.url() === fixture.runtimeOrigin + '/frame');
+      await expect(declared.locator('body')).toHaveText('Declared runtime frame works');
+      const granted = await currentFrame.evaluate(() => window.appReceipt.initialize.hostCapabilities.sandbox.csp);
+      assert.deepEqual(granted.connectDomains, [fixture.origin, fixture.runtimeOrigin]);
+      assert.deepEqual(granted.resourceDomains, [fixture.runtimeOrigin]);
+      assert.deepEqual(granted.frameDomains, [fixture.runtimeOrigin]);
+      // The proxy intentionally scrubs its query parameters from location.href.
+      // Observe the actual response and the inner meta, rather than that URL.
+      const applied = proxyPolicies.get(sandboxOrigin);
+      assert.deepEqual(applied?.requested, granted, 'Initialized policy must equal the proxy request');
+      const inner = await currentFrame.locator('meta[http-equiv="Content-Security-Policy"]').first().getAttribute('content');
+      for (const policy of [applied.header, inner]) {
+        assert.ok(policy.includes(`connect-src ${fixture.origin} ${fixture.runtimeOrigin};`));
+        assert.ok(policy.includes(fixture.runtimeOrigin));
+        assert.ok(!policy.includes(fixture.deniedOrigin));
+        if (result.retired) assert.ok(!policy.includes(result.retired));
+        assert.ok(!policy.includes(':*'));
+      }
+      assert.ok(!JSON.stringify(granted).includes(':*'));
+    };
+    await checkCsp(frame);
     assert.equal(fixture.state.deniedRequests, 0, 'Undeclared network/frame requests must never reach their listener');
+    const restarts = [];
+    for (const failFirstRead of [false, true]) {
+      const previousMount = await frame.evaluate(() => window.appReceipt.mount);
+      await frame.locator('#pending').click();
+      await expect.poll(() => fixture.activeWaits.size).toBe(1);
+      const cancellations = fixture.state.cancelledWaits;
+      const ports = await fixture.restartRuntime();
+      fixture.state.resourceUnavailable = failFirstRead;
+      const callsBeforeReload = fixture.state.calls.length;
+      const reload = page.getByRole('button', { name: 'Reload app', exact: true });
+      await expect(reload).toBeEnabled();
+      const controlSize = await reload.boundingBox(); assert.ok(controlSize.height >= 44);
+      await reload.click();
+      await expect.poll(() => frame.isDetached()).toBe(true);
+      await expect.poll(() => fixture.state.cancelledWaits).toBe(cancellations + 1);
+      let readFailureMessage;
+      if (failFirstRead) {
+        const error = page.getByRole('alert').last();
+        await expect(error).toBeVisible();
+        readFailureMessage = await error.innerText(); assert.ok(readFailureMessage.trim());
+        await expect(reload).toBeEnabled();
+        assert.equal(page.frames().filter(candidate => candidate !== page.mainFrame()).length, 0, 'Failed reload must retire the stale View');
+        fixture.state.resourceUnavailable = false;
+        await reload.click();
+      }
+      frame = await view(page);
+      const currentMount = await frame.evaluate(() => window.appReceipt.mount);
+      assert.notEqual(currentMount, previousMount);
+      assert.equal(new URL(frame.parentFrame().url()).origin, sandboxOrigin, 'Restart must preserve the App identity');
+      await expect.poll(() => fixture.state.observations.some(item => item.mount === previousMount && item.event === 'teardown')).toBe(true);
+      assert.equal(fixture.state.calls.length, callsBeforeReload, 'Reload must not rerun any tool');
+      await checkCsp(frame);
+      assert.equal(fixture.state.retiredRequests, 0, 'Fresh policy must block the healthy listener reusing the old port');
+      assert.equal(fixture.state.deniedRequests, 0);
+      restarts.push({ ...ports, readFailureRecovered: failFirstRead, readFailureMessage, oldViewRetired: true, pendingToolCancelled: true, toolNotRerun: true, exactPolicy: true });
+    }
+    mounted = await frame.evaluate(() => window.appReceipt);
     await click(frame, 'reserved');
     assert.equal((await click(frame, 'allowed')).result.structuredContent.marker, 'allowed', 'Reserved injection must not replace the bridge');
     assert.ok(rpcError(await click(frame, 'unsafe'))); assert.equal(context.pages().length, 1);
@@ -190,6 +261,7 @@ try {
       sameServerAppTool: true, modelOnlyAndForeignRefused: true, forbiddenViewRetiredAndRetryFresh: true, foreignErrorRecoverable: true, resourceRead: true, cspBlockedBeforeNetwork: true,
       reservedMessageRefused: true, unsafeLinkRefused: true, safeLink: safe, popupOpenerNull: true, downloadContentsVerified: true,
       consentRevokedBeforeEffects: true, remountFreshBridge: true, gracefulTeardownMs: teardownMs, pendingToolCancelled: true });
+    receipt.groups.at(-1).exactPortRestarts = restarts;
     console.log(JSON.stringify({ appsGroup: receipt.groups.at(-1) }));
   }
   assert.equal(sandboxOrigins.size, 2, 'Different server identities must receive different sandbox origins');

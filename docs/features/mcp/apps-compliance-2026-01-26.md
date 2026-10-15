@@ -11,12 +11,16 @@ network/frame/resource domains. The current candidate pins Apps 2.0.3 and uses t
 October 15 source-production Tool Tester browser evidence now covers SDK1 HTTP at
 1440px and SDK2 modern HTTP at 390px, including origin separation, same-server
 visibility, links/downloads, consent revocation/remount and pending-work teardown.
-[The exact-tree receipt](../../audits/evidence/mcp-apps-browser-1093-2026-10-15.json)
-retains a conformance exception: declared loopback ports automatically widen to
-all ports on that hostname. The stable specification defines origins; exact-port
-no-loosening remains unfinished #1093 implementation work. Current evidence does
-not qualify hosted/installed profiles, Chat/canvas-specific embedding or independent
-human accessibility. Historical automated outcomes below retain their original scope.
+The first [October 15 receipt](../../audits/evidence/mcp-apps-browser-1093-2026-10-15.json)
+retains the original fixed-port widening reproduction. The subsequent
+[exact-port/restart receipt](../../audits/evidence/mcp-apps-exact-ports-1093-2026-10-15.json)
+repairs that exception: exact declared ports survive frontend/backend normalization;
+both browser profiles block undeclared and retired ports on the same hostname.
+Reload app re-reads the resource and replaces the sandbox policy after bounded
+teardown, without rerunning the original tool. Two runtime restarts per SDK,
+including a failed read and retry, preserve origin identity and cancel pending tools.
+Current evidence does not qualify hosted/installed profiles, Chat/canvas-specific
+embedding or independent human accessibility. Historical outcomes retain their original scope.
 
 Outcomes use these meanings:
 
@@ -38,9 +42,9 @@ Outcomes use these meanings:
 | App-only tools never enter the model's list | Model-facing filtering in `src/backend/services/mcp/tools.ts` and `appsProtocol.ts` | `__tests__/mcp/toolVisibility.test.ts`, `__tests__/mcp/toolNamespace.test.ts` | **Compliant.** |
 | Apps may call only app-visible tools from the same server connection | App-call authorization in `appsProtocol.ts` and `src/backend/services/mcp/index.ts`; tool API route | `__tests__/mcp/mcpAppToolRoute.test.ts`, `__tests__/mcp/toolVisibility.test.ts` | **Compliant.** Cross-server and model-only calls are rejected. |
 | Web host uses a different-origin Sandbox proxy | Sandbox listener/proxy in `src/backend/mcpApps/sandboxServer.ts`; bootstrap route `src/app/api/mcp/app-sandbox/route.ts`; frame host in `McpAppFrame.tsx` | `__tests__/mcp/sandboxRelay.test.ts`, `__tests__/mcp/sandboxCsp.test.ts`, `McpAppFrameCompliance.test.ts` | **Compliant security boundary.** Deployment must provide a distinct origin; startup fails closed for invalid production configuration. |
-| Sandbox/View iframe is restricted and communication stays under host control | Proxy relay filtering in `sandboxServer.ts`; iframe policy in `McpAppFrame.tsx` | `sandboxRelay.test.ts`, `McpAppFrameCompliance.test.ts`; October 15 browser receipt above | **Qualified source Tool Tester boundary.** The outer proxy has required `allow-scripts allow-same-origin` on a separate origin. Other deployment/embedding profiles remain separate; the local CSP port exception is listed below. |
+| Sandbox/View iframe is restricted and communication stays under host control | Proxy relay filtering in `sandboxServer.ts`; iframe policy in `McpAppFrame.tsx` | `sandboxRelay.test.ts`, `McpAppFrameCompliance.test.ts`; October 15 browser receipt above | **Qualified source Tool Tester boundary.** The outer proxy has required `allow-scripts allow-same-origin` on a separate origin. Other deployment/embedding profiles remain separate; the subsequent exact-port/restart receipt covers policy replacement. |
 | Sandbox readiness/resource readiness and reserved messages are not exposed to the View | Relay lifecycle and reserved-prefix filtering in `sandboxServer.ts` and `McpAppFrame.tsx` | `__tests__/mcp/sandboxRelay.test.ts`, `McpAppFrameCompliance.test.ts` | **Compliant.** Host messages are held until initialization completes. |
-| CSP is derived from resource metadata with restrictive defaults | CSP normalization in `src/shared/utils/mcpApps.ts`; response CSP and `frame-ancestors` in `sandboxServer.ts` | `__tests__/mcp/sandboxCsp.test.ts`, `__tests__/mcp/mcpApps.test.ts`, `McpAppFrameCompliance.test.ts`; October 15 browser receipt | **Partial.** Undeclared-host connections and undeclared frames are blocked in the current browser profile. Declared loopback ports widen to `:*`; exact-origin/port no-loosening is unfinished #1093 work. Existing restart assertions remain intact. |
+| CSP is derived from resource metadata with restrictive defaults | CSP normalization in `src/shared/utils/mcpApps.ts`; response CSP and `frame-ancestors` in `sandboxServer.ts` | `__tests__/mcp/sandboxCsp.test.ts`, `__tests__/mcp/mcpApps.test.ts`, `McpAppFrameCompliance.test.ts`; October 15 browser receipt | **Qualified source Tool Tester policy.** The [exact-port/restart receipt](../../audits/evidence/mcp-apps-exact-ports-1093-2026-10-15.json) proves declared fetch/frame/image access and same-host undeclared/retired-port refusal in both SDK generations. Fixed ports stay exact; only explicitly declared port wildcards survive. Restart coverage now verifies a fresh policy, bounded teardown, failed-read retry and no tool rerun. |
 | Requested permissions are host-controlled and effective grants are reported | Permission normalization and iframe `allow` construction in `mcpApps.ts`/`McpAppFrame.tsx`; host capabilities from the bridge | `McpAppFrameCompliance.test.ts`, `sandboxCsp.test.ts` | **Compliant.** Camera, microphone, geolocation, and clipboard-write are deny-by-default and require declaration plus host approval. |
 | Resource `domain` and `prefersBorder` metadata are host-dependent preferences | Metadata normalization in `mcpApps.ts`; border rendering in Chat | `mcpApps.test.ts`, `McpAppFrameCompliance.test.ts` | **Intentional restriction.** Border preference is honored when safe. Arbitrary resource-selected domains are not; FLUJO derives a workspace/resource-scoped origin under its local or operator-configured sandbox hostname. |
 | JSON-RPC messages are validated and relayed between the matching frame and host | AppBridge transport in `McpAppFrame.tsx`; proxy validation in `sandboxServer.ts` | `sandboxRelay.test.ts`, `McpAppFrameCompliance.test.ts` | **Compliant.** Malformed, reserved, foreign-origin/source, stale, and late messages are rejected or ignored. |

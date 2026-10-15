@@ -205,13 +205,13 @@ export function isValidCspSourceToken(
 const LOOPBACK_CSP_ORIGIN = /^(http|ws):\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5}|\*)$/i;
 
 /**
- * Shared parse for the loopback exception. Returns the scheme/host pair when
+ * Shared parse for the loopback exception. Returns the scheme, host and declared port when
  * `token` is a well-formed loopback origin whose scheme the caller permits.
  */
 function parseLoopbackCspOrigin(
   token: unknown,
   allowedSchemes: ReadonlyArray<'http' | 'ws'>,
-): { scheme: 'http' | 'ws'; host: string } | undefined {
+): { scheme: 'http' | 'ws'; host: string; port: string } | undefined {
   if (typeof token !== 'string' || token.length === 0 || token.length > 2_048) return undefined;
   // Same defence-in-depth as isValidCspSourceToken: no CSP-special characters.
   if (/[^\x21-\x7e]/.test(token) || /[;,'"`$<>\\()]/.test(token)) return undefined;
@@ -223,7 +223,7 @@ function parseLoopbackCspOrigin(
     const port = Number(match[3]);
     if (!Number.isInteger(port) || port < 1 || port > 65_535) return undefined;
   }
-  return { scheme, host: match[2].toLowerCase() };
+  return { scheme, host: match[2].toLowerCase(), port: match[3] === '*' ? '*' : String(Number(match[3])) };
 }
 
 /**
@@ -245,29 +245,17 @@ export function isLoopbackCspOrigin(
 }
 
 /**
- * Collapse a loopback origin to its port-wildcard form (`http://127.0.0.1:*`),
- * or return `undefined` when `token` is not an admissible loopback origin.
- *
- * Local App servers routinely bind an EPHEMERAL port (`listen(0)`), so the port
- * they advertise in `_meta.ui.csp` is only valid until their next restart. The
- * host commits a resource's CSP once — as a response header on the sandbox proxy
- * document — and never re-issues it, so a pinned port turns every subsequent
- * restart into a hard `frame-src`/`connect-src` violation: the app loads once,
- * then breaks with the granted port and the live port one restart apart.
- *
- * CSP's `host-source` grammar allows `port = ":" ( 1*DIGIT / "*" )`, so widening
- * the grant to the wildcard keeps an already-committed policy valid across those
- * restarts. The trade-off is deliberate: within the loopback host we are already
- * trusting, the grant stops naming one port and covers any of them. Callers gate
- * this on FLUJO not being publicly exposed, so the hosts named here belong to the
- * operator's own machine.
+ * Canonicalize the scheme, host and explicit port without broadening the
+ * resource's request. A port wildcard survives only when explicitly declared.
+ * An ephemeral-port restart needs a fresh resource read and sandbox document;
+ * the live document's committed CSP must never expand to make a new port work.
  */
 export function canonicalizeLoopbackCspOrigin(
   token: unknown,
   allowedSchemes: ReadonlyArray<'http' | 'ws'> = ['http', 'ws'],
 ): string | undefined {
   const parsed = parseLoopbackCspOrigin(token, allowedSchemes);
-  return parsed && `${parsed.scheme}://${parsed.host}:*`;
+  return parsed && `${parsed.scheme}://${parsed.host}:${parsed.port}`;
 }
 
 /**

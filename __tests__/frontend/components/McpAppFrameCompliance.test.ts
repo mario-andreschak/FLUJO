@@ -138,7 +138,7 @@ describe('loopback CSP grant mirror', () => {
     expect(allowLoopbackCspGrant()).toBe(true);
   });
 
-  it('grants loopback http/ws origins as port wildcards only when allowed', () => {
+  it('grants exact loopback http/ws ports only when allowed', () => {
     const requested = {
       connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503', 'http://insecure.example.com'],
       resourceDomains: ['http://127.0.0.1:59503'],
@@ -146,13 +146,12 @@ describe('loopback CSP grant mirror', () => {
       baseUriDomains: ['http://127.0.0.1'],
     };
 
-    // The port is collapsed to `:*` so the grant survives the app server's next
-    // ephemeral-port restart, matching the sandbox server's normalizeCspOrigin.
+    // Host capabilities must match the exact policy applied by the sandbox.
     expect(sanitizeGrantedCsp(requested, true)).toEqual({
-      connectDomains: ['http://127.0.0.1:*', 'ws://127.0.0.1:*'],
-      resourceDomains: ['http://127.0.0.1:*'],
+      connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503'],
+      resourceDomains: ['http://127.0.0.1:59503'],
       // ws: never widens frame-src; portless loopback is rejected.
-      frameDomains: ['http://127.0.0.1:*'],
+      frameDomains: ['http://127.0.0.1:59503'],
       baseUriDomains: [],
     });
 
@@ -164,13 +163,13 @@ describe('loopback CSP grant mirror', () => {
     });
   });
 
-  it('dedupes several ports on one loopback host into a single granted source', () => {
+  it('keeps separately declared ports distinct and dedupes identical origins', () => {
     expect(sanitizeGrantedCsp({
-      frameDomains: ['http://127.0.0.1:4300', 'http://127.0.0.1:4301', 'http://localhost:4302'],
+      frameDomains: ['http://127.0.0.1:4300', 'http://127.0.0.1:4301', 'http://localhost:4302', 'HTTP://127.0.0.1:4300'],
     }, true)).toEqual({
       connectDomains: [],
       resourceDomains: [],
-      frameDomains: ['http://127.0.0.1:*', 'http://localhost:*'],
+      frameDomains: ['http://127.0.0.1:4300', 'http://127.0.0.1:4301', 'http://localhost:4302'],
       baseUriDomains: [],
     });
   });
