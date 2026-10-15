@@ -628,7 +628,7 @@ export class ModelHandler {
       };
 
       const writeAnchor = async (
-        text: string,
+        messages: readonly FlujoChatMessage[],
         metadata: { artifactId: string; sourceDigest: string; projectionDigest: string },
       ): Promise<string | undefined> => {
         const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
@@ -636,7 +636,7 @@ export class ModelHandler {
           name: `compaction-artifact-${metadata.artifactId}`,
           mimeType: 'application/json',
           kind: 'text',
-          data: { text },
+          data: { json: messages },
           producedBy: {
             source: 'compaction-artifact',
             nodeId,

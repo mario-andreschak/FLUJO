@@ -226,7 +226,7 @@ describe('compactHistory orchestrator (issue #248)', () => {
       user('recent'),
     ];
     const summarize = jest.fn(async (_m: FlujoChatMessage[], _p: { system: string; user: string }) => anchored('merged anchor'));
-    const writeAnchor = jest.fn(async (_text: string) => 'flujo://run/conv1/anchor-1');
+    const writeAnchor = jest.fn(async (_messages: readonly FlujoChatMessage[]) => 'flujo://run/conv1/anchor-1');
     const result = await compactHistory(messages, options(), {
       summarize,
       writeAnchor,
@@ -315,13 +315,13 @@ describe('compactHistory orchestrator (issue #248)', () => {
     const call = asstCall('', 'send-pedido-ñ-002');
     const receipt = toolResult('send-pedido-ñ-002', bulk(8_000));
     const source = [user('Never send twice.'), call, receipt, assistant(bulk(8_000)), user('Continue.')];
-    const writeAnchor = jest.fn(async (_text: string) => 'flujo://run/conv1/receipt-source');
+    const writeAnchor = jest.fn(async (_messages: readonly FlujoChatMessage[]) => 'flujo://run/conv1/receipt-source');
     const result = await compactHistory(source, options(), { summarize: async () => anchored('Done.'), writeAnchor });
     expect(result).not.toBeNull();
     expect(summaryOf(result!).content).toContain('send-pedido-ñ-002');
     expect(summaryOf(result!).content).toContain('result-observed');
     expect(summaryOf(result!).content).toContain('flujo://run/conv1/receipt-source');
-    expect(JSON.parse(writeAnchor.mock.calls[0][0])).toEqual(expect.arrayContaining([call, receipt]));
+    expect(writeAnchor.mock.calls[0][0]).toEqual(expect.arrayContaining([call, receipt]));
     const withoutArchive = await compactHistory(source, options(), { summarize: async () => anchored('Done.') });
     expect(withoutArchive).toBeNull();
   });
