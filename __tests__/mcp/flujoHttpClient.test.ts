@@ -1,3 +1,4 @@
+import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { flujoBaseUrl, flujoRequest, toolRoute } from '../../mcp-servers/flujo/src/client';
 import { MCP_SKILLS_SUPPORTED_REVISION as STANDALONE_SKILLS_REVISION } from '../../mcp-servers/flujo/src/skills';
 import { MCP_SKILLS_SUPPORTED_REVISION as HOST_SKILLS_REVISION } from '@/shared/types/mcp';
@@ -21,6 +22,32 @@ describe('standalone flujo HTTP client', () => {
 
   it('uses the same frozen Skills protocol revision as the host', () => {
     expect(STANDALONE_SKILLS_REVISION).toBe(HOST_SKILLS_REVISION);
+  });
+
+  it.each([400, 404])('maps invalid or unknown Skills (%s) to invalid parameters', async (status) => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false, status, text: async () => JSON.stringify({ error: 'Skill URI is invalid or unknown.' }),
+    }) as typeof fetch;
+    await expect(flujoRequest('getSkill', { skillUri: 'skill://missing/SKILL.md' }))
+      .rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+  });
+
+  it('refuses a blank Skill URI before contacting FLUJO', async () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as typeof fetch;
+    await expect(flujoRequest('getSkill', { skillUri: '   ' }))
+      .rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403, 423, 500, 502])('preserves Skills service/authority failures (%s)', async (status) => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false, status, text: async () => JSON.stringify({ error: 'Skills service refused the request.' }),
+    }) as typeof fetch;
+    await expect(flujoRequest('getSkill', { skillUri: 'skill://example/SKILL.md' }))
+      .rejects.toMatchObject({ message: 'Skills service refused the request.' });
+    await expect(flujoRequest('getSkill', { skillUri: 'skill://example/SKILL.md' }))
+      .rejects.not.toHaveProperty('code', ErrorCode.InvalidParams);
   });
 
   it('defaults to the standard local URL and honors a custom runtime URL', () => {

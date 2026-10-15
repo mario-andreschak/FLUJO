@@ -1,3 +1,4 @@
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import {
   McpGetSkillResultSchema,
   McpListSkillsResultSchema,
@@ -127,6 +128,13 @@ export function toolRoute(name: string): string {
   throw new Error(`Unknown FLUJO tool: ${name}`);
 }
 
+class FlujoHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'FlujoHttpError';
+  }
+}
+
 async function requestJson<T>(
   path: string,
   init: RequestInit = {},
@@ -179,7 +187,7 @@ async function requestJson<T>(
         body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
           ? body.error
           : `FLUJO request failed (${response.status}).`;
-      throw new Error(message);
+      throw new FlujoHttpError(response.status, message);
     }
     return body as T;
   } catch (error) {
@@ -231,12 +239,19 @@ export async function flujoRequest<T>(
   }
   if (operation === 'getSkill') {
     const uri = payload.skillUri?.trim();
-    if (!uri) throw new Error('A standalone MCP Skill URI is required.');
-    const result = await requestJson<unknown>('/api/mcp/flujo/skills', {
-      method: 'POST',
-      body: JSON.stringify({ uri }),
-    });
-    return McpGetSkillResultSchema.parse(result) as T;
+    if (!uri) throw new McpError(ErrorCode.InvalidParams, 'A standalone MCP Skill URI is required.');
+    try {
+      const result = await requestJson<unknown>('/api/mcp/flujo/skills', {
+        method: 'POST',
+        body: JSON.stringify({ uri }),
+      });
+      return McpGetSkillResultSchema.parse(result) as T;
+    } catch (error) {
+      if (error instanceof FlujoHttpError && (error.status === 400 || error.status === 404)) {
+        throw new McpError(ErrorCode.InvalidParams, error.message);
+      }
+      throw error;
+    }
   }
 
   const name = payload.name?.trim() ?? '';

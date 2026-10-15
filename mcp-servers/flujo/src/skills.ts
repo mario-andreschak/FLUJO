@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
 /**
  * Optional MCP Skills wire contract used by the standalone FLUJO server.
@@ -312,15 +313,24 @@ export function validateStandaloneGetSkillResult(
   };
 }
 
-/** Draft request schemas frozen to the Skills protocol implemented by FLUJO. */
+// SDK1 otherwise serializes a custom request's Zod error as InternalError.
+function requestParams<Schema extends z.ZodType>(schema: Schema) {
+  return schema.catch(({ error }) => {
+    throw new McpError(ErrorCode.InvalidParams, 'Invalid Skills request parameters.', {
+      issues: error.issues.map(({ path, message }) => ({ path, message })),
+    });
+  });
+}
+
+/** Request schemas frozen to the Skills protocol implemented by FLUJO. */
 export const McpListSkillsRequestSchema = z.object({
   method: z.literal('skills/list'),
-  params: z.object({ cursor: z.string().optional() }).optional(),
+  params: requestParams(z.object({ cursor: z.string().optional() }).optional()),
 });
 
 export const McpGetSkillRequestSchema = z.object({
   method: z.literal('skills/get'),
-  params: z.object({ uri: z.string().min(1) }),
+  params: requestParams(z.object({ uri: z.string().min(1) })),
 });
 
 export const McpListSkillsResultSchema = z
