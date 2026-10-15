@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "utc": "2026-10-15T05:55:03.9377932Z",
+  "issue": 565,
+  "base": "df787b3477c27e1fb19ef8b21607cd076616862e",
+  "testedTree": "9b050e3aba2bc10218dc096444a3a240abc2e39d",
+  "inputs": {
+    "lockSha256": "116627fc55e0c6c69fdef483bb00592f5f24caa8aac139ebba57f8515f3e4be8",
+    "utc": "2026-10-15T05:48:03.261199Z",
+    "manifestSha256": "8935c8f269c1874989ce7d871eac22a3a4e75d8b2905afef7ea06419a9b4e8d8",
+    "paths": [
+      "package.json",
+      "package-lock.json"
+    ],
+    "tree": "9b050e3aba2bc10218dc096444a3a240abc2e39d"
+  },
+  "versions": {
+    "sharp": "0.35.5",
+    "react": "19.3.1",
+    "next": "16.4.1",
+    "eslintConfigNext": "16.4.1",
+    "reactDom": "19.3.1"
+  },
+  "lockChanges": [
+    {
+      "after": "3.46.3",
+      "before": "3.46.3",
+      "name": ""
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/env"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/eslint-plugin-next"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/swc-darwin-arm64"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/swc-darwin-x64"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/swc-linux-arm64-gnu"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/swc-linux-arm64-musl"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/swc-linux-x64-gnu"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/swc-linux-x64-musl"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/swc-win32-arm64-msvc"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/@next/swc-win32-x64-msvc"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/eslint-config-next"
+    },
+    {
+      "after": "16.4.1",
+      "before": "16.4.0",
+      "name": "node_modules/next"
+    },
+    {
+      "after": "19.3.1",
+      "before": "19.3.0",
+      "name": "node_modules/react"
+    },
+    {
+      "after": "19.3.1",
+      "before": "19.3.0",
+      "name": "node_modules/react-dom"
+    }
+  ],
+  "checks": [
+    {
+      "utc": "2026-10-15T05:45:49.4522168Z",
+      "step": "typecheck",
+      "revision": "df787b3477c27e1fb19ef8b21607cd076616862e",
+      "exitCode": 0,
+      "elapsedSeconds": 60.6957581
+    },
+    {
+      "utc": "2026-10-15T05:47:23.890289Z",
+      "step": "lint",
+      "revision": "df787b3477c27e1fb19ef8b21607cd076616862e",
+      "exitCode": 0,
+      "elapsedSeconds": 94.3780891
+    },
+    {
+      "utc": "2026-10-15T05:52:43.7685556Z",
+      "step": "build",
+      "revision": "df787b3477c27e1fb19ef8b21607cd076616862e",
+      "exitCode": 0,
+      "elapsedSeconds": 319.8401493
+    }
+  ],
+  "node": "v22.23.3",
+  "buildId": "jRkFRFjtF03q0g78A46T9",
+  "sources": [
+    "https://nextjs.org/blog/nextjs-security-update-october-14-2026",
+    "https://github.com/vercel/next.js/security/advisories/GHSA-673q-mjm6-r5xr",
+    "https://github.com/react/react/releases/tag/v19.3.1"
+  ],
+  "npmAudit": {
+    "info": 0,
+    "low": 0,
+    "moderate": 19,
+    "high": 0,
+    "critical": 0,
+    "total": 19
+  },
+  "heldAdvisory": {
+    "id": "GHSA-hp3w-g68c-fv3c",
+    "alert": 42,
+    "patchedVersion": null,
+    "decision": "Retain existing unpatched sprintf-js hold; 19 moderate cascading test-tool entries. No Jest downgrade or alert dismissal."
+  },
+  "externalProviderCalls": 0,
+  "releaseCiDispatched": false,
+  "limitations": [
+    "Dependency patch and local source build; not an exploit reproduction or release/deployment qualification",
+    "Broader #565 and installed #1093 requirements remain open; no full/remote/image workflow triggered",
+    "GitHub global advisory API returned 404; actual upstream repository advisory pages and npm package manifests verified"
+  ]
+}
