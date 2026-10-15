@@ -1,0 +1,317 @@
+{
+  "schemaVersion": 1,
+  "utc": "2026-10-15T06:12:44.9497604Z",
+  "issue": 1093,
+  "base": "885995efeeb8aa8fa7735a24012f3276de9b6364",
+  "testedTree": "8016eaa3da344b9c230f6f994b9cdf28bd5e2fd6",
+  "applicationBuildAndRegressionTree": "d02430dca617fc493ffd387261901e216e3c7545",
+  "remainingConformanceGap": "Loopback fixed ports expand to a wildcard; strict origin/port no-loosening is not qualified. Preserve the existing restart regression in its repair.",
+  "sourceSha256": "99d8998c2e971dc3ae2d830be2563a93f7869d8ae0bdb46459730de58f928cf2",
+  "manifestSha256": "8935c8f269c1874989ce7d871eac22a3a4e75d8b2905afef7ea06419a9b4e8d8",
+  "lockSha256": "116627fc55e0c6c69fdef483bb00592f5f24caa8aac139ebba57f8515f3e4be8",
+  "checks": [
+    {
+      "exitCode": 0,
+      "step": "typecheck",
+      "elapsedSeconds": 58.332477,
+      "utc": "2026-10-15T05:57:45.5331344Z",
+      "revision": "885995efeeb8aa8fa7735a24012f3276de9b6364"
+    },
+    {
+      "exitCode": 0,
+      "step": "lint",
+      "elapsedSeconds": 94.4469431,
+      "utc": "2026-10-15T05:59:20.0386276Z",
+      "revision": "885995efeeb8aa8fa7735a24012f3276de9b6364"
+    },
+    {
+      "exitCode": 0,
+      "step": "build",
+      "elapsedSeconds": 338.9440323,
+      "utc": "2026-10-15T06:04:59.0223004Z",
+      "revision": "885995efeeb8aa8fa7735a24012f3276de9b6364"
+    }
+  ],
+  "focused": {
+    "tests": 37,
+    "success": true,
+    "suites": 1
+  },
+  "runtimeTiming": {
+    "utc": "2026-10-15T06:11:53.1637492Z",
+    "exitCode": 0,
+    "elapsedSeconds": 29.9127526,
+    "measuredScope": "Final equipment lint plus actual production browser runtime; application build and focused regressions are separate phases"
+  },
+  "runtime": {
+    "schemaVersion": 1,
+    "startedUtc": "2026-10-15T06:11:26.848Z",
+    "buildId": "f3_O6HfcLIVfFSBINMSBm",
+    "externalProviderCalls": 0,
+    "groups": [
+      {
+        "generation": "legacy",
+        "viewport": 1440,
+        "sandboxOriginDistinct": true,
+        "initializedWithoutToolEffects": true,
+        "sameServerAppTool": true,
+        "modelOnlyAndForeignRefused": true,
+        "forbiddenViewRetiredAndRetryFresh": true,
+        "foreignErrorRecoverable": true,
+        "resourceRead": true,
+        "cspBlockedBeforeNetwork": true,
+        "reservedMessageRefused": true,
+        "unsafeLinkRefused": true,
+        "safeLink": {
+          "result": {},
+          "jsonrpc": "2.0",
+          "id": "view-5"
+        },
+        "popupOpenerNull": true,
+        "downloadContentsVerified": true,
+        "consentRevokedBeforeEffects": true,
+        "remountFreshBridge": true,
+        "gracefulTeardownMs": 190,
+        "pendingToolCancelled": true
+      },
+      {
+        "generation": "modern",
+        "viewport": 390,
+        "sandboxOriginDistinct": true,
+        "initializedWithoutToolEffects": true,
+        "sameServerAppTool": true,
+        "modelOnlyAndForeignRefused": true,
+        "forbiddenViewRetiredAndRetryFresh": true,
+        "foreignErrorRecoverable": true,
+        "resourceRead": true,
+        "cspBlockedBeforeNetwork": true,
+        "reservedMessageRefused": true,
+        "unsafeLinkRefused": true,
+        "safeLink": {
+          "result": {},
+          "jsonrpc": "2.0",
+          "id": "view-5"
+        },
+        "popupOpenerNull": true,
+        "downloadContentsVerified": true,
+        "consentRevokedBeforeEffects": true,
+        "remountFreshBridge": true,
+        "gracefulTeardownMs": 163,
+        "pendingToolCancelled": true
+      }
+    ],
+    "pageErrors": [],
+    "unexpectedRequests": [],
+    "limitations": [
+      "Source production localhost profile with SDK reference servers; not installed/public deployment acceptance",
+      "Default restrictive sandbox and per-server Apps opt-in; permissive settings and optional per-resource click policy are not qualified",
+      "Existing declared loopback grants are hostname-wide across ports; undeclared-host refusal is tested separately",
+      "Automated Chromium browser observation, not independent human accessibility acceptance"
+    ],
+    "browserVersion": "155.0.4283.45",
+    "safeLinkObservation": {
+      "generation": "modern",
+      "response": {
+        "result": {},
+        "jsonrpc": "2.0",
+        "id": "view-5"
+      },
+      "destinationOpened": true,
+      "openerNull": true
+    },
+    "browserClosed": true,
+    "appClosed": true,
+    "referenceServersClosed": true,
+    "referenceState": {
+      "calls": [
+        {
+          "generation": "legacy",
+          "name": "open_view"
+        },
+        {
+          "generation": "legacy",
+          "name": "app_echo",
+          "marker": "allowed"
+        },
+        {
+          "generation": "legacy",
+          "name": "open_view"
+        },
+        {
+          "generation": "legacy",
+          "name": "app_echo",
+          "marker": "allowed"
+        },
+        {
+          "generation": "legacy",
+          "name": "open_view"
+        },
+        {
+          "generation": "legacy",
+          "name": "app_echo",
+          "marker": "allowed"
+        },
+        {
+          "generation": "legacy",
+          "name": "app_wait",
+          "marker": "pending"
+        },
+        {
+          "generation": "modern",
+          "name": "open_view"
+        },
+        {
+          "generation": "modern",
+          "name": "app_echo",
+          "marker": "allowed"
+        },
+        {
+          "generation": "modern",
+          "name": "open_view"
+        },
+        {
+          "generation": "modern",
+          "name": "app_echo",
+          "marker": "allowed"
+        },
+        {
+          "generation": "modern",
+          "name": "open_view"
+        },
+        {
+          "generation": "modern",
+          "name": "app_echo",
+          "marker": "allowed"
+        },
+        {
+          "generation": "modern",
+          "name": "app_wait",
+          "marker": "pending"
+        }
+      ],
+      "reads": [
+        {
+          "generation": "legacy",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "legacy",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "legacy",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "legacy",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "legacy",
+          "uri": "receipt://apps-acceptance/value"
+        },
+        {
+          "generation": "legacy",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "legacy",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "modern",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "modern",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "modern",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "modern",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "modern",
+          "uri": "receipt://apps-acceptance/value"
+        },
+        {
+          "generation": "modern",
+          "uri": "ui://apps-acceptance/view"
+        },
+        {
+          "generation": "modern",
+          "uri": "ui://apps-acceptance/view"
+        }
+      ],
+      "observations": [
+        {
+          "mount": "d3aed8ed-304d-40ec-af47-05982bc72d05",
+          "event": "teardown"
+        },
+        {
+          "mount": "e067a51f-4da9-411b-846b-d0b7ae63522d",
+          "event": "teardown"
+        },
+        {
+          "mount": "5b6dd1f8-3049-4548-a0ea-6f76118def6f",
+          "event": "teardown"
+        },
+        {
+          "mount": "e72d5f36-8a45-4e10-b785-abc9a67d5bbd",
+          "event": "teardown"
+        }
+      ],
+      "deniedRequests": 0,
+      "allowedRequests": 2,
+      "cancelledWaits": 2
+    },
+    "privateProfileRemoved": true,
+    "cleanupErrors": [],
+    "success": true,
+    "finishedUtc": "2026-10-15T06:11:53.139Z",
+    "node": "v22.23.3",
+    "platform": "win32"
+  },
+  "before": {
+    "error": "AssertionError [ERR_ASSERTION]: An opened safe link must not be reported as a failure",
+    "buildId": "jRkFRFjtF03q0g78A46T9",
+    "safeLinkObservation": {
+      "generation": "legacy",
+      "response": {
+        "result": {
+          "isError": true
+        },
+        "jsonrpc": "2.0",
+        "id": "view-5"
+      },
+      "destinationOpened": true,
+      "openerNull": true
+    },
+    "browserVersion": "155.0.4283.45",
+    "success": false,
+    "cleanupComplete": true
+  },
+  "equipmentAttempts": [
+    "Initial201 status expectation corrected; no acceptance credit",
+    "Missing Playwright binary replaced with existing Edge; no browser installed",
+    "403 intentionally retires the model-only View; ordinary tester retry creates a fresh View",
+    "An equipment run during rebuild had no BUILD_ID and allocated no app/profile",
+    "Same-host loopback port probe demonstrated the existing intentional hostname-wide grant; not credited as undeclared-host refusal",
+    "Phone clicks synchronized with two animation frames after layout; no production layout change",
+    "SDK2 reference handler corrected from extra.signal to context.mcpReq.signal; final actual cancellation passes both generations"
+  ],
+  "releaseCiDispatched": false,
+  "externalProviderCalls": 0,
+  "browserPermission": "Chromium local-network-access granted only to each owned sandbox origin; App CSP and permissions are unchanged",
+  "portWideningEvidence": {
+    "meaning": "Another port on the declared loopback hostname reached the listener under the existing automatic wildcard grant",
+    "status": "Unfinished #1093 implementation work, not an external blocker",
+    "buildId": "jRkFRFjtF03q0g78A46T9",
+    "deniedListenerRequests": 1,
+    "spec": "https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx"
+  }
+}

@@ -179,3 +179,16 @@ servers, for the existing subscription requirement. Hosted/multi-process deploym
 are outside this qualification. #1093 remains open for its existing OAuth, Apps
 browser and installed release requirements. No full or
 remote CI, packed/installed suite, container build or release workflow was run.
+
+
+## October 15 Apps browser qualification and safe-link repair
+
+APP-1 now has browser evidence for the **source production localhost Tool Tester** profile with the local CSP exception below: SDK1 sessionful HTTP at 1440px and split-SDK modern HTTP at 390px, using Apps 2.0.3, Next 16.4.1, React 19.3.1 and Edge 155.0.4283.45. The actual View waits for initialization, receives input before its result, calls the same-server app-visible tool and reads its resource. Model-only and foreign-server calls stop before effects. A 403 retires the View; ordinary Test tool retry opens a fresh one. A 404 stays recoverable. Separate server identities receive distinct sandbox origins and cannot read the host DOM.
+
+The browser exposed a real safe-link defect: the destination opened with a null opener, but FLUJO returned isError:true because noopener intentionally returns a null WindowProxy. The handler now acknowledges the validated dispatch without misclassifying that null result; URL checks and noopener/noreferrer remain. Both generations verify the opened destination and null opener, reject javascript: links, and verify the downloaded filename and exact contents. Browser popup-blocker detection cannot be inferred from a null handle.
+
+Declared connections work; undeclared-host connection/frame attempts are blocked before their healthy listener receives a request. The existing loopback policy deliberately normalizes declared ports to a hostname-wide grant. The acceptance probe uses localhost as the undeclared hostname while only 127.0.0.1 is granted; exact-port isolation is not claimed. Reserved readiness injection cannot replace the live bridge. Revocation blocks calls before effects, gracefully retires the View, and re-enabling/remounting creates a fresh bridge. Closing with real pending tool work aborts it in both SDK generations; no wait remains. The host fits the recorded phone viewport. No permissive sandbox setting was enabled.
+
+[Exact-tree receipt and sanitized browser/protocol observations](../audits/evidence/mcp-apps-browser-1093-2026-10-15.json) bind tested tree 8016eaa3da344b9c230f6f994b9cdf28bd5e2fd6, local typecheck/lint/non-container build, 37 focused frame checks, original failing safe-link proof and successful browser/profile cleanup. Zero external provider calls were made. Earlier equipment failures are retained without acceptance credit.
+
+This advances APP-1 for the measured profile, not full conformance or #1093 closure. The stable specification defines CSP entries as origins and forbids loosening. Automatic fixed-port-to-wildcard expansion remains unfinished implementation work under #1093; its repair must preserve the existing ephemeral-port restart regression. Genuine OAuth, hosted/installed Windows/Linux identities and release-level combined qualification also remain open. Chat/canvas-specific embedding, optional per-resource click policy, permissive settings and independent human accessibility are not inferred. No full/remote CI, packed/installed suite, container/image build or release workflow ran.
