@@ -140,7 +140,7 @@
     "remark-gfm": "^4.0.1",
     "simple-git": "^4.0.2",
     "slate": "^0.133.1",
-    "slate-dom": "^0.133.1",
+    "slate-dom": "^0.133.5",
     "slate-history": "^0.128.1",
     "slate-react": "^0.133.2",
     "smol-toml": "1.9.1",
