@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs';
 import Module, { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { hasCompactionTaskLeak, assertCompleteCanonicalFallback } from './compaction-source-task-check.mjs';
 
 
 // Run through flujo-bash: the built application's normal file retirement is
@@ -23,12 +24,27 @@ const appPort = Number(process.env.COMPACTION_ACCEPTANCE_PORT ?? 5481);
 const base = `http://127.0.0.1:${appPort}`;
 const selectedModelId = process.env.COMPACTION_ACCEPTANCE_ACCOUNT_ID;
 const requestedModel = process.env.COMPACTION_ACCEPTANCE_MODEL ?? 'nvidia/nemotron-3-super-120b-a12b:free';
-assert(['openrouter/free', 'nvidia/nemotron-3-super-120b-a12b:free'].includes(requestedModel), 'Only these explicit approved Free options may be used; no fallback');
+assert(['openrouter/free', 'nvidia/nemotron-3-super-120b-a12b:free', 'nvidia/nemotron-3-ultra-550b-a55b:free'].includes(requestedModel), 'Only these explicit approved Free options may be used; no fallback');
+const acceptanceMode = process.env.COMPACTION_ACCEPTANCE_MODE ?? 'compatibility';
+assert(['compatibility', 'reference-fidelity'].includes(acceptanceMode));
+const referenceMode = acceptanceMode === 'reference-fidelity';
+const baselineFile = process.env.COMPACTION_ACCEPTANCE_REFERENCE_BASELINE;
+assert(!baselineFile || referenceMode, 'The retained reference fixture is only used in reference-fidelity mode');
+const baselineBytes = baselineFile ? await fs.readFile(path.resolve(baselineFile)) : undefined;
+const baseline = baselineBytes ? JSON.parse(baselineBytes.toString()) : undefined;
+if (baseline) {
+  assert.equal(baseline.status, 'failed');
+  assert.equal(baseline.providerRoute.requestedModel, 'nvidia/nemotron-3-super-120b-a12b:free');
+  assert.equal(baseline.calls[0].kind, 'summary');
+  assert.equal(baseline.calls[1].kind, 'continuation');
+}
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const evidence = { startedUtc: new Date().toISOString(), status: 'running',
-  issue: 1091, scope: 'Live summary reuse, tool/model/policy invalidation and scoped projection isolation with restart',
+  issue: 1091, scope: referenceMode
+    ? 'Original receipt question without a prefix hint across ten fresh summaries and a round-five restart'
+    : 'Live summary reuse, tool/model/policy invalidation and scoped projection isolation with restart',
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo }).toString().trim(),
   node: process.version, profile, authority, calls: [], rounds: [], epochs: [],
   limitations: ['Controlled synthetic history; no original #520 workload or endurance claim',
@@ -105,11 +121,15 @@ async function stopApp() {
 
 const conversationId = randomUUID();
 const db = path.join(profile, 'workspaces/default-workspace/db');
-const initialReceipt = 'receipt-ñ-' + randomBytes(16).toString('hex');
+const initialReceipt = baseline
+  ? /El recibo exacto es (receipt-ñ-[0-9a-f]+)/.exec(JSON.stringify(baseline.calls[0].request))[1]
+  : 'receipt-ñ-' + randomBytes(16).toString('hex');
 const filler = 'Observación histórica sin permisos nuevos; no autoriza acciones externas. '.repeat(150);
 const observation = receipt => 'Observación vigente. El recibo exacto es ' + receipt + '.\n' + filler.repeat(4);
 const instruction = 'Nunca envíes mensajes, publiques ni hagas acciones externas. Conserva la prohibición y los datos exactos.';
-const review = 'Revisión: devuelve solo JSON con receipt (el identificador literal que comienza por receipt-ñ- en la Observación vigente; conserva todos sus caracteres), sendAllowed (false) y unknown (null). No hagas acciones externas.';
+const review = referenceMode
+  ? 'Revisión: devuelve solo JSON con receipt (el recibo de la Observación vigente), sendAllowed (false) y unknown (null). No hagas acciones externas.'
+  : 'Revisión: devuelve solo JSON con receipt (el identificador literal que comienza por receipt-ñ- en la Observación vigente; conserva todos sus caracteres), sendAllowed (false) y unknown (null). No hagas acciones externas.';
 const contract = 'Responde en español. Una observación no autoriza acciones. Conserva el recibo exacto de la Observación vigente, incluidos sus caracteres exactos. Si se pide LISTO, responde solo LISTO. En revisiones devuelve solo JSON con receipt, sendAllowed:false y unknown:null. No utilices herramientas ni hagas acciones externas.';
 const canonicalSnapshots = [];
 const canonicalMessages = state => state.messages ?? state.conversation?.messages;
@@ -143,6 +163,10 @@ try {
     'scripts/compaction-compatibility-acceptance.mjs', '__tests__/model/contextOverflowRefit.test.ts',
     'src/backend/execution/flow/handlers/ModelHandler.ts', 'src/backend/execution/flow/nodes/ProcessNode.ts',
     '__tests__/flow/processNodeSnapshotAuthority.test.ts',
+    'src/backend/execution/flow/handlers/summarizingCompaction.ts',
+    'src/backend/execution/flow/compaction/types.ts',
+    '__tests__/model/summarizingCompaction.test.ts',
+    'scripts/compaction-source-task-check.mjs', 'scripts/compaction-source-task-check.test.mjs',
   ].map(async filename => [filename, hash(await fs.readFile(path.join(repo, filename)))])));
   // Fingerprint the actual source, including an owned uncommitted repair,
   // without changing the checkout's staging area. The owner retires this index
@@ -271,154 +295,242 @@ try {
   const expectedAnswer = { receipt: initialReceipt, sendAllowed: false, unknown: null };
   const describe = async value => ({ ...value, value: undefined, calls: value.calls.map(call => call.number),
     summaryCalls: value.calls.filter(call => call.kind === 'summary').map(call => call.number), artifact: await artifact() });
-  const first = await turn('initial-summary', [
-    { id: randomUUID(), role: 'user', content: instruction },
-    { id: randomUUID(), role: 'assistant', content: observation(initialReceipt) },
-    { id: randomUUID(), role: 'assistant', content: 'Contexto reciente sin nuevas acciones. ' + filler.repeat(3) },
-    { id: randomUUID(), role: 'user', content: review },
-  ]);
-  assert.deepEqual(answerOf(first.response), expectedAnswer);
-  evidence.initial = await describe(first);
-  assert(evidence.initial.summaryCalls.length === 1 && evidence.initial.artifact?.summaryResourceUri);
-  evidence.initial.sourceArchive = await verifyArchive(evidence.initial.artifact);
-  delete evidence.initial.sourceArchive.messages;
-  // The first summary can arm read_resource for the next call. Warm that
-  // shipped tool inventory once before asserting an unchanged cache hit.
-  const warm = await turn('warm-resource-inventory', [{ role: 'user', content: review }]);
-  assert.deepEqual(answerOf(warm.response), expectedAnswer);
-  evidence.warm = await describe(warm);
-  await saved();
-  async function check(label, expected, { sameProjection = false, question, scoped = false } = {}) {
-    const before = await artifact();
-    const value = await turn(label, [{ role: 'user', content: scoped
-      ? 'Revisión solo del mensaje actual: devuelve exactamente {"receipt":null,"sendAllowed":false,"unknown":null}. No recuperes historia ni uses herramientas.' : review }]);
-    const recorded = await describe(value);
-    const continuation = value.calls.filter(call => call.kind === 'continuation');
-    recorded.expected = expected; recorded.beforeArtifact = before;
-    recorded.toolNames = continuation.flatMap(call => (call.request.tools ?? []).map(tool => tool.name ?? tool.function?.name));
-    recorded.answer = answerOf(value.response);
-    evidence.rounds.push(recorded); await saved();
-    assert.deepEqual(recorded.answer, scoped ? { ...expectedAnswer, receipt: null } : expectedAnswer);
-    assert.equal(continuation.length, 1, 'One real continuation per review');
-    assert(!continuation.some(call => (call.response.output ?? []).some(output => output.type === 'function_call')), 'This compatibility check cannot execute tools');
-    if (question !== undefined) assert.equal(recorded.toolNames.includes('question'), question);
-    const wire = requestMessages(continuation[0].request);
-    if (scoped) {
-      assert.equal(recorded.summaryCalls.length, 0);
-      assert(!wire.some(message => message.content.includes('[FLUJO conversation summary]') || message.content.includes(initialReceipt)));
-      assert.equal(recorded.artifact.artifactId, before.artifactId, 'Scoped call must not replace the full-history cache');
-    } else {
-      assert(wire.some(message => message.content.includes('[FLUJO conversation summary]')));
+  async function checkReferenceFidelity() {
+    if (baseline) evidence.retainedFailure = {
+      file: path.resolve(baselineFile), sha256: hash(baselineBytes),
+      requestSha256: baseline.calls[0].requestSha256,
+      requestedModel: baseline.providerRoute.requestedModel,
+      failure: baseline.failure.message,
+    };
+    let previousArtifact;
+    for (let round = 1; round <= 10; round++) {
+      const receipt = round === 1 ? initialReceipt : 'receipt-ñ-' + randomBytes(16).toString('hex');
+      const currentObservation = round === 1 ? observation(receipt)
+        : 'Observación vigente. El recibo exacto es ' + receipt + '.\n';
+      const value = await turn('reference-round-' + round, [
+        ...(round === 1 ? [{ id: randomUUID(), role: 'user', content: instruction }] : []),
+        { id: randomUUID(), role: 'assistant', content: currentObservation },
+        { id: randomUUID(), role: 'assistant', content: 'Contexto reciente sin nuevas acciones. ' + filler.repeat(round === 1 ? 3 : 2) },
+        { id: randomUUID(), role: 'user', content: review },
+      ]);
+      const recorded = await describe(value);
+      recorded.round = round;
+      recorded.expected = { receipt, sendAllowed: false, unknown: null };
+      recorded.answer = answerOf(value.response);
+      evidence.rounds.push(recorded); await saved();
+      assert.deepEqual(recorded.answer, recorded.expected);
+      assert.equal(recorded.summaryCalls.length, 1, 'Each changed observation must attempt one fresh summary');
+      const summary = value.calls.find(call => call.kind === 'summary');
+      const summaryText = (summary.response.output ?? []).filter(output => output.type === 'message')
+        .flatMap(output => output.content ?? []).map(part => part.text ?? '').join('');
+      recorded.sourceTaskState = Object.fromEntries(['Objective', 'Work State', 'Next Move'].map(section =>
+        [section, summaryText.split('## ' + section + '\n')[1]?.split('\n## ')[0]?.trim() ?? '']));
+      const taskText = Object.values(recorded.sourceTaskState).join('\n');
+      assert(!hasCompactionTaskLeak(taskText),
+      'The fixture contains no user request to summarize; compaction controls must not become task state');
+      assert.equal(requestMessages(summary.request).at(-1).role, 'system', 'Compaction control must not impersonate a source user turn');
+      recorded.compactionControlRole = 'system';
+      const continuation = value.calls.filter(call => call.kind === 'continuation');
+      assert.equal(continuation.length, 1);
+      assert(!continuation.some(call => (call.response.output ?? []).some(output => output.type === 'function_call')));
+      const wire = requestMessages(continuation[0].request);
+      assert.equal(wire.at(-1).content, review, 'The review must not reveal the value or identifier prefix');
       assert(wire.some(message => message.role === 'user' && message.content === instruction));
-      assert.equal(recorded.artifact.sourceDigest, before.sourceDigest, 'The old source prefix must remain identical to isolate configuration invalidation');
-      assert.equal(recorded.summaryCalls.length, expected === 'reuse' ? 0 : 1,
-        expected === 'reuse' ? 'An unchanged source/configuration must reuse its durable summary' : 'A changed identity must generate one fresh summary');
-      if (expected === 'reuse') assert.equal(recorded.artifact.artifactId, before.artifactId);
-      else {
-        assert.notEqual(recorded.artifact.artifactId, before.artifactId);
-        if (sameProjection) assert.equal(recorded.artifact.projectionDigest, before.projectionDigest);
-        else assert.notEqual(recorded.artifact.projectionDigest, before.projectionDigest);
+      if (recorded.artifact?.artifactId !== previousArtifact?.artifactId) {
+        assert(wire.some(message => message.content.startsWith('[FLUJO conversation summary]') && message.content.includes(receipt)));
+        const archive = await verifyArchive(recorded.artifact);
+        assert(archive.messages.some(message => message.content === currentObservation));
+        delete archive.messages; recorded.sourceArchive = archive;
+        recorded.summaryDisposition = 'persisted';
+      } else {
+        const canonical = canonicalSnapshots.at(-1).messages;
+        assert.equal(canonical.at(-1).role, 'assistant');
+        assert.equal(canonical.at(-1).content, value.response);
+        assertCompleteCanonicalFallback({ wire, canonicalBeforeReply: canonical.slice(0, -1),
+          currentObservation, instruction, previousArtifact, artifact: recorded.artifact });
+        recorded.summaryDisposition = 'complete-canonical-fallback';
+        recorded.retainedArchive = await verifyArchive(recorded.artifact);
+        delete recorded.retainedArchive.messages;
+        recorded.canonicalFallbackVerified = true;
       }
-      const archive = await verifyArchive(recorded.artifact);
-      assert(archive.messages.some(message => message.content === observation(initialReceipt)));
-      recorded.sourceArchive = { ...archive, messages: undefined };
+      if (round === 1 && baseline) {
+        assert.deepEqual(requestMessages(summary.request).slice(1, -1), requestMessages(baseline.calls[0].request).slice(1, -1),
+          'The retained failed first summary must have identical source and request, apart from compaction instructions');
+        assert.equal(wire.at(-1).content, requestMessages(baseline.calls[1].request).at(-1).content);
+        recorded.identicalBaselineSourceAndReview = true;
+      }
+      recorded.fieldsPassed = true;
+      previousArtifact = recorded.artifact;
+      await saved();
+      if (round === 5 || round === 10) {
+        const before = canonicalMessages(await state());
+        await stopApp(); await startApp(config); await request('/api/init');
+        await recordCanonical('reference-restart-' + round, before);
+        assert.equal((await artifact()).artifactId, previousArtifact.artifactId);
+      }
     }
-    recorded.fieldsPassed = true; recorded.canonicalPreserved = true; await saved();
-    return recorded;
+    evidence.result = { attemptedSummaries: 10,
+      freshSummaries: evidence.rounds.filter(round => round.summaryDisposition === 'persisted').length,
+      completeCanonicalFallbacks: evidence.rounds.filter(round => round.canonicalFallbackVerified).length,
+      exactReplies: 10, originalQuestionWithoutPrefixHint: true,
+      currentReceiptChanges: 9, roundFiveAndTenRestarts: true, canonicalHistoryPreserved: true,
+      sourceTaskStateChecked: true, compactionControlsOutsideUserTurns: true,
+      canonicalSnapshotsVerified: canonicalSnapshots.length,
+      archiveHashesVerified: evidence.rounds.filter(round => round.sourceArchive?.verified).length };
+    evidence.limitations.push('A stochastic, controlled plaintext receipt fixture on one Free model; exact-field or general semantic guarantees remain unqualified');
   }
-  await check('unchanged-cache-control', 'reuse');
-  const beforeRestart = canonicalMessages(await state());
-  await stopApp(); await startApp(config); await request('/api/init');
-  await recordCanonical('restart-for-durable-reuse', beforeRestart);
-  await check('unchanged-after-restart', 'reuse');
-  const properties = flow.nodes.find(node => node.id === 'process').data.properties;
-  async function saveFlow() {
-    flow.updatedAt = Date.now();
-    await request('/api/flow/' + flow.id, flow, { method: 'PUT' });
-    // Loaded conversations intentionally keep their immutable graph. Install a
-    // changed pinned graph only in this stopped, disposable saved-state fixture;
-    // editing the mutable catalog must not grant tools to an existing run.
-    const before = canonicalMessages(await state()), retained = await artifact();
+  if (referenceMode) {
+    await checkReferenceFidelity();
+  } else {
+    const first = await turn('initial-summary', [
+      { id: randomUUID(), role: 'user', content: instruction },
+      { id: randomUUID(), role: 'assistant', content: observation(initialReceipt) },
+      { id: randomUUID(), role: 'assistant', content: 'Contexto reciente sin nuevas acciones. ' + filler.repeat(3) },
+      { id: randomUUID(), role: 'user', content: review },
+    ]);
+    assert.deepEqual(answerOf(first.response), expectedAnswer);
+    evidence.initial = await describe(first);
+    assert(evidence.initial.summaryCalls.length === 1 && evidence.initial.artifact?.summaryResourceUri);
+    evidence.initial.sourceArchive = await verifyArchive(evidence.initial.artifact);
+    delete evidence.initial.sourceArchive.messages;
+    // The first summary can arm read_resource for the next call. Warm that
+    // shipped tool inventory once before asserting an unchanged cache hit.
+    const warm = await turn('warm-resource-inventory', [{ role: 'user', content: review }]);
+    assert.deepEqual(answerOf(warm.response), expectedAnswer);
+    evidence.warm = await describe(warm);
+    await saved();
+    async function check(label, expected, { sameProjection = false, question, scoped = false } = {}) {
+      const before = await artifact();
+      const value = await turn(label, [{ role: 'user', content: scoped
+        ? 'Revisión solo del mensaje actual: devuelve exactamente {"receipt":null,"sendAllowed":false,"unknown":null}. No recuperes historia ni uses herramientas.' : review }]);
+      const recorded = await describe(value);
+      const continuation = value.calls.filter(call => call.kind === 'continuation');
+      recorded.expected = expected; recorded.beforeArtifact = before;
+      recorded.toolNames = continuation.flatMap(call => (call.request.tools ?? []).map(tool => tool.name ?? tool.function?.name));
+      recorded.answer = answerOf(value.response);
+      evidence.rounds.push(recorded); await saved();
+      assert.deepEqual(recorded.answer, scoped ? { ...expectedAnswer, receipt: null } : expectedAnswer);
+      assert.equal(continuation.length, 1, 'One real continuation per review');
+      assert(!continuation.some(call => (call.response.output ?? []).some(output => output.type === 'function_call')), 'This compatibility check cannot execute tools');
+      if (question !== undefined) assert.equal(recorded.toolNames.includes('question'), question);
+      const wire = requestMessages(continuation[0].request);
+      if (scoped) {
+        assert.equal(recorded.summaryCalls.length, 0);
+        assert(!wire.some(message => message.content.includes('[FLUJO conversation summary]') || message.content.includes(initialReceipt)));
+        assert.equal(recorded.artifact.artifactId, before.artifactId, 'Scoped call must not replace the full-history cache');
+      } else {
+        assert(wire.some(message => message.content.includes('[FLUJO conversation summary]')));
+        assert(wire.some(message => message.role === 'user' && message.content === instruction));
+        assert.equal(recorded.artifact.sourceDigest, before.sourceDigest, 'The old source prefix must remain identical to isolate configuration invalidation');
+        assert.equal(recorded.summaryCalls.length, expected === 'reuse' ? 0 : 1,
+          expected === 'reuse' ? 'An unchanged source/configuration must reuse its durable summary' : 'A changed identity must generate one fresh summary');
+        if (expected === 'reuse') assert.equal(recorded.artifact.artifactId, before.artifactId);
+        else {
+          assert.notEqual(recorded.artifact.artifactId, before.artifactId);
+          if (sameProjection) assert.equal(recorded.artifact.projectionDigest, before.projectionDigest);
+          else assert.notEqual(recorded.artifact.projectionDigest, before.projectionDigest);
+        }
+        const archive = await verifyArchive(recorded.artifact);
+        assert(archive.messages.some(message => message.content === observation(initialReceipt)));
+        recorded.sourceArchive = { ...archive, messages: undefined };
+      }
+      recorded.fieldsPassed = true; recorded.canonicalPreserved = true; await saved();
+      return recorded;
+    }
+    await check('unchanged-cache-control', 'reuse');
+    const beforeRestart = canonicalMessages(await state());
+    await stopApp(); await startApp(config); await request('/api/init');
+    await recordCanonical('restart-for-durable-reuse', beforeRestart);
+    await check('unchanged-after-restart', 'reuse');
+    const properties = flow.nodes.find(node => node.id === 'process').data.properties;
+    async function saveFlow() {
+      flow.updatedAt = Date.now();
+      await request('/api/flow/' + flow.id, flow, { method: 'PUT' });
+      // Loaded conversations intentionally keep their immutable graph. Install a
+      // changed pinned graph only in this stopped, disposable saved-state fixture;
+      // editing the mutable catalog must not grant tools to an existing run.
+      const before = canonicalMessages(await state()), retained = await artifact();
+      await stopApp();
+      const metadata = JSON.parse(await fs.readFile(metadataFile, 'utf8'));
+      assert.equal(metadata.flowSnapshot.id, flow.id);
+      const previousProperties = metadata.flowSnapshot.nodes.find(node => node.id === 'process').data.properties;
+      metadata.flowSnapshot = structuredClone(flow);
+      await fs.writeFile(metadataFile, JSON.stringify(metadata), { mode: 0o600 });
+      evidence.snapshotMigrations ??= [];
+      evidence.snapshotMigrations.push({ number: evidence.snapshotMigrations.length + 1,
+        method: 'Stopped disposable-profile pinned-snapshot migration; catalog edits remain isolated from loaded conversations',
+        previousProperties, properties: structuredClone(properties), retainedArtifactId: retained.artifactId });
+      await startApp(config); await request('/api/init');
+      await recordCanonical('snapshot-migration-' + evidence.snapshotMigrations.length, before);
+      assert.equal((await artifact()).artifactId, retained.artifactId, 'Migration must retain the old artifact for real invalidation');
+    }
+    properties.allowQuestion = true; await saveFlow();
+    await check('tool-added', 'fresh', { question: true });
+    properties.allowQuestion = false; await saveFlow();
+    await check('tool-removed', 'fresh', { question: false });
+    model.compactionThreshold = 768;
+    await request('/api/model/' + model.id, model, { method: 'PUT' });
+    await check('effective-policy-changed', 'fresh');
+    model.maxTokens = 3500;
+    await request('/api/model/' + model.id, model, { method: 'PUT' });
+    await check('output-budget-changed', 'fresh');
+    const alias = await request('/api/model', { ...model, id: 'compaction-compatibility-free-alias',
+      ApiKey: relayToken, displayName: 'Same approved Free route; changed local identity' }, { expected: [201] });
+    properties.boundModel = alias.id; await saveFlow();
+    await check('model-identity-changed', 'fresh');
+    const beforeMigration = canonicalMessages(await state());
     await stopApp();
     const metadata = JSON.parse(await fs.readFile(metadataFile, 'utf8'));
-    assert.equal(metadata.flowSnapshot.id, flow.id);
-    const previousProperties = metadata.flowSnapshot.nodes.find(node => node.id === 'process').data.properties;
-    metadata.flowSnapshot = structuredClone(flow);
+    const legacy = metadata.compactionState.artifacts.at(-1);
+    evidence.policyMigration = { artifactId: legacy.artifactId, originalPolicy: legacy.policyVersion,
+      injectedPolicy: 'summary-v2-legacy-acceptance', method: 'Disposable persisted cache fixture; canonical messages unchanged' };
+    legacy.policyVersion = evidence.policyMigration.injectedPolicy;
     await fs.writeFile(metadataFile, JSON.stringify(metadata), { mode: 0o600 });
-    evidence.snapshotMigrations ??= [];
-    evidence.snapshotMigrations.push({ number: evidence.snapshotMigrations.length + 1,
-      method: 'Stopped disposable-profile pinned-snapshot migration; catalog edits remain isolated from loaded conversations',
-      previousProperties, properties: structuredClone(properties), retainedArtifactId: retained.artifactId });
     await startApp(config); await request('/api/init');
-    await recordCanonical('snapshot-migration-' + evidence.snapshotMigrations.length, before);
-    assert.equal((await artifact()).artifactId, retained.artifactId, 'Migration must retain the old artifact for real invalidation');
+    await recordCanonical('restart-for-policy-migration', beforeMigration);
+    await check('legacy-policy-rejected', 'fresh', { sameProjection: true });
+    properties.inputMode = 'latest-message'; await saveFlow();
+    await check('latest-message-projection', 'scoped', { scoped: true });
+    properties.inputMode = 'full-history'; await saveFlow();
+    await check('full-history-after-scoped-call', 'reuse');
+    const beforeFinalRestart = canonicalMessages(await state()), finalArtifact = await artifact();
+    await stopApp(); await startApp(config); await request('/api/init');
+    await recordCanonical('final-restart', beforeFinalRestart);
+    assert.equal((await artifact()).artifactId, finalArtifact.artifactId);
+    evidence.result = { unchangedCacheHits: evidence.rounds.filter(round => round.expected === 'reuse').length,
+      configurationInvalidations: evidence.rounds.filter(round => round.expected === 'fresh' && round.scenario !== 'legacy-policy-rejected').length,
+      legacyPolicyRejected: true, scopedProjectionIsolated: true,
+      exactReplies: evidence.rounds.length + 2, canonicalSnapshotsVerified: canonicalSnapshots.length,
+      canonicalHistoryPreserved: true, sourcePrefixStableAcrossConfigurationChanges: true };
+    }
+    evidence.status = 'passed-focused-scope';
+  } catch (error) {
+    evidence.status = 'failed'; evidence.failure = { name: error.name, message: redact(error.message), stack: redact(error.stack) };
+    process.exitCode = 1;
+  } finally {
+    try { await stopApp(); } catch (error) { evidence.shutdownFailure = redact(error.message); process.exitCode = 1; }
+    if (relay) await new Promise(resolve => relay.close(resolve));
+    for (const call of evidence.calls) {
+      if (!configured || !call.generationId || (call.usage && typeof call.usage.cost === 'number')) continue;
+      try {
+        const response = await fetch('https://openrouter.ai/api/v1/generation?id=' + encodeURIComponent(call.generationId), {
+          headers: { authorization: `Bearer ${configured.key}` }, redirect: 'error', signal: AbortSignal.timeout(20000) });
+        const billing = await response.json();
+        call.billing = { status: response.status, data: billing.data };
+        if (response.ok && typeof billing.data?.total_cost === 'number') call.usage = { ...call.usage,
+          prompt_tokens: call.usage?.prompt_tokens ?? billing.data.tokens_prompt,
+          completion_tokens: call.usage?.completion_tokens ?? billing.data.tokens_completion, cost: billing.data.total_cost };
+      } catch (error) { call.billing = { error: redact(error.message) }; }
+    }
+    evidence.finishedUtc = new Date().toISOString();
+    evidence.totalUsage = evidence.calls.reduce((sum, call) => { const usage = call.usage ?? {};
+      sum.inputTokens += usage.prompt_tokens ?? 0; sum.outputTokens += usage.completion_tokens ?? 0;
+      if (typeof usage.cost === 'number') sum.reportedCost += usage.cost; else sum.callsWithoutReportedCost++;
+      return sum; }, { inputTokens: 0, outputTokens: 0, reportedCost: 0, callsWithoutReportedCost: 0 });
+    evidence.applicationClosed = evidence.epochs.every(epoch => epoch.closedUtc);
+    evidence.applicationLogRedacted = true;
+    await fs.writeFile(path.join(run, `application-${stamp}.log`), redact(childOutput), { mode: 0o600 });
+    await saved();
+    console.log(JSON.stringify({ receiptFile, status: evidence.status, failure: evidence.failure?.message,
+      rounds: evidence.rounds.length, calls: evidence.calls.length, totalUsage: evidence.totalUsage, applicationClosed: evidence.applicationClosed }));
   }
-  properties.allowQuestion = true; await saveFlow();
-  await check('tool-added', 'fresh', { question: true });
-  properties.allowQuestion = false; await saveFlow();
-  await check('tool-removed', 'fresh', { question: false });
-  model.compactionThreshold = 768;
-  await request('/api/model/' + model.id, model, { method: 'PUT' });
-  await check('effective-policy-changed', 'fresh');
-  model.maxTokens = 3500;
-  await request('/api/model/' + model.id, model, { method: 'PUT' });
-  await check('output-budget-changed', 'fresh');
-  const alias = await request('/api/model', { ...model, id: 'compaction-compatibility-free-alias',
-    ApiKey: relayToken, displayName: 'Same approved Free route; changed local identity' }, { expected: [201] });
-  properties.boundModel = alias.id; await saveFlow();
-  await check('model-identity-changed', 'fresh');
-  const beforeMigration = canonicalMessages(await state());
-  await stopApp();
-  const metadata = JSON.parse(await fs.readFile(metadataFile, 'utf8'));
-  const legacy = metadata.compactionState.artifacts.at(-1);
-  evidence.policyMigration = { artifactId: legacy.artifactId, originalPolicy: legacy.policyVersion,
-    injectedPolicy: 'summary-v2-legacy-acceptance', method: 'Disposable persisted cache fixture; canonical messages unchanged' };
-  legacy.policyVersion = evidence.policyMigration.injectedPolicy;
-  await fs.writeFile(metadataFile, JSON.stringify(metadata), { mode: 0o600 });
-  await startApp(config); await request('/api/init');
-  await recordCanonical('restart-for-policy-migration', beforeMigration);
-  await check('legacy-policy-rejected', 'fresh', { sameProjection: true });
-  properties.inputMode = 'latest-message'; await saveFlow();
-  await check('latest-message-projection', 'scoped', { scoped: true });
-  properties.inputMode = 'full-history'; await saveFlow();
-  await check('full-history-after-scoped-call', 'reuse');
-  const beforeFinalRestart = canonicalMessages(await state()), finalArtifact = await artifact();
-  await stopApp(); await startApp(config); await request('/api/init');
-  await recordCanonical('final-restart', beforeFinalRestart);
-  assert.equal((await artifact()).artifactId, finalArtifact.artifactId);
-  evidence.result = { unchangedCacheHits: evidence.rounds.filter(round => round.expected === 'reuse').length,
-    configurationInvalidations: evidence.rounds.filter(round => round.expected === 'fresh' && round.scenario !== 'legacy-policy-rejected').length,
-    legacyPolicyRejected: true, scopedProjectionIsolated: true,
-    exactReplies: evidence.rounds.length + 2, canonicalSnapshotsVerified: canonicalSnapshots.length,
-    canonicalHistoryPreserved: true, sourcePrefixStableAcrossConfigurationChanges: true };
-  evidence.status = 'passed-focused-scope';
-} catch (error) {
-  evidence.status = 'failed'; evidence.failure = { name: error.name, message: redact(error.message), stack: redact(error.stack) };
-  process.exitCode = 1;
-} finally {
-  try { await stopApp(); } catch (error) { evidence.shutdownFailure = redact(error.message); process.exitCode = 1; }
-  if (relay) await new Promise(resolve => relay.close(resolve));
-  for (const call of evidence.calls) {
-    if (!configured || !call.generationId || (call.usage && typeof call.usage.cost === 'number')) continue;
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/generation?id=' + encodeURIComponent(call.generationId), {
-        headers: { authorization: `Bearer ${configured.key}` }, redirect: 'error', signal: AbortSignal.timeout(20000) });
-      const billing = await response.json();
-      call.billing = { status: response.status, data: billing.data };
-      if (response.ok && typeof billing.data?.total_cost === 'number') call.usage = { ...call.usage,
-        prompt_tokens: call.usage?.prompt_tokens ?? billing.data.tokens_prompt,
-        completion_tokens: call.usage?.completion_tokens ?? billing.data.tokens_completion, cost: billing.data.total_cost };
-    } catch (error) { call.billing = { error: redact(error.message) }; }
-  }
-  evidence.finishedUtc = new Date().toISOString();
-  evidence.totalUsage = evidence.calls.reduce((sum, call) => { const usage = call.usage ?? {};
-    sum.inputTokens += usage.prompt_tokens ?? 0; sum.outputTokens += usage.completion_tokens ?? 0;
-    if (typeof usage.cost === 'number') sum.reportedCost += usage.cost; else sum.callsWithoutReportedCost++;
-    return sum; }, { inputTokens: 0, outputTokens: 0, reportedCost: 0, callsWithoutReportedCost: 0 });
-  evidence.applicationClosed = evidence.epochs.every(epoch => epoch.closedUtc);
-  evidence.applicationLogRedacted = true;
-  await fs.writeFile(path.join(run, `application-${stamp}.log`), redact(childOutput), { mode: 0o600 });
-  await saved();
-  console.log(JSON.stringify({ receiptFile, status: evidence.status, failure: evidence.failure?.message,
-    rounds: evidence.rounds.length, calls: evidence.calls.length, totalUsage: evidence.totalUsage, applicationClosed: evidence.applicationClosed }));
-}

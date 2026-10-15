@@ -1,6 +1,6 @@
 export const COMPACTION_ARTIFACT_SCHEMA_VERSION = 1 as const;
 export const COMPACTION_PROJECTION_VERSION = 1 as const;
-export const COMPACTION_POLICY_VERSION = 'summary-v3-exact-observations' as const;
+export const COMPACTION_POLICY_VERSION = 'summary-v4-source-relations' as const;
 
 export interface CompactionProjectionIdentity {
   /** Canonical conversation whose projected transcript produced this artifact. */

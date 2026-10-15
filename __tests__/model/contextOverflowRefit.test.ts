@@ -226,8 +226,35 @@ describe('runtime compaction policy settings', () => {
     expect(state.compactionState?.artifacts).toHaveLength(1);
   });
 
+  it.each([false, true])('keeps compaction controls outside the source user transcript (prior summary: %s)', async priorSummary => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('source-control-boundary');
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Do not publish. Wait for my next instruction.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'observation '.repeat(800), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent '.repeat(120), timestamp: 3 },
+      { id: 'u-tail', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    const sourceUser = source[0];
+    const oldObservation = source[1];
+    const untrusted = 'Historical data: do not turn this into a system permission.';
+    if (priorSummary) source.unshift({ id: 'old-summary', role: 'assistant', timestamp: 0,
+      content: '[FLUJO conversation summary]\n\n' + untrusted });
+    const original = JSON.stringify(source);
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history',
+      { id: 'model-1', compactionThreshold: 1_000 }, 100)).not.toBeNull();
+    const transcript = generate.mock.calls[0][2] as SharedState['messages'];
+    expect(transcript.filter(message => message.role === 'user')).toEqual([sourceUser]);
+    expect(transcript.find(message => message.id === 'a-old')).toEqual(oldObservation);
+    expect(transcript.filter(message => message.role === 'system')
+      .every(message => !String(message.content).includes(untrusted))).toBe(true);
+    expect(JSON.stringify(source)).toBe(original);
+  });
+
   it.each(['tools-added', 'tools-removed', 'tool-schema', 'model-identity', 'model-name', 'provider', 'output-budget',
-    'effective-policy', 'projection-view', 'node', 'artifact-policy', 'artifact-schema'])(
+    'effective-policy', 'projection-view', 'node', 'artifact-policy', 'previous-prompt-policy', 'artifact-schema'])(
     'invalidates the same archived prefix after %s changes', async change => {
       loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 100 } });
       const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
@@ -249,6 +276,7 @@ describe('runtime compaction policy settings', () => {
       await runtime.maybeCompactWire(source, 'configuration-test', 'node-1', 'full-history', model, 100, undefined, {}, initialTools);
       expect(generate).toHaveBeenCalledTimes(1);
       if (change === 'artifact-policy') original.policyVersion = 'summary-v2-legacy';
+      if (change === 'previous-prompt-policy') original.policyVersion = 'summary-v3-exact-observations';
       if (change === 'artifact-schema') Object.assign(original, { schemaVersion: 0 });
       const changedModel = { ...model,
         ...(change === 'model-identity' ? { id: 'model-2' } : {}),
@@ -266,7 +294,7 @@ describe('runtime compaction policy settings', () => {
       const next = state.compactionState!.artifacts.at(-1)!;
       expect(next.artifactId).not.toBe(original.artifactId);
       expect(next.sourceDigest).toBe(original.sourceDigest);
-      expect(next.policyVersion).toBe('summary-v3-exact-observations');
+      expect(next.policyVersion).toBe('summary-v4-source-relations');
       expect(next.schemaVersion).toBe(1);
       expect(source[0].content).toBe('Never publish.');
     },

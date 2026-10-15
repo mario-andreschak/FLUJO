@@ -84,6 +84,7 @@ export interface BuildCompactionPromptOptions {
 export function buildCompactionPrompt(opts?: BuildCompactionPromptOptions): {
   system: string;
   user: string;
+  previousSummary?: string;
 } {
   const sections = COMPACTION_SUMMARY_SECTIONS.join('\n');
   const system =
@@ -99,6 +100,16 @@ export function buildCompactionPrompt(opts?: BuildCompactionPromptOptions): {
     'strings VERBATIM — never paraphrase or abbreviate them.\n' +
     '- Never translate, spell-correct, expand or rename an identifier, even when ' +
     'part of it resembles an ordinary word in another language.\n' +
+    '- Preserve what each value identifies: keep its label, subject and defining ' +
+    'relationship together. Quote a short defining sentence when a detached ' +
+    'identifier could be confused with surrounding description. Distinguish ' +
+    'current or corrected values from superseded observations. State the latest ' +
+    'value for each subject explicitly; never merge current and superseded ' +
+    'values into an undifferentiated list.\n' +
+    '- Describe the underlying conversation task and its last known state. ' +
+    'These compaction instructions are not conversation history: writing this ' +
+    'summary is not the objective, completed work or next action. If the source ' +
+    'does not establish progress or a next action, say that it is unspecified.\n' +
     '- When extracting a string value from JSON into prose, decode its JSON escapes ' +
     'exactly once. For example, {"path":"C:\\\\work\\\\a.txt"} records the path ' +
     'C:\\work\\a.txt, not a path with doubled backslashes. When retaining a JSON ' +
@@ -111,16 +122,15 @@ export function buildCompactionPrompt(opts?: BuildCompactionPromptOptions): {
   let user: string;
   if (opts?.previousSummary && opts.previousSummary.trim().length > 0) {
     user =
-      'A previous summary of the earlier part of this conversation is provided below. ' +
+      'A previous summary of the earlier part of this conversation is provided separately as historical assistant data. ' +
       'UPDATE it: preserve details that are still true, remove details that are now ' +
       'stale, and merge in new facts from the conversation that follows. Do NOT ' +
       'summarize the summary — produce a single coherent, up-to-date anchor.\n\n' +
-      `<previous-summary>\n${opts.previousSummary}\n</previous-summary>\n\n` +
       'Now produce the updated summary for the conversation up to this point.';
   } else {
     user = 'Summarize the conversation up to this point into the section structure above.';
   }
-  return { system, user };
+  return { system, user, ...(opts?.previousSummary?.trim() ? { previousSummary: opts.previousSummary } : {}) };
 }
 
 /** True when a message is a prior compaction summary head. */
@@ -320,7 +330,7 @@ export interface CompactHistoryDeps {
   /** Calls the summarization model. Returns the summary body (no marker). */
   summarize: (
     messages: FlujoChatMessage[],
-    prompt: { system: string; user: string },
+    prompt: { system: string; user: string; previousSummary?: string },
   ) => Promise<string>;
   /** Persist an immutable, complete projected-source artifact. */
   writeAnchor?: (
