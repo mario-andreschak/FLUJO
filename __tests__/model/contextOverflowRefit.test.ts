@@ -226,6 +226,52 @@ describe('runtime compaction policy settings', () => {
     expect(state.compactionState?.artifacts).toHaveLength(1);
   });
 
+  it.each(['tools-added', 'tools-removed', 'tool-schema', 'model-identity', 'model-name', 'provider', 'output-budget',
+    'effective-policy', 'projection-view', 'node', 'artifact-policy', 'artifact-schema'])(
+    'invalidates the same archived prefix after %s changes', async change => {
+      loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 100 } });
+      const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+      const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+      const state = seedState('configuration-test');
+      const source = [
+        { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+        { id: 'a-old', role: 'assistant', content: 'x'.repeat(6_000), timestamp: 2 },
+        { id: 'a-tail', role: 'assistant', content: 'recent '.repeat(120), timestamp: 3 },
+        { id: 'u-tail', role: 'user', content: 'Continue.', timestamp: 4 },
+      ];
+      const model = { id: 'model-1', name: 'test-model', provider: 'openai', compactionThreshold: 1_000 };
+      const tool: OpenAI.ChatCompletionFunctionTool = { type: 'function', function: {
+        name: 'lookup', description: 'Read the receipt.', parameters: { type: 'object', properties: {} },
+      } };
+      const initialTools = change === 'tools-added' ? undefined : [tool];
+      await runtime.maybeCompactWire(source, 'configuration-test', 'node-1', 'full-history', model, 100, undefined, {}, initialTools);
+      const original = state.compactionState!.artifacts[0];
+      await runtime.maybeCompactWire(source, 'configuration-test', 'node-1', 'full-history', model, 100, undefined, {}, initialTools);
+      expect(generate).toHaveBeenCalledTimes(1);
+      if (change === 'artifact-policy') original.policyVersion = 'summary-v2-legacy';
+      if (change === 'artifact-schema') Object.assign(original, { schemaVersion: 0 });
+      const changedModel = { ...model,
+        ...(change === 'model-identity' ? { id: 'model-2' } : {}),
+        ...(change === 'model-name' ? { name: 'replacement-model' } : {}),
+        ...(change === 'provider' ? { provider: 'replacement-provider' } : {}),
+        ...(change === 'effective-policy' ? { compactionThreshold: 1_100 } : {}),
+      };
+      const changedTools = change === 'tools-removed' ? undefined : change === 'tool-schema'
+        ? [{ ...tool, function: { ...tool.function, parameters: { type: 'object', properties: { receipt: { type: 'string' } } } } }]
+        : [tool];
+      await runtime.maybeCompactWire(source, 'configuration-test', change === 'node' ? 'node-2' : 'node-1',
+        change === 'projection-view' ? 'node-projected' : 'full-history', changedModel,
+        change === 'output-budget' ? 200 : 100, undefined, {}, changedTools);
+      expect(generate).toHaveBeenCalledTimes(2);
+      const next = state.compactionState!.artifacts.at(-1)!;
+      expect(next.artifactId).not.toBe(original.artifactId);
+      expect(next.sourceDigest).toBe(original.sourceDigest);
+      expect(next.policyVersion).toBe('summary-v3-exact-observations');
+      expect(next.schemaVersion).toBe(1);
+      expect(source[0].content).toBe('Never publish.');
+    },
+  );
+
   it('refuses provider-truncated summaries even when all five section headings are present', async () => {
     loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
