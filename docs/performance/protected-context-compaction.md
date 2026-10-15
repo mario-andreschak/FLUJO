@@ -33,6 +33,23 @@ Disposable metadata keeps the newest artifact per node/model, with at most 64
 artifacts and 1,048,576 summary characters, including when restoring older state.
 This cache bound does not evict canonical, active, paused or recovery-owned runs.
 
+Small standalone JSON objects/arrays in assistant and tool observations now have
+an exact, deterministic evidence block alongside the narrative. It preserves the
+original JSON literal and source role/message ID, including arrays, nulls,
+escaped paths and integers too large for a JavaScript number. Recorded data
+does not grant tool permissions; original user corrections remain separate and
+supersede earlier observations. Text parts and pretty-printed/fenced JSON are
+eligible; inline prose, malformed JSON and non-text content are not extracted.
+Each value is at most 4,096 code units. The newest 32 records fit within 16,384
+record code units; omitted or larger data explicitly requires the full source
+archive. Callers without an archive writer retain the source when these bounds
+are exceeded. Subsequent wire rewrites carry the recorded block without nesting it
+or asking the summarizer to regenerate its values. The summary policy is
+`summary-v3-exact-observations`, so earlier cached summaries are regenerated.
+The complete restored projection must still shrink, and existing persistence,
+source-change and context-budget refusal paths remain in effect. This bounded
+evidence does not establish universal structured-state or provider fidelity.
+
 Stored-resource `read_resource` calls default to at most 50,000 UTF-16 code units
 and accept `start_char` and `max_chars` (maximum 200,000). `range.nextChar` is the
 next offset. Reads decode incrementally with a 64 KiB byte buffer. Optional
@@ -173,3 +190,24 @@ requests across baseline, candidate and retained failed attempts report zero
 cost. No full suite, remote workflow, container or release check is dispatched.
 Native sessions/signatures, visual benefit, real side-effect replay, original
 #520 workload confirmation and the remaining exact-state criteria stay open.
+
+The [bounded JSON observation results](compaction-structured-observations-2026-10-15.json)
+retain the prompt-only candidate above as the existing main `f52c8f08` baseline.
+The complete first summary request, including its instructions and fixed Free
+model, is identical. Retaining the original JSON literals alongside the narrative
+raises strict field/type retention from 4/10 to 10/10 on this controlled workload;
+both new five/ten checkpoints pass. All ten continuations receive the recorded
+evidence block. The original six failures remain in the baseline evidence.
+
+The new run preserves canonical history through the round-five restart. A
+further fresh process returns the identical transcript, verifies complete source
+hashes and exact 768-byte archive tails at rounds five/ten, and returns HTTP 416
+beyond EOF. All three application processes close. Fifty focused cases, including
+ten deterministic rewrites, cache-policy migration, no-archive refusal and capped
+allocation/source-release checks, pass with local types/lint and the inspected
+non-container application build. The qualified build takes 299.963 seconds and
+the real-model journey 710.166 seconds, measured separately. All 20 new approved
+Free requests report $0, with no missing reported-cost values. These results
+qualify bounded observation retention on this fixture; universal exact-state,
+native/session/signature, visual and genuine side-effect acceptance remain open
+in #1091.
