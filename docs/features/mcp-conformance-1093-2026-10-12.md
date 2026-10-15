@@ -19,7 +19,7 @@ and lane08 handover. Source/fixture evidence is distinct from release qualificat
 | TASK-1 | Bounded initial MRTR to immediate result or task, exact opaque state, fresh IDs, attended input, cancellation and no ambiguous retry. | Actual split-SDK negotiation and native Node ESM coexistence; input-to-immediate/task and abort fixtures. |
 | TASK-2/3 | Schema parameter headers with safe encoding; JSON output validation on immediate/completed/restarted task results. | Header option capture, scalar/array/object schema cases, terminal bookkeeping/restart and existing generation regressions. Real localhost strict reference HTTP now confirms required method/name and encoded parameter framing; missing/mismatched headers reject 400/-32020 before effects. |
 | LIST-1 | Complete resources/templates/prompts catalogs across opaque/empty pages; repeated cursors/page cap fail. Explicit proxy catalog cursors return one page with continuation. | Catalog and transparent proxy fixtures; existing complete tool discovery retained. |
-| EVENTS-1 | Split-SDK catalog options open acknowledged modern listen streams and invalidate caches. URI-specific resource listens deduplicate and retire with their generation. | Filter/deduplication/late acknowledgment/retirement fixtures. Deployment traces remain release pre-flight. |
+| EVENTS-1 | Split-SDK catalog options open acknowledged modern listen streams and invalidate caches. URI-specific resource listens deduplicate and retire with their generation. | Filter/deduplication/late acknowledgment/retirement fixtures, plus actual production localhost HTTP acceptance in both SDK generations. The subscription receipt below records cache invalidation, correlated updates, reconnect and teardown. Hosted/multi-process profiles are not inferred. |
 | CANCEL-1 | Ordinary route/proxy carries abort and correlated progress. SDK/raw dispatch has a total deadline independent of progress resets. | Route/proxy signal assertions and existing SDK timeout checks. Downstream real effects cease only to the extent the provider supports cancellation. |
 
 ## Supported deployment boundaries
@@ -37,7 +37,7 @@ and lane08 handover. Source/fixture evidence is distinct from release qualificat
 ## Remaining release acceptance
 
 #1093 remains open for identified candidate/provider/browser/installed acceptance.
-Real OAuth, deployed subscription correlation/teardown, Apps browser
+Real OAuth, Apps browser
 origin/CSP/consent/teardown and installed Windows/Linux profiles belong to release
 pre-flight under the current pause. Existing #404 evidence stays credited only for
 unchanged inputs; changed adapter inputs require applicable requalification. CIMD is
@@ -148,3 +148,34 @@ other providers, sampling with tools, genuine OAuth, deployed subscriptions,
 Apps browser behavior or installed artifacts. #1093 remains open for the existing
 uncompleted acceptance listed above. No full/remote CI, container/image build,
 installed/packed or release suite was run.
+
+## Production HTTP subscription lifecycle — October 14, 2026
+
+EVENTS-1 now passes on an isolated production localhost application connected to
+actual SDK1 sessionful HTTP and split-SDK modern HTTP reference servers. Four
+authored Flow executions read a bound MCP resource through the real engine. The
+only model is a synthetic loopback fixture; there are zero external provider calls.
+
+Both generations deliver catalog changes and subscribed resource contents, then
+retire their streams when the server is disabled. Re-enabling a server delivers
+one catalog version change, with current tools, prompts, resources and templates.
+The modern reference advertises a 60-second private cache: repeated reads prove
+the catalogs and resource contents are cached before notifications evict them.
+Two reads reuse one URI listen stream; its acknowledgment is first and echoes the
+requested filter. Unwatched URIs are excluded. An injected retired URI subscription
+ID cannot advance the replacement generation's catalog version. The final modern
+bus, modern streams and legacy SSE streams all have zero remaining listeners.
+
+The read-only IPC observer runs only in the smoke child and its private acceptance
+workspace; no HTTP inspection route or product behavior is added. Application
+closure and private profile removal precede the success receipt. The reusable
+command is `node scripts/smoke-mcp-subscriptions.mjs --production`, after the normal
+non-container application build, executed through flujo-bash MCP for cleanup.
+
+The [exact-tree receipt and sanitized protocol traces](../audits/evidence/mcp-subscriptions-1093-2026-10-14.json)
+record SDK/runtime versions, filters, acknowledgments, cache assertions and local
+validation. This qualifies the source production localhost profile, using reference
+servers, for the existing subscription requirement. Hosted/multi-process deployments
+are outside this qualification. #1093 remains open for its existing OAuth, Apps
+browser and installed release requirements. No full or
+remote CI, packed/installed suite, container build or release workflow was run.
