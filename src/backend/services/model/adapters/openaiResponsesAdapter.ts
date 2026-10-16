@@ -12,6 +12,7 @@ import { supportsExplicitOpenAiPromptCaching } from './openaiPromptCaching';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
 import { digestCanonicalJson } from '@/backend/execution/flow/compaction/digest';
+import { inspectJson } from '@/backend/execution/flow/compaction/jsonInspection';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -52,8 +53,8 @@ const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter
  * every iteration. Responses can return encrypted reasoning items
  * (`include: ['reasoning.encrypted_content']`) which are fed back on the next
  * turn — better answers on multi-step tool use, fewer wasted output tokens, and a
- * longer stable prefix. That is the whole reason to pick this adapter, and it only
- * matters for reasoning models.
+ * longer stable prefix. Complete native output also retains assistant phases
+ * and item ordering that the Chat Completion projection cannot represent.
  *
  * Everything is translated to and from the OpenAI **Chat Completion** shape, so
  * ModelHandler, ToolHandler, the usage mapping and the tool-call plumbing are
@@ -65,24 +66,20 @@ const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter
 // ---------------------------------------------------------------------------
 
 /**
- * Encrypted reasoning items from a prior response, so the next turn of the same
- * agentic loop can hand the model back its own reasoning.
- *
- * The anchor is the `tool_call_id`. With `store: false` OpenAI's guidance is to
- * append the previous response's whole `output` array to the next input verbatim,
- * which keeps reasoning items positioned correctly relative to the function calls
- * they preceded. FLUJO can't do that literally — its history is Chat-Completion
- * shaped and gets rewritten between turns — but `tool_call_id` SURVIVES every one
- * of those rewrites. So the items are stashed against the first tool call of the
- * response that produced them, and re-emitted immediately before that same call
- * when the input is rebuilt. If the history rewriting drops that tool call
- * entirely, the reasoning is simply not re-sent, which is correct: it belonged to
- * an exchange the model is no longer being shown.
+ * Preserve the complete output window, including interleaved reasoning, calls,
+ * message IDs and phases. Its exact canonical prefix/assistant projection and
+ * actual native input must still match before it replaces a reconstructed turn.
+ * Tool IDs alone cannot establish that lineage. Final answers need no tool ID.
+ * This bounded, disposable cache never replaces the canonical conversation.
  */
 type ReasoningItem = OpenAI.Responses.ResponseReasoningItem;
 
 interface ReasoningRecord {
+  callId?: string;
   items: ReasoningItem[];
+  nativeOutput?: OpenAI.Responses.ResponseOutputItem[];
+  nativeInputDigest?: string;
+  retainedChars: number;
   inputLength: number;
   inputDigest: string;
   outputLength: number;
@@ -95,6 +92,7 @@ interface ReasoningSession {
 
 /** Disposable process-local state. Canonical history never depends on this cache. */
 const MAX_TRACKED_SESSIONS = 200;
+const MAX_SESSION_OUTPUT_CHARS = 1024 * 1024;
 const reasoningByWorkspace = new Map<string, Map<string, ReasoningSession>>();
 
 function reasoningBySession(): Map<string, ReasoningSession> {
@@ -118,14 +116,16 @@ type ReasoningInput = Pick<CompletionInput, 'model' | 'apiKey' | 'messages' | 't
  * prefixes can carry opaque state; a call ID alone is not source lineage. */
 export function prepareResponsesReasoning(input: ReasoningInput, adapter: string): {
   carried: Map<string, ReasoningItem[]> | undefined;
-  remember: (completion: OpenAI.Chat.Completions.ChatCompletion, items: ReasoningItem[]) => void;
+  replay: (translated: ResponseInputItem[]) => ResponseInputItem[];
+  remember: (completion: OpenAI.Chat.Completions.ChatCompletion, items: ReasoningItem[],
+    output?: OpenAI.Responses.ResponseOutputItem[]) => void;
 } {
   const key = sessionKey(input.conversationId, input.nodeId);
-  if (!key) return { carried: undefined, remember: () => undefined };
+  if (!key) return { carried: undefined, replay: translated => translated, remember: () => undefined };
   // Capture the workspace store now, rather than rereading async context when
   // the provider eventually finishes. Credential bytes are never retained.
   const sessions = reasoningBySession();
-  const owner = digestCanonicalJson({ policy: 'responses-reasoning-v1', adapter,
+  const owner = digestCanonicalJson({ policy: 'responses-output-v2', adapter,
     connection: input.model.id, model: input.model.name, provider: input.model.provider,
     baseUrl: input.model.baseUrl, credential: input.apiKey,
     reasoningEffort: input.model.reasoningEffort, outputModalities: input.model.outputModalities,
@@ -145,27 +145,72 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
   sessions.set(key, session);
   const current = toResponsesInput(input.messages);
   const inputDigest = digestCanonicalJson(current);
+  let nativeInputDigest = inputDigest;
   const carried = new Map<string, ReasoningItem[]>();
+  const windows = new Map<string, ReasoningRecord>();
   for (const [callId, record] of session.anchors) {
     const end = record.inputLength + record.outputLength;
     if (current.length < end
       || digestCanonicalJson(current.slice(0, record.inputLength)) !== record.inputDigest
       || digestCanonicalJson(current.slice(record.inputLength, end)) !== record.outputDigest) {
       session.anchors.delete(callId);
-    } else carried.set(callId, structuredClone(record.items));
+    } else {
+      windows.set(callId, record);
+      const items = record.nativeOutput?.filter((item): item is ReasoningItem =>
+        item.type === 'reasoning' && !!item.encrypted_content) ?? record.items;
+      if (items.length && record.callId) carried.set(record.callId, structuredClone(items));
+    }
   }
   const ownedSession = session;
-  return { carried, remember: (completion, items) => {
+  return { carried, replay: translated => {
+    if (!windows.size) {
+      nativeInputDigest = digestCanonicalJson(translated);
+      return translated;
+    }
+    const replayed: ResponseInputItem[] = [];
+    const append = (items: ResponseInputItem[]) => { for (const item of items) replayed.push(item); };
+    let cursor = 0;
+    for (const [anchor, record] of [...windows].sort((a, b) => a[1].inputLength - b[1].inputLength)) {
+      const start = record.inputLength;
+      if (start < cursor) continue;
+      append(translated.slice(cursor, start));
+      const end = start + record.outputLength;
+      // A previous native window can disappear or be replaced while its plain
+      // text stays identical. Descendants must not replay against that new input.
+      if (record.nativeInputDigest && digestCanonicalJson(replayed) !== record.nativeInputDigest) {
+        if (sessions.get(key) === ownedSession) ownedSession.anchors.delete(anchor);
+        append(translated.slice(start, end));
+      } else if (record.nativeOutput) {
+        append(structuredClone(record.nativeOutput) as ResponseInputItem[]);
+      } else {
+        append(structuredClone(record.items));
+        append(translated.slice(start, end));
+      }
+      cursor = end;
+    }
+    append(translated.slice(cursor));
+    nativeInputDigest = digestCanonicalJson(replayed);
+    return replayed;
+  }, remember: (completion, items, nativeOutput) => {
     const message = completion.choices[0]?.message;
     const callId = message?.tool_calls?.[0]?.id;
-    if (!message || !callId || items.length === 0 || sessions.get(key) !== ownedSession) return;
+    if (!message || sessions.get(key) !== ownedSession) return;
     const output = toResponsesInput([message]);
-    ownedSession.anchors.delete(callId);
-    ownedSession.anchors.set(callId, { items: structuredClone(items), inputLength: current.length,
-      inputDigest, outputLength: output.length, outputDigest: digestCanonicalJson(output) });
-    if (ownedSession.anchors.size > 64) {
+    if (!output.length || (!nativeOutput?.length && (!callId || !items.length))) return;
+    const outputDigest = digestCanonicalJson(output);
+    const anchor = callId ? JSON.stringify(['call', callId]) : JSON.stringify(['turn', current.length, outputDigest]);
+    ownedSession.anchors.delete(anchor);
+    const retainedChars = inspectJson(nativeOutput ?? items);
+    if (retainedChars > MAX_SESSION_OUTPUT_CHARS) return;
+    ownedSession.anchors.set(anchor, { callId, items: nativeOutput ? [] : structuredClone(items),
+      ...(nativeOutput ? { nativeOutput: structuredClone(nativeOutput), nativeInputDigest } : {}),
+      retainedChars, inputLength: current.length, inputDigest, outputLength: output.length, outputDigest });
+    let retained = [...ownedSession.anchors.values()].reduce((sum, record) => sum + record.retainedChars, 0);
+    while (ownedSession.anchors.size > 64 || retained > MAX_SESSION_OUTPUT_CHARS) {
       const oldest = ownedSession.anchors.keys().next();
-      if (!oldest.done) ownedSession.anchors.delete(oldest.value);
+      if (oldest.done) break;
+      retained -= ownedSession.anchors.get(oldest.value)!.retainedChars;
+      ownedSession.anchors.delete(oldest.value);
     }
   } };
 }
@@ -675,10 +720,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
 
     const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
       conversationId, nodeId, toolNameMap }, 'openai-responses');
-    const { carried } = reasoningState;
 
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
-    const input = toResponsesInput(translateMessagesForProvider(messages, toolNames), carried);
+    const input = reasoningState.replay(toResponsesInput(translateMessagesForProvider(messages, toolNames)));
     const responsesTools = toResponsesTools(translateToolsForProvider(tools, toolNames));
     const wantsImage = (model.outputModalities ?? [])
       .some(modality => modality.toLowerCase() === 'image');
@@ -714,7 +758,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       baseUrl: model.baseUrl,
       inputItems: input.length,
       toolCount: responsesTools?.length ?? 0,
-      carriedReasoningAnchors: carried?.size ?? 0,
+      carriedReasoningAnchors: reasoningState.carried?.size ?? 0,
       droppedParams: Array.from(dropped),
     });
 
@@ -763,17 +807,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     const completion = translateCompletionFromProvider(translated.completion, toolNames);
     const { reasoning, media } = translated;
 
-    // Stash this turn's reasoning against its first tool call, so the next
-    // iteration of the loop can hand it back. Nothing to carry when the turn made
-    // no tool calls: the exchange is finished.
-    const firstCallId = completion.choices[0]?.message?.tool_calls?.[0]?.id;
-    if (firstCallId && reasoning.length > 0) {
-      reasoningState.remember(completion, reasoning);
-      log.debug('Carrying encrypted reasoning items to the next turn', {
-        anchor: firstCallId,
-        items: reasoning.length,
-      });
-    }
+    if (response.status === 'completed') reasoningState.remember(completion, reasoning, response.output);
 
     return { completion, media, contextUsage: contextUsageFromCompletion(completion.usage, model.contextWindow) };
   }
@@ -806,9 +840,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     });
     const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
       conversationId, nodeId, toolNameMap }, 'openai-responses');
-    const { carried } = reasoningState;
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
-    const input = toResponsesInput(translateMessagesForProvider(messages, toolNames), carried);
+    const input = reasoningState.replay(toResponsesInput(translateMessagesForProvider(messages, toolNames)));
     const responsesTools = toResponsesTools(translateToolsForProvider(tools, toolNames));
     const wantsImage = (model.outputModalities ?? [])
       .some(modality => modality.toLowerCase() === 'image');
@@ -945,7 +978,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     for (const part of media) {
       onModelDelta?.({ messageId: liveMessageId, mediaPart: part });
     }
-    reasoningState.remember(completion, reasoning);
+    if (response.status === 'completed') reasoningState.remember(completion, reasoning, response.output);
     return { completion, liveMessageId, media, contextUsage: contextUsageFromCompletion(completion.usage, model.contextWindow) };
   }
 }

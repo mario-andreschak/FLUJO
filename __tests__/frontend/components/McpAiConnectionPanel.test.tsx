@@ -613,7 +613,7 @@ describe('McpAiConnectionPanel', () => {
     await waitFor(() => expect(installMcpRecommendationMock).toHaveBeenCalledWith(expect.objectContaining({
       serverName: 'paypal',
       inputs: {},
-      authMode: 'oauth-dcr',
+      authMode,
     })));
   });
 });
