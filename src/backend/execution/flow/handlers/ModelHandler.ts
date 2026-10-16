@@ -53,7 +53,7 @@ import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import {
   compactHistory,
-  splitHistoryForCompaction,
+  selectCompactionSplit,
   COMPACTION_SUMMARY_MARKER,
   type CompactHistoryResult,
 } from './summarizingCompaction';
@@ -590,8 +590,6 @@ export class ModelHandler {
       // the verbatim recent tail must not regenerate that prefix or add another
       // retained anchor. Check the complete projection again after generation.
       const fullSourceDigest = digestProjectedMessages(source);
-      const split = splitHistoryForCompaction(source, eff.keepTokens);
-      const sourceDigest = digestProjectedMessages([...split.leadingSystem, ...split.toSummarize]);
       const projectionDigest = digestProjectionIdentity(projection);
 
       const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
@@ -600,11 +598,12 @@ export class ModelHandler {
         artifact.schemaVersion === COMPACTION_ARTIFACT_SCHEMA_VERSION &&
         artifact.conversationId === conversationId &&
         artifact.nodeId === nodeId &&
-        artifact.sourceDigest === sourceDigest &&
         artifact.projectionDigest === projectionDigest &&
         artifact.policyVersion === COMPACTION_POLICY_VERSION &&
         artifact.modelId === model.id
       );
+      const split = selectCompactionSplit(source, eff.keepTokens, reusableArtifact);
+      const sourceDigest = digestProjectedMessages([...split.leadingSystem, ...split.toSummarize]);
 
       const summarize = async (
         msgs: FlujoChatMessage[],

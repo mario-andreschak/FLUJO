@@ -23,6 +23,8 @@ export interface WireSummaryArtifact {
   sourceEndId?: string;
   sourceMessageCount: number;
   sourceDigest: string;
+  /** Exact latest user turn for which this prefix was materialized. */
+  requestDigest?: string;
   projectionDigest: string;
   summaryText: string;
   summaryResourceUri?: string;

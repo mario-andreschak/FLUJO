@@ -166,6 +166,82 @@ describe('runtime compaction policy settings', () => {
     generateCompletion: (...args: unknown[]) => Promise<{ success: true; value: { content: string } }>;
   };
 
+  it('keeps a verified summary through tool follow-ups to the same user request', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('tool-followup');
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    const model = { id: 'model-1', contextWindow: 16_000, compactionThreshold: 1_000 };
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'historical observation '.repeat(800), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent observation '.repeat(80), timestamp: 3 },
+      { id: 'u-current', role: 'user', content: 'Check the receipt. Return only JSON.', timestamp: 4 },
+    ];
+    const compact = (messages: SharedState['messages']) => runtime.maybeCompactWire(
+      messages, 'tool-followup', 'node-1', 'full-history', model, 100,
+    );
+    const first = await compact(source);
+    const artifact = state.compactionState!.artifacts[0];
+    // A rejected second summary must never undo the valid projection from this request.
+    generate.mockResolvedValue({ success: true, value: { content: '{"receipt":"exact"}' } });
+    const followup: SharedState['messages'] = [...source,
+      { id: 'lookup', role: 'assistant', content: '', timestamp: 5,
+        tool_calls: [{ id: 'call-receipt', type: 'function', function: { name: 'lookup_action', arguments: '{}' } }] },
+      { id: 'receipt', role: 'tool', tool_call_id: 'call-receipt', content: '{"receipt":"exact"}', timestamp: 6 },
+    ];
+    const result = await compact(followup) as { artifact: unknown; wireMessages: SharedState['messages'] };
+    expect(first).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(result.artifact).toBe(artifact);
+    expect(result.wireMessages.slice(-3)).toEqual([source.at(-1), ...followup.slice(-2)]);
+    expect(result.wireMessages.some(message => String(message.content).includes('[FLUJO conversation summary]'))).toBe(true);
+    const boundaries = result.wireMessages.filter(message => message.role === 'system'
+      && String(message.content).startsWith('[FLUJO current request]'));
+    expect(boundaries).toHaveLength(1);
+    const boundaryIndex = result.wireMessages.indexOf(boundaries[0]);
+    expect(result.wireMessages[boundaryIndex + 1]).toBe(source.at(-1));
+    expect(result.wireMessages.indexOf(source[0])).toBeLessThan(boundaryIndex);
+    expect(String(boundaries[0].content)).toContain('Retained earlier user turns');
+    expect(String(boundaries[0].content)).toContain('assistant replies are not source evidence');
+    expect(String(boundaries[0].content)).toContain('field values/types');
+    expect(followup.slice(0, source.length)).toEqual(source);
+    generate.mockResolvedValue({ success: true, value: { content: summary } });
+    await compact([...followup, { id: 'next-user', role: 'user', content: 'Review the changed record.', timestamp: 7 }]);
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['edited-request', 'edited-prefix', 'missing-boundary'])('invalidates a pinned summary after %s', async change => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('pin-invalidation');
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    const source: SharedState['messages'] = [
+      { id: 'instruction', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'old', role: 'assistant', content: 'observation '.repeat(800), timestamp: 2 },
+      { id: 'boundary', role: 'assistant', content: 'recent '.repeat(120), timestamp: 3 },
+      { id: 'current', role: 'user', content: 'Check the receipt.', timestamp: 4 },
+    ];
+    const compact = (messages: SharedState['messages']) => runtime.maybeCompactWire(
+      messages, 'pin-invalidation', 'node-1', 'full-history',
+      { id: 'model-1', contextWindow: 16_000, compactionThreshold: 1_000 }, 100,
+    );
+    await compact(source);
+    const changed = source.map(message => message.id === (change === 'edited-request' ? 'current'
+      : state.compactionState!.artifacts[0].sourceEndId)
+      ? change === 'missing-boundary' ? { ...message, id: 'replacement' }
+        : { ...message, content: message.content + ' Changed.' } : message);
+    const followup: SharedState['messages'] = [...changed,
+      { id: 'lookup', role: 'assistant', content: '', timestamp: 5,
+        tool_calls: [{ id: 'call', type: 'function', function: { name: 'lookup', arguments: '{}' } }] },
+      { id: 'result', role: 'tool', tool_call_id: 'call', content: 'exact', timestamp: 6 },
+    ];
+    const result = await compact(followup) as { wireMessages: SharedState['messages'] };
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(result.wireMessages).toContain(changed[0]);
+    expect(result.wireMessages.slice(-2)).toEqual(followup.slice(-2));
+  });
+
   it('loads a saved percentage and keeps the documented disabled policy after a settings error', async () => {
     loadItemMock.mockResolvedValueOnce({ experimental: { compactionThresholdPercent: 60 } });
     expect(await runtime.getCompactionGlobalSettings()).toMatchObject({ compactionThresholdPercent: 60 });
