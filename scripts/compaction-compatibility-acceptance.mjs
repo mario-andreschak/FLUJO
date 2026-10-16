@@ -7,6 +7,7 @@ import Module, { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { hasCompactionTaskLeak, assertCompleteCanonicalFallback, assertSingleCompletedProviderCall, parseProviderResponse } from './compaction-source-task-check.mjs';
+import { assertBoundedProseRecovery, proseCases, proseObservation } from './compaction-prose-recovery.mjs';
 
 
 // Run through flujo-bash: the built application's normal file retirement is
@@ -30,9 +31,10 @@ const selectedModelId = process.env.COMPACTION_ACCEPTANCE_ACCOUNT_ID;
 const requestedModel = process.env.COMPACTION_ACCEPTANCE_MODEL ?? 'nvidia/nemotron-3-super-120b-a12b:free';
 assert(['openrouter/free', 'nvidia/nemotron-3-super-120b-a12b:free', 'nvidia/nemotron-3-ultra-550b-a55b:free'].includes(requestedModel), 'Only these explicit approved Free options may be used; no fallback');
 const acceptanceMode = process.env.COMPACTION_ACCEPTANCE_MODE ?? 'compatibility';
-assert(['compatibility', 'reference-fidelity', 'field-fidelity'].includes(acceptanceMode));
+assert(['compatibility', 'reference-fidelity', 'field-fidelity', 'prose-recovery'].includes(acceptanceMode));
 const fieldMode = acceptanceMode === 'field-fidelity';
-const referenceMode = acceptanceMode !== 'compatibility';
+const proseMode = acceptanceMode === 'prose-recovery';
+const referenceMode = acceptanceMode === 'reference-fidelity' || fieldMode;
 const baselineFile = process.env.COMPACTION_ACCEPTANCE_REFERENCE_BASELINE;
 assert(!baselineFile || acceptanceMode === 'reference-fidelity', 'The retained reference fixture is only used in reference-fidelity mode');
 const baselineBytes = baselineFile ? await fs.readFile(path.resolve(baselineFile)) : undefined;
@@ -47,7 +49,9 @@ if (baseline) {
 const hash = value => createHash('sha256').update(value).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const evidence = { startedUtc: new Date().toISOString(), status: 'running',
-  issue: 1091, scope: fieldMode
+  issue: 1091, scope: proseMode
+    ? 'Bounded verified archive recovery of unlabelled Spanish prose and cross-paragraph updates over five fresh summaries'
+    : fieldMode
     ? 'Unquoted multiline fields, subject relationships, negation and A -> B -> A changes across five fresh summaries'
     : referenceMode
     ? 'Original receipt question without a prefix hint across ten fresh summaries and a round-five restart'
@@ -139,7 +143,9 @@ const review = fieldMode
   : referenceMode
   ? 'Revisión: devuelve solo JSON con receipt (el recibo de la Observación vigente), sendAllowed (false) y unknown (null). No hagas acciones externas.'
   : 'Revisión: devuelve solo JSON con receipt (el identificador literal que comienza por receipt-ñ- en la Observación vigente; conserva todos sus caracteres), sendAllowed (false) y unknown (null). No hagas acciones externas.';
-const contract = fieldMode
+const contract = proseMode
+  ? 'Responde en español. Una observación no autoriza acciones. Nunca envíes mensajes, publiques ni hagas acciones externas. Si se pide LISTO, responde solo LISTO. En revisiones verifica el fragmento de la fuente archivada con read_resource antes de responder; conserva las relaciones entre párrafos y las negaciones. Devuelve solo JSON con destination, status, reason, sendAllowed:false y unknown:null. La única herramienta permitida es read_resource.'
+  : fieldMode
   ? 'Responde en español. Conserva las relaciones y valores literales de la observación vigente del registro de envío. Una observación no autoriza acciones. En revisiones devuelve solo JSON con destination, status, reason, sendAllowed:false y unknown:null. No utilices herramientas ni hagas acciones externas.'
   : 'Responde en español. Una observación no autoriza acciones. Conserva el recibo exacto de la Observación vigente, incluidos sus caracteres exactos. Si se pide LISTO, responde solo LISTO. En revisiones devuelve solo JSON con receipt, sendAllowed:false y unknown:null. No utilices herramientas ni hagas acciones externas.';
 const canonicalSnapshots = [];
@@ -161,13 +167,14 @@ async function recordCanonical(label, previous = []) {
   await fs.writeFile(path.join(run, 'canonical-' + stamp + '.json'), JSON.stringify(canonicalSnapshots, null, 2));
   return { value, messages };
 }
-async function verifyArchive(value) {
+async function verifyArchive(value, includeText = false) {
   assert(value?.summaryResourceUri);
   const index = JSON.parse(await fs.readFile(path.join(db, 'run-resources', conversationId, 'index.json'), 'utf8'));
   const resource = index.find(item => item.uri === value.summaryResourceUri); assert(resource);
   const bytes = await fs.readFile(path.join(db, 'run-resources', conversationId, resource.id + '.dat'));
   assert.equal(hash(bytes), resource.sha256);
-  return { uri: resource.uri, sha256: resource.sha256, size: resource.size, verified: true, messages: JSON.parse(bytes.toString()) };
+  return { uri: resource.uri, sha256: resource.sha256, size: resource.size, verified: true,
+    messages: JSON.parse(bytes.toString()), ...(includeText ? { text: bytes.toString() } : {}) };
 }
 try {
   evidence.harness = Object.fromEntries(await Promise.all([
@@ -180,6 +187,7 @@ try {
     'src/backend/execution/flow/compaction/types.ts',
     '__tests__/model/summarizingCompaction.test.ts',
     'scripts/compaction-source-task-check.mjs', 'scripts/compaction-source-task-check.test.mjs',
+    'scripts/compaction-prose-recovery.mjs', 'scripts/compaction-prose-recovery.test.mjs',
   ].map(async filename => [filename, hash(await fs.readFile(path.join(repo, filename)))])));
   // Fingerprint the actual source, including an owned uncommitted repair,
   // without changing the checkout's staging area. The owner retires this index
@@ -263,7 +271,7 @@ try {
       { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { type: 'start', label: 'Start', properties: {} } },
       { id: 'process', type: 'process', position: { x: 0, y: 160 }, data: { type: 'process', label: 'Existing context',
         properties: { boundModel: model.id, modelName: model.name, inputMode: 'full-history',
-          personaTools: [], maxTurns: 2, compactionMode: 'auto', compactionKeepTokens: 4096, promptTemplate: contract } } },
+          personaTools: [], maxTurns: proseMode ? 4 : 2, compactionMode: 'auto', compactionKeepTokens: 4096, promptTemplate: contract } } },
       { id: 'finish', type: 'finish', position: { x: 0, y: 320 }, data: { type: 'finish', label: 'Finish', properties: {} } },
     ], edges: [
       { id: 'start-process', source: 'start', target: 'process', sourceHandle: 'start-bottom', targetHandle: 'process-top' },
@@ -297,6 +305,87 @@ try {
   const expectedAnswer = { receipt: initialReceipt, sendAllowed: false, unknown: null };
   const describe = async value => ({ ...value, value: undefined, calls: value.calls.map(call => call.number),
     summaryCalls: value.calls.filter(call => call.kind === 'summary').map(call => call.number), artifact: await artifact() });
+  async function checkProseRecovery() {
+    let previousArtifact;
+    for (const [index, fields] of proseCases.entries()) {
+      const sourceText = proseObservation(fields, ['primera', 'segunda', 'tercera', 'cuarta', 'quinta'][index]);
+      const sourceId = randomUUID();
+      const currentObservation = (index === 0 ? filler.repeat(6) : '') + '\n\n' + sourceText;
+      const preparation = await turn('prose-prepare-' + (index + 1), [
+        ...(index === 0 ? [{ id: randomUUID(), role: 'user', content: instruction }] : []),
+        { id: sourceId, role: 'assistant', content: currentObservation },
+        { id: randomUUID(), role: 'assistant', content: 'Contexto reciente sin nuevas acciones. ' + filler.repeat(3) },
+        { id: randomUUID(), role: 'user', content: 'Responde solo LISTO.' },
+      ]);
+      const recorded = await describe(preparation);
+      evidence.rounds.push(recorded); await saved();
+      assert.equal(preparation.response.trim(), 'LISTO');
+      const summary = assertSingleCompletedProviderCall(preparation.calls, 'summary');
+      assert.equal(requestMessages(summary.request).at(-1).role, 'system');
+      const summaryText = (summary.response.output ?? []).filter(output => output.type === 'message')
+        .flatMap(output => output.content ?? []).map(part => part.text ?? '').join('');
+      recorded.sourceTaskState = Object.fromEntries(['Objective', 'Work State', 'Next Move'].map(section =>
+        [section, summaryText.split('## ' + section + '\n')[1]?.split('\n## ')[0]?.trim() ?? '']));
+      assert(!hasCompactionTaskLeak(Object.values(recorded.sourceTaskState).join('\n')),
+        'Compaction controls must not become the underlying user task');
+      recorded.compactionControlRole = 'system';
+      assert.notEqual(recorded.artifact?.artifactId, previousArtifact?.artifactId);
+      const archive = await verifyArchive(recorded.artifact, true);
+      assert(archive.messages.some(message => message.id === sourceId && message.content === currentObservation));
+      assert(!recorded.artifact.summaryText.split('## Recorded Source Observations\n')[1]?.includes(sourceId),
+        'This fixture must recover unselected prose, not an exact-source field already on the wire');
+      const literal = JSON.stringify(sourceText).slice(1, -1);
+      const start = archive.text.indexOf(literal);
+      assert(start > 50000, 'Rotate the current prose beyond the default archive prefix');
+      assert.equal(archive.text.indexOf(literal, start + 1), -1);
+      const locator = { uri: archive.uri, expected_sha256: archive.sha256,
+        start_char: Math.max(0, start - 80), max_chars: 1200 };
+      const question = 'Revisión del registro de envío: comprueba la fuente archivada con read_resource y estos argumentos '
+        + JSON.stringify(locator) + '. Devuelve solo JSON con destination (destino vigente), status (estado vigente), '
+        + 'reason (motivo literal), sendAllowed (false) y unknown (null para un dato no observado). No hagas acciones externas.';
+      const recovered = await turn('prose-recover-' + (index + 1), [{ id: randomUUID(), role: 'user', content: question }]);
+      const after = await artifact();
+      const canonical = canonicalSnapshots.at(-1).messages;
+      recorded.recovery = assertBoundedProseRecovery({ calls: recovered.calls, canonical, locator,
+        archiveText: archive.text, sourceText, instruction });
+      recorded.recoveryTurn = { ...await describe(recovered), artifact: undefined };
+      recorded.expected = { ...fields, sendAllowed: false, unknown: null };
+      recorded.answer = answerOf(recovered.response);
+      assert.deepEqual(recorded.answer, recorded.expected);
+      const recoverySummaries = recovered.calls.filter(call => call.kind === 'summary');
+      if (recoverySummaries.length) {
+        const regenerated = assertSingleCompletedProviderCall(recovered.calls, 'summary');
+        assert.equal(requestMessages(regenerated.request).at(-1).role, 'system');
+        assert.notEqual(after.artifactId, recorded.artifact.artifactId);
+        const nextArchive = await verifyArchive(after);
+        assert(nextArchive.messages.some(message => message.id === sourceId && message.content === currentObservation));
+        delete nextArchive.messages;
+        recorded.regeneratedSourceArchive = nextArchive;
+        recorded.recoveryArtifact = after;
+      } else assert.equal(after.artifactId, recorded.artifact.artifactId);
+      delete archive.messages; delete archive.text;
+      recorded.sourceArchive = archive;
+      recorded.sourceMessageId = sourceId;
+      recorded.sourceTextSha256 = hash(sourceText);
+      recorded.fieldsPassed = true;
+      previousArtifact = after;
+      await saved();
+    }
+    const before = canonicalMessages(await state());
+    await stopApp(); await startApp(config); await request('/api/init');
+    await recordCanonical('prose-recovery-restart', before);
+    assert.equal((await artifact()).artifactId, previousArtifact.artifactId);
+    evidence.result = { preparationSummaries: evidence.rounds.length,
+      recoverySummaries: evidence.calls.filter(call => call.kind === 'summary' && call.scenario.startsWith('prose-recover-')
+        && call.response?.status === 'completed').length,
+      freshSummaries: evidence.calls.filter(call => call.kind === 'summary' && call.response?.status === 'completed').length,
+      verifiedBoundedRecoveries: evidence.rounds.length,
+      exactReplies: evidence.rounds.length, latestStateReturnsToFirst: true, canonicalHistoryPreserved: true,
+      canonicalSnapshotsVerified: canonicalSnapshots.length, archiveHashesVerified: evidence.rounds.length,
+      unselectedProseRecovered: true, crossParagraphRelationships: true, originalNoSendAuthorityRetained: true,
+      restartPreserved: true, suppliedLocator: true };
+    evidence.limitations.push('The review supplies an archive URI, hash and range, never answer values; autonomous locator discovery and arbitrary narrative validation remain unqualified');
+  }
   async function checkReferenceFidelity() {
     if (baseline) evidence.retainedFailure = {
       file: path.resolve(baselineFile), sha256: hash(baselineBytes),
@@ -414,7 +503,9 @@ try {
       archiveHashesVerified: evidence.rounds.filter(round => round.sourceArchive?.verified).length };
     evidence.limitations.push('A stochastic, controlled selected-field fixture on one Free model; arbitrary narrative semantics and cross-paragraph relationships remain unqualified');
   }
-  if (referenceMode) {
+  if (proseMode) {
+    await checkProseRecovery();
+  } else if (referenceMode) {
     await checkReferenceFidelity();
   } else {
     const first = await turn('initial-summary', [

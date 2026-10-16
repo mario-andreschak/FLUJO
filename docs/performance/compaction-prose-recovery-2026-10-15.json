@@ -1,0 +1,560 @@
+{
+  "issue": 1091,
+  "status": "passed-controlled-prose-recovery-scope",
+  "frozenUtc": "2026-10-16T02:15:50.249Z",
+  "sourceBaseRevision": "e098bd3deca97aa136b80b1ba3116719904844c2",
+  "applicationSourceTree": "a667d494cebbd509b71bf2e91a4e47140f4f7d5f",
+  "buildId": "ot6nhu_owMTq19CdRaxqF",
+  "scope": "Existing bounded archive recovery of unselected Spanish prose with cross-paragraph destination/status/reason updates and original no-send authority.",
+  "implementationChanged": false,
+  "result": {
+    "preparationSummaries": 5,
+    "recoverySummaries": 1,
+    "freshSummaries": 6,
+    "verifiedBoundedRecoveries": 5,
+    "exactReplies": 5,
+    "latestStateReturnsToFirst": true,
+    "canonicalHistoryPreserved": true,
+    "canonicalSnapshotsVerified": 11,
+    "archiveHashesVerified": 5,
+    "unselectedProseRecovered": true,
+    "crossParagraphRelationships": true,
+    "originalNoSendAuthorityRetained": true,
+    "restartPreserved": true,
+    "suppliedLocator": true
+  },
+  "qualification": {
+    "harness-final-lint": {
+      "utc": "2026-10-16T02:09:49.0476356Z",
+      "exitCode": 0,
+      "harnessSha256": "d63c8ee0cac6a4e2a38cef8e9bef89aacb0201ffa1f1a853091beb52c59fa836"
+    },
+    "harness-focused": {
+      "utc": "2026-10-16T02:09:49.2394472Z",
+      "exitCode": 0,
+      "cases": 39,
+      "reused": false,
+      "reason": "New bounded prose-recovery trace verifier plus unchanged provider/task/fallback guards"
+    },
+    "typecheck": {
+      "utc": "2026-10-16T02:02:06.6757471Z",
+      "step": "typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 60.4249537,
+      "applicationSourceTree": "a667d494cebbd509b71bf2e91a4e47140f4f7d5f",
+      "command": "next typegen && tsc --noEmit -p tsconfig.json"
+    },
+    "lint": {
+      "utc": "2026-10-16T02:03:40.6406493Z",
+      "step": "lint",
+      "exitCode": 0,
+      "elapsedSeconds": 93.9596706,
+      "applicationSourceTree": "a667d494cebbd509b71bf2e91a4e47140f4f7d5f",
+      "command": "eslint src"
+    },
+    "build": {
+      "utc": "2026-10-16T02:09:07.7911286Z",
+      "step": "build",
+      "exitCode": 0,
+      "elapsedSeconds": 327.1481309,
+      "applicationSourceTree": "a667d494cebbd509b71bf2e91a4e47140f4f7d5f",
+      "command": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "buildId": "ot6nhu_owMTq19CdRaxqF"
+    },
+    "journey-timing": {
+      "utc": "2026-10-16T02:14:11.7713234Z",
+      "exitCode": 0,
+      "elapsedSeconds": 262.5291119,
+      "applicationSourceTree": "a667d494cebbd509b71bf2e91a4e47140f4f7d5f",
+      "harnessSha256": "d63c8ee0cac6a4e2a38cef8e9bef89aacb0201ffa1f1a853091beb52c59fa836"
+    }
+  },
+  "sourceFiles": {
+    "scripts/compaction-compatibility-acceptance.mjs": {
+      "sha256": "d63c8ee0cac6a4e2a38cef8e9bef89aacb0201ffa1f1a853091beb52c59fa836",
+      "gitNormalizedSha256": "d63c8ee0cac6a4e2a38cef8e9bef89aacb0201ffa1f1a853091beb52c59fa836",
+      "bytes": 50437
+    },
+    "__tests__/model/contextOverflowRefit.test.ts": {
+      "sha256": "72ead2b2830ee8e1de6ed698b1b104837f71f3f8d86781f73f1ccb4d5c62d609",
+      "gitNormalizedSha256": "72ead2b2830ee8e1de6ed698b1b104837f71f3f8d86781f73f1ccb4d5c62d609",
+      "bytes": 34520
+    },
+    "src/backend/execution/flow/handlers/ModelHandler.ts": {
+      "sha256": "3222d55e27ae465cbdb567d0acb7daaf18d1858c77e8e42807d2849266a53c47",
+      "gitNormalizedSha256": "3222d55e27ae465cbdb567d0acb7daaf18d1858c77e8e42807d2849266a53c47",
+      "bytes": 236368
+    },
+    "src/backend/execution/flow/nodes/ProcessNode.ts": {
+      "sha256": "f4171c98e3e28d773a90f5d13b1f1cd978a62df5699500079e7ed2bc7fe71610",
+      "gitNormalizedSha256": "efaf4c4f7d936e8d854a28d8d3ed14caeac4c441d84bbbc43a17c481a368dd36",
+      "bytes": 99691
+    },
+    "__tests__/flow/processNodeSnapshotAuthority.test.ts": {
+      "sha256": "74e9ef346c9e87aaca7e606e78373a5713ea5777c0a9a664a1fe0a1a31e55111",
+      "gitNormalizedSha256": "fdd94335e61865cdd28734a7e1ae8c5a27823e478ecbc795e6c4894a662d3042",
+      "bytes": 4954
+    },
+    "src/backend/execution/flow/handlers/summarizingCompaction.ts": {
+      "sha256": "8b52a2b948d62babe10e10a7035079312ac4390d7ce2a85226e195af8e444795",
+      "gitNormalizedSha256": "8b52a2b948d62babe10e10a7035079312ac4390d7ce2a85226e195af8e444795",
+      "bytes": 23021
+    },
+    "src/backend/execution/flow/compaction/structuredObservations.ts": {
+      "sha256": "a9239f3937d70c73373c109ca3db619c84027fbb3fa83f21ea243f9897b67230",
+      "gitNormalizedSha256": "a9239f3937d70c73373c109ca3db619c84027fbb3fa83f21ea243f9897b67230",
+      "bytes": 10412
+    },
+    "__tests__/model/structuredObservations.test.ts": {
+      "sha256": "7bf88b42807b9a9331c6e94b54edd3abde9f5f544993210840bb1123d75dc13d",
+      "gitNormalizedSha256": "7bf88b42807b9a9331c6e94b54edd3abde9f5f544993210840bb1123d75dc13d",
+      "bytes": 9843
+    },
+    "src/backend/execution/flow/compaction/types.ts": {
+      "sha256": "df4d07f608bd131aba5cac6ef0bd540d798f88dc32b4dc940fe318bf677d3ab6",
+      "gitNormalizedSha256": "df4d07f608bd131aba5cac6ef0bd540d798f88dc32b4dc940fe318bf677d3ab6",
+      "bytes": 1341
+    },
+    "__tests__/model/summarizingCompaction.test.ts": {
+      "sha256": "aa86999976b8d1ecb27cc16c980ddf7c5c93402d148b5c15b4f444882466f81b",
+      "gitNormalizedSha256": "aa86999976b8d1ecb27cc16c980ddf7c5c93402d148b5c15b4f444882466f81b",
+      "bytes": 30166
+    },
+    "scripts/compaction-source-task-check.mjs": {
+      "sha256": "c35b1394dd5f0a70ac89ac5e46d33d9b76dc0295c6e7212608b2544a993ba48b",
+      "gitNormalizedSha256": "c35b1394dd5f0a70ac89ac5e46d33d9b76dc0295c6e7212608b2544a993ba48b",
+      "bytes": 4374
+    },
+    "scripts/compaction-source-task-check.test.mjs": {
+      "sha256": "ea12f9c728932191b8edd331c79323f432afcd95895d2ed151584a659ed8235f",
+      "gitNormalizedSha256": "ea12f9c728932191b8edd331c79323f432afcd95895d2ed151584a659ed8235f",
+      "bytes": 7104
+    },
+    "scripts/compaction-prose-recovery.mjs": {
+      "sha256": "46d8243433eae7ca515da713d18829d0c00abc83679014707c2adea6c0cf222a",
+      "gitNormalizedSha256": "46d8243433eae7ca515da713d18829d0c00abc83679014707c2adea6c0cf222a",
+      "bytes": 4815
+    },
+    "scripts/compaction-prose-recovery.test.mjs": {
+      "sha256": "c86f00aa2bfe8e6ab2a235f8f3b852a9558a45d1559e1bae05bbde7946d76dff",
+      "gitNormalizedSha256": "c86f00aa2bfe8e6ab2a235f8f3b852a9558a45d1559e1bae05bbde7946d76dff",
+      "bytes": 4640
+    }
+  },
+  "sourceTaskControls": [
+    {
+      "call": 1,
+      "scenario": "prose-prepare-1",
+      "controlRole": "system",
+      "task": {
+        "Objective": "- Update shipment log record: previous destination discarded, current destination set to \"cedro\", record retained with reason \"autorización revocada\", shipment not executed",
+        "Work State": "- Completed: Log record updated with new destination and retention status\n- Active: None identified\n- Blocked: Shipment not executed due to revoked authorization",
+        "Next Move": "- Unspecified"
+      }
+    },
+    {
+      "call": 3,
+      "scenario": "prose-recover-1",
+      "controlRole": "system",
+      "task": {
+        "Objective": "Unspecified — the conversation consists of a repeated historical observation about permissions and a log update note; no explicit task or goal is stated.",
+        "Work State": "- Completed: None identified\n- Active: None identified\n- Blocked: Send action blocked due to revoked authorization; record retained",
+        "Next Move": "Unspecified — no actionable next step is indicated in the source."
+      }
+    },
+    {
+      "call": 8,
+      "scenario": "prose-prepare-2",
+      "controlRole": "system",
+      "task": {
+        "Objective": "Track and verify shipping log (registro de envío) updates from archived source, extracting current destination, status, reason, and send permission state.",
+        "Work State": "- Completed: Read and verified first log update from archived resource; returned JSON with destination=\"cedro\", status=\"retenido\", reason=\"autorización revocada\", sendAllowed=false, unknown=null\n- Active: Second log update received (destination=\"pino\", status=\"preparado\", reason=\"revisión pendiente\") — not yet verified against source\n- Blocked: None",
+        "Next Move": "Verify second log update against its archived source resource (URI not yet provided) to confirm destination=\"pino\", status=\"preparado\", reason=\"revisión pendiente\", sendAllowed=false."
+      }
+    },
+    {
+      "call": 13,
+      "scenario": "prose-prepare-3",
+      "controlRole": "system",
+      "task": {
+        "Objective": "Verify shipment register updates by reading archived resources and extracting current destination, status, reason, and sendAllowed flag for each update.",
+        "Work State": "**Completed**\n- Read and verified first update from `flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/3ead0cd0-6be7-4622-a6c7-354bf85f7a3a` (offset 66804, 1200 chars)\n- Read and verified second update from `flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/6d524e93-886a-4307-9191-6137f10d776b` (offset 104131, 1200 chars)\n- Extracted and returned JSON for both verified updates\n\n**Active**\n- Third update observed in conversation text but not yet verified against archived source\n\n**Blocked**\n- None",
+        "Next Move": "Verify third update by reading its archived resource (URI and SHA-256 not yet provided) and return JSON with destination \"abeto\", status \"cancelado\", reason \"solicitud retirada\", sendAllowed false, unknown null."
+      }
+    },
+    {
+      "call": 17,
+      "scenario": "prose-prepare-4",
+      "controlRole": "system",
+      "task": {
+        "Objective": "Verify shipment record updates by reading archived resources and returning structured JSON with current destination, status, reason, sendAllowed=false, and unknown=null.",
+        "Work State": "- **Completed**: Verified first three updates via read_resource (cedro, pino, abeto) and returned JSON for each.\n- **Active**: Fourth update (roble) observed in context but not yet verified via read_resource.\n- **Blocked**: None.",
+        "Next Move": "Verify fourth update (roble) by reading its archived resource when user provides URI and SHA-256, then return JSON."
+      }
+    },
+    {
+      "call": 25,
+      "scenario": "prose-prepare-5",
+      "controlRole": "system",
+      "task": {
+        "Objective": "Verify and track the current state of a shipping register (registro de envío) through its sequential updates by reading archived compaction artifacts.",
+        "Work State": "**Completed**\n- Verified update 1: destination `cedro`, status `retenido`, reason `autorización revocada`\n- Verified update 2: destination `pino`, status `preparado`, reason `revisión pendiente`\n- Verified update 3: destination `abeto`, status `cancelado`, reason `solicitud retirada`\n- Verified update 4: destination `roble`, status `listo`, reason `aprobación pendiente`\n- Verified update 5: destination `cedro`, status `retenido`, reason `autorización revocada`\n\n**Active**\n- None — all requested verifications complete\n\n**Blocked**\n- None",
+        "Next Move": "Unspecified — no further verification requests or actions indicated."
+      }
+    }
+  ],
+  "selectedFreeRoute": {
+    "utc": "2026-10-16T02:06:15.917Z",
+    "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "canonicalSlug": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
+    "pricing": {
+      "prompt": "0",
+      "completion": "0"
+    },
+    "contextLength": 1000000,
+    "supportedParameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "reasoning_effort",
+      "seed",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_p"
+    ],
+    "route": "https://openrouter.ai/api/v1/responses",
+    "automaticFallback": false,
+    "credential": {
+      "method": "one explicitly selected existing encrypted account; canonical read-only format",
+      "configuredModelId": "24618177-b739-44a3-b79d-b459ba9151a2",
+      "configuredModel": "openrouter/free",
+      "baseHost": "openrouter.ai",
+      "credentialRetained": "memory only",
+      "configuredInputFilesUnchanged": true,
+      "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+      "configuredInputCount": 2
+    },
+    "decision": "Explicit approved Ultra Free for existing issue1091 prose archive recovery; no automatic fallback"
+  },
+  "providerRoute": {
+    "adapter": "actual built OpenAiResponsesAdapter, selected by production OpenRouter routing",
+    "requestedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "destination": "https://openrouter.ai/api/v1/responses",
+    "relay": "strict exact-model forwarding; no replacement answers or fallback",
+    "providerCredential": "memory only; application receives a private local relay token"
+  },
+  "providerRequestsIncludingAllNewAttempts": {
+    "requests": 29,
+    "completedResponses": 21,
+    "inputTokens": 308444,
+    "outputTokens": 6939,
+    "reportedCostUsd": 0,
+    "callsWithoutReportedCost": 8
+  },
+  "trace": {
+    "file": "docs/performance/compaction-prose-recovery-provider-trace-2026-10-15.json.gz",
+    "sha256": "bcbb09deb9bf3b73e26d17eec84840e20f25ed6cb8dd7cca1acf4c103419ef77",
+    "uncompressedSha256": "fd4aee3628ec0ef4836cd494178f363a15210ee166e3bfb4b4d652a1372fed20",
+    "compressedBytes": 233704,
+    "uncompressedBytes": 5110160,
+    "attempts": [
+      {
+        "file": "compatibility-0c480fe3-dd33-4b13-ba78-accace4092b2.json",
+        "status": "passed-focused-scope",
+        "calls": 29,
+        "applicationClosed": true
+      }
+    ]
+  },
+  "independentVerification": {
+    "sourceArchiveHashes": 6,
+    "comparedCanonicalFields": 920,
+    "originalSourceFieldsMatchReplies": true,
+    "boundedToolOutputMatchesArchive": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "expected": {
+        "destination": "cedro",
+        "status": "retenido",
+        "reason": "autorización revocada",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "destination": "cedro",
+        "status": "retenido",
+        "reason": "autorización revocada",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "recovery": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/3ead0cd0-6be7-4622-a6c7-354bf85f7a3a",
+        "sha256": "707013d2b4a3cd37d8e63ec43b11654aec3c09d0c6280c9662b959a8e9326692",
+        "range": {
+          "startChar": 66804,
+          "endChar": 67223
+        },
+        "contentCharacters": 419,
+        "sourceCharacters": 67223,
+        "verificationOk": true,
+        "exactSource": true,
+        "canonicalPairingValid": true,
+        "completedProviderCalls": 2,
+        "reads": 1
+      },
+      "sourceArchive": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/3ead0cd0-6be7-4622-a6c7-354bf85f7a3a",
+        "sha256": "707013d2b4a3cd37d8e63ec43b11654aec3c09d0c6280c9662b959a8e9326692",
+        "size": 69032,
+        "verified": true
+      },
+      "regeneratedSourceArchive": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/b224d44b-c800-45ad-a964-f233102d07f6",
+        "sha256": "707013d2b4a3cd37d8e63ec43b11654aec3c09d0c6280c9662b959a8e9326692",
+        "size": 69032,
+        "verified": true
+      },
+      "sourceTextSha256": "e1cb3730154ab527df2b1a80f6e6ce79de2680cb1ef70c4f4e5fd1ee226b01d5",
+      "preparationElapsedMs": 14114.1564,
+      "recoveryElapsedMs": 29529.6238,
+      "sourceTaskState": {
+        "Objective": "- Update shipment log record: previous destination discarded, current destination set to \"cedro\", record retained with reason \"autorización revocada\", shipment not executed",
+        "Work State": "- Completed: Log record updated with new destination and retention status\n- Active: None identified\n- Blocked: Shipment not executed due to revoked authorization",
+        "Next Move": "- Unspecified"
+      },
+      "compactionControlRole": "system"
+    },
+    {
+      "round": 2,
+      "expected": {
+        "destination": "pino",
+        "status": "preparado",
+        "reason": "revisión pendiente",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "destination": "pino",
+        "status": "preparado",
+        "reason": "revisión pendiente",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "recovery": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/6d524e93-886a-4307-9191-6137f10d776b",
+        "sha256": "0b04b48641d6d0356cb2b940ea638ff0d1cfcd38b2758382ad30989eece314e5",
+        "range": {
+          "startChar": 104131,
+          "endChar": 104547
+        },
+        "contentCharacters": 416,
+        "sourceCharacters": 104547,
+        "verificationOk": true,
+        "exactSource": true,
+        "canonicalPairingValid": true,
+        "completedProviderCalls": 2,
+        "reads": 1
+      },
+      "sourceArchive": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/6d524e93-886a-4307-9191-6137f10d776b",
+        "sha256": "0b04b48641d6d0356cb2b940ea638ff0d1cfcd38b2758382ad30989eece314e5",
+        "size": 107275,
+        "verified": true
+      },
+      "sourceTextSha256": "b85ac75cced9cd7ad253ffccb74aec0b4331bbd52cb4d4d24216e8ae29b65c94",
+      "preparationElapsedMs": 19691.654400000007,
+      "recoveryElapsedMs": 11806.240699999995,
+      "sourceTaskState": {
+        "Objective": "Track and verify shipping log (registro de envío) updates from archived source, extracting current destination, status, reason, and send permission state.",
+        "Work State": "- Completed: Read and verified first log update from archived resource; returned JSON with destination=\"cedro\", status=\"retenido\", reason=\"autorización revocada\", sendAllowed=false, unknown=null\n- Active: Second log update received (destination=\"pino\", status=\"preparado\", reason=\"revisión pendiente\") — not yet verified against source\n- Blocked: None",
+        "Next Move": "Verify second log update against its archived source resource (URI not yet provided) to confirm destination=\"pino\", status=\"preparado\", reason=\"revisión pendiente\", sendAllowed=false."
+      },
+      "compactionControlRole": "system"
+    },
+    {
+      "round": 3,
+      "expected": {
+        "destination": "abeto",
+        "status": "cancelado",
+        "reason": "solicitud retirada",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "destination": "abeto",
+        "status": "cancelado",
+        "reason": "solicitud retirada",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "recovery": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/f52045f3-825d-498c-8b54-9afafd1a4654",
+        "sha256": "badaa8b3f886dd98e3b5ce6768b7a82e982729f72f640e523c4945563cda5121",
+        "range": {
+          "startChar": 141491,
+          "endChar": 141908
+        },
+        "contentCharacters": 417,
+        "sourceCharacters": 141908,
+        "verificationOk": true,
+        "exactSource": true,
+        "canonicalPairingValid": true,
+        "completedProviderCalls": 2,
+        "reads": 1
+      },
+      "sourceArchive": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/f52045f3-825d-498c-8b54-9afafd1a4654",
+        "sha256": "badaa8b3f886dd98e3b5ce6768b7a82e982729f72f640e523c4945563cda5121",
+        "size": 145552,
+        "verified": true
+      },
+      "sourceTextSha256": "32032e8b6cd945c12c1b76245edee23388bf55b357f05e81cb8a0c0963d353c6",
+      "preparationElapsedMs": 71802.13530000001,
+      "recoveryElapsedMs": 11601.018199999991,
+      "sourceTaskState": {
+        "Objective": "Verify shipment register updates by reading archived resources and extracting current destination, status, reason, and sendAllowed flag for each update.",
+        "Work State": "**Completed**\n- Read and verified first update from `flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/3ead0cd0-6be7-4622-a6c7-354bf85f7a3a` (offset 66804, 1200 chars)\n- Read and verified second update from `flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/6d524e93-886a-4307-9191-6137f10d776b` (offset 104131, 1200 chars)\n- Extracted and returned JSON for both verified updates\n\n**Active**\n- Third update observed in conversation text but not yet verified against archived source\n\n**Blocked**\n- None",
+        "Next Move": "Verify third update by reading its archived resource (URI and SHA-256 not yet provided) and return JSON with destination \"abeto\", status \"cancelado\", reason \"solicitud retirada\", sendAllowed false, unknown null."
+      },
+      "compactionControlRole": "system"
+    },
+    {
+      "round": 4,
+      "expected": {
+        "destination": "roble",
+        "status": "listo",
+        "reason": "aprobación pendiente",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "destination": "roble",
+        "status": "listo",
+        "reason": "aprobación pendiente",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "recovery": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/1fa766c2-7299-47e2-8b0d-4044bc475cbd",
+        "sha256": "8ef902d30c828a27d2f36bfa9516f6fb2e2d997939f1dcb25da4ecb6174e9c4d",
+        "range": {
+          "startChar": 178864,
+          "endChar": 179278
+        },
+        "contentCharacters": 414,
+        "sourceCharacters": 179278,
+        "verificationOk": true,
+        "exactSource": true,
+        "canonicalPairingValid": true,
+        "completedProviderCalls": 2,
+        "reads": 1
+      },
+      "sourceArchive": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/1fa766c2-7299-47e2-8b0d-4044bc475cbd",
+        "sha256": "8ef902d30c828a27d2f36bfa9516f6fb2e2d997939f1dcb25da4ecb6174e9c4d",
+        "size": 183837,
+        "verified": true
+      },
+      "sourceTextSha256": "e719655d9ad0b1f02ca1b13abc64582b8186dd1de566c8ff97893f98c8147b54",
+      "preparationElapsedMs": 35516.485600000015,
+      "recoveryElapsedMs": 22057.829700000002,
+      "sourceTaskState": {
+        "Objective": "Verify shipment record updates by reading archived resources and returning structured JSON with current destination, status, reason, sendAllowed=false, and unknown=null.",
+        "Work State": "- **Completed**: Verified first three updates via read_resource (cedro, pino, abeto) and returned JSON for each.\n- **Active**: Fourth update (roble) observed in context but not yet verified via read_resource.\n- **Blocked**: None.",
+        "Next Move": "Verify fourth update (roble) by reading its archived resource when user provides URI and SHA-256, then return JSON."
+      },
+      "compactionControlRole": "system"
+    },
+    {
+      "round": 5,
+      "expected": {
+        "destination": "cedro",
+        "status": "retenido",
+        "reason": "autorización revocada",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "destination": "cedro",
+        "status": "retenido",
+        "reason": "autorización revocada",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "recovery": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/f9f441b2-6c54-44de-8761-954612a502b6",
+        "sha256": "31a69d156a46c46a9632b86e7c53a2a055d4978ec39ae1e29281db71dc81402e",
+        "range": {
+          "startChar": 216229,
+          "endChar": 216647
+        },
+        "contentCharacters": 418,
+        "sourceCharacters": 216647,
+        "verificationOk": true,
+        "exactSource": true,
+        "canonicalPairingValid": true,
+        "completedProviderCalls": 2,
+        "reads": 1
+      },
+      "sourceArchive": {
+        "uri": "flujo://run/8d7ad183-89a2-41d4-91ea-6391ec7d36d8/f9f441b2-6c54-44de-8761-954612a502b6",
+        "sha256": "31a69d156a46c46a9632b86e7c53a2a055d4978ec39ae1e29281db71dc81402e",
+        "size": 222123,
+        "verified": true
+      },
+      "sourceTextSha256": "e109aa9cf3505f3e9490d1ffa47d046c58201e054b7be7b2724e2d31d21f7c6b",
+      "preparationElapsedMs": 20375.229099999997,
+      "recoveryElapsedMs": 11703.3468,
+      "sourceTaskState": {
+        "Objective": "Verify and track the current state of a shipping register (registro de envío) through its sequential updates by reading archived compaction artifacts.",
+        "Work State": "**Completed**\n- Verified update 1: destination `cedro`, status `retenido`, reason `autorización revocada`\n- Verified update 2: destination `pino`, status `preparado`, reason `revisión pendiente`\n- Verified update 3: destination `abeto`, status `cancelado`, reason `solicitud retirada`\n- Verified update 4: destination `roble`, status `listo`, reason `aprobación pendiente`\n- Verified update 5: destination `cedro`, status `retenido`, reason `autorización revocada`\n\n**Active**\n- None — all requested verifications complete\n\n**Blocked**\n- None",
+        "Next Move": "Unspecified — no further verification requests or actions indicated."
+      },
+      "compactionControlRole": "system"
+    }
+  ],
+  "epochs": [
+    {
+      "number": 1,
+      "startedUtc": "2026-10-16T02:09:50.803Z",
+      "pid": 3620,
+      "exit": {
+        "code": 143,
+        "signal": null,
+        "utc": "2026-10-16T02:14:03.948Z"
+      },
+      "closedUtc": "2026-10-16T02:14:03.948Z"
+    },
+    {
+      "number": 2,
+      "startedUtc": "2026-10-16T02:14:03.948Z",
+      "pid": 24836,
+      "exit": {
+        "code": 143,
+        "signal": null,
+        "utc": "2026-10-16T02:14:07.274Z"
+      },
+      "closedUtc": "2026-10-16T02:14:07.274Z"
+    }
+  ],
+  "reusedRuntimeRegressionEvidence": {
+    "file": "docs/performance/compaction-source-spans-2026-10-15.json",
+    "revision": "e098bd3deca97aa136b80b1ba3116719904844c2",
+    "cases": 85,
+    "reason": "All application, package, dependency and runtime test inputs are unchanged; only the acceptance harness, guards and evidence change."
+  },
+  "limitations": [
+    "Controlled synthetic history; no original #520 workload or endurance claim",
+    "No native session, visual compaction, installed/release or full provider-matrix qualification",
+    "Controlled synthetic history and disposable cache migration; no power-loss or native provider acceptance",
+    "The review supplies an archive URI, hash and range, never answer values; autonomous locator discovery and arbitrary narrative validation remain unqualified",
+    "The supplied locator tests targeted recovery, not autonomous lookup or a general narrative validator.",
+    "The selected prose is near the archive tail in each round; this is not a full evidence-position or narrative benchmark.",
+    "No exhaustive every-transform or provider-matrix claim. Native/session/signature, visual-benefit and release acceptance remain open.",
+    "Earlier accepted five/ten-round/cache/action/Stop/crash/edit/persistence proofs retain their original scope."
+  ],
+  "releaseChecksDispatched": 0
+}
