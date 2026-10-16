@@ -1,7 +1,6 @@
 import { GoogleGenAI, Content, Part, FunctionDeclaration, GenerateContentResponse } from '@google/genai';
 import OpenAI from 'openai';
-import { contextUsageFromCompletion } from './contextUsage';
-import { mapGeminiUsage } from './geminiUsage';
+import { geminiContextUsage, mapGeminiUsage } from './geminiUsage';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest, assertReadOnlyAssessmentInput } from './types';
@@ -400,7 +399,7 @@ export class GeminiAdapter implements CompletionAdapter {
     return {
       ...result,
       // Gemini's catalog limit is inputTokenLimit; output has a separate limit.
-      contextUsage: contextUsageFromCompletion(result.completion.usage, model.contextWindow, true),
+      contextUsage: geminiContextUsage(resp.usageMetadata, model.contextWindow),
     };
   }
 
@@ -464,7 +463,7 @@ export class GeminiAdapter implements CompletionAdapter {
       },
     );
     const result = toChatCompletion(model.name, data);
-    return { ...result, contextUsage: contextUsageFromCompletion(result.completion.usage, model.contextWindow, true) };
+    return { ...result, contextUsage: geminiContextUsage(data.usageMetadata, model.contextWindow) };
   }
 
   async createStreamCompletion({
@@ -604,7 +603,7 @@ export class GeminiAdapter implements CompletionAdapter {
     return {
       liveMessageId,
       media,
-      contextUsage: contextUsageFromCompletion(mapGeminiUsage(usage), model.contextWindow, true),
+      contextUsage: geminiContextUsage(usage, model.contextWindow),
       completion: {
         id: responseId,
         object: 'chat.completion',
