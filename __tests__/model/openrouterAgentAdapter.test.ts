@@ -147,6 +147,21 @@ it('carries encrypted reasoning before its original call on the next flow turn',
   expect(items[position - 1]).toMatchObject({ type: 'reasoning', encryptedContent: 'opaque' });
 });
 
+it.each(['model', 'credential', 'tools', 'source'])('invalidates shared opaque state after an Agent %s change', async kind => {
+  const data = { ...input(), conversationId: 'reasoning-owner', nodeId: 'node' };
+  nativeResponse.output.unshift({ type: 'reasoning', id: 'reasoning', summary: [], encryptedContent: 'opaque' });
+  const adapter = new OpenRouterAgentAdapter();
+  const first = await adapter.createCompletion(data);
+  data.messages.push(first.completion.choices[0].message,
+    { role: 'tool', tool_call_id: 'call-1', content: 'OK' });
+  if (kind === 'model') data.model = { ...data.model, name: 'openrouter/free' };
+  if (kind === 'credential') data.apiKey = 'another-fixture-key';
+  if (kind === 'tools') data.tools = [];
+  if (kind === 'source') data.messages[0].content = 'Check the existing file instead.';
+  await adapter.createStreamCompletion(data);
+  expect(callModel.mock.calls[0][0].input.some((item: { type: string }) => item.type === 'reasoning')).toBe(false);
+});
+
 it.each(['error', 'cancelled'])('propagates failures and finalizes archived requests as %s', async outcome => {
   const data = input();
   const controller = new AbortController();

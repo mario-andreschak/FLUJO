@@ -42,8 +42,11 @@ import {
   __resetReasoningStore,
   __resetParamNegotiation,
   withResponsesCacheBreakpoints,
+  prepareResponsesReasoning,
+  forgetReasoning,
 } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import type { Model } from '@/shared/types/model';
+import { runWithWorkspace } from '@/utils/workspace';
 
 const model = (name = 'gpt-5'): Model =>
   ({
@@ -430,6 +433,124 @@ describe('request shape', () => {
   it('forwards the prompt cache key', async () => {
     await call(model(), [{ role: 'user', content: 'hi' }], { promptCacheKey: 'flujo-tabc' });
     expect(bodyOf().prompt_cache_key).toBe('flujo-tabc');
+  });
+});
+
+describe('reasoning ownership and projection invalidation (#1091)', () => {
+  const history = (): OpenAI.ChatCompletionMessageParam[] => [
+    { role: 'system', content: 'Never send messages.' },
+    { role: 'user', content: 'Check the weather in Berlin.' },
+  ];
+  const tools: OpenAI.ChatCompletionFunctionTool[] = [{ type: 'function', function: {
+    name: 'get_weather', description: 'Read weather', parameters: { type: 'object', properties: {} },
+  } }];
+  const session = { conversationId: 'owned-conversation', nodeId: 'owned-node', tools };
+  const seed = async () => {
+    const messages = history();
+    const first = await call(model(), messages, session);
+    messages.push(first.completion.choices[0].message,
+      { role: 'tool', tool_call_id: 'call_abc', content: 'Sunny' });
+    return messages;
+  };
+  const noReasoning = () => expect((bodyOf(1).input as { type?: string }[])
+    .some(item => item.type === 'reasoning')).toBe(false);
+
+  it.each([
+    ['model', { name: 'another-model' }],
+    ['connection', { id: 'another-connection' }],
+    ['provider', { provider: 'openrouter' }],
+    ['endpoint', { baseUrl: 'https://openrouter.ai/api/v1' }],
+    ['reasoning policy', { reasoningEffort: 'high' }],
+  ])('does not replay opaque state after changing %s', async (_name, change) => {
+    const messages = await seed();
+    await call({ ...model(), ...change } as Model, messages, session);
+    noReasoning();
+  });
+
+  it('does not replay another credential scope', async () => {
+    await call(model(), await seed(), { ...session, apiKey: 'another-fixture-key' });
+    noReasoning();
+  });
+
+  it('does not replay state after changing tool authority', async () => {
+    await call(model(), await seed(), { ...session, tools: [{ type: 'function', function: {
+      ...tools[0].function, parameters: { type: 'object', properties: { recipient: { type: 'string' } } },
+    } }] });
+    noReasoning();
+  });
+
+  it.each(['instruction', 'source', 'arguments'])('does not replay an edited %s prefix', async kind => {
+    const messages = await seed();
+    if (kind === 'instruction') messages[0].content = 'Sending is now allowed.';
+    if (kind === 'source') messages[1].content = 'Check the weather in Bogota.';
+    if (kind === 'arguments') (messages[2] as OpenAI.ChatCompletionAssistantMessageParam)
+      .tool_calls![0] = { id: 'call_abc', type: 'function', function: {
+        name: 'get_weather', arguments: '{"city":"Bogota"}',
+      } };
+    await call(model(), messages, session);
+    noReasoning();
+  });
+
+  it('does not replay stale state on the streaming route', async () => {
+    const messages = await seed();
+    mockResponsesCreate.mockResolvedValueOnce((async function* () {
+      yield { type: 'response.completed', response: responseWithToolCall() };
+    })());
+    await new OpenAiResponsesAdapter().createStreamCompletion({ model: model('another-model'),
+      apiKey: 'sk-test', messages, temperature: 0, ...session });
+    noReasoning();
+  });
+
+  it('keeps unchanged streaming continuation and exact opaque bytes', async () => {
+    const messages = await seed();
+    mockResponsesCreate.mockResolvedValueOnce((async function* () {
+      yield { type: 'response.completed', response: responseWithToolCall({ output: [] }) };
+    })());
+    await new OpenAiResponsesAdapter().createStreamCompletion({ model: model(),
+      apiKey: 'sk-test', messages, temperature: 0, ...session });
+    expect(bodyOf(1).input).toContainEqual({ type: 'reasoning', id: 'rs_1', summary: [],
+      encrypted_content: 'ENCRYPTED_BLOB' });
+  });
+
+  it('does not confuse delimiter-containing conversation and node IDs', async () => {
+    const messages = history();
+    const first = await call(model(), messages, { ...session, conversationId: 'a|b', nodeId: 'c' });
+    messages.push(first.completion.choices[0].message);
+    await call(model(), messages, { ...session, conversationId: 'a', nodeId: 'b|c' });
+    noReasoning();
+  });
+
+  it('keeps workspace ownership across an asynchronous completion', async () => {
+    const data = { model: model(), apiKey: 'fixture', messages: history(), ...session };
+    const translated = fromResponse(responseWithToolCall() as never, model().name);
+    const pending = runWithWorkspace('reasoning-owner-a', () => prepareResponsesReasoning(data, 'openai-responses'));
+    runWithWorkspace('reasoning-owner-b', () => pending.remember(translated.completion, translated.reasoning));
+    const next = { ...data, messages: [...data.messages, translated.completion.choices[0].message] };
+    expect(runWithWorkspace('reasoning-owner-b', () => prepareResponsesReasoning(next, 'openai-responses').carried?.size)).toBe(0);
+    expect(runWithWorkspace('reasoning-owner-a', () => prepareResponsesReasoning(next, 'openai-responses').carried?.get('call_abc')))
+      .toEqual(translated.reasoning);
+  });
+
+  it.each(['route replacement', 'forget'])('ignores late completion after %s', kind => {
+    const data = { model: model(), apiKey: 'fixture', messages: history(), ...session };
+    const first = prepareResponsesReasoning(data, 'openai-responses');
+    if (kind === 'route replacement') prepareResponsesReasoning({ ...data, model: model('replacement') }, 'openai-responses');
+    else forgetReasoning(session.conversationId, session.nodeId);
+    const current = prepareResponsesReasoning(data, 'openai-responses');
+    const translated = fromResponse(responseWithToolCall() as never, model().name);
+    current.remember(translated.completion, [{ ...translated.reasoning[0], encrypted_content: 'CURRENT' }]);
+    first.remember(translated.completion, translated.reasoning);
+    const next = prepareResponsesReasoning({ ...data, messages: [...data.messages, translated.completion.choices[0].message] }, 'openai-responses');
+    expect(next.carried?.get('call_abc')?.[0].encrypted_content).toBe('CURRENT');
+  });
+
+  it('invalidates state when switching between the shared SDK adapters', () => {
+    const data = { model: model(), apiKey: 'fixture', messages: history(), ...session };
+    const first = prepareResponsesReasoning(data, 'openrouter-agent');
+    const translated = fromResponse(responseWithToolCall() as never, model().name);
+    first.remember(translated.completion, translated.reasoning);
+    expect(prepareResponsesReasoning({ ...data, messages: [...data.messages, translated.completion.choices[0].message] },
+      'openai-responses').carried?.size).toBe(0);
   });
 });
 

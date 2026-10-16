@@ -11,6 +11,7 @@ import { parseDataUrl } from './messageUtils';
 import { supportsExplicitOpenAiPromptCaching } from './openaiPromptCaching';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
+import { digestCanonicalJson } from '@/backend/execution/flow/compaction/digest';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -80,11 +81,23 @@ const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter
  */
 type ReasoningItem = OpenAI.Responses.ResponseReasoningItem;
 
-/** Bounded LRU-ish store, keyed by `${conversationId}|${nodeId}`. */
-const MAX_TRACKED_SESSIONS = 200;
-const reasoningByWorkspace = new Map<string, Map<string, Map<string, ReasoningItem[]>>>();
+interface ReasoningRecord {
+  items: ReasoningItem[];
+  inputLength: number;
+  inputDigest: string;
+  outputLength: number;
+  outputDigest: string;
+}
+interface ReasoningSession {
+  owner: string;
+  anchors: Map<string, ReasoningRecord>;
+}
 
-function reasoningBySession(): Map<string, Map<string, ReasoningItem[]>> {
+/** Disposable process-local state. Canonical history never depends on this cache. */
+const MAX_TRACKED_SESSIONS = 200;
+const reasoningByWorkspace = new Map<string, Map<string, ReasoningSession>>();
+
+function reasoningBySession(): Map<string, ReasoningSession> {
   const workspace = getCurrentWorkspace();
   let value = reasoningByWorkspace.get(workspace);
   if (!value) {
@@ -95,38 +108,66 @@ function reasoningBySession(): Map<string, Map<string, ReasoningItem[]>> {
 }
 
 const sessionKey = (conversationId?: string, nodeId?: string): string | undefined =>
-  conversationId ? `${conversationId}|${nodeId ?? ''}` : undefined;
+  conversationId ? JSON.stringify([conversationId, nodeId ?? null]) : undefined;
 
-function stashReasoning(key: string, callId: string, items: ReasoningItem[]): void {
+type ReasoningInput = Pick<CompletionInput, 'model' | 'apiKey' | 'messages' | 'tools'
+  | 'conversationId' | 'nodeId' | 'toolNameMap'>;
+
+/** Capture ownership before dispatch so a late response cannot overwrite a
+ * replacement route or a forgotten session. Only unchanged provider-visible
+ * prefixes can carry opaque state; a call ID alone is not source lineage. */
+export function prepareResponsesReasoning(input: ReasoningInput, adapter: string): {
+  carried: Map<string, ReasoningItem[]> | undefined;
+  remember: (completion: OpenAI.Chat.Completions.ChatCompletion, items: ReasoningItem[]) => void;
+} {
+  const key = sessionKey(input.conversationId, input.nodeId);
+  if (!key) return { carried: undefined, remember: () => undefined };
+  // Capture the workspace store now, rather than rereading async context when
+  // the provider eventually finishes. Credential bytes are never retained.
   const sessions = reasoningBySession();
-  let forSession = sessions.get(key);
-  if (!forSession) {
-    // Refresh insertion order so active sessions are not evicted first.
+  const owner = digestCanonicalJson({ policy: 'responses-reasoning-v1', adapter,
+    connection: input.model.id, model: input.model.name, provider: input.model.provider,
+    baseUrl: input.model.baseUrl, credential: input.apiKey,
+    reasoningEffort: input.model.reasoningEffort, outputModalities: input.model.outputModalities,
+    tools: input.tools ?? [], toolNameMap: input.toolNameMap ?? {} });
+  let session = sessions.get(key);
+  if (session?.owner !== owner) {
+    session = { owner, anchors: new Map() };
+    sessions.delete(key);
     if (sessions.size >= MAX_TRACKED_SESSIONS) {
       const oldest = sessions.keys().next();
       if (!oldest.done) sessions.delete(oldest.value);
     }
-    forSession = new Map();
-    sessions.set(key, forSession);
+    sessions.set(key, session);
   }
-  forSession.set(callId, items);
-  // A single node's loop can make many tool calls; keep the map from growing
-  // without bound over a very long run.
-  if (forSession.size > 64) {
-    const oldest = forSession.keys().next();
-    if (!oldest.done) forSession.delete(oldest.value);
+  // Refresh insertion order for an active unchanged owner too.
+  sessions.delete(key);
+  sessions.set(key, session);
+  const current = toResponsesInput(input.messages);
+  const inputDigest = digestCanonicalJson(current);
+  const carried = new Map<string, ReasoningItem[]>();
+  for (const [callId, record] of session.anchors) {
+    const end = record.inputLength + record.outputLength;
+    if (current.length < end
+      || digestCanonicalJson(current.slice(0, record.inputLength)) !== record.inputDigest
+      || digestCanonicalJson(current.slice(record.inputLength, end)) !== record.outputDigest) {
+      session.anchors.delete(callId);
+    } else carried.set(callId, structuredClone(record.items));
   }
-}
-
-/** Shared Responses reasoning carry-over for SDKs using the same wire protocol. */
-export function getCarriedResponsesReasoning(conversationId?: string, nodeId?: string): Map<string, ReasoningItem[]> | undefined {
-  const key = sessionKey(conversationId, nodeId);
-  return key ? reasoningBySession().get(key) : undefined;
-}
-
-export function rememberResponsesReasoning(conversationId: string | undefined, nodeId: string | undefined, callId: string | undefined, items: ReasoningItem[]): void {
-  const key = sessionKey(conversationId, nodeId);
-  if (key && callId && items.length) stashReasoning(key, callId, items);
+  const ownedSession = session;
+  return { carried, remember: (completion, items) => {
+    const message = completion.choices[0]?.message;
+    const callId = message?.tool_calls?.[0]?.id;
+    if (!message || !callId || items.length === 0 || sessions.get(key) !== ownedSession) return;
+    const output = toResponsesInput([message]);
+    ownedSession.anchors.delete(callId);
+    ownedSession.anchors.set(callId, { items: structuredClone(items), inputLength: current.length,
+      inputDigest, outputLength: output.length, outputDigest: digestCanonicalJson(output) });
+    if (ownedSession.anchors.size > 64) {
+      const oldest = ownedSession.anchors.keys().next();
+      if (!oldest.done) ownedSession.anchors.delete(oldest.value);
+    }
+  } };
 }
 
 /** Drop a session's carried reasoning (housekeeping / tests). */
@@ -632,8 +673,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       defaultHeaders: getProviderDefaultHeaders(model.provider),
     });
 
-    const key = sessionKey(conversationId, nodeId);
-    const carried = key ? reasoningBySession().get(key) : undefined;
+    const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
+      conversationId, nodeId, toolNameMap }, 'openai-responses');
+    const { carried } = reasoningState;
 
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const input = toResponsesInput(translateMessagesForProvider(messages, toolNames), carried);
@@ -725,8 +767,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     // iteration of the loop can hand it back. Nothing to carry when the turn made
     // no tool calls: the exchange is finished.
     const firstCallId = completion.choices[0]?.message?.tool_calls?.[0]?.id;
-    if (key && firstCallId && reasoning.length > 0) {
-      stashReasoning(key, firstCallId, reasoning);
+    if (firstCallId && reasoning.length > 0) {
+      reasoningState.remember(completion, reasoning);
       log.debug('Carrying encrypted reasoning items to the next turn', {
         anchor: firstCallId,
         items: reasoning.length,
@@ -762,8 +804,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       baseURL: model.baseUrl,
       defaultHeaders: getProviderDefaultHeaders(model.provider),
     });
-    const key = sessionKey(conversationId, nodeId);
-    const carried = key ? reasoningBySession().get(key) : undefined;
+    const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
+      conversationId, nodeId, toolNameMap }, 'openai-responses');
+    const { carried } = reasoningState;
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const input = toResponsesInput(translateMessagesForProvider(messages, toolNames), carried);
     const responsesTools = toResponsesTools(translateToolsForProvider(tools, toolNames));
@@ -902,10 +945,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     for (const part of media) {
       onModelDelta?.({ messageId: liveMessageId, mediaPart: part });
     }
-    const firstCallId = completion.choices[0]?.message?.tool_calls?.[0]?.id;
-    if (key && firstCallId && reasoning.length > 0) {
-      stashReasoning(key, firstCallId, reasoning);
-    }
+    reasoningState.remember(completion, reasoning);
     return { completion, liveMessageId, media, contextUsage: contextUsageFromCompletion(completion.usage, model.contextWindow) };
   }
 }
