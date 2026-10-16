@@ -526,3 +526,51 @@ retains requests, replies, original source payloads and canonical snapshots.
 Arbitrary unquoted fields, cross-line relationships, narrative correctness,
 every-transform/native/session/signature/visual and release acceptance remain
 open. No broad suite, remote CI, container or release checks were dispatched.
+
+### Unquoted fields and adjacent source lines
+
+`summary-v6-source-spans` extends lexical selection to unquoted colon/equal
+fields, such as `Status: pending`. A selected field retains its surrounding
+bounded paragraph, including adjacent subject, value, negation and cause lines.
+Text records include the ordinal text part and original UTF-16 start/end offsets.
+Blank lines and code fences separate spans; standalone JSON retains its existing
+exact lexical representation. Paragraphs split at complete lines within the
+4,096-character value bound, with archive recovery required for a selected split.
+Oversized selected lines are omitted whole. Record/block bounds remain unchanged.
+The complete reconstructed block participates in cache validation; v5 artifacts
+regenerate under the new policy.
+
+The existing compatibility harness accepts
+`COMPACTION_ACCEPTANCE_MODE=field-fidelity` for five fresh summaries of unquoted
+multiline destination/status/reason fields. It changes current values, returns
+to the original values, checks original no-send authority and source positions,
+and verifies archive hashes, canonical history and an application restart.
+Run through flujo-bash using the documented qualified-build, private-profile and
+explicit approved Free-provider configuration. The
+[frozen selected-field result](compaction-source-spans-2026-10-15.json) retains
+the tested configuration, timings, costs and complete compressed trace.
+
+This is still lexical source selection. It does not establish a general semantic
+validator for unlabelled prose, omitted/cross-paragraph relationships or generated
+narrative. Earlier ten-round receipt/cache/recovery proofs retain their original
+revision and scope. Every-transform, Native/session/signature, visual-benefit and
+release acceptance remain open in #1091.
+
+The rebuilt application passes this five-round selected-field check on explicit
+Ultra Free: five persisted summaries and exact replies, four changes returning
+to the first values, five source-span/archive checks, six canonical snapshots
+and a restart. The frozen trace retains the earlier Super transport timeouts
+and harness failures. The harness now pairs its installed HTTP client/agent,
+preserves failed SSE envelopes and distinguishes failed retries from duplicate
+completed responses. Four captured correct rounds also pass offline replay.
+This is not a same-model causal comparison with the earlier Super attempt.
+
+Local typecheck, source/touched/harness lint, 85 focused cases and 24 harness
+guards pass. The previous collector fails the new multiline field regression;
+duplicate completions and incomplete output remain rejected. The inspected
+non-container build takes 333.572 seconds; the accepted journey takes 194.684
+seconds, measured separately. Across all attempts, 18 completed approved Free
+responses report USD 0; eight failed/timeout requests return no usage/cost fields.
+Both explicitly selected routes have verified zero-price catalogs. Every app
+epoch closes. The frozen record retains each failed attempt and separate timing.
+No full suite, remote workflow, container or release check was dispatched.

@@ -206,6 +206,17 @@ describe('compactHistory orchestrator (issue #248)', () => {
     expect(JSON.stringify(source)).toBe(before);
   });
 
+  it('retains unquoted multiline field relationships when the generated narrative loses their meaning', async () => {
+    const text = 'Pedido Cedro\nEstado:\npendiente\nNo fue enviado\nMotivo = autorización revocada\nSiguiente destino:\nalmacén';
+    const source = [user('Never send.'), assistant(bulk(12_000)), assistant(text, { id: 'field-source' }),
+      assistant(bulk(12_000)), user('Current status?')];
+    const result = await compactHistory(source, options(), deps(anchored('The shipment is completed.')));
+    expect(result).not.toBeNull();
+    expect(String(summaryOf(result!).content)).toContain('"source_message_id":"field-source","text":' + JSON.stringify(text));
+    expect(String(summaryOf(result!).content)).toContain('"source_start":0,"source_end":' + text.length);
+    expect(result!.wireMessages.some(message => message.role === 'user' && message.content === 'Never send.')).toBe(true);
+  });
+
   it.each(['missing-block', 'changed-value', 'changed-provenance', 'changed-role'])(
     'regenerates matching-digest cached summaries with %s source evidence', async change => {
       const source = updatedObservationHistory();
