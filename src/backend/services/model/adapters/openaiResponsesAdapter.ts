@@ -13,7 +13,7 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
 import { digestCanonicalJson } from '@/backend/execution/flow/compaction/digest';
 import { inspectJson } from '@/backend/execution/flow/compaction/jsonInspection';
-import { validateResponsesSession, cloneResponsesJson, MAX_RESPONSES_SESSION_CHARS,
+import { validateResponsesSession, cloneResponsesJson, responsesReplayInput, MAX_RESPONSES_SESSION_CHARS,
   type ResponsesReplayRecord, type ResponsesSessionState } from './responsesSessionState';
 import {
   buildProviderToolNameTranslation,
@@ -149,7 +149,7 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
   const windows = new Map<string, ReasoningRecord>();
   for (const [callId, record] of session.anchors) {
     const end = record.inputLength + record.outputLength;
-    if (current.length < end
+    if ((record.nativeOutput && !responsesReplayInput(record.nativeOutput)) || current.length < end
       || digestCanonicalJson(current.slice(0, record.inputLength)) !== record.inputDigest
       || digestCanonicalJson(current.slice(record.inputLength, end)) !== record.outputDigest) {
       session.anchors.delete(callId);
@@ -196,7 +196,7 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
         if (sessions.get(key) === ownedSession) ownedSession.anchors.delete(anchor);
         append(translated.slice(start, end));
       } else if (record.nativeOutput) {
-        append(structuredClone(record.nativeOutput) as ResponseInputItem[]);
+        append(responsesReplayInput(structuredClone(record.nativeOutput))!);
       } else {
         append(structuredClone(record.items));
         append(translated.slice(start, end));
@@ -217,7 +217,7 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
     const anchor = callId ? JSON.stringify(['call', callId]) : JSON.stringify(['turn', current.length, outputDigest]);
     ownedSession.anchors.delete(anchor);
     const retainedChars = inspectJson(nativeOutput ?? items);
-    if (retainedChars > MAX_SESSION_OUTPUT_CHARS) { publish(); return; }
+    if (retainedChars > MAX_SESSION_OUTPUT_CHARS || (nativeOutput && !responsesReplayInput(nativeOutput))) { publish(); return; }
     ownedSession.anchors.set(anchor, { callId, items: nativeOutput ? [] : cloneResponsesJson(items),
       ...(nativeOutput ? { nativeOutput: cloneResponsesJson(nativeOutput), nativeInputDigest } : {}),
       retainedChars, inputLength: current.length, inputDigest, outputLength: output.length, outputDigest });

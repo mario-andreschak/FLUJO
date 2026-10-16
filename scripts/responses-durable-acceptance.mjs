@@ -21,11 +21,19 @@ const base = `http://127.0.0.1:${port}`, profile = path.join(run, 'durable-profi
 const authority = path.join(run, 'durable-authority-' + stamp);
 const require = createRequire(path.join(repo, 'package.json'));
 const secrets = [], requests = [], outputs = [];
+const expectedReplay = output => {
+  const items = structuredClone(output);
+  for (const item of items) {
+    delete item.created_by;
+    for (const part of item.content ?? []) delete part.parsed;
+  }
+  return items;
+};
 const evidence = { issue: 1091, startedUtc: new Date().toISOString(), kind: 'built-http-durable-responses',
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, windowsHide: true }).toString().trim(),
   buildId: (await fs.readFile(path.join(repo, '.next/BUILD_ID'), 'utf8')).trim(),
   cases: [], epochs: [], requests, outputs, providerCalls: 0,
-  limits: ['Synthetic opaque bytes; no genuine encrypted/signature or CLI resume acceptance',
+  limits: ['Synthetic compaction/opaque bytes and hosted-search receipts; no genuine provider compaction/signature or CLI resume acceptance',
     'No tools execute; no browser, installed, endurance, full CI or release acceptance'] };
 const redact = value => secrets.reduce((text, secret) => text.replaceAll(secret, '[private]'), String(value));
 let child, observed, cookie = '', ownerToken = '', executionToken = '', fixtureUrl, childOutput = '';
@@ -42,10 +50,13 @@ const fixture = createServer(async (incoming, outgoing) => {
     const id = String(requests.length), text = 'Exact receipt ñ-' + id;
     const output = [
       { type: 'reasoning', id: 'reasoning-' + id, summary: [], encrypted_content: 'SYNTHETIC_OPAQUE_ñ_' + id },
+      { type: 'compaction', id: 'compaction-' + id, encrypted_content: 'SYNTHETIC_COMPACTION_ñ_' + id,
+        created_by: 'output-only-provenance' },
+      { type: 'web_search_call', id: 'search-' + id, status: 'completed', action: { type: 'search', query: 'Bogotá' } },
       { type: 'message', id: 'commentary-' + id, role: 'assistant', status: 'completed', phase: 'commentary',
         content: [{ type: 'output_text', text: 'Checking. ', annotations: [] }] },
       { type: 'message', id: 'final-' + id, role: 'assistant', status: 'completed', phase: 'final_answer',
-        content: [{ type: 'output_text', text, annotations: [] }] },
+        content: [{ type: 'output_text', text, annotations: [], parsed: { sdkOnly: true } }] },
     ];
     outputs.push(output);
     const response = { id: 'response-' + id, object: 'response', created_at: 1700000000,
@@ -164,12 +175,21 @@ try {
     const first = await turn('Read the existing receipt.');
     const firstOutput = outputs.at(-1);
     check(first.responsesSessions?.process?.records.length === 1, adapter + ': canonical checkpoint stores complete native output');
+    const expectedStored = structuredClone(firstOutput);
+    // The real OpenRouter SDK removes its parsed-only message fields before
+    // returning output; its UNKNOWN compaction wrapper retains the raw item.
+    if (adapter === 'openrouter-agent') {
+      for (const item of expectedStored) for (const part of item.content ?? []) delete part.parsed;
+    }
+    assert.deepEqual(first.responsesSessions.process.records[0][1].nativeOutput, expectedStored);
     check(!JSON.stringify(first).includes(relayToken), adapter + ': checkpoint contains no credential bytes');
     await stopOwnedCandidate(observed); await start(config);
     const second = await turn('Continue after restart.');
     const input = requests.at(-1).input, index = input.findIndex(item => item.id === firstOutput[0].id);
-    assert.deepEqual(input.slice(index, index + firstOutput.length), firstOutput);
-    check(index >= 0, adapter + ': a new application process replays exact opaque bytes, IDs, phases and ordering');
+    assert.deepEqual(input.slice(index, index + firstOutput.length), expectedReplay(firstOutput));
+    check(index >= 0, adapter + ': a new process replays exact compaction/opaque bytes, search receipt, IDs, phases and ordering');
+    check(!JSON.stringify(input).includes('output-only-provenance') && !JSON.stringify(input).includes('sdkOnly'),
+      adapter + ': replay strips output-only fields while persisted source remains exact');
     check(first.messages.every(original => second.messages.some(current => current.id === original.id && current.content === original.content)),
       adapter + ': restart continuation preserves canonical messages');
     await stopOwnedCandidate(observed);

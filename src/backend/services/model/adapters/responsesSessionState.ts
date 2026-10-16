@@ -1,4 +1,5 @@
 import type OpenAI from 'openai';
+import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems';
 import { inspectJson } from '@/backend/execution/flow/compaction/jsonInspection';
 import { digestCanonicalJson } from '@/backend/execution/flow/compaction/digest';
 
@@ -34,6 +35,34 @@ export interface ResponsesSessionState {
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
+// A checkpoint contains provider output, never arbitrary input instructions or
+// item references. Keep this exhaustive for the installed SDK's output union.
+const outputTypes = {
+  message: true, reasoning: true, compaction: true,
+  function_call: true, function_call_output: true,
+  file_search_call: true, web_search_call: true, image_generation_call: true,
+  computer_call: true, computer_call_output: true, code_interpreter_call: true,
+  program: true, program_output: true, tool_search_call: true, tool_search_output: true,
+  additional_tools: true, local_shell_call: true, local_shell_call_output: true,
+  shell_call: true, shell_call_output: true, apply_patch_call: true, apply_patch_call_output: true,
+  mcp_call: true, mcp_list_tools: true, mcp_approval_request: true, mcp_approval_response: true,
+  custom_tool_call: true, custom_tool_call_output: true,
+} satisfies Record<OpenAI.Responses.ResponseOutputItem['type'], true>;
+
+/** Normalize a disposable replay copy; stored output and opaque bytes stay exact.
+ * The SDK removes output-only provenance/parsed fields and skips known items
+ * that cannot be replayed without changing their meaning. */
+export function responsesReplayInput(output: unknown): OpenAI.Responses.ResponseInputItem[] | undefined {
+  if (!Array.isArray(output) || !output.length || output.some(item => !item || typeof item !== 'object'
+    || typeof item.type !== 'string' || !Object.hasOwn(outputTypes, item.type))) return undefined;
+  try {
+    const input = toResponseInputItems(output);
+    return input.length ? input : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Source/native prefix compatibility is checked again immediately before use. */
 export function validateResponsesSession(
   value: unknown,
@@ -59,8 +88,7 @@ export function validateResponsesSession(
         || !count(record.retainedChars) || !Array.isArray(record.items)
         || (record.callId !== undefined && typeof record.callId !== 'string')) return undefined;
       const output = record.nativeOutput ?? record.items;
-      if (!Array.isArray(output) || !output.length || output.some(item => !item || typeof item !== 'object'
-        || !['reasoning', 'message', 'function_call'].includes(item.type))
+      if (!responsesReplayInput(output)
         || inspectJson(output) !== record.retainedChars
         || (record.nativeOutput !== undefined && !digest(record.nativeInputDigest))
         || (record.nativeOutput === undefined && (!record.callId || record.items.some(item => item.type !== 'reasoning')))) return undefined;
