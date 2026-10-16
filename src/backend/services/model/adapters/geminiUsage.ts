@@ -1,5 +1,6 @@
 import type OpenAI from 'openai';
 import type { GenerateContentResponse } from '@google/genai';
+import { contextUsageFromCompletion } from './contextUsage';
 
 /** Gemini's cached input is included in promptTokenCount; thoughts are separate from candidates. */
 export function mapGeminiUsage(usage: GenerateContentResponse['usageMetadata']): OpenAI.Completions.CompletionUsage | undefined {
@@ -16,4 +17,13 @@ export function mapGeminiUsage(usage: GenerateContentResponse['usageMetadata']):
     ...(usage.thoughtsTokenCount != null
       ? { completion_tokens_details: { reasoning_tokens: reasoning } } : {}),
   };
+}
+
+/** SDK continuation hops accumulate billing; the input window uses the initial prompt. */
+export function geminiContextUsage(usage: GenerateContentResponse['usageMetadata'], contextWindow?: number) {
+  const snapshot = mapGeminiUsage(usage);
+  if (snapshot && usage?.initialPromptTokenCount !== undefined) {
+    snapshot.prompt_tokens = usage.initialPromptTokenCount;
+  }
+  return contextUsageFromCompletion(snapshot, contextWindow, true);
 }
