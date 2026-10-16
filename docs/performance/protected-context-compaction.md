@@ -812,3 +812,43 @@ Matrix source `783a3522c1d0ac36fa56e3bdb86cc4aee70b47ce` and final guarded sourc
 The selected matrix reports USD 0.916433. Across usable attempts, reported charges total USD 1.230976; 7 requests lack reported cost, and the unusable old receipt supplies no cost evidence. Overlapping case timings are recorded per case rather than added into a wall-clock claim.
 
 Free was attempted first; its over-issued write batch and path error stay unqualified. DeepSeek sometimes exhausted the fixed 4,000-token summary ceiling on reasoning. Genuine provider compaction endpoints, encrypted/signature/CLI and Claude Agent SDK lifecycle, visual benefit, installed/endurance and release acceptance remain unqualified. No full suite, remote CI, container/image build or release was dispatched.
+
+## Returned compaction and hosted-tool checkpoints — October 16, 2026
+
+The next existing #1091 review reproduced a native replay gap: the checkpoint
+validator accepted only reasoning, messages and function calls. A completed
+response containing a compaction or hosted-tool item lost its whole durable
+window. Replaying raw output also retained SDK-only parsed values and output
+provenance that do not belong in a later input request.
+
+Both Responses adapters now preserve known output kinds from the installed
+OpenAI SDK. The stored window stays exact; a separate replay copy uses the SDK's
+input conversion to remove output-only fields and omit items that cannot be
+replayed without changing their meaning. Unknown and input-only output kinds
+still use canonical fallback. Existing owner/prefix checks, integrity digests,
+size limits and tool-execution authority remain in force.
+
+The installed OpenRouter SDK accepts a compaction input but represents that
+returned output as `UNKNOWN` with its original payload in `raw`. The adapter
+restores only a recognized compaction item with an ID and nonempty opaque
+content. Malformed or unrelated unknown output remains ineligible for replay.
+
+The [frozen compatibility evidence](responses-returned-compaction-2026-10-16.json)
+binds source, harnesses, before/after failures and local qualification. Five new
+regressions fail on the prior main. All 137 focused checks across four affected
+suites, typecheck and lint pass on the repaired application inputs.
+
+The inspected non-container application/five-MCP build passes in 350.500 seconds
+on application source tree `129ddcece518bf67f8d9f87b1331687f613de62f`.
+Both real SDKs pass 56 emitted HTTP cases / 116 local requests, including
+streaming and three-turn lineage. The actual built app passes 14 checks over
+five application epochs / eight local requests: exact compaction bytes and
+hosted-search receipts after restart, clean replay fields, unchanged canonical
+messages, same-size corruption fallback and credential invalidation. Every
+owned epoch exits with drained pipes. These phases overlap; their measured
+durations in the receipt must not be added together. No inference is dispatched.
+
+This changes handling of returned output; it does not request a provider
+compaction endpoint or introduce a new tool. Synthetic protocol checks do not
+qualify genuine provider compaction, encrypted state, native SDK/CLI sessions,
+visual benefit, installed/endurance or release acceptance. #1091 remains open.

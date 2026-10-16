@@ -16,6 +16,14 @@ process.env.FLUJO_DATA_DIR = path.join(path.dirname(report), 'transport-profile'
 process.env.NEXT_TELEMETRY_DISABLED = '1';
 const require = createRequire(path.join(repo, 'package.json'));
 const hash = value => createHash('sha256').update(value).digest('hex');
+const expectedReplay = output => {
+  const items = structuredClone(output);
+  for (const item of items) {
+    delete item.created_by;
+    for (const part of item.content ?? []) delete part.parsed;
+  }
+  return items;
+};
 const evidence = { issue: 1091, startedUtc: new Date().toISOString(),
   kind: 'emitted-adapter-controlled-http', cases: [], requests: [], responses: [], providerCalls: 0,
   limits: ['Synthetic opaque strings and read-only tool history; no tool executes',
@@ -48,6 +56,9 @@ const server = createServer(async (request, outgoing) => {
     evidence.requests.push({ index, path: request.url, body });
     const output = [
       { type: 'reasoning', id: `fixture-reasoning-${index}`, summary: [], encrypted_content: `opaque-ñ-${index}-unchanged` },
+      { type: 'compaction', id: `fixture-compaction-${index}`, encrypted_content: `compact-ñ-${index}`,
+        created_by: 'output-only-provenance' },
+      { type: 'web_search_call', id: `fixture-search-${index}`, status: 'completed', action: { type: 'search', query: 'Bogotá' } },
       { type: 'message', id: `fixture-message-${index}`, status: 'completed', role: 'assistant', phase: 'commentary',
         content: [{ type: 'output_text', text: 'Checking.', annotations: [] }] },
       { type: 'function_call', id: `fixture-item-${index}`, status: 'completed', call_id: `fixture-call-${index}`,
@@ -56,7 +67,7 @@ const server = createServer(async (request, outgoing) => {
       { type: 'function_call', id: `fixture-item-tail-${index}`, status: 'completed', call_id: `fixture-call-tail-${index}`,
         name: 'read_status', arguments: '{"record":"current"}' },
       { type: 'message', id: `fixture-message-tail-${index}`, status: 'completed', role: 'assistant', phase: 'final_answer',
-        content: [{ type: 'output_text', text: 'Waiting.', annotations: [] }] },
+        content: [{ type: 'output_text', text: 'Waiting.', annotations: [], parsed: { sdkOnly: true } }] },
     ].filter(item => fixtureMode === 'plain-final' ? item.type === 'message'
       : fixtureMode === 'final' ? item.type !== 'function_call' : true);
     const response = { id: `fixture-response-${index}`, created_at: 1700000000, model: body.model,
@@ -121,7 +132,7 @@ try {
         assert.equal(evidence.requests.length, before + 2, 'Exactly two local HTTP requests; no retry');
         const carried = evidence.requests[before + 1].body.input.filter(item => item.type === 'reasoning');
         assert.equal(carried.length, reuse ? 2 : 0, `${name}/${streaming}/${change}`);
-        if (reuse) assert.deepEqual(evidence.requests[before + 1].body.input.slice(2, -2), evidence.responses[before].output,
+        if (reuse) assert.deepEqual(evidence.requests[before + 1].body.input.slice(2, -2), expectedReplay(evidence.responses[before].output),
           'SDK HTTP must preserve the complete native window, including interleaving, IDs, phases and aliases');
         evidence.cases.push({ adapter: name, streaming, change, reuse, outcome: 'passed', requestIndexes: [before, before + 1] });
       }
@@ -148,8 +159,8 @@ try {
         if (mode === 'incomplete') assert(!request.some(item => item.id || item.type === 'reasoning'));
         else {
           const first = evidence.responses[before].output;
-          assert.deepEqual(request.slice(1, 1 + first.length), first);
-          if (mode === 'three-turns') assert.deepEqual(request.slice(1 + first.length + 2, -3), evidence.responses[before + 1].output);
+          assert.deepEqual(request.slice(1, 1 + first.length), expectedReplay(first));
+          if (mode === 'three-turns') assert.deepEqual(request.slice(1 + first.length + 2, -3), expectedReplay(evidence.responses[before + 1].output));
         }
         assert.equal(JSON.stringify(input.messages), canonical, 'Replay must leave the canonical conversation intact');
         assert.equal(evidence.requests.length, before + (mode === 'three-turns' ? 3 : 2));

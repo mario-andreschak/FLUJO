@@ -593,6 +593,37 @@ describe('complete native output replay', () => {
     expect(JSON.stringify(saved)).not.toContain('sk-test');
   });
 
+  it.each([false, true])('replays compaction and hosted-tool output after restart with clean input fields (streaming=%s)', async streaming => {
+    const output = [
+      { type: 'compaction', id: 'compact-ñ', encrypted_content: 'EXACT\nCOMPACTED', created_by: 'output-provenance' },
+      { type: 'web_search_call', id: 'search-ñ', status: 'completed', action: { type: 'search', query: 'Bogotá' } },
+      ...nativeOutput(),
+    ];
+    (output.at(-1) as any).content[0].parsed = { local: 'SDK-only value' };
+    let saved: ResponsesSessionState | undefined;
+    const onResponsesSessionChange = (value: ResponsesSessionState | undefined) => { saved = value; };
+    const messages = history();
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+    const first = await call(model(), messages, { ...session, onResponsesSessionChange });
+    expect(saved?.records[0][1].nativeOutput).toEqual(output);
+    messages.push(first.completion.choices[0].message,
+      { role: 'tool', tool_call_id: 'call_a', content: 'Berlin: sunny' },
+      { role: 'tool', tool_call_id: 'call_b', content: 'Bogota: rain' });
+    __resetReasoningStore();
+    if (streaming) mockResponsesCreate.mockResolvedValueOnce((async function* () {
+      yield { type: 'response.completed', response: responseWithToolCall({ output: [] }) };
+    })());
+    await new OpenAiResponsesAdapter()[streaming ? 'createStreamCompletion' : 'createCompletion']({
+      model: model(), apiKey: 'sk-test', messages, ...session, responsesSession: saved, onResponsesSessionChange,
+    });
+    const expected = JSON.parse(JSON.stringify(output));
+    delete expected[0].created_by;
+    delete expected.at(-1).content[0].parsed;
+    expect((bodyOf(1).input as unknown[]).slice(1, 1 + output.length)).toEqual(expected);
+    expect(output[0]).toHaveProperty('created_by', 'output-provenance');
+    expect((output.at(-1) as any).content[0]).toHaveProperty('parsed');
+  });
+
   it.each(['connection', 'credential', 'node', 'conversation', 'prefix', 'policy', 'missing', 'corrupt', 'workspace'])(
     'uses canonical history after restart with an incompatible %s checkpoint', async change => {
       const output = nativeOutput();

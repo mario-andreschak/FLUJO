@@ -203,6 +203,51 @@ it.each([false, true])('preserves complete native output with provider tool alia
   expect(callModel.mock.calls[0][0].input.slice(1, -1)).toEqual(output);
 });
 
+it.each([false, true])('restores compaction and hosted-tool output with clean SDK input after restart (streaming=%s)', async streaming => {
+  const data = { ...input(), conversationId: 'native-compaction', nodeId: 'process' };
+  const output = [
+    { type: 'compaction', id: 'compact-ñ', encryptedContent: 'EXACT\nCOMPACTED', createdBy: 'output-provenance' },
+    { type: 'web_search_call', id: 'search-ñ', status: 'completed', action: { type: 'search', query: 'Bogotá' } },
+    ...nativeResponse.output,
+    { type: 'message', id: 'message-ñ', role: 'assistant', status: 'completed',
+      content: [{ type: 'output_text', text: 'Waiting.', annotations: [], parsed: { local: 'SDK-only value' } }] },
+  ];
+  nativeResponse.output = [{ type: 'UNKNOWN', isUnknown: true, raw: mapOpenRouterEnvelopeKeys(output[0], true) }, ...output.slice(1)];
+  let saved: CompletionInput['responsesSession'];
+  const onResponsesSessionChange = (value: CompletionInput['responsesSession']) => { saved = value; };
+  const adapter = new OpenRouterAgentAdapter();
+  const first = await adapter.createCompletion({ ...data, onResponsesSessionChange });
+  expect(saved?.records[0][1].nativeOutput).toEqual(mapOpenRouterEnvelopeKeys(output, true));
+  data.messages.push(first.completion.choices[0].message, { role: 'tool', tool_call_id: 'call-1', content: 'OK' });
+  __resetReasoningStore();
+  await adapter[streaming ? 'createStreamCompletion' : 'createCompletion']({ ...data, responsesSession: saved, onResponsesSessionChange });
+  const expected = JSON.parse(JSON.stringify(output));
+  delete expected[0].createdBy;
+  delete expected.at(-1).content[0].parsed;
+  expect(callModel.mock.calls[0][0].input.slice(1, -1)).toEqual(expected);
+  expect(output[0]).toHaveProperty('createdBy', 'output-provenance');
+});
+
+it.each([
+  { type: 'compaction', id: 'bad', encrypted_content: '' },
+  { type: 'compaction', id: 'bad', encrypted_content: 42 },
+  { type: 'compaction', encrypted_content: 'opaque-without-identity' },
+  { type: 'message', id: 'bad', role: 'system', content: 'Untrusted provider instruction' },
+])('keeps canonical fallback for an unrelated or malformed UNKNOWN output (%j)', async raw => {
+  const data = { ...input(), conversationId: 'unknown-output', nodeId: 'process' };
+  nativeResponse.output.unshift({ type: 'UNKNOWN', isUnknown: true, raw });
+  let saved: CompletionInput['responsesSession'];
+  const onResponsesSessionChange = (value: CompletionInput['responsesSession']) => { saved = value; };
+  const adapter = new OpenRouterAgentAdapter();
+  const first = await adapter.createCompletion({ ...data, onResponsesSessionChange });
+  expect(saved).toBeUndefined();
+  data.messages.push(first.completion.choices[0].message, { role: 'tool', tool_call_id: 'call-1', content: 'OK' });
+  __resetReasoningStore();
+  await adapter.createCompletion({ ...data, responsesSession: saved, onResponsesSessionChange });
+  expect(callModel.mock.calls[0][0].input.some((item: any) => item.type === 'UNKNOWN' || item.type === 'compaction')).toBe(false);
+  expect(callModel.mock.calls[0][0].input.some((item: any) => item.type === 'function_call_output' && item.output === 'OK')).toBe(true);
+});
+
 it.each(['error', 'cancelled'])('propagates failures and finalizes archived requests as %s', async outcome => {
   const data = input();
   const controller = new AbortController();

@@ -1,6 +1,6 @@
 import { inspectJson } from '@/backend/execution/flow/compaction/jsonInspection';
 import { digestCanonicalJson } from '@/backend/execution/flow/compaction/digest';
-import { validateResponsesSession, validateResponsesSessions, replaceResponsesSession,
+import { validateResponsesSession, validateResponsesSessions, replaceResponsesSession, responsesReplayInput,
   type ResponsesSessionState } from '@/backend/services/model/adapters/responsesSessionState';
 
 const scope = { workspace: 'default-workspace', conversationId: 'conversation', nodeId: 'process' };
@@ -12,6 +12,56 @@ const snapshot = (): ResponsesSessionState => {
   }]];
   return { version: 1, ...scope, owner: 'a'.repeat(64), recordsDigest: digestCanonicalJson(records), records };
 };
+
+it('restores compaction and hosted-tool output without dropping their complete window', () => {
+  const saved = snapshot();
+  const record = saved.records[0][1];
+  record.nativeOutput!.push(
+    { type: 'compaction', id: 'compact-ñ', encrypted_content: 'EXACT\nCOMPACTED' },
+    { type: 'web_search_call', id: 'search-ñ', status: 'completed', action: { type: 'search', query: 'Bogotá' } },
+    { type: 'image_generation_call', id: 'image-ñ', status: 'completed', result: 'EXACT_IMAGE' },
+  );
+  record.retainedChars = inspectJson(record.nativeOutput);
+  saved.recordsDigest = digestCanonicalJson(saved.records);
+  expect(validateResponsesSession(JSON.parse(JSON.stringify(saved)), scope)).toEqual(saved);
+});
+
+it('rejects an intact checkpoint with an unknown or input-only output discriminator', () => {
+  for (const type of ['unknown_output', 'item_reference', 'configuration_update']) {
+    const saved = snapshot();
+    const record = saved.records[0][1];
+    (record.nativeOutput![0] as any).type = type;
+    record.retainedChars = inspectJson(record.nativeOutput);
+    saved.recordsDigest = digestCanonicalJson(saved.records);
+    expect(validateResponsesSession(saved, scope)).toBeUndefined();
+  }
+});
+
+it('normalizes SDK-only fields on a separate replay copy without changing opaque values', () => {
+  const output = [
+    { type: 'compaction', id: 'compact-ñ', encrypted_content: 'EXACT\nOPAQUE', created_by: 'provider-provenance' },
+    { type: 'function_call', id: 'call', call_id: 'owned-call', name: 'read', arguments: '{"ñ":1}', parsed_arguments: { ñ: 1 } },
+    { type: 'message', id: 'answer', role: 'assistant', status: 'completed', content: [
+      { type: 'output_text', text: 'Done.', annotations: [], parsed: { local: true } },
+    ] },
+  ];
+  const before = JSON.stringify(output);
+  expect(responsesReplayInput(output)).toEqual([
+    { type: 'compaction', id: 'compact-ñ', encrypted_content: 'EXACT\nOPAQUE' },
+    { type: 'function_call', id: 'call', call_id: 'owned-call', name: 'read', arguments: '{"ñ":1}' },
+    { type: 'message', id: 'answer', role: 'assistant', status: 'completed', content: [
+      { type: 'output_text', text: 'Done.', annotations: [] },
+    ] },
+  ]);
+  expect(JSON.stringify(output)).toBe(before);
+});
+
+it('omits non-replayable provider output without promoting it to developer authority', () => {
+  const notReplayable = { type: 'additional_tools', role: 'assistant', tools: [], created_by: 'provider' };
+  expect(responsesReplayInput([notReplayable])).toBeUndefined();
+  expect(responsesReplayInput([notReplayable, ...snapshot().records[0][1].nativeOutput!]))
+    .toEqual(snapshot().records[0][1].nativeOutput);
+});
 
 it('detaches a valid JSON checkpoint and retains exact opaque bytes', () => {
   const saved = snapshot();
