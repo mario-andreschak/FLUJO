@@ -2922,15 +2922,20 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             const lastAssistantMsg = sharedState.handoffRequested
               ? findStagedHandoffAssistant(sharedState)
               : [...sharedState.messages].reverse().find((message) => message.role === 'assistant');
+            // A later deterministic edge can follow a completed handoff turn,
+            // for example when a user resumes after Finish. Its existing result
+            // must not be duplicated or its old caller brief captured again.
+            const answeredCallIds = new Set(sharedState.messages
+              .filter((message) => message.role === 'tool')
+              .map((message) => message.tool_call_id));
             const handoffCallsForBoundary = lastAssistantMsg?.role === 'assistant'
-              ? requireFunctionToolCalls(lastAssistantMsg.tool_calls).filter(isHandoffToolCall)
+              ? requireFunctionToolCalls(lastAssistantMsg.tool_calls).filter(
+                  (call) => isHandoffToolCall(call) && !answeredCallIds.has(call.id),
+                )
               : undefined;
 
-            if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
-              const allHandoffCalls = lastAssistantMsg.tool_calls.filter(tc =>
-                tc.type === 'function' &&
-                (tc.function.name === 'handoff' || tc.function.name.startsWith('handoff_to_'))
-              );
+            if (handoffCallsForBoundary?.length) {
+              const allHandoffCalls = handoffCallsForBoundary ?? [];
               // Spawn-with-brief (issue #156): the routing model may call the SAME
               // handoff tool several times in one turn — each call is one spawned
               // lane of the target sub-agent, briefed by its `task` argument. So
