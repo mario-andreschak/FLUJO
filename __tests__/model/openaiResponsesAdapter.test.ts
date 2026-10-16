@@ -554,6 +554,145 @@ describe('reasoning ownership and projection invalidation (#1091)', () => {
   });
 });
 
+describe('complete native output replay', () => {
+  const nativeOutput = () => [
+    { type: 'reasoning', id: 'rs_a', summary: [], encrypted_content: 'OPAQUE_ñ_A' },
+    { type: 'message', id: 'msg_a', role: 'assistant', phase: 'commentary',
+      content: [{ type: 'output_text', text: 'Checking.', annotations: [] }] },
+    { type: 'function_call', id: 'fc_a', call_id: 'call_a', name: 'get_weather', arguments: '{"city":"Berlin"}' },
+    { type: 'reasoning', id: 'rs_b', summary: [], encrypted_content: 'OPAQUE_ñ_B' },
+    { type: 'function_call', id: 'fc_b', call_id: 'call_b', name: 'get_weather', arguments: '{"city":"Bogota"}' },
+    { type: 'message', id: 'msg_b', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text: 'Please wait.', annotations: [] }] },
+  ];
+  const session = { conversationId: 'complete-window', nodeId: 'weather' };
+  const history = (): OpenAI.ChatCompletionMessageParam[] => [{ role: 'user', content: 'Compare both cities.' }];
+
+  it.each([false, true])('replays exact interleaved items, IDs and phases (streaming=%s)', async streaming => {
+    const output = nativeOutput();
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+    const messages = history();
+    const first = await call(model(), messages, session);
+    messages.push(first.completion.choices[0].message,
+      { role: 'tool', tool_call_id: 'call_a', content: 'Berlin: sunny' },
+      { role: 'tool', tool_call_id: 'call_b', content: 'Bogota: rain' });
+    if (streaming) mockResponsesCreate.mockResolvedValueOnce((async function* () {
+      yield { type: 'response.completed', response: responseWithToolCall({ output: [] }) };
+    })());
+    await new OpenAiResponsesAdapter()[streaming ? 'createStreamCompletion' : 'createCompletion']({
+      model: model(), apiKey: 'sk-test', messages, ...session,
+    });
+    expect((bodyOf(1).input as unknown[]).slice(1, 1 + output.length)).toEqual(output);
+    expect((bodyOf(1).input as unknown[]).slice(1 + output.length)).toEqual([
+      { type: 'function_call_output', call_id: 'call_a', output: 'Berlin: sunny' },
+      { type: 'function_call_output', call_id: 'call_b', output: 'Bogota: rain' },
+    ]);
+  });
+
+  it.each([false, true])('keeps final-answer output without a tool anchor (reasoning=%s)', async reasoning => {
+    const output = nativeOutput().filter(item => item.type === 'message' || (reasoning && item.type === 'reasoning'));
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+    const messages = history();
+    const first = await call(model(), messages, session);
+    messages.push(first.completion.choices[0].message, { role: 'user', content: 'Continue.' });
+    await call(model(), messages, session);
+    expect((bodyOf(1).input as unknown[]).slice(1, -1)).toEqual(output);
+  });
+
+  it('preserves both native windows and the intervening tool results over three turns', async () => {
+    const firstOutput = nativeOutput();
+    const secondOutput = nativeOutput().map(item => ({ ...item, id: item.id + '_2',
+      ...('call_id' in item ? { call_id: item.call_id + '_2' } : {}) }));
+    const messages = history();
+    for (const output of [firstOutput, secondOutput]) {
+      mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+      const turn = await call(model(), messages, session);
+      messages.push(turn.completion.choices[0].message);
+      for (const item of output) if ('call_id' in item) messages.push({ role: 'tool',
+        tool_call_id: item.call_id!, content: 'Read-only result ' + item.call_id });
+    }
+    await call(model(), messages, session);
+    const input = bodyOf(2).input as { type?: string }[];
+    expect(input.slice(1, 1 + firstOutput.length)).toEqual(firstOutput);
+    expect(input.slice(1 + firstOutput.length + 2, -2)).toEqual(secondOutput);
+    expect(input.filter(item => item.type === 'function_call_output')).toHaveLength(4);
+  });
+
+  it('uses canonical fallback for an incomplete native response', async () => {
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' } }));
+    const messages = history();
+    const first = await call(model(), messages, session);
+    messages.push(first.completion.choices[0].message);
+    await call(model(), messages, session);
+    expect((bodyOf(1).input as { type?: string }[]).some(item => item.type === 'reasoning')).toBe(false);
+  });
+
+  it('invalidates a descendant when a late sibling replaces native input with identical canonical text', async () => {
+    const messages = history();
+    const racing = prepareResponsesReasoning({ model: model(), apiKey: 'sk-test', messages, ...session }, 'openai-responses');
+    const output = nativeOutput();
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+    const first = await call(model(), messages, session);
+    messages.push(first.completion.choices[0].message,
+      { role: 'tool', tool_call_id: 'call_a', content: 'A' },
+      { role: 'tool', tool_call_id: 'call_b', content: 'B' });
+    const secondOutput = [{ type: 'reasoning', id: 'rs_child', summary: [], encrypted_content: 'CHILD' },
+      { type: 'message', id: 'msg_child', role: 'assistant', phase: 'final_answer',
+        content: [{ type: 'output_text', text: 'Done.' }] }];
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output: secondOutput }));
+    const second = await call(model(), messages, session);
+    messages.push(second.completion.choices[0].message, { role: 'user', content: 'Continue.' });
+    const replacement = output.map(item => ({ ...item, id: item.id + '_replacement' }));
+    const translated = fromResponse(responseWithToolCall({ output: replacement }) as never, model().name);
+    racing.remember(translated.completion, translated.reasoning, replacement as never);
+    await call(model(), messages, session);
+    const replay = bodyOf(2).input as { id?: string; type?: string; content?: unknown }[];
+    expect(replay.slice(1, 1 + replacement.length)).toEqual(replacement);
+    expect(replay.some(item => item.id === 'rs_child' || item.id === 'msg_child')).toBe(false);
+    expect(replay).toContainEqual({ role: 'assistant', content: 'Done.' });
+  });
+
+  it('owns a snapshot of provider output and does not mutate the canonical conversation', async () => {
+    const output = nativeOutput();
+    const expected = structuredClone(output);
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+    const messages = history();
+    const first = await call(model(), messages, session);
+    messages.push(first.completion.choices[0].message);
+    const canonical = structuredClone(messages);
+    output[0].encrypted_content = 'MUTATED';
+    await call(model(), messages, session);
+    expect((bodyOf(1).input as unknown[]).slice(1)).toEqual(expected);
+    expect(messages).toEqual(canonical);
+  });
+
+  it('falls back when one native window exceeds the disposable cache bound', async () => {
+    const output = nativeOutput();
+    output[0].encrypted_content = 'x'.repeat(1024 * 1024);
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+    const messages = history();
+    const first = await call(model(), messages, session);
+    messages.push(first.completion.choices[0].message);
+    await call(model(), messages, session);
+    expect(bodyOf(1).input).toEqual(toResponsesInput(messages));
+  });
+
+  it('invalidates dependent windows after total cache eviction', async () => {
+    const messages = history();
+    for (let round = 0; round < 2; round++) {
+      const output = [{ type: 'reasoning', id: 'large-' + round, summary: [], encrypted_content: 'x'.repeat(600_000) },
+        { type: 'message', id: 'message-' + round, role: 'assistant', phase: 'final_answer',
+          content: [{ type: 'output_text', text: 'Round ' + round }] }];
+      mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+      const result = await call(model(), messages, session);
+      messages.push(result.completion.choices[0].message, { role: 'user', content: 'Continue.' });
+    }
+    await call(model(), messages, session);
+    expect(bodyOf(2).input).toEqual(toResponsesInput(messages));
+  });
+});
+
 describe('native Responses streaming', () => {
   it('forwards output text and function arguments before returning the final response', async () => {
     async function* events() {
