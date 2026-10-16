@@ -294,7 +294,7 @@ describe('runtime compaction policy settings', () => {
       const next = state.compactionState!.artifacts.at(-1)!;
       expect(next.artifactId).not.toBe(original.artifactId);
       expect(next.sourceDigest).toBe(original.sourceDigest);
-      expect(next.policyVersion).toBe('summary-v6-source-spans');
+      expect(next.policyVersion).toBe('summary-v7-authority');
       expect(next.schemaVersion).toBe(1);
       expect(source[0].content).toBe('Never publish.');
     },

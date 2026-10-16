@@ -767,6 +767,35 @@ describe('complete native output replay', () => {
 });
 
 describe('native Responses streaming', () => {
+  it.each(['max_output_tokens', 'content_filter'])('retains an incomplete terminal response (%s) without caching native output', async reason => {
+    const output = [{ type: 'message', id: 'partial-message', role: 'assistant',
+      content: [{ type: 'output_text', text: 'Partial answer' }] }];
+    let session: ResponsesSessionState | undefined;
+    const scope = { conversationId: 'incomplete-stream', nodeId: 'node' };
+    const messages: OpenAI.ChatCompletionMessageParam[] = [{ role: 'user', content: 'Check the weather.' }];
+    const first = await call(model(), messages, { ...scope,
+      onResponsesSessionChange: (state: ResponsesSessionState | undefined) => { session = state; } });
+    expect(session?.records.length).toBeGreaterThan(0);
+    const before = structuredClone(session);
+    messages.push(first.completion.choices[0].message, { role: 'tool', tool_call_id: 'call_abc', content: 'Sunny.' },
+      { role: 'user', content: 'Continue.' });
+    const changed = jest.fn();
+    const delta = jest.fn();
+    mockResponsesCreate.mockResolvedValueOnce((async function* () {
+      yield { type: 'response.output_text.delta', delta: 'Partial answer' };
+      yield { type: 'response.incomplete', response: responseWithToolCall({ status: 'incomplete',
+        incomplete_details: { reason }, output }) };
+    })());
+    const result = await new OpenAiResponsesAdapter().createStreamCompletion({ model: model(), apiKey: 'sk-test',
+      messages, temperature: 0, ...scope,
+      responsesSession: session, onResponsesSessionChange: changed, onModelDelta: delta });
+    expect(result.completion.choices[0].message.content).toBe('Partial answer');
+    expect(result.completion.choices[0].finish_reason).toBe(reason === 'max_output_tokens' ? 'length' : 'content_filter');
+    expect(result.completion.usage?.completion_tokens).toBe(40);
+    expect(delta).toHaveBeenCalledWith(expect.objectContaining({ contentDelta: 'Partial answer' }));
+    expect(session).toEqual(before);
+    for (const [published] of changed.mock.calls) expect(published).toEqual(before);
+  });
   it('forwards output text and function arguments before returning the final response', async () => {
     async function* events() {
       yield {
