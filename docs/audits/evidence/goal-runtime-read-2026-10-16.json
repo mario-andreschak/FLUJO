@@ -1,0 +1,294 @@
+{
+  "schema": "flujo-maintenance-evidence/v1",
+  "recordedUtc": "2026-10-16T21:19:33.2706819Z",
+  "pullRequest": 1198,
+  "relatedIssue": 505,
+  "scope": "Guarded owner-local read access to existing native Goal runtime evidence",
+  "status": "locally-qualified",
+  "inputs": {
+    "originalPrHead": "746c5959c821d3f1cc7615906a029cd223726a5d",
+    "currentMain": "3c7c25257ef3a4a0147821afe5fc1362d4f81755",
+    "applicationSourceTree": "c66ebd4ed6571bf404600e2d8d0dcd19384af041",
+    "packageLockSha256": "00a0aa4044199f6337f95e6b0c910e1c851667853675f7563861328b9cd0210b",
+    "harness": "scripts/persona-goal-runtime-read-acceptance.mjs",
+    "harnessSha256": "845bd79cc779a750eea9a002c5602ac8ea2c9142edd556367979444ef298f999",
+    "buildId": "2xKrU01Qnf0APgJD9GkTK"
+  },
+  "sourceReview": {
+    "conflictResolution": "Retain the complete current-main CIMD guide, including its qualified acceptance. OAuth changes disappear from the effective PR diff.",
+    "regression": "The original route returns HTTP 503 for a foreign legacy WorkItem because the actual shard reader rejects its identity. Reproduced with expected 404 / actual 503 before repair.",
+    "repair": "Preserve storage identity validation and its error message; give its refusal a distinct type. Only the initial root lookup translates that refusal into the same private 404 as missing/child/task/foreign roots. Native lineage errors and malformed storage retain generic 503.",
+    "authority": "Reuse owner/workspace admission, strict loopback and encryption lock. Delegate the actual projection, join and drift decisions to readPersonaGoalRuntime. No work/control/provider authority is added."
+  },
+  "beforeRepair": {
+    "failed": 1,
+    "passed": 8,
+    "source": "__tests__/api/personaGoalRuntimeRoute.test.ts",
+    "case": "hides a foreign legacy Goal rejected by the actual storage reader",
+    "expectedHttp": 404,
+    "actualHttp": 503,
+    "actualStorageReader": true
+  },
+  "focusedRegressions": {
+    "total": 32,
+    "passed": 32,
+    "failed": 0,
+    "suites": [
+      {
+        "source": "__tests__/enduringAgents/goalRuntimeRead.test.ts",
+        "status": "passed",
+        "checks": [
+          {
+            "title": "denies absent, foreign and child Goal roots before reading runtime records",
+            "status": "passed"
+          },
+          {
+            "title": "distinguishes registered, reserved and mailbox queued from accepted execution",
+            "status": "passed"
+          },
+          {
+            "title": "reports joined running and terminal evidence, projecting no private fields",
+            "status": "passed"
+          },
+          {
+            "title": "keeps partial pending evidence unverified",
+            "status": "passed"
+          },
+          {
+            "title": "keeps foreign workspace evidence unverified",
+            "status": "passed"
+          },
+          {
+            "title": "keeps wrong task evidence unverified",
+            "status": "passed"
+          },
+          {
+            "title": "keeps wrong mailbox evidence unverified",
+            "status": "passed"
+          },
+          {
+            "title": "keeps wrong Activity evidence unverified",
+            "status": "passed"
+          },
+          {
+            "title": "keeps wrong lease evidence unverified",
+            "status": "passed"
+          },
+          {
+            "title": "does not verify historical missing dispatch after pending clears",
+            "status": "passed"
+          },
+          {
+            "title": "does not verify historical queued dispatch without mailbox after pending clears",
+            "status": "passed"
+          },
+          {
+            "title": "does not verify historical queued dispatch and mailbox after pending clears",
+            "status": "passed"
+          },
+          {
+            "title": "does not verify reserved when current pending clears during the read",
+            "status": "passed"
+          },
+          {
+            "title": "does not verify queued when current pending clears during the read",
+            "status": "passed"
+          },
+          {
+            "title": "does not treat a cleared pending round without its saved event as accepted",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "source": "__tests__/enduringAgents/directoryShardingMigration.test.ts",
+        "status": "passed",
+        "checks": [
+          {
+            "title": "Enduring Agent Persona directory sharding writes, reads, and deletes a Persona-owned record in its shard",
+            "status": "passed"
+          },
+          {
+            "title": "Enduring Agent Persona directory sharding falls back to a flat record but fails closed for the wrong Persona",
+            "status": "passed"
+          },
+          {
+            "title": "Enduring Agent Persona directory sharding migrates all five collections and is idempotent",
+            "status": "passed"
+          },
+          {
+            "title": "Enduring Agent Persona directory sharding rejects conflicting flat and sharded copies without removing either",
+            "status": "passed"
+          },
+          {
+            "title": "Enduring Agent Persona directory sharding refuses a shard replaced after the directory and item were checked",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "source": "__tests__/api/personaGoalRuntimeRoute.test.ts",
+        "status": "passed",
+        "checks": [
+          {
+            "title": "holds transport and lock failures before any native read",
+            "status": "passed"
+          },
+          {
+            "title": "hides missing, foreign and non-root Goals: null",
+            "status": "passed"
+          },
+          {
+            "title": "hides missing, foreign and non-root Goals: {\"goal\": [Object], \"id\": \"goal_one\", \"personaId\": \"persona_other\"}",
+            "status": "passed"
+          },
+          {
+            "title": "hides missing, foreign and non-root Goals: {\"goal\": [Object], \"id\": \"goal_one\", \"parentGoalId\": \"goal_parent\", \"personaId\": \"persona_owner\"}",
+            "status": "passed"
+          },
+          {
+            "title": "hides missing, foreign and non-root Goals: {\"goal\": undefined, \"id\": \"goal_one\", \"personaId\": \"persona_owner\"}",
+            "status": "passed"
+          },
+          {
+            "title": "rejects invalid IDs without reading storage",
+            "status": "passed"
+          },
+          {
+            "title": "hides a foreign legacy Goal rejected by the actual storage reader",
+            "status": "passed"
+          },
+          {
+            "title": "hides a foreign sharded Goal rejected by the actual storage reader",
+            "status": "passed"
+          },
+          {
+            "title": "keeps malformed storage unavailable without returning its contents",
+            "status": "passed"
+          },
+          {
+            "title": "returns the engine projection without promoting unverified evidence",
+            "status": "passed"
+          },
+          {
+            "title": "holds an engine/read failure without returning raw storage or error text: [Error: private-runtime-context]",
+            "status": "passed"
+          },
+          {
+            "title": "holds an engine/read failure without returning raw storage or error text: [PersonaShardIdentityError: Persona record \"private-child\" does not match requested Persona \"private-persona\".]",
+            "status": "passed"
+          }
+        ]
+      }
+    ],
+    "runnerReportedSeconds": 2.409
+  },
+  "localValidation": {
+    "typecheck": {
+      "command": "npm run typecheck",
+      "seconds": 11.0761259,
+      "exitCode": 0
+    },
+    "sourceLint": {
+      "command": "eslint src and changed route regression",
+      "seconds": 98.3824735,
+      "exitCode": 0
+    },
+    "finalChangedSourceTestsAndHarnessLint": {
+      "status": "passed",
+      "command": "eslint src/app/v1/personas/[personaId]/work-items/[workItemId]/runtime/route.ts __tests__/api/personaGoalRuntimeRoute.test.ts scripts/persona-goal-runtime-read-acceptance.mjs --max-warnings=0"
+    },
+    "nonContainerApplicationAndFiveMcpBuild": {
+      "command": "npm run build",
+      "seconds": 346.2524228,
+      "exitCode": 0
+    },
+    "timingNote": "Measured elapsed seconds; phases overlap and are not additive. Final typecheck reuses valid incremental cache from the earlier full typecheck."
+  },
+  "builtHttp": {
+    "timing": {
+      "command": "actual built Goal runtime HTTP acceptance",
+      "seconds": 14.6567079,
+      "exitCode": 0
+    },
+    "result": {
+      "pr": 1198,
+      "startedUtc": "2026-10-16T21:18:26.686Z",
+      "head": "746c5959c821d3f1cc7615906a029cd223726a5d",
+      "candidateTree": "2a57915b92335d003032f8ed97a83cbccf4f0bb3",
+      "applicationSourceTree": "c66ebd4ed6571bf404600e2d8d0dcd19384af041",
+      "buildId": "2xKrU01Qnf0APgJD9GkTK",
+      "cases": [
+        "Missing owner authorization is refused before reading runtime",
+        "OpenAI read scope does not grant local control-plane access",
+        "Foreign origins and forwarded non-loopback peers are refused",
+        "Actual engine projection preserves identity, registration semantics, privacy and no-store caching",
+        "Matching legacy root Goals remain readable",
+        "Incomplete native lineage remains explicitly unverified",
+        "Missing, invalid, child, task and foreign flat/sharded Goals share the same private 404",
+        "Malformed storage returns a generic uncached 503",
+        "Unknown and invalid workspaces remain behind ordinary workspace admission",
+        "The same Persona/Goal IDs resolve only inside the selected workspace",
+        "HEAD returns no runtime body",
+        "The read endpoint admits no POST control operation",
+        "A real process restart retains the USER encryption lock",
+        "Owner unlock recovers the identical native read after restart",
+        "Network exposure cannot turn a spoofed localhost Host into local reader authority",
+        "Every controlled WorkItem byte remains unchanged after all reads and restarts"
+      ],
+      "epochs": [
+        {
+          "pid": 50852,
+          "startedAt": "2026-10-16T21:18:26.817Z",
+          "exitedAt": "2026-10-16T21:18:34.464Z",
+          "closedAt": "2026-10-16T21:18:34.464Z",
+          "ioDrainedAt": "2026-10-16T21:18:34.449Z",
+          "completedAt": "2026-10-16T21:18:34.464Z",
+          "exitCode": 143,
+          "signal": null,
+          "forcedStop": false,
+          "processError": null
+        },
+        {
+          "pid": 41596,
+          "startedAt": "2026-10-16T21:18:34.468Z",
+          "exitedAt": "2026-10-16T21:18:37.687Z",
+          "closedAt": "2026-10-16T21:18:37.687Z",
+          "ioDrainedAt": "2026-10-16T21:18:37.672Z",
+          "completedAt": "2026-10-16T21:18:37.687Z",
+          "exitCode": 143,
+          "signal": null,
+          "forcedStop": false,
+          "processError": null
+        },
+        {
+          "pid": 51540,
+          "startedAt": "2026-10-16T21:18:37.691Z",
+          "exitedAt": "2026-10-16T21:18:40.63Z",
+          "closedAt": "2026-10-16T21:18:40.63Z",
+          "ioDrainedAt": "2026-10-16T21:18:40.615Z",
+          "completedAt": "2026-10-16T21:18:40.63Z",
+          "exitCode": 143,
+          "signal": null,
+          "forcedStop": false,
+          "processError": null
+        }
+      ],
+      "providerCalls": 0,
+      "limits": [
+        "Actual built HTTP with controlled persisted WorkItems; no native round or business outcome is fabricated",
+        "No provider, browser/UI, installed, endurance, full CI or release acceptance"
+      ],
+      "success": true,
+      "finishedUtc": "2026-10-16T21:18:40.634Z"
+    }
+  },
+  "limits": [
+    "Controlled persisted WorkItems exercise actual built HTTP, guards, native projection and process restart; no genuine native round, child producer or business outcome is claimed.",
+    "No inference/provider call, public external effect, browser/phone UI, installed profile, endurance or release acceptance.",
+    "Full/remote CI and container/image builds remain release-preflight only; no workflows dispatched.",
+    "Issue #505 remains open for its documented broader Native/real-model/unattended acceptance.",
+    "Only approved OpenRouter Free/DeepSeek/Luna/Haiku routes may be used in future credit-spending work; earlier issue history grants no exception."
+  ],
+  "providerCalls": 0
+}
