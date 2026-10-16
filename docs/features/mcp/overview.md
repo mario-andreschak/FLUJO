@@ -23,3 +23,7 @@ controls and does not invoke a model or tool for you.
 Local servers run as processes with the host user's permissions. Installing a repository can execute its installation/build scripts. A remote server receives requests at its configured URL. Tool approvals help review actions but do not turn arbitrary local processes into a sandbox.
 
 Use [local server setup](local-servers.md), [GitHub server setup](github-servers.md), or [launch-and-connect](launch-and-connect.md) for the relevant transport. See [MCP Apps](apps.md) for the separate sandbox origin used by interactive interfaces.
+
+For remote OAuth sign-in, FLUJO prefers [CIMD client metadata](oauth-cimd.md),
+with DCR retained for compatibility. The default document is hosted on GitHub Pages
+at `flujo.com.co`; custom addresses can publish their own document.

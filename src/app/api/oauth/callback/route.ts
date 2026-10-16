@@ -5,7 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
-import { createOAuthClientProvider, matchesOAuthState } from '@/backend/services/mcp/oauth';
+import { createOAuthClientProvider, matchesOAuthState, oauthStateWorkspace } from '@/backend/services/mcp/oauth';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { requestOrigin } from '@/utils/http/requestOrigin';
 
@@ -170,6 +170,16 @@ async function handleWorkspaceCallback(
   });
 }
 
+/** Select only an existing workspace; validation inside the route remains authoritative. */
+function callbackRequest(request: NextRequest, state: string | null): NextRequest {
+  const workspace = oauthStateWorkspace(state);
+  if (!workspace || new URL(request.url).searchParams.has('workspace')
+      || request.headers.has('x-flujo-workspace')) return request;
+  const headers = new Headers(request.headers);
+  headers.set('x-flujo-workspace', workspace);
+  return new NextRequest(request, { headers });
+}
+
 /** GET callback - the form most authorization servers use. */
 async function GET_handler(request: NextRequest) {
   try {
@@ -210,5 +220,17 @@ async function POST_handler(request: NextRequest) {
   }
 }
 
-export const GET = withWorkspaceRoute(GET_handler);
-export const POST = withWorkspaceRoute(POST_handler);
+const workspaceGET = withWorkspaceRoute(GET_handler);
+const workspacePOST = withWorkspaceRoute(POST_handler);
+
+export async function GET(request: NextRequest) {
+  return workspaceGET(callbackRequest(request, new URL(request.url).searchParams.get('state')));
+}
+
+export async function POST(request: NextRequest) {
+  // Read a clone so the guarded handler can still consume the original form.
+  let state: string | null = null;
+  try { state = (await request.clone().formData()).get('state')?.toString() ?? null; }
+  catch { /* The existing handler returns the malformed-request response. */ }
+  return workspacePOST(callbackRequest(request, state));
+}

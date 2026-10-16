@@ -558,7 +558,7 @@ describe('McpAiConnectionPanel', () => {
     await waitFor(() => expect(onInstalled).toHaveBeenCalledWith('search'));
   });
 
-  it('does not render an Authorization credential field for an OAuth DCR recommendation', async () => {
+  it.each(['oauth-cimd', 'oauth-dcr'] as const)('does not request an Authorization credential for an %s recommendation', async authMode => {
     const dcrPlan = {
       ...reviewedPlan,
       registryName: 'com.paypal.mcp/mcp',
@@ -581,7 +581,7 @@ describe('McpAiConnectionPanel', () => {
         title: 'PayPal',
         plan: dcrPlan,
         config: { name: 'paypal', transport: 'streamable', serverUrl: dcrPlan.serverUrl, headers: {} },
-        authMode: 'oauth-dcr',
+        authMode,
         requiredInputs: [],
         alternateTransports: ['streamable'],
       }],
@@ -613,7 +613,7 @@ describe('McpAiConnectionPanel', () => {
     await waitFor(() => expect(installMcpRecommendationMock).toHaveBeenCalledWith(expect.objectContaining({
       serverName: 'paypal',
       inputs: {},
-      authMode: 'oauth-dcr',
+      authMode,
     })));
   });
 });
