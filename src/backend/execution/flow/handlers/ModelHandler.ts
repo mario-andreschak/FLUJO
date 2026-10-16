@@ -602,6 +602,20 @@ export class ModelHandler {
         artifact.policyVersion === COMPACTION_POLICY_VERSION &&
         artifact.modelId === model.id
       );
+      if (model.adapter === 'openai-responses' || model.adapter === 'openrouter-agent') {
+        const requestIndex = source.findLastIndex(message => message.role === 'user' && (message.depth ?? 0) === 0);
+        const request = source[requestIndex];
+        const usingCurrentSummary = request?.id && reusableArtifact?.requestDigest === digestProjectedMessages([request]);
+        const continuingTools = source.slice(requestIndex + 1).some(message => message.role === 'assistant'
+          && (message.depth ?? 0) === 0 && message.tool_calls?.length
+          && (message.processNodeId === undefined || nodeId === undefined || message.processNodeId === nodeId));
+        // A rejected summary (or a newly crossed threshold) can leave the first
+        // native call on canonical history. Preserve that prefix through its
+        // tool results; introducing a summary now would invalidate exact output
+        // replay. A new user request can compact again. Existing refit/capacity
+        // checks still apply to the unmodified fallback.
+        if (continuingTools && !usingCurrentSummary) return null;
+      }
       const split = selectCompactionSplit(source, eff.keepTokens, reusableArtifact);
       const sourceDigest = digestProjectedMessages([...split.leadingSystem, ...split.toSummarize]);
 
