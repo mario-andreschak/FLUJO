@@ -700,3 +700,48 @@ describes complete output replay; this repair covers the existing bounded
 tool-anchored reasoning cache. These results do not establish durable native compaction windows,
 provider signatures, every resolved backend behind a router/alias, CLI session
 resume, visual benefit or release acceptance. Those #1091 criteria stay open.
+
+## Complete Responses output replay
+
+The next existing #1091 repair addresses reconstruction of native output. Six
+new regressions fail before repair: interleaved reasoning moves ahead of all
+calls, native message IDs/phases disappear, final answers have no tool anchor,
+and incomplete output can enter the reasoning cache. The
+[Responses state contract](https://developers.openai.com/api/docs/guides/conversation-state)
+requires preserving the complete output array for stateless continuation.
+
+Both Responses SDK adapters now retain the complete output of completed
+responses whose assistant projection exists in canonical history. On unchanged
+continuations, that window replaces the synthetic Chat Completion projection
+at its original boundary. Reasoning, assistant messages, refusals, function
+items, IDs, phases and their original order stay together. Tool results remain
+separate and retain their original call IDs. Provider aliases remain in native
+items while the conversation keeps canonical tool names. Final answers can
+carry a window without a function-call anchor.
+
+Reuse requires the captured route/authority owner, exact canonical source and
+assistant projection, plus the normalized native input that produced the
+window. A late sibling can return the same text with different native IDs;
+dependent windows then invalidate. Eviction also invalidates windows whose
+native ancestors are missing. Incomplete/failed responses do not enter this
+cache. The returned output is cloned; replay never mutates canonical history.
+
+The existing 200-session/workspace and 64-window/session bounds now also cap
+retained output at 1,048,576 serialized JSON UTF-16 code units per session.
+Oversized windows are skipped and older windows are evicted. This optional,
+process-local cache falls back to the complete canonical projection on misses,
+rewrites, owner changes, eviction or restart. It is not durable native
+compaction/session storage and does not introduce a compaction endpoint.
+
+The [frozen full-output evidence](responses-output-replay-2026-10-16.json)
+records 100 focused checks, local typecheck/lint and the non-container build on
+source tree `5eee4cbf2caa95a1c2124664a5b44f3999bf7ad2`. Fifty-six emitted HTTP
+cases / 116 loopback requests verify exact windows through both SDKs and
+streaming modes, provider aliases, rewrite/configuration fallback, final
+answers, incomplete responses and three-turn lineage. Six genuine Super Free
+turns through the same emitted adapters perform four exact replays of actual
+returned output and preserve the exact supplied receipt. No tool executes.
+The provider returns no encrypted items; synthetic encrypted strings qualify
+controlled replay only. Durable native compaction, real provider signatures,
+CLI resume, broader semantic/provider coverage and release acceptance remain
+open in #1091.

@@ -162,6 +162,26 @@ it.each(['model', 'credential', 'tools', 'source'])('invalidates shared opaque s
   expect(callModel.mock.calls[0][0].input.some((item: { type: string }) => item.type === 'reasoning')).toBe(false);
 });
 
+it.each([false, true])('preserves complete native output with provider tool aliases (streaming=%s)', async streaming => {
+  const data = { ...input(), conversationId: 'complete-native', nodeId: 'node' };
+  const output = [
+    { type: 'reasoning', id: 'reasoning-a', summary: [], encryptedContent: 'opaque-a' },
+    { type: 'message', id: 'message-a', role: 'assistant', phase: 'commentary',
+      content: [{ type: 'output_text', text: 'Checking.', annotations: [] }] },
+    nativeResponse.output[0],
+    { type: 'reasoning', id: 'reasoning-b', summary: [], encryptedContent: 'opaque-b' },
+    { type: 'message', id: 'message-b', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text: 'Waiting.', annotations: [] }] },
+  ];
+  nativeResponse.output = output;
+  const adapter = new OpenRouterAgentAdapter();
+  const first = await adapter.createCompletion(data);
+  expect(first.completion.choices[0].message.tool_calls?.[0]).toMatchObject({ function: { name: 'mcp:bash:run' } });
+  data.messages.push(first.completion.choices[0].message, { role: 'tool', tool_call_id: 'call-1', content: 'OK' });
+  await adapter[streaming ? 'createStreamCompletion' : 'createCompletion'](data);
+  expect(callModel.mock.calls[0][0].input.slice(1, -1)).toEqual(output);
+});
+
 it.each(['error', 'cancelled'])('propagates failures and finalizes archived requests as %s', async outcome => {
   const data = input();
   const controller = new AbortController();
