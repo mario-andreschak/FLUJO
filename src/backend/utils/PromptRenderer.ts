@@ -197,7 +197,8 @@ export class PromptRenderer {
       completePrompt += `Focus on the part of the user-message that can be accomplished using the tools provided to you.\n\n`
       completePrompt += `You may do multiple tool calls.\n\n`
       completePrompt += `After you completed the user's request to the best of your ability, you can use the 'handoff_to_xxxx' tool.\n\n`
-      completePrompt += `The processing may be handed back to you as part of a loop. In this case repeat processing your instructions as if you were executing them for the first time. \n\n`
+      completePrompt += `When a user requests an answer, provide the requested response before handing off to Finish, in the requested format. A Finish handoff alone is not an answer.\n\n`
+      completePrompt += `Answer the current user request, then stop. Do not invent future user messages, observations or review rounds. If processing returns to you in a loop, use the latest actual input and completed-action evidence; do not repeat completed actions.\n\n`
     }
 
     // 3. Node Prompt

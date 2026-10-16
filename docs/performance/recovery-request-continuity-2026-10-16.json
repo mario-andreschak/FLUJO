@@ -1,0 +1,3348 @@
+{
+  "schemaVersion": 1,
+  "issue": 1091,
+  "frozenUtc": "2026-10-16T16:50:44.353Z",
+  "baseMain": "686b11c5b32e393ae4599f500a9e5b073d86cd80",
+  "problem": "Tool results shifted the compaction boundary during the same user request. Regeneration could reject a replacement summary and return to repetitive canonical history. The generic workflow prompt also allowed empty Finish handoffs and asked models to repeat instructions as if for the first time. Crash replies additionally annotated the status scalar or appended unrequested prose despite exact raw receipt values.",
+  "repair": "Pin only a verified source prefix for the exact current user request; retain every current tool call/result and tail message verbatim. Edited or missing prefixes, changed user turns, settings, tools and provider ownership invalidate reuse. A short runtime system boundary identifies the current user request after retained historical user turns, with exact user bytes and roles preserved. It distinguishes factual source values from prior assistant replies, silent value/type annotations and unrequested prose. Include this boundary in reduction budgets and fresh/cached projections. Require requested response before Finish; answer the actual current request without inventing future rounds. Canonical history, raw provider answers and acceptance assertions remain unchanged.",
+  "applicationSourceTree": "5add215db8f1762db4046cb12178b48b65e50920",
+  "qualifiedInputs": {
+    "utc": "2026-10-16T16:34:40.800Z",
+    "revision": "686b11c5b32e393ae4599f500a9e5b073d86cd80",
+    "qualifiedTree": "d203cfb7406cf4df68f21528496d77e6cf71cf19",
+    "applicationSourceTree": "5add215db8f1762db4046cb12178b48b65e50920",
+    "testsTree": "ccc33417ed664454f08436480f6c980347ba35f4",
+    "manifestSha256": "856ba92adc6a42c957fe5f71ac8c883190d79d4f492cd816e739159ff5cefc12",
+    "lockSha256": "7ad9a0ccd5c6673626ff4a8ccce51950c9cbeb0fd0003b0aed2ac6b05cd6b601",
+    "node": "v22.23.3",
+    "buildCommand": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+    "mcpBuildCommand": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
+    "dependencyInstall": "npm ci --ignore-scripts --no-audit --no-fund; no native CLI acceptance claim",
+    "sourceSha256": {
+      "__tests__/flow/promptRendererCompose.test.ts": "2992c296204a96cf8749859da694e87d3ee02d0bbc44f58e6e65bc9459bcf552",
+      "__tests__/model/contextOverflowRefit.test.ts": "fcaacd190c11116853d4e500ff5f556ed567d638b28db84cc01b576786391570",
+      "src/backend/execution/flow/compaction/types.ts": "fb0d0828ec2d6c02ffd97d57cd38d57957799491fbd6581db3ad9d68be7ef831",
+      "src/backend/execution/flow/handlers/ModelHandler.ts": "e58ba46e2d4f0b32d13ff11e1f1cc15a9ce223db4cd1e717e918fcf0f0ca6d6c",
+      "src/backend/execution/flow/handlers/summarizingCompaction.ts": "8a2ce6bba0de94470ce41535c759afe9a618a72248c84b7814a84be052090f00",
+      "src/backend/utils/PromptRenderer.ts": "4958717f70f4a2f5a4471ea36075ff2bde715c3f2089c9839d1a2794b8bd12ea"
+    }
+  },
+  "qualification": {
+    "focusedTests": 240,
+    "suites": 9,
+    "checks": {
+      "focused": {
+        "step": "focused",
+        "startedUtc": "2026-10-16T16:34:41.6268292Z",
+        "completedUtc": "2026-10-16T16:34:55.3277560Z",
+        "revision": "686b11c5b32e393ae4599f500a9e5b073d86cd80",
+        "exitCode": 0,
+        "elapsedSeconds": 13.701942
+      },
+      "typecheck": {
+        "step": "typecheck",
+        "startedUtc": "2026-10-16T16:34:55.4170163Z",
+        "completedUtc": "2026-10-16T16:35:05.9452748Z",
+        "revision": "686b11c5b32e393ae4599f500a9e5b073d86cd80",
+        "exitCode": 0,
+        "elapsedSeconds": 10.5282911
+      },
+      "lint": {
+        "step": "lint",
+        "startedUtc": "2026-10-16T16:35:05.9506604Z",
+        "completedUtc": "2026-10-16T16:36:38.2861273Z",
+        "revision": "686b11c5b32e393ae4599f500a9e5b073d86cd80",
+        "exitCode": 0,
+        "elapsedSeconds": 92.3354863
+      },
+      "build": {
+        "step": "build",
+        "startedUtc": "2026-10-16T16:34:42.4560572Z",
+        "completedUtc": "2026-10-16T16:40:03.6457603Z",
+        "revision": "686b11c5b32e393ae4599f500a9e5b073d86cd80",
+        "exitCode": 0,
+        "elapsedSeconds": 321.19052,
+        "buildId": "mva8lUG39O7_PMcaidQlN"
+      }
+    },
+    "baselineAssertionFailures": 4,
+    "harnessGuards": 8,
+    "fixtureFailure": "Two invalidation fixtures initially edited a retained tail instead of the archived prefix; corrected to the actual sourceEndId. An initial ledger guard invocation lacked its required private test directory; all eight guards then passed. The first long current-request marker exceeded an unchanged protected-state refit budget; shortening the marker restored that same budget without changing the assertion.",
+    "timing": "Measured commands are separate. Build, local gates and independent provider cases overlap; do not sum their durations."
+  },
+  "acceptance": {
+    "status": "failed-full-reply-fidelity",
+    "provider": "OpenRouter",
+    "models": [
+      "anthropic/claude-haiku-5.5",
+      "openai/gpt-6-luna"
+    ],
+    "protocol": "native-window-and-review-recording-v4",
+    "assertionsChanged": false,
+    "rounds": 40,
+    "exactRounds": 37,
+    "authorizedWrites": 8,
+    "actualWrites": 8,
+    "ordinarySignatureReplay": [
+      {
+        "model": "openai/gpt-6-luna",
+        "scenario": "cancel",
+        "windows": 0,
+        "exactWindows": 0,
+        "opaqueItems": 0,
+        "scope": "Genuine provider signature/output replay within current-request tool follow-up only; no native compaction/SDK/CLI/restart-window claim"
+      },
+      {
+        "model": "openai/gpt-6-luna",
+        "scenario": "crash",
+        "windows": 0,
+        "exactWindows": 0,
+        "opaqueItems": 0,
+        "scope": "Genuine provider signature/output replay within current-request tool follow-up only; no native compaction/SDK/CLI/restart-window claim"
+      },
+      {
+        "model": "anthropic/claude-haiku-5.5",
+        "scenario": "crash",
+        "windows": 10,
+        "exactWindows": 10,
+        "opaqueItems": 10,
+        "scope": "Genuine provider signature/output replay within current-request tool follow-up only; no native compaction/SDK/CLI/restart-window claim"
+      },
+      {
+        "model": "anthropic/claude-haiku-5.5",
+        "scenario": "cancel",
+        "windows": 10,
+        "exactWindows": 10,
+        "opaqueItems": 10,
+        "scope": "Genuine provider signature/output replay within current-request tool follow-up only; no native compaction/SDK/CLI/restart-window claim"
+      }
+    ],
+    "cases": [
+      {
+        "model": "openai/gpt-6-luna",
+        "scenario": "cancel",
+        "status": "passed-focused-scope",
+        "receiptSha256": "bd36bb41dff2c54c1644ba33d724fb2c46b26f16752742b7210527ce312b637a",
+        "buildId": "mva8lUG39O7_PMcaidQlN",
+        "applicationSourceTree": "5add215db8f1762db4046cb12178b48b65e50920",
+        "checkpoints": [
+          {
+            "round": 5,
+            "passed": true,
+            "writes": 2,
+            "commitInvocations": 2
+          },
+          {
+            "round": 10,
+            "passed": true,
+            "writes": 2,
+            "commitInvocations": 2
+          }
+        ],
+        "interruption": {
+          "mode": "cancel",
+          "pendingCallIds": [
+            "call_HLjKrqWKnwom2fE3jhfol5fX",
+            "call_eCIoR16RxBWcGGXRz7ihIZff"
+          ],
+          "originalCallIds": [
+            "call_HLjKrqWKnwom2fE3jhfol5fX",
+            "call_eCIoR16RxBWcGGXRz7ihIZff"
+          ],
+          "ledgerAtInterruption": {
+            "rows": [
+              {
+                "actionId": "acción-completa-ñ",
+                "receiptId": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+                "committedUtc": "2026-10-16T16:40:53.284Z"
+              },
+              {
+                "actionId": "acción-incierta-ñ",
+                "receiptId": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+                "committedUtc": "2026-10-16T16:40:53.285Z"
+              }
+            ],
+            "calls": [
+              {
+                "number": 1,
+                "utc": "2026-10-16T16:40:53.284Z",
+                "tool": "commit_action",
+                "actionId": "acción-completa-ñ",
+                "startedAtMs": 10962.3903,
+                "fsyncedAtMs": 10967.4887,
+                "acknowledgement": "completed",
+                "result": {
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"committedUtc\":\"2026-10-16T16:40:53.284Z\",\"status\":\"completed\"}"
+                    }
+                  ]
+                },
+                "completedAtMs": 10967.5245
+              },
+              {
+                "number": 2,
+                "utc": "2026-10-16T16:40:53.285Z",
+                "tool": "commit_action",
+                "actionId": "acción-incierta-ñ",
+                "startedAtMs": 10963.589,
+                "fsyncedAtMs": 10971.4913,
+                "acknowledgement": "held-after-fsync",
+                "heldAfterFsyncAtMs": 10971.4947
+              }
+            ],
+            "peakConcurrentCommits": 2,
+            "fileSha256": "1803b169c000676b4ecc0abe83f2249f2fea819a7050a948803b1e4247b75085"
+          },
+          "durableLogSha256": "57189df93fa7208d3c70c27cce82c5424bc3601e1967ca93954da0b5d61a5fec",
+          "durableCallsVerified": true,
+          "applicationWasLive": true,
+          "callsBeforeInterruption": 1,
+          "cancelResponse": {
+            "success": true,
+            "message": "Cancellation request processed."
+          },
+          "completion": {
+            "response": {
+              "error": {
+                "message": "Execution cancelled by user.",
+                "type": "Error",
+                "code": "internal_error",
+                "error_class": "unknown",
+                "details": {
+                  "message": "Execution cancelled by user."
+                }
+              }
+            }
+          },
+          "cancelledState": {
+            "status": "error",
+            "recovery": {
+              "version": 1,
+              "runId": "0052473d-9fca-419d-8a48-5638c2f7c213",
+              "attemptId": "fb5d0549-f40d-4e02-8095-1fb1f614d86b",
+              "attempt": 1,
+              "classification": "cancelled",
+              "ownerId": "55d23f55-f381-489e-b48c-c077a0511cee",
+              "ownerHeartbeatAt": 1792168853468,
+              "startedAt": 1792168848767,
+              "updatedAt": 1792168853468,
+              "failure": {
+                "category": "user_cancelled",
+                "message": "Execution was cancelled by the user.",
+                "retryable": false
+              },
+              "cancellationRequestedAt": 1792168853355,
+              "manualActionRequired": true,
+              "sideEffectWarning": "A tool may have produced an external side effect before execution stopped. Automatic replay is disabled; restart the turn or confirm the effect before retrying.",
+              "currentCheckpoint": {
+                "id": "c0ff8415-4bc3-4f17-9fb0-662c34e5504b",
+                "phase": "tool:unknown",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "ff3edd52fee3a6467defc1298a2a9911984bb52fd0ae79108223637e4e9ff202",
+                "safe": false,
+                "effectStatus": "unknown",
+                "tools": [
+                  {
+                    "toolCallId": "call_HLjKrqWKnwom2fE3jhfol5fX",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  },
+                  {
+                    "toolCallId": "call_eCIoR16RxBWcGGXRz7ihIZff",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  }
+                ],
+                "createdAt": 1792168853404
+              },
+              "lastSafeCheckpoint": {
+                "id": "2f6c725d-0d93-4665-adf5-d0e13942422d",
+                "phase": "node:after",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "d3f295b057014fa339fce22254e36f523170b7af01d667eae7da85ce100d3797",
+                "safe": true,
+                "effectStatus": "none",
+                "createdAt": 1792168853153
+              },
+              "terminalAt": 1792168853468
+            },
+            "canonicalSha256": "935939049e382c9c3fc658e7d9e4ae06b5ef17024a88ab4654cec27744854a80",
+            "toolPairingValid": true
+          },
+          "applicationClosedBeforeAcknowledgementRelease": true,
+          "restartedState": {
+            "status": "error",
+            "recovery": {
+              "version": 1,
+              "runId": "0052473d-9fca-419d-8a48-5638c2f7c213",
+              "attemptId": "fb5d0549-f40d-4e02-8095-1fb1f614d86b",
+              "attempt": 1,
+              "classification": "cancelled",
+              "ownerId": "55d23f55-f381-489e-b48c-c077a0511cee",
+              "ownerHeartbeatAt": 1792168853468,
+              "startedAt": 1792168848767,
+              "updatedAt": 1792168853468,
+              "failure": {
+                "category": "user_cancelled",
+                "message": "Execution was cancelled by the user.",
+                "retryable": false
+              },
+              "cancellationRequestedAt": 1792168853355,
+              "manualActionRequired": true,
+              "sideEffectWarning": "A tool may have produced an external side effect before execution stopped. Automatic replay is disabled; restart the turn or confirm the effect before retrying.",
+              "currentCheckpoint": {
+                "id": "c0ff8415-4bc3-4f17-9fb0-662c34e5504b",
+                "phase": "tool:unknown",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "ff3edd52fee3a6467defc1298a2a9911984bb52fd0ae79108223637e4e9ff202",
+                "safe": false,
+                "effectStatus": "unknown",
+                "tools": [
+                  {
+                    "toolCallId": "call_HLjKrqWKnwom2fE3jhfol5fX",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  },
+                  {
+                    "toolCallId": "call_eCIoR16RxBWcGGXRz7ihIZff",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  }
+                ],
+                "createdAt": 1792168853404
+              },
+              "lastSafeCheckpoint": {
+                "id": "2f6c725d-0d93-4665-adf5-d0e13942422d",
+                "phase": "node:after",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "d3f295b057014fa339fce22254e36f523170b7af01d667eae7da85ce100d3797",
+                "safe": true,
+                "effectStatus": "none",
+                "createdAt": 1792168853153
+              },
+              "terminalAt": 1792168853468
+            }
+          },
+          "recoveredToolResults": [
+            {
+              "id": "690106bc-da8e-4fd4-a266-f370457d6ba8",
+              "role": "tool",
+              "tool_call_id": "call_HLjKrqWKnwom2fE3jhfol5fX",
+              "content": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"actionId\\\":\\\"acción-completa-ñ\\\",\\\"receiptId\\\":\\\"c918c959-a68d-4bdf-9e40-c2c731937e3c\\\",\\\"committedUtc\\\":\\\"2026-10-16T16:40:53.284Z\\\",\\\"status\\\":\\\"completed\\\"}\"}],\"_meta\":{\"io.flujo/host-owner-scope\":\"run:0052473d-9fca-419d-8a48-5638c2f7c213\"}}",
+              "timestamp": 1792168853403,
+              "processNodeId": "process",
+              "executionOrigin": "internal"
+            },
+            {
+              "id": "e7909604-28cd-4e95-9cef-3ba5033f83ea",
+              "role": "tool",
+              "tool_call_id": "call_eCIoR16RxBWcGGXRz7ihIZff",
+              "content": "Error: Tool 'commit_action' call was cancelled.",
+              "timestamp": 1792168853403,
+              "processNodeId": "process",
+              "executionOrigin": "internal"
+            }
+          ]
+        },
+        "epochs": [
+          {
+            "number": 1,
+            "startedUtc": "2026-10-16T16:40:43.980Z",
+            "pid": 46968,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:40:53.582Z"
+            },
+            "closedUtc": "2026-10-16T16:40:53.582Z"
+          },
+          {
+            "number": 2,
+            "startedUtc": "2026-10-16T16:40:53.582Z",
+            "pid": 51980,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:42:36.310Z"
+            },
+            "closedUtc": "2026-10-16T16:42:36.310Z"
+          },
+          {
+            "number": 3,
+            "startedUtc": "2026-10-16T16:42:36.310Z",
+            "pid": 32064,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:44:39.818Z"
+            },
+            "closedUtc": "2026-10-16T16:44:39.818Z"
+          }
+        ],
+        "rounds": [
+          {
+            "round": 1,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-1.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "bc11732370c0a81790136a56801b065fd851bc419d1fb845e22ab073ac803835",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/5a417fac-6a3b-49f7-ae7d-58ed729676a9",
+              "sha256": "dea540fab709dc515d24350ec85a8d7f3d915904c339b8306cc55f57dd55d1fd",
+              "size": 31931,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 2,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-2.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "a128395efbf42ee273b3308d3f70a54291f10e9ed0adaca216aeb3b9ddd7b1d9",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/7e2b8e1d-553e-4622-99cb-ecf3ad698c49",
+              "sha256": "63be1f17432e58f3d1da37b7e109e7e3d33c2851b56c6c93f88ca3b1c6a8a94f",
+              "size": 51051,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 3,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-3.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "f716364b1cc8cfff51e96f63da1436d1b6e7d5183346bd9beff3869f4243b76c",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/b7c614b7-0962-4982-a957-20c267d2558c",
+              "sha256": "bb7cf3d902f75ef53c8f6733befb7ed2a10ca93988aab0b3678543f711a94617",
+              "size": 70085,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 4,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-4.json\",\"status\":\"listo\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "aae36e710e0aae743b682b47587f33d7ea8db2047b3b87c6c48497279d24fe63",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/2f2b6497-f42c-4d3b-abee-9e2e38bfa63b",
+              "sha256": "cb561c0986f339aa39760899d9a35c54517a5343ddea440cbf636bfbc54a4d3f",
+              "size": 89119,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 5,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "b824dfddf75006362a58f29847f1f688f546d530f4da7cda7bf9074caf4132cb",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/8b96de97-9b10-4c26-b6f3-207e42d2b01a",
+              "sha256": "7eed0575be16dfff04f21740cde41a2b9a0c8aee7352794236685240668f9874",
+              "size": 108145,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 6,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-6.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "64c4ede7303ff99e0365805ac7cfd88e3ad76b05fe2254908c12058a96e178a1",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/6c827b66-a4ea-4288-b4e9-a2d62d5d7d14",
+              "sha256": "961897ecdbd1150f04f23b3cb4d248186655914b3bd81e85d5cacfb34e639944",
+              "size": 127179,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 7,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-7.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "03709a4fb5914c995811ff137d002d91c0279ee7a6320083fdee2546ffae65ca",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/4d9ca3ae-5f2e-46c2-89fd-0d58563091cf",
+              "sha256": "d81fcb884647a2dbc3ab70df523c1eeff1a8a201886c395de107f7a62fff3ec4",
+              "size": 146209,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 8,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-8.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "61e0bce314d52f4d1f089b062385fea27ac1b5485c986eebce2cd6b1bf6acb36",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/f777e9f4-ec09-4e52-9380-2a36c007d871",
+              "sha256": "3a2e5fc23d57b5529ea8ae2248be9bb14a9cf60d377d0f4f23a71ffb9550937d",
+              "size": 165243,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 9,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-9.json\",\"status\":\"listo\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "d8476724b3f69adc22529434ef39ee2d58b657328657e7de43fbf11a879e03a9",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/2f9c167f-fe9d-4ee9-a9bd-2397f15e3f29",
+              "sha256": "01bf2e570afb6f13664152ec215cab4f854e4d3f3bc6b88e381dc193c23bf8e8",
+              "size": 184279,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 10,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"c918c959-a68d-4bdf-9e40-c2c731937e3c\",\"secondReceipt\":\"c1ca8d80-8e19-4b47-886c-159b3cd5ba86\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-10.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "c918c959-a68d-4bdf-9e40-c2c731937e3c",
+              "secondReceipt": "c1ca8d80-8e19-4b47-886c-159b3cd5ba86",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "38e6cd4c85e9f53bc58b77cc5d47cc0fd2387a3c557f0e8a601df6223d763f89",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/4298ca01-03d8-42af-8474-36e676c489de/37be14c0-1068-4c62-8721-eca4326eb96d",
+              "sha256": "2e2a41c2848fd21260c17e6079a9e25fd00940606cd5b5857737841e22e8388c",
+              "size": 203302,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          }
+        ],
+        "totalUsage": {
+          "inputTokens": 362893,
+          "outputTokens": 13021,
+          "reportedCost": 0.023534089999999997,
+          "callsWithoutReportedCost": 0
+        },
+        "applicationClosed": true
+      },
+      {
+        "model": "openai/gpt-6-luna",
+        "scenario": "crash",
+        "status": "failed-semantic-fields",
+        "receiptSha256": "1acbc03d57927dbd3e1164ae7a45d7da821e351c6cfd8871e393211e3decaf2d",
+        "buildId": "mva8lUG39O7_PMcaidQlN",
+        "applicationSourceTree": "5add215db8f1762db4046cb12178b48b65e50920",
+        "checkpoints": [
+          {
+            "round": 5,
+            "passed": false,
+            "writes": 2,
+            "commitInvocations": 2
+          },
+          {
+            "round": 10,
+            "passed": false,
+            "writes": 2,
+            "commitInvocations": 2
+          }
+        ],
+        "interruption": {
+          "mode": "crash",
+          "pendingCallIds": [
+            "call_QwS9Hq0ZIdY5d2WeuTbzV5dq",
+            "call_Z4QQeALlk9Oeqh3gtvQqE7MK"
+          ],
+          "originalCallIds": [
+            "call_QwS9Hq0ZIdY5d2WeuTbzV5dq",
+            "call_Z4QQeALlk9Oeqh3gtvQqE7MK"
+          ],
+          "ledgerAtInterruption": {
+            "rows": [
+              {
+                "actionId": "acción-completa-ñ",
+                "receiptId": "4500326e-1f50-43e3-9d86-3825d828f784",
+                "committedUtc": "2026-10-16T16:44:49.998Z"
+              },
+              {
+                "actionId": "acción-incierta-ñ",
+                "receiptId": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+                "committedUtc": "2026-10-16T16:44:49.999Z"
+              }
+            ],
+            "calls": [
+              {
+                "number": 1,
+                "utc": "2026-10-16T16:44:49.998Z",
+                "tool": "commit_action",
+                "actionId": "acción-completa-ñ",
+                "startedAtMs": 10055.6313,
+                "fsyncedAtMs": 10059.4278,
+                "acknowledgement": "completed",
+                "result": {
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"committedUtc\":\"2026-10-16T16:44:49.998Z\",\"status\":\"completed\"}"
+                    }
+                  ]
+                },
+                "completedAtMs": 10059.4549
+              },
+              {
+                "number": 2,
+                "utc": "2026-10-16T16:44:49.999Z",
+                "tool": "commit_action",
+                "actionId": "acción-incierta-ñ",
+                "startedAtMs": 10056.6683,
+                "fsyncedAtMs": 10064.2372,
+                "acknowledgement": "held-after-fsync",
+                "heldAfterFsyncAtMs": 10064.2405
+              }
+            ],
+            "peakConcurrentCommits": 2,
+            "fileSha256": "139ba90396e3fed5a2547f286d723864d872cb6b1b1a0b1eb18e5475e9aeb85c"
+          },
+          "durableLogSha256": "bdd64e128f0c8eaad8b51f8620b75ae8d3f7e3c1a6ec424eb706a850d75cc0cf",
+          "durableCallsVerified": true,
+          "applicationWasLive": true,
+          "callsBeforeInterruption": 1,
+          "completion": {
+            "transportError": "fetch failed"
+          },
+          "applicationClosedBeforeAcknowledgementRelease": true,
+          "restartedState": {
+            "status": "error",
+            "recovery": {
+              "version": 1,
+              "runId": "e0e9720a-47ee-4923-bcd2-c4b2ae94aa45",
+              "attemptId": "f89dafa5-d750-47ee-920a-a89ab365dd01",
+              "attempt": 1,
+              "classification": "interrupted",
+              "ownerId": "297f618a-7c23-456f-a77d-5a5eb33b75b2",
+              "ownerHeartbeatAt": 1792169093285,
+              "startedAt": 1792169086278,
+              "updatedAt": 1792169093285,
+              "currentCheckpoint": {
+                "id": "a75f6e08-889f-4fe5-be51-41dabc82d1f9",
+                "phase": "tool:before",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "e01c40fafe3516be27c85bd905b7628a70c13464ac8fe08bccd4c9809ff9c3fc",
+                "safe": false,
+                "effectStatus": "pending",
+                "tools": [
+                  {
+                    "toolCallId": "call_QwS9Hq0ZIdY5d2WeuTbzV5dq",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  },
+                  {
+                    "toolCallId": "call_Z4QQeALlk9Oeqh3gtvQqE7MK",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  }
+                ],
+                "createdAt": 1792169089931
+              },
+              "lastSafeCheckpoint": {
+                "id": "4b04cccc-edb5-4dd7-a558-380889a4b6ca",
+                "phase": "node:after",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "e01c40fafe3516be27c85bd905b7628a70c13464ac8fe08bccd4c9809ff9c3fc",
+                "safe": true,
+                "effectStatus": "none",
+                "createdAt": 1792169089864
+              },
+              "failure": {
+                "category": "unclean_process_interruption",
+                "message": "The process that owned this run is no longer active.",
+                "retryable": false
+              },
+              "manualActionRequired": true,
+              "terminalAt": 1792169093285
+            }
+          },
+          "recoveredToolResults": [
+            {
+              "id": "3c62d982-896e-4682-a91f-575d9e7f4a59",
+              "role": "tool",
+              "tool_call_id": "call_QwS9Hq0ZIdY5d2WeuTbzV5dq",
+              "content": "Tool execution interrupted (FLUJO restarted before this tool finished)",
+              "timestamp": 1792169093543,
+              "processNodeId": "process"
+            },
+            {
+              "id": "30b3f6f8-e1be-49fc-8063-becad54fab41",
+              "role": "tool",
+              "tool_call_id": "call_Z4QQeALlk9Oeqh3gtvQqE7MK",
+              "content": "Tool execution interrupted (FLUJO restarted before this tool finished)",
+              "timestamp": 1792169093543,
+              "processNodeId": "process"
+            }
+          ]
+        },
+        "epochs": [
+          {
+            "number": 1,
+            "startedUtc": "2026-10-16T16:44:41.555Z",
+            "pid": 39104,
+            "exit": {
+              "code": null,
+              "signal": "SIGKILL",
+              "utc": "2026-10-16T16:44:50.074Z"
+            },
+            "closedUtc": "2026-10-16T16:44:50.074Z",
+            "abruptTermination": true
+          },
+          {
+            "number": 2,
+            "startedUtc": "2026-10-16T16:44:50.074Z",
+            "pid": 52472,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:47:07.205Z"
+            },
+            "closedUtc": "2026-10-16T16:47:07.205Z"
+          },
+          {
+            "number": 3,
+            "startedUtc": "2026-10-16T16:47:07.206Z",
+            "pid": 5268,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:49:22.508Z"
+            },
+            "closedUtc": "2026-10-16T16:49:22.509Z"
+          }
+        ],
+        "rounds": [
+          {
+            "round": 1,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"secondReceipt\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-1.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "2df5b39e6722381e81836611cdf9792bf8993519c33e5a6f6ed0bfe385e737e5",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/5289fcf6-51a0-4518-83d5-d44f8abc1345",
+              "sha256": "4161b70ce8e8fe60ef4ba3469aa6a0f794fe19219ffdd8f5398b0e9d6bd1f0b8",
+              "size": 31692,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 2,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"committedUtc\":\"2026-10-16T16:44:49.998Z\"},\"secondReceipt\":{\"actionId\":\"acción-incierta-ñ\",\"receiptId\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"committedUtc\":\"2026-10-16T16:44:49.999Z\"},\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-2.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": {
+                "actionId": "acción-completa-ñ",
+                "receiptId": "4500326e-1f50-43e3-9d86-3825d828f784",
+                "committedUtc": "2026-10-16T16:44:49.998Z"
+              },
+              "secondReceipt": {
+                "actionId": "acción-incierta-ñ",
+                "receiptId": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+                "committedUtc": "2026-10-16T16:44:49.999Z"
+              },
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": false,
+            "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'pino',\n    first: 'completed',\n+   firstReceipt: {\n+     actionId: 'acción-completa-ñ',\n+     committedUtc: '2026-10-16T16:44:49.998Z',\n+     receiptId: '4500326e-1f50-43e3-9d86-3825d828f784'\n+   },\n-   firstReceipt: '4500326e-1f50-43e3-9d86-3825d828f784',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-2.json',\n    repeated: false,\n    second: 'completed',\n+   secondReceipt: {\n+     actionId: 'acción-incierta-ñ',\n+     committedUtc: '2026-10-16T16:44:49.999Z',\n+     receiptId: 'd0bfe79a-5321-4441-8bf6-047c08fa62d1'\n+   },\n-   secondReceipt: 'd0bfe79a-5321-4441-8bf6-047c08fa62d1',\n    sendAllowed: false,\n    status: 'preparado',\n    unknown: null\n  }\n",
+            "summarySources": [
+              {
+                "sourceSha256": "683411359ae1f96be1be2317f7cf4d943b95aa3c76a1c51e3abde50bdbb1f030",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/874dcc27-5262-42a3-8f48-010b56b1c619",
+              "sha256": "346eeda8265bd40d941fbfeaf857c432ef7ed8e562dd587a604022460c00eb40",
+              "size": 50816,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 3,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"committedUtc\":\"2026-10-16T16:44:49.998Z\"},\"secondReceipt\":{\"actionId\":\"acción-incierta-ñ\",\"receiptId\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"committedUtc\":\"2026-10-16T16:44:49.999Z\"},\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-3.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": {
+                "actionId": "acción-completa-ñ",
+                "receiptId": "4500326e-1f50-43e3-9d86-3825d828f784",
+                "committedUtc": "2026-10-16T16:44:49.998Z"
+              },
+              "secondReceipt": {
+                "actionId": "acción-incierta-ñ",
+                "receiptId": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+                "committedUtc": "2026-10-16T16:44:49.999Z"
+              },
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": false,
+            "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'abeto',\n    first: 'completed',\n+   firstReceipt: {\n+     actionId: 'acción-completa-ñ',\n+     committedUtc: '2026-10-16T16:44:49.998Z',\n+     receiptId: '4500326e-1f50-43e3-9d86-3825d828f784'\n+   },\n-   firstReceipt: '4500326e-1f50-43e3-9d86-3825d828f784',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-3.json',\n    repeated: false,\n    second: 'completed',\n+   secondReceipt: {\n+     actionId: 'acción-incierta-ñ',\n+     committedUtc: '2026-10-16T16:44:49.999Z',\n+     receiptId: 'd0bfe79a-5321-4441-8bf6-047c08fa62d1'\n+   },\n-   secondReceipt: 'd0bfe79a-5321-4441-8bf6-047c08fa62d1',\n    sendAllowed: false,\n    status: 'cancelado',\n    unknown: null\n  }\n",
+            "summarySources": [
+              {
+                "sourceSha256": "f5cf45e591f8837b6444bcbf6c433b4853a4ba242c68903f0c640f69c52779d6",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/dcd804fb-1b75-433d-8b3e-c5a4e40a2bab",
+              "sha256": "7a1f41f7a8976b2578b29417c68a170c37fd6c5cb1ec60874e831ca79efe05cc",
+              "size": 70048,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 4,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"committedUtc\":\"2026-10-16T16:44:49.998Z\"},\"secondReceipt\":{\"actionId\":\"acción-incierta-ñ\",\"receiptId\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"committedUtc\":\"2026-10-16T16:44:49.999Z\"},\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-4.json\",\"status\":\"listo\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": {
+                "actionId": "acción-completa-ñ",
+                "receiptId": "4500326e-1f50-43e3-9d86-3825d828f784",
+                "committedUtc": "2026-10-16T16:44:49.998Z"
+              },
+              "secondReceipt": {
+                "actionId": "acción-incierta-ñ",
+                "receiptId": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+                "committedUtc": "2026-10-16T16:44:49.999Z"
+              },
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "fieldsPassed": false,
+            "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'roble',\n    first: 'completed',\n+   firstReceipt: {\n+     actionId: 'acción-completa-ñ',\n+     committedUtc: '2026-10-16T16:44:49.998Z',\n+     receiptId: '4500326e-1f50-43e3-9d86-3825d828f784'\n+   },\n-   firstReceipt: '4500326e-1f50-43e3-9d86-3825d828f784',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-4.json',\n    repeated: false,\n    second: 'completed',\n+   secondReceipt: {\n+     actionId: 'acción-incierta-ñ',\n+     committedUtc: '2026-10-16T16:44:49.999Z',\n+     receiptId: 'd0bfe79a-5321-4441-8bf6-047c08fa62d1'\n+   },\n-   secondReceipt: 'd0bfe79a-5321-4441-8bf6-047c08fa62d1',\n    sendAllowed: false,\n    status: 'listo',\n    unknown: null\n  }\n",
+            "summarySources": [
+              {
+                "sourceSha256": "2ddeb0009c76a170514d3d5ef459734bc7dbdd7c2a2c828ec714d27c938fe99d",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/3264f3ad-b1db-457b-9ad1-74a3080c0662",
+              "sha256": "71add482863ee7af51d4b8a078c19a4fd7e2be27c58d2d9a88e6a8ced5fac93b",
+              "size": 89278,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 5,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"secondReceipt\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "7195904fe8be20798b6fbac5c71f0a3b3090a91145b707c18c4ce86d38e26810",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/73f40ae2-46ca-4a1c-a816-0b82c1c3a076",
+              "sha256": "406cd20090ba3178ff1cc4d811c8a19a3a772850afcfacaafe3183af70dac37c",
+              "size": 108500,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 6,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"secondReceipt\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-6.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "869a19e9fe7c08f6547c7bfc941f1cd88e16d89481e74b24ad11e2c26d0f8bb8",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/a5536742-e358-4af3-b849-ae1e22359910",
+              "sha256": "16141770cc3ed2c1b946ddef75dd57e3d7f9b43e2cd9cccf0ca5a47d92b4e0c4",
+              "size": 127534,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 7,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"secondReceipt\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-7.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "fd7d1eed1f73cb149c9b4d7520c632417acefe0090f3752ad982cacf2d8855b7",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/e662355b-1050-4f86-bde0-8b81dc687326",
+              "sha256": "6ebc3bbd529827042afc7a361dc5797d97694b066b7b5209c178506b00443395",
+              "size": 146564,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 8,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"secondReceipt\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-8.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "f127b4f236ed5d23e233ef164a0dd4564bb5e032b66472a52a03c77fd40eea30",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/18fc705e-0f43-46af-99dc-9bb735ecb1a9",
+              "sha256": "6cac2ac7e1117535d8c488d805f59b382f062553d953e6d3b9c77792c23ee457",
+              "size": 165596,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 9,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"secondReceipt\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-9.json\",\"status\":\"listo\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "c928403b5cd648e81267b5256a75757be367f25dea4d6b07a041ebd37f958cbc",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/e4b17353-961d-4e6a-88f0-76483cbd38c0",
+              "sha256": "5790b519c1f5f4f3dbac9beb7a8562b777dee997c0e6b9b43d1e6b56a428c091",
+              "size": 184632,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 10,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"4500326e-1f50-43e3-9d86-3825d828f784\",\"secondReceipt\":\"d0bfe79a-5321-4441-8bf6-047c08fa62d1\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-10.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "4500326e-1f50-43e3-9d86-3825d828f784",
+              "secondReceipt": "d0bfe79a-5321-4441-8bf6-047c08fa62d1",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "c744646ad11a6304fa212572c848de7fe39ffad69e3edb286afb3a82e9c753fc",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/e127a0b4-f1f6-485d-8a2a-90a015ca0b9c/39264d1a-a6ec-4890-9996-4d5ab52836d9",
+              "sha256": "75b8d585cb5782bc26e7b3856cb96786f0ce8e37916547f4e4722648057a7c0a",
+              "size": 203657,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          }
+        ],
+        "totalUsage": {
+          "inputTokens": 362794,
+          "outputTokens": 13821,
+          "reportedCost": 0.023375495,
+          "callsWithoutReportedCost": 0
+        },
+        "applicationClosed": true
+      },
+      {
+        "model": "anthropic/claude-haiku-5.5",
+        "scenario": "crash",
+        "status": "passed-focused-scope",
+        "receiptSha256": "1fd19baa669a61c9900464ed8fdbecaf19d1b5a303f554c7558d26ef264a6dbd",
+        "buildId": "mva8lUG39O7_PMcaidQlN",
+        "applicationSourceTree": "5add215db8f1762db4046cb12178b48b65e50920",
+        "checkpoints": [
+          {
+            "round": 5,
+            "passed": true,
+            "writes": 2,
+            "commitInvocations": 2
+          },
+          {
+            "round": 10,
+            "passed": true,
+            "writes": 2,
+            "commitInvocations": 2
+          }
+        ],
+        "interruption": {
+          "mode": "crash",
+          "pendingCallIds": [
+            "toolu_01AXj5x6Gcjp2puD2sSjWJKV",
+            "toolu_011UYxFWTHgjwY2Yt8SdZ9p2"
+          ],
+          "originalCallIds": [
+            "toolu_01AXj5x6Gcjp2puD2sSjWJKV",
+            "toolu_011UYxFWTHgjwY2Yt8SdZ9p2"
+          ],
+          "ledgerAtInterruption": {
+            "rows": [
+              {
+                "actionId": "acción-incierta-ñ",
+                "receiptId": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+                "committedUtc": "2026-10-16T16:46:44.518Z"
+              },
+              {
+                "actionId": "acción-completa-ñ",
+                "receiptId": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+                "committedUtc": "2026-10-16T16:46:44.519Z"
+              }
+            ],
+            "calls": [
+              {
+                "number": 1,
+                "utc": "2026-10-16T16:46:44.518Z",
+                "tool": "commit_action",
+                "actionId": "acción-incierta-ñ",
+                "startedAtMs": 9247.8755,
+                "fsyncedAtMs": 9252.4342,
+                "acknowledgement": "held-after-fsync",
+                "heldAfterFsyncAtMs": 9252.4437
+              },
+              {
+                "number": 2,
+                "utc": "2026-10-16T16:46:44.519Z",
+                "tool": "commit_action",
+                "actionId": "acción-completa-ñ",
+                "startedAtMs": 9249.0415,
+                "fsyncedAtMs": 9256.37,
+                "acknowledgement": "completed",
+                "result": {
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"committedUtc\":\"2026-10-16T16:46:44.519Z\",\"status\":\"completed\"}"
+                    }
+                  ]
+                },
+                "completedAtMs": 9256.4636
+              }
+            ],
+            "peakConcurrentCommits": 2,
+            "fileSha256": "d0d9c4d6d630807eadb08eac17c1d6465f3633cc3a480b254a71d88081681d1b"
+          },
+          "durableLogSha256": "8bb1b188c6989cec8721535a408e1e98aa31ed9e0669120336dd77c8cbb61d60",
+          "durableCallsVerified": true,
+          "applicationWasLive": true,
+          "callsBeforeInterruption": 1,
+          "completion": {
+            "transportError": "fetch failed"
+          },
+          "applicationClosedBeforeAcknowledgementRelease": true,
+          "restartedState": {
+            "status": "error",
+            "recovery": {
+              "version": 1,
+              "runId": "f3d79dac-e069-4325-9c0f-20701aa9b1e6",
+              "attemptId": "c72182e1-e1f8-4c48-be8b-7a7e07993e8e",
+              "attempt": 1,
+              "classification": "interrupted",
+              "ownerId": "a4c196d0-448e-40fe-9ea9-f06186d50a11",
+              "ownerHeartbeatAt": 1792169208025,
+              "startedAt": 1792169202121,
+              "updatedAt": 1792169208025,
+              "currentCheckpoint": {
+                "id": "548eb8c1-6b0a-4ec2-af0f-e13e4f66bedb",
+                "phase": "tool:before",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "f5713f1fa00501df082ad8e34b37809c94828a0b0b567ef28f562fc913828439",
+                "safe": false,
+                "effectStatus": "pending",
+                "tools": [
+                  {
+                    "toolCallId": "toolu_01AXj5x6Gcjp2puD2sSjWJKV",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  },
+                  {
+                    "toolCallId": "toolu_011UYxFWTHgjwY2Yt8SdZ9p2",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  }
+                ],
+                "createdAt": 1792169204450
+              },
+              "lastSafeCheckpoint": {
+                "id": "1ebb2b2e-586b-4a15-9b93-3480655ca582",
+                "phase": "node:after",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "f5713f1fa00501df082ad8e34b37809c94828a0b0b567ef28f562fc913828439",
+                "safe": true,
+                "effectStatus": "none",
+                "createdAt": 1792169204392
+              },
+              "failure": {
+                "category": "unclean_process_interruption",
+                "message": "The process that owned this run is no longer active.",
+                "retryable": false
+              },
+              "manualActionRequired": true,
+              "terminalAt": 1792169208025
+            }
+          },
+          "recoveredToolResults": [
+            {
+              "id": "41ad1309-2f09-42f6-8eb2-f6e37ca47e37",
+              "role": "tool",
+              "tool_call_id": "toolu_01AXj5x6Gcjp2puD2sSjWJKV",
+              "content": "Tool execution interrupted (FLUJO restarted before this tool finished)",
+              "timestamp": 1792169208288,
+              "processNodeId": "process"
+            },
+            {
+              "id": "f2d9f3d3-cd19-4939-a539-62d79a875381",
+              "role": "tool",
+              "tool_call_id": "toolu_011UYxFWTHgjwY2Yt8SdZ9p2",
+              "content": "Tool execution interrupted (FLUJO restarted before this tool finished)",
+              "timestamp": 1792169208288,
+              "processNodeId": "process"
+            }
+          ]
+        },
+        "epochs": [
+          {
+            "number": 1,
+            "startedUtc": "2026-10-16T16:46:37.040Z",
+            "pid": 50124,
+            "exit": {
+              "code": null,
+              "signal": "SIGKILL",
+              "utc": "2026-10-16T16:46:44.600Z"
+            },
+            "closedUtc": "2026-10-16T16:46:44.600Z",
+            "abruptTermination": true
+          },
+          {
+            "number": 2,
+            "startedUtc": "2026-10-16T16:46:44.600Z",
+            "pid": 48248,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:48:45.978Z"
+            },
+            "closedUtc": "2026-10-16T16:48:45.978Z"
+          },
+          {
+            "number": 3,
+            "startedUtc": "2026-10-16T16:48:45.978Z",
+            "pid": 18448,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:50:23.862Z"
+            },
+            "closedUtc": "2026-10-16T16:50:23.862Z"
+          }
+        ],
+        "rounds": [
+          {
+            "round": 1,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-1.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "3da9f061e4951fe41880cf236d5707be0248008f105c71f0851728d75bf79767",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/7e199332-b6ac-432f-9494-65708f84ecc7",
+              "sha256": "a4a6f508eeaa6113ccb09771fe688718db0f950c21df3d04df6bcf0b9631b7e2",
+              "size": 31699,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 2,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-2.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "062a79594aeeb10a6046722c98cce3fd6fd7c2aea5143f113e163011adea94fc",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/fb4eaf0b-15db-46e2-9ea0-06ecb13e4196",
+              "sha256": "2b9f752f4f0adf1de323cafd518a1c829a9f925bafae8254e9a2d9e5bdb354c6",
+              "size": 50835,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 3,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-3.json\",\"status\":\"cancelado\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "3d529a8234e1d2c13787bad4cfccd5760d7276c60d7952c55580f9be4a94778b",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/5d1fb0d7-f3b5-4489-a4f3-fc5b46dca079",
+              "sha256": "7815880a5eecf369987ec3a24a8ee1ef4975af1bb68b1d7d525dfe269d8cbda9",
+              "size": 69866,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 4,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-4.json\",\"status\":\"listo\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "3b85c73f66c563aa0a2ce8295132942f079498a381f0ec0f59b8cf2ac2c2a5f5",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/0ed57167-a918-4256-bc7a-80b59f8b0295",
+              "sha256": "a791fd92c6ab97a812a5888cfc7d3a8564876d2fef6243015f09e38c589a279a",
+              "size": 88911,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 5,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "c6500f2b587bd94d98397ae161d260718bf45732320575de06f4db466c2f0c59",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/7e65d420-b589-4cc6-bbd4-7dee59d1189e",
+              "sha256": "5adef03826e1fd0d4c31bfff2f29e7ea04655b49576467ec717f34a915691484",
+              "size": 107938,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 6,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-6.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "5d9a046309e3342e8db9e6d636df3938e8dda1f4106bb61e4da09d6c7169562e",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/6df6f9e0-1779-4c7d-9e32-0e7bb05c1aeb",
+              "sha256": "a7cd189a162f946e1c5c09729b1c43be9e384b82a1552b9c47ab8f7064c0d4aa",
+              "size": 126991,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 7,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-7.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "45c2a0c74714034f2422f7ceb112c16f51842a022e574c4cb043f38e87ddccb1",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/71d8b331-6d0e-4f24-a485-bb41822c177d",
+              "sha256": "3004aa5cfbd452f41026ef6c1f4dbb613dfbed249dd808fe57ec10e60301b710",
+              "size": 146040,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 8,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-8.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "5a9eb26d6de6c04c95132f8665c43b86e8fee5a4d6d30d763472a52d89d71b77",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/6802e846-96b2-49de-b5aa-bd1a5e044387",
+              "sha256": "f952e1086ba029721db84078a2c823fc77b28b623439631a8f874ee5b70f05bc",
+              "size": 165079,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 9,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-9.json\",\"status\":\"listo\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "10cebee550bd9d53478658a1d270db90fed88e23d13331cdac1873442abc7f58",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/5fdd0471-b8c4-472f-95ac-caa4bba50353",
+              "sha256": "214397f24765dc22b2622904d98ef1c38145b4303565ddcd87231c14fb7d9e98",
+              "size": 184120,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 10,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"d82b7a02-a22d-4756-9996-7d88cc2aef65\",\"secondReceipt\":\"6acc06d5-f754-42b7-ba49-4f2d904c8960\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-10.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "d82b7a02-a22d-4756-9996-7d88cc2aef65",
+              "secondReceipt": "6acc06d5-f754-42b7-ba49-4f2d904c8960",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "5d17c42924c90824d8611e5d66fbbb6804c2011fa1e54317aa61f2bf03d50e72",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/82de6f47-fb4d-48da-bfca-183e17167e61/5f7d18e4-f04c-4623-a236-eee956e76d33",
+              "sha256": "485d8359a6ab483da378fe69266fdb4f5b8a49a5c52be79cbe152b40577499b5",
+              "size": 203164,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          }
+        ],
+        "totalUsage": {
+          "inputTokens": 698567,
+          "outputTokens": 27565,
+          "reportedCost": 0.0836392,
+          "callsWithoutReportedCost": 2
+        },
+        "applicationClosed": true
+      },
+      {
+        "model": "anthropic/claude-haiku-5.5",
+        "scenario": "cancel",
+        "status": "passed-focused-scope",
+        "receiptSha256": "75b27fe4e01d80f54ca10217f00670cc3c5b4c823a8168ad58e51ca41bf975c1",
+        "buildId": "mva8lUG39O7_PMcaidQlN",
+        "applicationSourceTree": "5add215db8f1762db4046cb12178b48b65e50920",
+        "checkpoints": [
+          {
+            "round": 5,
+            "passed": true,
+            "writes": 2,
+            "commitInvocations": 2
+          },
+          {
+            "round": 10,
+            "passed": true,
+            "writes": 2,
+            "commitInvocations": 2
+          }
+        ],
+        "interruption": {
+          "mode": "cancel",
+          "pendingCallIds": [
+            "toolu_01SeRwQPLgpkeeQwzKZab7dX",
+            "toolu_013v6VGZhWT1Dmz1WK7EUzWB"
+          ],
+          "originalCallIds": [
+            "toolu_01SeRwQPLgpkeeQwzKZab7dX",
+            "toolu_013v6VGZhWT1Dmz1WK7EUzWB"
+          ],
+          "ledgerAtInterruption": {
+            "rows": [
+              {
+                "actionId": "acción-completa-ñ",
+                "receiptId": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+                "committedUtc": "2026-10-16T16:40:52.961Z"
+              },
+              {
+                "actionId": "acción-incierta-ñ",
+                "receiptId": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+                "committedUtc": "2026-10-16T16:40:52.962Z"
+              }
+            ],
+            "calls": [
+              {
+                "number": 1,
+                "utc": "2026-10-16T16:40:52.961Z",
+                "tool": "commit_action",
+                "actionId": "acción-completa-ñ",
+                "startedAtMs": 11003.9124,
+                "fsyncedAtMs": 11008.827,
+                "acknowledgement": "completed",
+                "result": {
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "{\"actionId\":\"acción-completa-ñ\",\"receiptId\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"committedUtc\":\"2026-10-16T16:40:52.961Z\",\"status\":\"completed\"}"
+                    }
+                  ]
+                },
+                "completedAtMs": 11008.8537
+              },
+              {
+                "number": 2,
+                "utc": "2026-10-16T16:40:52.962Z",
+                "tool": "commit_action",
+                "actionId": "acción-incierta-ñ",
+                "startedAtMs": 11004.9653,
+                "fsyncedAtMs": 11013.0868,
+                "acknowledgement": "held-after-fsync",
+                "heldAfterFsyncAtMs": 11013.0899
+              }
+            ],
+            "peakConcurrentCommits": 2,
+            "fileSha256": "772b123574c4ab3c7665109a83d343692105b58437a816cceefbc2165c97f421"
+          },
+          "durableLogSha256": "3b05d1b0920d67c696e41246ff7ccc9f7c811c713f65aea89e69f98ee9d63076",
+          "durableCallsVerified": true,
+          "applicationWasLive": true,
+          "callsBeforeInterruption": 1,
+          "cancelResponse": {
+            "success": true,
+            "message": "Cancellation request processed."
+          },
+          "completion": {
+            "response": {
+              "error": {
+                "message": "Execution cancelled by user.",
+                "type": "Error",
+                "code": "internal_error",
+                "error_class": "unknown",
+                "details": {
+                  "message": "Execution cancelled by user."
+                }
+              }
+            }
+          },
+          "cancelledState": {
+            "status": "error",
+            "recovery": {
+              "version": 1,
+              "runId": "3333b01d-8814-4ad4-9e1f-0e08f341db71",
+              "attemptId": "2ecd52e0-4429-428a-a443-78268989ca14",
+              "attempt": 1,
+              "classification": "cancelled",
+              "ownerId": "a6c9d01d-aa59-42f9-a185-8aff6a3c6847",
+              "ownerHeartbeatAt": 1792168853143,
+              "startedAt": 1792168848567,
+              "updatedAt": 1792168853143,
+              "failure": {
+                "category": "user_cancelled",
+                "message": "Execution was cancelled by the user.",
+                "retryable": false
+              },
+              "cancellationRequestedAt": 1792168853031,
+              "manualActionRequired": true,
+              "sideEffectWarning": "A tool may have produced an external side effect before execution stopped. Automatic replay is disabled; restart the turn or confirm the effect before retrying.",
+              "currentCheckpoint": {
+                "id": "21dc9ef9-8ceb-42d5-9dc1-c33bd02ee2e1",
+                "phase": "tool:unknown",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "f8ae905865c5d58acaa315635caf731253b91b0e10ae97c8accbe43fc17df560",
+                "safe": false,
+                "effectStatus": "unknown",
+                "tools": [
+                  {
+                    "toolCallId": "toolu_01SeRwQPLgpkeeQwzKZab7dX",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  },
+                  {
+                    "toolCallId": "toolu_013v6VGZhWT1Dmz1WK7EUzWB",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  }
+                ],
+                "createdAt": 1792168853080
+              },
+              "lastSafeCheckpoint": {
+                "id": "21c23d75-ccb7-4c15-8a45-6c8b32e25016",
+                "phase": "node:after",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "ee66edad8ee0c1931e603acd1cb41bbd6f9622dffa160836dea6b578dd6975e5",
+                "safe": true,
+                "effectStatus": "none",
+                "createdAt": 1792168852827
+              },
+              "terminalAt": 1792168853143
+            },
+            "canonicalSha256": "31e64fe61a5d7c63ade7d6030ce115d8beef96c8a1ab47da9612363fbc2df6b2",
+            "toolPairingValid": true
+          },
+          "applicationClosedBeforeAcknowledgementRelease": true,
+          "restartedState": {
+            "status": "error",
+            "recovery": {
+              "version": 1,
+              "runId": "3333b01d-8814-4ad4-9e1f-0e08f341db71",
+              "attemptId": "2ecd52e0-4429-428a-a443-78268989ca14",
+              "attempt": 1,
+              "classification": "cancelled",
+              "ownerId": "a6c9d01d-aa59-42f9-a185-8aff6a3c6847",
+              "ownerHeartbeatAt": 1792168853143,
+              "startedAt": 1792168848567,
+              "updatedAt": 1792168853143,
+              "failure": {
+                "category": "user_cancelled",
+                "message": "Execution was cancelled by the user.",
+                "retryable": false
+              },
+              "cancellationRequestedAt": 1792168853031,
+              "manualActionRequired": true,
+              "sideEffectWarning": "A tool may have produced an external side effect before execution stopped. Automatic replay is disabled; restart the turn or confirm the effect before retrying.",
+              "currentCheckpoint": {
+                "id": "21dc9ef9-8ceb-42d5-9dc1-c33bd02ee2e1",
+                "phase": "tool:unknown",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "f8ae905865c5d58acaa315635caf731253b91b0e10ae97c8accbe43fc17df560",
+                "safe": false,
+                "effectStatus": "unknown",
+                "tools": [
+                  {
+                    "toolCallId": "toolu_01SeRwQPLgpkeeQwzKZab7dX",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  },
+                  {
+                    "toolCallId": "toolu_013v6VGZhWT1Dmz1WK7EUzWB",
+                    "name": "mcp_commit_action_164x268",
+                    "readOnly": false,
+                    "idempotent": false,
+                    "destructive": false
+                  }
+                ],
+                "createdAt": 1792168853080
+              },
+              "lastSafeCheckpoint": {
+                "id": "21c23d75-ccb7-4c15-8a45-6c8b32e25016",
+                "phase": "node:after",
+                "nodeId": "process",
+                "turnEntryNodeId": "start",
+                "attempt": 1,
+                "inputFingerprint": "ee66edad8ee0c1931e603acd1cb41bbd6f9622dffa160836dea6b578dd6975e5",
+                "safe": true,
+                "effectStatus": "none",
+                "createdAt": 1792168852827
+              },
+              "terminalAt": 1792168853143
+            }
+          },
+          "recoveredToolResults": [
+            {
+              "id": "fc2fba83-7e49-4d4b-8ece-e5c1f0c00dd7",
+              "role": "tool",
+              "tool_call_id": "toolu_01SeRwQPLgpkeeQwzKZab7dX",
+              "content": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"actionId\\\":\\\"acción-completa-ñ\\\",\\\"receiptId\\\":\\\"63ef3636-f6d9-4488-8297-ed13b14b519c\\\",\\\"committedUtc\\\":\\\"2026-10-16T16:40:52.961Z\\\",\\\"status\\\":\\\"completed\\\"}\"}],\"_meta\":{\"io.flujo/host-owner-scope\":\"run:3333b01d-8814-4ad4-9e1f-0e08f341db71\"}}",
+              "timestamp": 1792168853080,
+              "processNodeId": "process",
+              "executionOrigin": "internal"
+            },
+            {
+              "id": "5ebb19c9-2002-4e00-891c-939a5a9ca00e",
+              "role": "tool",
+              "tool_call_id": "toolu_013v6VGZhWT1Dmz1WK7EUzWB",
+              "content": "Error: Tool 'commit_action' call was cancelled.",
+              "timestamp": 1792168853080,
+              "processNodeId": "process",
+              "executionOrigin": "internal"
+            }
+          ]
+        },
+        "epochs": [
+          {
+            "number": 1,
+            "startedUtc": "2026-10-16T16:40:43.785Z",
+            "pid": 49048,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:40:53.253Z"
+            },
+            "closedUtc": "2026-10-16T16:40:53.253Z"
+          },
+          {
+            "number": 2,
+            "startedUtc": "2026-10-16T16:40:53.253Z",
+            "pid": 47720,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:42:25.118Z"
+            },
+            "closedUtc": "2026-10-16T16:42:25.118Z"
+          },
+          {
+            "number": 3,
+            "startedUtc": "2026-10-16T16:42:25.118Z",
+            "pid": 18180,
+            "exit": {
+              "code": 143,
+              "signal": null,
+              "utc": "2026-10-16T16:44:05.950Z"
+            },
+            "closedUtc": "2026-10-16T16:44:05.950Z"
+          }
+        ],
+        "rounds": [
+          {
+            "round": 1,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-1.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "14304b9953b0ba04a914ddc22908e9ca17b0cb773807ca0c326ff5f647ab56d3",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/592638bb-3aa8-4e02-9434-d8b13d53e778",
+              "sha256": "f15def9208ba6304af81ce24ea77c7c07b743a7c24561ce8acef6f90008b883a",
+              "size": 31938,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 2,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-2.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "a83e8c4f3967810d8eca767731a144419130573e36e7d186a1afb19be853b8e8",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/2649d52a-f8e0-44c6-8200-a7e137864aa4",
+              "sha256": "9c6c9dde521dc8a3848b8725b3788235c0e58cb14137f34213d425587c261d43",
+              "size": 51074,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 3,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-3.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "638214357710e7d52959ac11a4b94d7982475efaecd5fed37901553557bfdb60",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/e3adfd64-2858-4610-895e-b6cdd08d60ef",
+              "sha256": "dd4de6025ea72b61425a9db7dcf1b45d732795e2bda075d2105579e752e69257",
+              "size": 70105,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 4,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-4.json\",\"status\":\"listo\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "78bb30eeacb9bab98a1cdd8e413bc6281c3278b31daa8e246a0d3de0b94c631e",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/5aac72b7-499b-4a03-9252-633731578792",
+              "sha256": "b0f9c73c9df954d6e5769029a1febd6e12ac5f394945b304831820164af464d2",
+              "size": 89136,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 5,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "7c37a53dccb36a36383c4a172b3224071d591f58f6d5623f8cb81436a41085f2",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/49ca667a-d35e-429b-a725-e2a6a8eb43f9",
+              "sha256": "326ca472bffe2722a853a87877c381be8f01c07a48f96216675aab069a65260c",
+              "size": 108165,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 6,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-6.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "29f53a5fc94e215affa03b1fef8cd744efcf67426280f3f4bbce9be2b46e7c46",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/06717861-f79a-4546-bf61-b7d056833beb",
+              "sha256": "7d964d3f87aba848d37a065e1adc2b84c4653deb66f18172d8a13b7937daf56b",
+              "size": 127218,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 7,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-7.json\",\"status\":\"preparado\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "abeto",
+              "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+              "status": "preparado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "1e36eb0224b2904c92657b30d193527a3ac76fac71b10f2138a3e382c2f569d7",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/bc7f9e25-e0d9-4f35-a98c-506e664554dc",
+              "sha256": "0646019d437e2ba0f3f0759b2e1068fc6e38e4661182b4f2834a815122db4fdd",
+              "size": 146253,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 8,
+            "response": "{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-8.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "roble",
+              "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+              "status": "cancelado",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "be2caf6b33158c96942faaef0c8077cab5d21248cfeafe761eeeac4775b8ebd6",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/31c57615-2874-4dbc-9d00-9554d4f20774",
+              "sha256": "779944fe358bc898bf11537987d5cafba6a42166c0d8000e1e9bf2263767efa1",
+              "size": 165306,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 9,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-9.json\",\"status\":\"listo\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "pino",
+              "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+              "status": "listo",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "4ffecc83530eb2de0f01fc698ab1cf3cebbe096cf7fa195a8b0e68ae4007bcf4",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/d1e4ff75-c01b-4828-be96-54357d17fc8c",
+              "sha256": "c819c1b16dfe940b49595bd73e590fd1f589977e98d458ce984e1eb2f285cb55",
+              "size": 184347,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          },
+          {
+            "round": 10,
+            "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"63ef3636-f6d9-4488-8297-ed13b14b519c\",\"secondReceipt\":\"9e1b7235-af66-418b-94e5-36d20f2eb359\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-10.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```",
+            "expected": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "answer": {
+              "first": "completed",
+              "second": "completed",
+              "firstReceipt": "63ef3636-f6d9-4488-8297-ed13b14b519c",
+              "secondReceipt": "9e1b7235-af66-418b-94e5-36d20f2eb359",
+              "repeated": false,
+              "unknown": null,
+              "destination": "cedro",
+              "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+              "status": "retenido",
+              "sendAllowed": false
+            },
+            "fieldsPassed": true,
+            "summarySources": [
+              {
+                "sourceSha256": "abe77dd3af301feb8ca3345a6b0b035aa3211fd8b0026e50573a130350a0555f",
+                "attempts": 1,
+                "completed": true
+              }
+            ],
+            "sourceArchive": {
+              "uri": "flujo://run/a1d3433f-bfb0-4e1a-b24d-efbac563f883/93621008-f769-4704-8b6d-c4e171b85934",
+              "sha256": "e3eddc40b34bb7db3b815feacb09f97daac313300f92a447f3895256d8d41588",
+              "size": 203391,
+              "verified": true
+            },
+            "writes": 2,
+            "commitInvocations": 2,
+            "canonicalPreserved": true,
+            "toolPairingValid": true
+          }
+        ],
+        "totalUsage": {
+          "inputTokens": 706817,
+          "outputTokens": 30061,
+          "reportedCost": 0.08571220000000002,
+          "callsWithoutReportedCost": 0
+        },
+        "applicationClosed": true
+      }
+    ]
+  },
+  "knownUsageAcrossOwnedAttempts": {
+    "requests": 312,
+    "reportedCost": 0.5575001500000001,
+    "requestsWithoutReportedCost": 2
+  },
+  "startupFailures": [
+    {
+      "file": "actions-27d8b8c0-b28b-4813-afd9-05678ca4aefb.json",
+      "scenario": "crash",
+      "failure": {
+        "name": "TypeError",
+        "message": "fetch failed",
+        "stack": "TypeError: fetch failed\n    at node:internal/deps/undici/undici:15270:13\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-action-acceptance.mjs:190:26"
+      },
+      "calls": 0,
+      "epochs": 0,
+      "applicationClosed": true,
+      "scope": "Provider catalog fetch failed before any model call/application startup; preserved and retried without code or assertion changes"
+    }
+  ],
+  "earlierOwnedCases": [
+    {
+      "model": "openai/gpt-6-luna",
+      "scenario": "cancel",
+      "status": "passed-focused-scope",
+      "applicationSourceTree": "98e4382da6a9441f774f4ba6a1e9dc57511e7cb9",
+      "buildId": "8Lu6I_0vJlvvTZH4nojUJ",
+      "rounds": 10,
+      "exactRounds": 10,
+      "failures": [],
+      "totalUsage": {
+        "inputTokens": 364249,
+        "outputTokens": 12701,
+        "reportedCost": 0.02333946,
+        "callsWithoutReportedCost": 0
+      },
+      "applicationClosed": true
+    },
+    {
+      "model": "anthropic/claude-haiku-5.5",
+      "scenario": "crash",
+      "status": "failed-semantic-fields",
+      "applicationSourceTree": "98e4382da6a9441f774f4ba6a1e9dc57511e7cb9",
+      "buildId": "8Lu6I_0vJlvvTZH4nojUJ",
+      "rounds": 10,
+      "exactRounds": 9,
+      "failures": [
+        {
+          "round": 4,
+          "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"ebd3ef8c-d515-4afd-9e73-03f7d5c6a4a8\",\"secondReceipt\":\"25b8d283-c042-44f6-a7ec-dc49a8107bba\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-4.json\",\"status\":\"listo\",\"sendAllowed\":false}\n```\n\nAmbas acciones están `completed` con count 1 y sus recibos se mantienen idénticos. Los valores de registro de envío corresponden a la última corrección aceptada en esta solicitud. `sendAllowed` es `false` porque ninguna corrección concede permiso de envío. No se realizaron escrituras ni repeticiones, y no se ejecutó ninguna acción externa.",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "ebd3ef8c-d515-4afd-9e73-03f7d5c6a4a8",
+            "secondReceipt": "25b8d283-c042-44f6-a7ec-dc49a8107bba",
+            "repeated": false,
+            "unknown": null,
+            "destination": "roble",
+            "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+            "status": "listo",
+            "sendAllowed": false
+          },
+          "failure": "Unexpected non-whitespace character after JSON at position 286 (line 2 column 1)"
+        }
+      ],
+      "totalUsage": {
+        "inputTokens": 681414,
+        "outputTokens": 27473,
+        "reportedCost": 0.0818779,
+        "callsWithoutReportedCost": 0
+      },
+      "applicationClosed": true
+    },
+    {
+      "model": "anthropic/claude-haiku-5.5",
+      "scenario": "cancel",
+      "status": "failed-semantic-fields",
+      "applicationSourceTree": "fb050dabf1805834f210c64c2816627eea53a749",
+      "buildId": "bkqTDQL2vXJNz5rxI8zBU",
+      "rounds": 10,
+      "exactRounds": 8,
+      "failures": [
+        {
+          "round": 2,
+          "response": "No ejecuté el lote de `commit_action`. `acción-completa-ñ` ya tiene un recibo y repetirlo crearía otra entrada. Para `acción-incierta-ñ`, la conciliación muestra que ya está completada, así que una nueva escritura también duplicaría una acción existente. Solo consulté el estado con `lookup_action`.\n\nRevisión 1:\n```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"0a91806e-dab5-4c10-8e23-5de14b145711\",\"secondReceipt\":\"3820ab46-3da7-48aa-9237-dfee175aa003\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-1.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```\n\nRevisión 2:\n```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"0a91806e-dab5-4c10-8e23-5de14b145711\",\"secondReceipt\":\"3820ab46-3da7-48aa-9237-dfee175aa003\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-2.json\",\"status\":\"preparado\",\"sendAllowed\":false}\n```\n\nEn la Revisión 2 uso la última corrección aceptada (`pino`, `lote-2.json`, `preparado`). `sendAllowed` es `false` porque la prohibición de enviar sigue vigente; un registro preparado no concede permiso de envío.\n\nObservación: los `lookup_action` de esta revisión devolvieron un scope `run:a93b4c42-8bb6-454f-9ec6-b6da3df28b19`. Los recibos coinciden con los anteriores, pero el scope cambió respecto a las consultas previas (`run:53259687-...`) y al de la escritura original (`run:ad24256c-...`). Conviene revisar esta discrepancia en la conciliación.",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "0a91806e-dab5-4c10-8e23-5de14b145711",
+            "secondReceipt": "3820ab46-3da7-48aa-9237-dfee175aa003",
+            "repeated": false,
+            "unknown": null,
+            "destination": "pino",
+            "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+            "status": "preparado",
+            "sendAllowed": false
+          },
+          "failure": "Unexpected token 'N', \"No ejecuté\"... is not valid JSON"
+        },
+        {
+          "round": 5,
+          "response": "```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"0a91806e-dab5-4c10-8e23-5de14b145711\",\"secondReceipt\":\"3820ab46-3da7-48aa-9237-dfee175aa003\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```\n```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"0a91806e-dab5-4c10-8e23-5de14b145711\",\"secondReceipt\":\"3820ab46-3da7-48aa-9237-dfee175aa003\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```\n```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"0a91806e-dab5-4c10-8e23-5de14b145711\",\"secondReceipt\":\"3820ab46-3da7-48aa-9237-dfee175aa003\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```\n```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"0a91806e-dab5-4c10-8e23-5de14b145711\",\"secondReceipt\":\"3820ab46-3da7-48aa-9237-dfee175aa003\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```\n```json\n{\"first\":\"completed\",\"second\":\"completed\",\"firstReceipt\":\"0a91806e-dab5-4c10-8e23-5de14b145711\",\"secondReceipt\":\"3820ab46-3da7-48aa-9237-dfee175aa003\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}\n```\n\nNota: estas revisiones usan la última corrección aceptada de su mensaje (cedro / lote-5.json / retenido). La consulta de `lookup_action` se hizo una vez para cada actionId; no hubo escrituras ni reintentos. Los recibos coinciden con los registrados.",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "0a91806e-dab5-4c10-8e23-5de14b145711",
+            "secondReceipt": "3820ab46-3da7-48aa-9237-dfee175aa003",
+            "repeated": false,
+            "unknown": null,
+            "destination": "cedro",
+            "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+            "status": "retenido",
+            "sendAllowed": false
+          },
+          "failure": "Unexpected non-whitespace character after JSON at position 289 (line 2 column 1)"
+        }
+      ],
+      "totalUsage": {
+        "inputTokens": 816951,
+        "outputTokens": 38629,
+        "reportedCost": 0.1010096,
+        "callsWithoutReportedCost": 0
+      },
+      "applicationClosed": true
+    },
+    {
+      "model": "anthropic/claude-haiku-5.5",
+      "scenario": "cancel",
+      "status": "passed-focused-scope",
+      "applicationSourceTree": "98e4382da6a9441f774f4ba6a1e9dc57511e7cb9",
+      "buildId": "8Lu6I_0vJlvvTZH4nojUJ",
+      "rounds": 10,
+      "exactRounds": 10,
+      "failures": [],
+      "totalUsage": {
+        "inputTokens": 707778,
+        "outputTokens": 28791,
+        "reportedCost": 0.0851733,
+        "callsWithoutReportedCost": 0
+      },
+      "applicationClosed": true
+    },
+    {
+      "model": "openai/gpt-6-luna",
+      "scenario": "crash",
+      "status": "failed-semantic-fields",
+      "applicationSourceTree": "98e4382da6a9441f774f4ba6a1e9dc57511e7cb9",
+      "buildId": "8Lu6I_0vJlvvTZH4nojUJ",
+      "rounds": 10,
+      "exactRounds": 0,
+      "failures": [
+        {
+          "round": 1,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-1.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "cedro",
+            "path": "C:\\entregas\\niño-ñ\\lote-1.json",
+            "status": "retenido",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'cedro',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-1.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'retenido',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 2,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-2.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "pino",
+            "path": "C:\\entregas\\niño-ñ\\lote-2.json",
+            "status": "preparado",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'pino',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-2.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'preparado',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 3,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-3.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "abeto",
+            "path": "C:\\entregas\\niño-ñ\\lote-3.json",
+            "status": "cancelado",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'abeto',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-3.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'cancelado',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 4,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-4.json\",\"status\":\"listo\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "roble",
+            "path": "C:\\entregas\\niño-ñ\\lote-4.json",
+            "status": "listo",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'roble',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-4.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'listo',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 5,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-5.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "cedro",
+            "path": "C:\\entregas\\niño-ñ\\lote-5.json",
+            "status": "retenido",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'cedro',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-5.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'retenido',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 6,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-6.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "pino",
+            "path": "C:\\entregas\\niño-ñ\\lote-6.json",
+            "status": "retenido",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'pino',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-6.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'retenido',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 7,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"abeto\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-7.json\",\"status\":\"preparado\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "abeto",
+            "path": "C:\\entregas\\niño-ñ\\lote-7.json",
+            "status": "preparado",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'abeto',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-7.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'preparado',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 8,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"roble\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-8.json\",\"status\":\"cancelado\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "roble",
+            "path": "C:\\entregas\\niño-ñ\\lote-8.json",
+            "status": "cancelado",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'roble',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-8.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'cancelado',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 9,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-a3cf-4d50-be72-6c9a8506b046\",\"repeated\":false,\"unknown\":null,\"destination\":\"pino\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-9.json\",\"status\":\"listo\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "pino",
+            "path": "C:\\entregas\\niño-ñ\\lote-9.json",
+            "status": "listo",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'pino',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-9.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n+   secondReceipt: '1e29600e-a3cf-4d50-be72-6c9a8506b046',\n-   second: 'completed',\n-   secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'listo',\n    unknown: null\n  }\n"
+        },
+        {
+          "round": 10,
+          "response": "{\"first\":\"completed (count: 1)\",\"second\":\"completed (count: 1)\",\"firstReceipt\":\"925df736-a3cf-4d50-be72-6c9a8506b046\",\"secondReceipt\":\"1e29600e-ac8a-4266-8921-6b3194a5cf34\",\"repeated\":false,\"unknown\":null,\"destination\":\"cedro\",\"path\":\"C:\\\\entregas\\\\niño-ñ\\\\lote-10.json\",\"status\":\"retenido\",\"sendAllowed\":false}",
+          "expected": {
+            "first": "completed",
+            "second": "completed",
+            "firstReceipt": "925df736-a3cf-4d50-be72-6c9a8506b046",
+            "secondReceipt": "1e29600e-ac8a-4266-8921-6b3194a5cf34",
+            "repeated": false,
+            "unknown": null,
+            "destination": "cedro",
+            "path": "C:\\entregas\\niño-ñ\\lote-10.json",
+            "status": "retenido",
+            "sendAllowed": false
+          },
+          "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    destination: 'cedro',\n+   first: 'completed (count: 1)',\n-   first: 'completed',\n    firstReceipt: '925df736-a3cf-4d50-be72-6c9a8506b046',\n    path: 'C:\\\\entregas\\\\niño-ñ\\\\lote-10.json',\n    repeated: false,\n+   second: 'completed (count: 1)',\n-   second: 'completed',\n    secondReceipt: '1e29600e-ac8a-4266-8921-6b3194a5cf34',\n    sendAllowed: false,\n    status: 'retenido',\n    unknown: null\n  }\n"
+        }
+      ],
+      "totalUsage": {
+        "inputTokens": 428466,
+        "outputTokens": 11966,
+        "reportedCost": 0.025041439999999998,
+        "callsWithoutReportedCost": 0
+      },
+      "applicationClosed": true
+    },
+    {
+      "model": "openai/gpt-6-luna",
+      "scenario": "cancel",
+      "status": "passed-focused-scope",
+      "applicationSourceTree": "fb050dabf1805834f210c64c2816627eea53a749",
+      "buildId": "bkqTDQL2vXJNz5rxI8zBU",
+      "rounds": 10,
+      "exactRounds": 10,
+      "failures": [],
+      "totalUsage": {
+        "inputTokens": 362916,
+        "outputTokens": 14674,
+        "reportedCost": 0.024797465000000005,
+        "callsWithoutReportedCost": 0
+      },
+      "applicationClosed": true
+    }
+  ],
+  "trace": {
+    "path": "docs/performance/recovery-request-continuity-provider-trace-2026-10-16.json.gz",
+    "sha256": "e928a7dc45d7c297290d64f6117e67eff7fb87e64ecedb25222a725accdf909e",
+    "uncompressedSha256": "91010884667c0e3b12c5fa93271ee022a1a4711aed934d54128566dab14515c0",
+    "bytes": 3277253,
+    "uncompressedBytes": 35627005
+  },
+  "priorEvidence": "https://github.com/mario-andreschak/FLUJO/blob/686b11c5b32e393ae4599f500a9e5b073d86cd80/docs/performance/summary-authority-recovery-2026-10-16.json",
+  "boundaries": [
+    "Existing #1091 remains open for genuine native compaction/window/session, encrypted/signature/CLI, semantic/position/visual, installed/endurance and release criteria.",
+    "API Haiku through OpenRouter is not Claude Agent SDK lifecycle proof.",
+    "Earlier failures remain failed evidence. These controlled local writes are not external delivery or crash-midcommit atomicity.",
+    "No full/remote CI, container image build or release was dispatched. Free was previously unable to satisfy this same acceptance; only approved explicit Haiku/GPT Luna routes were used without fallback."
+  ]
+}
