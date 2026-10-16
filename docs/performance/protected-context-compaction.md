@@ -654,3 +654,49 @@ one Responses route; developer maps to system on that adapter. It adds no
 external-action, provider-overflow retry, Native/session/signature, visual or
 release acceptance claim. Earlier accepted proofs retain their scopes and
 #1091 remains open. Application source and dependencies are unchanged.
+
+## Responses reasoning ownership and projection invalidation
+
+The existing #1091 native-state review reproduced opaque reasoning replay after
+changing the selected model, connection, provider, endpoint, credential, tools,
+instructions, source text or function arguments. Conversation/node IDs alone
+were insufficient, including on the streaming route. Eleven new adapter
+regressions failed against main before the repair.
+
+The Responses and OpenRouter Agent SDK adapters now capture a workspace-local
+cache owner before dispatch. Its digest binds the concrete adapter, selected
+connection/model/provider/endpoint, credential scope, reasoning policy, output
+modalities, tools and name bindings. Credential bytes are not retained in the
+cache. Every anchor also binds the provider-visible input prefix and generated
+assistant/function-call group. A changed or summarized prefix discards that
+anchor; an unchanged appended tail can retain its exact opaque items.
+
+A late completion cannot repopulate a forgotten, evicted or replaced owner.
+Conversation/node keys are encoded as tuples. The existing bounds remain 200
+sessions per workspace and 64 anchors per session, with active-owner LRU refresh.
+The existing streamed canonical JSON digest avoids a whole-history serialized
+copy when fingerprinting the prefix. Canonical history remains available when
+this optional process-local cache is empty, including after application restart.
+
+[The frozen evidence](responses-reasoning-ownership-2026-10-15.json) records the
+source tree, local typecheck/lint/non-container build, 88 focused checks and 40
+controlled HTTP cases through the production Chat route's emitted adapter
+registry and real SDKs. The 80 loopback requests cover both adapters, ordinary
+and streaming continuation, exact opaque-byte reuse and configuration/projection
+invalidation. The initial equipment failures are retained separately; the
+successful fixture uses the installed SDK's complete Responses/SSE schema.
+Run through flujo-bash with an absolute task-owned report path:
+`node scripts/responses-reasoning-acceptance.mjs <report.json>`.
+
+The loopback opaque strings are synthetic, and no tool executes. Four genuine
+OpenRouter Nemotron Super Free turns also pass through the emitted adapters:
+each requests the read-only tool, then returns its exact receipt after a saved
+connection change. All four report zero cost and return no opaque items, so
+they establish canonical continuation rather than real opaque-state replay.
+The earlier Ultra Free provider error and timed-out diagnostic attempt remain
+failed in the evidence; neither supplies monetary cost fields. The
+[Responses state protocol](https://developers.openai.com/api/docs/guides/conversation-state)
+describes complete output replay; this repair covers the existing bounded
+tool-anchored reasoning cache. These results do not establish durable native compaction windows,
+provider signatures, every resolved backend behind a router/alias, CLI session
+resume, visual benefit or release acceptance. Those #1091 criteria stay open.

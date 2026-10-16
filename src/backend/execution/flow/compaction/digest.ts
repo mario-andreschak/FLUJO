@@ -25,7 +25,7 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-function sha256(value: unknown): string {
+export function digestCanonicalJson(value: unknown): string {
   const hash = createHash('sha256');
   let buffer = '';
   const append = (text: string) => {
@@ -111,9 +111,9 @@ function sha256(value: unknown): string {
  * invalidate an artifact.
  */
 export function digestProjectedMessages(messages: readonly FlujoChatMessage[]): string {
-  return sha256(messages);
+  return digestCanonicalJson(messages);
 }
 
 export function digestProjectionIdentity(identity: CompactionProjectionIdentity): string {
-  return sha256(identity);
+  return digestCanonicalJson(identity);
 }

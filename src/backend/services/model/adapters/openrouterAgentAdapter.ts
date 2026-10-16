@@ -13,7 +13,7 @@ import { contextUsageFromCompletion } from './contextUsage';
 import { toAnthropicToolSchema } from './anthropicToolSchema';
 import {
   fromResponse, toResponsesInput, toResponsesTools,
-  getCarriedResponsesReasoning, rememberResponsesReasoning,
+  prepareResponsesReasoning,
 } from './openaiResponsesAdapter';
 import {
   buildProviderToolNameTranslation, translateToolsForProvider,
@@ -125,6 +125,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
     const translation = buildProviderToolNameTranslation(input.tools, input.toolNameMap);
     const tools = translateToolsForProvider(input.tools, translation);
     const messages = translateMessagesForProvider(input.messages, translation);
+    const reasoningState = prepareResponsesReasoning(input, 'openrouter-agent');
     const nativeTools = toResponsesTools(tools)?.map(definition =>
       input.model.name.startsWith('anthropic/') && definition.type === 'function'
         ? { ...definition, parameters: toAnthropicToolSchema(definition.parameters ?? {}) }
@@ -205,8 +206,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
     try {
       const result = client.callModel({
         model: input.model.name,
-        input: mapOpenRouterEnvelopeKeys(toResponsesInput(messages,
-          getCarriedResponsesReasoning(input.conversationId, input.nodeId))) as Item[],
+        input: mapOpenRouterEnvelopeKeys(toResponsesInput(messages, reasoningState.carried)) as Item[],
         tools: tools?.map(definition => tool({
           name: definition.function.name,
           description: definition.function.description,
@@ -238,9 +238,8 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
       }
       const { completion: nativeCompletion, reasoning, media } = fromResponse(
         mapOpenRouterEnvelopeKeys(response, true) as OpenAI.Responses.Response, input.model.name);
-      rememberResponsesReasoning(input.conversationId, input.nodeId,
-        nativeCompletion.choices[0]?.message.tool_calls?.[0]?.id, reasoning);
       const completion = translateCompletionFromProvider(nativeCompletion, translation);
+      reasoningState.remember(completion, reasoning);
       return { completion, media,
         contextUsage: contextUsageFromCompletion(completion.usage, input.model.contextWindow),
         ...(liveMessageId ? { liveMessageId } : {}),
