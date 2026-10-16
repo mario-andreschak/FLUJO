@@ -787,3 +787,28 @@ the exact receipt. Each reports USD 0; no tool executes or model fallback occurs
 That provider returns no encrypted items, so genuine encrypted/signature/CLI
 resume, provider compaction windows, broader semantic/position/visual and release
 acceptance remain open in #1091.
+
+## Continuing completed handoffs — October 16, 2026
+
+A later deterministic edge must not answer an already completed handoff or reuse its old caller brief/session key. The runtime now captures and answers pending calls only. With none pending, it skips caller-input capture entirely, including the Signal caller-body marker. Partially completed batches still handle their pending calls.
+
+The [frozen handoff and fidelity evidence](responses-restart-fidelity-2026-10-16.json) records 80 focused runtime checks across five suites, 32 harness guards, fresh typecheck/lint and the inspected non-container build. Two initial regressions and the adjacent Signal regression fail before repair.
+
+The six actual built-app cases use approved Claude Haiku 5.5 through OpenRouter. Each ledger fsyncs every invocation and has no deduplication. Both sequential cases replay the actual native provider output after process restart. Stop/crash cases reconcile the real committed writes after their acknowledgement is lost; the source/corrections rotate through early, middle and late positions.
+
+| Adapter / case | Exact replies | Physical writes |
+|---|---:|---:|
+| openai-responses / sequential | 10/10 | 2 |
+| openai-responses / cancel | 3/10 | 2 |
+| openai-responses / crash | 2/10 | 2 |
+| openrouter-agent / sequential | 10/10 | 2 |
+| openrouter-agent / cancel | 10/10 | 2 |
+| openrouter-agent / crash | 10/10 | 2 |
+
+All 60 captured rounds preserve trusted user authority and valid tool pairing on every continuation; all six selected ledgers have two writes from two authorizations. Ten incomplete later summary sources were rejected while valid summaries and safe canonical fallback remained available. The 15 non-exact OpenAI Responses recovery replies remain failed acceptance, including `sendAllowed:null` instead of `false` and extra prose. No answer is repaired for scoring. #1091 remains open.
+
+Matrix source `783a3522c1d0ac36fa56e3bdb86cc4aee70b47ce` and final guarded source `31678cb7e11b9d1d5db0ec03544e640dc3faf8f7` are recorded separately. The final Signal guard skips an otherwise empty capture block; its branch is covered by the new regression and fresh final build. The compressed trace includes the matrix source patch, all provider traffic/canonical snapshots, earlier failures, aborted baselines and the unusable old receipt.
+
+The selected matrix reports USD 0.916433. Across usable attempts, reported charges total USD 1.230976; 7 requests lack reported cost, and the unusable old receipt supplies no cost evidence. Overlapping case timings are recorded per case rather than added into a wall-clock claim.
+
+Free was attempted first; its over-issued write batch and path error stay unqualified. DeepSeek sometimes exhausted the fixed 4,000-token summary ceiling on reasoning. Genuine provider compaction endpoints, encrypted/signature/CLI and Claude Agent SDK lifecycle, visual benefit, installed/endurance and release acceptance remain unqualified. No full suite, remote CI, container/image build or release was dispatched.
