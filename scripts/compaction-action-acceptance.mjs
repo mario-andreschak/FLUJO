@@ -26,7 +26,7 @@ const appPort = Number(process.env.COMPACTION_ACCEPTANCE_PORT ?? 5481);
 const base = `http://127.0.0.1:${appPort}`;
 const selectedModelId = process.env.COMPACTION_ACCEPTANCE_ACCOUNT_ID;
 const requestedModel = process.env.COMPACTION_ACCEPTANCE_MODEL ?? 'nvidia/nemotron-3-super-120b-a12b:free';
-assert(['openrouter/free', 'nvidia/nemotron-3-super-120b-a12b:free', 'deepseek/deepseek-v4-flash', 'anthropic/claude-haiku-5.5'].includes(requestedModel),
+assert(['openrouter/free', 'nvidia/nemotron-3-super-120b-a12b:free', 'deepseek/deepseek-v4-flash', 'anthropic/claude-haiku-5.5', 'openai/gpt-6-luna'].includes(requestedModel),
   'Only these explicit approved OpenRouter options may be used; no fallback');
 const adapter = process.env.COMPACTION_ACCEPTANCE_ADAPTER ?? 'openai';
 assert(['openai', 'openai-responses', 'openrouter-agent'].includes(adapter), 'Select an existing Responses adapter');

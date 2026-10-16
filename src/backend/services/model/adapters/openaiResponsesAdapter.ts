@@ -942,9 +942,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
               toolCallDelta: { index, argumentsDelta: event.delta },
             });
           }
-        } else if (event.type === 'response.completed') {
-          response = event.response;
-        } else if (event.type === 'response.failed') {
+        } else if (event.type === 'response.completed' || event.type === 'response.failed'
+          || event.type === 'response.incomplete') {
           response = event.response;
         }
       }
