@@ -164,6 +164,8 @@ try {
     'src/backend/execution/flow/handlers/ModelHandler.ts', 'src/backend/execution/flow/nodes/ProcessNode.ts',
     '__tests__/flow/processNodeSnapshotAuthority.test.ts',
     'src/backend/execution/flow/handlers/summarizingCompaction.ts',
+    'src/backend/execution/flow/compaction/structuredObservations.ts',
+    '__tests__/model/structuredObservations.test.ts',
     'src/backend/execution/flow/compaction/types.ts',
     '__tests__/model/summarizingCompaction.test.ts',
     'scripts/compaction-source-task-check.mjs', 'scripts/compaction-source-task-check.test.mjs',
@@ -340,6 +342,15 @@ try {
         assert(wire.some(message => message.content.startsWith('[FLUJO conversation summary]') && message.content.includes(receipt)));
         const archive = await verifyArchive(recorded.artifact);
         assert(archive.messages.some(message => message.content === currentObservation));
+        if (recorded.artifact.policyVersion === 'summary-v5-source-observations') {
+          const source = archive.messages.find(message => message.content === currentObservation);
+          const exactRecord = JSON.stringify({ source_role: source.role,
+            source_message_id: source.id, text: currentObservation.split('\n')[0] });
+          assert(recorded.artifact.summaryText.split('## Recorded Source Observations\n')[1]?.includes(exactRecord),
+            'Persisted evidence must quote the current defining source line and its actual provenance');
+          recorded.exactSourceObservationVerified = true;
+          recorded.exactSourceMessageId = source.id;
+        }
         delete archive.messages; recorded.sourceArchive = archive;
         recorded.summaryDisposition = 'persisted';
       } else {

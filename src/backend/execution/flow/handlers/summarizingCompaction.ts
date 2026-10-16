@@ -4,7 +4,8 @@ import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { CompactionProjectionIdentity, WireSummaryArtifact } from '../compaction/types';
 import { inspectJson } from '../compaction/jsonInspection';
-import { buildStructuredObservationBlock } from '../compaction/structuredObservations';
+import { buildStructuredObservationBlock, STRUCTURED_OBSERVATIONS_HEADING,
+  validateSourceObservationBlock } from '../compaction/structuredObservations';
 
 const log = createLogger('backend/execution/flow/handlers/summarizingCompaction');
 
@@ -235,10 +236,14 @@ function retainedOldMessages(messages: FlujoChatMessage[], split: SplitResult): 
  * authority for instructions or execution receipts. Missing sections, fenced
  * or unfinished output are rejected rather than persisted as a usable anchor. */
 export function validateCompactionSummary(summary: string): boolean {
-  const headings = summary.split(/\r?\n/).filter(line => /^## /.test(line));
+  // Exact source literals may themselves contain Markdown fences or truncation
+  // words. Syntax restrictions apply to generated narrative; cache evidence is
+  // checked byte-for-byte against the actual source separately.
+  const narrative = summary.split('\n\n' + STRUCTURED_OBSERVATIONS_HEADING + '\n')[0];
+  const headings = narrative.split(/\r?\n/).filter(line => /^## /.test(line));
   return COMPACTION_SUMMARY_SECTIONS.every((section, index) => headings[index] === section)
-    && !summary.includes('```')
-    && !/\[(?:truncated|incomplete)\]\s*$/i.test(summary.trim());
+    && !narrative.includes('```')
+    && !/\[(?:truncated|incomplete)\]\s*$/i.test(narrative.trim());
 }
 
 function preserveExecutionReceipts(summary: string, messages: FlujoChatMessage[]): string {
@@ -376,6 +381,10 @@ export async function compactHistory(
   const summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user')
     .map(message => message.id).filter((id): id is string => Boolean(id));
   const retainedOld = retainedOldMessages(messages, split);
+  let incompleteObservations = false;
+  const observations = buildStructuredObservationBlock(split.toSummarize, isCompactionSummary,
+    () => { incompleteObservations = true; });
+  const requiresArchive = incompleteObservations || split.toSummarize.some(message => message.role === 'tool');
 
   const reusable = opts.reusableArtifact;
   if (
@@ -391,6 +400,10 @@ export async function compactHistory(
     reusable.sourceEndId === split.toSummarize.at(-1)?.id &&
     reusable.sourceMessageCount === split.toSummarize.length
     && validateCompactionSummary(reusable.summaryText)
+    && validateSourceObservationBlock(reusable.summaryText, observations)
+    && (!requiresArchive || (typeof reusable.summaryResourceUri === 'string'
+      && reusable.summaryResourceUri.startsWith(RUN_RESOURCE_SCHEME)
+      && reusable.summaryText.includes(reusable.summaryResourceUri)))
   ) {
     const summaryMessage: FlujoChatMessage = {
       id: reusable.artifactId,
@@ -411,6 +424,8 @@ export async function compactHistory(
     };
   }
 
+  if (requiresArchive && !deps.writeAnchor) return null;
+
   const prompt = buildCompactionPrompt({ previousSummary: split.previousSummary });
 
   let summaryBody: string;
@@ -420,17 +435,15 @@ export async function compactHistory(
     log.warn('compactHistory: summarization model call failed; falling back (no mutation)', error);
     return null;
   }
-  if (!summaryBody || !validateCompactionSummary(summaryBody)) {
+  if (!summaryBody || !validateCompactionSummary(summaryBody)
+    || summaryBody.includes(STRUCTURED_OBSERVATIONS_HEADING)) {
     log.warn('compactHistory: incomplete summary returned; falling back (no mutation)');
     return null;
   }
 
   // Preserve dereferenceable resource URIs from the summarized slice.
   summaryBody = preserveResourceUris(summaryBody, split.toSummarize);
-  let incompleteObservations = false;
-  summaryBody += buildStructuredObservationBlock(split.toSummarize, isCompactionSummary,
-    () => { incompleteObservations = true; });
-  if (incompleteObservations && !deps.writeAnchor) return null;
+  summaryBody += observations;
   summaryBody = preserveExecutionReceipts(summaryBody, split.toSummarize);
   // Validate achieved reduction after exact instruction/receipt restoration,
   // before writing an artifact. Refuse a cosmetic summary that makes the wire

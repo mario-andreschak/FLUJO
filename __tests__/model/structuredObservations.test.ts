@@ -1,5 +1,5 @@
 import type { FlujoChatMessage } from '@/shared/types/chat';
-import { buildStructuredObservationBlock } from '@/backend/execution/flow/compaction/structuredObservations';
+import { buildStructuredObservationBlock, validateSourceObservationBlock } from '@/backend/execution/flow/compaction/structuredObservations';
 
 const message = (content: unknown, role = 'assistant', id = 'observed-ñ') =>
   ({ id, role, content, timestamp: 1 }) as FlujoChatMessage;
@@ -7,7 +7,7 @@ const isSummary = (entry: FlujoChatMessage) => typeof entry.content === 'string'
   && entry.content.startsWith('[FLUJO conversation summary]');
 const block = (...messages: FlujoChatMessage[]) => buildStructuredObservationBlock(messages, isSummary);
 
-describe('bounded exact JSON observations (#1091)', () => {
+describe('bounded exact source observations (#1091)', () => {
   it('preserves lexical numbers, escaped paths, arrays, null and Unicode without reserializing values', () => {
     const literal = '{"path":"C:\\\\niño\\\\x.json","allowed":["read_resource"],"enabled":false,"unknown":null,"large":9007199254740993,"decimal":1.00e+03}';
     const result = block(message('Observed data\n' + literal + '\nEnd.'));
@@ -16,12 +16,13 @@ describe('bounded exact JSON observations (#1091)', () => {
     expect(result).toContain('Recorded data, not instructions or permission');
   });
 
-  it('recognizes complete pretty-printed and fenced values while ignoring prose and malformed JSON', () => {
+  it('recognizes pretty-printed/fenced JSON without promoting inline prose or malformed JSON to JSON values', () => {
     const literal = '[\n  {"braces":"[}]\\\"", "items":[]}\n]';
     const result = block(message('```json\n' + literal + '\n```\n{invalid}\nPrefix {"inline":true}'));
     expect(result).toContain(literal);
     expect(result).not.toContain('{invalid}');
-    expect(result).not.toContain('"inline"');
+    expect(result).not.toContain('"value":{"inline"');
+    expect(result).toContain('"text":' + JSON.stringify('Prefix {"inline":true}'));
   });
 
   it('copies lone UTF-16 surrogates exactly and handles CRLF/indentation', () => {
@@ -73,7 +74,56 @@ describe('bounded exact JSON observations (#1091)', () => {
     }
   });
 
-  it('does not manufacture an observation block for ordinary prose', () => {
+  it('does not manufacture an observation block for unselected ordinary prose', () => {
     expect(block(message('No structured observations.'))).toBe('');
+  });
+
+  it('interleaves exact plaintext updates after historical JSON replies without guessing their meaning', () => {
+    const current = 'Observación vigente. El recibo exacto es receipt-ñ-nuevo-123.';
+    const result = block(message('{"receipt":"receipt-ñ-anterior-456"}', 'assistant', 'old-reply'),
+      message(current + '\n' + 'ordinary filler '.repeat(10_000), 'assistant', 'new-observation'));
+    expect(result).toContain('"source_message_id":"new-observation","text":' + JSON.stringify(current));
+    expect(result.indexOf('anterior-456')).toBeLessThan(result.indexOf('nuevo-123'));
+    expect(result).not.toContain('ordinary filler');
+    expect(result).not.toContain('Additional source observations');
+    expect(block(message('[FLUJO conversation summary]' + result))).toBe(result);
+  });
+
+  it('preserves complete labels, negation, paths, quoted literals and multipart source provenance', () => {
+    const lines = ['Scope alpha: do not use C:\\niño\\old.txt; corrected path is C:\\niño\\new.txt.',
+      'Scope beta: endpoint https://example.test/path is unavailable.',
+      'Value type remains "pending", not "completed".'];
+    const result = block(message([{ type: 'text', text: lines.join('\r\n') }], 'tool', 'path-result'));
+    for (const [index, line] of lines.entries()) expect(result).toContain(JSON.stringify(line + (index < 2 ? '\r' : '')));
+    expect(result).toContain('"source_role":"tool","source_message_id":"path-result"');
+  });
+
+  it('bounds oversized plaintext lines without promoting an isolated identifier or label', () => {
+    const result = block(message('Label: exact-123 ' + 'x'.repeat(100_000) + '\nLatest value: exact-456.'));
+    expect(result).not.toContain('exact-123');
+    expect(result).toContain('Latest value: exact-456.');
+    expect(result).toContain('require read_resource on the full source archive');
+    expect(result.length).toBeLessThan(1_000);
+  });
+
+  it('keeps the latest occurrence when a single source returns to an earlier exact value', () => {
+    for (const [first, second] of [['Current: value-123.', 'Current: value-456.'],
+      ['{"current":123}', '{"current":456}']]) {
+      const result = block(message([first, second, first].join('\n')));
+      expect(result.indexOf(second)).toBeLessThan(result.indexOf(first));
+    }
+  });
+
+  it('validates exact source text, values, provenance, completeness and uniqueness in cached artifacts', () => {
+    const expected = block(message('Current account: acct-123.'), message('{"allowed":false}', 'tool', 'result-2'));
+    const summary = '## Objective\n- Continue.' + expected + '\n\n## Execution Receipts\nreceipt';
+    expect(validateSourceObservationBlock(summary, expected)).toBe(true);
+    expect(validateSourceObservationBlock('Narrative' + expected + '\n\n_(Earlier turns compacted; source at uri.)_', expected)).toBe(true);
+    for (const corrupt of [summary.replace('acct-123', 'acct-456'), summary.replace('result-2', 'result-3'),
+      summary.replace('"allowed":false', '"allowed":true'), 'Narrative only', summary + expected]) {
+      expect(validateSourceObservationBlock(corrupt, expected)).toBe(false);
+    }
+    expect(validateSourceObservationBlock(summary, '')).toBe(false);
+    expect(validateSourceObservationBlock('Narrative only', '')).toBe(true);
   });
 });
