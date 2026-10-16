@@ -852,3 +852,53 @@ This changes handling of returned output; it does not request a provider
 compaction endpoint or introduce a new tool. Synthetic protocol checks do not
 qualify genuine provider compaction, encrypted state, native SDK/CLI sessions,
 visual benefit, installed/endurance or release acceptance. #1091 remains open.
+
+## Genuine encrypted Responses checkpoints — October 16, 2026
+
+The [frozen live evidence](responses-genuine-encrypted-state-2026-10-16.json)
+adds genuine provider-encrypted reasoning to the existing checkpoint acceptance.
+The prior approved Free runs returned no encrypted items. Explicit GPT Luna
+through OpenRouter supplies nonempty opaque output; the strict relay forwards
+the original request and response bodies without substituting answers or models.
+
+Both `openai-responses` and `openrouter-agent` pass the actual built HTTP journey
+with normal owner enrollment, scoped execution and a saved model-only flow.
+After the application exits and restarts, its durable checkpoint supplies the
+exact encrypted bytes, item IDs and ordering to a new provider request. The
+provider accepts that request and returns the exact Unicode receipt. Deliberate
+same-size corruption of the derived checkpoint and a changed connection
+credential each invalidate its native windows; canonical-history continuation
+still returns the same receipt and preserves all earlier canonical messages.
+No tools or third-party side effects execute.
+
+The application source remains main `42ad5ba1`, source tree
+`f70d21d034f35682da403387d5ff5d702969247f`; this batch adds acceptance and evidence.
+All 22 live checks pass across eight genuine provider calls and five application
+epochs, with observed exits and drained output pipes. Typecheck, whole-source
+lint, final harness lint/syntax and the inspected non-container five-MCP/Next
+build pass. Build time is 337.045 seconds; the live journey is 37.692 seconds.
+Overlapping phases are measured separately. The eight calls report USD 0.0005214;
+the capability probe reports USD 0.0000263, totaling USD 0.0005477 with no missing
+cost fields. The complete redacted provider/canonical trace is retained beside
+the receipt.
+
+The first harness attempt supplied an optional reasoning-effort setting that
+the ordinary OpenRouter profile does not expose. Model creation rejected it
+before any provider call. Its failed receipt remains in the trace and receives
+no acceptance credit. The corrected harness uses the normal provider default;
+no product validation gate is changed.
+
+Reproduce through flujo-bash with a fresh absolute report path:
+`node scripts/responses-live-state-acceptance.mjs <report.json>`. Set
+`OPENROUTER_API_KEY` (or the existing read-only configured-provider loader),
+`COMPACTION_ACCEPTANCE_MODEL=openai/gpt-6-luna` and an available
+`COMPACTION_ACCEPTANCE_PORT`. The harness defaults to an approved Free model,
+requires genuine encrypted output for a pass, and never changes models after
+a refusal. Remove its private profile and authority only after all epochs close.
+
+This qualifies genuine encrypted checkpoint replay and invalidation on the two
+non-streaming HTTP routes. Encrypted contents remain opaque. It does not call
+a provider compaction endpoint or qualify native CLI/Claude Agent SDK sessions,
+broader semantic/position/visual behavior, installed/endurance or release
+acceptance. #1091 stays open for those existing criteria. No full/remote CI,
+container build, release or automation change is introduced.
