@@ -616,3 +616,41 @@ USD 0; eight failed provider responses have no returned usage/cost fields. Faile
 attempts remain in the trace and do not cause additional archive reads. Both
 application epochs close. No full suite, remote workflow, container or release
 check was dispatched.
+
+## Ten-round generic text-transform authority acceptance
+
+The October 15 [frozen result](compaction-protected-state-2026-10-15.json) and
+complete compressed provider trace qualify ten successive rounds each of
+summaries, resource-backed result shortening and emergency omission in the
+actual built application. Each route preserves the original no-send user
+instruction, developer instruction and the order and literal text of all user
+corrections. Thirty qualified replies retain the latest destination, Windows path and
+status, with no inferred send permission or generated tool call. Conflicting
+historical claims of permission do not replace the user's prohibition.
+
+The trace proves each intended transform actually reaches the continuation.
+All ten result masks refer to their hash-verified original archives. Provider
+tool pairing and canonical history remain valid; independent replay compares
+6292 canonical fields.
+Three route restarts after round five, two explicit interruption resumes and a final restart preserve the stored
+histories. The first seven summary rounds are reused; an overloaded eighth generation falls back to complete canonical history and remains unqualified until its resumed summary succeeds. An infeasible protected input returns an explicit context-budget
+error without a provider request or shortened canonical instruction.
+
+The initial mechanical prompt did not declare the permission output type. One masking reply returned null despite intact original instructions and is retained as a failed attempt. Before the mechanical matrix, sendAllowed was pinned as boolean without supplying its value; only unknown may be null. This revised protocol is recorded separately from the original summary prompt.
+
+Configuration is explicit: ten rounds per transform, two recent wire messages,
+4,096 kept summary tokens, 4,000 output tokens and configured windows of
+1,000,000 / 24,000 / 16,000 for summary / masking / emergency. The selected
+approved OpenRouter Ultra Free catalog advertises a 1,000,000-token window and
+zero input/output pricing. All 67 recorded requests retain that
+exact route without fallback; 42 completed responses
+contribute to USD 0 reported cost; 25
+requests lack cost fields. Timings and all failed attempts remain in the result.
+
+Fresh typecheck, source/harness lint, the inspected non-container application
+build and 47 focused harness guards pass. The unchanged 85 runtime cases retain
+their earlier pinned evidence. This tests synthetic historical exchanges and
+one Responses route; developer maps to system on that adapter. It adds no
+external-action, provider-overflow retry, Native/session/signature, visual or
+release acceptance claim. Earlier accepted proofs retain their scopes and
+#1091 remains open. Application source and dependencies are unchanged.
