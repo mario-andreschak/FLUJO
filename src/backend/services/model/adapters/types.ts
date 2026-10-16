@@ -7,6 +7,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
 import type { CodexSessionMetadata, ToolReferenceContext } from '@/backend/execution/flow/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import type { ResponsesSessionState } from './responsesSessionState';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 /**
@@ -163,6 +164,9 @@ export interface CompletionInput {
   outputSchema?: Record<string, unknown>;
   /** Replace or invalidate the durable Codex metadata after an adapter turn. */
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
+  /** Conversation-owned native output; canonical history remains authoritative. */
+  responsesSession?: ResponsesSessionState;
+  onResponsesSessionChange?: (session: ResponsesSessionState | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
   tools?: OpenAI.ChatCompletionFunctionTool[];
   /** Sampling temperature. Omitted when an invalid persisted value is ignored. */
@@ -391,6 +395,7 @@ export function assertReadOnlyAssessmentInput(input: CompletionInput): void {
     || input.nativeToolPort || input.nativeOriginalProcessHost || input.executionExtensionContext
     || input.beforeToolDispatch || input.afterToolDispatch || input.requestToolApproval || input.authorizePersonaCoreMcp
     || input.conversationId || input.nodeId || input.sessionResume || input.codexSession || input.steering
+    || input.responsesSession || input.onResponsesSessionChange
     || input.consumeSteeringMessages || input.runResourceMarkers
     || input.messages.some(message => !['system', 'developer', 'user'].includes(message.role)
       || typeof message.content !== 'string')) {

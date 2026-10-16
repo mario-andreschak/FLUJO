@@ -13,6 +13,8 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
 import { digestCanonicalJson } from '@/backend/execution/flow/compaction/digest';
 import { inspectJson } from '@/backend/execution/flow/compaction/jsonInspection';
+import { validateResponsesSession, cloneResponsesJson, MAX_RESPONSES_SESSION_CHARS,
+  type ResponsesReplayRecord, type ResponsesSessionState } from './responsesSessionState';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -74,25 +76,15 @@ const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter
  */
 type ReasoningItem = OpenAI.Responses.ResponseReasoningItem;
 
-interface ReasoningRecord {
-  callId?: string;
-  items: ReasoningItem[];
-  nativeOutput?: OpenAI.Responses.ResponseOutputItem[];
-  nativeInputDigest?: string;
-  retainedChars: number;
-  inputLength: number;
-  inputDigest: string;
-  outputLength: number;
-  outputDigest: string;
-}
+type ReasoningRecord = ResponsesReplayRecord;
 interface ReasoningSession {
   owner: string;
   anchors: Map<string, ReasoningRecord>;
 }
 
-/** Disposable process-local state. Canonical history never depends on this cache. */
+/** Calls without a conversation checkpoint retain only this disposable cache. */
 const MAX_TRACKED_SESSIONS = 200;
-const MAX_SESSION_OUTPUT_CHARS = 1024 * 1024;
+const MAX_SESSION_OUTPUT_CHARS = MAX_RESPONSES_SESSION_CHARS;
 const reasoningByWorkspace = new Map<string, Map<string, ReasoningSession>>();
 
 function reasoningBySession(): Map<string, ReasoningSession> {
@@ -109,7 +101,7 @@ const sessionKey = (conversationId?: string, nodeId?: string): string | undefine
   conversationId ? JSON.stringify([conversationId, nodeId ?? null]) : undefined;
 
 type ReasoningInput = Pick<CompletionInput, 'model' | 'apiKey' | 'messages' | 'tools'
-  | 'conversationId' | 'nodeId' | 'toolNameMap'>;
+  | 'conversationId' | 'nodeId' | 'toolNameMap' | 'responsesSession' | 'onResponsesSessionChange' | 'signal'>;
 
 /** Capture ownership before dispatch so a late response cannot overwrite a
  * replacement route or a forgotten session. Only unchanged provider-visible
@@ -125,14 +117,21 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
   // Capture the workspace store now, rather than rereading async context when
   // the provider eventually finishes. Credential bytes are never retained.
   const sessions = reasoningBySession();
+  const workspace = getCurrentWorkspace();
   const owner = digestCanonicalJson({ policy: 'responses-output-v2', adapter,
     connection: input.model.id, model: input.model.name, provider: input.model.provider,
     baseUrl: input.model.baseUrl, credential: input.apiKey,
     reasoningEffort: input.model.reasoningEffort, outputModalities: input.model.outputModalities,
     tools: input.tools ?? [], toolNameMap: input.toolNameMap ?? {} });
   let session = sessions.get(key);
-  if (session?.owner !== owner) {
-    session = { owner, anchors: new Map() };
+  // A conversation checkpoint is authoritative over the disposable cache. A
+  // reload/revert must never resurrect a newer process-local sibling, and each
+  // admitted invocation fences late publications from an older checkpoint.
+  if (input.onResponsesSessionChange || session?.owner !== owner) {
+    const restored = input.onResponsesSessionChange ? validateResponsesSession(input.responsesSession, {
+      workspace, conversationId: input.conversationId!, nodeId: input.nodeId, owner,
+    }) : undefined;
+    session = { owner, anchors: new Map(restored?.records) };
     sessions.delete(key);
     if (sessions.size >= MAX_TRACKED_SESSIONS) {
       const oldest = sessions.keys().next();
@@ -162,6 +161,22 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
     }
   }
   const ownedSession = session;
+  const publish = () => {
+    if (!input.onResponsesSessionChange || input.signal?.aborted || sessions.get(key) !== ownedSession) return;
+    const snapshot: ResponsesSessionState = { version: 1, workspace,
+      conversationId: input.conversationId!, nodeId: input.nodeId, owner,
+      recordsDigest: '0'.repeat(64), records: [...ownedSession.anchors] };
+    // Include record metadata in the durable limit as well as native bytes.
+    while (snapshot.records.length && inspectJson(snapshot) > MAX_SESSION_OUTPUT_CHARS) {
+      const [oldest] = snapshot.records.shift()!;
+      ownedSession.anchors.delete(oldest);
+    }
+    snapshot.recordsDigest = digestCanonicalJson(snapshot.records);
+    input.onResponsesSessionChange(validateResponsesSession(snapshot, {
+      workspace, conversationId: input.conversationId!, nodeId: input.nodeId, owner,
+    }));
+  };
+  publish();
   return { carried, replay: translated => {
     if (!windows.size) {
       nativeInputDigest = digestCanonicalJson(translated);
@@ -190,20 +205,21 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
     }
     append(translated.slice(cursor));
     nativeInputDigest = digestCanonicalJson(replayed);
+    publish();
     return replayed;
   }, remember: (completion, items, nativeOutput) => {
     const message = completion.choices[0]?.message;
     const callId = message?.tool_calls?.[0]?.id;
-    if (!message || sessions.get(key) !== ownedSession) return;
+    if (!message || input.signal?.aborted || sessions.get(key) !== ownedSession) return;
     const output = toResponsesInput([message]);
     if (!output.length || (!nativeOutput?.length && (!callId || !items.length))) return;
     const outputDigest = digestCanonicalJson(output);
     const anchor = callId ? JSON.stringify(['call', callId]) : JSON.stringify(['turn', current.length, outputDigest]);
     ownedSession.anchors.delete(anchor);
     const retainedChars = inspectJson(nativeOutput ?? items);
-    if (retainedChars > MAX_SESSION_OUTPUT_CHARS) return;
-    ownedSession.anchors.set(anchor, { callId, items: nativeOutput ? [] : structuredClone(items),
-      ...(nativeOutput ? { nativeOutput: structuredClone(nativeOutput), nativeInputDigest } : {}),
+    if (retainedChars > MAX_SESSION_OUTPUT_CHARS) { publish(); return; }
+    ownedSession.anchors.set(anchor, { callId, items: nativeOutput ? [] : cloneResponsesJson(items),
+      ...(nativeOutput ? { nativeOutput: cloneResponsesJson(nativeOutput), nativeInputDigest } : {}),
       retainedChars, inputLength: current.length, inputDigest, outputLength: output.length, outputDigest });
     let retained = [...ownedSession.anchors.values()].reduce((sum, record) => sum + record.retainedChars, 0);
     while (ownedSession.anchors.size > 64 || retained > MAX_SESSION_OUTPUT_CHARS) {
@@ -212,6 +228,7 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
       retained -= ownedSession.anchors.get(oldest.value)!.retainedChars;
       ownedSession.anchors.delete(oldest.value);
     }
+    publish();
   } };
 }
 
@@ -705,6 +722,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     onSdkRequestResult,
     conversationId,
     nodeId,
+    responsesSession,
+    onResponsesSessionChange,
     promptCacheKey,
     promptCacheMode,
     toolNameMap,
@@ -719,7 +738,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     });
 
     const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
-      conversationId, nodeId, toolNameMap }, 'openai-responses');
+      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal }, 'openai-responses');
 
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const input = reasoningState.replay(toResponsesInput(translateMessagesForProvider(messages, toolNames)));
@@ -822,6 +841,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     signal,
     conversationId,
     nodeId,
+    responsesSession,
+    onResponsesSessionChange,
     promptCacheKey,
     promptCacheMode,
     onModelDelta,
@@ -839,7 +860,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       defaultHeaders: getProviderDefaultHeaders(model.provider),
     });
     const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
-      conversationId, nodeId, toolNameMap }, 'openai-responses');
+      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal }, 'openai-responses');
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const input = reasoningState.replay(toResponsesInput(translateMessagesForProvider(messages, toolNames)));
     const responsesTools = toResponsesTools(translateToolsForProvider(tools, toolNames));

@@ -1707,6 +1707,8 @@ export class ModelHandler {
       takeModelStepOrdinal: input.takeModelStepOrdinal,
       codexSession,
       onCodexSessionChange,
+      responsesSession: input.responsesSession,
+      onResponsesSessionChange: input.onResponsesSessionChange,
       localToolExecutors,
       shouldEndAgenticTurn,
       runResourceMarkers,
@@ -1998,6 +2000,8 @@ export class ModelHandler {
       takeModelStepOrdinal?: () => number;
       codexSession?: import('../types').CodexSessionMetadata;
       onCodexSessionChange?: (session: import('../types').CodexSessionMetadata | undefined) => void;
+      responsesSession?: import('@/backend/services/model/adapters/responsesSessionState').ResponsesSessionState;
+      onResponsesSessionChange?: (session: import('@/backend/services/model/adapters/responsesSessionState').ResponsesSessionState | undefined) => void;
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
        * #161) run in-loop by self-orchestrating adapters. */
       localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
@@ -3126,6 +3130,8 @@ export class ModelHandler {
               nodeId: opts?.nodeId,
               codexSession: nativeToolPort ? undefined : opts?.codexSession,
               onCodexSessionChange: nativeToolPort ? undefined : opts?.onCodexSessionChange,
+              responsesSession: nativeToolPort ? undefined : opts?.responsesSession,
+              onResponsesSessionChange: nativeToolPort ? undefined : opts?.onResponsesSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
               sessionResume: nativeToolPort ? false : opts?.sessionResume,
               // Derived from the tool-block hash, or from the conversation for a

@@ -728,10 +728,10 @@ cache. The returned output is cloned; replay never mutates canonical history.
 
 The existing 200-session/workspace and 64-window/session bounds now also cap
 retained output at 1,048,576 serialized JSON UTF-16 code units per session.
-Oversized windows are skipped and older windows are evicted. This optional,
-process-local cache falls back to the complete canonical projection on misses,
-rewrites, owner changes, eviction or restart. It is not durable native
-compaction/session storage and does not introduce a compaction endpoint.
+Oversized windows are skipped and older windows are evicted. Calls without a
+conversation-owned checkpoint use a process-local cache and canonical fallback
+on restart. Ordinary Process execution now checkpoints bounded output as
+described below. This does not introduce a provider compaction endpoint.
 
 The [frozen full-output evidence](responses-output-replay-2026-10-16.json)
 records 100 focused checks, local typecheck/lint and the non-container build on
@@ -745,3 +745,45 @@ The provider returns no encrypted items; synthetic encrypted strings qualify
 controlled replay only. Durable native compaction, real provider signatures,
 CLI resume, broader semantic/provider coverage and release acceptance remain
 open in #1091.
+
+## Durable Responses output checkpoints — October 16, 2026
+
+Ordinary Process calls checkpoint complete native Responses output alongside
+their canonical conversation through the existing state persistence path. Both
+Responses SDK adapters restore this derived state after application restart.
+The checkpoint is versioned and bound to workspace, conversation, node, adapter,
+connection, model, provider, endpoint, credential fingerprint, tools and effective
+reasoning configuration. Credential bytes and tool execution authority are never
+stored in it. Exact canonical source/assistant and normalized native-input
+digests still govern each window's reuse.
+
+Checkpoint records have an integrity digest for accidental corruption. Schema,
+scope, policy, payload and size validation run on restore and before reuse.
+Missing, corrupt, oversized or incompatible state uses canonical history;
+derived metadata never repairs or replaces canonical messages. Each session
+retains at most 64 windows, and the aggregate conversation checkpoint retains
+at most 64 nodes and 1,048,576 serialized JSON UTF-16 code units, including
+metadata. The current conversation checkpoint takes precedence over disposable
+process-local state. Stop and superseding invocations fence late publications;
+chat rewind, graph reset and meeting exit clear the corresponding checkpoints.
+
+The [frozen persistence evidence](responses-durable-state-2026-10-16.json)
+records application source tree `b2c9f244b88ef960a0344e173a6685fda31a2c3b`,
+264 focused checks across ten suites, typecheck/lint and the inspected
+non-container build. Two restart regressions fail before repair. Twelve actual
+built HTTP cases across five application epochs cover normal owner enrollment,
+scoped execution, exact opaque bytes/IDs/phases/order after restart, same-size
+corruption fallback, changed credentials and unchanged canonical messages.
+The 56 emitted real-SDK HTTP cases also pass. All application epochs exit with
+their output pipes drained. Earlier fixture/readiness/type failures remain in
+the evidence and receive no acceptance credit.
+
+Run the controlled built-app check through flujo-bash with a fresh absolute
+report path: `node scripts/responses-durable-acceptance.mjs <report.json>`.
+The owner must remove its private profiles after their observed epochs close.
+Four genuine explicit Nemotron Super Free turns run through separate processes:
+both adapters replay actual provider output after a JSON checkpoint and retain
+the exact receipt. Each reports USD 0; no tool executes or model fallback occurs.
+That provider returns no encrypted items, so genuine encrypted/signature/CLI
+resume, provider compaction windows, broader semantic/position/visual and release
+acceptance remain open in #1091.

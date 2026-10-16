@@ -84,6 +84,27 @@ beforeEach(() => {
   });
 });
 
+it.each([false, true])('restores a durable native window with provider tool names (streaming=%s)', async streaming => {
+  const data = { ...input(), conversationId: 'durable-agent', nodeId: 'process' };
+  let saved: CompletionInput['responsesSession'];
+  const onResponsesSessionChange: CompletionInput['onResponsesSessionChange'] = value => { saved = value; };
+  const output = [
+    { type: 'reasoning', id: 'reasoning-ñ', encryptedContent: 'OPAQUE\nñ', summary: [] },
+    ...nativeResponse.output,
+  ];
+  nativeResponse.output = output;
+  const first = await new OpenRouterAgentAdapter().createCompletion({ ...data, onResponsesSessionChange });
+  data.messages.push(first.completion.choices[0].message,
+    { role: 'tool', tool_call_id: 'call-1', content: 'OK' });
+  __resetReasoningStore();
+  await new OpenRouterAgentAdapter()[streaming ? 'createStreamCompletion' : 'createCompletion']({
+    ...data, responsesSession: JSON.parse(JSON.stringify(saved)), onResponsesSessionChange,
+  });
+  // This mock observes the SDK's camelCase request, before its HTTP serializer.
+  expect(requestBody.input.slice(1, 1 + output.length)).toEqual(output);
+  expect(JSON.stringify(saved)).not.toContain(data.apiKey);
+});
+
 it('uses one SDK turn, preserves MCP schemas, returns canonical calls, and archives no credentials', async () => {
   const data = input();
   data.signal = new AbortController().signal;
