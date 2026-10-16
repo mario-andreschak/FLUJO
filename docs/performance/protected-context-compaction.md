@@ -33,22 +33,33 @@ Disposable metadata keeps the newest artifact per node/model, with at most 64
 artifacts and 1,048,576 summary characters, including when restoring older state.
 This cache bound does not evict canonical, active, paused or recovery-owned runs.
 
-Small standalone JSON objects/arrays in assistant and tool observations now have
-an exact, deterministic evidence block alongside the narrative. It preserves the
-original JSON literal and source role/message ID, including arrays, nulls,
-escaped paths and integers too large for a JavaScript number. Recorded data
-does not grant tool permissions; original user corrections remain separate and
-supersede earlier observations. Text parts and pretty-printed/fenced JSON are
-eligible; inline prose, malformed JSON and non-text content are not extracted.
-Each value is at most 4,096 code units. The newest 32 records fit within 16,384
-record code units; omitted or larger data explicitly requires the full source
-archive. Callers without an archive writer retain the source when these bounds
-are exceeded. Subsequent wire rewrites carry the recorded block without nesting it
-or asking the summarizer to regenerate its values. The summary policy is
-`summary-v3-exact-observations`, so earlier cached summaries are regenerated.
-The complete restored projection must still shrink, and existing persistence,
-source-change and context-budget refusal paths remain in effect. This bounded
-evidence does not establish universal structured-state or provider fidelity.
+Assistant and tool observations have a deterministic source-evidence block
+alongside the narrative. It preserves standalone JSON literals and complete
+plaintext lines containing numbers, paths/URIs or quoted literals, with the
+original source role/message ID. Plaintext updates appear in their source order
+after earlier JSON replies, preserving the defining sentence instead of a list
+of detached values. Repeated identical records move to their latest occurrence.
+JSON keeps its lexical numbers, arrays, nulls and escaped paths. Original user
+corrections remain separate; recorded observations do not authorize execution.
+
+Each selected value/line is at most 4,096 code units; escaped records are bounded
+to 8,192. The newest 32 records fit within 16,384 record code units. Oversized,
+malformed or omitted candidates require the complete source archive. Nested
+fragments of oversized JSON are not promoted to independent observations.
+Without an archive writer or a valid existing archived artifact, the original
+wire is retained when that archive is required. Subsequent rewrites carry the
+recorded block without asking the summarizer to regenerate its values.
+
+Reuse reconstructs this block from the actual projected source and compares
+its complete text, values, provenance and ordering, in addition to the existing
+digest/configuration checks. Missing or changed evidence regenerates the
+summary. Generated narrative cannot supply its own recorded-source block.
+`summary-v5-source-observations` rejects older cached policies. The complete
+restored projection must still shrink, with the existing persistence,
+source-change and context-budget refusal paths intact. This conservative
+lexical selection is not a general semantic field extractor: arbitrary unquoted
+words, cross-line relationships and correctness of narrative prose remain open
+acceptance criteria. It does not establish universal provider fidelity.
 
 Stored-resource `read_resource` calls default to at most 50,000 UTF-16 code units
 and accept `start_char` and `max_chars` (maximum 200,000). `range.nextChar` is the
@@ -473,7 +484,7 @@ the original question without a prefix hint. All ten receipt replies and 9 sourc
 archive hashes pass, as do twelve canonical snapshots and restarts after rounds
 five and ten. The source and review in the first round match the original failure;
 the accepted provider selection also changes from Super Free to Ultra Free. The final
-source still fails Super Free at round five, so this is not a same-model causal
+v4 source still fails Super Free at round five, so this is not a same-model causal
 comparison or cross-model qualification. Task-state excerpts
 and actual control roles are recorded for each accepted round.
 
@@ -493,3 +504,25 @@ requests/replies, source payloads and canonical snapshots are retained in the
 [compressed trace](compaction-reference-provider-trace-2026-10-15.json.gz).
 No full suite, remote CI, container or release check was dispatched. This remains
 a stochastic controlled result; #1091's broader criteria remain open.
+
+The subsequent [v5 source-observation result](compaction-source-observations-2026-10-15.json)
+retests the original unhinted receipt question on the same explicit Super Free
+model as that retained failure. Ten successive review rounds pass with ten
+persisted summaries, nine value changes, ten verified exact defining lines and
+source archive hashes, twelve canonical snapshots, and restarts after rounds
+five and ten. The first source and review match the retained original failure.
+The source block now interleaves plaintext updates after older JSON replies;
+cache reuse checks the complete selected evidence and provenance. This is a
+controlled stochastic result, not a deterministic general semantic guarantee.
+
+Local typecheck, source/touched/harness lint and 81 focused cases pass. The new
+plaintext-after-JSON regression fails with the previous production collector.
+Twelve unchanged journey-guard cases are reused with matching file hashes.
+The inspected non-container build takes 336.423 seconds and the journey takes
+464.257 seconds, measured separately. All 20 new approved OpenRouter Free calls
+report USD 0 with no missing cost fields; every owned app epoch closes. The
+[compressed trace](compaction-source-observations-provider-trace-2026-10-15.json.gz)
+retains requests, replies, original source payloads and canonical snapshots.
+Arbitrary unquoted fields, cross-line relationships, narrative correctness,
+every-transform/native/session/signature/visual and release acceptance remain
+open. No broad suite, remote CI, container or release checks were dispatched.

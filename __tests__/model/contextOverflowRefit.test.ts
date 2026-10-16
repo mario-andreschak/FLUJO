@@ -276,7 +276,7 @@ describe('runtime compaction policy settings', () => {
       await runtime.maybeCompactWire(source, 'configuration-test', 'node-1', 'full-history', model, 100, undefined, {}, initialTools);
       expect(generate).toHaveBeenCalledTimes(1);
       if (change === 'artifact-policy') original.policyVersion = 'summary-v2-legacy';
-      if (change === 'previous-prompt-policy') original.policyVersion = 'summary-v3-exact-observations';
+      if (change === 'previous-prompt-policy') original.policyVersion = 'summary-v4-source-relations';
       if (change === 'artifact-schema') Object.assign(original, { schemaVersion: 0 });
       const changedModel = { ...model,
         ...(change === 'model-identity' ? { id: 'model-2' } : {}),
@@ -294,7 +294,7 @@ describe('runtime compaction policy settings', () => {
       const next = state.compactionState!.artifacts.at(-1)!;
       expect(next.artifactId).not.toBe(original.artifactId);
       expect(next.sourceDigest).toBe(original.sourceDigest);
-      expect(next.policyVersion).toBe('summary-v4-source-relations');
+      expect(next.policyVersion).toBe('summary-v5-source-observations');
       expect(next.schemaVersion).toBe(1);
       expect(source[0].content).toBe('Never publish.');
     },
