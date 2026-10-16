@@ -176,7 +176,7 @@ describe('runtime compaction policy settings', () => {
       { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
       { id: 'a-old', role: 'assistant', content: 'historical observation '.repeat(800), timestamp: 2 },
       { id: 'a-tail', role: 'assistant', content: 'recent observation '.repeat(80), timestamp: 3 },
-      { id: 'u-current', role: 'user', content: 'Check the receipt. Return only JSON.', timestamp: 4 },
+      { id: 'u-current', role: 'user', content: 'Check the receipt ID. Return only JSON with receipt as the exact ID string.', timestamp: 4 },
     ];
     const compact = (messages: SharedState['messages']) => runtime.maybeCompactWire(
       messages, 'tool-followup', 'node-1', 'full-history', model, 100,
@@ -188,7 +188,8 @@ describe('runtime compaction policy settings', () => {
     const followup: SharedState['messages'] = [...source,
       { id: 'lookup', role: 'assistant', content: '', timestamp: 5,
         tool_calls: [{ id: 'call-receipt', type: 'function', function: { name: 'lookup_action', arguments: '{}' } }] },
-      { id: 'receipt', role: 'tool', tool_call_id: 'call-receipt', content: '{"receipt":"exact"}', timestamp: 6 },
+      { id: 'receipt', role: 'tool', tool_call_id: 'call-receipt',
+        content: '{"status":"completed","receipts":[{"actionId":"action-ñ","receiptId":"exact","committedUtc":"2026-10-16T00:00:00Z"}]}', timestamp: 6 },
     ];
     const result = await compact(followup) as { artifact: unknown; wireMessages: SharedState['messages'] };
     expect(first).not.toBeNull();
@@ -203,8 +204,10 @@ describe('runtime compaction policy settings', () => {
     expect(result.wireMessages[boundaryIndex + 1]).toBe(source.at(-1));
     expect(result.wireMessages.indexOf(source[0])).toBeLessThan(boundaryIndex);
     expect(String(boundaries[0].content)).toContain('Retained earlier user turns');
-    expect(String(boundaries[0].content)).toContain('assistant replies are not source evidence');
+    expect(String(boundaries[0].content)).toContain('Assistant replies are not source evidence');
     expect(String(boundaries[0].content)).toContain('field values/types');
+    expect(String(boundaries[0].content)).toContain('an ID is its value, not its record');
+    expect(String(boundaries[0].content)).toContain('No unrequested annotations/prose');
     expect(followup.slice(0, source.length)).toEqual(source);
     generate.mockResolvedValue({ success: true, value: { content: summary } });
     await compact([...followup, { id: 'next-user', role: 'user', content: 'Review the changed record.', timestamp: 7 }]);

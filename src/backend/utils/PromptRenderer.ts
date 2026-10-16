@@ -198,6 +198,7 @@ export class PromptRenderer {
       completePrompt += `You may do multiple tool calls.\n\n`
       completePrompt += `After you completed the user's request to the best of your ability, you can use the 'handoff_to_xxxx' tool.\n\n`
       completePrompt += `When a user requests an answer, provide the requested response before handing off to Finish, in the requested format. A Finish handoff alone is not an answer.\n\n`
+      completePrompt += `For a requested identifier, select the exact ID field from its source record. Match the record to the requested entity and preserve the field's value and type. Return a full record only when requested.\n\n`
       completePrompt += `Answer the current user request, then stop. Do not invent future user messages, observations or review rounds. If processing returns to you in a loop, use the latest actual input and completed-action evidence; do not repeat completed actions.\n\n`
     }
 
