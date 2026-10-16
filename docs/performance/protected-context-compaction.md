@@ -574,3 +574,45 @@ responses report USD 0; eight failed/timeout requests return no usage/cost field
 Both explicitly selected routes have verified zero-price catalogs. Every app
 epoch closes. The frozen record retains each failed attempt and separate timing.
 No full suite, remote workflow, container or release check was dispatched.
+
+### Bounded recovery of ordinary prose
+
+`COMPACTION_ACCEPTANCE_MODE=prose-recovery` extends the existing built-application
+harness with five unlabelled Spanish source updates. Destination, status, reason
+and the statement that no send occurred occupy separate paragraphs, without the
+lexical characters selected by the exact-source collector. The values change
+and return to their initial state. A conflicting reported permission remains
+observation data; the original user prohibition stays authoritative.
+
+Each review supplies a real archive URI, SHA-256 and UTF-16 range, without answer
+values. It requires an actual `read_resource` request beyond the default archive
+prefix, at most 1,200 returned characters, verified original payload bytes, exact
+current replies and canonical tool pairing. The original user instruction must
+remain verbatim on both the read and final-answer requests. The harness also
+checks canonical preservation and a built-application restart. Introducing the
+reader may change the tool fingerprint and safely regenerate the summary; this
+does not require a cache hit or invalidate the earlier immutable source archive.
+
+The [frozen result](compaction-prose-recovery-2026-10-15.json) and its complete
+compressed trace identify all requests, retries, source payloads and snapshots.
+This qualifies recovery using a supplied locator. Autonomous locator discovery,
+arbitrary narrative validation, exhaustive transform/provider coverage and the
+Native/session/signature/visual/release criteria remain open in #1091. Existing
+five/ten-round/cache/action/interruption/persistence proofs keep their original
+revision and scope.
+
+The rebuilt application passes all five updates on explicit Ultra Free, with six
+persisted summaries, five bounded verified reads, exact replies, eleven canonical
+snapshots and restart durability. The first reader introduction regenerates the
+summary safely; subsequent reads reuse it. Independent verification checks all
+six source archives and 920 canonical fields against the frozen trace. Application
+source and dependencies are unchanged.
+
+Fresh local typecheck, source/harness lint and 39 harness guards pass. The 85
+unchanged runtime regressions retain their earlier pinned results. The inspected
+non-container build takes 327.148 seconds and this journey takes 262.529 seconds,
+measured separately. Of 29 approved Free requests, 21 completed responses report
+USD 0; eight failed provider responses have no returned usage/cost fields. Failed
+attempts remain in the trace and do not cause additional archive reads. Both
+application epochs close. No full suite, remote workflow, container or release
+check was dispatched.
