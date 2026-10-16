@@ -4,14 +4,33 @@ import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
-import { getCurrentWorkspace } from '@/utils/workspace';
+import { getCurrentWorkspace, normalizeWorkspaceName } from '@/utils/workspace';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { assertOAuthCredentialsAvailable, readOAuthClientInformation, readOAuthCodeVerifier, readOAuthTokens, sealOAuthCredential } from './oauthCredentialStorage';
+import { resolveOAuthClientMetadataUrl } from './oauthClientMetadata';
 
 const log = createLogger('backend/services/mcp/oauth');
 
 /** Authorization callbacks older than this must start a fresh flow. */
 export const MCP_OAUTH_STATE_TTL_MS = 20 * 60 * 1000;
+
+const OAUTH_NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+/** Routing hint only: the complete state still needs its persisted nonce/TTL check. */
+export function oauthStateWorkspace(state: string | null): string | undefined {
+  if (typeof state !== 'string' || !state || state.length > 108) return undefined;
+  const parts = state.split('.');
+  if (parts.length !== 2 || !OAUTH_NONCE_PATTERN.test(parts[1])) return undefined;
+  try {
+    const workspace = normalizeWorkspaceName(parts[0]);
+    return workspace === parts[0] ? workspace : undefined;
+  }
+  catch { return undefined; }
+}
+
+function validOAuthState(state: string): boolean {
+  return OAUTH_NONCE_PATTERN.test(state) || oauthStateWorkspace(state) !== undefined;
+}
 
 /** Legacy credentials must complete a fresh authorization before they can be reused. */
 export function hasOAuthIssuer(credential: { issuer?: unknown } | undefined): boolean {
@@ -26,10 +45,11 @@ export function matchesOAuthState(
   now = Date.now(),
 ): boolean {
   if (
-    !/^[A-Za-z0-9_-]{43}$/.test(candidate)
-    || !/^[A-Za-z0-9_-]{43}$/.test(config.oauthState ?? '')
+    !validOAuthState(candidate)
+    || !validOAuthState(config.oauthState ?? '')
     || !config.oauthState
     || config.oauthStateWorkspace !== workspace
+    || (oauthStateWorkspace(candidate) !== undefined && oauthStateWorkspace(candidate) !== workspace)
     || typeof config.oauthStateCreatedAt !== 'number'
     || now - config.oauthStateCreatedAt < 0
     || now - config.oauthStateCreatedAt > MCP_OAUTH_STATE_TTL_MS
@@ -50,11 +70,16 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
   private discovery?: OAuthDiscoveryState;
   private observedIssuer?: string;
   private issuerResponseSupported?: boolean;
+  private usingCimd = false;
+  private readonly cimdRedirectUrl: string;
 
   constructor(config: MCPStreamableConfig, redirectUrl: string, authorizationDiscovery?: OAuthDiscoveryState) {
     this.config = config;
     this.discovery = authorizationDiscovery;
     this._redirectUrl = redirectUrl;
+    const stableCallback = new URL(redirectUrl);
+    stableCallback.searchParams.delete('workspace');
+    this.cimdRedirectUrl = stableCallback.toString();
     
     // Build client metadata from config
     this._clientMetadata = {
@@ -73,18 +98,27 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
   }
 
   get redirectUrl(): string {
-    return this._redirectUrl;
+    return this.usingCimd ? this.cimdRedirectUrl : this._redirectUrl;
+  }
+
+  /** The SDK selects CIMD ahead of DCR when the authorization server supports it. */
+  get clientMetadataUrl(): string | undefined {
+    return resolveOAuthClientMetadataUrl(this.cimdRedirectUrl);
   }
 
   get clientMetadata(): OAuthClientMetadata {
-    return this._clientMetadata;
+    return this.usingCimd
+      ? { ...this._clientMetadata, redirect_uris: [this.cimdRedirectUrl], token_endpoint_auth_method: 'none' }
+      : this._clientMetadata;
   }
 
-  /** Create an opaque callback nonce. saveCodeVerifier() persists it before redirect. */
+  /** CIMD keeps the callback stable; its state carries a workspace plus a random nonce. */
   state(): string {
-    const state = randomBytes(32).toString('base64url');
+    const nonce = randomBytes(32).toString('base64url');
+    const workspace = getCurrentWorkspace();
+    const state = this.usingCimd ? `${workspace}.${nonce}` : nonce;
     this.config.oauthState = state;
-    this.config.oauthStateWorkspace = getCurrentWorkspace();
+    this.config.oauthStateWorkspace = workspace;
     this.config.oauthStateCreatedAt = Date.now();
     this.config.oauthStateDiscovery = this.discovery;
     return state;
@@ -122,6 +156,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
     const storedClient = await readOAuthClientInformation(this.config);
     if (hasOAuthIssuer(storedClient)) {
+      this.usingCimd = storedClient?.client_id === this.clientMetadataUrl;
       log.debug(`Returning stored client information for ${this.config.name}`);
       return storedClient;
     }
@@ -222,6 +257,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     if (scope === 'all' || scope === 'discovery') this.discovery = undefined;
 
     await this.persist(update);
+    if (scope === 'all' || scope === 'client') this.usingCimd = false;
   }
 
   async saveClientInformation(clientInformation: OAuthClientInformationMixed): Promise<void> {
@@ -236,6 +272,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       : { ...clientInformation };
     const oauthClientInformation = await sealOAuthCredential('client', registration);
     await this.persist({ oauthClientInformation, oauthClientMetadata: undefined });
+    this.usingCimd = clientInformation.client_id === this.clientMetadataUrl;
     log.info(`Client information saved for ${this.config.name}`);
   }
 

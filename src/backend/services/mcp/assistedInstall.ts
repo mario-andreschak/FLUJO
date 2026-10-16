@@ -36,6 +36,7 @@ import {
   type ResolvedInstallPlan,
 } from '@/utils/mcp/registry';
 import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
+import { isAutomaticMcpOAuth } from '@/shared/types/mcp/assistant';
 import { createLogger } from '@/utils/logger';
 import { readUtf8TextPrefix } from '@/utils/http/readUtf8TextPrefix';
 import { bestMcpRecommendationPreference, compareMcpRecommendationPreferences, recommendationCost, recommendationSupport, recommendationTier, supportedRegistrySearches } from '@/shared/mcpRecommendationPreferences';
@@ -196,7 +197,7 @@ export function assistantRequiredInputs(
   authMode: McpAssistantCandidate['authMode'],
 ): string[] {
   const missing = missingRequiredInputs(option);
-  return authMode === 'oauth-dcr' ? missing.filter(name => !isAuthorizationInput(name)) : missing;
+  return isAutomaticMcpOAuth(authMode) ? missing.filter(name => !isAuthorizationInput(name)) : missing;
 }
 
 function assistantConfig(
@@ -211,7 +212,7 @@ function assistantConfig(
   if (option.kind !== 'remote') return { ...config, name: serverName };
   const headers = Object.fromEntries(
     Object.entries(config.headers ?? {})
-      .filter(([name]) => authMode !== 'oauth-dcr' || !isAuthorizationInput(name)),
+      .filter(([name]) => !isAutomaticMcpOAuth(authMode) || !isAuthorizationInput(name)),
   ) as Record<string, MCPHeaderValue>;
   return { ...config, name: serverName, rootPath: `mcp-servers/${serverName}`, headers };
 }
@@ -384,7 +385,7 @@ export interface McpCandidateScoreInput {
   awesomeMention: boolean;
   transport: 'package' | 'remote';
   weeklyDownloads?: number;
-  authMode?: 'oauth-dcr' | 'oauth-manual' | 'none' | 'unknown';
+  authMode?: McpAssistantCandidate['authMode'];
   requiredInputCount: number;
 }
 
@@ -396,7 +397,7 @@ export function scoreMcpAssistantCandidate(input: McpCandidateScoreInput): numbe
   if (input.awesomeMention) score += 0.06;
   if (input.transport === 'package') {
     score += (input.weeklyDownloads ?? 0) >= 1_000 ? 0.12 : 0.06;
-  } else if (input.authMode === 'oauth-dcr') {
+  } else if (isAutomaticMcpOAuth(input.authMode)) {
     score += 0.2;
   } else if (input.authMode === 'oauth-manual') {
     score += 0.08;
@@ -421,13 +422,15 @@ function scoreDraft(query: string, draft: CandidateDraft): number {
   const quality = draft.hit.quality;
   const authMode = draft.option.kind === 'package'
     ? 'none'
-    : draft.auth?.dynamicClientRegistration
-      ? 'oauth-dcr'
-      : draft.auth?.oauthCapable
-        ? 'oauth-manual'
-        : draft.auth?.unauthenticated
-          ? 'none'
-          : 'unknown';
+    : draft.auth?.clientIdMetadataDocument
+      ? 'oauth-cimd'
+      : draft.auth?.dynamicClientRegistration
+        ? 'oauth-dcr'
+        : draft.auth?.oauthCapable
+          ? 'oauth-manual'
+          : draft.auth?.unauthenticated
+            ? 'none'
+            : 'unknown';
   return scoreMcpAssistantCandidate({
     qualityScore: quality?.score,
     relevance: lexicalRelevance(query, draft.server),
@@ -640,13 +643,15 @@ export async function researchMcpServers(input: {
     const verificationStatus = draft.hit.quality?.status ?? draft.verificationStatus;
     const authMode = draft.option.kind === 'package'
       ? 'none'
-      : draft.auth?.dynamicClientRegistration
-        ? 'oauth-dcr'
+      : draft.auth?.clientIdMetadataDocument
+        ? 'oauth-cimd'
+        : draft.auth?.dynamicClientRegistration
+          ? 'oauth-dcr'
           : draft.auth?.oauthCapable
             ? 'oauth-manual'
             : draft.auth?.unauthenticated
-            ? 'none'
-            : 'unknown';
+              ? 'none'
+              : 'unknown';
     const suggestedName = normalizeMcpAssistantServerName(
       plan.suggestedName ?? plan.service,
       draft.server.title ?? sanitizeServerName(draft.server.name),
@@ -656,7 +661,7 @@ export async function researchMcpServers(input: {
     const planPreview = {
       ...basePlanPreview,
       serverName: suggestedName,
-      ...(authMode === 'oauth-dcr'
+      ...(isAutomaticMcpOAuth(authMode)
         ? { requiredEnvNames: basePlanPreview.requiredEnvNames.filter(name => !isAuthorizationInput(name)) }
         : {}),
     };
@@ -666,12 +671,13 @@ export async function researchMcpServers(input: {
       verificationStatus === 'active' ? 'Active entry in the official MCP Registry' : undefined,
       draft.awesomeMention ? 'Also listed by an Awesome MCP community index' : undefined,
       authMode === 'oauth-dcr' ? 'Hosted endpoint advertises OAuth dynamic client registration' : undefined,
+      authMode === 'oauth-cimd' ? 'Hosted endpoint advertises OAuth Client ID Metadata Documents (CIMD)' : undefined,
       authMode === 'none' && transport !== 'stdio' ? 'Hosted endpoint did not require OAuth during the capability probe' : undefined,
       transport === 'stdio' ? 'Runs locally through a published package' : 'Uses a hosted endpoint; no local package execution',
     ].filter((reason): reason is string => Boolean(reason));
     const warnings = [
       verificationStatus !== 'active' ? `Registry status is ${verificationStatus}; review the publisher and command carefully.` : undefined,
-      authMode === 'oauth-manual' ? 'OAuth is supported, but dynamic client registration was not advertised; client credentials may be required.' : undefined,
+      authMode === 'oauth-manual' ? 'OAuth is supported, but neither CIMD nor dynamic client registration was advertised; client credentials may be required.' : undefined,
       authMode === 'unknown' ? 'The hosted endpoint could not be reached during the auth probe; availability and auth are unconfirmed.' : undefined,
       requiredInputs.length > 0 ? `You must provide ${requiredInputs.join(', ')} before installation.` : undefined,
     ].filter((warning): warning is string => Boolean(warning));
@@ -687,7 +693,7 @@ export async function researchMcpServers(input: {
       config: assistantConfig(draft.server, draft.option, authMode, suggestedName),
       authMode,
       ...(requiredInputs.length ? { authHelp: `Obtain the declared credentials from the server publisher or connected service and provide only ${requiredInputs.join(', ')}. Service charges are unverified.` }
-        : authMode === 'oauth-dcr' ? { authHelp: 'Complete the provider’s OAuth sign-in after reviewing and installing this exact endpoint. Pricing remains unverified.' }
+        : isAutomaticMcpOAuth(authMode) ? { authHelp: 'Complete the provider’s OAuth sign-in after reviewing and installing this exact endpoint. Pricing remains unverified.' }
           : authMode === 'oauth-manual' ? { authHelp: 'Consult the server publisher’s documentation for OAuth client registration. Client credentials may be required; pricing remains unverified.' } : {}),
       recommendationTier: recommendationTier(draft.server, draft.option),
       supportEvidence: recommendationSupport(draft.server, draft.option),
@@ -765,12 +771,12 @@ export async function installAssistedMcpServer(input: McpAssistantInstallInput):
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(input.serverName ?? '')) {
     return { installed: false, error: 'The server name must be 1-64 characters and use only letters, numbers, hyphens, or underscores.' };
   }
-  const oauthDynamicClientRegistration = input.authMode === 'oauth-dcr';
+  const oauthAutomaticRegistration = isAutomaticMcpOAuth(input.authMode);
   const preview = await installRegistryServer(input.registryName, undefined, {
     resolveOnly: true,
     preferredTransport: input.transport,
     serverName: input.serverName,
-    oauthDynamicClientRegistration,
+    oauthAutomaticRegistration,
   });
   if (!preview.plan) return { installed: false, error: preview.error ?? 'Could not resolve this Registry entry.' };
   if (!sameMcpInstallPlan(preview.plan, input.reviewedPlan)) {
@@ -795,7 +801,7 @@ export async function installAssistedMcpServer(input: McpAssistantInstallInput):
     {
       preferredTransport: input.transport,
       serverName: input.serverName,
-      oauthDynamicClientRegistration,
+      oauthAutomaticRegistration,
       expectedPlan: preview.plan,
       worksGate: remote && input.authMode?.startsWith('oauth') ? false : true,
       ...(remote ? { headerOverrides: supplied as Record<string, MCPHeaderValue> } : {}),

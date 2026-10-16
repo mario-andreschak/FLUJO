@@ -107,7 +107,7 @@ describe('installAssistedMcpServer', () => {
     );
   });
 
-  it('installs a DCR endpoint without requesting or saving a static Authorization value', async () => {
+  it.each(['oauth-cimd', 'oauth-dcr'] as const)('installs a %s endpoint without requesting or saving a static Authorization value', async authMode => {
     const dcrPlan = {
       ...plan,
       registryName: 'com.paypal.mcp/mcp',
@@ -129,7 +129,7 @@ describe('installAssistedMcpServer', () => {
       serverName: 'paypal',
       reviewedPlan: dcrPlan,
       approved: true,
-      authMode: 'oauth-dcr',
+      authMode,
     });
 
     expect(result).toEqual(expect.objectContaining({ installed: true, needsAuthentication: true }));
@@ -138,7 +138,7 @@ describe('installAssistedMcpServer', () => {
       undefined,
       expect.objectContaining({
         serverName: 'paypal',
-        oauthDynamicClientRegistration: true,
+        oauthAutomaticRegistration: true,
         headerOverrides: {},
       }),
     );

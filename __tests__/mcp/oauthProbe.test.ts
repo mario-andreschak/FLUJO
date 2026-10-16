@@ -101,6 +101,18 @@ describe('probeOAuthSupport', () => {
     expect(result.resourceMetadataUrl).toBe(wellKnown);
   });
 
+  it.each([undefined, 'https://127.0.0.1/private'])('detects CIMD without a usable DCR endpoint (%s)', registrationEndpoint => {
+    mockFetch(url => {
+      if (url.endsWith('/mcp')) return { status: 401, headers: { 'www-authenticate': 'Bearer' } };
+      if (url.endsWith('/oauth-protected-resource')) return { json: {
+        resource: 'https://mcp.example.com', authorization_servers: ['https://auth.example.com'] } };
+      return { json: { client_id_metadata_document_supported: true, registration_endpoint: registrationEndpoint } };
+    });
+    return expect(probeOAuthSupport('https://mcp.example.com/mcp')).resolves.toMatchObject({
+      oauthCapable: true, clientIdMetadataDocument: true, dynamicClientRegistration: false,
+    });
+  });
+
   it('infers OAuth from a bare Bearer challenge even without fetchable metadata', async () => {
     mockFetch((url) => {
       if (url === 'https://mcp.example.com/mcp') {

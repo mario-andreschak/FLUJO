@@ -260,10 +260,12 @@ export interface InstallOptions {
   /** Optional reviewed FLUJO config name (used by the assisted-install UI). */
   serverName?: string;
   /**
-   * The hosted endpoint was probed and advertised OAuth dynamic client
-   * registration. In this mode the OAuth provider owns Authorization, so a
+   * The hosted endpoint advertised CIMD or OAuth dynamic client registration.
+   * In this mode the OAuth provider owns Authorization, so a
    * Registry-declared static Authorization header must not be requested/saved.
    */
+  oauthAutomaticRegistration?: boolean;
+  /** Compatibility alias for existing callers that only probe DCR. */
   oauthDynamicClientRegistration?: boolean;
   /**
    * Exact plan that was reviewed/audited immediately before this call. The
@@ -417,7 +419,8 @@ export async function prepareRegistryServerRuntime(
       error: 'The server name must be 1-64 characters and use only letters, numbers, hyphens, or underscores.',
     };
   }
-  const omitOAuthAuthorization = option.kind === 'remote' && options?.oauthDynamicClientRegistration === true;
+  const omitOAuthAuthorization = option.kind === 'remote'
+    && (options?.oauthAutomaticRegistration === true || options?.oauthDynamicClientRegistration === true);
   const isAuthorization = (name: string) => name.trim().toLocaleLowerCase() === 'authorization';
   const verificationStatus = verificationStatusOf(result);
   const basePlan = resolvedPlanFrom(registryName, server, option, verificationStatus);
