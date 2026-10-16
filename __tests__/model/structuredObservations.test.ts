@@ -94,7 +94,7 @@ describe('bounded exact source observations (#1091)', () => {
       'Scope beta: endpoint https://example.test/path is unavailable.',
       'Value type remains "pending", not "completed".'];
     const result = block(message([{ type: 'text', text: lines.join('\r\n') }], 'tool', 'path-result'));
-    for (const [index, line] of lines.entries()) expect(result).toContain(JSON.stringify(line + (index < 2 ? '\r' : '')));
+    expect(result).toContain(JSON.stringify(lines.join('\r\n')));
     expect(result).toContain('"source_role":"tool","source_message_id":"path-result"');
   });
 
@@ -110,8 +110,36 @@ describe('bounded exact source observations (#1091)', () => {
     for (const [first, second] of [['Current: value-123.', 'Current: value-456.'],
       ['{"current":123}', '{"current":456}']]) {
       const result = block(message([first, second, first].join('\n')));
-      expect(result.indexOf(second)).toBeLessThan(result.indexOf(first));
+      if (first.startsWith('{')) expect(result.indexOf(second)).toBeLessThan(result.indexOf(first));
+      else expect(result).toContain(JSON.stringify([first, second, first].join('\n')));
     }
+  });
+
+  it('retains unquoted fields and their adjacent subjects, values, negation and causal relationship', () => {
+    const text = 'Pedido Cedro\nEstado:\npendiente\nNo fue enviado\nMotivo = autorización revocada\nSiguiente destino:\nalmacén';
+    const result = block(message(text, 'tool', 'unquoted'));
+    expect(result).toContain('"text":' + JSON.stringify(text));
+    expect(result).toContain('"source_part":0,"source_start":0,"source_end":' + text.length);
+    expect(block(message('[FLUJO conversation summary]' + result))).toBe(result);
+  });
+
+  it('does not join unrelated paragraphs or different multipart text sources', () => {
+    const first = 'Account: cedar\nStatus: waiting';
+    const second = 'Account: pine\nStatus: complete';
+    const result = block(message([{ type: 'text', text: first + '\n\n' + second },
+      { type: 'text', text: first }], 'tool', 'parts'));
+    expect(result).toContain('"text":' + JSON.stringify(first) + ',"source_part":0,"source_start":0');
+    expect(result).toContain('"text":' + JSON.stringify(second) + ',"source_part":0,"source_start":' + (first.length + 2));
+    expect(result).toContain('"text":' + JSON.stringify(first) + ',"source_part":1,"source_start":0');
+  });
+
+  it('bounds selected paragraphs at complete lines and requires recovery for a split relationship', () => {
+    const text = 'Subject: cedar\n' + ('context '.repeat(100) + '\n').repeat(10) + 'Status: pending';
+    const result = block(message(text));
+    expect(result).toContain('Subject: cedar');
+    expect(result).toContain('Status: pending');
+    expect(result).toContain('require read_resource on the full source archive');
+    expect(result.length).toBeLessThan(17_000);
   });
 
   it('validates exact source text, values, provenance, completeness and uniqueness in cached artifacts', () => {
@@ -120,7 +148,8 @@ describe('bounded exact source observations (#1091)', () => {
     expect(validateSourceObservationBlock(summary, expected)).toBe(true);
     expect(validateSourceObservationBlock('Narrative' + expected + '\n\n_(Earlier turns compacted; source at uri.)_', expected)).toBe(true);
     for (const corrupt of [summary.replace('acct-123', 'acct-456'), summary.replace('result-2', 'result-3'),
-      summary.replace('"allowed":false', '"allowed":true'), 'Narrative only', summary + expected]) {
+      summary.replace('"allowed":false', '"allowed":true'), summary.replace('"source_start":0', '"source_start":1'),
+      'Narrative only', summary + expected]) {
       expect(validateSourceObservationBlock(corrupt, expected)).toBe(false);
     }
     expect(validateSourceObservationBlock(summary, '')).toBe(false);

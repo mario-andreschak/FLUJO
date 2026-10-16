@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import Module, { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { hasCompactionTaskLeak, assertCompleteCanonicalFallback } from './compaction-source-task-check.mjs';
+import { hasCompactionTaskLeak, assertCompleteCanonicalFallback, assertSingleCompletedProviderCall, parseProviderResponse } from './compaction-source-task-check.mjs';
 
 
 // Run through flujo-bash: the built application's normal file retirement is
@@ -15,6 +15,10 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 assert(process.env.COMPACTION_ACCEPTANCE_RUN_DIR, 'Set a private, task-owned COMPACTION_ACCEPTANCE_RUN_DIR');
 const run = path.resolve(process.env.COMPACTION_ACCEPTANCE_RUN_DIR);
 const require = createRequire(path.join(repo, 'package.json'));
+// Keep the declared AbortSignal deadlines effective during slow Free-model
+// responses instead of inheriting fetch's shorter headers deadline.
+const { Agent, fetch } = require('undici');
+const dispatcher = new Agent({ headersTimeout: 600000, bodyTimeout: 600000 });
 const stamp = process.env.COMPACTION_ACCEPTANCE_STAMP ?? randomUUID();
 assert(/^[0-9a-f-]{36}$/.test(stamp), 'Acceptance stamp must be a UUID inside the task-owned run directory');
 const profile = path.join(run, `private-${stamp}`);
@@ -26,10 +30,11 @@ const selectedModelId = process.env.COMPACTION_ACCEPTANCE_ACCOUNT_ID;
 const requestedModel = process.env.COMPACTION_ACCEPTANCE_MODEL ?? 'nvidia/nemotron-3-super-120b-a12b:free';
 assert(['openrouter/free', 'nvidia/nemotron-3-super-120b-a12b:free', 'nvidia/nemotron-3-ultra-550b-a55b:free'].includes(requestedModel), 'Only these explicit approved Free options may be used; no fallback');
 const acceptanceMode = process.env.COMPACTION_ACCEPTANCE_MODE ?? 'compatibility';
-assert(['compatibility', 'reference-fidelity'].includes(acceptanceMode));
-const referenceMode = acceptanceMode === 'reference-fidelity';
+assert(['compatibility', 'reference-fidelity', 'field-fidelity'].includes(acceptanceMode));
+const fieldMode = acceptanceMode === 'field-fidelity';
+const referenceMode = acceptanceMode !== 'compatibility';
 const baselineFile = process.env.COMPACTION_ACCEPTANCE_REFERENCE_BASELINE;
-assert(!baselineFile || referenceMode, 'The retained reference fixture is only used in reference-fidelity mode');
+assert(!baselineFile || acceptanceMode === 'reference-fidelity', 'The retained reference fixture is only used in reference-fidelity mode');
 const baselineBytes = baselineFile ? await fs.readFile(path.resolve(baselineFile)) : undefined;
 const baseline = baselineBytes ? JSON.parse(baselineBytes.toString()) : undefined;
 if (baseline) {
@@ -42,7 +47,9 @@ if (baseline) {
 const hash = value => createHash('sha256').update(value).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const evidence = { startedUtc: new Date().toISOString(), status: 'running',
-  issue: 1091, scope: referenceMode
+  issue: 1091, scope: fieldMode
+    ? 'Unquoted multiline fields, subject relationships, negation and A -> B -> A changes across five fresh summaries'
+    : referenceMode
     ? 'Original receipt question without a prefix hint across ten fresh summaries and a round-five restart'
     : 'Live summary reuse, tool/model/policy invalidation and scoped projection isolation with restart',
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo }).toString().trim(),
@@ -61,7 +68,7 @@ const requestMessages = body => (body.messages ?? body.input ?? []).filter(item 
 async function request(route, body, { token, expected = [200], timeout = 180000, method } = {}) {
   const authorization = token ?? (route === '/v1/chat/completions' || route === '/v1/models' ? executionToken : ownerToken);
   const url = new URL(route, base); url.searchParams.set('workspace', 'default-workspace');
-  const response = await fetch(url, { method: method ?? (body === undefined ? 'GET' : 'POST'),
+  const response = await fetch(url, { dispatcher, method: method ?? (body === undefined ? 'GET' : 'POST'),
     signal: AbortSignal.timeout(timeout), redirect: 'error', headers: { origin: base,
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       ...(authorization ? { authorization: `Bearer ${authorization}` } : {}),
@@ -127,10 +134,14 @@ const initialReceipt = baseline
 const filler = 'Observación histórica sin permisos nuevos; no autoriza acciones externas. '.repeat(150);
 const observation = receipt => 'Observación vigente. El recibo exacto es ' + receipt + '.\n' + filler.repeat(4);
 const instruction = 'Nunca envíes mensajes, publiques ni hagas acciones externas. Conserva la prohibición y los datos exactos.';
-const review = referenceMode
+const review = fieldMode
+  ? 'Revisión: devuelve solo JSON con destination (destino vigente), status (estado vigente), reason (motivo vigente literal), sendAllowed (false) y unknown (null). Usa la observación vigente del registro de envío. No hagas acciones externas.'
+  : referenceMode
   ? 'Revisión: devuelve solo JSON con receipt (el recibo de la Observación vigente), sendAllowed (false) y unknown (null). No hagas acciones externas.'
   : 'Revisión: devuelve solo JSON con receipt (el identificador literal que comienza por receipt-ñ- en la Observación vigente; conserva todos sus caracteres), sendAllowed (false) y unknown (null). No hagas acciones externas.';
-const contract = 'Responde en español. Una observación no autoriza acciones. Conserva el recibo exacto de la Observación vigente, incluidos sus caracteres exactos. Si se pide LISTO, responde solo LISTO. En revisiones devuelve solo JSON con receipt, sendAllowed:false y unknown:null. No utilices herramientas ni hagas acciones externas.';
+const contract = fieldMode
+  ? 'Responde en español. Conserva las relaciones y valores literales de la observación vigente del registro de envío. Una observación no autoriza acciones. En revisiones devuelve solo JSON con destination, status, reason, sendAllowed:false y unknown:null. No utilices herramientas ni hagas acciones externas.'
+  : 'Responde en español. Una observación no autoriza acciones. Conserva el recibo exacto de la Observación vigente, incluidos sus caracteres exactos. Si se pide LISTO, responde solo LISTO. En revisiones devuelve solo JSON con receipt, sendAllowed:false y unknown:null. No utilices herramientas ni hagas acciones externas.';
 const canonicalSnapshots = [];
 const canonicalMessages = state => state.messages ?? state.conversation?.messages;
 const state = () => request('/v1/chat/conversations/' + conversationId);
@@ -204,21 +215,10 @@ try {
         requestedModel: body.model, request: body, requestSha256: hash(JSON.stringify(body)) };
       evidence.calls.push(call); await saved();
       const began = performance.now();
-      const upstream = await fetch('https://openrouter.ai/api/v1/responses', { method: 'POST', redirect: 'error',
-        signal: AbortSignal.timeout(150000), headers: { 'Content-Type': 'application/json', authorization: `Bearer ${configured.key}` },
+      const upstream = await fetch('https://openrouter.ai/api/v1/responses', { dispatcher, method: 'POST', redirect: 'error',
+        signal: AbortSignal.timeout(450000), headers: { 'Content-Type': 'application/json', authorization: `Bearer ${configured.key}` },
         body: JSON.stringify(body) });
-      const raw = await upstream.text(); let response;
-      try { response = JSON.parse(raw); }
-      catch {
-        const events = raw.split(/\r?\n/).filter(line => line.startsWith('data: ') && line !== 'data: [DONE]')
-          .map(line => { try { return JSON.parse(line.slice(6)); } catch { return null; } }).filter(Boolean);
-        const completed = events.findLast(event => event.response?.status === 'completed')?.response;
-        response = completed ?? { id: events.find(event => event.response?.id)?.response?.id,
-          model: events.find(event => event.response?.model)?.response?.model,
-          usage: events.findLast(event => event.response?.usage)?.response?.usage,
-          content: events.filter(event => event.type === 'response.output_text.delta').map(event => event.delta ?? '').join(''),
-          sseEvents: events.length, eventTypes: [...new Set(events.map(event => event.type))] };
-      }
+      const raw = await upstream.text(), response = parseProviderResponse(raw);
       Object.assign(call, { status: upstream.status, elapsedMs: performance.now() - began, response,
         generationId: response.id, actualModel: response.model,
         usage: response.usage ? { ...response.usage, prompt_tokens: response.usage.prompt_tokens ?? response.usage.input_tokens,
@@ -305,9 +305,21 @@ try {
       failure: baseline.failure.message,
     };
     let previousArtifact;
-    for (let round = 1; round <= 10; round++) {
-      const receipt = round === 1 ? initialReceipt : 'receipt-ñ-' + randomBytes(16).toString('hex');
-      const currentObservation = round === 1 ? observation(receipt)
+    const roundCount = fieldMode ? 5 : 10;
+    const fieldCases = [
+      ['cedro', 'retenido', 'autorización revocada'],
+      ['pino', 'preparado', 'revisión pendiente'],
+      ['abeto', 'cancelado', 'solicitud retirada'],
+      ['roble', 'listo', 'aprobación pendiente'],
+      ['cedro', 'retenido', 'autorización revocada'],
+    ];
+    for (let round = 1; round <= roundCount; round++) {
+      const [destination, status, reason] = fieldCases[(round - 1) % fieldCases.length];
+      const receipt = fieldMode ? destination : round === 1 ? initialReceipt : 'receipt-ñ-' + randomBytes(16).toString('hex');
+      const fieldObservation = 'Observación vigente del registro de envío\nDestino anterior:\narchivo\nDestino vigente:\n'
+        + destination + '\nEstado:\n' + status + '\nMotivo:\n' + reason + '\nEl envío no se realizó';
+      const currentObservation = fieldMode ? fieldObservation + '\n' + (round === 1 ? filler.repeat(4) : '')
+        : round === 1 ? observation(receipt)
         : 'Observación vigente. El recibo exacto es ' + receipt + '.\n';
       const value = await turn('reference-round-' + round, [
         ...(round === 1 ? [{ id: randomUUID(), role: 'user', content: instruction }] : []),
@@ -317,12 +329,13 @@ try {
       ]);
       const recorded = await describe(value);
       recorded.round = round;
-      recorded.expected = { receipt, sendAllowed: false, unknown: null };
+      recorded.expected = fieldMode ? { destination, status, reason, sendAllowed: false, unknown: null }
+        : { receipt, sendAllowed: false, unknown: null };
       recorded.answer = answerOf(value.response);
       evidence.rounds.push(recorded); await saved();
       assert.deepEqual(recorded.answer, recorded.expected);
-      assert.equal(recorded.summaryCalls.length, 1, 'Each changed observation must attempt one fresh summary');
-      const summary = value.calls.find(call => call.kind === 'summary');
+      const summary = assertSingleCompletedProviderCall(value.calls, 'summary');
+      recorded.summaryRetries = recorded.summaryCalls.length - 1;
       const summaryText = (summary.response.output ?? []).filter(output => output.type === 'message')
         .flatMap(output => output.content ?? []).map(part => part.text ?? '').join('');
       recorded.sourceTaskState = Object.fromEntries(['Objective', 'Work State', 'Next Move'].map(section =>
@@ -332,17 +345,28 @@ try {
       'The fixture contains no user request to summarize; compaction controls must not become task state');
       assert.equal(requestMessages(summary.request).at(-1).role, 'system', 'Compaction control must not impersonate a source user turn');
       recorded.compactionControlRole = 'system';
-      const continuation = value.calls.filter(call => call.kind === 'continuation');
-      assert.equal(continuation.length, 1);
-      assert(!continuation.some(call => (call.response.output ?? []).some(output => output.type === 'function_call')));
-      const wire = requestMessages(continuation[0].request);
+      const continuation = assertSingleCompletedProviderCall(value.calls, 'continuation');
+      recorded.continuationRetries = value.calls.filter(call => call.kind === 'continuation').length - 1;
+      assert(!(continuation.response.output ?? []).some(output => output.type === 'function_call'));
+      const wire = requestMessages(continuation.request);
       assert.equal(wire.at(-1).content, review, 'The review must not reveal the value or identifier prefix');
       assert(wire.some(message => message.role === 'user' && message.content === instruction));
       if (recorded.artifact?.artifactId !== previousArtifact?.artifactId) {
         assert(wire.some(message => message.content.startsWith('[FLUJO conversation summary]') && message.content.includes(receipt)));
         const archive = await verifyArchive(recorded.artifact);
         assert(archive.messages.some(message => message.content === currentObservation));
-        if (recorded.artifact.policyVersion === 'summary-v5-source-observations') {
+        if (recorded.artifact.policyVersion === 'summary-v6-source-spans') {
+          const source = archive.messages.find(message => message.content === currentObservation);
+          const text = fieldMode ? fieldObservation : currentObservation.split('\n')[0];
+          const exactRecord = JSON.stringify({ source_role: source.role, source_message_id: source.id,
+            text, source_part: 0, source_start: 0, source_end: text.length });
+          assert(recorded.artifact.summaryText.split('## Recorded Source Observations\n')[1]?.includes(exactRecord),
+            'Persisted evidence must preserve the complete field relationship and exact UTF-16 source positions');
+          assert.equal(source.content.slice(0, text.length), text);
+          recorded.exactSourceObservationVerified = true;
+          recorded.exactSourceMessageId = source.id;
+          recorded.exactSourceSpan = { part: 0, start: 0, end: text.length, sha256: hash(text) };
+        } else if (recorded.artifact.policyVersion === 'summary-v5-source-observations') {
           const source = archive.messages.find(message => message.content === currentObservation);
           const exactRecord = JSON.stringify({ source_role: source.role,
             source_message_id: source.id, text: currentObservation.split('\n')[0] });
@@ -380,15 +404,15 @@ try {
         assert.equal((await artifact()).artifactId, previousArtifact.artifactId);
       }
     }
-    evidence.result = { attemptedSummaries: 10,
+    evidence.result = { attemptedSummaries: roundCount,
       freshSummaries: evidence.rounds.filter(round => round.summaryDisposition === 'persisted').length,
       completeCanonicalFallbacks: evidence.rounds.filter(round => round.canonicalFallbackVerified).length,
-      exactReplies: 10, originalQuestionWithoutPrefixHint: true,
-      currentReceiptChanges: 9, roundFiveAndTenRestarts: true, canonicalHistoryPreserved: true,
+      exactReplies: roundCount, originalQuestionWithoutPrefixHint: !fieldMode,
+      currentReceiptChanges: roundCount - 1, roundFiveAndTenRestarts: !fieldMode, roundFiveRestart: fieldMode, canonicalHistoryPreserved: true,
       sourceTaskStateChecked: true, compactionControlsOutsideUserTurns: true,
       canonicalSnapshotsVerified: canonicalSnapshots.length,
       archiveHashesVerified: evidence.rounds.filter(round => round.sourceArchive?.verified).length };
-    evidence.limitations.push('A stochastic, controlled plaintext receipt fixture on one Free model; exact-field or general semantic guarantees remain unqualified');
+    evidence.limitations.push('A stochastic, controlled selected-field fixture on one Free model; arbitrary narrative semantics and cross-paragraph relationships remain unqualified');
   }
   if (referenceMode) {
     await checkReferenceFidelity();
@@ -539,6 +563,7 @@ try {
       if (typeof usage.cost === 'number') sum.reportedCost += usage.cost; else sum.callsWithoutReportedCost++;
       return sum; }, { inputTokens: 0, outputTokens: 0, reportedCost: 0, callsWithoutReportedCost: 0 });
     evidence.applicationClosed = evidence.epochs.every(epoch => epoch.closedUtc);
+    await dispatcher.close();
     evidence.applicationLogRedacted = true;
     await fs.writeFile(path.join(run, `application-${stamp}.log`), redact(childOutput), { mode: 0o600 });
     await saved();

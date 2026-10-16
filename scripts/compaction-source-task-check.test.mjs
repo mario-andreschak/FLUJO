@@ -1,6 +1,83 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { hasCompactionTaskLeak, assertCompleteCanonicalFallback } from './compaction-source-task-check.mjs';
+import { hasCompactionTaskLeak, assertCompleteCanonicalFallback, assertSingleCompletedProviderCall, parseProviderResponse } from './compaction-source-task-check.mjs';
+
+test('preserves a failed SSE terminal envelope and its provider error', () => {
+  const error = { code: 'server_error', message: 'Service temporarily overloaded' };
+  const raw = 'data: ' + JSON.stringify({ type: 'response.created', response: { id: 'retry', status: 'in_progress' } })
+    + '\n\ndata: ' + JSON.stringify({ type: 'response.failed', response: { id: 'retry', status: 'failed', error } }) + '\n\ndata: [DONE]\n';
+  const parsed = parseProviderResponse(raw);
+  assert.equal(parsed.status, 'failed');
+  assert.deepEqual(parsed.error, error);
+  assert(parsed.eventTypes.includes('response.failed'));
+});
+
+test('preserves completed and incomplete SSE envelopes as different outcomes', () => {
+  for (const status of ['completed', 'incomplete']) {
+    const response = { id: 'terminal', status, output: [] };
+    const parsed = parseProviderResponse('data: ' + JSON.stringify({ type: 'response.' + status, response }));
+    assert.equal(parsed.status, status);
+    assert.deepEqual(parsed.output, []);
+  }
+});
+
+test('does not manufacture a completed response from partial SSE text', () => {
+  const response = parseProviderResponse('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'partial' }));
+  assert.equal(response.status, 'unresolved');
+  assert.throws(() => assertSingleCompletedProviderCall([{ kind: 'summary', status: 200, response }], 'summary'));
+});
+
+test('retains a JSON provider error envelope without rewriting it', () => {
+  const response = { error: { code: 'server_error' } };
+  assert.deepEqual(parseProviderResponse(JSON.stringify(response)), response);
+  const calls = [{ kind: 'summary', status: 200, response }, completedSummary()];
+  assert.equal(assertSingleCompletedProviderCall(calls, 'summary'), calls[1]);
+});
+
+test('accepts a captured legacy failed SSE event trace before the successful retry', () => {
+  const calls = [{ kind: 'summary', status: 200, response: { eventTypes: ['response.created', 'response.in_progress', 'response.failed'], content: '' } }, completedSummary()];
+  assert.equal(assertSingleCompletedProviderCall(calls, 'summary'), calls[1]);
+});
+
+test('rejects a legacy stream containing a completed event without the completed envelope', () => {
+  const calls = [{ kind: 'summary', status: 200, response: { eventTypes: ['response.failed', 'response.completed'] } }, completedSummary()];
+  assert.throws(() => assertSingleCompletedProviderCall(calls, 'summary'));
+});
+
+const completedSummary = () => ({ kind: 'summary', status: 200, response: { status: 'completed' } });
+
+test('accepts one completed summary without changing recorded attempts', () => {
+  const calls = [completedSummary()];
+  assert.equal(assertSingleCompletedProviderCall(calls, 'summary'), calls[0]);
+  assert.equal(calls.length, 1);
+});
+
+test('recognizes captured HTTP200 provider overload followed by the successful adapter retry', () => {
+  const calls = [{ kind: 'summary', status: 200, response: { status: 'failed', error: { code: 'server_error' } } }, completedSummary()];
+  assert.equal(assertSingleCompletedProviderCall(calls, 'summary'), calls[1]);
+  assert.equal(calls.length, 2);
+});
+
+test('recognizes failed transport attempts without declaring their costs or responses available', () => {
+  const calls = [{ kind: 'summary' }, { kind: 'summary', status: 503 }, completedSummary()];
+  assert.equal(assertSingleCompletedProviderCall(calls, 'summary'), calls[2]);
+  assert.equal(calls[0].usage, undefined);
+});
+
+test('rejects duplicate completed summaries', () => {
+  assert.throws(() => assertSingleCompletedProviderCall([completedSummary(), completedSummary()], 'summary'));
+});
+
+test('rejects incomplete or errored envelopes even with HTTP200', () => {
+  for (const response of [{ status: 'incomplete' }, { status: 'completed', error: { code: 'server_error' } }]) {
+    assert.throws(() => assertSingleCompletedProviderCall([{ kind: 'summary', status: 200, response }], 'summary'));
+  }
+});
+
+test('rejects an incomplete output before a completion, or a failure after it', () => {
+  assert.throws(() => assertSingleCompletedProviderCall([{ kind: 'summary', status: 200, response: { status: 'incomplete' } }, completedSummary()], 'summary'));
+  assert.throws(() => assertSingleCompletedProviderCall([completedSummary(), { kind: 'summary', status: 503 }], 'summary'));
+});
 
 for (const text of [
   'Active: User requested a summary of the conversation.',
