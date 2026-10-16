@@ -28,6 +28,7 @@ import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handl
 import { buildSubflowCommunicationTools } from '../subflowCommunication';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
+import { replaceResponsesSession } from '@/backend/services/model/adapters/responsesSessionState';
 import { admitCatalogModel, assertCatalogAdmissionCurrent, assertModelCatalogLeaseOwned, withModelCatalogLease, type ModelCatalogAdmission } from '@/backend/services/model/catalogAdmission';
 import { isOwnerCredentialBoundModel, validateOwnerCredentialBinding } from '@/shared/types/model';
 import { FlowNode } from '@/shared/types/flow';
@@ -777,6 +778,10 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     runId: sharedState.logicalRunId,
     archiveModelTurns: !sharedState.ephemeral,
     codexSession: sharedState.codexSessions?.[nodeId],
+    responsesSession: sharedState.responsesSessions?.[nodeId],
+    onResponsesSessionChange: (session) => {
+      sharedState.responsesSessions = replaceResponsesSession(sharedState.responsesSessions, nodeId, session);
+    },
     onCodexSessionChange: (session) => {
       if (session) {
         sharedState.codexSessions = { ...(sharedState.codexSessions ?? {}), [nodeId]: session };
@@ -1359,6 +1364,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             runId: prepResult.runId,
             codexSession: prepResult.codexSession,
             onCodexSessionChange: prepResult.onCodexSessionChange,
+            responsesSession: prepResult.responsesSession,
+            onResponsesSessionChange: prepResult.onResponsesSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
             onApprovalRequired: prepResult.onApprovalRequired,
             mcpNodes: prepResult.mcpNodesForDispatch ?? node_params?.properties?.mcpNodes,

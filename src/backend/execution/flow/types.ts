@@ -21,6 +21,7 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
 import type { ConversationCompactionState } from './compaction/types';
+import type { ResponsesSessionState } from '@/backend/services/model/adapters/responsesSessionState';
 import type {
   Persona,
   PersonaActivity,
@@ -954,6 +955,8 @@ export interface SharedState extends DebuggerStateView {
     compactionState?: ConversationCompactionState;
     /** Codex SDK threads persisted with the conversation, keyed by Process node id. */
     codexSessions?: Record<string, CodexSessionMetadata>;
+    /** Bounded native Responses windows; never replace canonical messages. */
+    responsesSessions?: Record<string, ResponsesSessionState>;
     /** Server-owned anchors for undoing a confirmed per-message restore. */
     revertOperations?: Record<string, {
         messageId: string;
@@ -1522,6 +1525,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Durable Codex session for this node and a state-owned replacement hook. */
     codexSession?: CodexSessionMetadata;
     onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
+    responsesSession?: ResponsesSessionState;
+    onResponsesSessionChange?: (session: ResponsesSessionState | undefined) => void;
     /** Immutable Behavior policy restored with the authoritative Flow snapshot. */
     behaviorRules?: Flow['behaviorRules'];
     /** Runtime-only guard checked before provider and tool dispatch. */

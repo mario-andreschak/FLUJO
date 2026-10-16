@@ -602,6 +602,7 @@ function installPersonaActivitySnapshot(
   sharedState.savedBehaviorRules = structuredClone(canonicalFlow.behaviorRules ?? []);
   sharedState.frozenSystemPrompts = undefined;
   sharedState.codexSessions = undefined;
+  sharedState.responsesSessions = undefined;
   sharedState.turnBudgets = undefined;
   sharedState.mcpAppContexts = undefined;
   sharedState.mcpSkillSelections = undefined;
@@ -1131,6 +1132,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     if (sharedState.meetingParticipant) {
       sharedState.frozenSystemPrompts = undefined;
       sharedState.codexSessions = undefined;
+      sharedState.responsesSessions = undefined;
     }
     sharedState.meetingTurn = undefined;
   }

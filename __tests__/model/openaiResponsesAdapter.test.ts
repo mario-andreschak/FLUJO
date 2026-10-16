@@ -47,6 +47,7 @@ import {
 } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import type { Model } from '@/shared/types/model';
 import { runWithWorkspace } from '@/utils/workspace';
+import type { ResponsesSessionState } from '@/backend/services/model/adapters/responsesSessionState';
 
 const model = (name = 'gpt-5'): Model =>
   ({
@@ -567,6 +568,78 @@ describe('complete native output replay', () => {
   ];
   const session = { conversationId: 'complete-window', nodeId: 'weather' };
   const history = (): OpenAI.ChatCompletionMessageParam[] => [{ role: 'user', content: 'Compare both cities.' }];
+
+  it.each([false, true])('restores complete output after a JSON checkpoint and process-cache loss (streaming=%s)', async streaming => {
+    const output = nativeOutput();
+    const messages = history();
+    let saved: ResponsesSessionState | undefined;
+    const onResponsesSessionChange = (value: ResponsesSessionState | undefined) => {
+      saved = value ? JSON.parse(JSON.stringify(value)) : undefined;
+    };
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+    const first = await call(model(), messages, { ...session, onResponsesSessionChange });
+    messages.push(first.completion.choices[0].message,
+      { role: 'tool', tool_call_id: 'call_a', content: 'Berlin: sunny' },
+      { role: 'tool', tool_call_id: 'call_b', content: 'Bogota: rain' });
+    __resetReasoningStore();
+    if (streaming) mockResponsesCreate.mockResolvedValueOnce((async function* () {
+      yield { type: 'response.completed', response: responseWithToolCall({ output: [] }) };
+    })());
+    await new OpenAiResponsesAdapter()[streaming ? 'createStreamCompletion' : 'createCompletion']({
+      model: model(), apiKey: 'sk-test', messages, ...session,
+      ...{ responsesSession: saved, onResponsesSessionChange },
+    });
+    expect((bodyOf(1).input as unknown[]).slice(1, 1 + output.length)).toEqual(output);
+    expect(JSON.stringify(saved)).not.toContain('sk-test');
+  });
+
+  it.each(['connection', 'credential', 'node', 'conversation', 'prefix', 'policy', 'missing', 'corrupt', 'workspace'])(
+    'uses canonical history after restart with an incompatible %s checkpoint', async change => {
+      const output = nativeOutput();
+      const messages = history();
+      let saved: ResponsesSessionState | undefined;
+      const onResponsesSessionChange = (value: ResponsesSessionState | undefined) => { saved = value; };
+      mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+      const first = await call(model(), messages, { ...session, onResponsesSessionChange });
+      messages.push(first.completion.choices[0].message);
+      __resetReasoningStore();
+      if (change === 'policy') saved!.version = 0 as never;
+      if (change === 'missing') saved = undefined;
+      if (change === 'corrupt') saved!.records[0][1].retainedChars = 0;
+      if (change === 'prefix') messages[0].content = 'An accepted correction.';
+      const data = { model: change === 'connection' ? { ...model(), id: 'other' } : model(),
+        apiKey: change === 'credential' ? 'other' : 'sk-test', messages,
+        conversationId: change === 'conversation' ? 'other' : session.conversationId,
+        nodeId: change === 'node' ? 'other' : session.nodeId, responsesSession: saved, onResponsesSessionChange };
+      if (change === 'workspace') await runWithWorkspace('other-workspace', () => new OpenAiResponsesAdapter().createCompletion(data));
+      else await new OpenAiResponsesAdapter().createCompletion(data);
+      expect(bodyOf(1).input).toEqual(toResponsesInput(messages));
+    });
+
+  it('does not resurrect process-local output when the owning checkpoint was removed', async () => {
+    const output = nativeOutput();
+    const messages = history();
+    mockResponsesCreate.mockResolvedValueOnce(responseWithToolCall({ output }));
+    const first = await call(model(), messages, { ...session, onResponsesSessionChange: () => undefined });
+    messages.push(first.completion.choices[0].message);
+    await call(model(), messages, { ...session, responsesSession: undefined, onResponsesSessionChange: () => undefined });
+    expect(bodyOf(1).input).toEqual(toResponsesInput(messages));
+  });
+
+  it.each(['replacement', 'stop'])('fences late durable publication after %s', change => {
+    const controller = new AbortController();
+    const publish = jest.fn();
+    const data = { model: model(), apiKey: 'sk-test', messages: history(), ...session,
+      signal: controller.signal, onResponsesSessionChange: publish };
+    const first = prepareResponsesReasoning(data, 'openai-responses');
+    if (change === 'replacement') prepareResponsesReasoning(data, 'openai-responses');
+    else controller.abort();
+    publish.mockClear();
+    const response = responseWithToolCall({ output: nativeOutput() });
+    const translated = fromResponse(response as never, model().name);
+    first.remember(translated.completion, translated.reasoning, response.output as never);
+    expect(publish).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])('replays exact interleaved items, IDs and phases (streaming=%s)', async streaming => {
     const output = nativeOutput();
