@@ -8,6 +8,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { PersonaShardIdentityError } from '@/utils/storage/personaShardIdentity';
 
 const log = createLogger('app/v1/personas/[personaId]/work-items/[workItemId]/runtime/route');
 export const dynamic = 'force-dynamic';
@@ -23,7 +24,10 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
   if (!EnduringAgentIdSchema.safeParse(personaId).success
     || !EnduringAgentIdSchema.safeParse(workItemId).success) return notFound();
   try {
-    const item = await getPersonaWorkItem(personaId, workItemId);
+    const item = await getPersonaWorkItem(personaId, workItemId).catch((error: unknown) => {
+      if (error instanceof PersonaShardIdentityError) return null;
+      throw error;
+    });
     if (!item || item.personaId !== personaId || item.parentGoalId || !item.goal) return notFound();
     // Reuse the same bounded, drift-checked join as the native Persona tool.
     // Never return the raw WorkItem, mailbox payload, Activity context or lease.

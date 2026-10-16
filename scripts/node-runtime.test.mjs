@@ -8,6 +8,7 @@ import test from 'node:test';
 // The existing runtime-contract CI gate also covers the opt-in application updater.
 import './node-runtime-update.test.mjs';
 import './undici-runtime-transport.test.cjs';
+import './undici-security.test.cjs';
 import { assertSupportedNodeRuntime, isSupportedNodeRuntime, SUPPORTED_NODE_RANGE } from '../bin/node-runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

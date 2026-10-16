@@ -700,3 +700,155 @@ describes complete output replay; this repair covers the existing bounded
 tool-anchored reasoning cache. These results do not establish durable native compaction windows,
 provider signatures, every resolved backend behind a router/alias, CLI session
 resume, visual benefit or release acceptance. Those #1091 criteria stay open.
+
+## Complete Responses output replay
+
+The next existing #1091 repair addresses reconstruction of native output. Six
+new regressions fail before repair: interleaved reasoning moves ahead of all
+calls, native message IDs/phases disappear, final answers have no tool anchor,
+and incomplete output can enter the reasoning cache. The
+[Responses state contract](https://developers.openai.com/api/docs/guides/conversation-state)
+requires preserving the complete output array for stateless continuation.
+
+Both Responses SDK adapters now retain the complete output of completed
+responses whose assistant projection exists in canonical history. On unchanged
+continuations, that window replaces the synthetic Chat Completion projection
+at its original boundary. Reasoning, assistant messages, refusals, function
+items, IDs, phases and their original order stay together. Tool results remain
+separate and retain their original call IDs. Provider aliases remain in native
+items while the conversation keeps canonical tool names. Final answers can
+carry a window without a function-call anchor.
+
+Reuse requires the captured route/authority owner, exact canonical source and
+assistant projection, plus the normalized native input that produced the
+window. A late sibling can return the same text with different native IDs;
+dependent windows then invalidate. Eviction also invalidates windows whose
+native ancestors are missing. Incomplete/failed responses do not enter this
+cache. The returned output is cloned; replay never mutates canonical history.
+
+The existing 200-session/workspace and 64-window/session bounds now also cap
+retained output at 1,048,576 serialized JSON UTF-16 code units per session.
+Oversized windows are skipped and older windows are evicted. Calls without a
+conversation-owned checkpoint use a process-local cache and canonical fallback
+on restart. Ordinary Process execution now checkpoints bounded output as
+described below. This does not introduce a provider compaction endpoint.
+
+The [frozen full-output evidence](responses-output-replay-2026-10-16.json)
+records 100 focused checks, local typecheck/lint and the non-container build on
+source tree `5eee4cbf2caa95a1c2124664a5b44f3999bf7ad2`. Fifty-six emitted HTTP
+cases / 116 loopback requests verify exact windows through both SDKs and
+streaming modes, provider aliases, rewrite/configuration fallback, final
+answers, incomplete responses and three-turn lineage. Six genuine Super Free
+turns through the same emitted adapters perform four exact replays of actual
+returned output and preserve the exact supplied receipt. No tool executes.
+The provider returns no encrypted items; synthetic encrypted strings qualify
+controlled replay only. Durable native compaction, real provider signatures,
+CLI resume, broader semantic/provider coverage and release acceptance remain
+open in #1091.
+
+## Durable Responses output checkpoints — October 16, 2026
+
+Ordinary Process calls checkpoint complete native Responses output alongside
+their canonical conversation through the existing state persistence path. Both
+Responses SDK adapters restore this derived state after application restart.
+The checkpoint is versioned and bound to workspace, conversation, node, adapter,
+connection, model, provider, endpoint, credential fingerprint, tools and effective
+reasoning configuration. Credential bytes and tool execution authority are never
+stored in it. Exact canonical source/assistant and normalized native-input
+digests still govern each window's reuse.
+
+Checkpoint records have an integrity digest for accidental corruption. Schema,
+scope, policy, payload and size validation run on restore and before reuse.
+Missing, corrupt, oversized or incompatible state uses canonical history;
+derived metadata never repairs or replaces canonical messages. Each session
+retains at most 64 windows, and the aggregate conversation checkpoint retains
+at most 64 nodes and 1,048,576 serialized JSON UTF-16 code units, including
+metadata. The current conversation checkpoint takes precedence over disposable
+process-local state. Stop and superseding invocations fence late publications;
+chat rewind, graph reset and meeting exit clear the corresponding checkpoints.
+
+The [frozen persistence evidence](responses-durable-state-2026-10-16.json)
+records application source tree `b2c9f244b88ef960a0344e173a6685fda31a2c3b`,
+264 focused checks across ten suites, typecheck/lint and the inspected
+non-container build. Two restart regressions fail before repair. Twelve actual
+built HTTP cases across five application epochs cover normal owner enrollment,
+scoped execution, exact opaque bytes/IDs/phases/order after restart, same-size
+corruption fallback, changed credentials and unchanged canonical messages.
+The 56 emitted real-SDK HTTP cases also pass. All application epochs exit with
+their output pipes drained. Earlier fixture/readiness/type failures remain in
+the evidence and receive no acceptance credit.
+
+Run the controlled built-app check through flujo-bash with a fresh absolute
+report path: `node scripts/responses-durable-acceptance.mjs <report.json>`.
+The owner must remove its private profiles after their observed epochs close.
+Four genuine explicit Nemotron Super Free turns run through separate processes:
+both adapters replay actual provider output after a JSON checkpoint and retain
+the exact receipt. Each reports USD 0; no tool executes or model fallback occurs.
+That provider returns no encrypted items, so genuine encrypted/signature/CLI
+resume, provider compaction windows, broader semantic/position/visual and release
+acceptance remain open in #1091.
+
+## Continuing completed handoffs — October 16, 2026
+
+A later deterministic edge must not answer an already completed handoff or reuse its old caller brief/session key. The runtime now captures and answers pending calls only. With none pending, it skips caller-input capture entirely, including the Signal caller-body marker. Partially completed batches still handle their pending calls.
+
+The [frozen handoff and fidelity evidence](responses-restart-fidelity-2026-10-16.json) records 80 focused runtime checks across five suites, 32 harness guards, fresh typecheck/lint and the inspected non-container build. Two initial regressions and the adjacent Signal regression fail before repair.
+
+The six actual built-app cases use approved Claude Haiku 5.5 through OpenRouter. Each ledger fsyncs every invocation and has no deduplication. Both sequential cases replay the actual native provider output after process restart. Stop/crash cases reconcile the real committed writes after their acknowledgement is lost; the source/corrections rotate through early, middle and late positions.
+
+| Adapter / case | Exact replies | Physical writes |
+|---|---:|---:|
+| openai-responses / sequential | 10/10 | 2 |
+| openai-responses / cancel | 3/10 | 2 |
+| openai-responses / crash | 2/10 | 2 |
+| openrouter-agent / sequential | 10/10 | 2 |
+| openrouter-agent / cancel | 10/10 | 2 |
+| openrouter-agent / crash | 10/10 | 2 |
+
+All 60 captured rounds preserve trusted user authority and valid tool pairing on every continuation; all six selected ledgers have two writes from two authorizations. Ten incomplete later summary sources were rejected while valid summaries and safe canonical fallback remained available. The 15 non-exact OpenAI Responses recovery replies remain failed acceptance, including `sendAllowed:null` instead of `false` and extra prose. No answer is repaired for scoring. #1091 remains open.
+
+Matrix source `783a3522c1d0ac36fa56e3bdb86cc4aee70b47ce` and final guarded source `31678cb7e11b9d1d5db0ec03544e640dc3faf8f7` are recorded separately. The final Signal guard skips an otherwise empty capture block; its branch is covered by the new regression and fresh final build. The compressed trace includes the matrix source patch, all provider traffic/canonical snapshots, earlier failures, aborted baselines and the unusable old receipt.
+
+The selected matrix reports USD 0.916433. Across usable attempts, reported charges total USD 1.230976; 7 requests lack reported cost, and the unusable old receipt supplies no cost evidence. Overlapping case timings are recorded per case rather than added into a wall-clock claim.
+
+Free was attempted first; its over-issued write batch and path error stay unqualified. DeepSeek sometimes exhausted the fixed 4,000-token summary ceiling on reasoning. Genuine provider compaction endpoints, encrypted/signature/CLI and Claude Agent SDK lifecycle, visual benefit, installed/endurance and release acceptance remain unqualified. No full suite, remote CI, container/image build or release was dispatched.
+
+## Returned compaction and hosted-tool checkpoints — October 16, 2026
+
+The next existing #1091 review reproduced a native replay gap: the checkpoint
+validator accepted only reasoning, messages and function calls. A completed
+response containing a compaction or hosted-tool item lost its whole durable
+window. Replaying raw output also retained SDK-only parsed values and output
+provenance that do not belong in a later input request.
+
+Both Responses adapters now preserve known output kinds from the installed
+OpenAI SDK. The stored window stays exact; a separate replay copy uses the SDK's
+input conversion to remove output-only fields and omit items that cannot be
+replayed without changing their meaning. Unknown and input-only output kinds
+still use canonical fallback. Existing owner/prefix checks, integrity digests,
+size limits and tool-execution authority remain in force.
+
+The installed OpenRouter SDK accepts a compaction input but represents that
+returned output as `UNKNOWN` with its original payload in `raw`. The adapter
+restores only a recognized compaction item with an ID and nonempty opaque
+content. Malformed or unrelated unknown output remains ineligible for replay.
+
+The [frozen compatibility evidence](responses-returned-compaction-2026-10-16.json)
+binds source, harnesses, before/after failures and local qualification. Five new
+regressions fail on the prior main. All 137 focused checks across four affected
+suites, typecheck and lint pass on the repaired application inputs.
+
+The inspected non-container application/five-MCP build passes in 350.500 seconds
+on application source tree `129ddcece518bf67f8d9f87b1331687f613de62f`.
+Both real SDKs pass 56 emitted HTTP cases / 116 local requests, including
+streaming and three-turn lineage. The actual built app passes 14 checks over
+five application epochs / eight local requests: exact compaction bytes and
+hosted-search receipts after restart, clean replay fields, unchanged canonical
+messages, same-size corruption fallback and credential invalidation. Every
+owned epoch exits with drained pipes. These phases overlap; their measured
+durations in the receipt must not be added together. No inference is dispatched.
+
+This changes handling of returned output; it does not request a provider
+compaction endpoint or introduce a new tool. Synthetic protocol checks do not
+qualify genuine provider compaction, encrypted state, native SDK/CLI sessions,
+visual benefit, installed/endurance or release acceptance. #1091 remains open.

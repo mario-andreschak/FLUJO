@@ -53,7 +53,7 @@ import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import {
   compactHistory,
-  splitHistoryForCompaction,
+  selectCompactionSplit,
   COMPACTION_SUMMARY_MARKER,
   type CompactHistoryResult,
 } from './summarizingCompaction';
@@ -590,8 +590,6 @@ export class ModelHandler {
       // the verbatim recent tail must not regenerate that prefix or add another
       // retained anchor. Check the complete projection again after generation.
       const fullSourceDigest = digestProjectedMessages(source);
-      const split = splitHistoryForCompaction(source, eff.keepTokens);
-      const sourceDigest = digestProjectedMessages([...split.leadingSystem, ...split.toSummarize]);
       const projectionDigest = digestProjectionIdentity(projection);
 
       const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
@@ -600,11 +598,26 @@ export class ModelHandler {
         artifact.schemaVersion === COMPACTION_ARTIFACT_SCHEMA_VERSION &&
         artifact.conversationId === conversationId &&
         artifact.nodeId === nodeId &&
-        artifact.sourceDigest === sourceDigest &&
         artifact.projectionDigest === projectionDigest &&
         artifact.policyVersion === COMPACTION_POLICY_VERSION &&
         artifact.modelId === model.id
       );
+      if (model.adapter === 'openai-responses' || model.adapter === 'openrouter-agent') {
+        const requestIndex = source.findLastIndex(message => message.role === 'user' && (message.depth ?? 0) === 0);
+        const request = source[requestIndex];
+        const usingCurrentSummary = request?.id && reusableArtifact?.requestDigest === digestProjectedMessages([request]);
+        const continuingTools = source.slice(requestIndex + 1).some(message => message.role === 'assistant'
+          && (message.depth ?? 0) === 0 && message.tool_calls?.length
+          && (message.processNodeId === undefined || nodeId === undefined || message.processNodeId === nodeId));
+        // A rejected summary (or a newly crossed threshold) can leave the first
+        // native call on canonical history. Preserve that prefix through its
+        // tool results; introducing a summary now would invalidate exact output
+        // replay. A new user request can compact again. Existing refit/capacity
+        // checks still apply to the unmodified fallback.
+        if (continuingTools && !usingCurrentSummary) return null;
+      }
+      const split = selectCompactionSplit(source, eff.keepTokens, reusableArtifact);
+      const sourceDigest = digestProjectedMessages([...split.leadingSystem, ...split.toSummarize]);
 
       const summarize = async (
         msgs: FlujoChatMessage[],
@@ -1707,6 +1720,8 @@ export class ModelHandler {
       takeModelStepOrdinal: input.takeModelStepOrdinal,
       codexSession,
       onCodexSessionChange,
+      responsesSession: input.responsesSession,
+      onResponsesSessionChange: input.onResponsesSessionChange,
       localToolExecutors,
       shouldEndAgenticTurn,
       runResourceMarkers,
@@ -1998,6 +2013,8 @@ export class ModelHandler {
       takeModelStepOrdinal?: () => number;
       codexSession?: import('../types').CodexSessionMetadata;
       onCodexSessionChange?: (session: import('../types').CodexSessionMetadata | undefined) => void;
+      responsesSession?: import('@/backend/services/model/adapters/responsesSessionState').ResponsesSessionState;
+      onResponsesSessionChange?: (session: import('@/backend/services/model/adapters/responsesSessionState').ResponsesSessionState | undefined) => void;
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
        * #161) run in-loop by self-orchestrating adapters. */
       localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
@@ -3126,6 +3143,8 @@ export class ModelHandler {
               nodeId: opts?.nodeId,
               codexSession: nativeToolPort ? undefined : opts?.codexSession,
               onCodexSessionChange: nativeToolPort ? undefined : opts?.onCodexSessionChange,
+              responsesSession: nativeToolPort ? undefined : opts?.responsesSession,
+              onResponsesSessionChange: nativeToolPort ? undefined : opts?.onResponsesSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
               sessionResume: nativeToolPort ? false : opts?.sessionResume,
               // Derived from the tool-block hash, or from the conversation for a

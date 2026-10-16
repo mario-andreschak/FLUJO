@@ -76,3 +76,25 @@ The [MCP 2026-07-28 client-registration specification](https://modelcontextproto
 deprecates DCR and retains it for compatibility. Release validation should exercise
 both SDK generations, CIMD-only and dual-capability servers, DCR fallback, existing
 registrations, custom documents, issuer/state/replay failures, and GET/POST callbacks.
+
+## Qualified CIMD maintenance acceptance (2026-10-16)
+
+[Exact inputs and results](../../audits/evidence/oauth-cimd-acceptance-2026-10-16.json)
+cover the existing CIMD implementation combined with main's Undici security patches.
+All 128 focused checks pass across both SDK generations, discovery/installation,
+issuer/state isolation, existing clients and the connection UI. The initial CIMD UI
+case had a hardcoded DCR expectation; it now asserts the selected auth mode.
+
+The built application completes controlled OAuth GET and cross-origin form POST
+callbacks with actual PKCE verification, issuer and workspace rejection, replay
+rejection, encrypted persistence and process restart. A real browser completes
+local consent and the resulting MCP page fits 320px and 390px viewports. No model
+or third-party OAuth account is invoked. Public metadata publication is verified
+separately after protected merge and the Pages deployment; these local results
+do not assert installed or broader release acceptance.
+
+To repeat the controlled journey, use an isolated source build with no dotenv
+files, keep ports 4200/4201 available, set `CIMD_ACCEPTANCE_RUN_DIR` to a new private
+absolute evidence directory, and run `node scripts/mcp-cimd-acceptance.mjs`
+through flujo-bash. The harness retains profiles and logs for the task owner to
+clean through flujo-bash after observing app exit and closed pipes.

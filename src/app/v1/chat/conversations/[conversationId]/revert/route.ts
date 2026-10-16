@@ -171,6 +171,7 @@ function restoreChatSuffix(
   // Native provider sessions contain the removed turns and cannot be rewound.
   // Clearing them makes the next turn rebuild from the restored transcript.
   state.codexSessions = undefined;
+  state.responsesSessions = undefined;
   state.lastResponse = undefined;
   state.lastError = undefined;
   state.errorEventEmitted = undefined;

@@ -123,6 +123,9 @@ describe('compaction preparation allocations (#569/#1091)', () => {
           metadata: { 'flujo://run/case/key': ['flujo://run/case/nested'] } });
         const fingerprint = createHash('sha256').update(payload).digest('hex');
         const expected = Math.ceil(JSON.stringify(input).length / 4);
+        const tailStart = input.content.lastIndexOf('\\n') + 1;
+        const expectedRecords = [{ source_role: 'tool', source_message_id: 'large-tool',
+          text: input.content.slice(tailStart), source_part: 0, source_start: tailStart, source_end: input.content.length }];
         global.gc();
         const before = process.memoryUsage();
         const samples = [];
@@ -130,13 +133,20 @@ describe('compaction preparation allocations (#569/#1091)', () => {
           for (const operation of ['tokens', 'uris', 'structured']) {
             global.gc();
             const start = process.memoryUsage();
+            let incomplete = false;
             const actual = operation === 'tokens' ? api.estimateMessageTokens(input)
               : operation === 'uris' ? api.preserveResourceUris('summary', [input])
-              : structured.buildStructuredObservationBlock([input], () => false);
+              : structured.buildStructuredObservationBlock([input], () => false, () => { incomplete = true; });
             const transient = process.memoryUsage();
             if (operation === 'tokens' && actual !== expected) throw new Error('Token estimate changed');
             if (operation === 'uris' && !['start', 'tail', 'key', 'nested'].every(id => actual.includes('flujo://run/case/' + id))) throw new Error('Resource URI lost');
-            if (operation === 'structured' && actual !== '') throw new Error('Invented structured observation');
+            // Preserve the exact bounded tail with source offsets, and require
+            // an archive notice for the oversized preceding line.
+            if (operation === 'structured' && (!incomplete || actual.length > 1_024
+              || !actual.startsWith('\\n\\n## Recorded Source Observations\\n')
+              || !actual.endsWith('Additional source observations require read_resource on the full source archive.')
+              || JSON.stringify(actual.split('\\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line)))
+                !== JSON.stringify(expectedRecords))) throw new Error('Invented structured observation or missing archive notice');
             if (transient.heapUsed - start.heapUsed > 16 * 1024 * 1024) throw new Error('Full-message allocation returned');
             global.gc();
             const retained = process.memoryUsage();

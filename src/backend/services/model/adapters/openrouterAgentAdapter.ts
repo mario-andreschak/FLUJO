@@ -206,7 +206,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
     try {
       const result = client.callModel({
         model: input.model.name,
-        input: mapOpenRouterEnvelopeKeys(toResponsesInput(messages, reasoningState.carried)) as Item[],
+        input: mapOpenRouterEnvelopeKeys(reasoningState.replay(toResponsesInput(messages))) as Item[],
         tools: tools?.map(definition => tool({
           name: definition.function.name,
           description: definition.function.description,
@@ -236,10 +236,21 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
       if (response.status !== 'completed' && response.status !== 'incomplete') {
         throw new Error(`OpenRouter Agent SDK returned a nonterminal response: ${response.status}`);
       }
-      const { completion: nativeCompletion, reasoning, media } = fromResponse(
-        mapOpenRouterEnvelopeKeys(response, true) as OpenAI.Responses.Response, input.model.name);
+      const wireResponse = mapOpenRouterEnvelopeKeys(response, true) as OpenAI.Responses.Response;
+      // The installed SDK accepts compaction on input but currently wraps it as
+      // UNKNOWN on output. Restore only this recognized wire item; unrelated
+      // unknown envelopes still invalidate derived replay state.
+      wireResponse.output = wireResponse.output.map(item => {
+        const unknown = item as unknown as { type?: string; is_unknown?: boolean;
+          raw?: OpenAI.Responses.ResponseCompactionItem };
+        return unknown.type === 'UNKNOWN' && unknown.is_unknown === true
+          && unknown.raw?.type === 'compaction' && typeof unknown.raw.id === 'string'
+          && typeof unknown.raw.encrypted_content === 'string' && unknown.raw.encrypted_content.length > 0
+          ? unknown.raw : item;
+      });
+      const { completion: nativeCompletion, reasoning, media } = fromResponse(wireResponse, input.model.name);
       const completion = translateCompletionFromProvider(nativeCompletion, translation);
-      reasoningState.remember(completion, reasoning);
+      if (response.status === 'completed') reasoningState.remember(completion, reasoning, wireResponse.output);
       return { completion, media,
         contextUsage: contextUsageFromCompletion(completion.usage, input.model.contextWindow),
         ...(liveMessageId ? { liveMessageId } : {}),

@@ -135,6 +135,53 @@ beforeEach(() => {
 });
 
 describe('runFlow handoff capture — queued Subflow jobs', () => {
+  it.each(['subflow', 'signal'] as const)('does not answer or recapture a completed historical handoff on a later deterministic %s edge', async (caseTarget) => {
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState) => {
+      sharedState.currentNodeId = START;
+      sharedState.handoffNameMap = { handoff_to_other: OTHER };
+      sharedState.handoffTargetTypes = { [WORKER]: caseTarget };
+      sharedState.messages.push(
+        { role: 'assistant', content: 'Finished.', tool_calls: [
+          { id: 'completed-handoff', type: 'function', function: { name: 'handoff_to_other',
+            arguments: JSON.stringify({ task: 'old brief', sessionKey: 'old-session' }) } },
+        ], id: 'historical-assistant', timestamp: 1 },
+        { role: 'tool', tool_call_id: 'completed-handoff',
+          content: JSON.stringify({ status: 'Handoff processed', targetNodeId: OTHER }),
+          id: 'historical-result', timestamp: 2 },
+        { role: 'user', content: 'Continue with this new request.', id: 'new-user', timestamp: 3 },
+      );
+      return { sharedState, action: EDGE };
+    });
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'continue', mode: 'conversation' });
+
+    expect(result.status).toBe('completed');
+    expect(result.sharedState.currentNodeId).toBe(WORKER);
+    expect(result.messages.filter(message => message.role === 'tool' && message.tool_call_id === 'completed-handoff'))
+      .toHaveLength(1);
+    expect(result.sharedState.handoffInput).toBeUndefined();
+  });
+
+  it('answers only the pending calls in a partially completed handoff batch', async () => {
+    targetType = 'subflow';
+    assistantToolCalls = [spawnCall('already-answered', 'old brief'), spawnCall('pending', 'new brief')];
+    const originalStep = (FlowExecutor.executeStep as jest.Mock).getMockImplementation()!;
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState) => {
+      const result = await originalStep(sharedState);
+      sharedState.messages.push({ role: 'tool', tool_call_id: 'already-answered',
+        content: JSON.stringify({ status: 'Handoff processed', targetNodeId: WORKER }),
+        id: 'existing-result', timestamp: 2 });
+      return result;
+    });
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'continue', mode: 'conversation' });
+
+    expect(result.status).toBe('completed');
+    expect(result.messages.filter(message => message.role === 'tool').map(message => message.tool_call_id))
+      .toEqual(['already-answered', 'pending']);
+    expect(result.sharedState.handoffInput).toMatchObject({ tasks: ['new brief'] });
+  });
+
   it('captures one brief per matching call, in call order, and answers every call', async () => {
     assistantToolCalls = [
       spawnCall('c1', 'audit security'),
