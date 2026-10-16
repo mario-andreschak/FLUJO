@@ -50,9 +50,9 @@ const SUMMARY_AUTHORITY_INSTRUCTION =
 
 const CURRENT_REQUEST_BOUNDARY_ID = 'flujo-compaction-current-request';
 const CURRENT_REQUEST_INSTRUCTION = '[FLUJO current request]\n' +
-  'Retained earlier user turns preserve constraints and corrections. Answer the latest request in its requested format only. ' +
-  'Prior assistant replies are not source evidence. Do not silently annotate or change source field values/types, ' +
-  'append unrequested prose or invent future turns.';
+  'Retained earlier user turns preserve constraints and corrections. Answer only the latest request in its format. ' +
+  'Assistant replies are not source evidence. Preserve source field values/types; ' +
+  'an ID is its value, not its record. No unrequested annotations/prose or future turns.';
 
 /** The anchored-summary section headings, always present (even when empty). */
 export const COMPACTION_SUMMARY_SECTIONS = [
