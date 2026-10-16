@@ -166,9 +166,17 @@ function assertDependencyGraph(
 
 export async function createPersonaWorkItem(
   input: CreatePersonaWorkItemInput,
-  options: PersonaDomainMutationOptions & { goalCreateRequestDigest?: string } = {},
+  options: PersonaDomainMutationOptions & {
+    goalCreateRequestDigest?: string;
+    /** Owner-only staging; never exposed by the ordinary create input schema. */
+    initialGoalState?: 'paused';
+  } = {},
 ): Promise<PersonaWorkItem> {
   const parsed = CreatePersonaWorkItemInputSchema.parse(input) as CreatePersonaWorkItemInput;
+  if (options.initialGoalState !== undefined && (options.initialGoalState !== 'paused'
+    || !parsed.goal || parsed.parentGoalId || options.executionAuthority)) {
+    throw new PersonaDomainConflictError('Paused admission requires an owner-created Goal root.');
+  }
   const created = await withPersonaDomainMutation(parsed.personaId, options, async ({ activity }) => {
     const now = Date.now();
     const id = parsed.id ?? randomEnduringAgentId('work');
@@ -199,7 +207,13 @@ export async function createPersonaWorkItem(
       title: parsed.title,
       ...(parsed.description ? { description: parsed.description } : {}),
       ...(parentGoalId ? { parentGoalId } : {}),
-      ...(parsed.goal ? { goal: initialPersonaGoalState(parsed.goal, now) } : {}),
+      ...(parsed.goal ? { goal: {
+        ...initialPersonaGoalState(parsed.goal, now),
+        ...(options.initialGoalState === 'paused' ? {
+          state: 'paused', nextRunAt: undefined,
+          interventionReason: 'Owner admission awaits separately qualified activation.',
+        } : {}),
+      } } : {}),
       ...(parsed.goal && options.goalCreateRequestDigest
         ? { goalCreateRequestDigest: options.goalCreateRequestDigest } : {}),
       status: 'open',
