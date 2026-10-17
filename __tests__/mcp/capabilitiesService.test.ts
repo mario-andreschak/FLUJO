@@ -26,9 +26,10 @@ jest.mock('@/backend/services/mcp/config', () => ({
   saveConfig: jest.fn(async () => ({ success: true })),
 }));
 
+const callToolMock = jest.fn();
 jest.mock('@/backend/services/mcp/tools', () => ({
   listServerTools: jest.fn(),
-  callTool: jest.fn(),
+  callTool: (...args: unknown[]) => callToolMock(...args),
 }));
 
 const listResourcesMock = jest.fn();
@@ -48,6 +49,7 @@ jest.mock('@/backend/services/mcp/prompts', () => ({
 }));
 
 const createNewClientMock = jest.fn();
+const safelyCloseClientMock = jest.fn();
 jest.mock('@/backend/services/mcp/connection', () => ({
   McpRuntimeAuthorityRetirementError: jest.requireActual('@/backend/services/mcp/connection').McpRuntimeAuthorityRetirementError,
   assertMcpRuntimeAuthorityRetired: jest.requireActual('@/backend/services/mcp/connection').assertMcpRuntimeAuthorityRetired,
@@ -55,10 +57,11 @@ jest.mock('@/backend/services/mcp/connection', () => ({
   createTransport: jest.fn(() => ({})),
   resolveConfigHeaders: jest.fn(async (config: unknown) => config),
   shouldRecreateClient: jest.fn(() => ({ needsNewClient: false })),
-  safelyCloseClient: jest.fn(async () => undefined),
+  safelyCloseClient: (...args: unknown[]) => safelyCloseClientMock(...args),
 }));
 
 import { MCPService } from '@/backend/services/mcp';
+import { _resetLifecycleForTests } from '@/backend/services/mcp/lifecycleCoordinator';
 
 const makeClient = (over: Record<string, unknown> = {}) => ({
   connect: jest.fn(async () => undefined),
@@ -69,6 +72,9 @@ const makeClient = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   createNewClientMock.mockReset();
+  safelyCloseClientMock.mockReset().mockResolvedValue(undefined);
+  callToolMock.mockReset();
+  _resetLifecycleForTests();
   listResourcesMock.mockReset();
   listResourceTemplatesMock.mockReset();
   readResourceMock.mockReset();
@@ -116,6 +122,97 @@ describe('MCPService.getServerProxyCapabilities', () => {
 });
 
 describe('MCPService.listServerResources', () => {
+  it('cold discovery cannot disconnect a concurrently authorizing tool or repeat its effect', async () => {
+    loadServerConfigsMock.mockResolvedValue((await loadServerConfigsMock()).map(config => ({
+      ...config, transport: 'streamable', serverUrl: 'http://127.0.0.1:54880/mcp',
+    })));
+    const closed = new Set<unknown>();
+    createNewClientMock.mockImplementation(() => makeClient());
+    safelyCloseClientMock.mockImplementation(async (client: unknown) => { closed.add(client); });
+    const svc = new MCPService();
+    let releaseAuthorization!: () => void;
+    const authorizationGate = new Promise<void>(resolve => { releaseAuthorization = resolve; });
+    let enteredAuthorization!: () => void;
+    const authorizationStarted = new Promise<void>(resolve => { enteredAuthorization = resolve; });
+    let effects = 0;
+    callToolMock.mockImplementation(async (client: unknown) => {
+      enteredAuthorization();
+      await authorizationGate;
+      if (closed.has(client)) return { success: false, error: 'Not connected' };
+      effects++;
+      return { success: true, data: { receipt: 'genuine-once' } };
+    });
+    let dispatch: ReturnType<MCPService['callTool']> | undefined;
+    listResourcesMock.mockImplementation(async (client: unknown) => {
+      dispatch ??= svc.callTool('srv', 'commit_action', { actionId: 'once' });
+      await Promise.race([authorizationStarted, dispatch.then(result => {
+        throw new Error('Tool dispatch ended before authorization: ' + JSON.stringify(result));
+      })]);
+      return client ? { resources: [] } : { resources: [], error: 'Server not connected' };
+    });
+    try {
+      await expect(svc.listServerResources('srv')).resolves.toEqual({ resources: [] });
+      releaseAuthorization();
+      await expect(dispatch).resolves.toMatchObject({ success: true });
+      expect(effects).toBe(1);
+      expect(callToolMock).toHaveBeenCalledTimes(1);
+      expect(safelyCloseClientMock).not.toHaveBeenCalled();
+      expect(createNewClientMock).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseAuthorization();
+      await dispatch;
+    }
+  });
+
+  it('failed discovery preserves a client held by another borrower and retries after release', async () => {
+    createNewClientMock.mockImplementation(() => makeClient());
+    const svc = new MCPService();
+    const held = await svc.acquireServerLease('srv');
+    expect(held.lease).toBeDefined();
+    listResourcesMock.mockResolvedValue({ resources: [], error: 'fetch failed' });
+    try {
+      const result = await svc.listServerResources('srv');
+      expect(result.error).toBeDefined();
+      expect(safelyCloseClientMock).not.toHaveBeenCalled();
+      expect(svc.getClient('srv')).toBe(held.lease!.client);
+    } finally {
+      held.lease!.release();
+    }
+    listResourcesMock.mockResolvedValueOnce({ resources: [], error: 'fetch failed' })
+      .mockResolvedValueOnce({ resources: [{ uri: 'file://recovered', name: 'Recovered' }] });
+    await expect(svc.listServerResources('srv')).resolves.toMatchObject({ resources: [{ name: 'Recovered' }] });
+    expect(safelyCloseClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish an old catalog or close the replacement after a connection change', async () => {
+    createNewClientMock.mockImplementation(() => makeClient());
+    const svc = new MCPService();
+    await svc.connectServer('srv');
+    listResourcesMock.mockImplementationOnce(async () => {
+      // An explicit owner/config reconnect is allowed to replace the client.
+      // The finishing discovery must then lease that replacement for its retry.
+      await svc.forceReconnect('srv');
+      return { resources: [{ uri: 'file://stale', name: 'Stale' }] };
+    }).mockResolvedValueOnce({ resources: [{ uri: 'file://current', name: 'Current' }] });
+    await expect(svc.listServerResources('srv')).resolves.toEqual({ resources: [{ uri: 'file://current', name: 'Current' }] });
+    expect(safelyCloseClientMock).toHaveBeenCalledTimes(1);
+    expect(createNewClientMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a pinned App connection intact when discovery fails', async () => {
+    createNewClientMock.mockImplementation(() => makeClient());
+    const svc = new MCPService();
+    await svc.connectServer('srv');
+    svc.pinServer('srv', 'active-app');
+    listResourcesMock.mockResolvedValue({ resources: [], error: 'fetch failed' });
+    try {
+      await expect(svc.listServerResources('srv')).resolves.toMatchObject({ error: expect.any(String) });
+      expect(safelyCloseClientMock).not.toHaveBeenCalled();
+    } finally {
+      svc.unpinServer('srv', 'active-app');
+    }
+  });
+
   it('returns resources directly when the connection is healthy', async () => {
     createNewClientMock.mockReturnValue(makeClient());
     const svc = new MCPService();
@@ -178,6 +275,34 @@ describe('MCPService.listServerPrompts', () => {
 });
 
 describe('MCPService.readResource / getPrompt pass-through', () => {
+  for (const kind of ['native resource', 'prompt'] as const) {
+    it(`preserves an active ${kind} read when concurrent discovery fails`, async () => {
+      createNewClientMock.mockImplementation(() => makeClient());
+      const svc = new MCPService();
+      await svc.connectServer('srv');
+      let finishRead!: () => void;
+      const readGate = new Promise<void>(resolve => { finishRead = resolve; });
+      let startedRead!: () => void;
+      const readStarted = new Promise<void>(resolve => { startedRead = resolve; });
+      const reader = kind === 'native resource' ? readResourceMock : getPromptMock;
+      reader.mockImplementation(async () => {
+        startedRead();
+        await readGate;
+        return { success: true, data: kind === 'native resource' ? { contents: [] } : { messages: [] } };
+      });
+      const pending = kind === 'native resource' ? svc.readResource('srv', 'file://original') : svc.getPrompt('srv', 'original');
+      try {
+        await readStarted;
+        listResourcesMock.mockResolvedValue({ resources: [], error: 'fetch failed' });
+        await expect(svc.listServerResources('srv')).resolves.toMatchObject({ error: expect.any(String) });
+        expect(safelyCloseClientMock).not.toHaveBeenCalled();
+      } finally {
+        finishRead();
+        await expect(pending).resolves.toMatchObject({ success: true });
+      }
+    });
+  }
+
   it('readResource forwards to the resources layer', async () => {
     createNewClientMock.mockReturnValue(makeClient());
     const svc = new MCPService();
