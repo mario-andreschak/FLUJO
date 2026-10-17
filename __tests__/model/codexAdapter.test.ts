@@ -171,7 +171,7 @@ import {
   CodexAdapter,
   CODEX_FLUJO_INSTRUCTIONS,
 } from '@/backend/services/model/adapters/codexAdapter';
-import { _clearCodexSessionsForTests } from '@/backend/services/model/adapters/codexSessionStore';
+import { _clearCodexSessionsForTests, requestCodexSessionFork } from '@/backend/services/model/adapters/codexSessionStore';
 import { prepareCodexRuntimeEnvironment } from '@/backend/services/model/adapters/codexRuntimeHome';
 import { _setNativeToolJournalRootForTests, prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
 import { createNativeBrokerAuthority, createNativeToolPort, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
@@ -1434,6 +1434,61 @@ describe('CodexAdapter — tool bridging', () => {
 });
 
 describe('CodexAdapter — SDK thread reuse', () => {
+  it('restores a completed native branch, excludes discarded later turns and resumes the persisted child after cache reset', async () => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    let persisted: CompletionInput['codexSession'];
+    const nativeTurns = ['parent-turn-1', 'parent-turn-2', 'child-turn-1', 'child-turn-2'];
+    const totals = [
+      { input_tokens: 100, output_tokens: 20, cached_input_tokens: 30, reasoning_output_tokens: 10 },
+      { input_tokens: 200, output_tokens: 40, cached_input_tokens: 60, reasoning_output_tokens: 20 },
+      { input_tokens: 120, output_tokens: 25, cached_input_tokens: 35, reasoning_output_tokens: 12 },
+      { input_tokens: 140, output_tokens: 29, cached_input_tokens: 40, reasoning_output_tokens: 14 },
+    ];
+    appServerThreadMock.mockImplementation(input => {
+      const index = appServerThreadMock.mock.calls.length - 1;
+      input.onUsage(totals[index], { promptTokens: 20, completionTokens: 5, totalTokens: 25 });
+      return { runStreamed: runStreamedMock, close: jest.fn(async () => {}), canSteer: () => false,
+        usage: () => totals[index], completedTurnId: () => nativeTurns[index], nativeSessionId: () => 'parent-thread' };
+    });
+    ['first answer', 'discarded answer', 'branch answer', 'continued answer'].forEach((answer, index) => {
+      runStreamedMock.mockResolvedValueOnce({ events: eventStream([
+        threadStarted(index < 2 ? 'parent-thread' : 'child-thread'), agentMessage(answer), turnCompleted(totals[index]),
+      ])() });
+    });
+    const identity = { apiKey: undefined, conversationId: 'ordinary-branch', nodeId: 'process', sessionResume: true,
+      onCodexSessionChange: (session: CompletionInput['codexSession']) => { persisted = session; } };
+    await new CodexAdapter().createCompletion(baseInput(identity));
+    const head = [{ role: 'user' as const, content: 'hi' }, { role: 'assistant' as const, content: 'first answer' }];
+    await new CodexAdapter().createCompletion(baseInput({ ...identity, codexSession: persisted,
+      messages: [...head, { role: 'user', content: 'discarded' }] }));
+    const parent = JSON.parse(JSON.stringify(persisted)) as NonNullable<typeof persisted>;
+    expect(parent.checkpoints?.map(checkpoint => checkpoint.turnId)).toEqual(nativeTurns.slice(0, 2));
+    const restored = requestCodexSessionFork({ process: parent })!.process;
+    _clearCodexSessionsForTests();
+    const branchMessages = [...head, { role: 'user' as const, content: 'replacement' }];
+    const result = await new CodexAdapter().createCompletion(baseInput({ ...identity, codexSession: restored, messages: branchMessages }));
+    expect(appServerThreadMock.mock.calls[2][0]).toMatchObject({ fork: {
+      threadId: 'parent-thread', lastTurnId: 'parent-turn-1', sessionId: 'parent-thread',
+    } });
+    expect(appServerThreadMock.mock.calls[2][0].resumeThreadId).toBeUndefined();
+    expect(runStreamedMock.mock.calls[2][0]).toBe('replacement');
+    expect(result.completion.usage).toMatchObject({ prompt_tokens: 20, completion_tokens: 5,
+      prompt_tokens_details: { cached_tokens: 5 }, completion_tokens_details: { reasoning_tokens: 2 } });
+    expect(persisted).toMatchObject({ threadId: 'child-thread', nativeSessionId: 'parent-thread',
+      forkedFrom: { threadId: 'parent-thread', turnId: 'parent-turn-1' } });
+    expect(persisted?.checkpoints?.map(checkpoint => checkpoint.turnId)).toEqual(['parent-turn-1', 'child-turn-1']);
+    expect(parent.checkpoints?.map(checkpoint => checkpoint.turnId)).toEqual(['parent-turn-1', 'parent-turn-2']);
+    const child = JSON.parse(JSON.stringify(persisted)) as NonNullable<typeof persisted>;
+    _clearCodexSessionsForTests();
+    await new CodexAdapter().createCompletion(baseInput({ ...identity, codexSession: child,
+      messages: [...branchMessages, { role: 'assistant', content: 'branch answer' }, { role: 'user', content: 'next' }] }));
+    expect(appServerThreadMock.mock.calls[3][0].resumeThreadId).toBe('child-thread');
+    expect(appServerThreadMock.mock.calls[3][0].fork).toBeUndefined();
+    expect(runStreamedMock.mock.calls[3][0]).toBe('next');
+    expect(startThreadMock).not.toHaveBeenCalled();
+    expect(resumeThreadMock).not.toHaveBeenCalled();
+  });
+
   it.each(['known', 'missing', 'corrupt', 'oversized', 'incomplete', 'regressed', 'changed thread',
     'invalid completed plain event', 'invalid completed compressed event'])
   ('preserves the answer/context and reports only known invocation usage (%s baseline)', async (condition) => {

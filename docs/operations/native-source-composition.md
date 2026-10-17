@@ -209,3 +209,15 @@ Deterministic authority, HTTP tool and born-child controls remain separate from
 connected subscription, installed-package and live UI qualification. Current
 run evidence must state which actual provider and Source journey were exercised;
 constructing the producer or closing its observer does not supply that evidence.
+
+The October 17 producer qualification exercised a saved Goal on the rebuilt
+Windows Source app with actual `gpt-6-luna` at medium reasoning through verified
+Codex ChatGPT subscription authentication. The root and its separate attached
+child each completed a Worker read with a durable Parent receipt. The child
+returned the file marker and joined once; the Activity, Goal and Native admission
+completed. All application epochs closed and protected user files were unchanged.
+The measured journey took 843.100 seconds. See the
+[producer qualification receipt](evidence/native-parent-producer-2026-10-17.json)
+for the qualified tree, earlier negative controls and integration validation.
+This result does not establish installed-package, deployed-image, live UI swarm
+or longer unattended-work acceptance.

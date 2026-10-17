@@ -778,8 +778,22 @@ export interface FlowParams {
     nodeParams?: Record<string, NodeParams>;
 }
 
+/** A verified completed native turn and its canonical FLUJO watermark. */
+export interface CodexSessionCheckpoint {
+    turnId: string;
+    historyHash: string;
+    seenMessageCount: number;
+    totalUsage: NonNullable<CodexSessionMetadata['totalUsage']>;
+}
+
 /** Durable Codex SDK thread metadata, scoped to one Process node. */
 export interface CodexSessionMetadata {
+    checkpoints?: CodexSessionCheckpoint[];
+    /** Provider-returned tree identity; ordinary forks may start a new tree. */
+    nativeSessionId?: string;
+    /** Chat restoration requests a new native branch, never parent mutation. */
+    forkRequired?: boolean;
+    forkedFrom?: { threadId: string; turnId: string };
     /** Protocol totals permit restart-safe accounting without reading rollout files. */
     totalUsage?: { input_tokens?: number; output_tokens?: number; cached_input_tokens?: number;
         cache_write_input_tokens?: number; reasoning_output_tokens?: number };

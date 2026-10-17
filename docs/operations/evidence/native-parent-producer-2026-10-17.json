@@ -1,6 +1,6 @@
 {
   "kind": "genuine-original-owner-native-parent-qualification",
-  "recordedAt": "2026-10-17T12:14:28.849Z",
+  "recordedAt": "2026-10-17T12:21:24.320Z",
   "branchParent": "e660d802c082a559402643ec1e8a8fe0e5ec5db2",
   "mergedMainParent": "36573b438369e6ec3d738caf858288fab06db644",
   "qualifiedSourceTree": "533045271e3b64620b74ea8dae31362862515b5e",
@@ -22,8 +22,8 @@
     "SubflowNode now requests the already-supported child authority for the actual persisted single attached lane, with a pinned graph and genuine causal capability; Persona abilities remain confined to the root."
   ],
   "localValidation": {
-    "focusedCases": 576,
-    "affectedSuites": 32,
+    "focusedCases": 608,
+    "affectedSuites": 34,
     "failedCases": 0,
     "nativeHostCases": 46,
     "finalAffectedHostCasesRerun": 9,
@@ -34,7 +34,7 @@
     "changedTestLint": "passed, zero warnings",
     "nonContainerApplicationBuild": {
       "status": "passed",
-      "measuredSeconds": 338.217,
+      "measuredSeconds": 339.274,
       "command": "node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
       "mcpBuild": {
         "status": "passed",
@@ -43,7 +43,19 @@
         "reason": "Workspace MCP sources, dependencies, runtime embed inputs and compiled outputs unchanged since the successful full non-container build."
       }
     },
-    "reuse": "Unchanged focused results retained; affected selector, lifecycle, Worker and freshness cases rerun after their changes."
+    "reuse": "Unchanged focused results retained; affected selector, lifecycle, Worker and freshness cases rerun after their changes.",
+    "originalNativeFocusedCases": 576,
+    "originalNativeApplicationBuild": {
+      "status": "passed",
+      "measuredSeconds": 338.217,
+      "command": "node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "mcpBuild": {
+        "status": "passed",
+        "sessionId": "bash-1792236196635-xwkd3p",
+        "log": "build-isolation.log",
+        "reason": "Workspace MCP sources, dependencies, runtime embed inputs and compiled outputs unchanged since the successful full non-container build."
+      }
+    }
   },
   "provider": {
     "model": "gpt-6-luna",
@@ -168,5 +180,32 @@
     "Packed/installed Windows, relocated Linux, deployed fleet/image eligibility or the requested live UI swarm.",
     "Long-context fidelity, other model/provider families, finite hard Native budgets or isolation from hostile local OS processes.",
     "Full suites, remote CI, containers, deployment or release validation; verification CI remains manually paused."
-  ]
+  ],
+  "mainIntegration": {
+    "main": "8d3739ea35446f93e46d251dd74c8d3fdadd6842",
+    "qualifiedSourceTree": "30d9a559afaee092edfaccb8888c0e57a9bfc3a3",
+    "focusedCasesRerun": 151,
+    "focusedSuitesRerun": 6,
+    "failedCases": 0,
+    "typecheckAndLint": {
+      "sessionId": "bash-1792239323571-ocxbtc",
+      "exitCode": 0,
+      "startedAt": "2026-10-17T12:15:23.571Z",
+      "endedAt": "2026-10-17T12:18:06.464Z",
+      "measuredSeconds": 162.893
+    },
+    "applicationBuild": {
+      "sessionId": "bash-1792239323299-fa65x0",
+      "exitCode": 0,
+      "startedAt": "2026-10-17T12:15:23.299Z",
+      "endedAt": "2026-10-17T12:21:02.573Z",
+      "measuredSeconds": 339.274,
+      "command": "node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack"
+    },
+    "nativeJourneyEvidenceReused": "The exact real Native run remains bound to qualifiedSourceTree above. Main adds ordinary completed-history restore/fork logic, gated by ordinaryThreadPath; Native tool-port/context dispatch, owned-thread creation and terminal reporting are unchanged. Native admission/profile/graph/model inputs are unchanged. Read-only integration review found no defect; affected adapter, app-server, fork, revert, qualification and child tests were rerun.",
+    "sourceConfigFingerprints": {
+      "checked": 4,
+      "unchanged": true
+    }
+  }
 }

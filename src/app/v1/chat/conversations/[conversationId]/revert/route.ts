@@ -15,6 +15,7 @@ import { isPersonaOwnedConversationState } from '@/backend/execution/flow/person
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
+import { requestCodexSessionFork } from '@/backend/services/model/adapters/codexSessionStore';
 import {
   shadowRepoService,
   snapshotsEnabled,
@@ -168,9 +169,9 @@ function restoreChatSuffix(
   const removedIds = new Set(plan.chatTailMessageIds);
   state.messages = (state.messages ?? []).filter(message => !removedIds.has(message.id));
 
-  // Native provider sessions contain the removed turns and cannot be rewound.
-  // Clearing them makes the next turn rebuild from the restored transcript.
-  state.codexSessions = undefined;
+  // Fork at a verified completed boundary on the next ordinary dispatch. Older
+  // sessions without checkpoints still rebuild from the canonical transcript.
+  state.codexSessions = requestCodexSessionFork(state.codexSessions);
   state.responsesSessions = undefined;
   state.lastResponse = undefined;
   state.lastError = undefined;

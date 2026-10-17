@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
-import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
+import type { CodexSessionMetadata, CodexSessionCheckpoint } from '@/backend/execution/flow/types';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { readCodexAuthForTransfer } from './codexAuth';
 import { MESSAGE_NORMALIZATION_POLICY_VERSION } from './messageNormalization';
@@ -94,6 +94,7 @@ export function findReusableCodexSession(
 ): StoredCodexSession | undefined {
   const existing = persisted ?? sessions().get(key);
   if (!existing) return undefined;
+  if (existing.forkRequired) return undefined;
   if (existing.prefixHash !== prefixHash) return undefined;
   if (currentMessages.length < existing.seenMessageCount) return undefined;
   if (
@@ -103,6 +104,42 @@ export function findReusableCodexSession(
     return undefined;
   }
   return existing;
+}
+
+function validCheckpoint(checkpoint: CodexSessionCheckpoint): boolean {
+  return Boolean(checkpoint && typeof checkpoint.turnId === 'string' && /^[\w-]{1,256}$/.test(checkpoint.turnId)
+    && /^[a-f0-9]{64}$/.test(checkpoint.historyHash)
+    && Number.isSafeInteger(checkpoint.seenMessageCount) && checkpoint.seenMessageCount > 0
+    && Number.isSafeInteger(checkpoint.totalUsage?.input_tokens) && checkpoint.totalUsage.input_tokens! >= 0
+    && Number.isSafeInteger(checkpoint.totalUsage?.output_tokens) && checkpoint.totalUsage.output_tokens! >= 0);
+}
+
+export function completedCodexCheckpoints(session: StoredCodexSession | undefined): CodexSessionCheckpoint[] {
+  return Array.isArray(session?.checkpoints) && session.checkpoints.length <= 32
+    ? session.checkpoints.filter(validCheckpoint) : [];
+}
+
+/** Never fork an incompatible account/runtime/policy or an unproven history prefix. */
+export function findForkableCodexSession(key: string, prefixHash: string, currentMessages: readonly unknown[], persisted?: StoredCodexSession) {
+  const existing = persisted ?? sessions().get(key);
+  if (!existing || existing.prefixHash !== prefixHash || !Array.isArray(existing.checkpoints) || existing.checkpoints.length > 32) return undefined;
+  if (!existing.forkRequired && currentMessages.length >= existing.seenMessageCount
+    && computeCodexHistoryHash(currentMessages.slice(0, existing.seenMessageCount)) === existing.historyHash) return undefined;
+  for (const checkpoint of completedCodexCheckpoints(existing).reverse()) {
+    if (validCheckpoint(checkpoint) && checkpoint.seenMessageCount < currentMessages.length
+      && computeCodexHistoryHash(currentMessages.slice(0, checkpoint.seenMessageCount)) === checkpoint.historyHash) {
+      return { session: existing, checkpoint };
+    }
+  }
+  return undefined;
+}
+
+/** Preserve only sessions that can prove a completed native boundary after restore. */
+export function requestCodexSessionFork(existing: Record<string, StoredCodexSession> | undefined): Record<string, StoredCodexSession> | undefined {
+  const candidates = Object.entries(existing ?? {}).filter(([, session]) => session && Array.isArray(session.checkpoints)
+    && session.checkpoints.length <= 32 && session.checkpoints.some(validCheckpoint))
+    .map(([nodeId, session]) => [nodeId, { ...session, forkRequired: true }]);
+  return candidates.length ? Object.fromEntries(candidates) : undefined;
 }
 
 function normalizeMessage(message: unknown): Record<string, unknown> {
