@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 
 /**
  * Optional MCP Skills transport types and validation.
@@ -523,20 +524,29 @@ export function mcpSkillCacheKey(
   return JSON.stringify([serverName, parseMcpSkillUri(skillUri).normalizedUri, digest]);
 }
 
-/** Draft request schemas shared by client, proxy, and standalone adapters. */
+// SDK1 otherwise serializes a custom request's Zod error as InternalError.
+function requestParams<Schema extends z.ZodType>(schema: Schema) {
+  return schema.catch(({ error }) => {
+    throw new McpError(ErrorCode.InvalidParams, "Invalid Skills request parameters.", {
+      issues: error.issues.map(({ path, message }) => ({ path, message })),
+    });
+  });
+}
+
+/** Request schemas shared by client and proxy adapters. */
 export const McpListSkillsRequestSchema = z.object({
   method: z.literal("skills/list"),
-  params: z.object({ cursor: z.string().optional() }).optional(),
+  params: requestParams(z.object({ cursor: z.string().optional() }).optional()),
 });
 
 export const McpGetSkillRequestSchema = z.object({
   method: z.literal("skills/get"),
-  params: z.object({ uri: z.string().min(1) }),
+  params: requestParams(z.object({ uri: z.string().min(1) })),
 });
 
 export const McpReadSkillDirectoryRequestSchema = z.object({
   method: z.literal("resources/directory/read"),
-  params: z.object({ uri: z.string().min(1), cursor: z.string().optional() }),
+  params: requestParams(z.object({ uri: z.string().min(1), cursor: z.string().optional() })),
 });
 
 export const McpListSkillsResultSchema = z

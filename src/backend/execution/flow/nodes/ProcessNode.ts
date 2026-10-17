@@ -28,6 +28,7 @@ import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handl
 import { buildSubflowCommunicationTools } from '../subflowCommunication';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
+import { replaceResponsesSession } from '@/backend/services/model/adapters/responsesSessionState';
 import { admitCatalogModel, assertCatalogAdmissionCurrent, assertModelCatalogLeaseOwned, withModelCatalogLease, type ModelCatalogAdmission } from '@/backend/services/model/catalogAdmission';
 import { isOwnerCredentialBoundModel, validateOwnerCredentialBinding } from '@/shared/types/model';
 import { FlowNode } from '@/shared/types/flow';
@@ -784,6 +785,10 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     runId: sharedState.logicalRunId,
     archiveModelTurns: !sharedState.ephemeral,
     codexSession: sharedState.codexSessions?.[nodeId],
+    responsesSession: sharedState.responsesSessions?.[nodeId],
+    onResponsesSessionChange: (session) => {
+      sharedState.responsesSessions = replaceResponsesSession(sharedState.responsesSessions, nodeId, session);
+    },
     onCodexSessionChange: (session) => {
       if (session) {
         sharedState.codexSessions = { ...(sharedState.codexSessions ?? {}), [nodeId]: session };
@@ -844,7 +849,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // the provider's prefix cache — so it is surfaced to the model as a synthetic
     // `[System update]` tail message instead. Re-frozen only at a compaction
     // boundary (where the prefix is rebuilt anyway).
-    const freeze = resolveFrozenSystemPrompt(
+    const requestedPromptPolicy = node_params?.properties?.systemPromptPolicy;
+    if (requestedPromptPolicy !== undefined && requestedPromptPolicy !== 'stable' && requestedPromptPolicy !== 'per-turn') {
+      throw new Error('Choose stable or per-turn system instructions for this step.');
+    }
+    const systemPromptPolicy = requestedPromptPolicy ?? 'stable';
+    prepResult.systemPromptPolicy = systemPromptPolicy;
+    const freeze = systemPromptPolicy === 'per-turn'
+      ? { content: completePrompt, frozenSystemPrompts: sharedState.frozenSystemPrompts ?? {}, frozeNow: false, driftUpdate: undefined }
+      : resolveFrozenSystemPrompt(
       nodeId,
       completePrompt,
       sharedState.frozenSystemPrompts,
@@ -877,11 +890,14 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     prepResult.currentPrompt = systemPromptContent;
 
     // Create our own system message with the (frozen) prompt as FlujoChatMessage
+    // This injected projection is not a new conversation event. Stable identity
+    // lets an unchanged archived prefix reuse its summary across steps/restarts;
+    // changed prompt content still invalidates the complete source digest.
     const systemMessage: FlujoChatMessage = {
-      id: uuidv4(), // Generate unique ID
+      id: `process-system:${nodeId}`,
       role: 'system',
       content: systemPromptContent,
-      timestamp: Date.now() // Add timestamp
+      timestamp: sharedState.createdAt,
     };
 
     log.info('Added system message from prompt template', {
@@ -954,7 +970,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       && typeof message.content === 'string'
       && (message.content.includes('${') || message.content.includes('@'))
     )) {
-      wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
+      const resolvedWireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
         if (message.role !== 'user' || typeof message.content !== 'string') return message;
         await assertModelCatalogLeaseOwned();
         let content = await promptRenderer.resolveChatMessageReferences(
@@ -985,6 +1001,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           ? message
           : { ...message, content } as FlujoChatMessage;
       }));
+      // A literal @path or unresolved reference can pass through unchanged.
+      // Preserve the full-history identity in that case: a wire-only array
+      // disables native session resume even when its content is identical.
+      if (resolvedWireBase.some((message, index) => message !== wireBase[index])) {
+        wireBase = resolvedWireBase;
+      }
     }
 
     let resolvedIsolatedPrompt: string | undefined;
@@ -1031,7 +1053,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     let materialized = finalizeModelInputMaterialization({
       ...materializationBase,
       folded: wireBase,
-      systemContent: completePrompt,
+      systemContent: systemPromptContent,
       inputMode,
       isolatedPrompt: resolvedIsolatedPrompt,
       mcpAppContexts: sharedState.mcpAppContexts,
@@ -1143,7 +1165,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       materialized = finalizeModelInputMaterialization({
         ...materializationBase,
         folded: wireBase,
-        systemContent: completePrompt,
+        systemContent: systemPromptContent,
         inputMode,
         isolatedPrompt: resolvedIsolatedPrompt,
         mcpAppContexts: sharedState.mcpAppContexts,
@@ -1304,6 +1326,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             modelId: prepResult.boundModel,
             modelCatalogAdmission: prepResult.modelCatalogAdmission,
             prompt: prepResult.currentPrompt,
+            systemPromptPolicy: prepResult.systemPromptPolicy,
             messages: prepResult.messages,
             // Scoped view for latest-message / isolated inputMode; when unset the
             // model sees `messages` verbatim (full-history). Persistence always uses
@@ -1363,6 +1386,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             runId: prepResult.runId,
             codexSession: prepResult.codexSession,
             onCodexSessionChange: prepResult.onCodexSessionChange,
+            responsesSession: prepResult.responsesSession,
+            onResponsesSessionChange: prepResult.onResponsesSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
             onApprovalRequired: prepResult.onApprovalRequired,
             mcpNodes: prepResult.mcpNodesForDispatch ?? node_params?.properties?.mcpNodes,

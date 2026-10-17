@@ -1,6 +1,6 @@
 export const COMPACTION_ARTIFACT_SCHEMA_VERSION = 1 as const;
 export const COMPACTION_PROJECTION_VERSION = 1 as const;
-export const COMPACTION_POLICY_VERSION = 'summary-v2-protected' as const;
+export const COMPACTION_POLICY_VERSION = 'summary-v7-authority' as const;
 
 export interface CompactionProjectionIdentity {
   /** Canonical conversation whose projected transcript produced this artifact. */
@@ -23,6 +23,8 @@ export interface WireSummaryArtifact {
   sourceEndId?: string;
   sourceMessageCount: number;
   sourceDigest: string;
+  /** Exact latest user turn for which this prefix was materialized. */
+  requestDigest?: string;
   projectionDigest: string;
   summaryText: string;
   summaryResourceUri?: string;

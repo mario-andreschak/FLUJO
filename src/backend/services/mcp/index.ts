@@ -2169,9 +2169,19 @@ export class MCPService {
    * before reconnecting, so connectServer() is guaranteed to build a brand-new client and
    * transport rather than short-circuiting on the stale one still sitting in the map.
    */
-  async forceReconnect(serverName: string): Promise<MCPServiceResponse> {
+  async forceReconnect(serverName: string, expectedClient?: Client): Promise<MCPServiceResponse> {
     await assertBundledFlujoWorkloadEffectCurrent();
     assertMcpRuntimeAuthorityRetired(serverName);
+    if (expectedClient) {
+      const current = this.getClient(serverName);
+      // Read-only recovery must not retire a replacement published while its
+      // failed request was finishing, or interrupt another active borrower.
+      if (current !== expectedClient) return current ? { success: true } : this.connectServer(serverName);
+      const runtime = peekRuntime(serverName);
+      if (runtime && (runtime.leases > 0 || runtime.pins.size > 0)) {
+        return { success: false, error: `Server '${serverName}' is in use. Retry discovery when its current work finishes.` };
+      }
+    }
     log.info(
       `forceReconnect: Forcing fresh connection for server ${serverName}`,
     );
@@ -2692,20 +2702,29 @@ export class MCPService {
       return { ...emptyResult, error };
     }
 
-    let client = this.getClient(serverName);
-    if (!client) {
-      log.warn(`listWithReconnect: Client not found for ${serverName}`);
-    }
-
-    let result = await lister(client, serverName);
-    if (!result.error) {
+    const listLeased = async (): Promise<{ client?: Client; result: T }> => {
+      const acquired = await this.acquireServerLease(serverName);
+      if (!acquired.lease) return { result: { ...emptyResult, error: acquired.error || 'Server not connected' } };
+      const lease = acquired.lease;
+      try {
+        const result = await lister(lease.client, serverName);
+        if (lease.isStale() || this.getClient(serverName) !== lease.client) {
+          return { client: lease.client, result: { ...emptyResult, error: 'MCP connection changed during discovery. Try again.' } };
+        }
+        return { client: lease.client, result };
+      } finally {
+        lease.release();
+      }
+    };
+    let { client, result } = await listLeased();
+    if (!result.error || !client) {
       return result;
     }
 
     log.warn(
       `listWithReconnect: Listing for ${serverName} failed (${result.error}); forcing reconnect and retrying once`,
     );
-    const reconnect = await this.forceReconnect(serverName);
+    const reconnect = await this.forceReconnect(serverName, client);
     if (!reconnect.success) {
       log.warn(
         `listWithReconnect: Reconnect for ${serverName} failed: ${reconnect.error}`,
@@ -2713,8 +2732,7 @@ export class MCPService {
       return { ...emptyResult, error: reconnect.error || result.error };
     }
 
-    client = this.clients.get(serverName);
-    result = await lister(client, serverName);
+    ({ client, result } = await listLeased());
     if (result.error) {
       log.warn(
         `listWithReconnect: Retry after reconnect still failed for ${serverName}:`,
@@ -2767,13 +2785,15 @@ export class MCPService {
     log.debug(
       `readResource: Entering method for server ${serverName}, uri ${uri}`,
     );
-    const client = this.getClient(serverName);
-    if (!client) {
-      log.warn(`readResource: Client not found for ${serverName}`);
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) return { success: false, error: acquired.error || 'Server not connected' };
+    try {
+      const result = await readResourceFn(acquired.lease.client, serverName, uri);
+      log.info(`readResource: Read resource ${uri} on ${serverName}`);
+      return result;
+    } finally {
+      acquired.lease.release();
     }
-    const result = await readResourceFn(client, serverName, uri);
-    log.info(`readResource: Read resource ${uri} on ${serverName}`);
-    return result;
   }
 
   private async prepareMcpSkillsClient(
@@ -3088,13 +3108,15 @@ export class MCPService {
     log.debug(
       `getPrompt: Entering method for server ${serverName}, prompt ${promptName}`,
     );
-    const client = this.getClient(serverName);
-    if (!client) {
-      log.warn(`getPrompt: Client not found for ${serverName}`);
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) return { success: false, error: acquired.error || 'Server not connected' };
+    try {
+      const result = await getPromptFn(acquired.lease.client, serverName, promptName, args);
+      log.info(`getPrompt: Got prompt ${promptName} on ${serverName}`);
+      return result;
+    } finally {
+      acquired.lease.release();
     }
-    const result = await getPromptFn(client, serverName, promptName, args);
-    log.info(`getPrompt: Got prompt ${promptName} on ${serverName}`);
-    return result;
   }
 
   /**

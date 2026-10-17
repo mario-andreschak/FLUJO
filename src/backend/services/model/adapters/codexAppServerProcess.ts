@@ -41,7 +41,7 @@ export class CodexAppServerRequestError extends Error {
 export type CodexAppServerRequest = Readonly<{ id: number | string; method: string; params: unknown }>;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING = 32;
-const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'thread/fork', 'turn/start', 'turn/steer', 'turn/interrupt']);
+const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'thread/fork', 'thread/compact/start', 'turn/start', 'turn/steer', 'turn/interrupt']);
 
 /** Own the public app-server child at birth. Registration precedes all wire input.
  * This transport does not by itself qualify a model, tool inventory, or Original.
@@ -190,16 +190,10 @@ export async function startOwnedCodexAppServer(input: {
   };
   try {
     await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
-    // A slow OS probe is uncertainty, never permission to use PID alone. Retry
-    // only the birth read on this same still-owned child, before any wire input.
-    let captured:RuntimeProcessIdentity|undefined;
-    for(let attempt=0;attempt<3;attempt++) {
-      try {captured=await captureRuntimeChildIdentity(child.pid!);break;}
-      catch(error) {if(attempt===2||exited||closed||stopping||input.signal?.aborted)throw error;}
-    }
-    if(!captured)throw unavailable();
-    const identity=Object.freeze(captured);
-    if (exited || closed || input.signal?.aborted) throw unavailable();
+    // The shared identity capture owns the bounded startup warmup. Retrying
+    // that entire sequence here would multiply exhausted OS probes by three.
+    const identity=Object.freeze(await captureRuntimeChildIdentity(child.pid!));
+    if (exited || closed || stopping || input.signal?.aborted) throw unavailable();
     const registration=Object.freeze({identity,requestStop,exit,close});
     registrations.set(registration,input.owner);
     probes.set(registration,async()=>{

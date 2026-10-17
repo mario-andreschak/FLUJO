@@ -16,7 +16,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { Client as LegacyClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport as LegacyTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createSmokeOperator } from './smoke-bundled-operator.mjs';
-import { ensurePrivateDirectory } from './local-instance.mjs';
+import { ensurePrivateDirectory, writePrivateJson } from './local-instance.mjs';
 
 if (process.argv.slice(2).join(' ') !== '--production') throw new Error('Usage: smoke-mcp-tasks.mjs --production (build first)');
 const application = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,6 +29,7 @@ const answer = 'mcp-tasks-production-smoke-response', privateInput = 'private-mc
 const password = randomBytes(32).toString('hex');
 const clients = new Set();
 const held = new Set();
+const receipt = { schemaVersion: 1, groups: [], externalProviderCalls: 0 };
 let child, childClosed, operator, otherOperator, base, log = '', providerCalls = 0, holdProvider = false;
 
 const provider = http.createServer(async (request, response) => {
@@ -145,6 +146,8 @@ async function equipment() {
   await fs.writeFile(destination, output, { flag: 'wx', mode: 0o600 });
   console.log(JSON.stringify({ taskHostSourceSha256: createHash('sha256').update(source).digest('hex'),
     taskHostEquipment: 'compiled-production-source', smokeOwnerIssuerEquipment: operator.issuerEquipment }));
+  receipt.taskHostSourceSha256 = createHash('sha256').update(source).digest('hex');
+  receipt.buildId = (await fs.readFile(path.join(application, '.next', 'BUILD_ID'), 'utf8')).trim();
   taskEquipment = await import(pathToFileURL(destination).href);
 }
 async function connect({ token = operator.token, selectedWorkspace = workspace, form = true } = {}) {
@@ -229,6 +232,7 @@ try {
   await waitTask(main.tasks, declined.taskId, 'input_required');
   await main.tasks.updateTask(declined.taskId, { confirmation: { action: 'decline' } });
   await waitTask(main.tasks, declined.taskId, 'completed'); assert.equal(providerCalls, beforeConfirmation + 1);
+  receipt.groups.push('authored-flow-and-encrypted-result', 'credential-and-workspace-isolation', 'confirmation-and-duplicate-input');
   console.log('Authored Flow, encrypted results, confirmation, input idempotence and owner/workspace fences passed.');
   holdProvider = true;
   const cancelled = await main.tasks.callTool({ name: 'tasks_smoke', arguments: { input: privateInput } });
@@ -236,6 +240,7 @@ try {
   await main.tasks.cancelTask(cancelled.taskId);
   await waitTask(main.tasks, cancelled.taskId, 'cancelled');
   await until(() => held.size === 0, 'actual provider AbortSignal propagation');
+  receipt.groups.push('cancel-closes-loopback-provider-request');
   const interrupted = await main.tasks.callTool({ name: 'tasks_smoke', arguments: { input: privateInput } });
   await until(() => held.size === 1, 'provider restart boundary');
   const beforeRestart = providerCalls;
@@ -246,6 +251,7 @@ try {
   assert.deepEqual((await waitTask(main.tasks, task.taskId, 'completed')).result, completed.result);
   assert.equal((await waitTask(main.tasks, interrupted.taskId, 'failed')).error.message, 'TASK_INTERRUPTED');
   assert.equal(providerCalls, beforeRestart, 'Restart must never replay an authored task');
+  receipt.groups.push('completed-result-after-restart', 'interrupted-task-without-replay');
   const ledger = await fs.readFile(path.join(data, '.mcp-server-tasks', 'ledger.json'), 'utf8');
   for (const secret of [operator.token, otherOperator.token, password, privateInput, answer, 'synthetic-smoke-key']) assert.ok(!ledger.includes(secret));
   await stop(); await start(false);
@@ -253,7 +259,56 @@ try {
   const disabled = await connect(); assert.equal(disabled.tasks, undefined);
   assert.equal(disabled.client.getServerCapabilities()?.extensions?.['io.modelcontextprotocol/tasks'], undefined);
   assert.equal(providerCalls, beforeRestart);
-  console.log('PASS: production authored Flow Tasks, official modern client/extension, private results, confirmation/input idempotence, cancellation, owner/workspace fences, restart without replay, legacy and disabled feature.');
+  receipt.groups.push('legacy-and-disabled-feature');
+
+  await stop(); await start();
+  assert.equal((await api('/api/encryption/secure', { action: 'authenticate', password })).success, true);
+  main = await connect(); assert.ok(main.tasks);
+  holdProvider = true;
+  const revoked = await main.tasks.callTool({ name: 'tasks_smoke', arguments: { input: privateInput } });
+  await until(() => held.size === 1, 'live provider before credential revocation');
+  const pending = await main.tasks.callTool({ name: 'tasks_smoke', arguments: { input: privateInput, confirm: true } });
+  await waitTask(main.tasks, pending.taskId, 'input_required');
+  const beforeRevocation = providerCalls;
+  const revokedDigest = createHash('sha256').update(operator.token).digest('hex');
+  const revokedCredential = policy.credentials.find(record => record.digest === revokedDigest);
+  assert.ok(revokedCredential);
+  revokedCredential.revokedAt = Date.now();
+  // Change the actual OS-owner policy, preserving the independently issued grant.
+  await writePrivateJson(operator.env.FLUJO_OWNER_AUTH_FILE, policy);
+  await until(() => held.size === 0, 'revocation closes the active provider request');
+  await until(async () => {
+    const stored = JSON.parse(await fs.readFile(path.join(data, '.mcp-server-tasks', 'ledger.json'), 'utf8'));
+    return [revoked.taskId, pending.taskId].every(id => stored.tasks.some(record => record.taskId === id
+      && record.status === 'failed' && record.errorCode === 'TASK_AUTH_REVOKED'
+      && record.executionPending === false && !Object.hasOwn(record, 'payload')));
+  }, 'revocation clears both execution leases and private payloads');
+  receipt.settledRevokedTasks = 2;
+  receipt.revokedHttpStatuses = {};
+  for (const [method, name, params] of [
+    ['tasks/get', revoked.taskId, { taskId: revoked.taskId }],
+    ['tasks/update', pending.taskId, { taskId: pending.taskId, inputResponses: { confirmation: { action: 'accept', content: { confirmed: true } } } }],
+    ['tasks/cancel', revoked.taskId, { taskId: revoked.taskId }],
+    ['tools/call', 'tasks_smoke', { name: 'tasks_smoke', arguments: { input: privateInput } }],
+  ]) {
+    const url = new URL('/mcp-flows', base); url.searchParams.set('workspace', workspace);
+    const denied = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${operator.token}`,
+      'content-type': 'application/json', accept: 'application/json, text/event-stream',
+      'Mcp-Protocol-Version': '2026-07-28', 'Mcp-Method': method, 'Mcp-Name': name },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'revoked-owner-check', method, params }), signal: AbortSignal.timeout(15000) });
+    assert.equal(denied.status, 401, `Revoked credential must not authorize ${method}`);
+    await denied.text();
+    receipt.revokedHttpStatuses[method] = denied.status;
+  }
+  const remaining = await connect({ token: otherOperator.token });
+  for (const id of [revoked.taskId, pending.taskId]) await assert.rejects(remaining.tasks.getTask(id), error => error.code === -32602);
+  assert.equal(providerCalls, beforeRevocation, 'Revocation must not resume confirmation or replay work');
+  const revokedLedger = await fs.readFile(path.join(data, '.mcp-server-tasks', 'ledger.json'), 'utf8');
+  for (const secret of [operator.token, otherOperator.token, password, privateInput, answer, 'synthetic-smoke-key']) assert.ok(!revokedLedger.includes(secret));
+  receipt.groups.push('revocation-aborts-active-flow-and-pending-input', 'revoked-requests-denied-and-other-credential-fenced', 'settled-leases-and-private-ledger');
+  receipt.loopbackProviderCalls = providerCalls;
+  receipt.node = process.version;
+  receipt.platform = process.platform;
 } catch (error) {
   // Fixture secrets stay out of diagnostics, even if framework logs echoed input.
   let diagnostic = `${error?.stack ?? error}\n${log.slice(-10000)}`;
@@ -284,4 +339,13 @@ try {
     } catch (error) { errors.push(error); }
   }
   if (errors.length) throw new AggregateError(errors, 'Tasks smoke cleanup failed.');
+}
+if (!process.exitCode) {
+  await assert.rejects(fs.stat(root), { code: 'ENOENT' });
+  for (const issued of [operator, otherOperator]) {
+    await assert.rejects(fs.stat(path.dirname(issued.env.FLUJO_OWNER_AUTH_FILE)), { code: 'ENOENT' });
+  }
+  receipt.ownedProcessesAndDataCleaned = true;
+  console.log(JSON.stringify({ tasksRecoveryReceipt: receipt }));
+  console.log('PASS: production authored Flow Tasks, private results, confirmation/input idempotence, cancellation, owner/workspace fences, restart without replay, credential revocation, legacy and disabled feature.');
 }

@@ -12,11 +12,16 @@ type ModelUsage = {
   inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number; contextWindow?: number; canonicalModel?: string;
 };
+export interface ClaudeUsageCheckpoint {
+  modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>;
+  totalCostUsd?: number;
+}
 type UsageMessage = {
   type?: string; uuid?: string; parent_tool_use_id?: string | null;
+  subtype?: string; is_error?: boolean;
   message?: { id?: string; model?: string; usage?: SdkUsage };
   event?: { type?: string; message?: { id?: string; model?: string; usage?: SdkUsage }; usage?: SdkUsage };
-  usage?: SdkUsage; modelUsage?: Record<string, ModelUsage>;
+  usage?: SdkUsage; modelUsage?: Record<string, ModelUsage>; total_cost_usd?: number; result_index?: number;
 };
 
 /** Keep per-request context distinct from per-query totals, including repeated SDK frames. */
@@ -29,6 +34,28 @@ export class ClaudeUsageTracker {
   private childrenAtResult = empty();
   private modelUsage: Record<string, ModelUsage> = {};
   private anonymousId = 0;
+  private checkpoint?: ClaudeUsageCheckpoint;
+  private cumulativeOffset = empty();
+  private cumulativeCostOffset = 0;
+  private lastResultIndex?: number;
+  private seenResults = new Set<string>();
+  private baseline: Counts;
+  private baselineCost: number;
+
+  constructor(checkpoint?: ClaudeUsageCheckpoint) {
+    this.checkpoint = checkpoint;
+    this.baseline = this.countCheckpoint(checkpoint);
+    this.baselineCost = checkpoint?.totalCostUsd ?? 0;
+  }
+
+  private countCheckpoint(checkpoint?: ClaudeUsageCheckpoint): Counts {
+    const counts = empty();
+    for (const usage of Object.values(checkpoint?.modelUsage ?? {})) add(counts, {
+      input_tokens: usage.inputTokens, output_tokens: usage.outputTokens,
+      cache_read_input_tokens: usage.cacheReadInputTokens, cache_creation_input_tokens: usage.cacheCreationInputTokens,
+    });
+    return counts;
+  }
 
   observe(rawMessage: unknown): void {
     if (!rawMessage || typeof rawMessage !== 'object') return;
@@ -52,17 +79,43 @@ export class ClaudeUsageTracker {
       // real output count comes from message_delta, or the terminal result.
       this.update(parent, id, assistant.usage, assistant.model, false);
     } else if (message.type === 'result') {
+      if (message.uuid && this.seenResults.has(message.uuid)) return;
+      if (message.uuid) this.seenResults.add(message.uuid);
+      if (message.result_index !== undefined && this.lastResultIndex !== undefined
+        && message.result_index <= this.lastResultIndex) return;
+      if (message.result_index !== undefined) this.lastResultIndex = message.result_index;
       const models = Object.values(message.modelUsage ?? {});
+      // Crash/startup failures can contain zeroed placeholder totals. They
+      // cannot erase requests already observed in this invocation.
+      const errorResult = message.is_error || message.subtype?.startsWith('error');
+      if (errorResult && !models.some(usage => (usage.inputTokens ?? 0) > 0 || (usage.outputTokens ?? 0) > 0
+        || (usage.cacheReadInputTokens ?? 0) > 0 || (usage.cacheCreationInputTokens ?? 0) > 0)
+        && !fields.some(field => (message.usage?.[field] ?? 0) > 0)) return;
       if (models.length) {
         this.modelUsage = message.modelUsage!;
-        this.reportedTotals = empty();
+        const snapshot = empty();
         // modelUsage is cumulative across all user turns within this query,
         // including subagents; never add successive modelUsage snapshots.
-        for (const usage of models) add(this.reportedTotals, {
+        for (const usage of models) add(snapshot, {
           input_tokens: usage.inputTokens, output_tokens: usage.outputTokens,
           cache_read_input_tokens: usage.cacheReadInputTokens,
           cache_creation_input_tokens: usage.cacheCreationInputTokens,
         });
+        const previous = this.countCheckpoint(this.checkpoint);
+        // /clear or a producer reset starts a new cumulative epoch. Preserve
+        // this invocation's already-accounted delta; never subtract past turns again.
+        if (fields.some(field => snapshot[field] < previous[field])) {
+          for (const field of fields) this.cumulativeOffset[field] += Math.max(0, previous[field] - this.baseline[field]);
+          this.cumulativeCostOffset += Math.max(0, (this.checkpoint?.totalCostUsd ?? 0) - this.baselineCost);
+          this.baseline = empty();
+          this.baselineCost = 0;
+        }
+        this.reportedTotals = empty();
+        for (const field of fields) this.reportedTotals[field] = this.cumulativeOffset[field] + Math.max(0, snapshot[field] - this.baseline[field]);
+        this.checkpoint = { modelUsage: Object.fromEntries(Object.entries(message.modelUsage!).map(([name, usage]) => [name, {
+          inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0,
+          cacheReadInputTokens: usage.cacheReadInputTokens ?? 0, cacheCreationInputTokens: usage.cacheCreationInputTokens ?? 0,
+        }])), ...(Number.isFinite(message.total_cost_usd) ? { totalCostUsd: message.total_cost_usd } : {}) };
       } else if (message.usage) {
         // Older SDKs expose main-loop totals for just this user turn.
         this.reportedTotals ??= empty();
@@ -109,6 +162,15 @@ export class ClaudeUsageTracker {
     // A handoff after a previous result may end before the next result arrives.
     for (const field of fields) totals[field] += Math.max(0, observed[field] - this.observedAtResult[field]);
     return totals;
+  }
+
+  getCheckpoint(): ClaudeUsageCheckpoint | undefined { return this.checkpoint; }
+  getAccounting() {
+    return { scope: 'completion' as const, costBasis: 'sdk-estimate' as const,
+      usage: this.getUsage(),
+      ...(this.checkpoint?.totalCostUsd !== undefined ? {
+        estimatedCostUsd: this.cumulativeCostOffset + Math.max(0, this.checkpoint.totalCostUsd - this.baselineCost),
+      } : {}), childRequestUsage: this.sumSteps(true) };
   }
 
   getContextUsage(configuredWindow?: number): ModelContextUsage | null {

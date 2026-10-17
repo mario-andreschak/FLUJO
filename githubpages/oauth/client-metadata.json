@@ -1,0 +1,14 @@
+{
+  "client_id": "https://flujo.com.co/oauth/client-metadata.json",
+  "client_name": "FLUJO",
+  "client_uri": "https://flujo.com.co/",
+  "redirect_uris": [
+    "http://localhost:4200/api/oauth/callback",
+    "http://127.0.0.1:4200/api/oauth/callback",
+    "http://[::1]:4200/api/oauth/callback"
+  ],
+  "application_type": "native",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none"
+}

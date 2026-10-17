@@ -1,0 +1,575 @@
+{
+  "schemaVersion": 1,
+  "at": "2026-10-16T19:22:35.828Z",
+  "baseline": "37795ae42802750782e9000701a0123ac72cb8e2",
+  "existingPrs": [
+    1192,
+    1193,
+    1195,
+    1196,
+    1197
+  ],
+  "deliveryPr": 1195,
+  "qualifiedApplicationTree": "a93fc39096fc011e623cd287e7740abf39e35a47",
+  "packageReview": {
+    "at": "2026-10-16T19:07:47.949Z",
+    "baseline": "37795ae42802750782e9000701a0123ac72cb8e2",
+    "prs": [
+      1192,
+      1193,
+      1195,
+      1196,
+      1197
+    ],
+    "exactPrDeltaUnion": true,
+    "changedPackageRecords": 6,
+    "runtime": "v22.23.3",
+    "packages": [
+      {
+        "name": "nanoid",
+        "previous": "3.3.19",
+        "version": "3.3.20",
+        "integrityMatches": true,
+        "nodeRange": "^10 || ^12 || ^13.7 || ^14 || >=15.0.1",
+        "peers": [],
+        "applicableReviewedAdvisories": []
+      },
+      {
+        "name": "postcss",
+        "previous": "8.5.29",
+        "version": "8.5.30",
+        "integrityMatches": true,
+        "nodeRange": "^10 || ^12 || >=14",
+        "peers": [],
+        "applicableReviewedAdvisories": []
+      },
+      {
+        "name": "@google/genai",
+        "previous": "2.28.0",
+        "version": "2.29.1",
+        "integrityMatches": true,
+        "nodeRange": ">=20.0.0",
+        "peers": [
+          {
+            "name": "@modelcontextprotocol/sdk",
+            "version": "1.32.1",
+            "range": "^1.25.2"
+          }
+        ],
+        "applicableReviewedAdvisories": []
+      },
+      {
+        "name": "slate-dom",
+        "previous": "0.133.5",
+        "version": "0.133.6",
+        "integrityMatches": true,
+        "peers": [
+          {
+            "name": "slate",
+            "version": "0.133.7",
+            "range": ">=0.121.0"
+          }
+        ],
+        "applicableReviewedAdvisories": []
+      },
+      {
+        "name": "slate-react",
+        "previous": "0.133.5",
+        "version": "0.133.8",
+        "integrityMatches": true,
+        "peers": [
+          {
+            "name": "@types/lodash",
+            "version": "4.17.26",
+            "range": "^4.14.0"
+          },
+          {
+            "name": "@types/react",
+            "version": "19.3.0",
+            "range": ">=18.0.0"
+          },
+          {
+            "name": "react",
+            "version": "19.3.1",
+            "range": ">=18.2.0"
+          },
+          {
+            "name": "react-dom",
+            "version": "19.3.1",
+            "range": ">=18.2.0"
+          },
+          {
+            "name": "slate",
+            "version": "0.133.7",
+            "range": ">=0.121.0"
+          },
+          {
+            "name": "slate-dom",
+            "version": "0.133.6",
+            "range": ">=0.133.6"
+          }
+        ],
+        "applicableReviewedAdvisories": []
+      },
+      {
+        "name": "slate",
+        "previous": "0.133.3",
+        "version": "0.133.7",
+        "integrityMatches": true,
+        "peers": [],
+        "applicableReviewedAdvisories": []
+      }
+    ],
+    "seconds": 1.623058,
+    "hashes": {
+      "package.json": "3f1a6838f585c0a2f8d81aa15b5de8d861ffbd0a443b67e18b0f2804b4901f16",
+      "package-lock.json": "00a0aa4044199f6337f95e6b0c910e1c851667853675f7563861328b9cd0210b"
+    }
+  },
+  "compatibilityRepair": {
+    "trigger": "@google/genai 2.29.1 automatic continuation",
+    "reproduced": "Both adapter paths reported cumulative billed prompt tokens 24 as input context instead of the initial 10.",
+    "baselineAdapterBlob": "3b01d32b351a3a5c9e84c3e63aa1e40010b8ae93",
+    "baselineUsageBlob": "564266268090a2bae35718a26f8f70b3127cd4be",
+    "baselineFailures": 2,
+    "baselineControlsPassed": 2,
+    "result": "Use initialPromptTokenCount for the input-window snapshot; retain cumulative prompt/completion/total billing. Fall back to ordinary usage without continuation metadata."
+  },
+  "localValidation": {
+    "node": "v22.23.3",
+    "next": "16.4.1",
+    "backend": {
+      "suites": 5,
+      "cases": 100
+    },
+    "editor": {
+      "suites": 3,
+      "cases": 19,
+      "reuse": "Editor, Slate and browser harness inputs unchanged by the Gemini-only compatibility repair."
+    },
+    "phases": {
+      "typecheck": {
+        "step": "typecheck",
+        "startedUtc": "2026-10-16T19:13:35.5899472Z",
+        "completedUtc": "2026-10-16T19:14:38.4369473Z",
+        "exitCode": 0,
+        "seconds": 62.8478593,
+        "head": "d1dc61dbb9f779d7f19bd13751c17eeb9c7705a5",
+        "stagedTree": "a93fc39096fc011e623cd287e7740abf39e35a47"
+      },
+      "lint": {
+        "step": "lint",
+        "startedUtc": "2026-10-16T19:13:35.5884054Z",
+        "completedUtc": "2026-10-16T19:15:20.4100919Z",
+        "exitCode": 0,
+        "seconds": 104.8268882,
+        "head": "d1dc61dbb9f779d7f19bd13751c17eeb9c7705a5",
+        "stagedTree": "a93fc39096fc011e623cd287e7740abf39e35a47"
+      },
+      "focused-node": {
+        "step": "focused-node",
+        "startedUtc": "2026-10-16T19:13:35.5899305Z",
+        "completedUtc": "2026-10-16T19:13:40.8510147Z",
+        "exitCode": 0,
+        "seconds": 5.2622831,
+        "head": "d1dc61dbb9f779d7f19bd13751c17eeb9c7705a5",
+        "stagedTree": "a93fc39096fc011e623cd287e7740abf39e35a47"
+      },
+      "focused-ui": {
+        "step": "focused-ui",
+        "startedUtc": "2026-10-16T19:08:57.6950079Z",
+        "completedUtc": "2026-10-16T19:09:09.4609102Z",
+        "exitCode": 0,
+        "seconds": 11.7670777,
+        "head": "d1dc61dbb9f779d7f19bd13751c17eeb9c7705a5",
+        "stagedTree": "f93ac828114602c3ed7583d14c858e71ea10de99"
+      },
+      "build": {
+        "step": "build",
+        "startedUtc": "2026-10-16T19:15:20.8289614Z",
+        "completedUtc": "2026-10-16T19:21:15.3200823Z",
+        "exitCode": 0,
+        "seconds": 354.4919827,
+        "head": "d1dc61dbb9f779d7f19bd13751c17eeb9c7705a5",
+        "stagedTree": "a93fc39096fc011e623cd287e7740abf39e35a47",
+        "buildId": "HvGwcZSdKYQjQy5yflevw"
+      },
+      "browser": {
+        "step": "browser",
+        "startedUtc": "2026-10-16T19:22:01.5849510Z",
+        "completedUtc": "2026-10-16T19:22:19.4181870Z",
+        "exitCode": 0,
+        "seconds": 17.8341391,
+        "head": "d1dc61dbb9f779d7f19bd13751c17eeb9c7705a5",
+        "stagedTree": "a93fc39096fc011e623cd287e7740abf39e35a47"
+      }
+    },
+    "sdkLoopback": {
+      "at": "2026-10-16T19:10:07.161Z",
+      "sdk": "2.29.1",
+      "loopbackOnly": true,
+      "providerCalls": 0,
+      "checks": [
+        {
+          "scenario": "native tool and thought signature",
+          "requests": 1
+        },
+        {
+          "scenario": "automatic completion continuation",
+          "requests": 2,
+          "text": "Hello world",
+          "usage": {
+            "promptTokenCount": 24,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 31
+          },
+          "initialPromptTokenCount": 10
+        },
+        {
+          "scenario": "automatic streaming continuation",
+          "requests": 2,
+          "usage": {
+            "promptTokenCount": 24,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 31
+          },
+          "initialPromptTokenCount": 10
+        },
+        {
+          "scenario": "Stop does not resume checkpoint",
+          "requests": 1
+        }
+      ],
+      "seconds": 0.0978152
+    }
+  },
+  "browser": {
+    "buildId": "HvGwcZSdKYQjQy5yflevw",
+    "browserVersion": "155.0.4283.45",
+    "checks": [
+      "EN/ES desktop and phone: native rapid Select All/Left/paste and typing, Right collapse, Shift selection replacement, clipboard paste, Undo/redo, reference pills, focus retention, synthetic paste rejection, no overflow/provider calls"
+    ],
+    "observations": [
+      {
+        "locale": "en",
+        "size": "desktop",
+        "rapidPairs": [
+          {
+            "elapsedMs": 3,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.5,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.2000000029802322,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.600000001490116,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.5,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.399999998509884,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.399999998509884,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.6999999955296516,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.600000001490116,
+            "selected": "First",
+            "trusted": true
+          }
+        ],
+        "realPaste": true,
+        "rapidTyping": true,
+        "rightCollapse": true,
+        "shiftSelectionReplacement": true,
+        "focusRetained": true,
+        "undoRetainsPriorText": true,
+        "redo": true,
+        "referencePaste": true,
+        "syntheticPasteRejected": true,
+        "controlAndMetaSelectAll": true,
+        "syntheticSelectAllRejected": true,
+        "sizes": {
+          "viewport": 1440,
+          "scroll": 1440
+        }
+      },
+      {
+        "locale": "en",
+        "size": "phone",
+        "rapidPairs": [
+          {
+            "elapsedMs": 2.7000000029802322,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 4,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 3.7000000029802322,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 4.100000001490116,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 5.200000002980232,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 3.2000000029802322,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.6999999955296516,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.899999998509884,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 3.7000000029802322,
+            "selected": "First",
+            "trusted": true
+          }
+        ],
+        "realPaste": true,
+        "rapidTyping": true,
+        "rightCollapse": true,
+        "shiftSelectionReplacement": true,
+        "focusRetained": true,
+        "undoRetainsPriorText": true,
+        "redo": true,
+        "referencePaste": true,
+        "syntheticPasteRejected": true,
+        "controlAndMetaSelectAll": true,
+        "syntheticSelectAllRejected": true,
+        "sizes": {
+          "viewport": 390,
+          "scroll": 390
+        }
+      },
+      {
+        "locale": "es",
+        "size": "desktop",
+        "rapidPairs": [
+          {
+            "elapsedMs": 3.5,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 4.299999997019768,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 3.399999998509884,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 3.399999998509884,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 4.399999998509884,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 4.299999997019768,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.1999999955296516,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.899999998509884,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.2999999970197678,
+            "selected": "First",
+            "trusted": true
+          }
+        ],
+        "realPaste": true,
+        "rapidTyping": true,
+        "rightCollapse": true,
+        "shiftSelectionReplacement": true,
+        "focusRetained": true,
+        "undoRetainsPriorText": true,
+        "redo": true,
+        "referencePaste": true,
+        "syntheticPasteRejected": true,
+        "controlAndMetaSelectAll": true,
+        "syntheticSelectAllRejected": true,
+        "sizes": {
+          "viewport": 1440,
+          "scroll": 1440
+        }
+      },
+      {
+        "locale": "es",
+        "size": "phone",
+        "rapidPairs": [
+          {
+            "elapsedMs": 2.8000000044703484,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.600000001490116,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.7000000029802322,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.2999999970197678,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.2999999970197678,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.600000001490116,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.5,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 2.8000000044703484,
+            "selected": "First",
+            "trusted": true
+          },
+          {
+            "elapsedMs": 8.799999997019768,
+            "selected": "First",
+            "trusted": true
+          }
+        ],
+        "realPaste": true,
+        "rapidTyping": true,
+        "rightCollapse": true,
+        "shiftSelectionReplacement": true,
+        "focusRetained": true,
+        "undoRetainsPriorText": true,
+        "redo": true,
+        "referencePaste": true,
+        "syntheticPasteRejected": true,
+        "controlAndMetaSelectAll": true,
+        "syntheticSelectAllRejected": true,
+        "sizes": {
+          "viewport": 390,
+          "scroll": 390
+        }
+      }
+    ],
+    "pageErrorCount": 0,
+    "externalRequestCount": 0,
+    "providerRequestCount": 0,
+    "appExitCode": 143,
+    "operatorCleanup": true,
+    "removedOwnedRootCount": 2,
+    "startedAt": "2026-10-16T19:22:03.036Z",
+    "completedAt": "2026-10-16T19:22:18.357Z",
+    "stoppedAt": "2026-10-16T19:22:19.396Z"
+  },
+  "inputIdentities": {
+    "package.json": {
+      "sha256": "3f1a6838f585c0a2f8d81aa15b5de8d861ffbd0a443b67e18b0f2804b4901f16",
+      "gitBlob": "64a6d7618755c4af01d20830281a759d0489d41b"
+    },
+    "package-lock.json": {
+      "sha256": "00a0aa4044199f6337f95e6b0c910e1c851667853675f7563861328b9cd0210b",
+      "gitBlob": "5e897204bfe1d0ad21ff33b06e4d265678da6291"
+    },
+    "src/backend/services/model/adapters/geminiAdapter.ts": {
+      "sha256": "d2bb0984cc9234b5856fd3ce52934788b1eb8aecb975a061422071e4d5984226",
+      "gitBlob": "e885cd72366ba774228c4212c7073838a5d5d024"
+    },
+    "src/backend/services/model/adapters/geminiUsage.ts": {
+      "sha256": "e0e9120fa197a0fd29b4088e80dec3147157e8bc9ce41b12d8613e9e54bf52cc",
+      "gitBlob": "94a32d9b3a302297681647682f59395d85e3b01f"
+    },
+    "__tests__/model/geminiSdkContinuation.test.ts": {
+      "sha256": "dd5bf69ef6e9f7c83526233c05a14bf6203a1704ed761fe55f2fc0ce474a290f",
+      "gitBlob": "4300386c0fc035c7b40f02bf0f1bd70e2c724062"
+    },
+    "src/frontend/components/shared/GlobalReferenceEditor.tsx": {
+      "sha256": "b6d46ea6a7435754725db175cc7df12d201d9e81ba2354dca1f7bde6dc5e0160",
+      "gitBlob": "a9592f1a0862189aa21e07e08cb554fefffda42e"
+    }
+  },
+  "boundaries": {
+    "paidProviderCalls": 0,
+    "actualGoogleProviderAcceptance": false,
+    "sdkAndCliLifecycleAcceptance": false,
+    "fullOrRemoteCi": false,
+    "containerBuilds": false,
+    "release": false,
+    "issuesClosed": 0,
+    "unchangedDailyBaseline": "2026-10-16 America/Bogota",
+    "nextDailyBroadReview": "2026-10-17 or relevant evidence"
+  },
+  "sources": [
+    "https://github.com/postcss/postcss/releases/tag/8.5.30",
+    "https://github.com/ai/nanoid/releases/tag/3.3.20",
+    "https://github.com/googleapis/js-genai/releases/tag/v2.29.0",
+    "https://github.com/googleapis/js-genai/releases/tag/v2.29.1",
+    "https://github.com/ianstormtaylor/slate/releases/tag/slate-react@0.133.6",
+    "https://github.com/ianstormtaylor/slate/releases/tag/slate-react@0.133.8",
+    "https://github.com/ianstormtaylor/slate/releases/tag/slate-dom@0.133.6",
+    "https://github.com/ianstormtaylor/slate/compare/slate@0.133.3...slate@0.133.7"
+  ]
+}

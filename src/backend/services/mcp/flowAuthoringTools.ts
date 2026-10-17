@@ -1,4 +1,5 @@
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
+import { isAutomaticMcpOAuth } from '@/shared/types/mcp/assistant';
 /**
  * Flow-authoring tools for FLUJO's control-plane MCP package (#14 follow-up:
  * FlowSpec as the public authoring contract).
@@ -370,7 +371,7 @@ export function authoringToolDefinitions(): Tool[] {
           capability: {
             type: 'string',
             description:
-              'What the user wants to connect, in natural language, e.g. "connect my PayPal account" or "search YouTube transcripts". Researches the official MCP Registry, GitHub, npm, and Awesome MCP community lists, probes hosted endpoints for OAuth 2.1 dynamic client registration, ranks candidates (relevance, Registry status, GitHub stars/activity, npm installs, local installability, auth friction, required credentials) and tries the strongest until one passes the works-gate. OAuth servers may return needsAuthentication with researched auth help for the interactive handoff. Same exact-plan consent and secrets-safe audit rules as install_mcp_server: supplied credential VALUES never reach the research model or the audit log. Falls back to deterministic Registry ranking when AI research is unavailable.',
+              'What the user wants to connect, in natural language, e.g. "connect my PayPal account" or "search YouTube transcripts". Researches the official MCP Registry, GitHub, npm, and Awesome MCP community lists, probes hosted endpoints for OAuth CIMD and legacy dynamic client registration, ranks candidates (relevance, Registry status, GitHub stars/activity, npm installs, local installability, auth friction, required credentials) and tries the strongest until one passes the works-gate. OAuth servers may return needsAuthentication with researched auth help for the interactive handoff. Same exact-plan consent and secrets-safe audit rules as install_mcp_server: supplied credential VALUES never reach the research model or the audit log. Falls back to deterministic Registry ranking when AI research is unavailable.',
           },
           modelId: {
             type: 'string',
@@ -781,12 +782,12 @@ export async function authoringCallTool(
           });
         }
         const transport = candidate.plan.transport;
-        const oauthDynamicClientRegistration = candidate.authMode === 'oauth-dcr';
+        const oauthAutomaticRegistration = isAutomaticMcpOAuth(candidate.authMode);
         const preview = await installRegistryServer(candidate.registryName, undefined, {
           resolveOnly: true,
           preferredTransport: transport,
           serverName: candidate.plan.serverName,
-          oauthDynamicClientRegistration,
+          oauthAutomaticRegistration,
         });
         if (!preview.plan) {
           attempts.push({
@@ -868,7 +869,7 @@ export async function authoringCallTool(
           {
             preferredTransport: transport,
             serverName: preview.plan.serverName,
-            oauthDynamicClientRegistration,
+            oauthAutomaticRegistration,
             expectedPlan: preview.plan,
             worksGate: remote && candidate.authMode.startsWith('oauth') ? false : true,
             ...(remote ? { headerOverrides: supplied } : {}),

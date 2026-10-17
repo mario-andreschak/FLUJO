@@ -21,13 +21,15 @@ Malformed visibility metadata fails closed.
 
 App HTML is untrusted. FLUJO serves it through a separate sandbox origin, applies a restrictive Content Security Policy, and embeds it in a script-only sandbox. The host validates relay messages and does not grant forms, top-level navigation, popups, or same-origin access to the App frame.
 
-Declared CSP origins are normalized and constrained to supported HTTP(S) origins. Missing or malformed declarations keep restrictive defaults: no undeclared network connections, nested frames, objects, or base URIs are enabled. Camera, microphone, geolocation, and clipboard-write permissions are granted only when both declared by the resource and allowed by FLUJO's host policy; the effective grant is reported to the App in host capabilities.
+Declared CSP origins are normalized and constrained to supported HTTP(S) origins. Fixed loopback ports stay exact; declaring one port does not grant another port on that hostname. Missing or malformed declarations keep restrictive defaults: no undeclared network connections, nested frames, objects, or base URIs are enabled. Camera, microphone, geolocation, and clipboard-write permissions are granted only when both declared by the resource and allowed by FLUJO's host policy; the effective grant is reported to the App in host capabilities.
 
 External links are limited to safe HTTP(S) URLs. App-originated tool calls and resource reads pass through host authorization. App-provided model context is treated as untrusted, validated, size-bounded, and applied to later turns using last-write-wins semantics.
 
 Localhost and plain-HTTP Local Network installs work without sandbox configuration. For a hosted HTTPS deployment, choose **Settings → Network access → Public** and optionally configure a wildcard sandbox hostname as described below. See [Network exposure](../../../README.md#network-exposure).
 
 ### Per-app sandbox origins
+
+If a local App restarts on a new port, choose **Reload app**. FLUJO reads its current interface and declared origins, closes the old View and pending calls, and opens a fresh View with the new policy. Reloading does not run the original tool again. If loading fails, the error stays visible and **Reload app** retries. The App keeps its browser identity; FLUJO never widens a fixed-port policy to recover.
 
 Every App gets a stable browser origin derived from its workspace and verified resource identity. On a local install, Apps use `http://<originKey>.localhost:4201`; all of those hostnames resolve to one loopback listener, but the browser keeps their storage partitions separate. FLUJO does not recycle ports into another App's origin and does not fall back to a shared origin.
 

@@ -107,6 +107,7 @@ export class FallbackAdapter implements CompletionAdapter {
           maxTurns: input.maxTurns ?? model.maxTurns,
           // A native thread belongs to one model; never resume a policy's other member.
           sessionResume: false, codexSession: undefined, onCodexSessionChange: undefined,
+          responsesSession: undefined, onResponsesSessionChange: undefined,
           consumeSteeringMessages: input.consumeSteeringMessages
             ? () => { const messages = input.consumeSteeringMessages!(); if (messages.length) markObservable(); return messages; }
             : undefined,

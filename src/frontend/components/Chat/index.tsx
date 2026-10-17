@@ -846,6 +846,7 @@ const Chat: React.FC = () => {
   const [retryWait, setRetryWait] = useState<
     { conversationId: string; attempt: number; maxAttempts?: number; retryAt: number } | null
   >(null);
+  const [sdkStatus, setSdkStatus] = useState<{ conversationId: string; text: string } | null>(null);
   // Live node/resource activity (Tier 3): which nodes/artifacts the run is
   // touching RIGHT NOW, for canvas highlighting in the debugger. Entries decay
   // by age (LIVE_HIGHLIGHT_TTL_MS); pruned on each event application.
@@ -2156,6 +2157,7 @@ const Chat: React.FC = () => {
     }
 
     if (event.type === 'model:delta') {
+      setSdkStatus(previous => previous?.conversationId === event.conversationId ? null : previous);
       enqueueModelDelta(event);
       return;
     }
@@ -2263,6 +2265,7 @@ const Chat: React.FC = () => {
 
     switch (event.type) {
       case 'run:start':
+        setSdkStatus(null);
         setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
         setLiveActivity(EMPTY_LIVE_ACTIVITY);
         setLiveLanes(EMPTY_LIVE_LANES);
@@ -2272,6 +2275,16 @@ const Chat: React.FC = () => {
           markConversationStopped(event.conversationId, false); // a new run clears the prior Stop notice
         }
         break;
+      case 'model:status': {
+        if (event.depth || event.laneIndex !== undefined) break;
+        const text = event.state === 'requires_action' ? t('chat.sdk.requiresAction')
+          : event.state === 'compacting' ? t('chat.sdk.compacting')
+          : event.kind === 'api_retry' ? t('chat.sdk.retry', { attempt: event.attempt ?? 1 })
+          : event.kind === 'rate_limit_event' && event.state === 'rejected' ? t('chat.sdk.rateLimit') : null;
+        setSdkStatus(text ? { conversationId: event.conversationId, text } : null);
+        touch({});
+        break;
+      }
       case 'model:dispatch': {
         touch({ activeNode: event.turn.node.nodeName || event.turn.node.nodeId });
         if (!modelTurnIdsRef.current.has(event.turn.id)) {
@@ -5829,6 +5842,11 @@ const Chat: React.FC = () => {
                 </Box>
               )}
 
+              {sdkStatus?.conversationId === currentConversationId && (viewedConversationRunning || viewedConversationAwaitingApproval) && (
+                <Typography role="status" aria-live="polite" variant="body2" sx={{ px: 2, py: 1 }}>
+                  {sdkStatus.text}
+                </Typography>
+              )}
               {/* Live execution indicator (progress, active node, tokens, stop).
                   Shown whenever the VIEWED conversation is running — including
                   runs this client didn't start (see viewedConversationRunning) —

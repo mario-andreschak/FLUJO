@@ -99,7 +99,8 @@ class RegistryService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
-    return parse<{ success: boolean; message?: string }>(response);
+    const result = await parse<{ success?: boolean }>(response);
+    return { success: response.ok && result?.success === true };
   }
 
   async getSettings(): Promise<RegistrySettingsView> {

@@ -4,7 +4,7 @@ import {
   type StoredCodexSession,
 } from '@/backend/services/model/adapters/codexSessionStore';
 import {
-  _clearAllSessionsForTests, computePrefixHash, findReusableSession, recordSession,
+  _clearAllSessionsForTests, computePrefixHash, computeHistoryHash, findReusableSession, recordSession,
 } from '@/backend/services/model/adapters/claudeSessionStore';
 
 jest.mock('@/utils/workspace', () => ({ getCurrentWorkspace: () => 'projection-compatibility-test' }));
@@ -47,9 +47,11 @@ it('refuses Claude sessions with a legacy projection, then reuses the corrected 
   const prefix = computePrefixHash(instructions, []);
   const key = 'conversation::node';
   recordSession(key, { sessionId: 'legacy-session', prefixHash: legacyClaudePrefix,
-    seenMessageCount: previous.length, leadingSystemMessageCount: 0 });
-  expect(findReusableSession(key, prefix, appended.length, 0)).toBeUndefined();
+    seenMessageCount: previous.length, leadingSystemMessageCount: 0,
+    historyHash: computeHistoryHash(previous as Array<{ role: string; [key: string]: unknown }>) });
+  expect(findReusableSession(key, prefix, appended as Array<{ role: string; [key: string]: unknown }>, 0)).toBeUndefined();
   recordSession(key, { sessionId: 'corrected-session', prefixHash: prefix,
-    seenMessageCount: previous.length, leadingSystemMessageCount: 0 });
-  expect(findReusableSession(key, prefix, appended.length, 0)?.sessionId).toBe('corrected-session');
+    seenMessageCount: previous.length, leadingSystemMessageCount: 0,
+    historyHash: computeHistoryHash(previous as Array<{ role: string; [key: string]: unknown }>) });
+  expect(findReusableSession(key, prefix, appended as Array<{ role: string; [key: string]: unknown }>, 0)?.sessionId).toBe('corrected-session');
 });

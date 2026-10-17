@@ -89,3 +89,20 @@ archive and Chat result, including restart durability. These results qualify
 that integration and Original path; they do not supply the missing Native
 producer or connected Worker acceptance. See the
 [qualification receipt](evidence/native-source-main-integration-2026-10-14.json).
+
+The October 17 integration preserves the current ordinary Codex endpoint and
+compaction behavior alongside Native ownership, qualification and keyless tool
+restrictions. Born-child admission now uses the shared identity capture's one
+bounded startup warmup. Repeating that warmup in the app-server transport had
+multiplied three exhausted OS birth probes into nine; exhaustion still closes
+the child before registration or wire input. Native reader checks observe the
+session only after the Original host accepts it, while session subscriptions
+remain installed before completion events. Current validation and its explicit
+acceptance limits are recorded in the
+[October 17 receipt](evidence/native-source-main-integration-2026-10-17.json).
+
+The production Parent is still implementation work. Existing Persona dispatcher
+and Original owner services supply genuine lease and task/graph checks, but do
+not yet admit Native accounts or execute Worker tool tickets. Neither these
+primitives nor a saved enrollment supply the missing Native producer or qualify
+connected Worker and attached-child acceptance.

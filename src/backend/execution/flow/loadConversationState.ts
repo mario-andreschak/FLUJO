@@ -12,6 +12,8 @@ import {
 } from './recoveryCheckpoint';
 import { coalesceLoad, noteRead, noteWrite } from './conversationStateCache';
 import { validateCompactionState } from './compaction/state';
+import { validateResponsesSessions } from '@/backend/services/model/adapters/responsesSessionState';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { assertExecutionConversationAccess, assertExecutionStateAccess, isExecutionProtectedState } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/execution/flow/loadConversationState');
@@ -107,6 +109,9 @@ async function loadFromDurableStorage(conversationId: string): Promise<SharedSta
       await assertExecutionStateAccess(state, conversationId);
       if (state) {
         log.debug('Loaded state from storage', { conversationId });
+        state.responsesSessions = validateResponsesSessions(state.responsesSessions, {
+          workspace: getCurrentWorkspace(), conversationId,
+        });
         // Persona snapshots deliberately omit their runtime capability. A read or
         // legacy control route may inspect that durable projection, but it must
         // never replay logs, classify interruption, repair tools, or persist a

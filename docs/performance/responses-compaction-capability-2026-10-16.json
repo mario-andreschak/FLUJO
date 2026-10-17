@@ -1,0 +1,348 @@
+{
+  "schemaVersion": 1,
+  "issue": 1091,
+  "frozenUtc": "2026-10-17T00:15:35.302Z",
+  "baseMain": "aa9be9b2afa078d4461354fb1663fa05e5481929",
+  "applicationSourceTree": "f70d21d034f35682da403387d5ff5d702969247f",
+  "productSourceChanged": false,
+  "probe": {
+    "path": "scripts/responses-compaction-capability.mjs",
+    "sha256": "25dede714adc95e1b900add6ce9a1faadf959b80ebede1e37eb6f4c743dd8d24",
+    "syntaxLint": {
+      "step": "probe-syntax-lint",
+      "exitCode": 0,
+      "elapsedSeconds": 3.9635252,
+      "utc": "2026-10-17T00:12:28.1200525Z",
+      "sourceSha256": "25dede714adc95e1b900add6ce9a1faadf959b80ebede1e37eb6f4c743dd8d24"
+    }
+  },
+  "qualification": {
+    "typecheck": {
+      "utc": "2026-10-17T00:08:09.5207306Z",
+      "inputs": {
+        "lockSha256": "00a0aa4044199f6337f95e6b0c910e1c851667853675f7563861328b9cd0210b",
+        "utc": "2026-10-17T00:07:09.9835185Z",
+        "inspectedMcpBuild": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
+        "inspectedBuild": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+        "applicationSourceTree": "f70d21d034f35682da403387d5ff5d702969247f",
+        "manifestSha256": "3f1a6838f585c0a2f8d81aa15b5de8d861ffbd0a443b67e18b0f2804b4901f16",
+        "revision": "aa9be9b2afa078d4461354fb1663fa05e5481929"
+      },
+      "step": "typecheck",
+      "elapsedSeconds": 59.4152975,
+      "exitCode": 0
+    },
+    "lint": {
+      "utc": "2026-10-17T00:09:49.8309666Z",
+      "inputs": {
+        "lockSha256": "00a0aa4044199f6337f95e6b0c910e1c851667853675f7563861328b9cd0210b",
+        "utc": "2026-10-17T00:07:09.9835185Z",
+        "inspectedMcpBuild": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
+        "inspectedBuild": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+        "applicationSourceTree": "f70d21d034f35682da403387d5ff5d702969247f",
+        "manifestSha256": "3f1a6838f585c0a2f8d81aa15b5de8d861ffbd0a443b67e18b0f2804b4901f16",
+        "revision": "aa9be9b2afa078d4461354fb1663fa05e5481929"
+      },
+      "step": "lint",
+      "elapsedSeconds": 100.3035321,
+      "exitCode": 0
+    },
+    "build": {
+      "utc": "2026-10-17T00:15:34.6265736Z",
+      "inputs": {
+        "lockSha256": "00a0aa4044199f6337f95e6b0c910e1c851667853675f7563861328b9cd0210b",
+        "utc": "2026-10-17T00:07:09.9835185Z",
+        "inspectedMcpBuild": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
+        "inspectedBuild": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+        "applicationSourceTree": "f70d21d034f35682da403387d5ff5d702969247f",
+        "manifestSha256": "3f1a6838f585c0a2f8d81aa15b5de8d861ffbd0a443b67e18b0f2804b4901f16",
+        "revision": "aa9be9b2afa078d4461354fb1663fa05e5481929"
+      },
+      "step": "build",
+      "elapsedSeconds": 344.7929397,
+      "exitCode": 0
+    }
+  },
+  "buildId": "-FM99uN1N9j-8IHMVyPI5",
+  "buildScope": "Fresh non-container application/five-MCP build; no built-app provider-compaction acceptance is claimed",
+  "sdkVersions": {
+    "openai": "7.32.0",
+    "@openrouter/sdk": "0.13.67",
+    "@openrouter/agent": "0.11.0"
+  },
+  "hostNode": "v22.23.3",
+  "outcome": "genuine-provider-compaction-unqualified-on-tested-OpenRouter-routes",
+  "cases": [
+    {
+      "model": "openrouter/free",
+      "catalog": {
+        "checkedUtc": "2026-10-17T00:08:50.904Z",
+        "id": "openrouter/free",
+        "pricing": {
+          "prompt": "0",
+          "completion": "0"
+        },
+        "contextLength": 200000,
+        "supportedParameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_completion_tokens",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ]
+      },
+      "startedUtc": "2026-10-17T00:08:50.629Z",
+      "finishedUtc": "2026-10-17T00:08:54.608Z",
+      "outcome": "no-genuine-provider-compaction-observed",
+      "credentialProvenance": {
+        "method": "one explicitly selected existing encrypted account; canonical read-only format",
+        "configuredModelId": "24618177-b739-44a3-b79d-b459ba9151a2",
+        "configuredModel": "openrouter/free",
+        "baseHost": "openrouter.ai",
+        "credentialRetained": "memory only",
+        "configuredInputFilesUnchanged": true,
+        "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+        "configuredInputCount": 2
+      },
+      "input": {
+        "sha256": "96fdfe840a16cf83c532311b68a2826c3ea0b599d98101095cd9f62af9d49ea4",
+        "characters": 44069,
+        "compactThreshold": 1024,
+        "receipt": "COMPACT-ñ-aa84765c-b4ca-4327-bf22-c753e033d1d9"
+      },
+      "requests": [
+        {
+          "scenario": "standalone-compaction",
+          "endpoint": "https://openrouter.ai/api/v1/responses/compact",
+          "startedUtc": "2026-10-17T00:08:50.904Z",
+          "elapsedMs": 122.0267,
+          "httpStatus": 404,
+          "requestSha256": "094766bc476e662ea558b327bd72e63580a036adf550bd9d96b475c0294231c4",
+          "responseSha256": "7bad366336f82bb6bfadd16ecf573bdd57e5ad605e2f6ddd990a142a90432a4f",
+          "responseBytes": 44,
+          "responseId": null,
+          "actualModel": null,
+          "compactionItems": 0,
+          "echoedContextManagement": null,
+          "usage": null,
+          "error": {
+            "message": "Not Found",
+            "code": 404
+          },
+          "exactSyntheticReceipt": false
+        },
+        {
+          "scenario": "server-side-compaction",
+          "endpoint": "https://openrouter.ai/api/v1/responses",
+          "startedUtc": "2026-10-17T00:08:51.029Z",
+          "elapsedMs": 3577.6065000000003,
+          "httpStatus": 200,
+          "requestSha256": "c430d9d958cd2b5e80cdf423d1d8620433c0d1e6c9902c07512345bbf610654e",
+          "responseSha256": "3d470ca0fb732db7535d6f984a4184fc34c91f7f618ceec8781082e16514a6fe",
+          "responseBytes": 2112,
+          "responseId": "gen-1792195729-n6LbpzS7iSoswRU1j1lm",
+          "actualModel": "nvidia/nemotron-3.5-super-vl:free",
+          "compactionItems": 0,
+          "echoedContextManagement": null,
+          "usage": {
+            "input_tokens": 10201,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 263,
+            "output_tokens_details": {
+              "reasoning_tokens": 224
+            },
+            "total_tokens": 10464,
+            "cost": 0,
+            "is_byok": false,
+            "cost_details": {
+              "upstream_inference_cost": 0,
+              "upstream_inference_input_cost": 0,
+              "upstream_inference_output_cost": 0
+            }
+          },
+          "error": null,
+          "exactSyntheticReceipt": true
+        }
+      ],
+      "rawReceiptSha256": "244890b4424491db29b3917236651cee6db7049b046ceb105a5945f09976ef7a"
+    },
+    {
+      "model": "openai/gpt-6-luna",
+      "catalog": {
+        "checkedUtc": "2026-10-17T00:09:14.152Z",
+        "id": "openai/gpt-6-luna",
+        "pricing": {
+          "prompt": "0.0000001",
+          "completion": "0.0000005",
+          "web_search": "0.01",
+          "input_cache_read": "0.00000001",
+          "input_cache_write": "0.000000125",
+          "overrides": [
+            {
+              "min_prompt_tokens": 272000,
+              "prompt": "0.0000002",
+              "completion": "0.00000075",
+              "input_cache_read": "0.00000002",
+              "input_cache_write": "0.00000025"
+            }
+          ]
+        },
+        "contextLength": 1050000,
+        "supportedParameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ]
+      },
+      "startedUtc": "2026-10-17T00:09:13.903Z",
+      "finishedUtc": "2026-10-17T00:09:17.212Z",
+      "outcome": "no-genuine-provider-compaction-observed",
+      "credentialProvenance": {
+        "method": "one explicitly selected existing encrypted account; canonical read-only format",
+        "configuredModelId": "24618177-b739-44a3-b79d-b459ba9151a2",
+        "configuredModel": "openrouter/free",
+        "baseHost": "openrouter.ai",
+        "credentialRetained": "memory only",
+        "configuredInputFilesUnchanged": true,
+        "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+        "configuredInputCount": 2
+      },
+      "input": {
+        "sha256": "5dde2012ef87fce677e41375f621c97e46f19edb11b54e2a82cb1d8931acbe21",
+        "characters": 44069,
+        "compactThreshold": 1024,
+        "receipt": "COMPACT-ñ-eb9a3e2b-40b1-4fc1-9a57-e2d1f0be0fbc"
+      },
+      "requests": [
+        {
+          "scenario": "standalone-compaction",
+          "endpoint": "https://openrouter.ai/api/v1/responses/compact",
+          "startedUtc": "2026-10-17T00:09:14.152Z",
+          "elapsedMs": 106.86400000000003,
+          "httpStatus": 404,
+          "requestSha256": "c6b63101006c99dde7464643cee93d0ea040eb497a45779b8b705f00ad9ff827",
+          "responseSha256": "7bad366336f82bb6bfadd16ecf573bdd57e5ad605e2f6ddd990a142a90432a4f",
+          "responseBytes": 44,
+          "responseId": null,
+          "actualModel": null,
+          "compactionItems": 0,
+          "echoedContextManagement": null,
+          "usage": null,
+          "error": {
+            "message": "Not Found",
+            "code": 404
+          },
+          "exactSyntheticReceipt": false
+        },
+        {
+          "scenario": "server-side-compaction",
+          "endpoint": "https://openrouter.ai/api/v1/responses",
+          "startedUtc": "2026-10-17T00:09:14.262Z",
+          "elapsedMs": 2948.834,
+          "httpStatus": 200,
+          "requestSha256": "a4dbc25e88fc64e926d27d03252d0ec0c4013c56201715a89b9d2ceeff095632",
+          "responseSha256": "dcf333530f217b5e86e39b879d7c765e8cf657cedb23ba479c687a325f9e52f3",
+          "responseBytes": 1382,
+          "responseId": "gen-1792195752-TewBU8Zsr3yT9Tra3cWZ",
+          "actualModel": "openai/gpt-6-luna",
+          "compactionItems": 0,
+          "echoedContextManagement": null,
+          "usage": {
+            "input_tokens": 8611,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 149,
+            "output_tokens_details": {
+              "reasoning_tokens": 112
+            },
+            "total_tokens": 8760,
+            "cost": 0.0009356,
+            "is_byok": false,
+            "cost_details": {
+              "upstream_inference_cost": 0.0009356,
+              "upstream_inference_input_cost": 0.0008611,
+              "upstream_inference_output_cost": 0.0000745
+            }
+          },
+          "error": null,
+          "exactSyntheticReceipt": true
+        }
+      ],
+      "rawReceiptSha256": "23a4a984b9ceea55f9bc5b0e1852e259bcd182db86cd6108871754ed6af73305"
+    }
+  ],
+  "measuredProviderUsage": {
+    "completedInferenceResponses": 2,
+    "reportedCostUsd": 0.0009356,
+    "inferenceResponsesWithoutCost": 0,
+    "http404ResponsesWithoutGenerationOrUsage": 2,
+    "missing404Cost": "No generation ID or usage in the two endpoint refusals; no measured zero-charge claim"
+  },
+  "reconciliation": [
+    {
+      "staleClaim": "#1188 fifteen Responses Stop/crash failures still need repair",
+      "currentEvidence": "recovery-receipt-selection-2026-10-16.json",
+      "mergedPRs": [
+        1189,
+        1190,
+        1191
+      ],
+      "qualifiedResult": "40/40 exact Haiku/Luna replies; prior failed answers remain historical evidence"
+    },
+    {
+      "currentEvidence": "native-fallback-replay-2026-10-16.json",
+      "mergedPRs": [
+        1194
+      ],
+      "qualifiedResult": "20/20 exact replies and 20/20 ordinary signed-output replay windows; forced fallback is regression-only"
+    },
+    {
+      "currentEvidence": "responses-genuine-encrypted-state-2026-10-16.json",
+      "mergedPRs": [
+        1201
+      ],
+      "qualifiedResult": "22 genuine encrypted checkpoint checks on both built non-streaming HTTP adapters; no provider compaction item"
+    }
+  ],
+  "trace": {
+    "path": "docs/performance/responses-compaction-capability-provider-trace-2026-10-16.json.gz",
+    "sha256": "f6c2bb102efc33b81674c445da8c8c6b4ba3d36ed8b3d8fd823d90136818e773",
+    "uncompressedSha256": "6e3abdaa6ca941c841d089756804f0862a266f056bb4e6adca5615f668feaaf5",
+    "bytes": 15451,
+    "uncompressedBytes": 193094
+  },
+  "boundaries": [
+    "Direct OpenRouter requests only; Free first, then separately explicit GPT Luna; no fallback or tools",
+    "HTTP 200 and high input-token count do not establish context_management was honored; no compaction item was returned",
+    "The endpoint 404 is a dated transport limitation; results do not establish every model or provider capability",
+    "No built-app compaction, native SDK/CLI, semantic/position/visual, installed/endurance or release qualification",
+    "No product source, acceptance criterion, full/remote CI, container build, release, new issue or automation change"
+  ],
+  "nextCapabilityReview": "On relevant OpenRouter compaction support changes, rather than repeating unchanged probes"
+}

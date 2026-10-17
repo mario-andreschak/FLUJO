@@ -11,6 +11,8 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { modelService } from '@/backend/services/model';
 import type { ProcessNodeParams, SharedState } from '@/backend/execution/flow/types';
 import type { Flow } from '@/shared/types/flow';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 afterEach(() => { jest.restoreAllMocks(); findByName.mockReset(); readResource.mockReset(); });
 
@@ -35,7 +37,9 @@ it.each(['system', 'chat', 'isolated'] as const)(
     } as SharedState;
     jest.spyOn(promptRenderer, 'renderPrompt').mockResolvedValue(input === 'system' ? '${res:report}' : 'System prompt');
     jest.spyOn(promptRenderer, 'resolveChatMessageReferences').mockImplementation(async text => text);
-    jest.spyOn(modelService, 'getModel').mockResolvedValue({ id: 'model-1', name: 'Model' } as Awaited<ReturnType<typeof modelService.getModel>>);
+    const model = { id: 'model-1', name: 'Model', ApiKey: '' };
+    await saveItem(StorageKey.MODELS, [model]);
+    jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
     findByName.mockImplementation(async () => {
       // Simulate ownership advancing while this asynchronous store lookup is
       // pending, before the durable readBy append and execution event.

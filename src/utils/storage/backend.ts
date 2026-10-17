@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { withConversationLogReadAdmission, type ConversationReadReservation } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { readPlainFile } from '@/utils/readPlainFile';
 import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
+import { PersonaShardIdentityError } from './personaShardIdentity';
 import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
@@ -554,10 +555,7 @@ function parsePersonaShardRecord<T>(
   }
   const candidate = value as { id?: unknown; personaId?: unknown };
   if (candidate.id !== recordId || candidate.personaId !== personaId) {
-    throw new Error(
-      `Persona record ${JSON.stringify(recordId)} does not match requested Persona `
-      + `${JSON.stringify(personaId)}.`,
-    );
+    throw new PersonaShardIdentityError(recordId, personaId);
   }
   return value as T;
 }

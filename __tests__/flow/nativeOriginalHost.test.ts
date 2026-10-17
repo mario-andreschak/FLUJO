@@ -6,6 +6,7 @@ import type { FlowRunInput, FlowRunResult } from '@/backend/execution/flow/runFl
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
+import type { ChildProcess } from 'node:child_process';
 import type { Model } from '@/shared/types/model';
 
 const modelFixture: Model = { id: 'model-test', name: 'offline-native', displayName: 'Offline native',
@@ -47,6 +48,7 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
   const actual = jest.requireActual<typeof import('@/backend/services/model/adapters/codexAppServerProcess')>(
     '@/backend/services/model/adapters/codexAppServerProcess');
   return { ...actual, startOwnedCodexAppServer: async (input: Parameters<typeof actual.startOwnedCodexAppServer>[0]) => {
+    if (fixtureCleanupStarted) throw new Error('Native fixture is closing.');
     codexLaunchArguments.push([...(input.args ?? [])]);
     const wire = path.join(directory, 'codex-wire.jsonl');
     let resolveOffered: (() => void) | undefined;
@@ -54,7 +56,8 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
     phase('Codex transport launch started');
     const transport = await actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
       args: ['-e', codexChildFixture, wire, codexForeignScope, emitHandoff ? 'handoff' : ''],
-      register: async registration => { phase('Codex registration started'); codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
+      register: async registration => { if (fixtureCleanupStarted) throw new Error('Native fixture is closing.');
+        phase('Codex registration started'); codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
         let closeObserved = false;
         codexCloseDelays.push(registration.exit.then(async () => {
           phase('Codex original exited');
@@ -113,7 +116,7 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import { createOwnedCodexThread } from '@/backend/services/model/adapters/codexOwnedThread';
 import { createExecutionExtensionContext, registerExecutionExtension, runWithExecutionInput, type ExecutionExtensionAdapter, type ExecutionNativeWorkerRoot } from '@/backend/execution/extensions';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
-import { createNativeInvocationSessionHook, type NativeInvocationSession } from '@/backend/execution/flow/handlers/nativeInvocationSession';
+import { createNativeInvocationSessionHook, type NativeInvocationSession, type NativeSessionEvent } from '@/backend/execution/flow/handlers/nativeInvocationSession';
 import { nativeDigest, createNativeToolPort, createNativeBrokerAuthority, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
 import { createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, assertNativeOriginalExecutionContext, nativeOriginalSourceReader } from '@/backend/execution/flow/handlers/nativeOriginalHost';
@@ -126,6 +129,10 @@ let previousData: string | undefined;
 let sequence = 0;
 let promptCount = 0;
 let children: SpawnedProcess[] = [];
+let childCloses: Promise<void>[] = [];
+const activeClaims = new Set<Promise<void>>();
+const activeDispatchers = new Set<{ dispatcher: PersonaFlowDispatcher; personaId: string }>();
+let fixtureCleanupStarted = false;
 let beforePrompt: (() => Promise<void>) | undefined;
 let emitHandoff = false;
 let afterHandoffStop: (() => Promise<void>) | undefined;
@@ -187,11 +194,12 @@ function phase(name: string) {
 }
 
 beforeEach(async () => {
+  fixtureCleanupStarted = false;
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-original-host-'));
   previousData = process.env.FLUJO_DATA_DIR;
   process.env.FLUJO_DATA_DIR = directory;
   selectedModel = { ...modelFixture };
-  promptCount = 0; children = []; beforePrompt = undefined; emitHandoff = false; afterHandoffStop = undefined;
+  promptCount = 0; children = []; childCloses = []; beforePrompt = undefined; emitHandoff = false; afterHandoffStop = undefined;
   afterPrompt = undefined; transcriptText = 'done';
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
@@ -201,6 +209,7 @@ beforeEach(async () => {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
   }) => {
+    if (fixtureCleanupStarted) throw new Error('Native fixture is closing.');
     const forwarded = new AbortController();
     const childScript = emitHandoff
       ? 'process.stdin.resume();process.stdin.on("end",()=>{require("node:child_process").spawn(process.execPath,["-e","setTimeout(()=>{},700)"],{stdio:["ignore",process.stdout,process.stderr],windowsHide:true});process.exit(0)});'
@@ -208,6 +217,7 @@ beforeEach(async () => {
     const child = options.spawnClaudeCodeProcess({ command: process.execPath,
       args: ['-e', childScript],
       env: options.env, signal: forwarded.signal });
+    childCloses.push(new Promise<void>(resolve => (child as ChildProcess).once('close', () => resolve())));
     children.push(child);
     phase('child spawned');
     const close = () => child.stdin.end();
@@ -255,9 +265,24 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
-  for (const child of children) child.kill('SIGKILL');
-  for (const registration of codexRegistrations) { registration.requestStop(); await registration.close; }
+  // A Jest timeout does not cancel the claim promise. Abort and drain every
+  // active dispatcher while its original data root is still selected.
+  fixtureCleanupStarted = true;
+  const failures: unknown[] = [];
+  const collectFailures = (results: PromiseSettledResult<unknown>[]) => {
+    for (const result of results) if (result.status === 'rejected') failures.push(result.reason);
+  };
+  const quiescence = Promise.allSettled([...activeDispatchers].map(({ dispatcher, personaId }) => dispatcher.quiesce(personaId)));
+  for (const child of children) {
+    try { child.kill('SIGKILL'); } catch (error) { failures.push(error); }
+  }
+  collectFailures(await Promise.allSettled([...childCloses, ...codexRegistrations.map(async registration => {
+    registration.requestStop(); await registration.close;
+  })]));
+  collectFailures(await quiescence);
+  await Promise.allSettled([...activeClaims]);
   stopPersonaGoalRuntime();
+  if (failures.length) throw new AggregateError(failures, 'Native fixture cleanup did not settle.');
   if (previousData === undefined) delete process.env.FLUJO_DATA_DIR; else process.env.FLUJO_DATA_DIR = previousData;
   await fs.rm(directory, { recursive: true, force: true });
 });
@@ -265,7 +290,8 @@ afterEach(async () => {
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
   after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' | 'child-refusal' | 'no-handoff-refusal' = false,
   authorityRevoked = false) {
-  await runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
+  if (fixtureCleanupStarted) throw new Error('Native fixture is closing.');
+  const claim = runWithWorkspace(`native-host-${process.pid}-${++sequence}`, async () => {
     phase('claim setup started');
     stopPersonaGoalRuntime();
     let roleVersionId: string | undefined;
@@ -328,6 +354,9 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
       return { status: production ? 'error' : 'completed', conversationId: input.conversationId!, runId: input.runId!,
         outputText: 'fixture', messages: [], sharedState: {} as SharedState } satisfies FlowRunResult;
     } } });
+    if (fixtureCleanupStarted) throw new Error('Native fixture is closing.');
+    const active = { dispatcher, personaId: persona.id };
+    activeDispatchers.add(active);
     try {
       await dispatcher.submit({ personaId: persona.id, idempotencyKey: 'native-host-round', kind: 'assignment',
         source: { kind: 'assignment', sourceId: goal.id }, flowInput: { source: 'internal', prompt: 'offline fixture', mode: 'conversation', requireApproval: false, onApprovalRequired: 'fail' } },
@@ -344,11 +373,17 @@ async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<
         else throw failure;
       }
       await after?.(persona.id, goal.id);
-    } finally { await dispatcher.quiesce(persona.id); phase('dispatcher quiesced'); }
+    } finally {
+      await dispatcher.quiesce(persona.id);
+      activeDispatchers.delete(active);
+      phase('dispatcher quiesced');
+    }
   });
+  activeClaims.add(claim);
+  try { await claim; } finally { activeClaims.delete(claim); }
 }
 
-async function prepare(input: FlowRunInput, observeSession?: (session: NativeInvocationSession) => Promise<void>) {
+async function prepare(input: FlowRunInput, observeSession?: (session: NativeInvocationSession) => void | Promise<void>) {
   const node = input.flowDefinition!.nodes.find(value => value.data.type === 'process')!;
   const state = { conversationId: input.conversationId!, logicalRunId: input.runId!, flowId: input.flowDefinition!.id,
     flowSnapshot: input.flowDefinition!, currentNodeId: node.id, source: 'api', status: 'running', runDepth: 0,
@@ -360,7 +395,11 @@ async function prepare(input: FlowRunInput, observeSession?: (session: NativeInv
     conversationId: input.conversationId, runId: input.runId, nodeId: node.id,
     modelId: node.data.properties!.boundModel as string });
   const sessionHook = observeSession ? createNativeInvocationSessionHook({ ...host!.session,
-    publish: async value => { await host!.session.publish(value); await observeSession(value); } }) : host!.session;
+    publish: async session => {
+      await host!.session.publish(session);
+      await observeSession?.(session);
+    },
+  }) : host!.session;
   const invoke = () => (ModelHandler as unknown as { generateCompletion: (...args: unknown[]) => Promise<{ success: boolean }> })
     .generateCompletion('model-test', '', [{ id: 'user-fixture', role: 'user', content: 'offline', timestamp: 1 }], [], {
       conversationId: input.conversationId, runId: input.runId, nodeId: node.id, archiveModelTurns: true, maxTurns: 3,
@@ -562,6 +601,30 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
     }, undefined, false, drift === 'goal');
   }, 60000);
+  it('holds a Claude Original and never certifies stream completion when query close fails', async () => {
+    const originalQuery = queryMock.getMockImplementation()!;
+    queryMock.mockImplementation((...args: unknown[]) => {
+      const response = originalQuery(...args) as AsyncGenerator<unknown> & { close(): void };
+      const close = response.close;
+      response.close = () => { close(); throw new Error('offline close failure'); };
+      return response;
+    });
+    await withClaim(async input => {
+      const events: NativeSessionEvent[] = [];
+      const { invoke, state } = await prepare(input, session => { session.subscribe(event => events.push(event)); });
+      try {
+        expect((await invoke()).success).toBe(false);
+        expect(queryMock).toHaveBeenCalledTimes(1);
+        expect(promptCount).toBe(1);
+        expect(events.some(event => event.kind === 'sdk-finished')).toBe(false);
+        const reservation = (await ledger()).reservations[0];
+        expect(reservation.state).not.toBe('released');
+        const archive = path.join(getWorkspaceDataDir(), 'db', 'model-turns', reservation.owner.conversationId);
+        const outcome = JSON.parse(await fs.readFile(path.join(archive, `${reservation.invocationId}.outcome.json`), 'utf8'));
+        expect(outcome.outcome).toBe('error');
+      } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
+    });
+  }, 30000);
   it.each(['pause', 'dispatch-drift'])('refuses actual %s while an additional held Native goal guard is awaiting', async mode => {
     await withClaim(async (input, goalId) => {
       const personaId = input.personaAttribution!.personaId;

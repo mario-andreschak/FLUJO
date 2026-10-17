@@ -2,15 +2,14 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, probeCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
-import { probeRuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
+import { probeRuntimeProcessIdentity, _setPersonaRuntimeLockProcessBirthProbeForTests } from '@/backend/services/enduringAgents/runtimeLock';
 let uncertainProbe=false;
-let unavailableBirthReads=0,birthReads=0,lastBirthPid=0;
+let birthReads=0,lastBirthPid=0;
 jest.mock('@/backend/services/enduringAgents/runtimeLock',()=>{
   const actual=jest.requireActual<typeof import('@/backend/services/enduringAgents/runtimeLock')>('@/backend/services/enduringAgents/runtimeLock');
   return {...actual,probeRuntimeProcessIdentity:async(identity:Parameters<typeof actual.probeRuntimeProcessIdentity>[0])=>
     uncertainProbe?false:actual.probeRuntimeProcessIdentity(identity),captureRuntimeChildIdentity:async(pid:number)=>{
     birthReads++;lastBirthPid=pid;
-    if(unavailableBirthReads-->0)throw new Error('Offline uncertain birth read');
     return actual.captureRuntimeChildIdentity(pid);
   }};
 });
@@ -30,6 +29,13 @@ process.stdin.on('end',()=>process.exit(0));
 readline.createInterface({input:process.stdin}).on('line',line=>{
   fs.appendFileSync(log,line+'\\n');
   const m=JSON.parse(line);if(m.id===undefined || m.method===undefined)return;
+  if(mode==='compaction' && m.method==='thread/compact/start'){
+    const params={threadId:m.params.threadId,turnId:'compact-1',item:{id:'item-compact-1',type:'contextCompaction'}};
+    process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n'+
+      JSON.stringify({method:'item/started',params})+'\\n'+
+      JSON.stringify({method:'item/completed',params})+'\\n'+
+      JSON.stringify({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:'compact-1',status:'completed'}}})+'\\n');return;
+  }
   if(mode==='incoming-terminal' && m.method==='turn/interrupt'){
     process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n'+JSON.stringify({method:'turn/completed',params:{threadId:'thread-1',turn:{id:'turn-1',status:'interrupted'}}})+'\\n');return;
   }
@@ -51,8 +57,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 let root: string;
 const children: Array<Awaited<ReturnType<typeof startOwnedCodexAppServer>>> = [];
 const registrations: CodexOwnedProcessRegistration[] = [];
-beforeEach(async()=>{uncertainProbe=false;unavailableBirthReads=0;birthReads=0;lastBirthPid=0;root=await fs.mkdtemp(path.join(os.tmpdir(),'codex-owned-process-'));});
+beforeEach(async()=>{uncertainProbe=false;birthReads=0;lastBirthPid=0;root=await fs.mkdtemp(path.join(os.tmpdir(),'codex-owned-process-'));});
 afterEach(async()=>{
+  _setPersonaRuntimeLockProcessBirthProbeForTests();
   const stopped=await Promise.allSettled(children.splice(0).map(child=>child.stop()));
   try {
     for(const registration of registrations.splice(0)){registration.requestStop();await registration.close;}
@@ -118,14 +125,20 @@ it('retains only the same owned original with positive OS identity and refuses u
   await child.stop();expect(await probeCodexOwnedProcessRegistration(child.registration,input.owner)).toBeNull();
 });
 
-it('rechecks an uncertain OS birth read on the same child before any wire input',async()=>{
-  unavailableBirthReads=1;const child=await startOwnedCodexAppServer(options());children.push(child);
-  expect(birthReads).toBe(2);expect(child.registration.identity.pid).toBe(lastBirthPid);
+it('uses the shared startup warmup on the same child before any wire input',async()=>{
+  const observations=jest.fn().mockResolvedValueOnce(null).mockResolvedValue('win32-v2:638927322190000000');
+  _setPersonaRuntimeLockProcessBirthProbeForTests(observations);
+  const child=await startOwnedCodexAppServer(options());children.push(child);
+  expect(birthReads).toBe(1);expect(observations.mock.calls).toEqual([[lastBirthPid],[lastBirthPid]]);
+  expect(child.registration.identity.pid).toBe(lastBirthPid);
   expect(child.registration.identity.processBirthMarkerV2).toBeDefined();expect(await wire()).toBe('');
 });
-it('holds repeated birth uncertainty and closes the child without registration or input',async()=>{
-  unavailableBirthReads=3;await expect(startOwnedCodexAppServer(options())).rejects.toThrow('uncertain birth');
-  expect(birthReads).toBe(3);expect(registrations).toHaveLength(0);expect(await wire()).toBe('');
+it('does not multiply exhausted startup probes and closes without registration or input',async()=>{
+  const observations=jest.fn().mockResolvedValue(null);
+  _setPersonaRuntimeLockProcessBirthProbeForTests(observations);
+  await expect(startOwnedCodexAppServer(options())).rejects.toThrow('Child process birth identity is unavailable');
+  expect(observations.mock.calls).toEqual([[lastBirthPid],[lastBirthPid],[lastBirthPid]]);
+  expect(birthReads).toBe(1);expect(registrations).toHaveLength(0);expect(await wire()).toBe('');
   expect(()=>process.kill(lastBirthPid,0)).toThrow();
 });
 
@@ -241,4 +254,23 @@ it('bounds a silent request and refuses methods outside the admitted protocol',a
   expect(await wire()).toBe('');
   await expect(child.request('initialize',{},50)).rejects.toThrow('unavailable');
   await child.registration.exit;await child.registration.close;
+});
+
+it('admits native compaction and preserves its typed completion lifecycle on the owned child',async()=>{
+  const notifications:Array<{method?:string;params?:unknown}>=[];
+  let complete!:()=>void;
+  const completed=new Promise<void>(resolve=>{complete=resolve;});
+  const child=await startOwnedCodexAppServer({...options('compaction'),onNotification:message=>{
+    notifications.push(message);
+    if(message.method==='turn/completed')complete();
+  }});children.push(child);
+  await child.request('initialize',{});
+  await expect(child.request('thread/compact/start',{threadId:'thread-1'})).resolves.toEqual({});
+  await completed;
+  expect(notifications.map(message=>message.method)).toEqual(['item/started','item/completed','turn/completed']);
+  expect(notifications[1].params).toEqual({threadId:'thread-1',turnId:'compact-1',item:{id:'item-compact-1',type:'contextCompaction'}});
+  const requests=(await wire()).trim().split('\n').map(line=>JSON.parse(line));
+  expect(requests.at(-1)).toMatchObject({method:'thread/compact/start',params:{threadId:'thread-1'}});
+  await child.stop();
+  await child.registration.close;
 });

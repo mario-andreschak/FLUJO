@@ -1,0 +1,276 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-15",
+  "issue": 1093,
+  "applicationRevision": "984c17a5f951528af0185bb5becd8ce67e79d896",
+  "applicationTree": "cf518e49d9a3f3abfc282e7fee19f485e7808fbe",
+  "applicationAndDependencyInputsUnchanged": true,
+  "scope": "Source-production live OAuth discovery, registration, PKCE persistence and constructed callback rejection; exchange/refresh NOT completed",
+  "checks": [
+    {
+      "exitCode": 0,
+      "utc": "2026-10-15T07:31:01.5554228Z",
+      "step": "typecheck",
+      "elapsedSeconds": 58.3166995
+    },
+    {
+      "exitCode": 0,
+      "utc": "2026-10-15T07:32:33.7571251Z",
+      "step": "lint",
+      "elapsedSeconds": 92.197444
+    },
+    {
+      "exitCode": 0,
+      "utc": "2026-10-15T07:38:03.023682Z",
+      "step": "build",
+      "elapsedSeconds": 329.2632242
+    }
+  ],
+  "focusedRegression": {
+    "command": "node --test scripts/mcp-oauth-credentials.test.mjs",
+    "failed": 0,
+    "passed": 1,
+    "scope": "Actual AES-GCM/private-file round trip, complete opaque token fields, unchanged metadata, exclusive destination, issuer/workspace/purpose refusal"
+  },
+  "providers": [
+    {
+      "provider": "banking",
+      "receipt": {
+        "schemaVersion": 1,
+        "provider": "https://banking-mcp.com",
+        "externalModelCalls": 0,
+        "buildId": "LHm8lJplxZXO207g5M-xM",
+        "sourceHashes": {
+          "src/backend/services/mcp/oauth.ts": "b655676025c968132153ae7b5a84622cd8988220ec31e01a78ad1f4a031aa0c6",
+          "src/app/api/oauth/initiate/route.ts": "4d5ad536d7c1171320c3b9e0b9d802e17fb5c87868de45cf5c4aaaed0cbcb4ce",
+          "src/app/api/oauth/callback/route.ts": "c965cb782cab86d95a76d4d1e1ef6907efc45485d741c621b3016daa09dec367",
+          "src/backend/services/mcp/oauthCredentialStorage.ts": "7bbc7fa2641427904610ba5ecc8f7b12d9962f1a77e5986cfd459dea21756e4f",
+          "src/utils/encryption/format.ts": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+          "package-lock.json": "116627fc55e0c6c69fdef483bb00592f5f24caa8aac139ebba57f8515f3e4be8"
+        },
+        "equipmentHashes": {
+          "scripts/smoke-mcp-oauth.mjs": "a13be00b7142641c811a2b7b1dfc86089a1a5e1f7cc9d949ebc9308e904b3573",
+          "scripts/mcp-oauth-observer.cjs": "441cdd2dc351d0eb8954db39ff48b45c3ccfddee0c014f596ac810b4d85506bd",
+          "scripts/mcp-oauth-credentials.mjs": "07a6c683780f36f4310c3c231518b0704b9f62ffcd12272c3068183417007b83",
+          "scripts/smoke-bundled-operator.mjs": "f575bee7913e0dd455912db5ded5046cfb9c8386f7c5f54dc3d9813cd6ddbdca"
+        },
+        "wire": [
+          {
+            "operation": "register",
+            "applicationType": "native",
+            "tokenEndpointAuthMethod": "client_secret_post",
+            "loopbackRedirect": true,
+            "status": 201
+          }
+        ],
+        "callbacks": [
+          {
+            "method": "GET",
+            "case": "code-issuer",
+            "result": "invalid_issuer",
+            "tokenRequests": 0
+          },
+          {
+            "method": "GET",
+            "case": "error-issuer",
+            "result": "invalid_issuer",
+            "tokenRequests": 0
+          },
+          {
+            "method": "GET",
+            "case": "invalid-state",
+            "result": "invalid_state",
+            "tokenRequests": 0
+          },
+          {
+            "method": "POST",
+            "case": "code-issuer",
+            "result": "invalid_issuer",
+            "tokenRequests": 0
+          },
+          {
+            "method": "POST",
+            "case": "error-issuer",
+            "result": "invalid_issuer",
+            "tokenRequests": 0
+          },
+          {
+            "method": "POST",
+            "case": "invalid-state",
+            "result": "invalid_state",
+            "tokenRequests": 0
+          },
+          {
+            "method": "GET",
+            "case": "error-issuer",
+            "result": "access_denied",
+            "tokenRequests": 0
+          },
+          {
+            "method": "GET",
+            "case": "invalid-state",
+            "result": "invalid_state",
+            "tokenRequests": 0
+          }
+        ],
+        "limitations": [
+          "Source production application; not installed, hosted or combined release qualification",
+          "Constructed negative callbacks are not provider-generated responses",
+          "No connected banking account, financial operation or model inference is requested"
+        ],
+        "clientRegistration": "live dynamic registration",
+        "authorizationPrepared": true,
+        "providerIssuerResponseRequired": false,
+        "providerFlowIncomplete": true,
+        "appClosed": true,
+        "privateProfileRemoved": true,
+        "localPreparationPassed": true,
+        "realProviderAcceptancePassed": false,
+        "node": "v22.23.3",
+        "platform": "win32"
+      },
+      "exitCode": 0,
+      "elapsedSeconds": 6.5469686,
+      "utc": "2026-10-15T07:52:04.3799539Z"
+    },
+    {
+      "provider": "slack",
+      "receipt": {
+        "schemaVersion": 1,
+        "provider": "https://mcp.slack.com",
+        "externalModelCalls": 0,
+        "configuredInputFilesUnchanged": true,
+        "buildId": "LHm8lJplxZXO207g5M-xM",
+        "sourceHashes": {
+          "src/backend/services/mcp/oauth.ts": "b655676025c968132153ae7b5a84622cd8988220ec31e01a78ad1f4a031aa0c6",
+          "src/app/api/oauth/initiate/route.ts": "4d5ad536d7c1171320c3b9e0b9d802e17fb5c87868de45cf5c4aaaed0cbcb4ce",
+          "src/app/api/oauth/callback/route.ts": "c965cb782cab86d95a76d4d1e1ef6907efc45485d741c621b3016daa09dec367",
+          "src/backend/services/mcp/oauthCredentialStorage.ts": "7bbc7fa2641427904610ba5ecc8f7b12d9962f1a77e5986cfd459dea21756e4f",
+          "src/utils/encryption/format.ts": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+          "package-lock.json": "116627fc55e0c6c69fdef483bb00592f5f24caa8aac139ebba57f8515f3e4be8"
+        },
+        "equipmentHashes": {
+          "scripts/smoke-mcp-oauth.mjs": "a13be00b7142641c811a2b7b1dfc86089a1a5e1f7cc9d949ebc9308e904b3573",
+          "scripts/mcp-oauth-observer.cjs": "441cdd2dc351d0eb8954db39ff48b45c3ccfddee0c014f596ac810b4d85506bd",
+          "scripts/mcp-oauth-credentials.mjs": "07a6c683780f36f4310c3c231518b0704b9f62ffcd12272c3068183417007b83",
+          "scripts/smoke-bundled-operator.mjs": "f575bee7913e0dd455912db5ded5046cfb9c8386f7c5f54dc3d9813cd6ddbdca"
+        },
+        "wire": [],
+        "callbacks": [
+          {
+            "method": "GET",
+            "case": "code-issuer",
+            "result": "invalid_issuer",
+            "tokenRequests": 0
+          },
+          {
+            "method": "GET",
+            "case": "error-issuer",
+            "result": "invalid_issuer",
+            "tokenRequests": 0
+          },
+          {
+            "method": "GET",
+            "case": "invalid-state",
+            "result": "invalid_state",
+            "tokenRequests": 0
+          },
+          {
+            "method": "POST",
+            "case": "code-issuer",
+            "result": "invalid_issuer",
+            "tokenRequests": 0
+          },
+          {
+            "method": "POST",
+            "case": "error-issuer",
+            "result": "invalid_issuer",
+            "tokenRequests": 0
+          },
+          {
+            "method": "POST",
+            "case": "invalid-state",
+            "result": "invalid_state",
+            "tokenRequests": 0
+          },
+          {
+            "method": "GET",
+            "case": "error-issuer",
+            "result": "access_denied",
+            "tokenRequests": 0
+          },
+          {
+            "method": "GET",
+            "case": "invalid-state",
+            "result": "invalid_state",
+            "tokenRequests": 0
+          }
+        ],
+        "limitations": [
+          "Source production application; not installed, hosted or combined release qualification",
+          "Constructed negative callbacks are not provider-generated responses",
+          "No connected banking account, financial operation or model inference is requested"
+        ],
+        "clientRegistration": "existing manually registered client; unchanged permissions",
+        "authorizationPrepared": true,
+        "providerIssuerResponseRequired": false,
+        "providerFlowIncomplete": true,
+        "appClosed": true,
+        "privateProfileRemoved": true,
+        "localPreparationPassed": true,
+        "realProviderAcceptancePassed": false,
+        "node": "v22.23.3",
+        "platform": "win32"
+      },
+      "exitCode": 0,
+      "elapsedSeconds": 6.8582814,
+      "utc": "2026-10-15T07:52:11.2515374Z"
+    }
+  ],
+  "browser": {
+    "slack": "Existing FLUJO internal app reaches consent; requested scopes are within the existing grant; no Allow submitted",
+    "bankingSignIn": "Completed through the existing authorized mailbox browser session; code not printed or stored",
+    "client": "Codex in-app browser",
+    "version": "not reported; no full browser-profile qualification claimed"
+  },
+  "blockers": [
+    {
+      "action": "Current computer-use policy requires action-time confirmation because Allow accepts FLUJO terms. The concise question and exact consent screenshot are in the current chat. Exchange/refresh remain unperformed; no app defect or permanent authentication blocker is inferred.",
+      "provider": "Slack"
+    },
+    {
+      "action": "Authenticated authorization page requires a Stripe-backed seven-day trial, then EUR5/month. No subscription, financial account or consent was created. Slack is the available alternative; a paid account is not an added acceptance requirement.",
+      "provider": "BankingMCP"
+    }
+  ],
+  "earlierEquipmentAttempts": [
+    {
+      "result": "The first isolated profile received the source-encrypted client secret without source-key resolution and could not initiate. Zero registration/token requests. Corrected equipment uses canonical read-only format functions and holds the credential only in memory.",
+      "provider": "Slack",
+      "acceptanceCredit": false
+    },
+    {
+      "result": "Existing disabled local connection requires authorization. The already signed-in browser mailbox completed the provider-code step; no new Gmail connection or message send.",
+      "provider": "Gmail MCP",
+      "acceptanceCredit": false
+    }
+  ],
+  "credentials": {
+    "retention": "A future genuine grant is sealed for the existing workspace recovery key into an explicit private destination before disposable-profile removal; it does not replace shared configuration.",
+    "privateRetentionRegressionPassed": true,
+    "newProviderTokensIssued": false,
+    "legacyTokensCopiedOrStamped": false,
+    "sharedConfigurationChanged": false
+  },
+  "externalModelCalls": 0,
+  "remoteCiDispatched": false,
+  "containerBuilds": 0,
+  "installedQualificationRun": false,
+  "limitations": [
+    "Constructed invalid/error callbacks are not provider-generated responses",
+    "Neither provider advertised mandatory issuer-response support; required-missing-issuer fixtures remain credited for unchanged inputs",
+    "No authorization-code exchange, real refresh or token-consuming transport qualification",
+    "No hosted/installed Windows/Linux or combined release qualification",
+    "Existing qualified Skills/Tasks/sampling/subscription/App evidence retains its unchanged scope"
+  ]
+}

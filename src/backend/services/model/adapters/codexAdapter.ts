@@ -234,6 +234,9 @@ export class CodexAdapter implements CompletionAdapter {
       nativeToolPort,
       nativeOriginalProcessHost,
     } = input;
+    // API-key models can select an OpenAI-compatible endpoint. Subscription
+    // credentials continue to use the managed ChatGPT route.
+    const apiBaseUrl = apiKey ? model.baseUrl?.trim() || undefined : undefined;
     if (nativeOriginalProcessHost) {
       assertNativeOriginalProcessHost(nativeOriginalProcessHost);
       assertNativeOriginalExecutionContext(nativeOriginalProcessHost, executionExtensionContext);
@@ -759,6 +762,7 @@ export class CodexAdapter implements CompletionAdapter {
       provider: model.provider ?? 'openai',
       model: model.name,
       reasoningEffort: model.reasoningEffort,
+      ...(apiKey ? { baseUrl: apiBaseUrl ?? 'https://api.openai.com/v1' } : {}),
       accountScope: '', runtimeIdentity: '', serviceTier: model.serviceTier ?? 'default',
       workingDirectory: '', developerInstructions: CODEX_FLUJO_INSTRUCTIONS,
     };
@@ -917,6 +921,16 @@ export class CodexAdapter implements CompletionAdapter {
         else baselineSnapshot = await readCodexTokenSnapshot(runtime.home, resumeThreadId);
       }
       const config = {
+        // A compatible Responses endpoint need not implement Codex's WebSocket
+        // transport. Select an explicit HTTP provider instead of repeatedly
+        // attempting an OpenAI WebSocket handshake before falling back.
+        ...(apiBaseUrl ? {
+          model_provider: 'flujo_api',
+          model_providers: { flujo_api: {
+            name: 'FLUJO API', base_url: apiBaseUrl, env_key: 'CODEX_API_KEY',
+            wire_api: 'responses', requires_openai_auth: false, supports_websockets: false,
+          } },
+        } : {}),
         // A user's Codex app/CLI Fast-mode preference is global. Do not let a
         // personal `service_tier = "priority"` leak into FLUJO when its selected
         // model (for example gpt-5.4-mini) does not advertise that tier: the CLI
@@ -956,6 +970,7 @@ export class CodexAdapter implements CompletionAdapter {
       if (abortController.signal.aborted) throw new Error('Codex run cancelled by user.');
       const codex = nativeOriginalProcessHost || ordinaryThreadPath ? undefined : new (await import('@openai/codex-sdk')).Codex({
         ...(apiKey ? { apiKey } : {}), // empty ⇒ ChatGPT-plan login from `codex login`
+        ...(apiBaseUrl ? { baseUrl: apiBaseUrl } : {}),
         ...(codexExecutable ? { codexPathOverride: codexExecutable } : {}),
         ...(restrictedRuntime ? { configOverrides: restrictedRuntime.configOverrides } : {}),
         env: runtime.env,

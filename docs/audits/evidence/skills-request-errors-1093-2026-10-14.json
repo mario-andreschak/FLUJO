@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-15T01:39:33.7190687Z",
+  "issue": 1093,
+  "scope": "Skills request validation and standalone HTTP parameter-error mapping",
+  "baseRevision": "b30cf9bc94c7138b203462fcd843d7863f326539",
+  "qualifiedApplicationAndTestTree": "fb06f2c418e01d5fe420829a98171a551484ff97",
+  "evidenceBoundary": "Final publication adds only this receipt to the qualified tree; no code or assertion changes after qualification.",
+  "specification": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/b0a66b133ddfaf193a70b526a31bc2aa7172f28a/seps/2640-skills-extension.md#retrieval-via-skillsget",
+  "versions": {
+    "next": "16.4.0",
+    "zod": "4.6.6",
+    "@modelcontextprotocol/sdk": "1.32.1"
+  },
+  "node": "v22.23.3",
+  "buildId": "R4OS3Yd9G8FkVU56H6TiT",
+  "before": {
+    "base": "b30cf9bc94c7138b203462fcd843d7863f326539",
+    "failed": 20,
+    "passed": 16,
+    "total": 36,
+    "cause": "Legacy SDK1 maps custom request Zod errors to -32603. Standalone invalid/unknown URI HTTP failures lost their -32602 protocol classification."
+  },
+  "after": {
+    "suites": 7,
+    "passed": 83,
+    "failed": 0,
+    "pending": 0,
+    "semantics": "Malformed requests fail with -32602 before the handler; valid retry works. Only standalone getSkill HTTP400/404 maps to -32602. Authority, locked-storage, timeout, transport and backend failures remain service failures. Field validation details omit supplied values."
+  },
+  "validation": [
+    {
+      "name": "focused",
+      "exit": 0,
+      "seconds": 13.4107886
+    },
+    {
+      "name": "typecheck",
+      "exit": 0,
+      "seconds": 57.8495353
+    },
+    {
+      "name": "lint",
+      "exit": 0,
+      "seconds": 95.349015
+    },
+    {
+      "name": "changed-lint",
+      "exit": 0,
+      "seconds": 4.4409353
+    },
+    {
+      "name": "standalone-typecheck",
+      "exit": 0,
+      "seconds": 1.8481106
+    },
+    {
+      "name": "build",
+      "exit": 0,
+      "seconds": 332.1676805
+    }
+  ],
+  "actualBuiltRuntime": {
+    "groups": [
+      {
+        "name": "actual-built-application",
+        "status": 200
+      },
+      {
+        "name": "actual-locked-storage-remains-service-refusal",
+        "status": 423,
+        "code": -32603
+      },
+      {
+        "name": "normal-passphrase-initialization-and-unlock",
+        "status": 200
+      },
+      {
+        "name": "actual-standalone-tool-discovery",
+        "count": 42
+      },
+      {
+        "name": "actual-stdio-malformed-requests",
+        "count": 7,
+        "code": -32602,
+        "downstreamHttpCalls": 0
+      },
+      {
+        "name": "valid-list-recovers-after-refusals",
+        "status": 200,
+        "skills": 0
+      },
+      {
+        "name": "actual-invalid-standalone-URI",
+        "status": 400,
+        "code": -32602
+      },
+      {
+        "name": "actual-unknown-standalone-source",
+        "status": 404,
+        "code": -32602
+      },
+      {
+        "name": "controlled-service-failure-and-valid-retry",
+        "status": 503,
+        "code": -32603,
+        "retryStatus": 200
+      }
+    ],
+    "success": true,
+    "seconds": 4.0697147,
+    "standaloneStopped": true,
+    "applicationStopped": true,
+    "applicationExit": {
+      "code": 1,
+      "signal": null
+    },
+    "forcedWindowsTermination": true,
+    "privatePassphraseInLogs": false,
+    "http": [
+      {
+        "method": "GET",
+        "path": "/api/mcp/flujo/skills",
+        "status": 423
+      },
+      {
+        "method": "GET",
+        "path": "/api/mcp/flujo/tools",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "path": "/api/mcp/flujo/skills",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/api/mcp/flujo/skills",
+        "status": 400
+      },
+      {
+        "method": "POST",
+        "path": "/api/mcp/flujo/skills",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/mcp/flujo/skills",
+        "status": 503,
+        "controlledInjection": true
+      },
+      {
+        "method": "GET",
+        "path": "/api/mcp/flujo/skills",
+        "status": 200
+      }
+    ]
+  },
+  "preserved": [
+    "Owner/workspace/encryption/proxy exposure gates",
+    "Existing Skills URI/digest/size/result validation",
+    "All original assertions and CI definitions"
+  ],
+  "limits": [
+    "Issue1093 stays open for its broader provider, deployment, durable Tasks, Apps browser and installed/release qualification.",
+    "In-memory SDK transport proves shared proxy schema behavior; built-app runtime specifically proves standalone stdio plus actual HTTP control routes.",
+    "The503 service response is explicitly injected in the local counted gateway; it is not a provider incident.",
+    "No full suite, remote CI, container, deployment or model-provider call."
+  ],
+  "providerCalls": 0
+}

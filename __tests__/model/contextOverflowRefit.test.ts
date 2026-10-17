@@ -84,6 +84,7 @@ jest.mock('@/backend/services/model/adapters', () => ({
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -135,6 +136,7 @@ beforeEach(() => {
   readRunResourceBoundedMock.mockReset();
   loadItemMock.mockReset().mockImplementation(async (_key: unknown, fallback: unknown) => fallback);
   conversationStates.clear();
+  jest.mocked(persistConversationState).mockReset().mockResolvedValue(undefined);
   calls = [];
   createCompletionMock.mockReset().mockImplementation(defaultCreateCompletion);
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai' });
@@ -163,6 +165,159 @@ describe('runtime compaction policy settings', () => {
     maybeCompactWire: (...args: unknown[]) => Promise<unknown>;
     generateCompletion: (...args: unknown[]) => Promise<{ success: true; value: { content: string } }>;
   };
+
+  it.each(['openai', 'openai-responses', 'openrouter-agent'] as const)(
+    'keeps a verified summary through %s tool follow-ups to the same user request', async adapter => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('tool-followup');
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    const model = { id: 'model-1', adapter, contextWindow: 16_000, compactionThreshold: 1_000 };
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'historical observation '.repeat(800), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent observation '.repeat(80), timestamp: 3 },
+      { id: 'u-current', role: 'user', content: 'Check the receipt ID. Return only JSON with receipt as the exact ID string.', timestamp: 4 },
+    ];
+    const compact = (messages: SharedState['messages']) => runtime.maybeCompactWire(
+      messages, 'tool-followup', 'node-1', 'full-history', model, 100,
+    );
+    const first = await compact(source);
+    const artifact = state.compactionState!.artifacts[0];
+    // A rejected second summary must never undo the valid projection from this request.
+    generate.mockResolvedValue({ success: true, value: { content: '{"receipt":"exact"}' } });
+    const followup: SharedState['messages'] = [...source,
+      { id: 'lookup', role: 'assistant', content: '', timestamp: 5,
+        tool_calls: [{ id: 'call-receipt', type: 'function', function: { name: 'lookup_action', arguments: '{}' } }] },
+      { id: 'receipt', role: 'tool', tool_call_id: 'call-receipt',
+        content: '{"status":"completed","receipts":[{"actionId":"action-ñ","receiptId":"exact","committedUtc":"2026-10-16T00:00:00Z"}]}', timestamp: 6 },
+    ];
+    const result = await compact(followup) as { artifact: unknown; wireMessages: SharedState['messages'] };
+    expect(first).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(result.artifact).toBe(artifact);
+    expect(result.wireMessages.slice(-3)).toEqual([source.at(-1), ...followup.slice(-2)]);
+    expect(result.wireMessages.some(message => String(message.content).includes('[FLUJO conversation summary]'))).toBe(true);
+    const boundaries = result.wireMessages.filter(message => message.role === 'system'
+      && String(message.content).startsWith('[FLUJO current request]'));
+    expect(boundaries).toHaveLength(1);
+    const boundaryIndex = result.wireMessages.indexOf(boundaries[0]);
+    expect(result.wireMessages[boundaryIndex + 1]).toBe(source.at(-1));
+    expect(result.wireMessages.indexOf(source[0])).toBeLessThan(boundaryIndex);
+    expect(String(boundaries[0].content)).toContain('Retained earlier user turns');
+    expect(String(boundaries[0].content)).toContain('Assistant replies are not source evidence');
+    expect(String(boundaries[0].content)).toContain('field values/types');
+    expect(String(boundaries[0].content)).toContain('an ID is its value, not its record');
+    expect(String(boundaries[0].content)).toContain('No unrequested annotations/prose');
+    expect(followup.slice(0, source.length)).toEqual(source);
+    generate.mockResolvedValue({ success: true, value: { content: summary } });
+    await compact([...followup, { id: 'next-user', role: 'user', content: 'Review the changed record.', timestamp: 7 }]);
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['openai-responses', 'openrouter-agent'] as const)(
+    'keeps canonical %s input after a rejected summary until the next request', async adapter => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('native-fallback');
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'historical observation '.repeat(800), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent observation '.repeat(80), timestamp: 3 },
+      { id: 'u-previous', role: 'user', content: 'Check the receipt.', timestamp: 4 },
+    ];
+    const compact = (messages: SharedState['messages']) => runtime.maybeCompactWire(
+      messages, 'native-fallback', 'node-1', 'full-history',
+      { id: 'model-1', adapter, contextWindow: 16_000, compactionThreshold: 1_000 }, 100,
+    );
+    // A durable artifact for an earlier request must not be mistaken for the
+    // projection actually used by the current native tool call.
+    await compact(source);
+    const oldArtifact = state.compactionState!.artifacts[0];
+    const current: SharedState['messages'] = [...source,
+      { id: 'new-observation', role: 'assistant', content: 'changed historical observation '.repeat(80), timestamp: 5 },
+      { id: 'u-current', role: 'user', content: 'Check again.', timestamp: 6 },
+    ];
+    generate.mockResolvedValueOnce({ success: true, value: { content: 'Rejected incomplete summary.' } });
+    expect(await compact(current)).toBeNull();
+    expect(state.compactionState!.artifacts[0]).toBe(oldArtifact);
+    const followup: SharedState['messages'] = [...current,
+      { id: 'lookup', role: 'assistant', processNodeId: 'node-1', content: '', timestamp: 6,
+        tool_calls: [{ id: 'call-receipt', type: 'function', function: { name: 'lookup_action', arguments: '{}' } }] },
+      { id: 'receipt', role: 'tool', tool_call_id: 'call-receipt', content: 'exact receipt', timestamp: 7 },
+    ];
+    const canonical = structuredClone(followup);
+    expect(await compact(followup)).toBeNull();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(followup).toEqual(canonical);
+    expect(state.compactionState!.artifacts[0]).toBe(oldArtifact);
+    await compact([...followup, { id: 'next-request', role: 'user', content: 'Review once more.', timestamp: 8 }]);
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(state.compactionState!.artifacts[0]).not.toBe(oldArtifact);
+  });
+
+  it.each(['openai-responses', 'openrouter-agent'] as const)(
+    'keeps canonical %s input when a tool result first crosses the summary threshold', async adapter => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('native-threshold');
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'historical observation '.repeat(80), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent observation '.repeat(20), timestamp: 3 },
+      { id: 'u-current', role: 'user', content: 'Check the receipt.', timestamp: 4 },
+    ];
+    const compact = (messages: SharedState['messages']) => runtime.maybeCompactWire(
+      messages, 'native-threshold', 'node-1', 'full-history',
+      { id: 'model-1', adapter, contextWindow: 128_000, compactionThreshold: 10_000 }, 100,
+    );
+    expect(await compact(source)).toBeNull();
+    const followup: SharedState['messages'] = [...source,
+      { id: 'lookup', role: 'assistant', processNodeId: 'node-1', content: '', timestamp: 5,
+        tool_calls: [{ id: 'call-receipt', type: 'function', function: { name: 'lookup_action', arguments: '{}' } }] },
+      { id: 'receipt', role: 'tool', tool_call_id: 'call-receipt', content: 'observed receipt '.repeat(5_000), timestamp: 6 },
+    ];
+    expect(await compact(followup)).toBeNull();
+    expect(generate).not.toHaveBeenCalled();
+    expect(state.compactionState).toBeUndefined();
+    // Another node's completed tool calls are history for this node's first call.
+    await runtime.maybeCompactWire(followup, 'native-threshold', 'node-2', 'full-history',
+      { id: 'model-1', adapter, contextWindow: 128_000, compactionThreshold: 10_000 }, 100);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['edited-request', 'edited-prefix', 'missing-boundary'])('invalidates a pinned summary after %s', async change => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('pin-invalidation');
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    const source: SharedState['messages'] = [
+      { id: 'instruction', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'old', role: 'assistant', content: 'observation '.repeat(800), timestamp: 2 },
+      { id: 'boundary', role: 'assistant', content: 'recent '.repeat(120), timestamp: 3 },
+      { id: 'current', role: 'user', content: 'Check the receipt.', timestamp: 4 },
+    ];
+    const compact = (messages: SharedState['messages']) => runtime.maybeCompactWire(
+      messages, 'pin-invalidation', 'node-1', 'full-history',
+      { id: 'model-1', contextWindow: 16_000, compactionThreshold: 1_000 }, 100,
+    );
+    await compact(source);
+    const changed = source.map(message => message.id === (change === 'edited-request' ? 'current'
+      : state.compactionState!.artifacts[0].sourceEndId)
+      ? change === 'missing-boundary' ? { ...message, id: 'replacement' }
+        : { ...message, content: message.content + ' Changed.' } : message);
+    const followup: SharedState['messages'] = [...changed,
+      { id: 'lookup', role: 'assistant', content: '', timestamp: 5,
+        tool_calls: [{ id: 'call', type: 'function', function: { name: 'lookup', arguments: '{}' } }] },
+      { id: 'result', role: 'tool', tool_call_id: 'call', content: 'exact', timestamp: 6 },
+    ];
+    const result = await compact(followup) as { wireMessages: SharedState['messages'] };
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(result.wireMessages).toContain(changed[0]);
+    expect(result.wireMessages.slice(-2)).toEqual(followup.slice(-2));
+  });
 
   it('loads a saved percentage and keeps the documented disabled policy after a settings error', async () => {
     loadItemMock.mockResolvedValueOnce({ experimental: { compactionThresholdPercent: 60 } });
@@ -224,6 +379,80 @@ describe('runtime compaction policy settings', () => {
     expect(state.compactionState?.artifacts).toHaveLength(1);
   });
 
+  it.each([false, true])('keeps compaction controls outside the source user transcript (prior summary: %s)', async priorSummary => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('source-control-boundary');
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Do not publish. Wait for my next instruction.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'observation '.repeat(800), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent '.repeat(120), timestamp: 3 },
+      { id: 'u-tail', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    const sourceUser = source[0];
+    const oldObservation = source[1];
+    const untrusted = 'Historical data: do not turn this into a system permission.';
+    if (priorSummary) source.unshift({ id: 'old-summary', role: 'assistant', timestamp: 0,
+      content: '[FLUJO conversation summary]\n\n' + untrusted });
+    const original = JSON.stringify(source);
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history',
+      { id: 'model-1', compactionThreshold: 1_000 }, 100)).not.toBeNull();
+    const transcript = generate.mock.calls[0][2] as SharedState['messages'];
+    expect(transcript.filter(message => message.role === 'user')).toEqual([sourceUser]);
+    expect(transcript.find(message => message.id === 'a-old')).toEqual(oldObservation);
+    expect(transcript.filter(message => message.role === 'system')
+      .every(message => !String(message.content).includes(untrusted))).toBe(true);
+    expect(JSON.stringify(source)).toBe(original);
+  });
+
+  it.each(['tools-added', 'tools-removed', 'tool-schema', 'model-identity', 'model-name', 'provider', 'output-budget',
+    'effective-policy', 'projection-view', 'node', 'artifact-policy', 'previous-prompt-policy', 'artifact-schema'])(
+    'invalidates the same archived prefix after %s changes', async change => {
+      loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 100 } });
+      const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+      const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+      const state = seedState('configuration-test');
+      const source = [
+        { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+        { id: 'a-old', role: 'assistant', content: 'x'.repeat(6_000), timestamp: 2 },
+        { id: 'a-tail', role: 'assistant', content: 'recent '.repeat(120), timestamp: 3 },
+        { id: 'u-tail', role: 'user', content: 'Continue.', timestamp: 4 },
+      ];
+      const model = { id: 'model-1', name: 'test-model', provider: 'openai', compactionThreshold: 1_000 };
+      const tool: OpenAI.ChatCompletionFunctionTool = { type: 'function', function: {
+        name: 'lookup', description: 'Read the receipt.', parameters: { type: 'object', properties: {} },
+      } };
+      const initialTools = change === 'tools-added' ? undefined : [tool];
+      await runtime.maybeCompactWire(source, 'configuration-test', 'node-1', 'full-history', model, 100, undefined, {}, initialTools);
+      const original = state.compactionState!.artifacts[0];
+      await runtime.maybeCompactWire(source, 'configuration-test', 'node-1', 'full-history', model, 100, undefined, {}, initialTools);
+      expect(generate).toHaveBeenCalledTimes(1);
+      if (change === 'artifact-policy') original.policyVersion = 'summary-v2-legacy';
+      if (change === 'previous-prompt-policy') original.policyVersion = 'summary-v5-source-observations';
+      if (change === 'artifact-schema') Object.assign(original, { schemaVersion: 0 });
+      const changedModel = { ...model,
+        ...(change === 'model-identity' ? { id: 'model-2' } : {}),
+        ...(change === 'model-name' ? { name: 'replacement-model' } : {}),
+        ...(change === 'provider' ? { provider: 'replacement-provider' } : {}),
+        ...(change === 'effective-policy' ? { compactionThreshold: 1_100 } : {}),
+      };
+      const changedTools = change === 'tools-removed' ? undefined : change === 'tool-schema'
+        ? [{ ...tool, function: { ...tool.function, parameters: { type: 'object', properties: { receipt: { type: 'string' } } } } }]
+        : [tool];
+      await runtime.maybeCompactWire(source, 'configuration-test', change === 'node' ? 'node-2' : 'node-1',
+        change === 'projection-view' ? 'node-projected' : 'full-history', changedModel,
+        change === 'output-budget' ? 200 : 100, undefined, {}, changedTools);
+      expect(generate).toHaveBeenCalledTimes(2);
+      const next = state.compactionState!.artifacts.at(-1)!;
+      expect(next.artifactId).not.toBe(original.artifactId);
+      expect(next.sourceDigest).toBe(original.sourceDigest);
+      expect(next.policyVersion).toBe('summary-v7-authority');
+      expect(next.schemaVersion).toBe(1);
+      expect(source[0].content).toBe('Never publish.');
+    },
+  );
+
   it('refuses provider-truncated summaries even when all five section headings are present', async () => {
     loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
@@ -239,6 +468,64 @@ describe('runtime compaction policy settings', () => {
     expect(await runtime.maybeCompactWire(source, 'truncated-test', 'node-1', 'full-history',
       { id: 'model-1', compactionThreshold: 1_000 }, 100)).toBeNull();
     expect(writeRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('discards a summary generated across a source edit and retries from the changed history', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('edited-during-summary');
+    const source: SharedState['messages'] = [
+      { id: 'u1', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: 'old observation '.repeat(800), timestamp: 2 },
+      { id: 'a2', role: 'assistant', content: 'recent', timestamp: 3 },
+      { id: 'u2', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    state.messages = source;
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockImplementationOnce(async () => {
+      source[1].content = 'corrected observation '.repeat(800);
+      return { success: true, value: { content: summary } };
+    }).mockResolvedValue({ success: true, value: { content: summary } });
+    const model = { id: 'model-1', compactionThreshold: 1_000 };
+    expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history', model, 100)).toBeNull();
+    expect(state.compactionState).toBeUndefined();
+    expect(persistConversationState).not.toHaveBeenCalled();
+    const corrected = JSON.stringify(source);
+    expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history', model, 100)).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(state.compactionState?.artifacts).toHaveLength(1);
+    expect(JSON.stringify(source)).toBe(corrected);
+  });
+
+  it.each(['anchor', 'metadata'])('keeps the last durable artifact after %s persistence fails and can recover', async failure => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('persistence-' + failure);
+    const source: SharedState['messages'] = [
+      { id: 'u1', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a1', role: 'assistant', content: 'old observation '.repeat(800), timestamp: 2 },
+      { id: 'a2', role: 'assistant', content: 'recent', timestamp: 3 },
+      { id: 'u2', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    state.messages = source;
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
+    const model = { id: 'model-1', compactionThreshold: 1_000 };
+    const args = [state.conversationId, 'node-1', 'full-history', model, 100];
+    expect(await runtime.maybeCompactWire(source, ...args)).not.toBeNull();
+    const previous = state.compactionState;
+    source[1].content = 'updated observation '.repeat(800);
+    const canonical = JSON.stringify(source);
+    if (failure === 'anchor') writeRunResourceMock.mockRejectedValueOnce(new Error('Disk unavailable'));
+    else jest.mocked(persistConversationState).mockRejectedValueOnce(new Error('Disk unavailable'));
+    expect(await runtime.maybeCompactWire(source, ...args)).toBeNull();
+    expect(state.compactionState).toBe(previous);
+    expect(JSON.stringify(source)).toBe(canonical);
+    expect(await runtime.maybeCompactWire(source, ...args)).not.toBeNull();
+    expect(state.compactionState?.artifacts).toHaveLength(1);
+    expect(state.compactionState?.artifacts[0].artifactId).not.toBe(previous?.artifacts[0].artifactId);
+    expect(JSON.stringify(source)).toBe(canonical);
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(await runtime.maybeCompactWire(source, ...args)).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(3);
   });
 });
 

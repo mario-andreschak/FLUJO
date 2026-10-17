@@ -14,6 +14,7 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import type { ModelInputSnapshot } from '../types';
+import type { ResponsesSessionState } from '@/backend/services/model/adapters/responsesSessionState';
 
 // Input for model call
 export interface ModelCallInput {
@@ -21,6 +22,7 @@ export interface ModelCallInput {
   /** Process preparation's detached model, held to dispatch by a catalog fence. */
   modelCatalogAdmission?: import('@/backend/services/model/catalogAdmission').ModelCatalogAdmission;
   prompt: string;
+  systemPromptPolicy?: 'stable' | 'per-turn';
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
   /**
    * Optional scoped view to send to the provider instead of `messages`. Lets a
@@ -78,6 +80,8 @@ export interface ModelCallInput {
   runId?: string;
   codexSession?: CodexSessionMetadata;
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
+  responsesSession?: ResponsesSessionState;
+  onResponsesSessionChange?: (session: ResponsesSessionState | undefined) => void;
   /** Whether tool calls require user approval (mirrors the run's requireApproval). */
   requireToolApproval?: boolean;
   /** Headless approval behavior for self-orchestrating adapters. */

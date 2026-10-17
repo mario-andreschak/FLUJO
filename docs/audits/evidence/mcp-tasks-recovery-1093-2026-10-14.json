@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "issue": "https://github.com/mario-andreschak/FLUJO/issues/1093",
+  "utc": "2026-10-15T02:36:48.9061580Z",
+  "baseRevision": "bbcb8af3f26a89697f20726b5dd3da1a346d4527",
+  "qualifiedTree": "3840cc9a253375174c767e4a535cb6b8de9c11fc",
+  "qualification": "Actual local production build, production owner issuer/private workspace and authored Flow engine; loopback fixture only",
+  "scriptSha256": "46fe26f6f8b04ff63abdde486cbe80cebcadd7238d21b0dff2e08312d39724b1",
+  "lockSha256": "268bc03ddb545ebc60948b02346b33c7103e507b56782f542864c86cb57d6ca5",
+  "applicationSourcesAndDependenciesUnchanged": true,
+  "versions": {
+    "node": "v22.23.3",
+    "next": "16.4.0",
+    "splitClient": "2.3.1",
+    "tasks": "0.2.2"
+  },
+  "checks": [
+    {
+      "step": "typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 55.5427746
+    },
+    {
+      "step": "lint",
+      "exitCode": 0,
+      "elapsedSeconds": 90.7760498
+    },
+    {
+      "step": "changed-lint",
+      "exitCode": 0,
+      "elapsedSeconds": 2.7742511
+    },
+    {
+      "step": "build",
+      "exitCode": 0,
+      "elapsedSeconds": 331.4676157
+    },
+    {
+      "step": "runtime",
+      "exitCode": 0,
+      "elapsedSeconds": 27.5669088
+    }
+  ],
+  "finalScriptLintAndSyntaxSeconds": 2.9460636,
+  "runtime": {
+    "schemaVersion": 1,
+    "groups": [
+      "authored-flow-and-encrypted-result",
+      "credential-and-workspace-isolation",
+      "confirmation-and-duplicate-input",
+      "cancel-closes-loopback-provider-request",
+      "completed-result-after-restart",
+      "interrupted-task-without-replay",
+      "legacy-and-disabled-feature",
+      "revocation-aborts-active-flow-and-pending-input",
+      "revoked-requests-denied-and-other-credential-fenced",
+      "settled-leases-and-private-ledger"
+    ],
+    "externalProviderCalls": 0,
+    "taskHostSourceSha256": "70bfb2f6cc2ce31e9c2514f71675bee64fb64e79a1b495c469cc9025eb41f5b3",
+    "buildId": "q7rUnvh3Neo7gVkzqYndB",
+    "settledRevokedTasks": 2,
+    "revokedHttpStatuses": {
+      "tasks/get": 401,
+      "tasks/update": 401,
+      "tasks/cancel": 401,
+      "tools/call": 401
+    },
+    "loopbackProviderCalls": 5,
+    "node": "v22.23.3",
+    "platform": "win32",
+    "ownedProcessesAndDataCleaned": true
+  },
+  "focusedOwnerRegressions": {
+    "exitCode": 0,
+    "elapsedSeconds": 3.3622228,
+    "command": "node --test scripts/smoke-bundled-operator.test.mjs",
+    "scope": "Two focused source/compiled-issuer equipment regressions, not installed/packed artifact qualification"
+  },
+  "initialFailure": {
+    "runtimeExitCode": 1,
+    "runtimeSeconds": 28.4639328,
+    "stage": "windows-verify",
+    "cause": "Smoke owner file inherited ACLs instead of explicit file protection",
+    "fixedBy": "Issue smoke credentials through the existing private atomic JSON writer"
+  },
+  "unchangedFocusedEvidence": "https://github.com/mario-andreschak/FLUJO/blob/bbcb8af3f26a89697f20726b5dd3da1a346d4527/docs/features/mcp-conformance-1093-2026-10-12.md",
+  "limits": [
+    "Loopback model fixture is not a genuine external provider exchange",
+    "Source-tree local candidate, not installed/packed Windows/Linux qualification",
+    "Real OAuth and sampling token/stop behavior, deployed subscriptions and Apps browser acceptance remain release pre-flight",
+    "No full/remote CI, container/image build or release workflow dispatched"
+  ]
+}

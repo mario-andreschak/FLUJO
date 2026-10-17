@@ -7,6 +7,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
 import type { CodexSessionMetadata, ToolReferenceContext } from '@/backend/execution/flow/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import type { ResponsesSessionState } from './responsesSessionState';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 /**
@@ -157,12 +158,21 @@ export interface CompletionInput {
    * Request/response adapters ignore it.
    */
   sessionResume?: boolean;
+  /** Only per-turn permits changed system text across a compatible Claude resume. */
+  systemPromptPolicy?: 'stable' | 'per-turn';
+  /** Provider lifecycle metadata, excluding prompts, credentials and raw errors. */
+  onSessionEvent?: (event: { kind: string; state?: string; attempt?: number; retryDelayMs?: number; terminalReason?: string;
+    runtimeVersion?: string; accounting?: { scope: 'completion'; costBasis: 'sdk-estimate'; estimatedCostUsd?: number;
+      partial?: boolean; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } }) => void;
   /** Persisted Codex thread metadata supplied by the conversation owner. */
   codexSession?: CodexSessionMetadata;
   /** Released Codex app-server structured-output constraint for this turn. */
   outputSchema?: Record<string, unknown>;
   /** Replace or invalidate the durable Codex metadata after an adapter turn. */
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
+  /** Conversation-owned native output; canonical history remains authoritative. */
+  responsesSession?: ResponsesSessionState;
+  onResponsesSessionChange?: (session: ResponsesSessionState | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
   tools?: OpenAI.ChatCompletionFunctionTool[];
   /** Sampling temperature. Omitted when an invalid persisted value is ignored. */
@@ -228,6 +238,8 @@ export interface CompletionInput {
     id: string;
     name: string;
     args: Record<string, unknown>;
+    /** SDK explanation for why this call requires a decision; never an authorization. */
+    decisionReason?: string;
   }) => Promise<boolean>;
   /**
    * Cancellation signal for the in-flight provider call. Wired by ModelHandler
@@ -391,6 +403,7 @@ export function assertReadOnlyAssessmentInput(input: CompletionInput): void {
     || input.nativeToolPort || input.nativeOriginalProcessHost || input.executionExtensionContext
     || input.beforeToolDispatch || input.afterToolDispatch || input.requestToolApproval || input.authorizePersonaCoreMcp
     || input.conversationId || input.nodeId || input.sessionResume || input.codexSession || input.steering
+    || input.responsesSession || input.onResponsesSessionChange
     || input.consumeSteeringMessages || input.runResourceMarkers
     || input.messages.some(message => !['system', 'developer', 'user'].includes(message.role)
       || typeof message.content !== 'string')) {
