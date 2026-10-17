@@ -1578,6 +1578,57 @@ describe('CodexAdapter — SDK thread reuse', () => {
     expect(runStreamedMock.mock.calls[1][0]).toBe('next');
   });
 
+  it.each([false, true])('honors the API endpoint and fences endpoint changes with durable=%s', async durable => {
+    let persisted: CompletionInput['codexSession'];
+    const identity = { conversationId: 'endpoint-conversation', nodeId: 'process-endpoint', sessionResume: true,
+      onCodexSessionChange: (session: CompletionInput['codexSession']) => { persisted = session; } };
+    runStreamedMock.mockImplementation(async () => ({
+      events: eventStream([threadStarted('endpoint-thread'), agentMessage('first answer'),
+        turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 })])(),
+    }));
+    const model = { ...baseInput().model, baseUrl: 'https://openrouter.ai/api/v1' };
+    await new CodexAdapter().createCompletion(baseInput({ ...identity, model }));
+    expect(codexCtorMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      apiKey: 'sk-test', baseUrl: model.baseUrl,
+      config: expect.objectContaining({ model_provider: 'flujo_api', model_providers: {
+        flujo_api: { name: 'FLUJO API', base_url: model.baseUrl, env_key: 'CODEX_API_KEY',
+          wire_api: 'responses', requires_openai_auth: false, supports_websockets: false },
+      } }),
+    }));
+    const messages = [{ role: 'user' as const, content: 'hi' },
+      { role: 'assistant' as const, content: 'first answer' }, { role: 'user' as const, content: 'next' }];
+    if (durable) _clearCodexSessionsForTests();
+    await new CodexAdapter().createCompletion(baseInput({ ...identity, model, messages,
+      ...(durable ? { codexSession: persisted } : {}) }));
+    expect(resumeThreadMock).toHaveBeenCalledTimes(1);
+    if (durable) _clearCodexSessionsForTests();
+    await new CodexAdapter().createCompletion(baseInput({ ...identity,
+      model: { ...model, baseUrl: 'https://other-endpoint.example/v1' },
+      messages: [...messages, { role: 'assistant', content: 'first answer' }, { role: 'user', content: 'again' }],
+      ...(durable ? { codexSession: persisted } : {}) }));
+    expect(startThreadMock).toHaveBeenCalledTimes(2);
+    expect(resumeThreadMock).toHaveBeenCalledTimes(1);
+    expect(codexCtorMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      baseUrl: 'https://other-endpoint.example/v1',
+    }));
+  });
+
+  it.each(['0', '1'])('keeps subscription credentials on their managed route with app-server=%s', async appServer => {
+    process.env.FLUJO_CODEX_APP_SERVER = appServer;
+    await new CodexAdapter().createCompletion(baseInput({ apiKey: '',
+      model: { ...baseInput().model, baseUrl: 'https://other-endpoint.example/v1' } }));
+    if (appServer === '1') {
+      expect(codexCtorMock).not.toHaveBeenCalled();
+      expect(appServerThreadMock).toHaveBeenCalledTimes(1);
+      expect(appServerThreadMock.mock.calls[0][0].config).not.toHaveProperty('openai_base_url');
+      expect(appServerThreadMock.mock.calls[0][0].config).not.toHaveProperty('model_provider');
+    } else {
+      expect(codexCtorMock).toHaveBeenCalledTimes(1);
+      expect(codexCtorMock.mock.calls[0][0]).not.toHaveProperty('baseUrl');
+      expect(codexCtorMock.mock.calls[0][0].config).not.toHaveProperty('model_provider');
+    }
+  });
+
   it('resumes from durable metadata after the process-local cache is cleared', async () => {
     let persisted: CompletionInput['codexSession'];
     const onCodexSessionChange = (session: CompletionInput['codexSession']) => { persisted = session; };

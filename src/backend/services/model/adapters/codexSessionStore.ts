@@ -49,7 +49,8 @@ function stableStringify(value: unknown): string {
  */
 export function computeCodexPrefixHash(
   configuration: { adapter: string; provider: string; model: string; reasoningEffort?: string;
-    accountScope?: string; runtimeIdentity?: string; serviceTier?: string; workingDirectory?: string; developerInstructions?: string },
+    accountScope?: string; runtimeIdentity?: string; serviceTier?: string; workingDirectory?: string; developerInstructions?: string;
+    baseUrl?: string },
   systemPrompt: string | undefined,
   tools: readonly ToolFingerprint[],
 ): string {
