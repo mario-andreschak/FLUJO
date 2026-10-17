@@ -75,6 +75,23 @@ test('claims and local requester access cannot substitute for actual Parent admi
   } finally { await source.close(); }
 });
 
+test('retires admitted Parent resources when initial observation fails and preserves independent cleanup failure', async () => {
+  const e=equipment(), failure=new Error('observer failed'), cleanup=new Error('retirement failed');
+  e.parent.transport.observe=jest.fn(async()=>{throw failure;});
+  e.parent.transport.retire=jest.fn(async()=>{});
+  const client=createControllerNativeClient(e.parent);
+  try {
+    await expect(client.admit('Bearer unit-only',claim)).rejects.toBe(failure);
+    expect(e.parent.transport.retire).toHaveBeenCalledWith(e.remote);
+    const second=equipment(); second.parent.transport.observe=jest.fn(async()=>{throw failure;});
+    second.parent.transport.retire=jest.fn(async()=>{throw cleanup;});
+    const failed=createControllerNativeClient(second.parent);
+    try {
+      await expect(failed.admit('Bearer unit-only',claim)).rejects.toMatchObject({errors:[failure,cleanup]});
+    } finally {await failed.close();}
+  } finally {await client.close();}
+});
+
 test('the client refuses copied capabilities and retires them even when observer cleanup fails', async () => {
   const e=equipment(), client=createControllerNativeClient(e.parent);
   const context=await client.admit('Bearer unit-only',claim);
@@ -85,6 +102,35 @@ test('the client refuses copied capabilities and retires them even when observer
   expect(watch.signal.aborted).toBe(true);
   await expect(client.readPlan(context)).rejects.toThrow();
   await client.close(); expect(e.close).toHaveBeenCalledTimes(1);
+});
+
+test('client forwards frozen plan expectations without a duplicate deep-current gate and rechecks revocation', async () => {
+  const e=equipment();
+  const expected={...plan},children=[{...plan,parentNodeId:'parent-node'}];
+  const ownerAssertPlan=jest.fn(async (_context:object,_plan:typeof plan,_children:typeof children)=>{});
+  e.parent.transport.assertPlan=ownerAssertPlan;
+  const client=createControllerNativeClient(e.parent),context=await client.admit('Bearer unit-only',claim);
+  e.assertRun.mockClear();
+  try {
+    await client.assertPlan!(context,expected,children);
+    expect(ownerAssertPlan).toHaveBeenCalledTimes(1);
+    const forwarded=ownerAssertPlan.mock.calls[0];
+    expect(forwarded[0]).toBe(e.remote);
+    expect(forwarded[1]).not.toBe(expected);
+    expect(forwarded[2]).not.toBe(children);
+    expect(Object.isFrozen(forwarded[1])).toBe(true);
+    expect(Object.isFrozen(forwarded[2])).toBe(true);
+    expect(Object.isFrozen(forwarded[2][0])).toBe(true);
+    expect(e.assertRun).not.toHaveBeenCalled();
+
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;});
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    ownerAssertPlan.mockImplementation(async()=>{entered();await gate;});
+    const pending=client.assertPlan!(context,expected,children);
+    await started;e.abort.abort(new Error('Parent revoked during plan gate'));release();
+    await expect(pending).rejects.toThrow('Parent revoked during plan gate');
+  } finally {await client.close();}
 });
 
 test('revocation while a tool ticket is pending refuses its returned authority', async () => {

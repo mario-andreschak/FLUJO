@@ -11,6 +11,7 @@ export function createNativeSourceComposition(parent: NativeSourceParent) {
   return Object.freeze({ adapter: source.adapter, withWorkerRun: source.withWorkerRun,
     async close() {
       const results = await Promise.allSettled([source.close(),client.close()]);
+      if (parent.close) results.push(...await Promise.allSettled([parent.close()]));
       const failures = results.filter(result=>result.status==='rejected').map(result=>result.reason);
       if (failures.length) throw new AggregateError(failures,'Native Source composition cleanup failed.');
     },

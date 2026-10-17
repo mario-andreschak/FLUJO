@@ -8,6 +8,7 @@ import { encryptApiKey, resolveAndDecryptApiKey } from '@/backend/services/model
 import { resolveCompletionAdapterRoute } from '@/backend/services/model/adapters/completionRoute';
 import { getPersonaWorkItem } from '@/backend/services/enduringAgents/store';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { originalNativeAccountAttestation } from './nativeAccount';
 import { mutateOriginalOwnerBook, flushOriginalOwnerBook, readOriginalOwnerBook } from './store';
 import { ownerId, BudgetSchema, bytesDigest, ownerDigest, accountModelPlan, refuse,
   type OriginalOwnerAccount, type OriginalOwnerEnrollment } from './types';
@@ -52,11 +53,29 @@ export async function createOriginalOwnerAccount(request: Request, input: unknow
     if (!model || model.fallbackPolicy) refuse('original_owner_model_unavailable');
     const native = model.adapter === 'codex-cli';
     if (!native && resolveCompletionAdapterRoute(model) !== 'openai') refuse('original_owner_adapter_unsupported');
-    if (native) refuse('original_owner_native_account_not_qualified');
     const approval = { ownerId: auth.principal.ownerId, credentialId: auth.principal.credentialId,
       policyRevision: auth.principal.policyRevision };
     const previous = book.accounts.find(value => value.modelId === model.id
       && value.ownerId === auth.principal.ownerId && value.state !== 'revoked');
+    if (native) {
+      if (Object.keys(parsed.routingHeaders).length) refuse('original_owner_native_routing_forbidden');
+      const attestation = await originalNativeAccountAttestation(model);
+      assertAdministrator(auth);
+      if (previous) {
+        if (previous.kind !== 'codex' || previous.modelDigest !== ownerDigest(accountModelPlan(model))
+          || ownerDigest(previous.nativeProfile) !== ownerDigest(attestation.nativeProfile)
+          || previous.nativeAccountScope !== attestation.nativeAccountScope) {
+          refuse('original_owner_native_account_changed');
+        }
+        previous.approval = approval; previous.updatedAt = Date.now();
+        return { id: previous.id, modelId: model.id, kind: previous.kind, state: previous.state };
+      }
+      const now = Date.now(), id = randomUUID();
+      book.accounts.push({ id, ownerId: auth.principal.ownerId, modelId: model.id, kind: 'codex',
+        modelDigest: ownerDigest(accountModelPlan(model)), credential: '', routingHeaders: {},
+        ...attestation, state: 'active', approval, createdAt: now, updatedAt: now });
+      return { id, modelId: model.id, kind: 'codex', state: 'active' };
+    }
     if (previous) {
       const binding = { ownerId: previous.ownerId, credentialId: previous.id };
       const bound = { ...model, ApiKey: '', ownerCredentialBinding: binding };
@@ -116,6 +135,12 @@ export async function enrollOriginalOwnerTask(request: Request, input: unknown) 
       refuse('original_owner_enrollment_refused');
     }
     assertOriginalApproval(account.approval);
+    // The restricted CLI does not expose a hard output-token limit or an
+    // owner-fenced per-inference counter. Never silently ignore a finite budget.
+    if (account.kind === 'codex'
+      && (parsed.budget.maxModelSteps !== null || parsed.budget.maxOutputTokens !== null)) {
+      refuse('original_owner_native_budget_unsupported');
+    }
     if (book.enrollments.some(value => value.state === 'active' && value.personaId === parsed.personaId
       && value.taskId === parsed.taskId)) refuse('original_owner_task_already_enrolled');
     const previousEnrollments = new Set(book.enrollments.filter(value => value.personaId === parsed.personaId

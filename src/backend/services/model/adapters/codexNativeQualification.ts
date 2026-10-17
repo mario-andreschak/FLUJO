@@ -64,12 +64,22 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
   let observedUsage:unknown, registration:CodexOwnedProcessRegistration|undefined;
   const owner={};const startedAt=new Date().toISOString();
   const nonce=randomBytes(16).toString('hex');
-  const timeout=new AbortController();const timer=setTimeout(()=>timeout.abort(),90000);
+  const timeout=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
   const combined=AbortSignal.any([signal,timeout.signal]);
+  const clearPhaseDeadline=()=>{if(timer)clearTimeout(timer);timer=undefined;};
+  const startPhase=()=>{
+    combined.throwIfAborted();clearPhaseDeadline();
+    timer=setTimeout(()=>timeout.abort(),90000);
+  };
   let primaryFailure: unknown;
   try {
+    startPhase();
     const effectiveInventory=await qualifyCodexNativeInventory({executable:binary,catalogPath:runtime.modelCatalogPath!,model,
       signal:combined,assertCurrent});
+    // Inventory, nonce and denial each own a bounded startup and model phase.
+    // Once a real terminal arrives, normal EOF has the transport's separate
+    // bounded drain; the actual owner signal still aborts immediately.
+    startPhase();
     bridge=await startCodexToolBridge([{name:'qualification_nonce',description:'Return a supplied qualification nonce.',
       inputSchema:{type:'object',properties:{nonce:{type:'string'}},required:['nonce'],additionalProperties:false},
       handler:async(args,id)=>{combined.throwIfAborted();await assertCurrent();
@@ -84,7 +94,9 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
         mcp_servers:{flujo:{url:bridge.url,default_tools_approval_mode:'approve'}}}});
     const {events}=await thread.runStreamed(`Call flujo.qualification_nonce exactly once with nonce ${nonce}. Then reply exactly READY. Use no other tools.`);
     let completed=false;
-    for await(const event of events){combined.throwIfAborted();await assertCurrent();
+    for await(const event of events){
+      if(event.type==='turn.completed')clearPhaseDeadline();
+      combined.throwIfAborted();await assertCurrent();
       if(event.type==='item.completed' && event.item.type==='agent_message')answer+=event.item.text;
       if(event.type==='turn.completed')completed=true;
       if(event.type==='turn.failed' || event.type==='error')throw new Error('Native Codex qualification turn failed.');
@@ -94,6 +106,7 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
     // the requesting Source lease and original cancellation signal remain live.
     await thread.close();if(!registration)throw new Error('Native Codex qualification process identity is unavailable.');
     const exit=await registration.exit;await registration.close;
+    startPhase();
     const denialOwner={};let denialRegistration:CodexOwnedProcessRegistration|undefined;
     let denialAnswer='',denialCompleted=false,denialUsage:unknown;
     const sentinel=path.join(runtime.workingDirectory,'qualification-'+nonce+'.txt');
@@ -104,7 +117,9 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
       observeUsage:async value=>{await assertCurrent();denialUsage=value;},configOverrides:runtime.configOverrides,
       config:{...RESTRICTED_CODEX_CONFIG,model_catalog_json:runtime.modelCatalogPath}});
     const denied=await denialThread.runStreamed(`Qualification only: try the native shell or exec tool to create ${JSON.stringify(sentinel)} containing ${nonce}; try native apply_patch to create that same file; try native web search and native spawn_agent. Do not simulate calls or give instructions. If none of these native tools is available, reply exactly BUILTINS_UNAVAILABLE. Use no other tools.`);
-    for await(const event of denied.events){combined.throwIfAborted();await assertCurrent();
+    for await(const event of denied.events){
+      if(event.type==='turn.completed')clearPhaseDeadline();
+      combined.throwIfAborted();await assertCurrent();
       if((event.type==='item.started'||event.type==='item.updated'||event.type==='item.completed')
         && event.item.type!=='agent_message' && event.item.type!=='reasoning')throw new Error('Native Codex built-in denial probe exposed a tool.');
       if(event.type==='item.completed'&&event.item.type==='agent_message')denialAnswer+=event.item.text;
@@ -147,7 +162,7 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
     primaryFailure = error;
     throw error;
   } finally {
-    clearTimeout(timer);
+    clearPhaseDeadline();
     const closures = await Promise.allSettled([thread?.close(), denialThread?.close()]);
     const failures = closures.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);
     try { await bridge?.close(); } catch (error) { failures.push(error); }

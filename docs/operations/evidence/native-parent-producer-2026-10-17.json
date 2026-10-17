@@ -1,0 +1,172 @@
+{
+  "kind": "genuine-original-owner-native-parent-qualification",
+  "recordedAt": "2026-10-17T12:14:28.849Z",
+  "branchParent": "e660d802c082a559402643ec1e8a8fe0e5ec5db2",
+  "mergedMainParent": "36573b438369e6ec3d738caf858288fab06db644",
+  "qualifiedSourceTree": "533045271e3b64620b74ea8dae31362862515b5e",
+  "sourceImplementation": {
+    "producer": "Dispatcher-captured Native account, plan and one admission; no caller-created Parent authority.",
+    "fences": "Genuine Persona commit followed by the private owner-journal writer across awaited Source mutations.",
+    "tools": "Authenticated loopback MCP; argument-bound durable one-use tickets and independently checked private receipts.",
+    "completion": "Exact opaque Source root context, run and plan independently observed terminal; observer close is not completion.",
+    "budgets": "Finite Native output/inference budgets are refused; both owner decisions must explicitly be null.",
+    "freshness": "Coalesce identical branded callbacks and use one current-authority plan/child assertion; retain distinct and durable-boundary rereads."
+  },
+  "fixesFromConnectedAcceptance": [
+    "ProcessNode now selects the genuine Worker host rather than pre-minting a Persona-only host.",
+    "Qualification phases have separate deadlines and normal EOF gets a bounded 45-second drain; successful exit and pipe close remain required.",
+    "Repeated aliases and nested immutable-plan checks no longer multiply full Parent freshness reads before child launch.",
+    "Queued SDK events after a confirmed handoff stop only the owned turn; the enclosing run stays active unless actual authority/tool cancellation occurs.",
+    "Native Codex validates the private broker's sealed MCP bindings under the exact live Source context; the intentionally removed host map is not required or exposed.",
+    "The MCP isolation guard rereads the authoritative in-memory protected configuration and independently resolved headers, then verifies the connected client identity; no public catalog row or caller-supplied config is required as authority.",
+    "SubflowNode now requests the already-supported child authority for the actual persisted single attached lane, with a pinned graph and genuine causal capability; Persona abilities remain confined to the root."
+  ],
+  "localValidation": {
+    "focusedCases": 576,
+    "affectedSuites": 32,
+    "failedCases": 0,
+    "nativeHostCases": 46,
+    "finalAffectedHostCasesRerun": 9,
+    "finalQueuedHandoffCasesRerun": 2,
+    "combinedFreshnessCases": 103,
+    "canonicalTypecheck": "passed",
+    "wholeSourceLint": "passed",
+    "changedTestLint": "passed, zero warnings",
+    "nonContainerApplicationBuild": {
+      "status": "passed",
+      "measuredSeconds": 338.217,
+      "command": "node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "mcpBuild": {
+        "status": "passed",
+        "sessionId": "bash-1792236196635-xwkd3p",
+        "log": "build-isolation.log",
+        "reason": "Workspace MCP sources, dependencies, runtime embed inputs and compiled outputs unchanged since the successful full non-container build."
+      }
+    },
+    "reuse": "Unchanged focused results retained; affected selector, lifecycle, Worker and freshness cases rerun after their changes."
+  },
+  "provider": {
+    "model": "gpt-6-luna",
+    "reasoningEffort": "medium",
+    "authentication": "Codex ChatGPT subscription",
+    "fileBackedChatGptLoginVerified": true,
+    "apiKey": false,
+    "paidApiFallback": false,
+    "cliVersion": "0.157.1",
+    "cliSha256": "8cb0e69e99ff2a158c54815db82d0f2e524d8f301bc30184722cfd1ae5973574",
+    "catalogSha256": "5a1ddcef609e52bd057b247d9487f2c8c4d9453d3d802745ba5325c2e10700e0",
+    "billing": "No separately billed provider route or fallback; an attributable billed-dollar receipt was not available.",
+    "capacity": "The subscription credit route served real qualification despite ordinary weekly capacity being exhausted."
+  },
+  "nativeQualification": [
+    {
+      "kind": "live-source-native-codex-qualification",
+      "model": "gpt-6-luna",
+      "cliVersion": "0.157.1",
+      "output": "READY",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "closeObserved": true,
+      "effectiveInventory": {
+        "kind": "offline-pinned-binary-inventory",
+        "posts": 2,
+        "advertisedTools": [],
+        "forcedCallsDenied": true,
+        "liveProvider": false,
+        "closeObserved": true
+      },
+      "builtInDenial": {
+        "output": "BUILTINS_UNAVAILABLE",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "closeObserved": true,
+        "sentinelAbsent": true
+      },
+      "countsAsBusinessWork": false
+    }
+  ],
+  "connectedJourney": {
+    "status": "passed",
+    "startedAt": "2026-10-17T11:57:53.643Z",
+    "completedAt": "2026-10-17T12:11:56.742Z",
+    "measuredElapsedMs": 843099.5614,
+    "activityStatus": "completed",
+    "goalState": "completed",
+    "nativeAdmissions": [
+      {
+        "state": "completed",
+        "operation": "source-terminal-observed"
+      }
+    ],
+    "tools": [
+      {
+        "tool": "worker_read_file",
+        "state": "completed"
+      },
+      {
+        "tool": "worker_read_file",
+        "state": "completed"
+      }
+    ],
+    "completedWorkerReadReceipts": 2,
+    "independentlyAttributedReads": {
+      "root": 1,
+      "child": 1
+    },
+    "attachedChild": {
+      "separateConversation": true,
+      "separateLogicalRun": true,
+      "depth": 1,
+      "invocationState": "folded",
+      "laneState": "completed",
+      "markerReturned": true
+    },
+    "sourceReadHttpStatus": 200,
+    "applicationEpochsClosed": true,
+    "protectedUserFilesUnchanged": true
+  },
+  "retainedEarlierEvidence": [
+    {
+      "reason": "A completed root Worker read exposed the missing protected Subflow transition.",
+      "status": "failed",
+      "reasoningEffort": "low",
+      "activityStatus": "error",
+      "goalState": "active",
+      "nativeAdmissionStates": [
+        "unknown"
+      ],
+      "completedWorkerReads": 1,
+      "applicationEpochsClosed": true,
+      "protectedUserFilesUnchanged": true,
+      "privateReceiptSha256": "f7d37179c2a4c38b6c7cf4277c98b5649e0a9c794b6cdfcc6df6cf7b459ffe17"
+    },
+    {
+      "reason": "The repaired Source root, child, joined lane and Native admission completed, but the root skipped its read and the child handed off without answer text; Goal completion was not established.",
+      "status": "failed",
+      "reasoningEffort": "low",
+      "activityStatus": "completed",
+      "goalState": "active",
+      "nativeAdmissionStates": [
+        "completed"
+      ],
+      "completedWorkerReads": 1,
+      "applicationEpochsClosed": true,
+      "protectedUserFilesUnchanged": true,
+      "privateReceiptSha256": "0668a7ff9c2eecb72e21d8a84386f8bbd7df266545e87cea3cf2ec2685b239f6"
+    }
+  ],
+  "privateEvidence": {
+    "journeyReceiptSha256": "03b3f48892c8e7e14da92fa48ad4346744d8859b85b9fbfaf427a7b34db8990a",
+    "harnessSha256": "bdaecdc90c5f2e10c5205ae1a92fd3a47a95376a18e7bb5d80a454ed1b7c7851",
+    "rawCredentialsAndProfilesPublished": false
+  },
+  "notClaimed": [
+    "Packed/installed Windows, relocated Linux, deployed fleet/image eligibility or the requested live UI swarm.",
+    "Long-context fidelity, other model/provider families, finite hard Native budgets or isolation from hostile local OS processes.",
+    "Full suites, remote CI, containers, deployment or release validation; verification CI remains manually paused."
+  ]
+}

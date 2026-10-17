@@ -20,7 +20,7 @@ import {
 import { runWithConcurrency } from "./utils/boundedConcurrency";
 import { MCP_APPS_EXTENSION_ID } from './appsProtocol';
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
-import { assertExecutionExtensionCurrent, assertExecutionServerConfig, assertExecutionToolDispatch, executionExtensionProtectedServer, type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { assertExecutionExtensionCurrent, assertExecutionServerConfig, assertExecutionToolDispatch, executionExtensionProtectedServer, executionProtectedServerConfig, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertMcpIsolationDispatch } from './isolation';
 import { McpIsolationError } from '../security/isolatedMcp';
 import { ExecutionExtensionError } from '@/backend/execution/extensions';
@@ -831,6 +831,8 @@ export class MCPService {
   private async getServerConfig(
     serverName: string,
   ): Promise<MCPServerConfig | null> {
+    const protectedConfig = executionProtectedServerConfig(serverName);
+    if (protectedConfig) return protectedConfig;
     log.debug(`getServerConfig: Looking up config for server ${serverName}`);
 
     const configs = await this.loadServerConfigs();

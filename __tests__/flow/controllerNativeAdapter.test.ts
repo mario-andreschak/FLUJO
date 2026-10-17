@@ -25,12 +25,14 @@ function equipment(withRequester=false,withChild=false) {
   const childFlow={id:'owned-child',nodes:[],edges:[]};
   let children=withChild?[{parentNodeId:'owned-subflow',flowId:childFlow.id,flowDigest:hash(childFlow),modelId:plan.modelId,modelDigest:plan.modelDigest}]:[];
   const remote=Object.freeze({});const abort=new AbortController();let logical:string|undefined;
-  let currentPlan={...rootPlan},held=false,calls=0;
+  let currentPlan={...rootPlan},held=false,calls=0,planChecks=0,planReads=0,childReads=0;
   const read=async(context:object)=>{expect(context).toBe(remote);abort.signal.throwIfAborted();};
   const transport:ControllerNativeTransport={bindingId:randomBytes(32).toString('hex'),
     async admit(auth,received){expect(auth).toBe('Bearer synthetic-worker-only');expect(received).toEqual(claim);return remote;},
-    async readPlan(context){await read(context);return {...currentPlan};},
-    async readChildren(context){await read(context);return children.map(value=>({...value}));},
+    async readPlan(context){await read(context);planReads++;return {...currentPlan};},
+    async readChildren(context){await read(context);childReads++;return children.map(value=>({...value}));},
+    async assertPlan(context,expectedPlan,expectedChildren){await read(context);planChecks++;
+      if(hash(currentPlan)!==hash(expectedPlan)||hash(children)!==hash(expectedChildren))throw new Error('installed plan changed');},
     async assertRun(context,expected){await read(context);if(expected?.conversationId&&expected.conversationId!==claim.rootConversationId)throw new Error('wrong conversation');
       if(expected?.runId&&expected.runId!==logical)throw new Error('wrong logical run');},
     async bindRun(context,conversation,run){await read(context);expect(conversation).toBe(claim.rootConversationId);logical=run;},
@@ -47,9 +49,47 @@ function equipment(withRequester=false,withChild=false) {
   const composed=createControllerNativeSourceAdapter(transport,gateway,withRequester?requester:undefined);
   const restore=registerExecutionExtension(composed.adapter);
   return {composed,transport,gateway,abort,restore,installedFlow,childFlow,children,held:()=>held,calls:()=>calls,
+    planReads:()=>planReads,childReads:()=>childReads,planChecks:()=>planChecks,
     drift(){currentPlan={...currentPlan,modelDigest:'d'.repeat(64)};},
     driftChild(){children=children.map(value=>({...value,flowDigest:'e'.repeat(64)}));}};
 }
+
+test('adapter uses one combined Parent freshness gate and refuses stale plan or revocation',async()=>{
+  const e=equipment();
+  try {
+    await expect(e.composed.withWorkerRun('Bearer synthetic-worker-only',claim,async context=>{
+      const before={checks:e.planChecks(),plans:e.planReads(),children:e.childReads()};
+      await assertExecutionExtensionCurrent(context);
+      expect(e.planChecks()-before.checks).toBe(1);
+      expect(e.planReads()).toBe(before.plans);
+      expect(e.childReads()).toBe(before.children);
+      e.drift();
+      await expect(assertExecutionExtensionCurrent(context)).rejects.toThrow();
+    })).rejects.toThrow();
+  } finally {e.restore();await e.composed.close();}
+  const revoked=equipment();
+  try {
+    await expect(revoked.composed.withWorkerRun('Bearer synthetic-worker-only',claim,async context=>{
+      revoked.abort.abort(new Error('Parent authority revoked'));
+      await expect(assertExecutionExtensionCurrent(context)).rejects.toThrow();
+    })).rejects.toThrow();
+  } finally {revoked.restore();await revoked.composed.close();}
+});
+
+test('adapter retains the separate read-plan fallback for transports without a combined gate',async()=>{
+  const e=equipment(false,true);
+  delete e.transport.assertPlan;
+  try {
+    await expect(e.composed.withWorkerRun('Bearer synthetic-worker-only',claim,async context=>{
+      const before={plans:e.planReads(),children:e.childReads()};
+      await assertExecutionExtensionCurrent(context);
+      expect(e.planReads()-before.plans).toBe(1);
+      expect(e.childReads()-before.children).toBe(1);
+      e.driftChild();
+      await expect(assertExecutionExtensionCurrent(context)).rejects.toThrow();
+    })).rejects.toThrow();
+  } finally {e.restore();await e.composed.close();}
+});
 
 test('one installed attached child gets its own opaque scope and logical identity under the actual parent lane',async()=>{
   const e=equipment(false,true);let child:ExecutionExtensionContext|undefined;

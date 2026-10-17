@@ -186,7 +186,10 @@ export async function startOwnedCodexAppServer(input: {
   const stop = async () => {
     if (closed) return;
     stopping=true;clearIncoming();child.stdin.end();
-    if (!await waitClose(2000)) {requestStop();if(!await waitClose(5000))throw new Error('Owned Codex process close remains unconfirmed.');}
+    // The pinned app-server drains RPC/session work after stdin EOF and bounds
+    // its own shutdown at 45s. Do not kill a successful normal drain at 2s.
+    // Cancellation still calls requestStop immediately through the abort hook.
+    if (!await waitClose(45000)) {requestStop();if(!await waitClose(5000))throw new Error('Owned Codex process close remains unconfirmed.');}
   };
   try {
     await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});

@@ -8,6 +8,7 @@ import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/c
 import { isOwnerCredentialBoundModel, validateOwnerCredentialBinding, type Model } from '@/shared/types/model';
 import { configuredExecutionAdapter } from '@/backend/execution/extensions/configuredAdapter';
 import { resolveCompletionAdapterRoute, type CompletionAdapterRoute } from '@/backend/services/model/adapters/completionRoute';
+import { flowAssertionRoot } from '../flow/executionAuthority';
 
 declare const contextBrand: unique symbol;
 /** Opaque capability minted by trusted server code, never by request metadata. */
@@ -100,6 +101,8 @@ export interface ExecutionExtensionAdapter {
   withRoute?(request: Request, task: (request: Request) => Promise<Response>): Promise<Response>;
   isProtectedServer(server: string): boolean;
   assertServerConfig(config: MCPServerConfig): void;
+  /** Private server-owned configuration; excluded from saved/public catalogs. */
+  protectedServerConfig?(server: string): MCPServerConfig | undefined;
   assertRun(context: object, expected?: { conversationId?: string; runId?: string; graphHash?: string }): Promise<void>;
   assertConversationAccess?(conversationId: string): Promise<void>;
   isProtectedState?(state: unknown): boolean;
@@ -361,7 +364,36 @@ export function executionExtensionSharesPersonaAuthority(context: ExecutionExten
   authority: FlowExecutionAuthority | undefined): boolean {
   if (!context || !authority) return false;
   const item = record(context);
-  return item.adapter === registry.originalOwnerAdapter && item.personaAuthority === authority;
+  return item.personaAuthority === flowAssertionRoot(authority) || Boolean(item.parent
+    && executionExtensionSharesPersonaAuthority(item.parent,authority));
+}
+
+/** Only a genuine Native dispatcher capability and its exact admitted root can
+ * share the Persona fence. A generic adapter callback or a DTO is insufficient. */
+export async function bindNativeExecutionPersonaAuthority(context: ExecutionExtensionContext,
+  authority: FlowExecutionAuthority): Promise<void> {
+  const { getNativeOriginalOwnerAuthority, getCapturedNativeOwnerRun } = await import('@/backend/services/originalOwner/authority');
+  const captured = await getNativeOriginalOwnerAuthority(authority);
+  if (!captured) throw new ExecutionExtensionError('native_persona_capture_required');
+  const binding = captured.binding, item = record(context);
+  const run = await getCapturedNativeOwnerRun({ workspace: binding.workspace, goalId: binding.goalId,
+    runId: binding.dispatchId, rootConversationId: binding.conversationId });
+  const { modelService } = await import('@/backend/services/model');
+  const model = await modelService.getModel(binding.modelId);
+  if (!run || run.authority !== captured || run.personaAuthority !== authority || !model) {
+    throw new ExecutionExtensionError('native_persona_capture_mismatch');
+  }
+  const { nativeDigest } = await import('../flow/handlers/nativeDigest');
+  const { nativeModelPlan } = await import('@/backend/services/originalOwner/types');
+  const root = await executionExtensionNativeWorkerRoot(context, { conversationId: binding.conversationId,
+    runId: binding.runId, workspace: binding.workspace, flowId: binding.flowId,
+    flowDigest: nativeDigest(run.flow), modelId: binding.modelId, modelDigest: nativeDigest(nativeModelPlan(model)) });
+  if (!root || root.workerId !== binding.enrollmentId || root.goalId !== binding.goalId
+    || root.fleetRunId !== binding.dispatchId || root.leaseEpoch !== binding.leaseEpoch
+    || root.targetDigest !== nativeDigest([binding.enrollmentDigest,binding.accountDigest])) {
+    throw new ExecutionExtensionError('native_persona_capture_mismatch');
+  }
+  item.personaAuthority = authority;
 }
 export async function withExecutionExtensionRoute(request: Request, task: (request: Request) => Promise<Response>): Promise<Response> {
   const adapter = executionExtensionAdapter();
@@ -370,6 +402,11 @@ export async function withExecutionExtensionRoute(request: Request, task: (reque
 export function authorizeExecutionTransport(request: Request): Response | null | undefined { return executionExtensionAdapter()?.authorizeTransport?.(request); }
 export function isProtectedExecutionServer(server: string): boolean { return executionExtensionAdapter()?.isProtectedServer(server) ?? false; }
 export function assertExecutionServerConfig(config: MCPServerConfig): void { executionExtensionAdapter()?.assertServerConfig(config); }
+export function executionProtectedServerConfig(server: string): MCPServerConfig | undefined {
+  const adapter = executionExtensionAdapter(), config = adapter?.protectedServerConfig?.(server);
+  if (config) { adapter!.assertServerConfig(config); return structuredClone(config); }
+  return undefined;
+}
 export async function assertExecutionExtensionCurrent(context: ExecutionExtensionContext | undefined, expected?: { conversationId?: string; runId?: string; graphHash?: string }): Promise<void> {
   const item = record(context);
   if (item.modelStep) await assertExecutionExtensionCurrent(item.modelStep.parent, expected);

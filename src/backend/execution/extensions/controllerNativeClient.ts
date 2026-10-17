@@ -12,6 +12,7 @@ export interface NativeSourceParent {
   readonly transport: ParentTransport;
   readonly requester: Readonly<ControllerNativeRequester>;
   codexProfile(context: object): Promise<RestrictedCodexProfile>;
+  close?(): Promise<void>;
 }
 type Watch = Awaited<ReturnType<ControllerNativeTransport['observe']>>;
 type Active = { remote: object; abort: AbortController; watch: Watch; close?: Promise<void>; profileDigest?: string };
@@ -75,8 +76,16 @@ export function createControllerNativeClient(parent: NativeSourceParent): Native
       const remote = await owner.admit(authorization,Object.freeze(structuredClone(claim)));
       if (!remote || typeof remote !== 'object' || Array.isArray(remote) || seen.has(remote)) throw refused();
       seen.add(remote);
-      const watch = await owner.observe(remote);
-      if (!watch || !(watch.signal instanceof AbortSignal) || typeof watch.close !== 'function') throw refused();
+      let watch: Watch | undefined;
+      try {
+        watch = await owner.observe(remote);
+        if (!watch || !(watch.signal instanceof AbortSignal) || typeof watch.close !== 'function') throw refused();
+      }
+      catch (error) {
+        try { if (owner.retire) await owner.retire(remote); else if (typeof watch?.close === 'function') await watch.close(); }
+        catch (cleanup) { throw new AggregateError([error,cleanup],'Parent observation and admission cleanup failed.'); }
+        throw error;
+      }
       const value: Active = { remote, watch, abort: new AbortController() };
       if (closed || active.size >= 100 || watch.signal.aborted) { await retire(value); throw refused(); }
       const context = Object.freeze({}); contexts.set(context,value); active.add(value);
@@ -98,6 +107,21 @@ export function createControllerNativeClient(parent: NativeSourceParent): Native
       const value = await current(context), result = await owner.readChildren?.(value.remote) ?? [];
       await current(context); return structuredClone(result);
     },
+    ...(owner.assertPlan ? { async assertPlan(context: object,
+      expectedPlan: Parameters<NonNullable<ControllerNativeTransport['assertPlan']>>[1],
+      expectedChildren: Parameters<NonNullable<ControllerNativeTransport['assertPlan']>>[2]) {
+      const value = get(context);
+      const plan = Object.freeze(structuredClone(expectedPlan));
+      const children = structuredClone(expectedChildren).map(child => Object.freeze(child));
+      Object.freeze(children);
+      await owner.assertPlan!(value.remote, plan, children);
+      get(context);
+    } } : {}),
+    ...(owner.validateOwnerRunInput ? { async validateOwnerRunInput(context: object,
+      input: Parameters<NonNullable<ControllerNativeTransport['validateOwnerRunInput']>>[1]) {
+      const value = await current(context);
+      await owner.validateOwnerRunInput!(value.remote,input); await current(context);
+    } } : {}),
     async bindRun(context, conversation, run) {
       const value = await current(context); await owner.bindRun(value.remote,conversation,run); await current(context);
     },
@@ -128,6 +152,13 @@ export function createControllerNativeClient(parent: NativeSourceParent): Native
       }
       return { signal: AbortSignal.any([value.abort.signal,value.watch.signal]), close: () => retire(value) };
     },
+    async retire(context) {
+      const value = contexts.get(context);
+      if (value) await retire(value);
+    },
+    ...(owner.complete ? { async complete(context: object, source: Parameters<NonNullable<ControllerNativeTransport['complete']>>[1]) {
+      const value = await current(context); await owner.complete!(value.remote,source); await current(context);
+    } } : {}),
     async codexProfile(context) {
       const value = await current(context), profile = checkedProfile(await parent.codexProfile(value.remote));
       await current(context);

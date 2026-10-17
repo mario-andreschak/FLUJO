@@ -19,6 +19,7 @@ import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, 
 import type { ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 const ports = new WeakSet<object>();
+const modelToolGates = new WeakMap<object, (context: ExecutionExtensionContext) => Promise<void>>();
 const authorities = new WeakSet<object>();
 const MAX_PORT_RESULT_BYTES = 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES = 64 * 1024;
@@ -46,6 +47,15 @@ export function assertNativeToolPort(value: unknown): asserts value is NativeToo
   if (!value || typeof value !== 'object' || !ports.has(value)) {
     throw new Error('Native tool port must be an origin-owned in-process capability.');
   }
+}
+
+/** Validate the actual Native bridge from its sealed Source-owned bindings.
+ * Host tool maps deliberately do not cross the SDK boundary. */
+export async function assertNativeToolPortModelTools(port: NativeToolPort, context: ExecutionExtensionContext): Promise<void> {
+  assertNativeToolPort(port);
+  const gate = modelToolGates.get(port);
+  if (!gate) throw new Error('Native tool inventory lacks its trusted Source context.');
+  await gate(context);
 }
 
 const isHandoff = (name: string) => name === 'handoff' || name.startsWith('handoff_to_');
@@ -300,5 +310,21 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
     },
   });
   ports.add(port);
+  if (executionContext) modelToolGates.set(port, async context => {
+    if (context !== executionContext) throw new Error('Native tool inventory Source context changed.');
+    assertNativeOriginalExecutionContext(input.originalProcessHost, context);
+    input.signal.throwIfAborted();
+    controller.signal.throwIfAborted();
+    await input.authority.assertCurrent();
+    const { assertExecutionModelTool } = await import('@/backend/execution/extensions');
+    for (const tool of advertised) {
+      await assertExecutionModelTool(context, tool.name, bound[tool.name]);
+      input.signal.throwIfAborted();
+      controller.signal.throwIfAborted();
+    }
+    await input.authority.assertCurrent();
+    input.signal.throwIfAborted();
+    controller.signal.throwIfAborted();
+  });
   return port;
 }

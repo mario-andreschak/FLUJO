@@ -19,6 +19,10 @@ jest.mock('@/backend/services/model/encryption', () => ({
   resolveAndDecryptApiKey: jest.fn(async (value: string) => value ? 'fixture-loopback-key' : null),
 }));
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug() {}, info() {}, warn() {}, error() {}, verbose() {} }) }));
+jest.mock('@/backend/services/originalOwner/nativeAccount', () => ({ originalNativeAccountAttestation: async () => ({
+  nativeProfile: { verifiedCliVersion: '0.157.1',verifiedCliSha256: 'a'.repeat(64),verifiedCliPath: '/private/codex',
+    verifiedModelCatalogPath: '/private/catalog',verifiedModelCatalogSha256: 'b'.repeat(64) },nativeAccountScope: 'c'.repeat(64),
+}) }));
 
 describe('Original account durable transfer and administrative recovery', () => {
   let directory: string;
@@ -47,6 +51,27 @@ describe('Original account durable transfer and administrative recovery', () => 
   const account = () => createOriginalOwnerAccount(request(), { modelId: 'model', routingHeaders: {} });
   const enroll = (id: string) => enrollOriginalOwnerTask(request(), { personaId: 'persona', taskId: 'task', accountId: id,
     budget: { maxModelSteps: null, maxOutputTokens: null }, allowedTools: [], commands: [] });
+
+  it('enrolls a qualified Native subscription account without moving a key or rebinding the saved model', async () => {
+    const saved = (await modelService.getModel('model'))!;
+    expect((await modelService.updateModel({ ...saved,name: 'gpt-6-luna',adapter: 'codex-cli',ApiKey: '' })).success).toBe(true);
+    const before = await modelService.getModel('model');
+    const created = await account();
+    expect(created).toMatchObject({ kind: 'codex',state: 'active' });
+    expect(await account()).toEqual(created);
+    expect(await modelService.getModel('model')).toEqual(before);
+    expect((await readOriginalOwnerBook()).accounts[0]).toMatchObject({ credential: '',nativeAccountScope: 'c'.repeat(64) });
+    expect((await enroll(created.id)).workerAuthorization).toMatch(/^Bearer [A-Za-z0-9_-]{43}$/);
+  });
+  it('refuses finite Native budgets instead of silently changing the owner decision', async () => {
+    const saved = (await modelService.getModel('model'))!;
+    await modelService.updateModel({ ...saved,name: 'gpt-6-luna',adapter: 'codex-cli',ApiKey: '' });
+    const created = await account();
+    await expect(enrollOriginalOwnerTask(request(), { personaId: 'persona',taskId: 'task',accountId: created.id,
+      budget: { maxModelSteps: 1,maxOutputTokens: null },allowedTools: [],commands: [] }))
+      .rejects.toMatchObject({ code: 'original_owner_native_budget_unsupported' });
+    expect((await readOriginalOwnerBook()).enrollments).toEqual([]);
+  });
 
   it('transfers a credential under the real catalog lock, writes a private book and retries idempotently', async () => {
     const created = await account();

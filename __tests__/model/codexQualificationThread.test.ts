@@ -9,7 +9,10 @@ const registrations:CodexOwnedProcessRegistration[]=[];
 const fixture=`
 const fs=require('node:fs'),rl=require('node:readline');
 const log=process.argv[1],mode=process.argv[2];
-process.stdin.on('end',()=>process.exit(mode.endsWith('nonzero-exit')?1:0));
+process.stdin.on('end',()=>{
+  const exit=()=>process.exit(mode.endsWith('nonzero-exit')?1:0);
+  if(mode==='delayed-successful-eof')setTimeout(exit,3000);else exit();
+});
 setInterval(()=>{},1000);
 const emit=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 rl.createInterface({input:process.stdin}).on('line',line=>{
@@ -109,6 +112,15 @@ it('refuses completed qualification frames when the actual child exits nonzero',
   expect(observed).toContain('turn.completed');
   expect(options.observeUsage).toHaveBeenCalledTimes(1);
   expect(await registrations[0].exit).toEqual({code:1,signal:null});
+  await registrations[0].close;
+  expect((await wire()).filter(message=>message.method==='turn/start')).toHaveLength(1);
+});
+
+it('waits for a bounded normal EOF drain after a successful terminal turn',async()=>{
+  mode='delayed-successful-eof';
+  const events=await collect(createQualificationCodexThread(input()));
+  expect(events.filter(event=>event.type==='turn.completed')).toHaveLength(1);
+  expect(await registrations[0].exit).toEqual({code:0,signal:null});
   await registrations[0].close;
   expect((await wire()).filter(message=>message.method==='turn/start')).toHaveLength(1);
 });

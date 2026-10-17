@@ -17,6 +17,7 @@ const log = createLogger(
 );
 const ControlInputSchema = z.object({
   action: z.enum(PERSONA_WORK_ITEM_CONTROL_ACTIONS),
+  expectedUpdatedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 }).strict();
 
 export const dynamic = 'force-dynamic';
@@ -38,8 +39,11 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
 
   const body = await request.json().catch(() => null);
   try {
-    const { action } = ControlInputSchema.parse(body);
-    return NextResponse.json(await controlPersonaWorkItem(personaId, workItemId, action));
+    const { action, expectedUpdatedAt } = ControlInputSchema.parse(body);
+    const result = expectedUpdatedAt === undefined
+      ? await controlPersonaWorkItem(personaId, workItemId, action)
+      : await controlPersonaWorkItem(personaId, workItemId, action, { expectedUpdatedAt });
+    return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const response = personaDomainErrorResponse(error); if (response) return response;
     log.error('Failed to control Persona Task', error);

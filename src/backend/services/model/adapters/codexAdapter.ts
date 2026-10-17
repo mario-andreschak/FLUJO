@@ -25,7 +25,7 @@ import { CompletionAdapter, CompletionInput, CompletionResult, type SteeringDeli
 import { steeringSource, watchSteering, UncertainSteeringSubmissionError } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
-import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { assertNativeToolPort, assertNativeToolPortModelTools } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { assertNativeCodexQualification } from './codexNativeQualification';
 import { createOwnedCodexThread, nativeCodexEnvironment } from './codexOwnedThread';
@@ -269,10 +269,14 @@ export class CodexAdapter implements CompletionAdapter {
       privateCodexPath = await assertRestrictedCodexProfile(privateCodexProfile, model.name);
       // Validate the complete offered bridge before starting the CLI. A private
       // profile cannot add local executors or borrow a different server's tools.
-      for (const tool of tools ?? []) {
-        if (tool.type !== 'function') continue;
-        if (executionExtensionContext) await assertExecutionModelTool(executionExtensionContext, tool.function.name,
-          toolNameMap?.[tool.function.name]);
+      if (executionExtensionContext && nativeToolPort) {
+        await assertNativeToolPortModelTools(nativeToolPort, executionExtensionContext);
+      } else {
+        for (const tool of tools ?? []) {
+          if (tool.type !== 'function') continue;
+          if (executionExtensionContext) await assertExecutionModelTool(executionExtensionContext, tool.function.name,
+            toolNameMap?.[tool.function.name]);
+        }
       }
     }
     // Lazy-load the Codex SDK: ESM-only, so a module-scope import would break
@@ -1161,7 +1165,12 @@ export class CodexAdapter implements CompletionAdapter {
             // end when the model produces a message without another call — or at
             // the runaway cap.
             if (handoffCalls.length > 0 && (endSpawning || handoffCalls.length >= MAX_SPAWN_CALLS)) {
-              abortController.abort();
+              // Native handoff stops this owned turn, not the enclosing run.
+              // Its independent exit/pipe-close confirmation below decides
+              // completion; real cancellation and tool failures still abort
+              // the enclosing controller.
+              if (nativeToolPort) turnAbortController.abort();
+              else abortController.abort();
               break;
             }
             if (
@@ -1213,7 +1222,8 @@ export class CodexAdapter implements CompletionAdapter {
                 // A message AFTER spawning means the model stopped queueing
                 // workers: end the run without accumulating post-handoff narration.
                 if (handoffCalls.length > 0) {
-                  abortController.abort();
+                  if (nativeToolPort) turnAbortController.abort();
+                  else abortController.abort();
                   break;
                 }
                 if (item.text || messageMedia.length > 0) {

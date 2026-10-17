@@ -544,6 +544,63 @@ describe('ongoing Persona goal runtime', () => {
     });
   });
 
+  it('rejects a stale versioned Goal retry without changing its newer pause or dispatching', async () => {
+    await inWorkspace(async () => {
+      const { task } = await goal();
+      await controlPersonaWorkItem(task.personaId, task.id, 'pause');
+      const paused = await current(task);
+      await expect(controlPersonaWorkItem(task.personaId, task.id, 'retry', {
+        expectedUpdatedAt: task.updatedAt,
+      })).rejects.toMatchObject({ code: 'PERSONA_GOAL_CONTROL_VERSION_CONFLICT' });
+      expect(await current(task)).toEqual(paused);
+      expect(submitMock).not.toHaveBeenCalled();
+      expect(dispatches.size).toBe(0);
+    });
+  });
+
+  it('allows only one concurrent versioned retry and rejects replay after its ACK is lost', async () => {
+    await inWorkspace(async () => {
+      const { task } = await goal();
+      await controlPersonaWorkItem(task.personaId, task.id, 'pause');
+      const paused = await current(task);
+      const fence = { expectedUpdatedAt: paused.updatedAt };
+      const results = await Promise.allSettled([
+        controlPersonaWorkItem(task.personaId, task.id, 'retry', fence),
+        controlPersonaWorkItem(task.personaId, task.id, 'retry', fence),
+      ]);
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+      expect(rejected.reason).toMatchObject({ code: 'PERSONA_GOAL_CONTROL_VERSION_CONFLICT' });
+      const resumed = await current(task);
+      expect(resumed.goal!.state).toBe('active');
+      await expect(controlPersonaWorkItem(task.personaId, task.id, 'retry', fence))
+        .rejects.toMatchObject({ code: 'PERSONA_GOAL_CONTROL_VERSION_CONFLICT' });
+      expect(await current(task)).toEqual(resumed);
+      expect(submitMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it('never reconciles a pending original control through a stale or matching fenced request', async () => {
+    await inWorkspace(async () => {
+      const { task } = await goal();
+      const pending = await savePersonaWorkItem({
+        ...task, updatedAt: task.updatedAt + 1,
+        goal: { ...task.goal!, state: 'paused', nextRunAt: undefined,
+          pendingControlId: 'goalcontrol_original', pendingControlAction: 'pause',
+          pendingControlFromState: 'active', pendingControlToState: 'paused',
+          pendingControlRequestedAt: task.updatedAt, pendingControlAppliedAt: task.updatedAt + 1,
+          pendingControlDispatchIds: [] },
+      });
+      for (const expectedUpdatedAt of [task.updatedAt, pending.updatedAt]) {
+        await expect(controlPersonaWorkItem(task.personaId, task.id, 'retry', { expectedUpdatedAt }))
+          .rejects.toMatchObject({ code: expectedUpdatedAt === task.updatedAt
+            ? 'PERSONA_GOAL_CONTROL_VERSION_CONFLICT' : 'PERSONA_GOAL_CONTROL_PENDING' });
+        expect(await current(task)).toEqual(pending);
+      }
+      expect(submitMock).not.toHaveBeenCalled();
+    });
+  });
+
   it('fences a pause that wins between reservation and admission, then resumes with a new intent', async () => {
     await inWorkspace(async () => {
       const { task } = await goal();

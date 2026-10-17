@@ -26,6 +26,7 @@ import { resolveBehaviorSubflowSnapshot, verifyBehaviorDependencies } from '@/ba
 import { readNativeHeldFile } from './nativeHeldFile';
 import { commitExecutionExtensionMutation, executionExtensionCodexProfile, executionExtensionNativeWorkerRoot, executionExtensionSupportsNativeWorkerRoot, executionExtensionSignal,
   executionExtensionNativeWorkerDescendant,isExecutionChildContext,
+  executionExtensionSharesPersonaAuthority,
   type ExecutionNativeWorkerDescendant,
   type ExecutionExtensionContext } from '@/backend/execution/extensions';
 
@@ -296,6 +297,19 @@ type NativeOriginalHostInput = {
   personaAttribution?: PersonaAttribution;
 };
 
+/** Process preparation and direct ModelHandler calls must select the same
+ * owner. The Worker mint independently checks any shared Persona authority. */
+export async function createProcessNativeOriginalHost(input: NativeOriginalHostInput & {
+  context?: ExecutionExtensionContext;
+}) {
+  if (input.context && executionExtensionSupportsNativeWorkerRoot(input.context)) {
+    return createWorkerNativeOriginalHost({ context: input.context,
+      conversationId: input.conversationId, runId: input.runId, nodeId: input.nodeId,
+      modelId: input.modelId, flowId: input.flowId, flowSnapshot: input.flowSnapshot });
+  }
+  return createPersonaNativeOriginalHost(input);
+}
+
 /** Only a live branded Persona root run can use the Persona mint. */
 export async function createPersonaNativeOriginalHost(input: NativeOriginalHostInput) {
   const binding = input.authority && bindings.get(input.authority);
@@ -318,7 +332,8 @@ export async function createWorkerNativeOriginalHost(input: Omit<NativeOriginalH
   const state = FlowExecutor.conversationStates.get(input.conversationId);
   if (!state?.flowSnapshot) return held();
   if (state.executionExtensionContext !== input.context || state.logicalRunId !== input.runId
-    || state.personaAttribution || ![0,1].includes(state.runDepth??0)) return held();
+    || (state.personaAttribution && !executionExtensionSharesPersonaAuthority(input.context,state.executionAuthority))
+    || ![0,1].includes(state.runDepth??0)) return held();
   const flow = structuredClone(state.flowSnapshot);
   if (Buffer.byteLength(JSON.stringify(flow)) > 1024 * 1024) return held();
   const node = flow.nodes.find(item => item.id === input.nodeId && item.data.type === 'process');
@@ -423,7 +438,12 @@ async function createBoundNativeOriginalHost(input: NativeOriginalHostInput): Pr
     authority.signal.throwIfAborted();
   };
   const assertCurrent = async () => {
-    authority.signal.throwIfAborted(); await authority.assertCurrent(); await assertGoalCurrent();
+    authority.signal.throwIfAborted();
+    await authority.assertCurrent();
+    // Worker authority already checks the captured Goal as part of the same
+    // lease. Persona authority still needs its independent Goal check.
+    if (binding.kind === 'persona') await assertGoalCurrent();
+    authority.signal.throwIfAborted();
   };
   // Every launch-cap mutation runs inside real commitWhileCurrent, which holds
   // the Persona lease lock across this callback. Its contract forbids acquiring

@@ -81,7 +81,11 @@ context and logical run. Source rereads that child's saved immediate-parent
 lineage before output; caller-selected, detached and additional children remain
 refused.
 
-Product Source has no configured Controller transport. These internal contracts
-do not establish deployed fleet, remote Worker tools, image eligibility or a live
-UI swarm. Those journeys require qualification of the actual owner, gateway,
-image and provider route.
+Product Source keeps its ordinary transport by default. A trusted source build
+may select the genuine Original owner producer documented in
+[Native Source composition](../operations/native-source-composition.md). It joins
+Native account enrollment with the actual dispatcher capability, fences Source
+mutations and Worker tool tickets, and preserves genuine Persona attribution in
+the existing root/attached-child path. These contracts do not establish deployed
+fleet, image eligibility, installed-package or live UI qualification. Those
+journeys require evidence for the actual owner, gateway, image and provider route.

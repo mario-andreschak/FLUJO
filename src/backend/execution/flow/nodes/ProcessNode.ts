@@ -4,7 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
-import { createPersonaNativeOriginalHost } from '../handlers/nativeOriginalHost';
+import { createProcessNativeOriginalHost } from '../handlers/nativeOriginalHost';
 import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
 import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
@@ -1397,7 +1397,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
               if (node_params?.properties?.terminalRouting === 'tool-free') throw new Error('Tool-free terminal routing denies tool dispatch');
             },
             beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
-            nativeOriginalHost: await createPersonaNativeOriginalHost({
+            nativeOriginalHost: await createProcessNativeOriginalHost({
+              context: prepResult.executionExtensionContext,
               authority: prepResult.executionAuthority, conversationId: prepResult.conversationId,
               runId: prepResult.runId, nodeId: prepResult.nodeId, modelId: prepResult.boundModel,
               flowId: prepResult.flowId,

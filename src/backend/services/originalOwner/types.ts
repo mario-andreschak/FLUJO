@@ -5,6 +5,11 @@ import type { Model } from '@/shared/types/model';
 export const ownerId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const time = z.number().int().nonnegative();
+export const NativeAccountProfileSchema = z.object({
+  verifiedCliVersion: z.literal('0.157.1'), verifiedCliSha256: digest,
+  verifiedCliPath: z.string().min(1), verifiedModelCatalogPath: z.string().min(1),
+  verifiedModelCatalogSha256: digest,
+}).strict();
 export const BudgetSchema = z.object({
   // Explicit owner decisions. There are deliberately no inferred/default limits.
   maxModelSteps: z.number().int().positive().nullable(),
@@ -16,10 +21,19 @@ export const AccountSchema = z.object({
   kind: z.enum(['openai', 'codex']),
   modelDigest: digest,
   credential: z.string(),
+  nativeProfile: NativeAccountProfileSchema.optional(),
+  nativeAccountScope: digest.optional(),
   routingHeaders: z.partialRecord(z.enum(['openai-organization', 'openai-project', 'http-referer', 'x-title']), z.string()),
   state: z.enum(['pending', 'active', 'revoked']), approval: ApprovalSchema,
   createdAt: time, updatedAt: time,
-}).strict();
+}).strict().superRefine((account, context) => {
+  if (account.kind === 'codex'
+    ? account.credential !== '' || !account.nativeProfile || !account.nativeAccountScope
+      || Object.keys(account.routingHeaders).length > 0
+    : account.nativeProfile !== undefined || account.nativeAccountScope !== undefined) {
+    context.addIssue({ code: 'custom', message: 'Invalid account authentication route' });
+  }
+});
 export const EnrollmentSchema = z.object({
   id: ownerId, workspace: ownerId, ownerId, personaId: ownerId, taskId: ownerId,
   accountId: ownerId, modelId: ownerId, workerAuthorizationDigest: digest,

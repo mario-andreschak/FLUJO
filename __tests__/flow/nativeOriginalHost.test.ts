@@ -55,7 +55,7 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
     const offered = new Promise<void>(resolve => { resolveOffered = resolve; });
     phase('Codex transport launch started');
     const transport = await actual.startOwnedCodexAppServer({ ...input, executable: process.execPath,
-      args: ['-e', codexChildFixture, wire, codexForeignScope, emitHandoff ? 'handoff' : ''],
+      args: ['-e', codexChildFixture, wire, codexForeignScope, emitHandoff ? (codexHandoffQueuedItem ? 'handoff-queued' : 'handoff') : ''],
       register: async registration => { if (fixtureCleanupStarted) throw new Error('Native fixture is closing.');
         phase('Codex registration started'); codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
         let closeObserved = false;
@@ -117,7 +117,7 @@ import { createOwnedCodexThread } from '@/backend/services/model/adapters/codexO
 import { createExecutionExtensionContext, registerExecutionExtension, runWithExecutionInput, type ExecutionExtensionAdapter, type ExecutionNativeWorkerRoot } from '@/backend/execution/extensions';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { createNativeInvocationSessionHook, type NativeInvocationSession, type NativeSessionEvent } from '@/backend/execution/flow/handlers/nativeInvocationSession';
-import { nativeDigest, createNativeToolPort, createNativeBrokerAuthority, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { nativeDigest, createNativeToolPort, createNativeBrokerAuthority, nativeToolInventoryDigest, assertNativeToolPortModelTools } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
 import { createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, assertNativeOriginalExecutionContext, nativeOriginalSourceReader } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
@@ -135,6 +135,7 @@ const activeDispatchers = new Set<{ dispatcher: PersonaFlowDispatcher; personaId
 let fixtureCleanupStarted = false;
 let beforePrompt: (() => Promise<void>) | undefined;
 let emitHandoff = false;
+let codexHandoffQueuedItem = false;
 let afterHandoffStop: (() => Promise<void>) | undefined;
 let afterPrompt: (() => Promise<void>) | undefined;
 let transcriptText = 'done';
@@ -145,6 +146,7 @@ let codexRegistrations: import('@/backend/services/model/adapters/codexAppServer
 let codexFrames: unknown[] = [];
 let codexForeignScope = '';
 let codexAfterResponseBarrier = false;
+const workerModelToolAssertions: Array<{ name: string; server?: string; tool?: string }> = [];
 let codexOwners: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost[] = [];
 let codexCloseDelays: Array<Promise<number>> = [];
 let codexExitWitnesses: Array<Promise<{ pipeCloseObservedAtExit: boolean; stateAtExit: string }>> = [];
@@ -165,7 +167,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   let threadId=m.params.threadId,turnId='native_codex_turn';
   send({id:m.id,result:{turn:{id:turnId}}});send({method:'turn/started',params:{threadId,turn:{id:turnId}}});
   const tick=setInterval(async()=>{if(!fs.existsSync(wire+'.events'))return;clearInterval(tick);
-   if(process.argv[3]==='handoff'){
+   if(process.argv[3]==='handoff'||process.argv[3]==='handoff-queued'){
     const rpc=async(method,params)=>{
      const response=await fetch(bridgeURL,{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
      const raw=await response.text();const data=raw.split('\\n').find(line=>line.startsWith('data: '));return JSON.parse(data?data.slice(6):raw);
@@ -175,6 +177,13 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     const keeper=require('node:child_process').spawn(process.execPath,['-e',keeperScript],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true,detached:true});
     await new Promise(resolve=>keeper.once('spawn',resolve));
     fs.writeFileSync(wire+'.mcp',JSON.stringify({name:tool.name,callId:'codex-handoff-1',threadId}));
+    if(process.argv[3]==='handoff-queued'){
+     let pending=true,sent=0;
+     const queued=setInterval(()=>{if(pending&&sent<32){const sequence=++sent;send({method:'item/started',params:{threadId,turnId,item:{id:'native-queued-handoff-item-'+sequence,type:'agentMessage',text:'queued before confirmed handoff'}}});}},5);
+     try{await rpc('tools/call',{name:tool.name,arguments:{},_meta:{callId:'codex-handoff-1',threadId}});}
+     finally{pending=false;clearInterval(queued);}
+     return;
+    }
     await rpc('tools/call',{name:tool.name,arguments:{},_meta:{callId:'codex-handoff-1',threadId}});return;
    }
    if(process.argv[2]==='thread')threadId='foreign_thread';
@@ -204,7 +213,7 @@ beforeEach(async () => {
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
   phaseStart = undefined;
-  codexLaunchArguments = []; codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = []; codexOwners = []; codexAfterResponseBarrier = false;
+  codexLaunchArguments = []; codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = []; codexOwners = []; codexAfterResponseBarrier = false; codexHandoffQueuedItem = false;
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -452,13 +461,20 @@ async function withWorkerClaim(task: (input: {
       isProtectedServer: () => false, assertServerConfig: () => {}, assertRun: assertCurrent,
       bindRun: async () => {}, signal: () => controller.signal,
       commit: async (_context, mutation) => { await assertCurrent(); return mutation(); },
-      protectedServer: () => 'fixture-worker', authorizeHandoffs: () => {}, assertModelTool: assertCurrent,
+      protectedServer: () => 'fixture-worker', authorizeHandoffs: () => {}, assertModelTool: async (_context, name, advertised) => {
+        await assertCurrent();
+        workerModelToolAssertions.push({ name, server: advertised?.server, tool: advertised?.tool });
+        if (advertised && (advertised.server !== 'fixture-worker' || advertised.tool !== 'worker_read_file')) {
+          throw new Error('Fixture Worker rejected a foreign MCP binding');
+        }
+      },
       assertDispatch: assertCurrent, normalizeArguments: (_context, _tool, args) => args,
       requestMeta: async () => ({}), validateResult: (_context, _tool, result) => result,
       nativeWorkerRoot: async () => { await assertCurrent(); return structuredClone(enrollment.root); },
     };
     const controller = new AbortController();
     const restore = registerExecutionExtension(adapter);
+    workerModelToolAssertions.length = 0;
     const context = createExecutionExtensionContext(adapter, enrollment);
     Object.defineProperty(state, 'executionExtensionContext', { value: context, enumerable: false, configurable: true });
     state.executionExtensionOwned = true;
@@ -511,6 +527,50 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
       expect(result.result.isError).not.toBe(true);expect(callTool).toHaveBeenCalledTimes(1);expect(promptCount).toBe(0);
     });
   },30000);
+  it('validates sealed Native MCP bindings only under their genuine Worker context and live authority', async () => {
+    await withWorkerClaim(async ({ host, context, state, enrollment }) => {
+      const toolName = 'owned_worker_read';
+      const tools: Parameters<typeof createNativeToolPort>[0]['tools'] = [
+        { type: 'function', function: { name: toolName, parameters: { type: 'object', properties: {} } } },
+      ];
+      let attemptOrdinal = 0;
+      const makePort = async (server: string, tool: string) => {
+        const mapping = { [toolName]: { server, tool, clientGeneration: 7, schemaHash: 'fixture-schema' } };
+        const receipt: Parameters<typeof createNativeToolPort>[0]['receipt'] = {
+          invocationId: `00000000-0000-4000-8000-${String(++attemptOrdinal).padStart(12, '0')}`,
+          owner: { conversationId: state.conversationId!, runId: state.logicalRunId!, nodeId: 'node-worker-owned',
+            modelId: 'model-test', leaseEpoch: host.broker.leaseEpoch,
+            inventoryDigest: nativeToolInventoryDigest(tools, mapping), inputDigest: `model-tool-${server}-${attemptOrdinal}`,
+            attemptOrdinal }, state: 'prepared', createdAt: Date.now(),
+        };
+        const controller = new AbortController();
+        const service = {} as Parameters<typeof createNativeToolPort>[0]['service'];
+        const port = createNativeToolPort({ receipt, tools, toolNameMap: mapping,
+          service,
+          authority: host.broker, signal: controller.signal, originalProcessHost: host.process,
+          executionExtensionContext: context });
+        return { port, controller };
+      };
+
+      workerModelToolAssertions.length = 0;
+      const { port } = await makePort('fixture-worker', 'worker_read_file');
+      await assertNativeToolPortModelTools(port, context);
+      expect(workerModelToolAssertions).toEqual([{ name: toolName, server: 'fixture-worker', tool: 'worker_read_file' }]);
+      await expect(assertNativeToolPortModelTools(port, {} as never)).rejects.toThrow('Source context changed');
+      await expect(assertNativeToolPortModelTools({} as never, context)).rejects.toThrow('in-process capability');
+
+      const cancelled = await makePort('fixture-worker', 'worker_read_file');
+      cancelled.port.cancel();
+      await expect(assertNativeToolPortModelTools(cancelled.port, context)).rejects.toThrow();
+
+      const foreign = await makePort('foreign-worker', 'worker_read_file');
+      await expect(assertNativeToolPortModelTools(foreign.port, context)).rejects.toThrow('foreign MCP binding');
+      expect(workerModelToolAssertions.at(-1)).toEqual({ name: toolName, server: 'foreign-worker', tool: 'worker_read_file' });
+
+      enrollment.active = false;
+      await expect(assertNativeToolPortModelTools(port, context)).rejects.toThrow();
+    });
+  }, 30000);
   it('acquires the Worker host through production callModel instead of caller-supplied native capabilities', async () => {
     await withWorkerClaim(async ({ autoInvoke, workerLedger }) => {
       expect(await autoInvoke()).toMatchObject({ success: true });
@@ -746,6 +806,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
   it.each([false, true])('confirms Codex handoff only after owned exit and pipe close (revoke=%s)', async revoked => {
     selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' };
     emitHandoff = true;
+    codexHandoffQueuedItem = true;
     await withClaim(async (input, goalId) => {
       afterHandoffStop = async () => {
         expect((await ledger()).reservations[0].handoff.state).toBe('requested');
@@ -755,6 +816,10 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         }
       };
     }, async () => {
+      expect(codexFrames.some(frame => frame && typeof frame === 'object' && 'method' in frame &&
+        frame.method === 'item/started' && 'params' in frame && frame.params && typeof frame.params === 'object' &&
+        'item' in frame.params && frame.params.item && typeof frame.params.item === 'object' && 'id' in frame.params.item &&
+        typeof frame.params.item.id === 'string' && frame.params.item.id.startsWith('native-queued-handoff-item-'))).toBe(true);
       expect(codexRegistrations).toHaveLength(1);
       const witness = await codexExitWitnesses[0];
       expect(witness.pipeCloseObservedAtExit).toBe(false);

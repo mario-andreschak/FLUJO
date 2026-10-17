@@ -25,7 +25,7 @@ import { assertNativeInvocationSessionHook, createNativeInvocationSession,
   type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
 import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
-import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, createProcessNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
 import { NATIVE_HANDOFF_PROTOCOL, CODEX_NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
@@ -1231,13 +1231,10 @@ export class ModelHandler {
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (!input.nativeOriginalHost && input.personaAttribution) {
-      input = { ...input, nativeOriginalHost: await createPersonaNativeOriginalHost({ authority: input.executionAuthority,
+    if (!input.nativeOriginalHost && (input.personaAttribution || input.executionExtensionContext)) {
+      input = { ...input, nativeOriginalHost: await createProcessNativeOriginalHost({ authority: input.executionAuthority,
+        context: input.executionExtensionContext,
         conversationId, runId, nodeId, modelId, personaAttribution: input.personaAttribution }) };
-    }
-    if (!input.nativeOriginalHost && input.executionExtensionContext) {
-      input = { ...input, nativeOriginalHost: await createWorkerNativeOriginalHost({ context: input.executionExtensionContext,
-        conversationId, runId, nodeId, modelId }) };
     }
     if (input.nativeOriginalHost) {
       assertNativeOriginalProcessHost(input.nativeOriginalHost.process);

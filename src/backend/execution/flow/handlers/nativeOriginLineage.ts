@@ -266,11 +266,15 @@ export async function readNativeOriginLineage(input: {
       input.signal.throwIfAborted();
       await authority.assertCurrent();
       input.signal.throwIfAborted();
-      await root.assertCurrent();
-      input.signal.throwIfAborted();
-      // The root gate can await long enough for the Worker lease to change.
-      await authority.assertCurrent();
-      input.signal.throwIfAborted();
+      // Both branded capabilities can share one complete authority gate. Do
+      // not multiply its joined store reads through aliases of that function.
+      if (root.assertCurrent !== authority.assertCurrent) {
+        await root.assertCurrent();
+        input.signal.throwIfAborted();
+        // A distinct root gate can await long enough for the Worker lease to change.
+        await authority.assertCurrent();
+        input.signal.throwIfAborted();
+      }
     };
     const status = async () => {
       const current = await nativeInvocationStatus(receipt.invocationId, receipt.owner);

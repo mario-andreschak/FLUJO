@@ -6,6 +6,7 @@ import { applyExecutionRunInput, createExecutionExtensionContext, ExecutionExten
   type ExecutionNativeWorkerRootRequest } from './index';
 import { createControllerNativeToolGateway, type ControllerNativeToolTransport } from './controllerNativeTools';
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
+import type { FlowRunInput } from '../flow/runFlow';
 
 type Claim = Readonly<{ runId: string; rootConversationId: string; goalId: string; workspace: string }>;
 type Plan = Readonly<{ flowId: string; flowDigest: string; modelId: string; modelDigest: string }>;
@@ -15,11 +16,19 @@ export interface ControllerNativeTransport {
   admit(workerAuthorization: string, claim: Claim): Promise<object>;
   readPlan(context: object): Promise<Plan>;
   readChildren?(context: object): Promise<ChildPlan[]>;
+  /** Optional atomic Parent gate for current authority plus exact installed plan. */
+  assertPlan?(context: object, expectedPlan: Plan, expectedChildren: ChildPlan[]): Promise<void>;
   assertRun(context: object, expected?: { conversationId?: string; runId?: string; graphHash?: string }): Promise<void>;
   bindRun(context: object, conversationId: string, runId: string): Promise<void>;
   readRoot(context: object, expected: ExecutionNativeWorkerRootRequest): Promise<ExecutionNativeWorkerRoot>;
   commit<T>(context: object, task: () => Promise<T>): Promise<T>;
   observe(context: object): Promise<{ signal: AbortSignal; close(): Promise<void> }>;
+  /** Cleanup of a known admission even when initial observation fails. */
+  retire?(context: object): Promise<void>;
+  /** Parent independently observes terminal Source state before retiring a claim. */
+  complete?(context: object, source: ExecutionExtensionContext): Promise<void>;
+  /** Exact genuine dispatcher or causal child input; never a serialized Worker grant. */
+  validateOwnerRunInput?(context: object, input: FlowRunInput): Promise<void>;
   /** Supplied only by the trusted Parent composition, never by Worker input. */
   codexProfile?(context: object): Promise<RestrictedCodexProfile>;
 }
@@ -58,6 +67,9 @@ export function createControllerNativeWorkerSourceAdapter(transport: ControllerN
 type Binding = { composed: ControllerNativeSourceAdapter; requesterDigest: string };
 const shared = globalThis as typeof globalThis & { __flujoControllerNativeAdapters?: Map<string, Binding> };
 const adapters = shared.__flujoControllerNativeAdapters ??= new Map<string, Binding>();
+export function controllerNativeSourceFor(bindingId: string): ControllerNativeSourceAdapter | undefined {
+  return adapters.get(bindingId)?.composed;
+}
 
 async function boundedRequestBody(request: Request): Promise<unknown> {
   const reader=request.body?.getReader(); if (!reader) throw denied();
@@ -107,14 +119,31 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
   };
   const current = async (selected: Active) => {
     if (closed) throw denied(); selected.watch.signal.throwIfAborted();
-    await transport.assertRun(selected.remote);
-    if (digest(checkedPlan(await transport.readPlan(selected.remote))) !== digest(selected.plan)) throw denied();
-    if(digest(checkedChildren(await transport.readChildren?.(selected.remote)??[]))!==digest(selected.children))throw denied();
+    if (transport.assertPlan) await transport.assertPlan(selected.remote, selected.plan, selected.children);
+    else {
+      await transport.assertRun(selected.remote);
+      if (digest(checkedPlan(await transport.readPlan(selected.remote))) !== digest(selected.plan)) throw denied();
+      if(digest(checkedChildren(await transport.readChildren?.(selected.remote)??[]))!==digest(selected.children))throw denied();
+    }
     if (closed) throw denied(); selected.watch.signal.throwIfAborted();
+  };
+  const validateChildOwnerInput = async (selected: Active, input: FlowRunInput, plan: ChildPlan) => {
+    if (input.flowDefinition && digest(input.flowDefinition) !== plan.flowDigest) throw denied();
+    if (input.flowDefinition || input.personaAttribution || input.executionAuthority
+      || input.personaInstructionContext || input.personaCoreAppRefs !== undefined) {
+      if (!transport.validateOwnerRunInput) throw denied();
+      await transport.validateOwnerRunInput(selected.remote,input);
+      await current(selected);
+    }
   };
   const adapter: ExecutionExtensionAdapter = {
     isProtectedServer: server => gateway.isProtectedServer(server),
     assertServerConfig: config => gateway.assertServerConfig(config),
+    protectedServerConfig: server => {
+      const config = (transport as Partial<ControllerNativeToolTransport>).toolConfig;
+      return config && server === config.name ? { ...structuredClone(config), transport: 'streamable',
+        disabled: false, rootPath: '', env: {}, _buildCommand: '', _installCommand: '' } : undefined;
+    },
     async assertRun(context, expected) {
       const selected=item(context),child=childContexts.get(context);await current(selected);
       if(child){
@@ -129,26 +158,33 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
       const selected=item(context); await current(selected);
       const child=childContexts.get(context);
       if(child){
-        if(input.conversationId!==child.conversationId||input.flowId!==child.plan.flowId||input.flowDefinition
-          ||input.personaAttribution||input.parentRunId!==selected.claim.rootConversationId||input.depth!==1
+        if(input.conversationId!==child.conversationId||input.flowId!==child.plan.flowId
+          ||input.parentRunId!==selected.claim.rootConversationId||input.depth!==1
           ||input.source!=='subflow'||input.mode!=='conversation')throw denied();
+        await validateChildOwnerInput(selected,input,child.plan);
         return;
       }
       if (input.conversationId!==selected.claim.rootConversationId || input.flowId!==selected.plan.flowId
-          || input.flowDefinition || input.personaAttribution || input.parentRunId || (input.depth??0)!==0) throw denied();
+          || input.parentRunId || (input.depth??0)!==0) throw denied();
+      if (input.flowDefinition || input.personaAttribution || input.executionAuthority) {
+        if (!transport.validateOwnerRunInput) throw denied();
+        await transport.validateOwnerRunInput(selected.remote,input); await current(selected);
+      }
     },
     async prepareSubflow(context,input) {
       const selected=item(context);await current(selected);
       if(childContexts.has(context)||!selected.context||input.source!=='subflow'||input.depth!==1
-        ||input.parentRunId!==selected.claim.rootConversationId||!input.conversationId||input.flowDefinition
-        ||input.personaAttribution||input.mode!=='conversation'||selected.child||!input.lane?.invocationId||!input.lane.laneId)throw denied();
+        ||input.parentRunId!==selected.claim.rootConversationId||!input.conversationId
+        ||input.mode!=='conversation'||selected.child||!input.lane?.invocationId||!input.lane.laneId)throw denied();
+      const plan=selected.children.find(value=>value.parentNodeId===input.lane?.parentNodeId&&value.flowId===input.flowId);
+      if(!plan)throw denied();
+      await validateChildOwnerInput(selected,input,plan);
       const {FlowExecutor}=await import('../flow/FlowExecutor');
       const parent=FlowExecutor.conversationStates.get(selected.claim.rootConversationId);
       const invocation=parent?.subflowInvocations?.[input.lane.invocationId];
       const lane=invocation?.lanes.find(value=>value.id===input.lane!.laneId);
-      const plan=selected.children.find(value=>value.parentNodeId===input.lane?.parentNodeId&&value.flowId===input.flowId);
       const node=parent?.flowSnapshot?.nodes.find(value=>value.id===plan?.parentNodeId);
-      if(!plan||plan.modelId!==selected.plan.modelId||plan.modelDigest!==selected.plan.modelDigest
+      if(selected.child||plan.modelId!==selected.plan.modelId||plan.modelDigest!==selected.plan.modelDigest
         ||parent?.executionExtensionContext!==selected.context||parent.isCancelled||parent.runDepth!==0
         ||digest(parent.flowSnapshot)!==selected.plan.flowDigest||!parent.logicalRunId
         ||node?.data.type!=='subflow'||node.data.properties?.subflowId!==plan.flowId
@@ -293,7 +329,13 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
       if (closed || typeof task!=='function' || active.size>=100 || conversations.size>=256) throw denied();
       const captured=Object.freeze(structuredClone(claim));
       const remote=await transport.admit(workerAuthorization,captured);
-      const observed=await transport.observe(remote);
+      let observed: Awaited<ReturnType<ControllerNativeTransport['observe']>>;
+      try { observed=await transport.observe(remote); }
+      catch (error) {
+        try { await transport.retire?.(remote); }
+        catch (cleanup) { throw new AggregateError([error,cleanup],'Controller observation and admission cleanup failed.'); }
+        throw error;
+      }
       const watch=signal?{...observed,signal:AbortSignal.any([observed.signal,signal])}:observed;
       let selected: Active | undefined;
       const value = Object.freeze({});
@@ -309,6 +351,7 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
         await current(selected);
         const result=await runWithExecutionInput({source:'internal',executionExtensionContext:context,conversationId:captured.rootConversationId,flowId:plan.flowId},()=>task(context));
         await current(selected);
+        await transport.complete?.(remote,context);
         return result;
       } catch (error) { failed = true; primary = error; throw error; }
       finally {
