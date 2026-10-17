@@ -34,8 +34,19 @@ export function assertSummarySources(calls, { allowRejectedSources = false } = {
 }
 
 export function assertUncertainActionNotConsulted(calls, actionId) {
-  assert.equal(calls.filter(call => call.tool === 'lookup_action' && call.actionId === actionId).length, 0,
+  const committed = calls.findIndex(call => call.tool === 'commit_action' && call.actionId === actionId);
+  assert(committed >= 0, 'The actual uncertain write must be present in the ledger');
+  assert.equal(calls.slice(committed + 1).filter(call => call.tool === 'lookup_action' && call.actionId === actionId).length, 0,
     'The uncertain action must await the user reconciliation request');
+}
+
+export function assertExternalObservations(calls, round) {
+  assert(Number.isInteger(round) && round >= 0 && round <= 10);
+  const reads = calls.filter(call => call.tool === 'read_observation');
+  assert.deepEqual(reads.map(call => call.round), Array.from({ length: round + 1 }, (_, index) => index),
+    'Each genuine external observation must be read once, without peeking ahead or replaying an old observation');
+  assert(reads.every(call => call.result && call.result.isError !== true),
+    'An error-shaped MCP result cannot count as a successful external observation');
 }
 
 // Move the current correction within one trusted source message. Earlier

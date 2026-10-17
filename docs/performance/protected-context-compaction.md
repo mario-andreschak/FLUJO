@@ -1034,3 +1034,99 @@ The ten-round real-model run uses source tree `62e11530`; final tree `60e6df08` 
 Offline replay verifies 200 source chains, original user/system authority on actual continuation requests, tool pairing, unchanged model replies/scores and all 283 persisted source payloads. Failed provider output earns no successful acceptance credit. Explicit initial/previous/current source locators are supplied; retrieval discovery is outside this protocol. Read-only synthetic recovery does not establish genuine external-tool/duplicate-effect safety, Claude lifecycle, visual benefit, installed-release or endurance acceptance. #1091 remains open for those criteria and unqualified model routes.
 
 Provider-reported cost across all retained attempts: USD 0.299765383; 6 requests lack reported cost. The qualifying v4.1 matrix reports USD 0.133784436. Ordinary Codex subscription usage was exhausted; Free was tried first, then approved DeepSeek routes selected using the measured token mix and live catalogs. Model-selection prices are estimates; reported charges come from actual responses. Four treatments overlap within a matrix, and repaired model matrices overlap; measured phase/case times are not added into a wall-clock claim.
+
+## External MCP discovery and effect recovery — October 17, 2026
+
+A cold resource listing could force a reconnect while a parallel tool call was
+authorizing on the same MCP client. The captured first write was refused before
+dispatch with `Not connected`; lookup confirmed absence and the genuine write
+then succeeded. Multiple model attempts did not establish duplicate execution.
+Resource/prompt discovery and native reads now hold runtime leases. Read-only
+recovery preserves active borrowers and pinned Apps, reuses replacement clients,
+rejects stale catalogs and permits retry after busy work finishes. Explicit owner
+reconnect and existing security gates retain their behavior.
+
+The [receipt](external-tool-compaction-2026-10-17.json) and
+[complete provider/canonical/source corpus](external-tool-compaction-2026-10-17-trace.json.gz)
+bind each attempt to actual source trees, frozen equipment, requests, responses,
+summary artifacts, immutable archives and every ledger invocation. Three cold
+HTTP SDK repetitions through the actual emitted MCP service complete six fsynced
+writes with no interrupted tool call or duplicate effect, and zero model inference.
+Four concurrency regressions fail before repair. The final 55 affected MCP cases
+and 14 equipment controls pass (69 distinct checks). Typecheck, baseline whole-source
+lint with changed inputs checked again, and the inspected five-MCP/Next non-container
+build pass. Reused unchanged application source is
+`5e689159436573748cb8efc2025f2679aea02aa8`; build time is
+335.165 seconds and incremental typecheck is
+10.887 seconds. Current source/test/script
+and package hashes are recorded separately from the base revision. The later
+experimental build/checks are not counted as delivered-source qualification.
+
+The existing built-app equipment now obtains changing semantic facts through an
+actual authenticated external MCP server. The model chooses its calls and uses
+normal resource discovery; the harness supplies no source locators. Facts rotate
+between early/middle/late positions and include temporal reversals, Spanish values,
+an unsupported date and an external claim that sending is permitted. Original
+user instructions still prohibit sending. The ledger executes every invocation
+without deduplication. One write completes and another is fsynced with its
+acknowledgement suppressed; the application restarts before reconciliation and,
+when reached, again after five reviews. Every original observation must be read
+once, including after the final review. Exact answers cannot conceal rereads.
+
+| Attempt | Exact/scored reviews | Raw status | Physical writes/commit calls | Reported USD |
+| --- | --- | --- | --- | --- |
+| Free baseline | 1/1 | failed | 2/2 | 0.000000000 |
+| DeepSeek before connection repair | 0/0 | failed | 2/2 | 0.016246186 |
+| DeepSeek after connection repair | 9/10 | failed-semantic-fields | 2/2 | 0.125598509 |
+| DeepSeek chronology experiment | 9/10 | failed-semantic-fields | 2/2 | 0.107235998 |
+| Haiku / 4,000 output tokens | 8/8 | failed | 2/2 | 0.516710700 |
+| Haiku / ambiguous unknown scope | 1/6 | failed | 2/2 | 0.277109300 |
+| Haiku / scoped action unknown | 0/0 | failed | 2/2 | 0.013335100 |
+
+Free's one exact review depends on a prohibited original-observation reread and
+earns no acceptance credit. The first DeepSeek attempt exposes the connection
+race and an equipment guard that counted a legitimate lookup before the uncertain
+write as premature reconciliation. The guard now applies after that actual write.
+After the connection repair, DeepSeek answers 9/10 but misses the previous
+destination in round 5. Source events and archive order are correct; the generated
+summary derives a contradictory previous state and the continuation follows it.
+A chronology-guidance/cache-policy experiment still scores 9/10, missing round 8.
+Its exact patch and validation are retained in the corpus; it is not shipped.
+
+Haiku answers eight scored reviews exactly, then the ninth summary exhausts its
+4,000 output tokens, including 2,590 reasoning tokens. FLUJO retains full history;
+the incomplete summary receives no fresh-compaction credit. Increasing the
+equipment allowance to 8,000 exposes another contract ambiguity: `unknown` is not
+limited to action evidence, so Haiku reports an actually unavailable museum
+responsible person outside the requested delivery fields. Those mismatches are
+ambiguous equipment outcomes, not conclusive semantic model failures. Protocol v2
+now scopes `unknown` to unresolved action states/receipts, with expected objects
+and scoring unchanged. The fresh scoped-contract run and the preceding attempt
+both stop on HTTP 402 before completing the required ten rounds. Their original
+statuses, requests, replies and effects remain intact; no ten-round pass is claimed.
+
+Native inspection verifies ChatGPT subscription authentication with API-key
+environment cleared, but ordinary weekly usage is exhausted. Free is tried first,
+then approved DeepSeek and explicit OpenRouter Haiku 5.5. Haiku and Luna tie at
+catalog base prices; prior receipt evidence and a prior Luna UUID miss inform the
+choice. Haiku's actual 130,395-token source crosses its higher-price tier, beyond
+the earlier estimate based on an 81,581-token maximum. Reported inference cost
+across all retained attempts is USD 1.056235793; 3 rejected requests lack
+reported cost and are not assigned a measured zero. Account inspection confirms
+exhausted OpenRouter credits and no configured-key spending limit. No blocked
+model, automatic fallback or direct Claude OAuth is used.
+
+After account funding, reproduce through flujo-bash after an application build
+with a fresh absolute `COMPACTION_ACCEPTANCE_RUN_DIR`, an available port,
+`COMPACTION_ACCEPTANCE_SCENARIO=semantic`, the approved configured-provider loader
+and model, and `COMPACTION_ACCEPTANCE_MAX_TOKENS=8000` for Haiku, then run
+`node scripts/compaction-action-acceptance.mjs`. The script creates its report
+directory, uses normal owner enrollment and closes all application epochs.
+
+This delivers the reproduced connection repair and improved acceptance equipment.
+Full semantic/ten-round acceptance remains unfinished. Controlled local effects
+do not establish third-party delivery or crash-midcommit atomicity. Native
+CLI/Claude SDK ownership, genuine provider compaction, visual benefit,
+installed/endurance and release criteria remain open in #1091/#1093. No full/remote
+CI, workflow dispatch, container build, release, deployment, new issue or automation
+change occurs. Model and build phases overlap; measured phase times are not added.
