@@ -949,3 +949,61 @@ No product source or acceptance criterion changes in this batch. #1091 remains
 open for genuine provider compaction, native SDK/CLI, broader semantic/position
 and visual behavior, installed/endurance and release acceptance. No full/remote
 CI, container build, release or automation change is introduced.
+
+## Codex native compaction and durable resume — October 16, 2026
+
+The owned app-server transport omitted the documented `thread/compact/start`
+method from its admission list. A live capability probe completed an ordinary
+Terra subscription reply, then FLUJO refused the compaction locally before
+dispatch. The new process-boundary regression reproduces that refusal. The
+repair admits this specific method through the existing owned transport.
+
+The [bound source, full traces, failures and limits](codex-native-compaction-2026-10-16.json)
+record ten successive genuine native compactions and eleven exact production
+adapter replies on **GPT-5.6 Terra low**, with Codex CLI/SDK **0.162.1**.
+Twenty-one fresh workers verify native `account/read = chatgpt`, cleared API-key
+environment, managed credentials/configuration and containment in the owned
+profile. The CLI binary hash stays identical. One durable thread survives every
+process restart.
+
+Each native operation must finish its typed `contextCompaction` lifecycle and
+append a durable full replacement window containing an encrypted `compaction`
+item. Earlier native records remain byte-equivalent. After every compaction,
+the emitted production adapter resumes the same thread, leaves every native
+window unchanged, and sends only the new question. The native rollout confirms
+that the exact receipt is not reinjected. All eleven replies preserve the JSON,
+Spanish/Unicode path, UUID, SHA-256, revoked permission, accepted correction,
+completed-operation state and unknown-field null. Canonical caller input hashes
+remain intact.
+
+The final two focused suites pass 47 checks; the new regression fails before
+repair. Fresh typecheck, source/test/harness lint and the inspected non-container
+five-MCP/Next build pass. Measured build time is 354.053 seconds, typecheck
+63.188 seconds and lint 104.348 seconds. Final worker timings are p50/p95
+6.224/7.783 seconds for compaction and 6.563/7.700 seconds for adapter turns;
+these include startup, account verification and binary hashing. The final
+cumulative adapter/native counter is 96,034 input / 1,775 output tokens. Native
+compactor counters are retained separately; do not add overlapping counters or
+infer a per-call dollar invoice. No separately billed provider request is made.
+
+The initial helper-lookup attempt failed before inference and receives no
+acceptance credit. The next probe's local method refusal also receives no
+compaction credit. A successful one-round capability check preceded the frozen
+ten-round run. Across these probes and the final run there are fourteen completed
+adapter turns and eleven completed native compaction operations, all using the
+verified approved subscription route. Full failed attempts remain in the trace.
+
+To reproduce through flujo-bash after an application build, set
+`CODEX_ACCEPTANCE_ROUTE=subscription`,
+`COMPACTION_ACCEPTANCE_MODEL=gpt-5.6-terra` and
+`CODEX_ACCEPTANCE_NATIVE_COMPACTIONS=10`, then run
+`node scripts/codex-native-lifecycle-acceptance.mjs <new-absolute-private-report.json>`.
+The harness sets and asserts both FLUJO data-root markers before loading the
+emitted runtime. It never falls back to another model or API-key billing.
+
+This qualifies controlled manual native compaction and durable adapter resume
+for the tested route. Automatic thresholds, real external actions/tool replay,
+Claude SDK lifecycle, broader semantic/position/visual comparisons and
+installed/endurance/release acceptance remain outside this result. #1091 stays
+open for those existing criteria. No full/remote CI, container build, release,
+deployment or automation change is introduced.

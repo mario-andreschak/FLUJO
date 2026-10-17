@@ -32,7 +32,7 @@ export class CodexAppServerRequestError extends Error {
 export type CodexAppServerRequest = Readonly<{ id: number | string; method: string; params: unknown }>;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING = 32;
-const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'thread/fork', 'turn/start', 'turn/steer', 'turn/interrupt']);
+const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'thread/fork', 'thread/compact/start', 'turn/start', 'turn/steer', 'turn/interrupt']);
 
 /** Own the public app-server child at birth. Registration precedes all wire input.
  * This transport does not by itself qualify a model, tool inventory, or Original.

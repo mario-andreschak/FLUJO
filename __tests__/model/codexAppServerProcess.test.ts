@@ -18,6 +18,13 @@ process.stdin.on('end',()=>process.exit(0));
 readline.createInterface({input:process.stdin}).on('line',line=>{
   fs.appendFileSync(log,line+'\\n');
   const m=JSON.parse(line);if(m.id===undefined || m.method===undefined)return;
+  if(mode==='compaction' && m.method==='thread/compact/start'){
+    const params={threadId:m.params.threadId,turnId:'compact-1',item:{id:'item-compact-1',type:'contextCompaction'}};
+    process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n'+
+      JSON.stringify({method:'item/started',params})+'\\n'+
+      JSON.stringify({method:'item/completed',params})+'\\n'+
+      JSON.stringify({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:'compact-1',status:'completed'}}})+'\\n');return;
+  }
   if(mode==='incoming-terminal' && m.method==='turn/interrupt'){
     process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n'+JSON.stringify({method:'turn/completed',params:{threadId:'thread-1',turn:{id:'turn-1',status:'interrupted'}}})+'\\n');return;
   }
@@ -207,4 +214,23 @@ it('bounds a silent request and refuses methods outside the admitted protocol',a
   expect(await wire()).toBe('');
   await expect(child.request('initialize',{},50)).rejects.toThrow('unavailable');
   await child.registration.exit;await child.registration.close;
+});
+
+it('admits native compaction and preserves its typed completion lifecycle on the owned child',async()=>{
+  const notifications:Array<{method?:string;params?:unknown}>=[];
+  let complete!:()=>void;
+  const completed=new Promise<void>(resolve=>{complete=resolve;});
+  const child=await startOwnedCodexAppServer({...options('compaction'),onNotification:message=>{
+    notifications.push(message);
+    if(message.method==='turn/completed')complete();
+  }});children.push(child);
+  await child.request('initialize',{});
+  await expect(child.request('thread/compact/start',{threadId:'thread-1'})).resolves.toEqual({});
+  await completed;
+  expect(notifications.map(message=>message.method)).toEqual(['item/started','item/completed','turn/completed']);
+  expect(notifications[1].params).toEqual({threadId:'thread-1',turnId:'compact-1',item:{id:'item-compact-1',type:'contextCompaction'}});
+  const requests=(await wire()).trim().split('\n').map(line=>JSON.parse(line));
+  expect(requests.at(-1)).toMatchObject({method:'thread/compact/start',params:{threadId:'thread-1'}});
+  await child.stop();
+  await child.registration.close;
 });
