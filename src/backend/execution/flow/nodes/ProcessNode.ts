@@ -842,7 +842,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // the provider's prefix cache — so it is surfaced to the model as a synthetic
     // `[System update]` tail message instead. Re-frozen only at a compaction
     // boundary (where the prefix is rebuilt anyway).
-    const freeze = resolveFrozenSystemPrompt(
+    const requestedPromptPolicy = node_params?.properties?.systemPromptPolicy;
+    if (requestedPromptPolicy !== undefined && requestedPromptPolicy !== 'stable' && requestedPromptPolicy !== 'per-turn') {
+      throw new Error('Choose stable or per-turn system instructions for this step.');
+    }
+    const systemPromptPolicy = requestedPromptPolicy ?? 'stable';
+    prepResult.systemPromptPolicy = systemPromptPolicy;
+    const freeze = systemPromptPolicy === 'per-turn'
+      ? { content: completePrompt, frozenSystemPrompts: sharedState.frozenSystemPrompts ?? {}, frozeNow: false, driftUpdate: undefined }
+      : resolveFrozenSystemPrompt(
       nodeId,
       completePrompt,
       sharedState.frozenSystemPrompts,
@@ -955,7 +963,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       && typeof message.content === 'string'
       && (message.content.includes('${') || message.content.includes('@'))
     )) {
-      wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
+      const resolvedWireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
         if (message.role !== 'user' || typeof message.content !== 'string') return message;
         await assertModelCatalogLeaseOwned();
         let content = await promptRenderer.resolveChatMessageReferences(
@@ -986,6 +994,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           ? message
           : { ...message, content } as FlujoChatMessage;
       }));
+      // A literal @path or unresolved reference can pass through unchanged.
+      // Preserve the full-history identity in that case: a wire-only array
+      // disables native session resume even when its content is identical.
+      if (resolvedWireBase.some((message, index) => message !== wireBase[index])) {
+        wireBase = resolvedWireBase;
+      }
     }
 
     let resolvedIsolatedPrompt: string | undefined;
@@ -1032,7 +1046,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     let materialized = finalizeModelInputMaterialization({
       ...materializationBase,
       folded: wireBase,
-      systemContent: completePrompt,
+      systemContent: systemPromptContent,
       inputMode,
       isolatedPrompt: resolvedIsolatedPrompt,
       mcpAppContexts: sharedState.mcpAppContexts,
@@ -1144,7 +1158,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       materialized = finalizeModelInputMaterialization({
         ...materializationBase,
         folded: wireBase,
-        systemContent: completePrompt,
+        systemContent: systemPromptContent,
         inputMode,
         isolatedPrompt: resolvedIsolatedPrompt,
         mcpAppContexts: sharedState.mcpAppContexts,
@@ -1305,6 +1319,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             modelId: prepResult.boundModel,
             modelCatalogAdmission: prepResult.modelCatalogAdmission,
             prompt: prepResult.currentPrompt,
+            systemPromptPolicy: prepResult.systemPromptPolicy,
             messages: prepResult.messages,
             // Scoped view for latest-message / isolated inputMode; when unset the
             // model sees `messages` verbatim (full-history). Persistence always uses

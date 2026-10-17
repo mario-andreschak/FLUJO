@@ -90,14 +90,14 @@ export function resolveFrozenSystemPrompt(
     };
   }
 
-  if (fresh === frozen) {
+  const latestUpdate = [...existingMessages].reverse().find(message =>
+    message.role === 'user' && typeof message.content === 'string' && message.content.startsWith(SYSTEM_UPDATE_PREFIX));
+  const driftText = buildSystemUpdateText(frozen, fresh);
+  if (fresh === frozen && !latestUpdate) {
     return { content: frozen, frozenSystemPrompts: current, frozeNow: false };
   }
 
-  const driftText = buildSystemUpdateText(frozen, fresh);
-  const alreadyPresent = existingMessages.some(
-    (m) => m.role === 'user' && m.content === driftText
-  );
+  const alreadyPresent = latestUpdate?.content === driftText;
 
   return {
     content: frozen,

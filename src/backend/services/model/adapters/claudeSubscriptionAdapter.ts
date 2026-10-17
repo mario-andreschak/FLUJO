@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 // Type-only imports (erased at compile time, so they don't trigger the ESM
 // runtime-load issue that forces the Agent SDK itself to be imported lazily).
@@ -42,8 +42,12 @@ import { embedSchemaInDescription } from './jsonSchemaToZod';
 import { createOwnedToolSchemaBuilder } from './ownedArchiveSchema';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import { ClaudeUsageTracker } from './claudeUsageTracker';
+import { hasClaudeSessionTranscript, captureClaudeSessionTranscript, canonicalSessionValue, sessionValueHash, claudeSdkRuntimeIdentity } from './claudeSessionPersistence';
+import { ClaudeResultCorrelation } from './claudeResultCorrelation';
 import {
   sessionKey,
+  acquireClaudeSession,
+  computeHistoryHash,
   computePrefixHash,
   findReusableSession,
   recordSession,
@@ -314,7 +318,15 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
  * multimodal user turn can carry image content blocks alongside its text.
  */
 export class ClaudeSubscriptionAdapter implements CompletionAdapter {
-  async createCompletion({
+  async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    const key = input.sessionResume && !input.nativeToolPort && !input.executionExtensionContext && input.conversationId && input.nodeId ? sessionKey(input.conversationId, input.nodeId) : undefined;
+    const release = key ? await acquireClaudeSession(key, input.signal) : undefined;
+    try { return await this.createSerializedCompletion(input); }
+    catch (error) { if (key) invalidateSession(key); throw error; }
+    finally { release?.(); }
+  }
+
+  private async createSerializedCompletion({
     model,
     apiKey,
     messages,
@@ -339,6 +351,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     nodeId,
     runResourceMarkers,
     sessionResume,
+    systemPromptPolicy = 'stable',
+    onSessionEvent,
     onSdkRequest,
     onSdkRequestResult,
     onNativeSdkLive,
@@ -373,6 +387,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
     const runtime = await prepareClaudeRuntimeEnvironment();
+    const runtimeIdentity = claudeSdkRuntimeIdentity();
     let runResourceSettings: RunResourceSettings | undefined;
     if (conversationId && !nativeToolPort) {
       try {
@@ -383,10 +398,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
     }
 
-    // The FULL flatten of the whole history. `systemPrompt` is the hoisted,
-    // prefix-stable system block (unchanged turn to turn for a given node); its
-    // `content` is the always-correct fallback we send when NOT resuming.
-    const { systemPrompt, content: fullContent } = buildUserMessage(messages, runResourceMarkers);
+    // Render only instructions before deciding reuse. An eligible resume must
+    // not allocate a discarded flatten of all prior tools, prose and media.
+    const { systemPrompt } = buildUserMessage(messages.filter(message => message.role === 'system'), runResourceMarkers);
 
     // #154 session tracking. When the caller identifies the conversation+node,
     // key a reusable Agent SDK session on a hash of the reusable prefix
@@ -398,12 +412,21 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // measurement signal AND, when `sessionResume` is on, to actually resume.
     const leadingSystemMessageCount = countLeadingSystemMessages(messages);
     const sessionTracking =
-      conversationId && nodeId
+      sessionResume && !nativeToolPort && !executionExtensionContext && conversationId && nodeId
         ? {
             key: sessionKey(conversationId, nodeId),
             prefixHash: computePrefixHash(
               systemPrompt,
-              (tools ?? []).filter(t => t.type === 'function').map(t => t.function.name),
+              tools ?? [],
+              { systemPromptPolicy, snapshot: systemPromptPolicy !== 'per-turn', model: model.name,
+                effort: model.reasoningEffort, maxTurns: maxTurns ?? DEFAULT_MAX_TURNS,
+                toolBindings: toolNameMap, exposedToolOrder: (tools ?? []).map(tool => tool.type === 'function' ? tool.function.name : tool.type),
+                localExecutors: Object.entries(localToolExecutors ?? {}).map(([name, executor]) => [name, executor.toString()]),
+                // Allowance groups use a process-random HMAC and cannot bind a
+                // durable session. Only the enclosing private prefix digest is
+                // saved; credential changes must still invalidate reuse.
+                account: sessionValueHash({ scope: 'claude-session-account-v1', credential: apiKey }),
+                runtimeIdentity, semantics: 'claude-lifecycle-v3-durable-account' },
             ),
           }
         : undefined;
@@ -415,27 +438,34 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // the session's watermark (`seenMessageCount`) — the SDK already holds every
     // prior turn NATIVELY, so re-sending them would duplicate context. Otherwise
     // fall back to the full flatten (the always-correct path). The systemPrompt
-    // is still passed on resume: the SDK applies it per-invocation (it is not
-    // part of the persisted transcript), and the prefix-hash match guarantees it
-    // is byte-identical to what the session was built with.
+    // uses an explicit snapshot policy: stable prompts are recorded, while
+    // per-turn prompts render at the next serialized invocation boundary.
+    // Recorded-session migrations always start fresh under the v2 fingerprint.
     let resumeSessionId: string | undefined;
-    let userContent: string | Anthropic.ContentBlockParam[] = fullContent;
+    let resumeCheckpoint: import('./claudeUsageTracker').ClaudeUsageCheckpoint | undefined;
+    let resumeReason = sessionResume ? 'no-compatible-checkpoint' : 'resume-disabled';
+    let reusableSessionAvailable = false;
+    let userContent: string | Anthropic.ContentBlockParam[] = '';
     if (sessionResume && sessionTracking) {
       const reusable = findReusableSession(
         sessionTracking.key,
         sessionTracking.prefixHash,
-        messages.length,
+        messages as unknown as Array<{ role: string; [key: string]: unknown }>,
         leadingSystemMessageCount,
       );
       // Only resume when there are genuinely new messages beyond the watermark;
       // an empty delta would mean "nothing new to say" (degenerate) — fall back
       // to the full flatten rather than send an empty turn.
-      if (reusable && messages.length > reusable.seenMessageCount) {
+      if (reusable && reusable.usageCheckpoint && reusable.transcriptCheckpoint && messages.length > reusable.seenMessageCount
+        && await hasClaudeSessionTranscript(runtime.home, reusable.sessionId, reusable.transcriptCheckpoint)) {
+        reusableSessionAvailable = true;
         const delta = buildUserMessage(messages.slice(reusable.seenMessageCount), runResourceMarkers);
         // `content` is a string OR a content-block array; both expose `.length`,
         // so a non-empty delta means there is genuinely something new to send.
         if (delta.content.length > 0) {
           resumeSessionId = reusable.sessionId;
+          resumeCheckpoint = reusable.usageCheckpoint;
+          resumeReason = 'compatible-history-and-transcript';
           userContent = delta.content;
           log.debug('Claude subscription resuming session (#154)', {
             key: sessionTracking.key,
@@ -446,11 +476,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         }
       }
     }
+    if (!resumeSessionId) userContent = buildUserMessage(messages, runResourceMarkers).content;
+    // Remove the old checkpoint before mutating an SDK transcript. A backend
+    // crash during this invocation must start fresh, never replay a partially
+    // consumed delta against the previous successful watermark.
+    if (sessionTracking) invalidateSession(sessionTracking.key);
 
     const usedNames = new Set<string>();
     const mcpToolUiByReadableName = new Map<string, {
       serverName: string;
       toolName: string;
+      functionName: string;
       advertisedUri?: string;
       presetArgs?: Record<string, unknown>;
       context?: import('@/backend/execution/flow/types').ToolReferenceContext;
@@ -469,6 +505,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // legacy semantics — the run ends at the next streamed message, no extra
     // model turn. Spawnable targets instead end when the model stops calling.
     let endSpawning = false;
+    let toolScopeClosed = false;
     const abortController = new AbortController();
     let endedByCaller = false;
     const endedToolResult = (): CallToolResult => ({
@@ -539,12 +576,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     };
     const takeToolCall = (name: string, args: Record<string, unknown>): string => {
       const queue = queuedToolCalls.get(name);
-      const argsJson = JSON.stringify(args ?? {});
+      const argsJson = canonicalSessionValue(args ?? {});
       const matchingIndex = queue?.findIndex(entry => entry.argsJson === argsJson) ?? -1;
       const [matching] = matchingIndex >= 0 ? queue!.splice(matchingIndex, 1) : [];
-      const callId = matching?.id ?? queue?.shift()?.id ?? `call_${uuidv4()}`;
+      if (!matching) throw new Error('Claude tool is missing its FLUJO authority binding.');
+      const callId = matching.id;
       if (queue?.length === 0) queuedToolCalls.delete(name);
-      if (!recordedToolCallIds.has(callId)) {
+      if (!isHandoffName(name) && !recordedToolCallIds.has(callId)) {
         recordToolCall(
           { id: callId, name, argsJson },
           partialToolMessageIds.get(callId),
@@ -555,7 +593,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     };
     const takeNativeToolCall = (name: string, args: Record<string, unknown>): string => {
       const queue = queuedToolCalls.get(name);
-      const argsJson = JSON.stringify(args ?? {});
+      const argsJson = canonicalSessionValue(args ?? {});
       const matches = queue?.filter(entry => entry.argsJson === argsJson) ?? [];
       if (matches.length !== 1) throw new Error('Native Claude tool-use identity is missing or ambiguous.');
       const index = queue!.findIndex(entry => entry.id === matches[0].id);
@@ -597,12 +635,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           );
           // Keep the exact name so FLUJO's `handoff_to_<nodeId>` routing matches.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
-            if (shouldEndAgenticTurn?.()) return endedToolResult();
+            if (toolScopeClosed || shouldEndAgenticTurn?.()) return endedToolResult();
             // Spawn-with-brief (issue #156): EVERY handoff call counts — a model
             // splitting work calls the same spawn tool once per brief, and
             // dropping the extras silently discarded its work.
             const toolStartedAt = Date.now();
-            handoffCalls.push({ name: fnName, args: args ?? {} });
+            abortController.signal.throwIfAborted();
+            await beforeToolDispatch?.();
+            abortController.signal.throwIfAborted();
+            const callId = takeToolCall(fnName, args);
+            handoffCalls.push({ id: callId, name: fnName, args: args ?? {} });
             if (runId) {
               recordStatisticsEvent(createStatisticsEvent({
                 type: 'tool.invocation',
@@ -640,18 +682,27 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // hand its JSON result back to the SDK. Keep the exact name — these
           // names are already OpenAI-safe and the caller keys executors by them.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
-            if (shouldEndAgenticTurn?.()) return endedToolResult();
+            if (toolScopeClosed || shouldEndAgenticTurn?.()) return endedToolResult();
             log.debug('Claude subscription local tool call', { tool: fnName });
             const callId = takeToolCall(fnName, args);
             const toolStartedAt = Date.now();
             let resultContent: string;
             let isError = false;
             try {
+              abortController.signal.throwIfAborted();
+              await beforeToolDispatch?.();
+              abortController.signal.throwIfAborted();
               resultContent = JSON.stringify(await localExec(args ?? {}));
+              await afterToolDispatch?.();
+              abortController.signal.throwIfAborted();
+              if (toolScopeClosed) throw new Error('Claude tool scope has ended.');
             } catch (err) {
+              rethrowFlowExecutionAuthorityError(err);
               resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
               isError = true;
             }
+            abortController.signal.throwIfAborted();
+            if (toolScopeClosed) throw new Error('Claude tool scope has ended.');
             recordToolResult({
               id: callId,
               resultContent,
@@ -686,19 +737,22 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         mcpToolUiByReadableName.set(readableName, {
           serverName: server,
           toolName: originalTool,
+          functionName: fnName,
           advertisedUri: uiResourceUri,
           presetArgs,
           context,
         });
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
-          if (shouldEndAgenticTurn?.()) return endedToolResult();
+          if (toolScopeClosed || shouldEndAgenticTurn?.()) return endedToolResult();
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
           const callId = takeToolCall(readableName, args);
           const toolStartedAt = Date.now();
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
           const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
+          abortController.signal.throwIfAborted();
           await beforeToolDispatch?.();
+          abortController.signal.throwIfAborted();
           await authorizePersonaCoreMcp?.(server, callerNodeId);
           // The SDK permission/approval round trip and preset resolution may
           // outlive the advertised MCP client. Check after all async gates.
@@ -713,13 +767,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             effectiveArgs,
             timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
             onToolProgress
-              ? (progress) => onToolProgress({
+              ? (progress) => { if (!toolScopeClosed && !abortController.signal.aborted) onToolProgress({
                   toolCallId: callId,
                   name: readableName,
                   progress: progress.progress,
                   total: progress.total,
                   message: progress.message,
-                })
+                }); }
               : undefined,
             callerNodeId,
             abortController.signal,
@@ -734,6 +788,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // Reject that late result before statistics, resource writes or a
           // transcript message can observe it.
           await afterToolDispatch?.();
+          abortController.signal.throwIfAborted();
+          if (toolScopeClosed) throw new Error('Claude tool scope has ended.');
           if (runId) {
             const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
             recordStatisticsEvent(createStatisticsEvent({
@@ -772,6 +828,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             if (conversationId) {
               try {
                 const settings = runResourceSettings ?? await getRunResourceSettings();
+                abortController.signal.throwIfAborted();
+                if (toolScopeClosed) throw new Error('Claude tool scope has ended.');
                 const bounded = await boundToolResult({
                   conversationId,
                   toolCallId: callId,
@@ -808,6 +866,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             result.data,
             args ?? {},
           );
+          abortController.signal.throwIfAborted();
+          if (toolScopeClosed) throw new Error('Claude tool scope has ended.');
           const cancelledReason = toolCancellationReason(result);
           const ui = uiLink
             ? {
@@ -832,6 +892,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           return tool(advertised.name,
             embedSchemaInDescription(advertised.description, fallbackSchema), shape,
             async (args: Record<string, unknown>): Promise<CallToolResult> => {
+              if (toolScopeClosed) return endedToolResult();
               try {
                 // Keep deferred routing bound to the same JSON arguments as
                 // permission and the durable broker fingerprint, even if the
@@ -842,6 +903,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   toolInvocationId: callId, name: advertised.name, args: capturedArgs,
                   signal: abortController.signal,
                 });
+                if (toolScopeClosed) throw new Error('Claude tool scope has ended.');
                 if (!recordedNativeToolResults.has(callId)) {
                   if (dispatched.kind === 'handoff' && !dispatched.result.isError) {
                     handoffCalls.push({ id: callId, name: advertised.name, args: capturedArgs });
@@ -874,6 +936,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // ANTHROPIC_API_KEY so it can't take precedence.
     const childEnv: Record<string, string | undefined> = { ...runtime.env };
     childEnv.CLAUDE_CODE_OAUTH_TOKEN = apiKey;
+    childEnv.CLAUDE_CODE_STARTUP_FAILURE_RESULTS = '1';
+    childEnv.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
     childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings));
     delete childEnv.ANTHROPIC_API_KEY;
 
@@ -891,6 +955,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // close the process early or deadlock while waiting for its first result.
     const sdkPromptMessage: SDKUserMessage = {
       type: 'user', parent_tool_use_id: null,
+      uuid: uuidv5(canonicalSessionValue({ conversationId, nodeId, historyHash: computeHistoryHash(
+        messages as unknown as Array<{ role: string; [key: string]: unknown }>,
+      ) }), uuidv5.URL) as SDKUserMessage['uuid'],
       message: { role: 'user', content: userContent },
     };
     let inputClosed = false;
@@ -899,7 +966,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     let activeDelivery: SteeringDelivery | undefined;
     let deliverySettled: Promise<void> | undefined;
     let settleDelivery: (() => void) | undefined;
-    let pendingResults = 0;
+    const resultCorrelation = new ClaudeResultCorrelation();
+    resultCorrelation.submitted(sdkPromptMessage.uuid!);
     let steeringFailure: unknown;
     const closeInput = (): void => { inputClosed = true; wakeInput?.(); };
     let ownedSpawner: ReturnType<typeof createClaudeOwnedProcessSpawner> | undefined;
@@ -909,7 +977,6 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         await ownedSpawner.ready;
         await nativeOriginalProcessHost.beforeFirstPrompt();
       }
-      pendingResults++;
       yield sdkPromptMessage;
       while (!inputClosed) {
         if (!queuedDelivery) {
@@ -925,9 +992,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           for (const message of delivery.messages) recordSteeringMessage(message);
           await delivery.beforeSend();
           if (inputClosed || signal?.aborted) throw new Error('Claude steering cancelled before delivery.');
-          pendingResults++;
+          const uuid = uuidv5(canonicalSessionValue({ conversationId, nodeId, messages: delivery.messages.map(message => message.id) }), uuidv5.URL);
+          resultCorrelation.submitted(uuid);
           yield {
-            type: 'user', parent_tool_use_id: null,
+            type: 'user', parent_tool_use_id: null, uuid: uuid as SDKUserMessage['uuid'],
             message: { role: 'user', content: delivery.messages.map(message =>
               typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n\n') },
           };
@@ -945,6 +1013,80 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
     }
 
+    const approvalDecisions = new Map<string, Promise<boolean>>();
+    const recordedDenials = new Set<string>();
+    let toolAuthorityFailure: unknown;
+    const prepareToolAuthority = async (toolName: string, input: Record<string, unknown>, opts: { toolUseID: string; signal?: AbortSignal }) => {
+      if (toolScopeClosed || abortController.signal.aborted || opts.signal?.aborted) return { behavior: 'deny' as const, message: 'Tool decision cancelled.' };
+          if (!toolName.startsWith(`mcp__${SDK_SERVER_NAME}__`)) {
+            return { behavior: 'deny' as const, message: `Tool ${toolName} is not permitted for this node.` };
+          }
+          const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
+          const args = (input ?? {}) as Record<string, unknown>;
+          if (nativeToolPort) {
+            if (!nativeToolPort.advertised.some(tool => tool.name === readableName) || !opts.toolUseID) {
+              return { behavior: 'deny' as const, message: 'Tool is outside the native broker inventory.' };
+            }
+            const argsJson = canonicalSessionValue(args);
+            const priorBinding = nativePermissionBindings.get(opts.toolUseID);
+            if (priorBinding && (priorBinding.name !== readableName || priorBinding.argsJson !== argsJson)) {
+              return { behavior: 'deny' as const, message: 'Conflicting native SDK tool-use identity.' };
+            }
+            if (!recordedToolCallIds.has(opts.toolUseID)) {
+              recordToolCall({ id: opts.toolUseID, name: readableName, argsJson });
+              recordedToolCallIds.add(opts.toolUseID);
+              nativePermissionBindings.set(opts.toolUseID, { name: readableName, argsJson });
+              enqueueToolCall(readableName, opts.toolUseID, argsJson);
+            }
+            return { behavior: 'allow' as const, updatedInput: input };
+          }
+          if (!effectiveSdkTools.some(tool => tool.name === readableName) || !opts.toolUseID) {
+            return { behavior: 'deny' as const, message: 'Tool is outside the node inventory or has no SDK identity.' };
+          }
+          const prior = nativePermissionBindings.get(opts.toolUseID);
+          const binding = { name: readableName, argsJson: canonicalSessionValue(args) };
+          if (prior && (prior.name !== binding.name || prior.argsJson !== binding.argsJson)) {
+            return { behavior: 'deny' as const, message: 'Conflicting SDK tool-use identity.' };
+          }
+          await beforeToolDispatch?.();
+          abortController.signal.throwIfAborted();
+          if (opts.signal?.aborted) return { behavior: 'deny' as const, message: 'Tool decision cancelled.' };
+          const linked = mcpToolUiByReadableName.get(readableName);
+          if (linked) {
+            await authorizePersonaCoreMcp?.(linked.serverName, toolNameMap?.[linked.functionName]?.nodeId);
+            const decoded = toolNameMap?.[linked.functionName];
+            if (!decoded) return { behavior: 'deny' as const, message: 'Tool binding is missing.' };
+            const freshness = assertToolIdentityFresh(linked.functionName, decoded, mcpService);
+            if (!freshness.ok) return { behavior: 'deny' as const, message: freshness.reason };
+          }
+          abortController.signal.throwIfAborted();
+          if (!prior) {
+            nativePermissionBindings.set(opts.toolUseID, binding);
+            if (isHandoffName(readableName)) enqueueToolCall(readableName, opts.toolUseID, binding.argsJson);
+          }
+          if (shouldEndAgenticTurn?.()) {
+            return {
+              behavior: 'deny' as const,
+              message: 'This agentic turn has ended; no further tools may run.',
+            };
+          }
+          // Handoffs are materialized once at the routing boundary below. Every
+          // executable tool, however, becomes visible before approval/execution.
+          if (!isHandoffName(readableName) && !recordedToolCallIds.has(opts.toolUseID)) {
+            recordToolCall(
+              {
+                id: opts.toolUseID,
+                name: readableName,
+                argsJson: canonicalSessionValue(args),
+              },
+              partialToolMessageIds.get(opts.toolUseID),
+            );
+            recordedToolCallIds.add(opts.toolUseID);
+            enqueueToolCall(readableName, opts.toolUseID, canonicalSessionValue(args));
+          }
+      return { behavior: 'allow' as const, updatedInput: input };
+    };
+
     const queryOptions: Parameters<typeof query>[0]['options'] = {
         model: model.name,
         env: childEnv,
@@ -952,6 +1094,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // SDK isolation mode: never load ~/.claude, project .claude settings,
         // CLAUDE.md, hooks, plugins, or MCP servers from the host filesystem.
         settingSources: [],
+        permissionMode: 'default',
+        verbatimPrompts: true,
         abortController,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
         includePartialMessages: true,
@@ -965,7 +1109,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // forkSession is left unset ⇒ the resumed session CONTINUES (same id,
         // appends), which is what accumulates context across turns.
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
-        ...(systemPrompt ? { systemPrompt } : {}),
+        systemPrompt: { type: 'custom', prompt: systemPrompt ?? '', snapshot: systemPromptPolicy !== 'per-turn' },
         // Disable Claude Code's built-in tool suite so ONLY FLUJO's MCP tools are
         // offered to the model (issue #166). `tools: []` is the SDK-documented
         // "disable all built-ins" switch; `disallowedTools` explicitly removes the
@@ -977,65 +1121,57 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         disallowedTools: CLAUDE_BUILTIN_TOOLS,
         // NOTE: deliberately NOT setting `allowedTools` — entries there are
         // auto-allowed and BYPASS canUseTool, which would skip the approval gate.
-        // canUseTool is the sole authority: it auto-allows our tools when no gate
-        // is wired, and blocks for approval when it is.
+        // PreToolUse always enforces node/broker authority and binds tool ids.
+        // canUseTool supplies human decisions after that mandatory gate.
         ...(mcpServers ? { mcpServers } : {}),
+        hooks: {
+          PreToolUse: [{ hooks: [async (hook, _id, options) => {
+            if (hook.hook_event_name !== 'PreToolUse') return {};
+            try {
+              const decision = await prepareToolAuthority(hook.tool_name, (hook.tool_input ?? {}) as Record<string, unknown>, {
+                toolUseID: hook.tool_use_id, signal: options.signal,
+              });
+              return { hookSpecificOutput: { hookEventName: 'PreToolUse',
+                ...(decision.behavior === 'deny' ? { permissionDecision: 'deny', permissionDecisionReason: decision.message }
+                  : requestToolApproval ? { permissionDecision: 'ask', permissionDecisionReason: 'FLUJO requires a human decision.' } : {}),
+              } };
+            } catch (error) {
+              toolAuthorityFailure = error;
+              abortController.abort();
+              return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'FLUJO tool authority is no longer current.' } };
+            }
+          }] }],
+        },
         canUseTool: async (toolName, input, opts) => {
-          if (!toolName.startsWith(`mcp__${SDK_SERVER_NAME}__`)) {
-            return { behavior: 'deny', message: `Tool ${toolName} is not permitted for this node.` };
-          }
+          try {
+          const authority = await prepareToolAuthority(toolName, input, opts);
+          if (authority.behavior === 'deny') return authority;
           const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
           const args = (input ?? {}) as Record<string, unknown>;
-          if (nativeToolPort) {
-            if (!nativeToolPort.advertised.some(tool => tool.name === readableName) || !opts.toolUseID) {
-              return { behavior: 'deny', message: 'Tool is outside the native broker inventory.' };
-            }
-            const argsJson = JSON.stringify(args);
-            const priorBinding = nativePermissionBindings.get(opts.toolUseID);
-            if (priorBinding && (priorBinding.name !== readableName || priorBinding.argsJson !== argsJson)) {
-              return { behavior: 'deny', message: 'Conflicting native SDK tool-use identity.' };
-            }
-            if (!recordedToolCallIds.has(opts.toolUseID)) {
-              recordToolCall({ id: opts.toolUseID, name: readableName, argsJson });
-              recordedToolCallIds.add(opts.toolUseID);
-              nativePermissionBindings.set(opts.toolUseID, { name: readableName, argsJson });
-              enqueueToolCall(readableName, opts.toolUseID, argsJson);
-            }
-            return { behavior: 'allow', updatedInput: input };
-          }
-          if (shouldEndAgenticTurn?.()) {
-            return {
-              behavior: 'deny',
-              message: 'This agentic turn has ended; no further tools may run.',
-            };
-          }
-          // Handoffs are materialized once at the routing boundary below. Every
-          // executable tool, however, becomes visible before approval/execution.
-          if (!isHandoffName(readableName) && !recordedToolCallIds.has(opts.toolUseID)) {
-            recordToolCall(
-              {
-                id: opts.toolUseID,
-                name: readableName,
-                argsJson: JSON.stringify(args),
-              },
-              partialToolMessageIds.get(opts.toolUseID),
-            );
-            recordedToolCallIds.add(opts.toolUseID);
-            enqueueToolCall(readableName, opts.toolUseID, JSON.stringify(args));
-          }
           // Human-in-the-loop: when an approval gate is wired, block until the
           // user decides (surfaced to FLUJO's tool-approval UI). Otherwise auto-allow.
           if (requestToolApproval) {
             const linkedTool = mcpToolUiByReadableName.get(readableName);
-            const approved = await requestToolApproval({
-              id: opts.toolUseID,
-              name: readableName,
-              args,
-            });
+            let decision = approvalDecisions.get(opts.toolUseID);
+            if (!decision) {
+              decision = requestToolApproval({ id: opts.toolUseID, name: readableName, args,
+                ...(opts.decisionReason ? { decisionReason: opts.decisionReason } : {}),
+              });
+              approvalDecisions.set(opts.toolUseID, decision);
+            }
+            const approved = await decision;
+            const stillCurrent = await prepareToolAuthority(toolName, input, opts);
+            if (stillCurrent.behavior === 'deny') return stillCurrent;
             if (approved) {
               return { behavior: 'allow', updatedInput: input };
             }
             const rejectionText = 'tool denied';
+            if (recordedDenials.has(opts.toolUseID)) return { behavior: 'deny', message: rejectionText };
+            recordedDenials.add(opts.toolUseID);
+            if (!recordedToolCallIds.has(opts.toolUseID)) {
+              recordToolCall({ id: opts.toolUseID, name: readableName, argsJson: JSON.stringify(args) });
+              recordedToolCallIds.add(opts.toolUseID);
+            }
             const queued = queuedToolCalls.get(readableName);
             if (queued) {
               const index = queued.findIndex(entry => entry.id === opts.toolUseID);
@@ -1051,6 +1187,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   args,
                 )
               : undefined;
+            abortController.signal.throwIfAborted();
+            if (toolScopeClosed || opts.signal?.aborted) return { behavior: 'deny', message: 'Tool decision cancelled.' };
             // On rejection the SDK never calls the tool handler, so record the
             // rejected call here — otherwise it (and the rejection) wouldn't show
             // up in the conversation transcript at all.
@@ -1070,6 +1208,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             return { behavior: 'deny', message: rejectionText };
           }
           return { behavior: 'allow', updatedInput: input };
+          } catch (error) {
+            // The SDK translates callback rejections into ordinary tool
+            // denials. Keep host authority/approval failures at the invocation
+            // boundary, as the mandatory PreToolUse hook already does.
+            toolAuthorityFailure = error;
+            abortController.abort();
+            return { behavior: 'deny', message: 'FLUJO tool authority is no longer current.' };
+          }
         },
     };
 
@@ -1079,6 +1225,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         adapter: 'claude-cli',
         operation: 'query',
         request: { prompt: sdkPromptMessage, options: queryOptions,
+          sessionLifecycle: { requestedPromptPolicy: systemPromptPolicy, requestedPromptHash: sessionValueHash(systemPrompt ?? ''),
+            snapshot: systemPromptPolicy !== 'per-turn', resumeReason, resumedSession: resumeSessionId,
+            accountingScope: 'completion-delta-from-session-checkpoint', costBasis: 'sdk-estimate',
+            ...runtimeIdentity, runtime: 'isolated runtime; observed CLI version in init events' },
           ownedToolShapes: nativeToolPort ? nativeToolShapes : hostToolShapes },
       });
       if (nativeToolPort && dispatchId !== nativeToolPort.invocationId) {
@@ -1087,12 +1237,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     } catch (archiveError) {
       if (nativeToolPort || archiveError instanceof ModelTurnArchiveMemoryError) {
         closeInput();
+        abortController.abort();
         signal?.removeEventListener('abort', onExternalAbort);
         throw archiveError;
       }
       try { rethrowFlowExecutionAuthorityError(archiveError); }
       catch (authorityError) {
         closeInput();
+        abortController.abort();
         signal?.removeEventListener('abort', onExternalAbort);
         throw authorityError;
       }
@@ -1114,6 +1266,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       response = query({ prompt: promptStream(), options: queryOptions });
     } catch (error) {
       closeInput();
+      abortController.abort();
       signal?.removeEventListener('abort', onExternalAbort);
       if (dispatchId && onSdkRequestResult) {
         try {
@@ -1140,17 +1293,22 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     });
 
     let resultText = '';
+    let backgroundTasks = 0;
+    let ambientTasks = 0;
+    let foregroundSettled = false;
     let nativeSdkTerminal = false;
+    let interruptedBeforeTeardown = false;
     let nativeHandoffTerminated = false;
     let nativeLiveObserved = false;
     let accumulatedText = '';
     // Result totals and per-request stream usage have different scopes. Track
     // them separately and deduplicate assistant frames by their API message id.
-    const usageTracker = new ClaudeUsageTracker();
+    const usageTracker = new ClaudeUsageTracker(resumeCheckpoint);
     // Whether we streamed at least one assistant text turn live (below). If so,
     // the final answer is already in the transcript and we must not re-emit the
     // concatenated text at the end (it would duplicate in the UI).
     let streamedText = false;
+    const assistantFrameIds = new Set<string>();
     const partialToolBlocks = new Map<string, { messageId: string; toolUseId: string }>();
     // Live-draft correlation key. `SDKPartialAssistantMessage.uuid` is a FRESH
     // uuid on EVERY stream event (verified against SDK 0.3.220: message_start,
@@ -1235,11 +1393,33 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // Capture the SDK session id (present on system/assistant/result
         // messages) for the #154 session registry, before any early break.
         const sid = (message as { session_id?: unknown }).session_id;
-        if (typeof sid === 'string' && sid) capturedSessionId = sid;
+        if (typeof sid === 'string' && sid && !(message as { parent_tool_use_id?: string | null }).parent_tool_use_id) {
+          if ((capturedSessionId && capturedSessionId !== sid) || (resumeSessionId && resumeSessionId !== sid)) {
+            throw new Error('Claude root session lineage changed during the invocation.');
+          }
+          capturedSessionId = sid;
+        }
+        if (signal?.aborted) break;
+        if (message.type === 'system' && message.subtype === 'background_tasks_changed') {
+          backgroundTasks = message.tasks.filter(task => !task.ambient).length;
+          ambientTasks = message.tasks.length - backgroundTasks;
+        }
+        if (message.type === 'system' || message.type === 'rate_limit_event') {
+          const lifecycle = message as unknown as { subtype?: string; state?: string; status?: string; attempt?: number; retry_delay_ms?: number; terminal_reason?: string; claude_code_version?: string };
+          onSessionEvent?.({ kind: lifecycle.subtype ?? message.type, state: lifecycle.state ?? lifecycle.status
+            ?? (message.type === 'rate_limit_event' ? message.rate_limit_info.status : undefined),
+            attempt: lifecycle.attempt, retryDelayMs: lifecycle.retry_delay_ms, terminalReason: lifecycle.terminal_reason,
+            runtimeVersion: lifecycle.claude_code_version });
+        }
         // Once cancelled, stop recording/streaming anything the detached loop
         // may still drain out of the dying subprocess.
         if (signal?.aborted) break;
         usageTracker.observe(message);
+        if (message.type === 'system' && message.subtype === 'session_state_changed' && message.state === 'idle'
+          && foregroundSettled && backgroundTasks === 0 && resultCorrelation.pendingCount === 0 && !queuedDelivery && !activeDelivery && unansweredTools.size === 0) {
+          closeInput();
+          break;
+        }
         // Handoff end conditions (issue #156). A PLAIN handoff (endSpawning)
         // ends the run at the next streamed message, exactly like before —
         // no extra model turn, no post-handoff narration. SPAWN handoffs
@@ -1299,6 +1479,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             }
           }
         } else if (message.type === 'assistant') {
+          if (assistantFrameIds.has(message.uuid)) continue;
+          assistantFrameIds.add(message.uuid);
           const assistant = (message as { message?: { id?: string; content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
           let turnText = '';
@@ -1375,19 +1557,33 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             pendingAbortedProse = undefined;
           }
         } else if (message.type === 'result') {
+          const attribution = resultCorrelation.result(message);
+          if (attribution.duplicate) continue;
+          const terminalReason = message.terminal_reason;
+          onSessionEvent?.({ kind: 'result', terminalReason });
+          if (terminalReason && terminalReason !== 'completed' && handoffCalls.length === 0) {
+            throw new Error(`Claude invocation incomplete: ${terminalReason}`);
+          }
           await nativeOriginalProcessHost?.observeSdkUsage(message);
-          if (message.subtype === 'success') {
+          for (const denial of message.permission_denials ?? []) {
+            if (unansweredTools.has(denial.tool_use_id)) recordToolResult({ id: denial.tool_use_id, resultContent: 'tool denied by Claude permission policy' });
+          }
+          if (!backgroundTasks && unansweredTools.size > 0) throw new Error('Claude terminal result has unresolved tool calls.');
+          if (message.subtype === 'success' && !message.is_error) {
             resultText = (message as { result?: string }).result ?? '';
             nativeSdkTerminal = true;
           } else if (handoffCalls.length === 0) {
             const errs = (message as { errors?: string[] }).errors;
-            const detail = Array.isArray(errs) && errs.length ? errs.join('; ') : message.subtype;
+            const errorResult = message.is_error ? (message as { result?: string }).result : undefined;
+            const rawDetail = Array.isArray(errs) && errs.length ? errs.join('; ')
+              : errorResult?.trim() || (message.is_error ? 'SDK reported an error result' : message.subtype);
+            const detail = apiKey ? rawDetail.split(apiKey).join('[credential redacted]') : rawDetail;
             throw new Error(`Claude subscription run failed: ${detail}`);
           }
-          pendingResults = Math.max(0, pendingResults - 1);
           await watcher.poll();
-          if (pendingResults === 0 && (queuedDelivery || activeDelivery)) await deliverySettled;
-          if (pendingResults === 0 && !queuedDelivery && !activeDelivery) {
+          if (attribution.settled && (queuedDelivery || activeDelivery)) await deliverySettled;
+          foregroundSettled = attribution.settled;
+          if (attribution.settled && backgroundTasks === 0 && resultCorrelation.pendingCount === 0 && !queuedDelivery && !activeDelivery) {
             closeInput();
             break;
           }
@@ -1424,6 +1620,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         await messageLoop();
       }
       if (steeringFailure) throw steeringFailure;
+      if (toolAuthorityFailure) throw toolAuthorityFailure;
+      if (!handoffCalls.length && !endedByCaller && (!nativeSdkTerminal || !foregroundSettled || backgroundTasks > 0
+        || resultCorrelation.pendingCount > 0 || queuedDelivery || activeDelivery || unansweredTools.size > 0)) {
+        throw new Error('Claude stream ended before a terminal result settled all submitted turns, tools and background work.');
+      }
     } catch (err) {
       // A handoff aborts the run on purpose; only genuine errors (including an
       // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
@@ -1433,30 +1634,51 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // turn never resumes a corrupted or half-torn-down session (#154 — the
         // "drop the cached session on error" contract coordinated with #151).
         if (sessionTracking) invalidateSession(sessionTracking.key);
-        throw err;
+        throw toolAuthorityFailure ?? err;
       }
     } finally {
-      if (allowanceObservation && !signal?.aborted && !abortController.signal.aborted) {
-        const observation = await allowanceObservation;
-        recordAllowanceSnapshot(allowanceKey, claudeAllowanceSnapshot(observation));
-      }
-      if (nativeOriginalProcessHost) {
-        closeInput();
-        response.close();
-        await nativeOriginalProcessHost.waitForExit();
-        if (handoffCalls.length && nativeToolPort && !signal?.aborted) {
-          if (!nativeToolPort.confirmHandoffTermination) throw new Error('Native handoff terminal confirmation is unavailable.');
-          await nativeToolPort.confirmHandoffTermination(handoffCalls.map(call => call.id!));
-          nativeHandoffTerminated = true;
-        }
-      }
-      if (dispatchId && nativeToolPort) onNativeSdkFinished?.();
-      if (nativeToolPort && (signal?.aborted || (abortController.signal.aborted && !nativeHandoffTerminated))) dispatchOutcome = 'cancelled';
+      toolScopeClosed = true;
+      interruptedBeforeTeardown = abortController.signal.aborted;
       closeInput();
-      await watcher.stop();
-      queuedDelivery?.requeue();
-      activeDelivery?.requeue();
+      let teardownFailure: unknown;
+      const finish = async (action: () => unknown): Promise<boolean> => {
+        try { await action(); return true; }
+        catch (error) {
+          teardownFailure ??= error;
+          dispatchOutcome = signal?.aborted ? 'cancelled' : 'error';
+          return false;
+        }
+      };
+      await finish(async () => {
+        if (allowanceObservation && !signal?.aborted && !interruptedBeforeTeardown) {
+          const observation = await allowanceObservation;
+          recordAllowanceSnapshot(allowanceKey, claudeAllowanceSnapshot(observation));
+        }
+      });
+      const streamClosed = await finish(() => response.close?.());
+      // Close also cancels outstanding local callbacks, including queries
+      // that naturally ended or threw without an external stop signal.
+      abortController.abort();
+      const processExited = await finish(async () => {
+        if (nativeOriginalProcessHost) {
+          await nativeOriginalProcessHost.waitForExit();
+          if (handoffCalls.length && nativeToolPort && !signal?.aborted) {
+            if (!nativeToolPort.confirmHandoffTermination) throw new Error('Native handoff terminal confirmation is unavailable.');
+            await nativeToolPort.confirmHandoffTermination(handoffCalls.map(call => call.id!));
+            nativeHandoffTerminated = true;
+          }
+        }
+      });
+      if (dispatchId && nativeToolPort && streamClosed && processExited) await finish(() => onNativeSdkFinished?.());
+      if (nativeToolPort && (signal?.aborted || (dispatchOutcome === 'completed' && interruptedBeforeTeardown && !nativeHandoffTerminated))) dispatchOutcome = 'cancelled';
+      await finish(() => watcher.stop());
+      await finish(() => queuedDelivery?.requeue());
+      await finish(() => activeDelivery?.requeue());
       signal?.removeEventListener('abort', onExternalAbort);
+      await finish(() => onSessionEvent?.({ kind: 'accounting', accounting: {
+        ...usageTracker.getAccounting(), partial: dispatchOutcome !== 'completed' || !nativeSdkTerminal
+          || !foregroundSettled || handoffCalls.length > 0 || endedByCaller || ambientTasks > 0,
+      } }));
       if (dispatchId && onSdkRequestResult) {
         try {
           await onSdkRequestResult({ dispatchId, outcome: dispatchOutcome });
@@ -1466,6 +1688,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           log.warn('Could not update Claude Agent SDK request archive', archiveError);
         }
       }
+      if (teardownFailure) throw teardownFailure;
     }
 
     const finalText = resultText || accumulatedText;
@@ -1517,15 +1740,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // (same id when resumed with forkSession unset, a fresh id on a first run).
     // `reusableSessionAvailable` is logged as the measurement signal.
     if (sessionTracking) {
-      const reusableSessionAvailable = Boolean(
-        findReusableSession(
-          sessionTracking.key,
-          sessionTracking.prefixHash,
-          messages.length,
-          leadingSystemMessageCount,
-        ),
-      );
-      if (endedByCaller || handoffCalls.length > 0 || !capturedSessionId) {
+      const transcriptCheckpoint = capturedSessionId && !endedByCaller && !handoffCalls.length && !ambientTasks
+        ? await captureClaudeSessionTranscript(runtime.home, capturedSessionId) : undefined;
+      if (endedByCaller || handoffCalls.length > 0 || ambientTasks > 0 || !capturedSessionId || !transcriptCheckpoint || !usageTracker.getCheckpoint()) {
         invalidateSession(sessionTracking.key);
       } else {
         recordSession(sessionTracking.key, {
@@ -1533,6 +1750,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           prefixHash: sessionTracking.prefixHash,
           seenMessageCount: messages.length + transcript.length,
           leadingSystemMessageCount,
+          historyHash: computeHistoryHash([...messages, ...transcript] as unknown as Array<{ role: string; [key: string]: unknown }>, leadingSystemMessageCount),
+          usageCheckpoint: usageTracker.getCheckpoint(),
+          transcriptCheckpoint,
         });
       }
       log.debug('Claude session usage (#154)', {
@@ -1588,6 +1808,6 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
 
     return { completion, transcript, contextUsage: usageTracker.getContextUsage(model.contextWindow),
       ...(nativeToolPort ? { nativeSdkTerminal: (nativeHandoffTerminated
-        || (nativeSdkTerminal && !abortController.signal.aborted)) && !signal?.aborted } : {}) };
+        || (nativeSdkTerminal && !interruptedBeforeTeardown)) && !signal?.aborted } : {}) };
   }
 }

@@ -155,6 +155,8 @@ export interface ProcessNodeProperties {
      *  the node after its bound model on (re)binding (issue #38, Item C). */
     nameIsCustom?: boolean;
     promptTemplate?: string;
+    /** Stable contextual updates (default), or fresh authoritative instructions each turn. */
+    systemPromptPolicy?: 'stable' | 'per-turn';
     excludeModelPrompt?: boolean;
     excludeStartNodePrompt?: boolean;
     /** When true, suppress the hardcoded `# GENERAL INFORMATION:` system block
@@ -1476,6 +1478,7 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Non-enumerable preparation field, checked against the immutable plan. */
     nativeFlowSnapshot?: Flow;
     currentPrompt: string;
+    systemPromptPolicy?: 'stable' | 'per-turn';
     boundModel: string;
     /** Detached model and catalog generation admitted before preparation effects. */
     modelCatalogAdmission?: import('@/backend/services/model/catalogAdmission').ModelCatalogAdmission;

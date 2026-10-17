@@ -158,6 +158,12 @@ export interface CompletionInput {
    * Request/response adapters ignore it.
    */
   sessionResume?: boolean;
+  /** Only per-turn permits changed system text across a compatible Claude resume. */
+  systemPromptPolicy?: 'stable' | 'per-turn';
+  /** Provider lifecycle metadata, excluding prompts, credentials and raw errors. */
+  onSessionEvent?: (event: { kind: string; state?: string; attempt?: number; retryDelayMs?: number; terminalReason?: string;
+    runtimeVersion?: string; accounting?: { scope: 'completion'; costBasis: 'sdk-estimate'; estimatedCostUsd?: number;
+      partial?: boolean; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } }) => void;
   /** Persisted Codex thread metadata supplied by the conversation owner. */
   codexSession?: CodexSessionMetadata;
   /** Released Codex app-server structured-output constraint for this turn. */
@@ -232,6 +238,8 @@ export interface CompletionInput {
     id: string;
     name: string;
     args: Record<string, unknown>;
+    /** SDK explanation for why this call requires a decision; never an authorization. */
+    decisionReason?: string;
   }) => Promise<boolean>;
   /**
    * Cancellation signal for the in-flight provider call. Wired by ModelHandler

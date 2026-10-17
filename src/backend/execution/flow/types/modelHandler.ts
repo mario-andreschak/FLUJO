@@ -22,6 +22,7 @@ export interface ModelCallInput {
   /** Process preparation's detached model, held to dispatch by a catalog fence. */
   modelCatalogAdmission?: import('@/backend/services/model/catalogAdmission').ModelCatalogAdmission;
   prompt: string;
+  systemPromptPolicy?: 'stable' | 'per-turn';
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
   /**
    * Optional scoped view to send to the provider instead of `messages`. Lets a

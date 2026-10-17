@@ -729,9 +729,14 @@ export interface RuntimeProcessIdentity {
 export async function captureRuntimeChildIdentity(pid: number): Promise<RuntimeProcessIdentity> {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid child PID.');
   // Fresh owned-child admission must establish a real incarnation before any
-  // protocol traffic. It can incur the same cold shell startup as our own PID;
-  // contention-loop observations keep their short uncertainty/fail-closed bound.
-  const birth = await queryProcessBirthMarker(pid, true);
+  // protocol traffic. Retry transient startup uncertainty within the existing
+  // bounded warmup; foreign contention probes retain their short deadline.
+  let birth: string | null = null;
+  for (let attempt = 0; attempt < OWN_PROCESS_BIRTH_PROBE_ATTEMPTS; attempt += 1) {
+    birth = await queryProcessBirthMarker(pid, true);
+    if (birth && birthMarkerVersion(birth)) break;
+    if (attempt + 1 < OWN_PROCESS_BIRTH_PROBE_ATTEMPTS) await systemClock.sleep(OWN_PROCESS_BIRTH_PROBE_RETRY_MS);
+  }
   if (!birth || !birthMarkerVersion(birth)) throw new Error('Child process birth identity is unavailable.');
   return { pid, processInstanceId: randomUUID(), processBirthMarkerV2: birth };
 }

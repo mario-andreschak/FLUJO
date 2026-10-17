@@ -2,11 +2,20 @@ import {
   sessionKey,
   computePrefixHash,
   findReusableSession,
-  recordSession,
+  recordSession as storeRecordSession,
+  computeHistoryHash,
   invalidateSession,
   sessionCount,
   _clearAllSessionsForTests,
 } from '@/backend/services/model/adapters/claudeSessionStore';
+
+const history = (count: number, systems: number) => Array.from({ length: count }, (_, index) => ({
+  role: index < systems ? 'system' : 'user', content: `message-${index}`,
+}));
+const recordSession = (key: string, observation: Parameters<typeof storeRecordSession>[1]) => storeRecordSession(key, {
+  historyHash: computeHistoryHash(history(observation.seenMessageCount, observation.leadingSystemMessageCount ?? 0), observation.leadingSystemMessageCount ?? 0),
+  ...observation,
+});
 
 // Unit tests for the #154 Claude Agent SDK session registry: keying, prefix
 // hashing (invalidation trigger) and the reuse/invalidation decision logic.
@@ -17,11 +26,14 @@ describe('claudeSessionStore (#154)', () => {
 
   describe('sessionKey', () => {
     it('combines conversation and node id into a stable key', () => {
-      expect(sessionKey('conv-1', 'node-a')).toBe('conv-1::node-a');
+      expect(sessionKey('conv-1', 'node-a')).toBe('["conv-1","node-a"]');
     });
 
     it('distinguishes different nodes of the same conversation', () => {
       expect(sessionKey('conv-1', 'node-a')).not.toBe(sessionKey('conv-1', 'node-b'));
+    });
+    it('cannot alias delimiter-bearing conversation and node identities', () => {
+      expect(sessionKey('conversation::node', 'other')).not.toBe(sessionKey('conversation', 'node::other'));
     });
   });
 
@@ -65,54 +77,54 @@ describe('claudeSessionStore (#154)', () => {
     const prefixHash = computePrefixHash('sys', ['t']);
 
     it('returns undefined when nothing is recorded', () => {
-      expect(findReusableSession(key, prefixHash, 5, 0)).toBeUndefined();
+      expect(findReusableSession(key, prefixHash, history(5, 0), 0)).toBeUndefined();
     });
 
     it('returns the session when prefix matches and history has not shrunk', () => {
       recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
-      const found = findReusableSession(key, prefixHash, 4, 1);
+      const found = findReusableSession(key, prefixHash, history(4, 1), 1);
       expect(found?.sessionId).toBe('sid-1');
       expect(found?.seenMessageCount).toBe(3);
     });
 
     it('allows reuse when the message count is unchanged (equal to seen)', () => {
       recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
-      expect(findReusableSession(key, prefixHash, 3, 1)?.sessionId).toBe('sid-1');
+      expect(findReusableSession(key, prefixHash, history(3, 1), 1)?.sessionId).toBe('sid-1');
     });
 
     it('refuses reuse when the prefix hash changed (prompt/tools changed)', () => {
       recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
       const otherHash = computePrefixHash('sys', ['t', 'extra']);
-      expect(findReusableSession(key, otherHash, 4, 1)).toBeUndefined();
+      expect(findReusableSession(key, otherHash, history(4, 1), 1)).toBeUndefined();
     });
 
     it('refuses reuse when the conversation shrank (client-side pruning/divergence)', () => {
       recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 10, leadingSystemMessageCount: 1 });
-      expect(findReusableSession(key, prefixHash, 4, 1)).toBeUndefined();
+      expect(findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
     });
 
     it('refuses reuse when the leading system-message count increased or decreased', () => {
       recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
-      expect(findReusableSession(key, prefixHash, 4, 2)).toBeUndefined();
-      expect(findReusableSession(key, prefixHash, 4, 0)).toBeUndefined();
+      expect(findReusableSession(key, prefixHash, history(4, 2), 2)).toBeUndefined();
+      expect(findReusableSession(key, prefixHash, history(4, 0), 0)).toBeUndefined();
     });
 
     it('refuses stale entries that do not have leading-system metadata', () => {
       recordSession(key, { sessionId: 'stale', prefixHash, seenMessageCount: 3 } as never);
-      expect(findReusableSession(key, prefixHash, 4, 1)).toBeUndefined();
+      expect(findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
     });
 
     it('overwrites the entry in place on re-record', () => {
       recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
       recordSession(key, { sessionId: 'sid-2', prefixHash, seenMessageCount: 5, leadingSystemMessageCount: 1 });
       expect(sessionCount()).toBe(1);
-      expect(findReusableSession(key, prefixHash, 5, 1)?.sessionId).toBe('sid-2');
+      expect(findReusableSession(key, prefixHash, history(5, 1), 1)?.sessionId).toBe('sid-2');
     });
 
     it('invalidate drops the session so it can no longer be reused', () => {
       recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
       invalidateSession(key);
-      expect(findReusableSession(key, prefixHash, 4, 1)).toBeUndefined();
+      expect(findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
       expect(sessionCount()).toBe(0);
     });
 
@@ -127,8 +139,8 @@ describe('claudeSessionStore (#154)', () => {
       recordSession(keyA, { sessionId: 'a', prefixHash, seenMessageCount: 1, leadingSystemMessageCount: 1 });
       recordSession(keyB, { sessionId: 'b', prefixHash, seenMessageCount: 1, leadingSystemMessageCount: 1 });
       invalidateSession(keyA);
-      expect(findReusableSession(keyA, prefixHash, 1, 1)).toBeUndefined();
-      expect(findReusableSession(keyB, prefixHash, 1, 1)?.sessionId).toBe('b');
+      expect(findReusableSession(keyA, prefixHash, history(1, 1), 1)).toBeUndefined();
+      expect(findReusableSession(keyB, prefixHash, history(1, 1), 1)?.sessionId).toBe('b');
     });
   });
 });
