@@ -512,6 +512,13 @@ export function fromResponse(
   reasoning: ReasoningItem[];
   media: ModelMediaPart[];
 } {
+  if (response.error || response.status === 'failed' || response.status === 'cancelled'
+    || response.status === 'queued' || response.status === 'in_progress') {
+    // HTTP 200 and streamed partial output do not confirm a usable reply. Keep
+    // both completion paths from exposing tool calls or advancing checkpoints.
+    throw new Error('The AI provider did not complete the reply'
+      + (response.error?.message ? `: ${response.error.message}` : ` (${response.status})`));
+  }
   const textParts: string[] = [];
   const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
   const reasoning: ReasoningItem[] = [];
