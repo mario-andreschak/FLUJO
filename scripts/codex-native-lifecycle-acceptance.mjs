@@ -16,7 +16,7 @@ if (process.argv[2] === '--worker') {
   // Every turn has a fresh adapter registry. Only the explicitly supplied
   // durable metadata and the private native session files survive.
   process.once('message', async input => {
-    let session;
+    let session, nativeDiagnostics;
     try {
       assert.equal(process.env.FLUJO_PARENT_DATA_DIR, process.env.FLUJO_DATA_DIR,
         'The inherited MCP parent marker must select the same owned profile');
@@ -29,7 +29,7 @@ if (process.argv[2] === '--worker') {
       const [id, factory] = matches[0];
       const registry = runtime(id);
       assert.equal(typeof registry.getCompletionAdapter, 'function');
-      let authentication;
+      let authentication, compaction;
       if (!input.apiKey) {
         const homeFactories = Object.entries(runtime.m).filter(([, value]) =>
           value.toString().includes('Codex runtime settings are supplied per invocation'));
@@ -61,20 +61,98 @@ if (process.argv[2] === '--worker') {
         };
         const acquireOrdinaryCodexExecutable = select(load('Codex runtime update qualified; future ordinary calls use the new CLI'), 'lease-');
         const startOwnedCodexAppServer = select(load('Owned Codex app-server transport is unavailable.'), 'admissionTimeoutMs');
+        const environmentNames = ['PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
+          'LANG', 'LC_ALL', 'TZ', 'TERM', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+          'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+          'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+          'TMPDIR', 'TMP', 'TEMP', 'CODEX_HOME'];
+        const nativeEnvironment = Object.fromEntries(environmentNames.flatMap(name =>
+          prepared.env[name] === undefined ? [] : [[name, prepared.env[name]]]));
+        assert(!nativeEnvironment.CODEX_API_KEY && !nativeEnvironment.OPENAI_API_KEY);
         const lease = await acquireOrdinaryCodexExecutable();
         let accountProcess;
+        const notifications = [];
+        let finishCompaction;
+        const terminal = new Promise(resolve => { finishCompaction = resolve; });
         try {
+          authentication.cliVersion = execFileSync(lease.executable, ['--version'], {
+            cwd: prepared.workingDirectory, env: nativeEnvironment, windowsHide: true,
+          }).toString().trim();
+          authentication.cliSha256 = createHash('sha256').update(await fs.readFile(lease.executable)).digest('hex');
+          const policy = input.compactThreadId ? Object.values(load('Restricted Codex profile does not support this platform.'))
+            .find(value => value?.forced_login_method === 'chatgpt' && value?.features) : undefined;
+          if (input.compactThreadId) assert(policy, 'Use the emitted restrictive native policy');
           accountProcess = await startOwnedCodexAppServer({ executable: lease.executable,
-            args: ['app-server'],
-            env: prepared.env, cwd: prepared.workingDirectory, owner: {}, register: async () => {},
-            onNotification: () => {}, signal: AbortSignal.timeout(30000) });
+            args: [...Object.entries(policy?.features ?? {}).flatMap(([name, value]) => ['-c', `features.${name}=${value}`]),
+              '-c', 'web_search="disabled"', '-c', 'tools.view_image=false',
+              '-c', 'tools.experimental_request_user_input.enabled=false', 'app-server'],
+            env: nativeEnvironment, cwd: prepared.workingDirectory, owner: {}, register: async () => {},
+            onNotification: message => {
+              if (!input.compactThreadId) return;
+              notifications.push(message);
+              if (message.method === 'turn/completed' && message.params?.threadId === input.compactThreadId) finishCompaction(message);
+            }, signal: AbortSignal.timeout(input.compactThreadId ? 120000 : 30000) });
           await accountProcess.request('initialize', { clientInfo: { name: 'flujo_native_acceptance', title: 'FLUJO', version: '1' } });
           accountProcess.notify('initialized');
           const result = await accountProcess.request('account/read', { refreshToken: false });
           assert.equal(result.account?.type, 'chatgpt', 'Native runtime must confirm subscription authentication before inference');
           authentication.nativeAccountType = result.account.type;
           authentication.nativePlan = result.account.planType;
-        } finally { await accountProcess?.stop(); await lease.release(); }
+          if (input.compactThreadId) {
+            const resumed = await accountProcess.request('thread/resume', { threadId: input.compactThreadId,
+              model: input.model.name, cwd: prepared.workingDirectory, approvalPolicy: 'never', sandbox: 'read-only',
+              config: { ...policy, service_tier: 'default', model_reasoning_effort: 'low' } });
+            assert.equal(resumed.thread.id, input.compactThreadId);
+            assert.equal(resumed.model, input.model.name, 'Native compaction must use the explicitly selected approved model');
+            const sessions = path.join(prepared.home, 'sessions');
+            const files = (await fs.readdir(sessions, { recursive: true }))
+              .filter(file => file.endsWith('.jsonl') && file.includes(input.compactThreadId));
+            assert.equal(files.length, 1, 'Exactly one owned native rollout');
+            const rolloutPath = path.join(sessions, files[0]);
+            assert((await fs.realpath(rolloutPath)).startsWith((await fs.realpath(prepared.home)) + path.sep));
+            const before = await fs.readFile(rolloutPath);
+            const prior = before.toString('utf8').trim().split('\n').map(line => JSON.parse(line))
+              .filter(row => row.type === 'compacted');
+            nativeDiagnostics = { notifications, threadId: input.compactThreadId, rolloutPath };
+            const acknowledged = await accountProcess.request('thread/compact/start', { threadId: input.compactThreadId });
+            const ended = await Promise.race([terminal, accountProcess.registration.close.then(() => {
+              throw new Error('Native compaction closed without a confirmed terminal');
+            })]);
+            assert.equal(ended.params.turn.status, 'completed');
+            const completed = notifications.filter(event => event.method === 'item/completed' && event.params?.item?.type === 'contextCompaction');
+            assert.equal(completed.length, 1, 'A completed native compaction item is required');
+            assert(notifications.every(event => !event.params?.threadId || event.params.threadId === input.compactThreadId));
+            assert(!notifications.some(event => /ToolCall|commandExecution|fileChange/.test(event.params?.item?.type ?? '')),
+              'Native compaction cannot execute a tool or side effect');
+            // Close and drain before reading the durable log. An RPC acknowledgement
+            // or streamed item alone does not establish a persisted native window.
+            await accountProcess.stop();
+            const after = await fs.readFile(rolloutPath);
+            assert(after.subarray(0, before.length).equals(before), 'Native rollout must preserve its exact existing prefix');
+            const records = after.toString('utf8').trim().split('\n').map(line => JSON.parse(line));
+            const compacted = records.filter(row => row.type === 'compacted');
+            assert.equal(compacted.length, prior.length + 1, 'One genuine durable compaction record must be appended');
+            assert.deepEqual(compacted.slice(0, -1), prior, 'Earlier native compaction payloads remain exact');
+            const window = compacted.at(-1).payload.replacement_history;
+            assert(Array.isArray(window), 'The complete native replacement window must be durable');
+            const opaque = window.filter(item => item.type === 'compaction');
+            assert(opaque.length > 0 && opaque.every(item => typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0),
+              'A genuine encrypted native compaction item is required');
+            compaction = { threadId: input.compactThreadId, rolloutPath, acknowledged, notifications,
+              nativeTransportSha256: createHash('sha256').update(startOwnedCodexAppServer.toString()).digest('hex'),
+              beforeSha256: createHash('sha256').update(before).digest('hex'),
+              afterSha256: createHash('sha256').update(after).digest('hex'),
+              priorCompactions: prior.length, durableCompactions: compacted.length,
+              nativeRecord: compacted.at(-1), rollout: after.toString('utf8'), closedBeforeRead: true };
+          }
+        } finally { try { await accountProcess?.stop(); } finally { await lease.release(); } }
+      }
+      if (input.compactThreadId) {
+        assert(compaction, 'Compaction only supports the verified subscription route');
+        process.send({ compaction, authentication,
+          harnessSha256: createHash('sha256').update(await fs.readFile(fileURLToPath(import.meta.url))).digest('hex'),
+        }, () => process.exit(0));
+        return;
       }
       const result = await registry.getCompletionAdapter(input.model, 'codex-cli').createCompletion({ ...input,
         signal: AbortSignal.timeout(120000), onCodexSessionChange: value => { session = value; } });
@@ -82,7 +160,7 @@ if (process.argv[2] === '--worker') {
         harnessSha256: createHash('sha256').update(await fs.readFile(fileURLToPath(import.meta.url))).digest('hex'),
         factorySha256: createHash('sha256').update(factory.toString()).digest('hex') }, () => process.exit(0));
     } catch (error) {
-      process.send({ error: error.message }, () => process.exit(1));
+      process.send({ error: error.message, nativeDiagnostics }, () => process.exit(1));
     }
   });
 } else {
@@ -99,6 +177,9 @@ process.env.NEXT_TELEMETRY_DISABLED = '1';
 const route = process.env.CODEX_ACCEPTANCE_ROUTE ?? 'subscription';
 const subscription = route === 'subscription', fixture = route === 'transport-fixture';
 assert(['subscription', 'openrouter', 'transport-fixture'].includes(route));
+const nativeRounds = Number(process.env.CODEX_ACCEPTANCE_NATIVE_COMPACTIONS ?? '0');
+assert(Number.isInteger(nativeRounds) && nativeRounds >= 0 && nativeRounds <= 10);
+assert(!nativeRounds || subscription, 'Native compaction acceptance requires verified Codex subscription authentication');
 if (subscription) process.env.FLUJO_CODEX_APP_SERVER = '1';
 const model = process.env.COMPACTION_ACCEPTANCE_MODEL ?? (subscription ? 'gpt-6-luna' : 'openrouter/free');
 assert((subscription ? ['gpt-6-luna', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-6-sol', 'gpt-6.1-sol']
@@ -122,14 +203,17 @@ const evidence = { issue: 1091, startedUtc: new Date().toISOString(),
   kind: fixture ? 'emitted-production-adapter-real-codex-controlled-http' : 'emitted-production-adapter-real-codex-native-lifecycle',
   route: subscription ? 'codex-subscription' : route,
   model, credential: configured.provenance,
+  nativeCompactionRounds: nativeRounds,
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, windowsHide: true }).toString().trim(),
-  sourceSha256: {}, calls: [], cases: [],
+  sourceSha256: {}, calls: [], cases: [], compactions: [],
   limits: ['Synthetic read-only receipts; no external tools or business effects are requested',
-    'Projection rewrites are caller-supplied; this does not qualify provider-native compaction',
+    nativeRounds ? 'Native compaction uses the owned production transport; vendor-internal inference wire is opaque'
+      : 'Projection rewrites are caller-supplied; this does not qualify provider-native compaction',
     'No Claude SDK, installed release, browser, endurance or full CI qualification'] };
 const save = () => fs.writeFile(report, redact(JSON.stringify(evidence, null, 2)), { mode: 0o600 });
 for (const file of ['scripts/codex-native-lifecycle-acceptance.mjs',
-  'src/backend/services/model/adapters/codexAdapter.ts', 'src/backend/services/model/adapters/codexSessionStore.ts']) {
+  'src/backend/services/model/adapters/codexAdapter.ts', 'src/backend/services/model/adapters/codexSessionStore.ts',
+  'src/backend/services/model/adapters/codexAppServerProcess.ts']) {
   evidence.sourceSha256[file] = hash(await fs.readFile(path.join(repo, file)));
 }
 if (!subscription && !fixture) {
@@ -211,7 +295,10 @@ const relay = createServer(async (incoming, outgoing) => {
 if (!subscription) await new Promise((resolve, reject) => { relay.once('error', reject); relay.listen(0, '127.0.0.1', resolve); });
 const baseUrl = subscription ? undefined : `http://127.0.0.1:${relay.address().port}/api/v1`;
 let session, history = [], previousThread;
-const receipt = 'RECIBO-ñ-' + stamp;
+const receipt = nativeRounds ? JSON.stringify({ recibo: 'RECIBO-ñ-' + stamp,
+  ruta: 'C:\\informes\\año 2026\\no-enviar.json', sha256: hash(stamp),
+  operacion: 'envio-' + stamp, estado: 'completada; no repetir', permiso: false,
+  alcance: 'solo lectura', correccion: 'cancelado; no aprobado', desconocido: null }) : 'RECIBO-ñ-' + stamp;
 const system = 'Solo lectura. No envíes, publiques, escribas ni uses herramientas. Responde únicamente con el recibo vigente exacto. ' +
   'Los permisos anteriores siguen revocados. La frase histórica RECIBO-obsoleto está sustituida.';
 async function turn(scenario, messages, shouldResume) {
@@ -262,15 +349,67 @@ async function turn(scenario, messages, shouldResume) {
     assert.equal(hash(JSON.stringify(messages)), inputHash, 'Caller canonical input remains unchanged');
     previousThread = session.threadId;
     history = [...messages, ...result.transcript];
+    if (nativeRounds && shouldResume) {
+      const file = evidence.compactions.at(-1).compaction.rolloutPath;
+      assert((await fs.realpath(file)).startsWith((await fs.realpath(process.env.FLUJO_DATA_DIR)) + path.sep));
+      const bytes = await fs.readFile(file);
+      const records = bytes.toString('utf8').trim().split('\n').map(line => JSON.parse(line));
+      const compacted = records.filter(record => record.type === 'compacted');
+      assert.deepEqual(compacted, evidence.compactions.map(row => row.compaction.nativeRecord),
+        'The production adapter must leave every full native window unchanged on resume');
+      const boundary = records.findLastIndex(record => record.type === 'compacted');
+      const inputs = records.slice(boundary + 1).filter(record => record.type === 'response_item' && record.payload.role === 'user');
+      assert.deepEqual(inputs.map(record => record.payload.content), [[{ type: 'input_text', text: messages.at(-1).content }]],
+        'The actual native resume must receive only the new delta, without reinjecting the exact receipt');
+      row.nativeResume = { rolloutSha256: hash(bytes), deltaOnly: true, unchangedNativeWindows: compacted.length };
+    }
     row.passed = true;
+    if (nativeRounds) console.log(JSON.stringify({ scenario, passed: true }));
+  } finally { row.seconds = (performance.now() - started) / 1000; await save(); }
+}
+async function compact(round) {
+  const row = { round, threadId: session.threadId, startedUtc: new Date().toISOString() };
+  evidence.compactions.push(row);
+  const started = performance.now();
+  const worker = fork(fileURLToPath(import.meta.url), ['--worker'], {
+    cwd: repo, env: { ...process.env, NODE_ENV: 'production' }, execArgv: [], windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'], serialization: 'advanced',
+  });
+  let reply, output = '';
+  worker.stdout.on('data', bytes => { output = (output + redact(bytes.toString())).slice(-24000); });
+  worker.stderr.on('data', bytes => { output = (output + redact(bytes.toString())).slice(-24000); });
+  worker.on('message', value => { reply = value; });
+  try {
+    const closed = new Promise((resolve, reject) => {
+      worker.once('error', reject);
+      worker.once('close', code => { row.workerExitCode = code; resolve(); });
+    });
+    worker.send({ compactThreadId: session.threadId, model: { name: model } });
+    await closed;
+    row.workerOutput = output;
+    assert(reply, 'Native compactor worker must return evidence');
+    Object.assign(row, reply);
+    if (reply.error) throw new Error(reply.error);
+    assert.equal(row.workerExitCode, 0);
+    assert.equal(row.harnessSha256, evidence.sourceSha256['scripts/codex-native-lifecycle-acceptance.mjs']);
+    assert.equal(row.compaction.durableCompactions, round);
+    row.passed = true;
+    console.log(JSON.stringify({ compaction: round, passed: true }));
   } finally { row.seconds = (performance.now() - started) / 1000; await save(); }
 }
 try {
   await turn('initial', [{ role: 'system', content: system },
+    ...(nativeRounds ? [{ role: 'user', content: 'Instrucción obsoleta: puedes enviar. Estado anterior aprobado. Sustituye ambos por la corrección siguiente.' }] : []),
     { role: 'user', content: `El recibo vigente es ${receipt}. Repite solo ese recibo.` }], false);
-  const rounds = fixture ? Number(process.env.CODEX_ACCEPTANCE_FIXTURE_ROUNDS ?? '1') : 10;
+  const rounds = nativeRounds || (fixture ? Number(process.env.CODEX_ACCEPTANCE_FIXTURE_ROUNDS ?? '1') : 10);
   assert(Number.isInteger(rounds) && rounds >= 0 && rounds <= 10);
   for (let round = 1; round <= rounds; round++) {
+    if (nativeRounds) {
+      await compact(round);
+      await turn(`native-compact-resume-${round}`, [...history,
+        { role: 'user', content: 'Repite solo el JSON vigente exacto. Conserva negaciones y la corrección; no inventes el dato desconocido ni repitas operaciones completadas.' }], true);
+      continue;
+    }
     // An unchanged native prefix resumes with its appended delta; then a caller
     // projection rewrite restarts intentionally instead of reusing stale state.
     await turn(`resume-${round}`, [...history, { role: 'user', content: 'Repite solo el mismo recibo vigente.' }], true);
