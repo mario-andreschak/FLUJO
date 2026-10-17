@@ -902,3 +902,50 @@ a provider compaction endpoint or qualify native CLI/Claude Agent SDK sessions,
 broader semantic/position/visual behavior, installed/endurance or release
 acceptance. #1091 stays open for those existing criteria. No full/remote CI,
 container build, release or automation change is introduced.
+
+## OpenRouter native compaction availability — October 16, 2026
+
+The [capability evidence](responses-compaction-capability-2026-10-16.json)
+checks the remaining genuine provider-compaction requirement before a runtime
+change. Both explicit `openrouter/free` and `openai/gpt-6-luna` requests use the
+existing OpenRouter credential in memory, without fallback, tools or an
+application profile. Full request/response bodies are retained in the linked
+compressed trace. This is direct provider evidence, not built-app acceptance.
+
+On October 17, 2026 UTC (October 16 in Bogota), both
+`https://openrouter.ai/api/v1/responses/compact` requests return HTTP 404 with
+`Not Found`, no generation ID and no usage. The corresponding `/responses`
+requests include `context_management: [{ type: "compaction",
+compact_threshold: 1024 }]`. They complete with 10,201 Free input tokens and
+8,611 Luna input tokens, return the exact synthetic Unicode receipt, and contain
+no `compaction` output item. The response does not echo `context_management`.
+These observations do not establish that the field was honored, or prove
+support on every model. They cannot qualify a genuine compacted provider window.
+
+The two completed inference responses report USD 0 and USD 0.0009356;
+both include cost evidence. The two 404 responses have no billing record in
+their bodies; they are recorded separately rather than assigned a measured
+zero charge. No direct OpenAI call or unapproved model is used. The probe
+defaults to Free and never retries or changes models after a refusal.
+
+The existing exact encrypted reasoning acceptance remains valid. Encrypted
+reasoning and a provider-generated `compaction` item are distinct protocol
+objects. Genuine provider compaction stays unqualified on these tested
+OpenRouter routes. Revisit this capability when relevant provider support
+changes; do not repeatedly infer availability from a successful ordinary reply.
+
+Backlog reconciliation also corrects a stale next-action note: the 15 Responses
+Stop/crash reply failures in the historical #1188 matrix were addressed by
+merged #1189/#1190/#1191. The final
+[receipt-selection evidence](recovery-receipt-selection-2026-10-16.json)
+scores 40/40 exact Haiku/Luna replies. The later
+[native fallback evidence](native-fallback-replay-2026-10-16.json) records
+20/20 exact replies and 20/20 ordinary signed-output replay windows; forced
+canonical-fallback transitions remain regression-only. Historical failures
+stay in their original evidence and do not become current defects merely
+because an older handover still points to them.
+
+No product source or acceptance criterion changes in this batch. #1091 remains
+open for genuine provider compaction, native SDK/CLI, broader semantic/position
+and visual behavior, installed/endurance and release acceptance. No full/remote
+CI, container build, release or automation change is introduced.
