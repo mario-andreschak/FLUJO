@@ -1,4 +1,5 @@
 import { createCodexAppServerThread } from '@/backend/services/model/adapters/codexAppServerThread';
+import path from 'node:path';
 import { startOwnedCodexAppServer, CodexAppServerRpcError } from '@/backend/services/model/adapters/codexAppServerProcess';
 import { parseCodexProtocolUsage } from '@/backend/services/model/adapters/codexProtocol';
 import { mapCodexUsage, subtractCodexUsage } from '@/backend/services/model/adapters/codexUsage';
@@ -22,7 +23,7 @@ beforeEach(() => {
     if (method === 'turn/steer') return { turnId: 'turn-1' };
     return {};
   });
-  jest.mocked(startOwnedCodexAppServer).mockImplementation(async input => {
+  jest.mocked(startOwnedCodexAppServer).mockReset().mockImplementation(async input => {
     emit = input.onNotification;
     return { request, stop, notify: jest.fn(), registration: { close: closed } } as unknown as Awaited<ReturnType<typeof startOwnedCodexAppServer>>;
   });
@@ -36,6 +37,72 @@ async function begin(thread: ReturnType<typeof make>, signal?: AbortSignal) {
   await events.next(); await events.next();
   return events;
 }
+
+const forkResponse = () => ({ thread: { id: 'child-thread', sessionId: 'root-session', forkedFromId: 'parent-thread',
+  turns: [{ id: 'parent-turn', status: 'completed' }] }, model: 'model', cwd: path.resolve('/managed'),
+  approvalPolicy: 'never', sandbox: { type: 'readOnly' } });
+
+it.each(['shared tree', 'new tree'])('forks through the completed boundary with the ordinary policy (%s)', async tree => {
+  const response = forkResponse();
+  if (tree === 'new tree') response.thread.sessionId = response.thread.id;
+  request.mockImplementation(async method => method === 'thread/fork' ? response
+    : method === 'turn/start' ? { turn: { id: 'turn-1', status: 'inProgress' } } : {});
+  const thread = make({ fork: { threadId: 'parent-thread', lastTurnId: 'parent-turn', sessionId: 'root-session' } });
+  const events = await begin(thread);
+  expect(request).toHaveBeenCalledWith('thread/fork', expect.objectContaining({ threadId: 'parent-thread', lastTurnId: 'parent-turn',
+    approvalPolicy: 'never', sandbox: 'read-only', ephemeral: false, developerInstructions: 'Trusted flow instructions' }));
+  expect(request.mock.calls.some(([method]) => method === 'thread/start' || method === 'thread/resume')).toBe(false);
+  send('turn/completed', { threadId: 'child-thread', turn: { id: 'turn-1', status: 'completed' } });
+  for await (const _event of events) { /* Drain the confirmed terminal. */ }
+  await thread.close();
+  expect(thread.completedTurnId()).toBe('turn-1');
+  expect(thread.nativeSessionId()).toBe(response.thread.sessionId);
+});
+
+it.each(['lineage', 'same thread', 'in progress', 'later turn', 'session', 'approval', 'sandbox', 'cwd', 'model', 'missing model'])
+('rejects a fork with changed %s before any inference or tool turn', async condition => {
+  const response = forkResponse();
+  if (condition === 'lineage') response.thread.forkedFromId = 'different-parent';
+  if (condition === 'same thread') response.thread.id = 'parent-thread';
+  if (condition === 'in progress') response.thread.turns[0].status = 'inProgress';
+  if (condition === 'later turn') response.thread.turns.push({ id: 'later-turn', status: 'completed' });
+  if (condition === 'session') response.thread.sessionId = 'different-session';
+  if (condition === 'approval') response.approvalPolicy = 'on-request';
+  if (condition === 'sandbox') response.sandbox.type = 'dangerFullAccess';
+  if (condition === 'cwd') response.cwd = path.resolve('/different');
+  if (condition === 'model') response.model = 'different-model';
+  if (condition === 'missing model') Reflect.deleteProperty(response, 'model');
+  request.mockImplementation(async method => method === 'thread/fork' ? response : {});
+  const thread = make({ fork: { threadId: 'parent-thread', lastTurnId: 'parent-turn', sessionId: 'root-session' } });
+  const { events } = await thread.runStreamed('replacement', {});
+  await expect(events.next()).rejects.toThrow(/fork/);
+  expect(request.mock.calls.filter(([method]) => method === 'turn/start')).toHaveLength(0);
+  expect(thread.completedTurnId()).toBeUndefined();
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it('closes an uncertain fork acknowledgement without replay or a fresh-thread fallback', async () => {
+  request.mockImplementation(async method => {
+    if (method === 'thread/fork') throw new Error('fork response lost');
+    return {};
+  });
+  const thread = make({ fork: { threadId: 'parent-thread', lastTurnId: 'parent-turn' } });
+  const { events } = await thread.runStreamed('replacement', {});
+  await expect(events.next()).rejects.toThrow('fork response lost');
+  expect(request.mock.calls.filter(([method]) => method === 'thread/fork')).toHaveLength(1);
+  expect(request.mock.calls.some(([method]) => ['thread/start', 'thread/resume', 'turn/start'].includes(method))).toBe(false);
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it('does not expose a completed fork checkpoint while MCP work is unresolved', async () => {
+  const thread = make(), events = await begin(thread);
+  send('item/started', { item: { id: 'tool-1', type: 'mcpToolCall', server: 'flujo', tool: 'write', status: 'inProgress' } });
+  send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  await events.next();
+  await expect(events.next()).rejects.toThrow('unresolved MCP work');
+  expect(thread.completedTurnId()).toBeUndefined();
+  expect(stop).toHaveBeenCalledTimes(1);
+});
 it('applies native-tool denial before the app-server child starts', async () => {
   const thread = make({ config: { features: { shell_tool: false, code_mode_host: false, multi_agent: false } }, onQuestion: jest.fn() });
   const events = await begin(thread);

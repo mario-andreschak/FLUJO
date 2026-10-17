@@ -42,6 +42,8 @@ import {
   computeCodexPrefixHash,
   computeCodexHistoryHash,
   findReusableCodexSession,
+  findForkableCodexSession,
+  completedCodexCheckpoints,
   recordCodexSession,
   invalidateCodexSession,
 } from './codexSessionStore';
@@ -736,9 +738,8 @@ export class CodexAdapter implements CompletionAdapter {
         }))
       : bridgeTools;
 
-    // Full-history session reuse. Prefix drift, a shortened history, a scoped
-    // input view (`sessionResume` false), or an empty delta all take the
-    // always-correct fresh/full-flatten path.
+    // Reuse full-history sessions or fork a verified completed native prefix.
+    // Incompatible/scoped/unproven history still takes the fresh/full path.
     const sessionRegistryKey =
       !nativeToolPort && !executionExtensionContext && conversationId && nodeId ? codexSessionKey(conversationId, nodeId) : undefined;
     if (!sessionResume && sessionRegistryKey) {
@@ -795,6 +796,9 @@ export class CodexAdapter implements CompletionAdapter {
     let baselineSnapshot: CodexTokenSnapshot | undefined;
     let protocolBaseline: CodexUsageLike | undefined;
     let protocolTotal: CodexUsageLike | undefined;
+    let forkCandidate: ReturnType<typeof findForkableCodexSession>;
+    let sessionBefore: ReturnType<typeof findReusableCodexSession>;
+    let unknownForkUsage = false;
     let ordinaryThread: ReturnType<typeof createCodexAppServerThread> | undefined;
     let ordinarySessionCompatible = true;
     let contextUsage: CompletionResult['contextUsage'] = null;
@@ -855,6 +859,7 @@ export class CodexAdapter implements CompletionAdapter {
             runResourceMarkers,
           );
           if (delta.text.length > 0 || delta.images.length > 0) {
+            sessionBefore = reusable;
             resumeThreadId = reusable.threadId;
             normalizedInput = delta;
             // The original system prompt is already in the persisted Codex thread.
@@ -866,6 +871,20 @@ export class CodexAdapter implements CompletionAdapter {
               seenMessageCount: reusable.seenMessageCount,
               deltaMessages: messages.length - reusable.seenMessageCount,
             });
+          }
+        }
+        if (!resumeThreadId && ordinaryThreadPath) {
+          const candidate = findForkableCodexSession(sessionTracking.key, sessionTracking.prefixHash, messages, codexSession);
+          if (candidate) {
+            const delta = normalizeMessageInput(messages.slice(candidate.checkpoint.seenMessageCount), runResourceMarkers);
+            if (delta.text.length || delta.images.length) {
+              forkCandidate = candidate;
+              sessionBefore = candidate.session;
+              protocolBaseline = candidate.checkpoint.totalUsage;
+              unknownForkUsage = true;
+              normalizedInput = delta;
+              inputSystemPrompt = undefined;
+            }
           }
         }
       }
@@ -988,6 +1007,8 @@ export class CodexAdapter implements CompletionAdapter {
       ordinaryThread = ordinaryThreadPath ? createCodexAppServerThread({
         executable: codexExecutable!, env: nativeCodexEnvironment(runtime.env), config,
         options: threadOptions, resumeThreadId, outputSchema: input.outputSchema, maxTurns: input.maxTurns,
+        ...(forkCandidate ? { fork: { threadId: forkCandidate.session.threadId, lastTurnId: forkCandidate.checkpoint.turnId,
+          ...(forkCandidate.session.nativeSessionId ? { sessionId: forkCandidate.session.nativeSessionId } : {}) } } : {}),
         beforeContinuation: input.beforeModelDispatch,
         developerInstructions: [configuration.developerInstructions, systemPrompt].filter(Boolean).join('\n\n'),
         ...(ordinaryQuestion ? {
@@ -1001,7 +1022,13 @@ export class CodexAdapter implements CompletionAdapter {
             return result;
           },
         } : {}),
-        onUsage: (total, context) => { protocolTotal = total; usage = protocolBaseline ? subtractCodexUsage(total, protocolBaseline) : total; contextUsage = context; },
+        onUsage: (total, context) => {
+          protocolTotal = total;
+          usage = forkCandidate ? subtractKnownCodexUsage(total, protocolBaseline)
+            : protocolBaseline ? subtractCodexUsage(total, protocolBaseline) : total;
+          unknownForkUsage = Boolean(forkCandidate && !usage);
+          contextUsage = context;
+        },
       }) : undefined;
       const thread = ownedThread ?? ordinaryThread ?? (resumeThreadId
         ? codex!.resumeThread(resumeThreadId, threadOptions)
@@ -1445,15 +1472,27 @@ export class CodexAdapter implements CompletionAdapter {
         handoffCalls.length === 0 &&
         capturedThreadId;
       if (reusable) {
+        const historyHash = computeCodexHistoryHash([...messages, ...transcript]);
+        const seenMessageCount = messages.length + transcript.length;
+        const completedNativeTurn = ordinaryThread?.completedTurnId?.();
+        const earlier = completedCodexCheckpoints(sessionBefore).filter(checkpoint => !forkCandidate
+          || checkpoint.seenMessageCount <= forkCandidate.checkpoint.seenMessageCount);
+        const checkpoints = completedNativeTurn && protocolTotal
+          ? [...earlier, { turnId: completedNativeTurn, historyHash, seenMessageCount, totalUsage: protocolTotal }].slice(-32)
+          : undefined;
         const stored = recordCodexSession(sessionTracking.key, {
           adapter: sessionTracking.configuration.adapter,
           provider: sessionTracking.configuration.provider,
           threadId: capturedThreadId!,
           ...(protocolTotal ? { totalUsage: protocolTotal } : {}),
+          ...(checkpoints ? { checkpoints } : {}),
+          ...(ordinaryThread?.nativeSessionId?.() ? { nativeSessionId: ordinaryThread.nativeSessionId() } : {}),
+          ...(forkCandidate ? { forkedFrom: { threadId: forkCandidate.session.threadId, turnId: forkCandidate.checkpoint.turnId } }
+            : sessionBefore?.forkedFrom ? { forkedFrom: sessionBefore.forkedFrom } : {}),
           configurationHash: sessionTracking.prefixHash,
           prefixHash: sessionTracking.prefixHash,
-          seenMessageCount: messages.length + transcript.length,
-          historyHash: computeCodexHistoryHash([...messages, ...transcript]),
+          seenMessageCount,
+          historyHash,
         });
         onCodexSessionChange?.(stored);
       } else {
@@ -1495,7 +1534,7 @@ export class CodexAdapter implements CompletionAdapter {
           },
         },
       ],
-      ...(!unknownResumedSdkUsage ? { usage: {
+      ...(!unknownResumedSdkUsage && !unknownForkUsage ? { usage: {
         prompt_tokens: mappedUsage.promptTokens,
         completion_tokens: mappedUsage.completionTokens,
         total_tokens: mappedUsage.totalTokens,

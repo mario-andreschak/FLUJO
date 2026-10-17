@@ -1,4 +1,5 @@
 import type { ThreadEvent, ThreadOptions, UserInput } from '@openai/codex-sdk';
+import path from 'node:path';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, CodexAppServerRpcError, CodexAppServerRequestError } from './codexAppServerProcess';
 import { codexRecord as record, codexId as id, parseCodexProtocolUsage } from './codexProtocol';
 import type { CodexUsageLike } from './codexUsage';
@@ -22,12 +23,14 @@ function wireInput(prompt: string | UserInput[]) {
 export function createCodexAppServerThread(input: {
   executable: string; env: NodeJS.ProcessEnv; config: Record<string, unknown>; options: ThreadOptions;
   developerInstructions: string; resumeThreadId?: string; outputSchema?: Record<string, unknown>;
+  fork?: { threadId: string; lastTurnId: string; sessionId?: string };
   onUsage(total: CodexUsageLike, context: ModelContextUsage): void;
   onQuestion?(questions: unknown, signal: AbortSignal): Promise<unknown>;
   onAsyncQuestion?(questions: unknown, signal: AbortSignal): Promise<CodexAsyncUserInputResult>;
   beforeContinuation?(): Promise<void>;
   maxTurns?: number;
 }) {
+  if (input.fork && input.resumeThreadId) throw new Error('Codex cannot fork and resume in the same dispatch.');
   const owner = Object.freeze({});
   let child: Child | undefined, threadId = input.resumeThreadId, activeTurnId: string | undefined;
   let childCloseProof: Promise<void> | undefined;
@@ -40,6 +43,8 @@ export function createCodexAppServerThread(input: {
   let queueBytes = 0, wake: (() => void) | undefined;
   const messageText = new Map<string, string>();
   let totalUsage: CodexUsageLike | undefined;
+  let completedTurnId: string | undefined;
+  let nativeSessionId: string | undefined;
   let resumedTurnIds = new Set<string>();
   const endedTurns = new Set<string>();
   const enqueue = (message: Notification) => {
@@ -106,14 +111,32 @@ export function createCodexAppServerThread(input: {
       approvalPolicy: 'never', sandbox: 'read-only', config: input.config,
       developerInstructions: input.developerInstructions,
     };
-    const response = record(await child.request(threadId ? 'thread/resume' : 'thread/start', {
-      ...params, ...(threadId ? { threadId } : { ephemeral: false }),
+    const response = record(await child.request(input.fork ? 'thread/fork' : threadId ? 'thread/resume' : 'thread/start', {
+      ...params, ...(input.fork ? { threadId: id(input.fork.threadId), lastTurnId: id(input.fork.lastTurnId), ephemeral: false }
+        : threadId ? { threadId } : { ephemeral: false }),
     }));
     const received = id(record(response.thread).id);
     const priorTurns = record(response.thread).turns;
     resumedTurnIds = new Set(Array.isArray(priorTurns) ? priorTurns.map(turn => id(record(turn).id)) : []);
+    if (input.fork) {
+      const boundary = Array.isArray(priorTurns) && priorTurns.length ? record(priorTurns.at(-1)) : {};
+      const receivedSessionId = record(response.thread).sessionId;
+      if (received === input.fork.threadId || record(response.thread).forkedFromId !== input.fork.threadId
+        || boundary.id !== input.fork.lastTurnId || boundary.status !== 'completed'
+        || typeof receivedSessionId !== 'string'
+        || (receivedSessionId !== received && receivedSessionId !== input.fork.sessionId)) {
+        throw new Error('Codex fork did not preserve the requested completed-turn boundary and lineage.');
+      }
+      const cwd = typeof response.cwd === 'string' ? path.resolve(response.cwd) : '';
+      const expectedCwd = path.resolve(input.options.workingDirectory!);
+      if (response.model !== input.options.model || response.approvalPolicy !== 'never' || record(response.sandbox).type !== 'readOnly'
+        || (process.platform === 'win32' ? cwd.toLowerCase() !== expectedCwd.toLowerCase() : cwd !== expectedCwd)) {
+        throw new Error('Codex fork did not preserve the ordinary model, permission policy and workspace.');
+      }
+    }
     if (threadId && received !== threadId) throw new Error('Codex resumed a different conversation.');
     if (response.model != null && response.model !== input.options.model) throw new Error('Codex selected a different model.');
+    if (record(response.thread).sessionId != null) nativeSessionId = id(record(response.thread).sessionId);
     threadId = received;
     })();
     await opening;
@@ -139,6 +162,8 @@ export function createCodexAppServerThread(input: {
     close,
     whenClosed: () => childCloseProof ?? child?.registration.close,
     usage: () => totalUsage,
+    completedTurnId: () => completedTurnId,
+    nativeSessionId: () => nativeSessionId,
     canSteer: () => Boolean(child && activeTurnId && !closed && !awaitingAsyncInput),
     /** Only a received rejection permits returning input to the pending inbox. */
     async steer(prompt: string | UserInput[]): Promise<boolean> {
@@ -188,6 +213,7 @@ export function createCodexAppServerThread(input: {
             options.signal?.throwIfAborted();
             lifecycle.signal.throwIfAborted();
             turnCount++;
+            completedTurnId = undefined;
             const response = record(await child!.request('turn/start', { threadId,
               model: input.options.model, effort: input.options.modelReasoningEffort,
               input: wireInput(nextInput), ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
@@ -330,6 +356,8 @@ export function createCodexAppServerThread(input: {
                   continue turns;
                 }
                 if (turn.status === 'completed') {
+                  if (activeTools.size) throw new Error('Codex completed with unresolved MCP work; this turn cannot be a fork checkpoint.');
+                  completedTurnId = currentTurnId;
                   // Usage can be absent; absence must not erase protocol totals or fabricate entitlement.
                   yield { type: 'turn.completed', usage: totalUsage ?? { input_tokens: 0, output_tokens: 0 } } as ThreadEvent;
                 } else if (turn.status === 'failed' || turn.status === 'interrupted') {
