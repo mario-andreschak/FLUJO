@@ -1,0 +1,751 @@
+{
+  "date": "2026-10-15",
+  "issues": [
+    569,
+    1091
+  ],
+  "baseMain": "ef5a2b3edea992e3176b811b695c74d0b14ae0a1",
+  "sourceInputs": [
+    {
+      "sha256": "e960f967ceaabd692438a24b623fe4f18fa037c7eec086e74acf9a9ef7716480",
+      "path": "src/backend/execution/flow/compaction/jsonInspection.ts"
+    },
+    {
+      "sha256": "4049546cff980b2edd957234960f32481c5360c60da0dc8bbe6f5eac579ce155",
+      "path": "src/backend/execution/flow/handlers/summarizingCompaction.ts"
+    },
+    {
+      "sha256": "63ba3e0a735b8484a06e33df13cf4fd72edc2198ccf2caaaa0432453adf77dba",
+      "path": "__tests__/model/compactionPreparation.test.ts"
+    },
+    {
+      "sha256": "8935c8f269c1874989ce7d871eac22a3a4e75d8b2905afef7ea06419a9b4e8d8",
+      "path": "package.json"
+    },
+    {
+      "sha256": "116627fc55e0c6c69fdef483bb00592f5f24caa8aac139ebba57f8515f3e4be8",
+      "path": "package-lock.json"
+    },
+    {
+      "sha256": "6e48fee95009210d287cf638bb4a4a3c38c1e52d245d3c0fbbdacbbd07df458f",
+      "path": "next.config.mjs"
+    },
+    {
+      "sha256": "0cc83729bf10c678e87eec09b74c485356f2eb9dff211652593bf08c824ac478",
+      "path": "tsconfig.json"
+    }
+  ],
+  "platform": "Windows",
+  "node": "v22.23.3",
+  "workload": {
+    "payloadCodeUnits": 25165878,
+    "payloadSha256": "aa92a9e3ebebf44df3a34a0eeabcdbb760d71ee730d6952423900d1dffc5f056",
+    "expectedTokens": 6291510,
+    "rounds": 3,
+    "operationsPerRound": [
+      "estimateMessageTokens",
+      "preserveResourceUris"
+    ],
+    "processOldSpaceMiB": 192,
+    "processSemiSpaceMiB": 1,
+    "actualHeapLimitBytes": 204472320,
+    "heapGrowthLimitBytes": 16777216,
+    "retainedGrowthLimitBytes": 4194304,
+    "flattenedInput": true
+  },
+  "negativeControl": {
+    "observedReason": "Full-message allocation returned",
+    "originalSourceRegressionExitCode": 1,
+    "observedOOM": false
+  },
+  "baseline": [
+    {
+      "round": 0,
+      "operation": "tokens",
+      "elapsedMs": 84.75110000000006,
+      "correct": true,
+      "start": {
+        "rss": 108339200,
+        "heapTotal": 77930496,
+        "heapUsed": 73690328,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 158597120,
+        "heapTotal": 128270336,
+        "heapUsed": 124023296,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 107413504,
+        "heapTotal": 77930496,
+        "heapUsed": 73690720,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 50332968,
+      "rssGrowthBytes": 50257920,
+      "retainedGrowthBytes": 1168
+    },
+    {
+      "round": 0,
+      "operation": "uris",
+      "elapsedMs": 90.43769999999995,
+      "correct": true,
+      "start": {
+        "rss": 107421696,
+        "heapTotal": 77930496,
+        "heapUsed": 73692216,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 157663232,
+        "heapTotal": 128270336,
+        "heapUsed": 124039240,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 157798400,
+        "heapTotal": 128270336,
+        "heapUsed": 124034272,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 50347024,
+      "rssGrowthBytes": 50241536,
+      "retainedGrowthBytes": 50344720
+    },
+    {
+      "round": 1,
+      "operation": "tokens",
+      "elapsedMs": 85.1173,
+      "correct": true,
+      "start": {
+        "rss": 158162944,
+        "heapTotal": 128008192,
+        "heapUsed": 124027440,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 208293888,
+        "heapTotal": 178348032,
+        "heapUsed": 174359968,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 158187520,
+        "heapTotal": 128270336,
+        "heapUsed": 124033600,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 50332528,
+      "rssGrowthBytes": 50130944,
+      "retainedGrowthBytes": 50344048
+    },
+    {
+      "round": 1,
+      "operation": "uris",
+      "elapsedMs": 90.11969999999997,
+      "correct": true,
+      "start": {
+        "rss": 158183424,
+        "heapTotal": 128270336,
+        "heapUsed": 124033912,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 208171008,
+        "heapTotal": 178610176,
+        "heapUsed": 174378856,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 158154752,
+        "heapTotal": 128270336,
+        "heapUsed": 124041712,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 50344944,
+      "rssGrowthBytes": 49987584,
+      "retainedGrowthBytes": 50352160
+    },
+    {
+      "round": 2,
+      "operation": "tokens",
+      "elapsedMs": 84.40769999999998,
+      "correct": true,
+      "start": {
+        "rss": 158158848,
+        "heapTotal": 128270336,
+        "heapUsed": 124034880,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 208314368,
+        "heapTotal": 178610176,
+        "heapUsed": 174367424,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 158175232,
+        "heapTotal": 128270336,
+        "heapUsed": 124035168,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 50332544,
+      "rssGrowthBytes": 50155520,
+      "retainedGrowthBytes": 50345616
+    },
+    {
+      "round": 2,
+      "operation": "uris",
+      "elapsedMs": 93.74980000000005,
+      "correct": true,
+      "start": {
+        "rss": 158187520,
+        "heapTotal": 128270336,
+        "heapUsed": 124035480,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 208289792,
+        "heapTotal": 178610176,
+        "heapUsed": 174380248,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 158076928,
+        "heapTotal": 128270336,
+        "heapUsed": 124043240,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 50344768,
+      "rssGrowthBytes": 50102272,
+      "retainedGrowthBytes": 50353688
+    }
+  ],
+  "corrected": [
+    {
+      "round": 0,
+      "operation": "tokens",
+      "elapsedMs": 74.3300999999999,
+      "correct": true,
+      "start": {
+        "rss": 109182976,
+        "heapTotal": 78192640,
+        "heapUsed": 73824304,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 109793280,
+        "heapTotal": 78192640,
+        "heapUsed": 74445104,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 108953600,
+        "heapTotal": 78192640,
+        "heapUsed": 73825816,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 620800,
+      "rssGrowthBytes": 610304,
+      "retainedGrowthBytes": 2216
+    },
+    {
+      "round": 0,
+      "operation": "uris",
+      "elapsedMs": 74.93370000000004,
+      "correct": true,
+      "start": {
+        "rss": 108969984,
+        "heapTotal": 78192640,
+        "heapUsed": 73827296,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 108986368,
+        "heapTotal": 78192640,
+        "heapUsed": 74462672,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 108564480,
+        "heapTotal": 78192640,
+        "heapUsed": 73845000,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 635376,
+      "rssGrowthBytes": 16384,
+      "retainedGrowthBytes": 21400
+    },
+    {
+      "round": 1,
+      "operation": "tokens",
+      "elapsedMs": 70.43349999999998,
+      "correct": true,
+      "start": {
+        "rss": 108670976,
+        "heapTotal": 78192640,
+        "heapUsed": 73844792,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 108498944,
+        "heapTotal": 78192640,
+        "heapUsed": 74464600,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 108658688,
+        "heapTotal": 78192640,
+        "heapUsed": 73845848,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 619808,
+      "rssGrowthBytes": -172032,
+      "retainedGrowthBytes": 22248
+    },
+    {
+      "round": 1,
+      "operation": "uris",
+      "elapsedMs": 73.1998000000001,
+      "correct": true,
+      "start": {
+        "rss": 108666880,
+        "heapTotal": 78192640,
+        "heapUsed": 73846160,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 108666880,
+        "heapTotal": 78192640,
+        "heapUsed": 74465160,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 108666880,
+        "heapTotal": 78192640,
+        "heapUsed": 73847408,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 619000,
+      "rssGrowthBytes": 0,
+      "retainedGrowthBytes": 23808
+    },
+    {
+      "round": 2,
+      "operation": "tokens",
+      "elapsedMs": 70.20139999999992,
+      "correct": true,
+      "start": {
+        "rss": 108699648,
+        "heapTotal": 78192640,
+        "heapUsed": 73847200,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 108421120,
+        "heapTotal": 78192640,
+        "heapUsed": 74463208,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 108584960,
+        "heapTotal": 78192640,
+        "heapUsed": 73847488,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 616008,
+      "rssGrowthBytes": -278528,
+      "retainedGrowthBytes": 23888
+    },
+    {
+      "round": 2,
+      "operation": "uris",
+      "elapsedMs": 83.4873,
+      "correct": true,
+      "start": {
+        "rss": 108589056,
+        "heapTotal": 78192640,
+        "heapUsed": 73847800,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "transient": {
+        "rss": 108302336,
+        "heapTotal": 78192640,
+        "heapUsed": 74478136,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retained": {
+        "rss": 108576768,
+        "heapTotal": 78192640,
+        "heapUsed": 73858064,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "heapGrowthBytes": 630336,
+      "rssGrowthBytes": -286720,
+      "retainedGrowthBytes": 34464
+    }
+  ],
+  "equivalence": {
+    "unchangedCanonicalInput": true,
+    "nativeCountsAndResourceTextAndOrderMatch": true,
+    "mixedSeededJsonComparisons": 4096,
+    "seed": "0x5691091"
+  },
+  "validation": {
+    "focusedDistinctCases": 52,
+    "changedRegressionFinalCases": 15,
+    "unchangedConsumerCasesReused": 0,
+    "typecheck": {
+      "exitCode": 0,
+      "elapsedSeconds": 60.0780392,
+      "step": "final-frozen-typecheck",
+      "utc": "2026-10-15T10:51:37.2151232Z"
+    },
+    "sourceLint": {
+      "elapsedSeconds": 110.4907127,
+      "utc": "2026-10-15T10:46:03.1876051Z",
+      "exitCode": 0,
+      "step": "lint"
+    },
+    "changedPathLint": {
+      "exitCode": 0,
+      "step": "final-frozen-path-lint",
+      "utc": "2026-10-15T10:51:40.7555331Z"
+    },
+    "build": {
+      "step": "non-container-application-build",
+      "exitCode": 0,
+      "elapsedSeconds": 355.6385338,
+      "utc": "2026-10-15T10:59:07.5200883Z",
+      "buildCommand": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "via": "flujo-bash MCP",
+      "buildId": "lZIUVvpIgSfl4qRmptSPl"
+    },
+    "emittedProductionFactory": {
+      "utc": "2026-10-15T11:00:01.75Z",
+      "complete": true,
+      "provenance": {
+        "buildId": "lZIUVvpIgSfl4qRmptSPl",
+        "moduleId": 39737,
+        "artifacts": [
+          {
+            "path": ".next/server/webpack-runtime.js",
+            "sha256": "af3c7527d7d028d987f97c086addbb069b48f667c4c37ce8ecc36a203c69a7f6"
+          },
+          {
+            "path": ".next/server/app/v1/chat/completions/route.js",
+            "sha256": "7533d9d13aefa6fe305e737fa388cc1882b3757928392aabebce49a772206dd9"
+          },
+          {
+            "path": ".next/server/chunks/798.js",
+            "sha256": "633808301ba3585395397f53245cb2d7fa9833eaa342e04c6a287b04f52b008e"
+          },
+          {
+            "path": ".next/server/chunks/15662.js",
+            "sha256": "6ad013ca13a7f461ea69aaca032c0c29ecd1dffc54ae101e7f91630e1b0d89b1"
+          }
+        ],
+        "preparationFactorySha256": "1100efc671346b0992c83e5cb2f2cdf751bd6a587dd5a9baa09484cbbfce1aa5",
+        "loggerFactorySha256": "9de62668c94f7e3bbc652bf46b378e6451ab1e4e5f2c1e88f80836a48438541c",
+        "externals": [
+          {
+            "moduleId": 504573,
+            "name": "node:buffer",
+            "sha256": "4b674f0af152333760009c8358bfaa5169eecf1ebdc17ec8a13e3fef65855b4e"
+          },
+          {
+            "moduleId": 979428,
+            "name": "buffer",
+            "sha256": "a326861d804cff7befd354f0fedc576649f4c74b0cf1446ab8f37323f6d94643"
+          }
+        ]
+      },
+      "before": {
+        "rss": 35196928,
+        "heapTotal": 10309632,
+        "heapUsed": 7213856,
+        "external": 3148031,
+        "arrayBuffers": 16619
+      },
+      "samples": [
+        {
+          "round": 0,
+          "expectedTokens": 6291482,
+          "countHeapGrowthBytes": 620208,
+          "elapsedMs": 368.4373,
+          "summaryChars": 268,
+          "retained": {
+            "rss": 37019648,
+            "heapTotal": 10309632,
+            "heapUsed": 7244904,
+            "external": 1692121,
+            "arrayBuffers": 16619
+          },
+          "retainedHeapGrowthBytes": 31048
+        },
+        {
+          "round": 1,
+          "expectedTokens": 6291482,
+          "countHeapGrowthBytes": 615424,
+          "elapsedMs": 365.2259999999999,
+          "summaryChars": 268,
+          "retained": {
+            "rss": 37445632,
+            "heapTotal": 10309632,
+            "heapUsed": 7246304,
+            "external": 1692121,
+            "arrayBuffers": 16619
+          },
+          "retainedHeapGrowthBytes": 32448
+        },
+        {
+          "round": 2,
+          "expectedTokens": 6291482,
+          "countHeapGrowthBytes": 615416,
+          "elapsedMs": 361.55229999999983,
+          "summaryChars": 268,
+          "retained": {
+            "rss": 37351424,
+            "heapTotal": 10309632,
+            "heapUsed": 7247080,
+            "external": 1692121,
+            "arrayBuffers": 16619
+          },
+          "retainedHeapGrowthBytes": 33224
+        }
+      ],
+      "withinEnvelope": true,
+      "modelCalls": 0,
+      "summaryDependency": "Injected deterministic summary; no provider/semantic fidelity claim",
+      "archiveWrite": false
+    },
+    "finalFocused": {
+      "exitCode": 0,
+      "step": "final-focused-regressions",
+      "utc": "2026-10-15T10:49:51.8619337Z"
+    }
+  },
+  "externalModelCalls": 0,
+  "remoteWorkflowsDispatched": 0,
+  "containerBuilds": 0,
+  "limits": [
+    "Counts remain the existing JSON UTF-16 char/4 heuristic, not measured provider tokens.",
+    "String encoding is sliced at16384 UTF-16 code units; complete original strings are scanned for exact URI matches.",
+    "Traversal retains keys of the active object and ancestors; resource bookkeeping/output scales with actual URI matches.",
+    "Accessors, custom toJSON and non-JSON objects retain native JSON.stringify compatibility; that path can materialize complete messages.",
+    "Native JSON archive writes and provider serialization remain unchanged.",
+    "This controlled flattened-text case is not original520 OOM confirmation, whole-runtime retained-memory endurance, live/paused/media/slow-client pressure, Linux or provider/native/release acceptance.",
+    "Emitted orchestration uses a deterministic injected summary and no archive writer to isolate preparation/source-release behavior; this is not provider fidelity or persistence acceptance."
+  ],
+  "releasedSource": {
+    "beforeDetachedCopy": {
+      "utc": "2026-10-15T10:49:01.592Z",
+      "source": "Initial bounded inspection candidate before detached URI copy",
+      "sourceInputs": [
+        {
+          "sha256": "e960f967ceaabd692438a24b623fe4f18fa037c7eec086e74acf9a9ef7716480",
+          "path": "src/backend/execution/flow/compaction/jsonInspection.ts"
+        },
+        {
+          "sha256": "f6190e5f7fbeaa98249df819677b844bfbcef34b1538c9840dc3720de078ee35",
+          "path": "src/backend/execution/flow/handlers/summarizingCompaction.ts"
+        },
+        {
+          "sha256": "c3fb02d74e4f573adf31295d05bef585b7716ef2a024df72e01df85666b58eeb",
+          "path": "__tests__/model/compactionPreparation.test.ts"
+        },
+        {
+          "sha256": "8935c8f269c1874989ce7d871eac22a3a4e75d8b2905afef7ea06419a9b4e8d8",
+          "path": "package.json"
+        },
+        {
+          "sha256": "116627fc55e0c6c69fdef483bb00592f5f24caa8aac139ebba57f8515f3e4be8",
+          "path": "package-lock.json"
+        },
+        {
+          "sha256": "6e48fee95009210d287cf638bb4a4a3c38c1e52d245d3c0fbbdacbbd07df458f",
+          "path": "next.config.mjs"
+        },
+        {
+          "sha256": "0cc83729bf10c678e87eec09b74c485356f2eb9dff211652593bf08c824ac478",
+          "path": "tsconfig.json"
+        }
+      ],
+      "summaryChars": 120,
+      "before": {
+        "heapTotal": 35725312,
+        "rss": 74268672,
+        "external": 1790447,
+        "arrayBuffers": 16831,
+        "heapUsed": 25402848
+      },
+      "after": {
+        "heapTotal": 109920256,
+        "rss": 137678848,
+        "external": 1790451,
+        "arrayBuffers": 16795,
+        "heapUsed": 74055424
+      },
+      "afterRegexReset": {
+        "heapTotal": 110182400,
+        "rss": 137588736,
+        "external": 1790451,
+        "arrayBuffers": 16795,
+        "heapUsed": 74058696
+      },
+      "retainedHeapBytes": 48652576,
+      "retainedAfterRegexResetBytes": 48655848
+    },
+    "corrected": {
+      "utc": "2026-10-15T10:49:46.042Z",
+      "summaryChars": 120,
+      "before": {
+        "rss": 74149888,
+        "heapTotal": 35725312,
+        "heapUsed": 25461008,
+        "external": 1790447,
+        "arrayBuffers": 16831
+      },
+      "after": {
+        "rss": 86315008,
+        "heapTotal": 59580416,
+        "heapUsed": 23734616,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "afterRegexReset": {
+        "rss": 86315008,
+        "heapTotal": 59842560,
+        "heapUsed": 23738000,
+        "external": 1790451,
+        "arrayBuffers": 16795
+      },
+      "retainedHeapBytes": -1726392,
+      "retainedAfterRegexResetBytes": -1723008
+    },
+    "emittedNegativeControl": {
+      "utc": "2026-10-15T10:52:43.899Z",
+      "complete": true,
+      "provenance": {
+        "buildId": "0_AVuFsLjLQ3VqkIPAGaQ",
+        "moduleId": 39737,
+        "artifacts": [
+          {
+            "path": ".next/server/webpack-runtime.js",
+            "sha256": "af3c7527d7d028d987f97c086addbb069b48f667c4c37ce8ecc36a203c69a7f6"
+          },
+          {
+            "path": ".next/server/app/chain-chat/page.js",
+            "sha256": "6c2c3ce18dbfb26caabd888737d4a9cbc0072f03aeb9671f937629c276923571"
+          },
+          {
+            "path": ".next/server/chunks/798.js",
+            "sha256": "633808301ba3585395397f53245cb2d7fa9833eaa342e04c6a287b04f52b008e"
+          },
+          {
+            "path": ".next/server/chunks/15662.js",
+            "sha256": "d6da9ebb3ea849edd5f58ad82bd199a61e45febd9699b3fc52197d1e3adf0d8d"
+          }
+        ],
+        "preparationFactorySha256": "1bfc7a6d4349b442d7fba162c94a17fab9332c32034203803b379fd045a92bbc",
+        "loggerFactorySha256": "9de62668c94f7e3bbc652bf46b378e6451ab1e4e5f2c1e88f80836a48438541c",
+        "externals": []
+      },
+      "before": {
+        "rss": 35192832,
+        "heapTotal": 10047488,
+        "heapUsed": 7240392,
+        "external": 3192460,
+        "arrayBuffers": 16619
+      },
+      "samples": [
+        {
+          "round": 0,
+          "expectedTokens": 6291482,
+          "countHeapGrowthBytes": 620208,
+          "elapsedMs": 358.51450000000006,
+          "summaryChars": 268,
+          "retained": {
+            "rss": 87535616,
+            "heapTotal": 60649472,
+            "heapUsed": 57551288,
+            "external": 1692121,
+            "arrayBuffers": 16619
+          },
+          "retainedHeapGrowthBytes": 50310896
+        },
+        {
+          "round": 1,
+          "expectedTokens": 6291482,
+          "countHeapGrowthBytes": 615584,
+          "elapsedMs": 338.5058,
+          "summaryChars": 268,
+          "retained": {
+            "rss": 87891968,
+            "heapTotal": 60649472,
+            "heapUsed": 57560936,
+            "external": 1692121,
+            "arrayBuffers": 16619
+          },
+          "retainedHeapGrowthBytes": 50320544
+        },
+        {
+          "round": 2,
+          "expectedTokens": 6291482,
+          "countHeapGrowthBytes": 615576,
+          "elapsedMs": 338.04189999999994,
+          "summaryChars": 268,
+          "retained": {
+            "rss": 87957504,
+            "heapTotal": 60649472,
+            "heapUsed": 57569048,
+            "external": 1692121,
+            "arrayBuffers": 16619
+          },
+          "retainedHeapGrowthBytes": 50328656
+        }
+      ],
+      "withinEnvelope": false,
+      "modelCalls": 0,
+      "summaryDependency": "Injected deterministic summary; no provider/semantic fidelity claim",
+      "archiveWrite": false
+    }
+  }
+}

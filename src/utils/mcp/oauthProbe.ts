@@ -8,6 +8,7 @@ export interface OAuthCapabilityProbeResult {
   resourceMetadataUrl?: string;
   authorizationServers?: string[];
   dynamicClientRegistration?: boolean;
+  clientIdMetadataDocument?: boolean;
   registrationEndpoint?: string;
   reachable?: boolean;
   unauthenticated?: boolean;
@@ -68,20 +69,31 @@ function authorizationMetadataUrls(issuer: string): string[] {
   ]));
 }
 
-async function findRegistrationEndpoint(issuers: string[], signal: AbortSignal): Promise<string | undefined> {
+async function findClientRegistration(issuers: string[], signal: AbortSignal): Promise<{
+  registrationEndpoint?: string; clientIdMetadataDocument?: boolean;
+}> {
   for (const issuer of issuers) {
     for (const metadataUrl of authorizationMetadataUrls(issuer)) {
       try {
         const res = await requestPublicOAuth(metadataUrl, 'metadata', signal);
         if (!res.ok) continue;
         const data: unknown = await res.json();
-        if (!data || typeof data !== 'object' || !('registration_endpoint' in data)
-            || typeof data.registration_endpoint !== 'string') continue;
-        return await publicOAuthEndpoint(data.registration_endpoint, signal);
+        if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
+        const metadata = data as Record<string, unknown>;
+        const clientIdMetadataDocument = metadata.client_id_metadata_document_supported === true;
+        let registrationEndpoint: string | undefined;
+        if (typeof metadata.registration_endpoint === 'string') {
+          try { registrationEndpoint = await publicOAuthEndpoint(metadata.registration_endpoint, signal); }
+          catch { /* A denied DCR link must not hide advertised CIMD support. */ }
+        }
+        if (clientIdMetadataDocument || registrationEndpoint) {
+          return { ...(clientIdMetadataDocument ? { clientIdMetadataDocument: true } : {}),
+            ...(registrationEndpoint ? { registrationEndpoint } : {}) };
+        }
       } catch { /* Best effort within the one shared deadline. */ }
     }
   }
-  return undefined;
+  return {};
 }
 
 /**
@@ -106,12 +118,13 @@ export async function probeOAuthSupport(serverUrl: string, _options: OAuthProbeO
     for (const metadataUrl of candidates) {
       const meta = await fetchResourceMetadata(metadataUrl, signal).catch(() => undefined);
       if (!meta) continue;
-      const registrationEndpoint = await findRegistrationEndpoint(meta.authorizationServers ?? [server.origin], signal);
+      const registration = await findClientRegistration(meta.authorizationServers ?? [server.origin], signal);
+      const { registrationEndpoint } = registration;
       _options.signal?.throwIfAborted();
       log.info('OAuth capability confirmed from public metadata');
       return { oauthCapable: true, resourceMetadataUrl: metadataUrl,
         authorizationServers: meta.authorizationServers, reachable: challenge.reachable,
-        dynamicClientRegistration: !!registrationEndpoint, ...(registrationEndpoint ? { registrationEndpoint } : {}) };
+        dynamicClientRegistration: !!registrationEndpoint, ...registration };
     }
     _options.signal?.throwIfAborted();
     if (challenge.bearer) {

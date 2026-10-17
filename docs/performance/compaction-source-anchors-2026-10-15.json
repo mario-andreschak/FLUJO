@@ -1,0 +1,729 @@
+{
+  "schemaVersion": 1,
+  "recordedUtc": "2026-10-15T11:57:30.676Z",
+  "issues": [
+    569,
+    1091
+  ],
+  "baseRevision": "c6cafece1b963ddfd96b29c565ec21b65351a0e4",
+  "applicationInputs": [
+    {
+      "path": "package.json",
+      "sha256": "8935c8f269c1874989ce7d871eac22a3a4e75d8b2905afef7ea06419a9b4e8d8"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "116627fc55e0c6c69fdef483bb00592f5f24caa8aac139ebba57f8515f3e4be8"
+    },
+    {
+      "path": "src/backend/execution/flow/handlers/ModelHandler.ts",
+      "sha256": "3d987bc6cdee0e509470fba8a0eb9b092481d5bf7a21c87261749606bc8471b3"
+    },
+    {
+      "path": "src/backend/execution/flow/handlers/summarizingCompaction.ts",
+      "sha256": "b9384da23bec590187cdfb0b41bfa19863bb559d4bc725b1a01ca60e9f6da890"
+    },
+    {
+      "path": "src/backend/services/runResources/index.ts",
+      "sha256": "096e3b5a604199064157ecdf1cf91c98afdb2d8737ae2d7a17926602dd3ecc66"
+    },
+    {
+      "path": "src/backend/services/runResources/jsonPayload.ts",
+      "sha256": "5da8bf4648141582507c2af6b7d17299af1afce42e5ff215bcc8d46ff0e52d36"
+    },
+    {
+      "path": "__tests__/model/summarizingCompaction.test.ts",
+      "sha256": "d0f81539d0cb3f636b9a5257ce8c0a5a887611101e6e3f757d14624693a0b854"
+    },
+    {
+      "path": "__tests__/flow/compactionSourceArchive.test.ts",
+      "sha256": "23bad72c5c5b3eae4e5ef2b65b6914d713a72cea7f28e9fa95d3d33a8104e631"
+    },
+    {
+      "path": "__tests__/flow/fixtures/compactionSourceAllocation.cjs",
+      "sha256": "e6a5b4b10969d476fb495117ba8ab9ce12f68ab5ae9bf2ddee36c1b1604d13e8"
+    }
+  ],
+  "change": "Pass the complete projected-source messages to run-resource persistence; encode/hash/measure ordinary saved JSON incrementally, enforce existing quotas before opening a payload, await bounded writes, and verify size/hash before index publication.",
+  "invariants": [
+    "Complete native JSON bytes/property order, identifiers, metadata and SHA-256 remain unchanged.",
+    "Canonical history and summary/tool recovery criteria stay authoritative.",
+    "Existing per-conversation quota/index transaction, named overwrite and durable mutation admission remain in use.",
+    "Edits after measurement and partial/no-progress I/O fail without publishing an incomplete source. Owned partial cleanup preserves replaced paths."
+  ],
+  "validation": {
+    "typecheck": {
+      "step": "frozen-typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 57.7042552,
+      "utc": "2026-10-15T11:46:44.9654478Z"
+    },
+    "wholeSourceAndChangedTestLint": {
+      "step": "source-and-changed-test-lint",
+      "exitCode": 0,
+      "elapsedSeconds": 108.8909169,
+      "utc": "2026-10-15T11:44:17.9778806Z"
+    },
+    "finalChangedPathLint": {
+      "step": "frozen-changed-path-lint",
+      "exitCode": 0,
+      "utc": "2026-10-15T11:45:55.3073122Z"
+    },
+    "focused": {
+      "passed": 98,
+      "suites": 6,
+      "bySuite": [
+        {
+          "path": "__tests__/flow/compactionSourceArchive.test.ts",
+          "cases": 26,
+          "status": "passed"
+        },
+        {
+          "path": "__tests__/flow/runResourceStore.test.ts",
+          "cases": 17,
+          "status": "passed"
+        },
+        {
+          "path": "__tests__/model/contextOverflowRefit.test.ts",
+          "cases": 13,
+          "status": "passed"
+        },
+        {
+          "path": "__tests__/model/compactionPreparation.test.ts",
+          "cases": 15,
+          "status": "passed"
+        },
+        {
+          "path": "__tests__/flow/runResourceConcurrency.test.ts",
+          "cases": 3,
+          "status": "passed"
+        },
+        {
+          "path": "__tests__/model/summarizingCompaction.test.ts",
+          "cases": 24,
+          "status": "passed"
+        }
+      ],
+      "finalArchiveEnvelopeRerun": {
+        "step": "final-source-allocation-envelope",
+        "exitCode": 0,
+        "utc": "2026-10-15T11:47:47.9611069Z"
+      },
+      "mixedNestedRecordsCompared": 4096,
+      "behaviors": [
+        "Native bytes/order/Unicode/control characters/sparse data/shared frozen graphs",
+        "Native getter/toJSON/inherited array/callable compatibility; cycles/BigInt fail safely",
+        "Actual complete tool-source persistence and verified targeted tail recovery",
+        "Quota refusal before payload open; awaited short writes; exact source size/hash mutation checks",
+        "Disk failure retains canonical history/prior named resource; retry succeeds; foreign replacement remains untouched",
+        "Existing ModelHandler prefix reuse/invalidation, provider-truncated-summary refusal, store/capture/concurrency regressions",
+        "Three repeated capped-process source/store rounds with complete persisted hashes"
+      ]
+    },
+    "build": {
+      "step": "non-container-application-build",
+      "exitCode": 0,
+      "elapsedSeconds": 329.1900227,
+      "utc": "2026-10-15T11:53:09.2112091Z",
+      "buildCommand": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "via": "flujo-bash MCP",
+      "buildId": "i0pMJCesl8fC_g4mTNZaF"
+    },
+    "built": {
+      "buildId": "i0pMJCesl8fC_g4mTNZaF",
+      "summaryId": 39737,
+      "storeId": 18315,
+      "artifacts": [
+        {
+          "path": ".next/server/webpack-runtime.js",
+          "sha256": "af3c7527d7d028d987f97c086addbb069b48f667c4c37ce8ecc36a203c69a7f6"
+        },
+        {
+          "path": ".next/server/app/v1/chat/completions/route.js",
+          "sha256": "8d95cdcfb326702dd616e8bf48e68e1cdcc88d7610c7ee1bf3f5153599146b2f"
+        },
+        {
+          "path": ".next/server/chunks/15662.js",
+          "sha256": "e634bcca3d7a8d90dd868ed1e7bfce8ee94db56ce3606847d45ff5734bbd9f44"
+        },
+        {
+          "path": ".next/server/chunks/28398.js",
+          "sha256": "e3ee53421cb32dcef91d2ec09fc3d4d2ab819b7acdbbc9f3bdcbb251c7aa8f2b"
+        },
+        {
+          "path": ".next/server/chunks/37388.js",
+          "sha256": "c4c08c44279a28f4112513ff0d2fef00dd09a89fdb40882b5845ad0e4b175d11"
+        },
+        {
+          "path": ".next/server/chunks/66087.js",
+          "sha256": "a7a4cf0d83ffcaa3055ed6c908dd43485dce890651d1c4ac543af0826babc38f"
+        },
+        {
+          "path": ".next/server/chunks/798.js",
+          "sha256": "633808301ba3585395397f53245cb2d7fa9833eaa342e04c6a287b04f52b008e"
+        },
+        {
+          "path": ".next/server/chunks/19955.js",
+          "sha256": "0319b28bdd74014f8ce629fd32124763c90a081a377ac27ece3bb8064c922822"
+        },
+        {
+          "path": ".next/server/chunks/79504.js",
+          "sha256": "739b51018482b700b1d12c8261850d588735136f0a2bef531548bdd3c4914c76"
+        },
+        {
+          "path": ".next/server/chunks/81300.js",
+          "sha256": "08b1332486b7fe9445018950833efe9acef35976bf7de1237bc5a0c06a031f3c"
+        },
+        {
+          "path": ".next/server/chunks/49366.js",
+          "sha256": "1add21c91eba46111db77059de23845946f61d5de41e0035f70953d54d186995"
+        },
+        {
+          "path": ".next/server/chunks/15047.js",
+          "sha256": "1f5df019f79687b2ff290da3c9a1b4a8653cc373e605b5b94f56b36b804597b0"
+        },
+        {
+          "path": ".next/server/chunks/49459.js",
+          "sha256": "6ef0ae71a78105479591144fdc197b44dcadedd6251ae6133d02e13887486428"
+        },
+        {
+          "path": ".next/server/chunks/10211.js",
+          "sha256": "6fb1745a2bf1f9f7bc3ac23d650d6368bc26f4b14c58cf61597033cfa21b2ba6"
+        },
+        {
+          "path": ".next/server/chunks/62816.js",
+          "sha256": "35f72dab53c6a0ff393d3527ef28b9272b66d3b0405fc61c6a3056d905968eaa"
+        },
+        {
+          "path": ".next/server/chunks/36628.js",
+          "sha256": "d5a26ec0f0e898332086aa5ec2d669994a01e595e1dfb758609c446d8bb10890"
+        },
+        {
+          "path": ".next/server/chunks/91784.js",
+          "sha256": "b0c0c0610d91a275a5c7cc81ddeb65f460a9020148aa05123c4e1cda050f44bd"
+        },
+        {
+          "path": ".next/server/chunks/58736.js",
+          "sha256": "d3674e61c4cdd62ced95d43d801e57ed2e817ad6a8b9db20f8a7cbc009d36ec6"
+        },
+        {
+          "path": ".next/server/chunks/37475.js",
+          "sha256": "3f745fe3fe0e27f2f271e8c3c865ce74eea765b42182fa980009c4267fb25efd"
+        },
+        {
+          "path": ".next/server/chunks/11120.js",
+          "sha256": "132ffcfc1f25e0b436e265a83fad499cd3b50311fac129eca20c652403f2d193"
+        },
+        {
+          "path": ".next/server/chunks/95260.js",
+          "sha256": "5c36851583d85e85c8b09d29249b9d2b855ee89ede0e35685ca6b907b7c2b1cc"
+        },
+        {
+          "path": ".next/server/chunks/23271.js",
+          "sha256": "1e70ca142e8f69598aecae2377487fd91567fdd4c6fba30846115f9b00d8f430"
+        },
+        {
+          "path": ".next/server/chunks/55328.js",
+          "sha256": "a2b81ee5bb41191694b46d5587cbff4405b7b6f8001a18be8e6a8babdeeb25f4"
+        },
+        {
+          "path": ".next/server/chunks/92970.js",
+          "sha256": "9f3223eb4d6478311f7e709f4e64392de46f3522c1a8d6e9f56fe189aec925a2"
+        },
+        {
+          "path": ".next/server/chunks/79361.js",
+          "sha256": "6f2d57aca9e1dcb133bc44e1e835d4473c20524d2d137b093f1dbe6d0b9b13df"
+        },
+        {
+          "path": ".next/server/chunks/49176.js",
+          "sha256": "bc370b72450262a9a3ce0aa3f2f404c4d57e2ddcad192f75b21612378ee8ae1c"
+        },
+        {
+          "path": ".next/server/chunks/28072.js",
+          "sha256": "f858570a4e06248b725f191e4865d492af9e988371fe65ca96b91728fdd9aac1"
+        },
+        {
+          "path": ".next/server/chunks/54947.js",
+          "sha256": "22b5e30723727bf308926ce0a6c8daac4b612717af535ade2a0f230508729fe8"
+        },
+        {
+          "path": ".next/server/chunks/74858.js",
+          "sha256": "cfd2d0a8df95ba088ed2f9dee20ca2076de4e679a5930851049e99de44ee9e06"
+        },
+        {
+          "path": ".next/server/chunks/59859.js",
+          "sha256": "164cbc189c946c79350433cac02a57b7700193ad3a111958ef2a9465419d7fbd"
+        },
+        {
+          "path": ".next/server/chunks/70825.js",
+          "sha256": "f51d1c85773596f7039ecc542707683c4abe0c6f69a5ca5da07239f7c4c5f322"
+        },
+        {
+          "path": ".next/server/chunks/34679.js",
+          "sha256": "0d7945de6e0a69d15c250f877bb179f60c22cd3a3eb2ad6104dfcd3f525218f3"
+        },
+        {
+          "path": ".next/server/chunks/61804.js",
+          "sha256": "c34d6374cc172fbab970f7bb05e51cc65aee466336386e17580553e611e39ece"
+        },
+        {
+          "path": ".next/server/chunks/87019.js",
+          "sha256": "665d030c25aaa42b02034e0ea644b984a3bc18deb6b2c2e0d4282b8857f3a7e1"
+        },
+        {
+          "path": ".next/server/chunks/22891.js",
+          "sha256": "5687c24cd00319f42c16801b45c9c41cad452992f36c632239ce62c2093ab8d7"
+        },
+        {
+          "path": ".next/server/chunks/62476.js",
+          "sha256": "c1b13f33cfc7f8e22d7c530d0019b5488c63b3ec923d5d0459caf2d8d5911b39"
+        },
+        {
+          "path": ".next/server/chunks/89374.js",
+          "sha256": "aaf9bfd6bd264c27aaec948666b2c20f189279be3a483f79fcbeaf49989a1bca"
+        },
+        {
+          "path": ".next/server/chunks/46200.js",
+          "sha256": "0eb6b48a245aae8d117f8f167fc58665cf33f38a8bc66ce4c181fe2625203eeb"
+        },
+        {
+          "path": ".next/server/chunks/89539.js",
+          "sha256": "76516a3e6b997a7099ee02647daf0040dee195e0a07f80a393a146c08ce88cf0"
+        },
+        {
+          "path": ".next/server/chunks/35274.js",
+          "sha256": "476c4bc696d1fa25436128a88a68d5e6f775ba85509475d3c48002057c73cef2"
+        },
+        {
+          "path": ".next/server/chunks/45335.js",
+          "sha256": "ff04584e37489092a83ebfa552b2eb508e7920b037f44128c73f0bb1a8c25e46"
+        },
+        {
+          "path": ".next/server/chunks/58297.js",
+          "sha256": "0c4c6a6d10f70d6913a9276bf0fbc7046f45696effcec7f0c1caee20a2e75340"
+        },
+        {
+          "path": ".next/server/chunks/41581.js",
+          "sha256": "d7d3b3f7b2ac89fd97cac9df726dba49f3e2ca2b353601dbf26807fcd94a2448"
+        },
+        {
+          "path": ".next/server/chunks/24499.js",
+          "sha256": "2944710a504baf7a0bf528efb32fa4d2b823ab6d0fbfb52df34759cb1ce6cbb2"
+        },
+        {
+          "path": ".next/server/chunks/36900.js",
+          "sha256": "0f1691dbb5c7e0f3eb602ade3683328867299f3f1ff8646a952e655e80acd5bc"
+        },
+        {
+          "path": ".next/server/chunks/67744.js",
+          "sha256": "babc8f75099dcc038db765d7bf422feaca3ea257cf4d90c65e135ef5da1ffe64"
+        },
+        {
+          "path": ".next/server/chunks/96140.js",
+          "sha256": "243a42b68601e28146a32a005ff8b8791f2584e1b89ef47147b0c7991ba784cd"
+        },
+        {
+          "path": ".next/server/chunks/54276.js",
+          "sha256": "65d6b94c85df8aa1de12867577b4fc85918bf90e942a101602780e88e8c157bd"
+        },
+        {
+          "path": ".next/server/chunks/48600.js",
+          "sha256": "c501713705d26b0ce5fea760938dc58eeea991128cd69b83becb25a799843116"
+        },
+        {
+          "path": ".next/server/chunks/35567.js",
+          "sha256": "f44472910926cab85d2a62a977404f42e4e00c7a7c35afa2d3b5901514bd5e04"
+        },
+        {
+          "path": ".next/server/chunks/74877.js",
+          "sha256": "5a02eebb59972dfd7861708d29fccb0c94b3da0881a1ce7a57d0dde663dc5934"
+        },
+        {
+          "path": ".next/server/chunks/4423.js",
+          "sha256": "b20ea31848668cf050863a70b8112c2bac881b3819fb4c98678e0c2a4de6ac1c"
+        }
+      ],
+      "summaryFactorySha256": "a3c0d098e5c123a9490f0bf8e58fc3fcb7d3a7444f6a6c27b622479191c36197",
+      "storeFactorySha256": "41d2862cedef0f1723b9dabef865df70bd31ce144e019e0b00eaa997a64e0f99",
+      "note": "Actual emitted application factories, registered with their original webpack runtime and external modules; deterministic summarizer dependency, real resource store and files."
+    }
+  },
+  "allocation": {
+    "node": "22.23.3",
+    "heapLimitMiB": 192,
+    "semiSpaceLimitMiB": 1,
+    "rounds": 3,
+    "payload": "24 MiB ASCII plus Unicode, escaping, exact URI and metadata; complete 25,165,986-byte JSON archive per round.",
+    "envelope": {
+      "writerEntryHeapGrowthBytes": 16777216,
+      "writerExitHeapGrowthBytes": 16777216,
+      "writerExitExternalGrowthBytes": 8388608,
+      "writeBufferBytes": 65536,
+      "declaration": "Writer-entry/external ceilings and process caps preceded the baseline. The writer-exit heap assertion was added before final candidate validation; the original baseline already fails the entry/external ceilings."
+    },
+    "forcedGc": "Before/after diagnostic memory samples only; not an endurance or no-GC envelope claim.",
+    "baseline": {
+      "baseRevision": "c6cafece1b963ddfd96b29c565ec21b65351a0e4",
+      "complete": true,
+      "withinEnvelope": false,
+      "samples": [
+        {
+          "round": 0,
+          "size": 25165986,
+          "elapsedMs": 1285.9209,
+          "writerEntryHeapGrowthBytes": 50623632,
+          "writerExitHeapGrowthBytes": 79668016,
+          "writerExitExternalGrowthBytes": 25189279,
+          "before": {
+            "rss": 138555392,
+            "heapTotal": 91959296,
+            "heapUsed": 81712912,
+            "external": 2141148,
+            "arrayBuffers": 16795
+          },
+          "atWriter": {
+            "rss": 189231104,
+            "heapTotal": 142299136,
+            "heapUsed": 132336544,
+            "external": 2141188,
+            "arrayBuffers": 16795
+          },
+          "afterWriter": {
+            "rss": 232570880,
+            "heapTotal": 164720640,
+            "heapUsed": 161380928,
+            "external": 27330427,
+            "arrayBuffers": 25203986
+          },
+          "retained": {
+            "rss": 157417472,
+            "heapTotal": 92545024,
+            "heapUsed": 84073856,
+            "external": 5694685,
+            "arrayBuffers": 1720893
+          }
+        },
+        {
+          "round": 1,
+          "size": 25165986,
+          "elapsedMs": 573.2092000000002,
+          "writerEntryHeapGrowthBytes": 50596648,
+          "writerExitHeapGrowthBytes": 50527440,
+          "writerExitExternalGrowthBytes": 25170819,
+          "before": {
+            "rss": 154091520,
+            "heapTotal": 91758592,
+            "heapUsed": 83568496,
+            "external": 2155741,
+            "arrayBuffers": 16957
+          },
+          "atWriter": {
+            "rss": 204644352,
+            "heapTotal": 142098432,
+            "heapUsed": 134165144,
+            "external": 2155741,
+            "arrayBuffers": 16957
+          },
+          "afterWriter": {
+            "rss": 230215680,
+            "heapTotal": 142360576,
+            "heapUsed": 134095936,
+            "external": 27326560,
+            "arrayBuffers": 25187776
+          },
+          "retained": {
+            "rss": 160550912,
+            "heapTotal": 91234304,
+            "heapUsed": 83595888,
+            "external": 38139529,
+            "arrayBuffers": 16957
+          }
+        },
+        {
+          "round": 2,
+          "size": 25165986,
+          "elapsedMs": 569.8153000000002,
+          "writerEntryHeapGrowthBytes": 50609800,
+          "writerExitHeapGrowthBytes": 51154232,
+          "writerExitExternalGrowthBytes": 25195650,
+          "before": {
+            "rss": 160612352,
+            "heapTotal": 91234304,
+            "heapUsed": 83581384,
+            "external": 2155741,
+            "arrayBuffers": 16957
+          },
+          "atWriter": {
+            "rss": 211193856,
+            "heapTotal": 141574144,
+            "heapUsed": 134191184,
+            "external": 2155741,
+            "arrayBuffers": 16957
+          },
+          "afterWriter": {
+            "rss": 236392448,
+            "heapTotal": 141574144,
+            "heapUsed": 134735616,
+            "external": 27351391,
+            "arrayBuffers": 25212607
+          },
+          "retained": {
+            "rss": 152465408,
+            "heapTotal": 91496448,
+            "heapUsed": 83505720,
+            "external": 34338841,
+            "arrayBuffers": 16957
+          }
+        }
+      ]
+    },
+    "source": {
+      "complete": true,
+      "withinEnvelope": true,
+      "samples": [
+        {
+          "round": 0,
+          "size": 25165986,
+          "elapsedMs": 1269.4909000000002,
+          "writerEntryHeapGrowthBytes": 354968,
+          "writerExitHeapGrowthBytes": 10301440,
+          "writerExitExternalGrowthBytes": 87161,
+          "before": {
+            "rss": 136704000,
+            "heapTotal": 87764992,
+            "heapUsed": 81724088,
+            "external": 2141148,
+            "arrayBuffers": 16795
+          },
+          "atWriter": {
+            "rss": 136749056,
+            "heapTotal": 87764992,
+            "heapUsed": 82079056,
+            "external": 2141188,
+            "arrayBuffers": 16795
+          },
+          "afterWriter": {
+            "rss": 149905408,
+            "heapTotal": 110309376,
+            "heapUsed": 92025528,
+            "external": 2228309,
+            "arrayBuffers": 82738
+          },
+          "retained": {
+            "rss": 155267072,
+            "heapTotal": 96153600,
+            "heapUsed": 86036128,
+            "external": 3601694,
+            "arrayBuffers": 16957
+          }
+        },
+        {
+          "round": 1,
+          "size": 25165986,
+          "elapsedMs": 660.0900000000001,
+          "writerEntryHeapGrowthBytes": 264104,
+          "writerExitHeapGrowthBytes": 1017312,
+          "writerExitExternalGrowthBytes": 152802,
+          "before": {
+            "rss": 154861568,
+            "heapTotal": 92545024,
+            "heapUsed": 84283120,
+            "external": 2155817,
+            "arrayBuffers": 16957
+          },
+          "atWriter": {
+            "rss": 154861568,
+            "heapTotal": 92545024,
+            "heapUsed": 84547224,
+            "external": 2155817,
+            "arrayBuffers": 16957
+          },
+          "afterWriter": {
+            "rss": 155066368,
+            "heapTotal": 92545024,
+            "heapUsed": 85300432,
+            "external": 2308619,
+            "arrayBuffers": 169759
+          },
+          "retained": {
+            "rss": 156418048,
+            "heapTotal": 92807168,
+            "heapUsed": 84401600,
+            "external": 9692819,
+            "arrayBuffers": 1852327
+          }
+        },
+        {
+          "round": 2,
+          "size": 25165986,
+          "elapsedMs": 706.2717000000002,
+          "writerEntryHeapGrowthBytes": 273520,
+          "writerExitHeapGrowthBytes": 801760,
+          "writerExitExternalGrowthBytes": 156728,
+          "before": {
+            "rss": 156082176,
+            "heapTotal": 92807168,
+            "heapUsed": 84351672,
+            "external": 2155741,
+            "arrayBuffers": 16957
+          },
+          "atWriter": {
+            "rss": 156086272,
+            "heapTotal": 92807168,
+            "heapUsed": 84625192,
+            "external": 2155741,
+            "arrayBuffers": 16957
+          },
+          "afterWriter": {
+            "rss": 150175744,
+            "heapTotal": 92807168,
+            "heapUsed": 85153432,
+            "external": 2312469,
+            "arrayBuffers": 173685
+          },
+          "retained": {
+            "rss": 155930624,
+            "heapTotal": 92282880,
+            "heapUsed": 83879384,
+            "external": 8520925,
+            "arrayBuffers": 287293
+          }
+        }
+      ]
+    },
+    "emitted": {
+      "complete": true,
+      "withinEnvelope": true,
+      "samples": [
+        {
+          "round": 0,
+          "size": 25165986,
+          "elapsedMs": 919.5816000000001,
+          "writerEntryHeapGrowthBytes": 315864,
+          "writerExitHeapGrowthBytes": 4400376,
+          "writerExitExternalGrowthBytes": 136631,
+          "before": {
+            "rss": 133713920,
+            "heapTotal": 98643968,
+            "heapUsed": 94225904,
+            "external": 2097249,
+            "arrayBuffers": 24987
+          },
+          "atWriter": {
+            "rss": 133844992,
+            "heapTotal": 98906112,
+            "heapUsed": 94541768,
+            "external": 2097289,
+            "arrayBuffers": 24987
+          },
+          "afterWriter": {
+            "rss": 137949184,
+            "heapTotal": 101789696,
+            "heapUsed": 98626280,
+            "external": 2233880,
+            "arrayBuffers": 159530
+          },
+          "retained": {
+            "rss": 140718080,
+            "heapTotal": 102313984,
+            "heapUsed": 97314968,
+            "external": 5130659,
+            "arrayBuffers": 2646996
+          }
+        },
+        {
+          "round": 1,
+          "size": 25165986,
+          "elapsedMs": 655.5536000000002,
+          "writerEntryHeapGrowthBytes": 263872,
+          "writerExitHeapGrowthBytes": 321120,
+          "writerExitExternalGrowthBytes": 135336,
+          "before": {
+            "rss": 138579968,
+            "heapTotal": 102313984,
+            "heapUsed": 97300848,
+            "external": 2115596,
+            "arrayBuffers": 25149
+          },
+          "atWriter": {
+            "rss": 138592256,
+            "heapTotal": 102313984,
+            "heapUsed": 97564720,
+            "external": 2115596,
+            "arrayBuffers": 25149
+          },
+          "afterWriter": {
+            "rss": 138358784,
+            "heapTotal": 102313984,
+            "heapUsed": 97621968,
+            "external": 2250932,
+            "arrayBuffers": 160485
+          },
+          "retained": {
+            "rss": 147058688,
+            "heapTotal": 102313984,
+            "heapUsed": 97351440,
+            "external": 11487244,
+            "arrayBuffers": 8610365
+          }
+        },
+        {
+          "round": 2,
+          "size": 25165986,
+          "elapsedMs": 650.7930000000001,
+          "writerEntryHeapGrowthBytes": 272848,
+          "writerExitHeapGrowthBytes": 338840,
+          "writerExitExternalGrowthBytes": 143528,
+          "before": {
+            "rss": 138076160,
+            "heapTotal": 101851136,
+            "heapUsed": 95566664,
+            "external": 2111918,
+            "arrayBuffers": 25149
+          },
+          "atWriter": {
+            "rss": 138067968,
+            "heapTotal": 101851136,
+            "heapUsed": 95839512,
+            "external": 2111918,
+            "arrayBuffers": 25149
+          },
+          "afterWriter": {
+            "rss": 138244096,
+            "heapTotal": 101851136,
+            "heapUsed": 95905504,
+            "external": 2255446,
+            "arrayBuffers": 168677
+          },
+          "retained": {
+            "rss": 150454272,
+            "heapTotal": 101851136,
+            "heapUsed": 95602152,
+            "external": 13973934,
+            "arrayBuffers": 10904125
+          }
+        }
+      ]
+    },
+    "timingNote": "Each sample includes actual compaction, resource persistence and independent streamed hash verification. Concurrent local build/check timing is not added to an end-to-end estimate."
+  },
+  "retainedFailures": [
+    "Unchanged main fails the focused allocation envelope with identical persisted hashes; no OOM was observed.",
+    "Initial focused run:82 passes/2 new fixture failures. Too-small recent tails selected no old messages; corrected fixtures exercise persistence. All98 final cases pass.",
+    "Initial typecheck found a new test projection.version widened to number; explicit literal corrected it. Final typecheck passes.",
+    "Emitted-harness discovery initially expected source function names/test setters; production minification/tree shaking removes them. The unchanged build passes with pinned export keys and its actual disposable workspace directory."
+  ],
+  "scopeLimits": [
+    "Injected deterministic summary proves orchestration/persistence plumbing, not model or semantic fidelity.",
+    "Exotic objects/getters/custom toJSON use one native JSON.stringify snapshot for compatibility and can still allocate a full string.",
+    "Object-key enumeration, recursion, cross-conversation concurrency and whole-runtime retention are not a global allocation bound.",
+    "No original live-provider520 reproduction, native session/signature acceptance, installed/cross-platform deployment or provider endurance claim.",
+    "No frontend change; existing error/retry controls are exercised through runtime regression coverage."
+  ],
+  "externalModelCalls": 0,
+  "remoteWorkflowsDispatched": 0,
+  "containerBuilds": 0,
+  "fullSuitesDispatched": 0,
+  "issuesClosed": [],
+  "evidenceDirectory": "C:/Users/Moe/.codex/tmp/flujo-maintenance-20261015T1133"
+}

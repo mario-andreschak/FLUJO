@@ -1,0 +1,515 @@
+{
+  "issue": 1091,
+  "status": "passed-controlled-source-observation-scope",
+  "frozenUtc": "2026-10-16T00:26:02.726Z",
+  "sourceBaseRevision": "a40fc70f5122737b2b1ccb3ab174613c43675b28",
+  "applicationSourceTree": "d2a48b6f4c17a45ab31bdd07714670331282d331",
+  "buildId": "Sz1fFGDwAI67nh6Mpke3O",
+  "problem": "The retained Super Free round-five summary detached plaintext receipt relationships; its recorded JSON evidence ended with a superseded reply.",
+  "repair": "Retain bounded selected source lines interleaved with original JSON in source order. Compare exact source evidence and provenance before cache reuse; require recoverable archived remainders. Version the policy to v5.",
+  "sameApprovedModelAsRetainedFailure": true,
+  "retainedFailure": {
+    "sourceEvidence": "docs/performance/compaction-reference-fidelity-2026-10-15.json",
+    "sourceTrace": "docs/performance/compaction-reference-provider-trace-2026-10-15.json.gz",
+    "traceSha256": "f3a6f97927eabe0d67dd016402191b7b5e6257e0ba881528f368f604b650ca40",
+    "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+    "failedRound": 5,
+    "failure": "Returned the prior receipt instead of the latest plaintext observation.",
+    "originalFirstSourceAndReviewUnchanged": true
+  },
+  "result": {
+    "attemptedSummaries": 10,
+    "freshSummaries": 10,
+    "completeCanonicalFallbacks": 0,
+    "exactReplies": 10,
+    "originalQuestionWithoutPrefixHint": true,
+    "currentReceiptChanges": 9,
+    "roundFiveAndTenRestarts": true,
+    "canonicalHistoryPreserved": true,
+    "sourceTaskStateChecked": true,
+    "compactionControlsOutsideUserTurns": true,
+    "canonicalSnapshotsVerified": 12,
+    "archiveHashesVerified": 10,
+    "exactSourceObservationBlocks": 10
+  },
+  "selectedFreeRoute": {
+    "utc": "2026-10-16T00:08:16.885Z",
+    "model": "nvidia/nemotron-3-super-120b-a12b:free",
+    "canonicalSlug": "nvidia/nemotron-3-super-120b-a12b-20230311",
+    "pricing": {
+      "prompt": "0",
+      "completion": "0"
+    },
+    "contextLength": 262144,
+    "route": "https://openrouter.ai/api/v1/responses",
+    "automaticFallback": false,
+    "credential": {
+      "method": "one explicitly selected existing encrypted account; canonical read-only format",
+      "configuredModelId": "24618177-b739-44a3-b79d-b459ba9151a2",
+      "configuredModel": "openrouter/free",
+      "baseHost": "openrouter.ai",
+      "credentialRetained": "memory only",
+      "configuredInputFilesUnchanged": true,
+      "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+      "configuredInputCount": 2
+    },
+    "decision": "Explicit same approved Free model as the retained stale-value failure; no model replacement"
+  },
+  "providerRoute": {
+    "adapter": "actual built OpenAiResponsesAdapter, selected by production OpenRouter routing",
+    "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+    "destination": "https://openrouter.ai/api/v1/responses",
+    "relay": "strict exact-model forwarding; no replacement answers or fallback",
+    "providerCredential": "memory only; application receives a private local relay token"
+  },
+  "credential": {
+    "method": "one explicitly selected existing encrypted account; canonical read-only format",
+    "configuredModelId": "24618177-b739-44a3-b79d-b459ba9151a2",
+    "configuredModel": "openrouter/free",
+    "baseHost": "openrouter.ai",
+    "credentialRetained": "memory only",
+    "configuredInputFilesUnchanged": true,
+    "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+    "configuredInputCount": 2
+  },
+  "qualification": {
+    "negative": {
+      "utc": "2026-10-16T00:09:41.3236153Z",
+      "exitCode": 1,
+      "control": "Previous production JSON-only source preservation"
+    },
+    "focused": {
+      "utc": "2026-10-16T00:11:29.3733487Z",
+      "exitCode": 0,
+      "revision": "a40fc70f5122737b2b1ccb3ab174613c43675b28",
+      "sourcePolicy": "summary-v5-source-observations"
+    },
+    "touched-lint": {
+      "utc": "2026-10-16T00:11:33.9757526Z",
+      "exitCode": 0
+    },
+    "harness-final-lint": {
+      "utc": "2026-10-16T00:18:12.1088298Z",
+      "exitCode": 0,
+      "harnessSha256": "1824d83de6718a63ed77c76dd5d445afa21653ac9411f34ff4690d485fa8b5a4"
+    },
+    "harness-focused": {
+      "utc": "2026-10-16T00:18:12.1376848Z",
+      "exitCode": 0,
+      "cases": 12,
+      "reusedFrom": "4ce5c89c054c10057384da546816dc430adb0af8",
+      "sourceEvidence": "docs/performance/compaction-reference-fidelity-2026-10-15.json",
+      "reason": "Both guard module and test file remain byte-identical"
+    },
+    "typecheck": {
+      "utc": "2026-10-16T00:10:50.0013905Z",
+      "step": "typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 59.5940136,
+      "applicationSourceTree": "d2a48b6f4c17a45ab31bdd07714670331282d331",
+      "command": "next typegen && tsc --noEmit -p tsconfig.json"
+    },
+    "lint": {
+      "utc": "2026-10-16T00:12:25.0665806Z",
+      "step": "lint",
+      "exitCode": 0,
+      "elapsedSeconds": 95.0608577,
+      "applicationSourceTree": "d2a48b6f4c17a45ab31bdd07714670331282d331",
+      "command": "eslint src"
+    },
+    "build": {
+      "utc": "2026-10-16T00:18:01.4920100Z",
+      "step": "build",
+      "exitCode": 0,
+      "elapsedSeconds": 336.4230285,
+      "applicationSourceTree": "d2a48b6f4c17a45ab31bdd07714670331282d331",
+      "command": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "buildId": "Sz1fFGDwAI67nh6Mpke3O"
+    },
+    "journey-timing": {
+      "utc": "2026-10-16T00:25:56.3964535Z",
+      "exitCode": 0,
+      "elapsedSeconds": 464.2565009,
+      "applicationSourceTree": "d2a48b6f4c17a45ab31bdd07714670331282d331",
+      "harnessSha256": "1824d83de6718a63ed77c76dd5d445afa21653ac9411f34ff4690d485fa8b5a4"
+    }
+  },
+  "focused": {
+    "suites": 3,
+    "passed": 81,
+    "failed": 0,
+    "negativeControl": "The previous JSON-only source collector fails the new plaintext-after-JSON regression.",
+    "journeyGuardCasesReused": 12
+  },
+  "sourceFiles": {
+    "scripts/compaction-compatibility-acceptance.mjs": {
+      "sha256": "1824d83de6718a63ed77c76dd5d445afa21653ac9411f34ff4690d485fa8b5a4",
+      "gitNormalizedSha256": "1824d83de6718a63ed77c76dd5d445afa21653ac9411f34ff4690d485fa8b5a4",
+      "bytes": 41104
+    },
+    "__tests__/model/contextOverflowRefit.test.ts": {
+      "sha256": "1da6648bcb1e00f17336ee33d7fc91823d72f4d4395dc199576f538547a3ad3f",
+      "gitNormalizedSha256": "1da6648bcb1e00f17336ee33d7fc91823d72f4d4395dc199576f538547a3ad3f",
+      "bytes": 34524
+    },
+    "src/backend/execution/flow/handlers/ModelHandler.ts": {
+      "sha256": "3222d55e27ae465cbdb567d0acb7daaf18d1858c77e8e42807d2849266a53c47",
+      "gitNormalizedSha256": "3222d55e27ae465cbdb567d0acb7daaf18d1858c77e8e42807d2849266a53c47",
+      "bytes": 236368
+    },
+    "src/backend/execution/flow/nodes/ProcessNode.ts": {
+      "sha256": "f4171c98e3e28d773a90f5d13b1f1cd978a62df5699500079e7ed2bc7fe71610",
+      "gitNormalizedSha256": "efaf4c4f7d936e8d854a28d8d3ed14caeac4c441d84bbbc43a17c481a368dd36",
+      "bytes": 99691
+    },
+    "__tests__/flow/processNodeSnapshotAuthority.test.ts": {
+      "sha256": "74e9ef346c9e87aaca7e606e78373a5713ea5777c0a9a664a1fe0a1a31e55111",
+      "gitNormalizedSha256": "fdd94335e61865cdd28734a7e1ae8c5a27823e478ecbc795e6c4894a662d3042",
+      "bytes": 4954
+    },
+    "src/backend/execution/flow/handlers/summarizingCompaction.ts": {
+      "sha256": "8b52a2b948d62babe10e10a7035079312ac4390d7ce2a85226e195af8e444795",
+      "gitNormalizedSha256": "8b52a2b948d62babe10e10a7035079312ac4390d7ce2a85226e195af8e444795",
+      "bytes": 23021
+    },
+    "src/backend/execution/flow/compaction/structuredObservations.ts": {
+      "sha256": "066ef010d5094be16c260e8df6030a609919b558d85000649f950859d9112438",
+      "gitNormalizedSha256": "066ef010d5094be16c260e8df6030a609919b558d85000649f950859d9112438",
+      "bytes": 9393
+    },
+    "__tests__/model/structuredObservations.test.ts": {
+      "sha256": "27916f8fb23fab254cb5420aeaeae114ca35fdef9769bd56860abe0dad19cacc",
+      "gitNormalizedSha256": "27916f8fb23fab254cb5420aeaeae114ca35fdef9769bd56860abe0dad19cacc",
+      "bytes": 8016
+    },
+    "src/backend/execution/flow/compaction/types.ts": {
+      "sha256": "47fdc0ca6eaeb47ace6393cc837da840d23b2ba34ae676033ab113fc32b45002",
+      "gitNormalizedSha256": "47fdc0ca6eaeb47ace6393cc837da840d23b2ba34ae676033ab113fc32b45002",
+      "bytes": 1348
+    },
+    "__tests__/model/summarizingCompaction.test.ts": {
+      "sha256": "b701f79f6191dade0bd79618c1eba6b4d50ef65794fa570a5558f7dcf1e07788",
+      "gitNormalizedSha256": "b701f79f6191dade0bd79618c1eba6b4d50ef65794fa570a5558f7dcf1e07788",
+      "bytes": 29248
+    },
+    "scripts/compaction-source-task-check.mjs": {
+      "sha256": "cfc123b78a1a2d9ce00cf0315ad0f4b72239d3eb2db0b84b0723bfdc16f1a6ee",
+      "gitNormalizedSha256": "cfc123b78a1a2d9ce00cf0315ad0f4b72239d3eb2db0b84b0723bfdc16f1a6ee",
+      "bytes": 1845
+    },
+    "scripts/compaction-source-task-check.test.mjs": {
+      "sha256": "557092a640a091e37870c4c4689892a29df18e5da5ba71ca0aca502f12574bb1",
+      "gitNormalizedSha256": "557092a640a091e37870c4c4689892a29df18e5da5ba71ca0aca502f12574bb1",
+      "bytes": 2717
+    }
+  },
+  "trace": {
+    "file": "docs/performance/compaction-source-observations-provider-trace-2026-10-15.json.gz",
+    "sha256": "2c7d8a2363e5617c29a2c8c9f0ccb4520b4c1805834c05c4a2c59ccfa95d8eeb",
+    "uncompressedSha256": "44453139e026e0fa8bc19b8f9eab51ddae931e3843a9cd3a60a36df91326751c",
+    "compressedBytes": 145366,
+    "uncompressedBytes": 6287120,
+    "attempts": [
+      {
+        "file": "compatibility-ae4abc14-99c0-4cd3-8746-bf1a9309e453.json",
+        "status": "passed-focused-scope",
+        "calls": 20,
+        "applicationClosed": true
+      }
+    ]
+  },
+  "providerRequestsIncludingAllNewAttempts": {
+    "requests": 20,
+    "inputTokens": 377594,
+    "outputTokens": 18741,
+    "reportedCostUsd": 0,
+    "callsWithoutReportedCost": 0
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "expected": {
+        "receipt": "receipt-ñ-fe16bf155a3f4ef383b7cbe125622ece",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-fe16bf155a3f4ef383b7cbe125622ece",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/85e580eb-6d23-4247-8f3a-16d6e473680b",
+        "sha256": "4a8598569f10869d9e4f36d814f6893b1ff9f48cf97b7f56fd1e9416486cf4db",
+        "size": 45999,
+        "verified": true
+      },
+      "canonicalSha256": "359ea8f003dc5c4cab374cace2910763c4342b7b48498c74904923e4268de1b0",
+      "elapsedMs": 30483.3845
+    },
+    {
+      "round": 2,
+      "expected": {
+        "receipt": "receipt-ñ-4d4eaf45f0d767db7774ea1640fd82bc",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-4d4eaf45f0d767db7774ea1640fd82bc",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/d4ce6951-310f-4927-8fcd-a7a740dcf8f3",
+        "sha256": "3e3811b2cb1c6f7d0959625cda770ebb6fe584a236ab883a3a29d0caf3e74409",
+        "size": 81226,
+        "verified": true
+      },
+      "canonicalSha256": "72bdfe47b7db37e1bb1e4b8c1221ff7da39f658f47fd2553dfcd1c5881e8f0de",
+      "elapsedMs": 50968.6539
+    },
+    {
+      "round": 3,
+      "expected": {
+        "receipt": "receipt-ñ-ebf8c959bd040c3807d8187153ce1100",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-ebf8c959bd040c3807d8187153ce1100",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/ec1b28c5-07f5-47e3-b725-23df4fa6ddd8",
+        "sha256": "ca1c5d5c2fea7ceec21d3ed2303a4088333f9c055aa4adf7d7593eaed8ca0a03",
+        "size": 105053,
+        "verified": true
+      },
+      "canonicalSha256": "1580b974d3392559f63de659d58fe1cbe143264df2782f17700118a9bed73a18",
+      "elapsedMs": 32456.393200000006
+    },
+    {
+      "round": 4,
+      "expected": {
+        "receipt": "receipt-ñ-00545fa8fde9437454028592ab3dc54b",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-00545fa8fde9437454028592ab3dc54b",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/0d819aa0-a2d9-41b9-9f22-b9849603e7e2",
+        "sha256": "ec6638ef5a0db02500abc20642a308d969b466d900e5dc0762e042610f6d0b4e",
+        "size": 128880,
+        "verified": true
+      },
+      "canonicalSha256": "9c153d9048d5381bb770f59ff9d2a408a58b93f8d9c02c1e8e8df88cb7caca16",
+      "elapsedMs": 50355.9445
+    },
+    {
+      "round": 5,
+      "expected": {
+        "receipt": "receipt-ñ-d6deb7c6fc92bdafd38da933490e1811",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-d6deb7c6fc92bdafd38da933490e1811",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/3fc2ef77-2cee-4582-b7f2-51c419db9bb8",
+        "sha256": "6a336d0335207522d4b9ec4193c04255e7ad6df2eeadbab4b154d4cb98e09f81",
+        "size": 152707,
+        "verified": true
+      },
+      "canonicalSha256": "c316e8ad87bb4d8a19731709cb835c7454f27edc0d9bb841278aa54987c8a4ee",
+      "elapsedMs": 53868.3683
+    },
+    {
+      "round": 6,
+      "expected": {
+        "receipt": "receipt-ñ-bdec4e264238540fd9025adf9920c9c1",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-bdec4e264238540fd9025adf9920c9c1",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/4e74fcd5-12e5-4f96-a263-35fdf58050a9",
+        "sha256": "5b684a88ef4dd016d8b695154bdc6ce6bb2a5a5d14962e0347b9c7593d53308e",
+        "size": 176534,
+        "verified": true
+      },
+      "canonicalSha256": "89c53d02439e5d4ea58f481bd552f9651ac183caeb1222c321b879b0c3203dc7",
+      "elapsedMs": 50974.50140000001
+    },
+    {
+      "round": 7,
+      "expected": {
+        "receipt": "receipt-ñ-47cd6c7be0c09df62113ad4440037a90",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-47cd6c7be0c09df62113ad4440037a90",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/748d9938-56b1-4c2c-9845-6de5a69c19b8",
+        "sha256": "b9523b949f21077364f594a68f9414910ff4de951205c7a7528f5e0048a7cead",
+        "size": 200361,
+        "verified": true
+      },
+      "canonicalSha256": "3757ab171ba22704f004732cf75b0528574d7f1312b64a5da7e41dee3d06255b",
+      "elapsedMs": 40095.5172
+    },
+    {
+      "round": 8,
+      "expected": {
+        "receipt": "receipt-ñ-7c7162a653ec0a45784becc4b7aaef21",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-7c7162a653ec0a45784becc4b7aaef21",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/d49d6025-0dcb-4920-943e-70fd38a53474",
+        "sha256": "dbc680db3f4c42f85c66a8fc97f80cca606ba860dc61cb283096723a93bd9be3",
+        "size": 224188,
+        "verified": true
+      },
+      "canonicalSha256": "95e84fe918902a695cb630002f0a27f339c7499f9b4c5734c98f5d14fa80078c",
+      "elapsedMs": 59228.23509999999
+    },
+    {
+      "round": 9,
+      "expected": {
+        "receipt": "receipt-ñ-b3402ecba540fb18029a4ebc3dfee37c",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-b3402ecba540fb18029a4ebc3dfee37c",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/8f1f6c08-f9b7-4d19-94e1-fe360b80ff13",
+        "sha256": "f0983b7736d189351acdfb0080dd9e6ec6b074eac455dcda35922cbb6af4333b",
+        "size": 247998,
+        "verified": true
+      },
+      "canonicalSha256": "942593585cc7ec7d598a08f19fd3ca4e30922c85ad5645bfa02f05e54ea97b86",
+      "elapsedMs": 41710.6556
+    },
+    {
+      "round": 10,
+      "expected": {
+        "receipt": "receipt-ñ-57018aed1aeeb5fad575e4dbd2121d2a",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-57018aed1aeeb5fad575e4dbd2121d2a",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryDisposition": "persisted",
+      "exactSourceObservationVerified": true,
+      "sourceArchive": {
+        "uri": "flujo://run/58da3cbf-9da8-494b-a4f9-f2526d49a4de/e6f7ab98-1c9d-4cef-bb28-9c73b3707bce",
+        "sha256": "d9843bcc5cf9e2d789dd8944285d7fb1bb3f01e1df0454140aece9257d219123",
+        "size": 271825,
+        "verified": true
+      },
+      "canonicalSha256": "c56758c51b65eea44ee2fda3518d53ced0239045ff901f5d97ea469369ef728e",
+      "elapsedMs": 41163.47720000002
+    }
+  ],
+  "epochs": [
+    {
+      "number": 1,
+      "startedUtc": "2026-10-16T00:18:13.545Z",
+      "pid": 38028,
+      "exit": {
+        "code": 143,
+        "signal": null,
+        "utc": "2026-10-16T00:21:56.271Z"
+      },
+      "closedUtc": "2026-10-16T00:21:56.271Z"
+    },
+    {
+      "number": 2,
+      "startedUtc": "2026-10-16T00:21:56.271Z",
+      "pid": 19792,
+      "exit": {
+        "code": 143,
+        "signal": null,
+        "utc": "2026-10-16T00:25:53.000Z"
+      },
+      "closedUtc": "2026-10-16T00:25:53.000Z"
+    },
+    {
+      "number": 3,
+      "startedUtc": "2026-10-16T00:25:53.000Z",
+      "pid": 49792,
+      "exit": {
+        "code": 143,
+        "signal": null,
+        "utc": "2026-10-16T00:25:56.365Z"
+      },
+      "closedUtc": "2026-10-16T00:25:56.365Z"
+    }
+  ],
+  "limitations": [
+    "Controlled synthetic history; no original #520 workload or endurance claim",
+    "No native session, visual compaction, installed/release or full provider-matrix qualification",
+    "Controlled synthetic history and disposable cache migration; no power-loss or native provider acceptance",
+    "A stochastic, controlled plaintext receipt fixture on one Free model; exact-field or general semantic guarantees remain unqualified",
+    "A stochastic controlled ten-round result on the same approved model is not a deterministic universal semantic or causal guarantee.",
+    "Lexical source selection covers bounded numeric/path/URI/quoted lines and standalone JSON, not arbitrary unquoted words or cross-line relationships.",
+    "Narrative semantic validation, every-transform guarantees, native sessions/windows/signatures, visual benefit and release acceptance remain open."
+  ],
+  "releaseChecksDispatched": 0
+}

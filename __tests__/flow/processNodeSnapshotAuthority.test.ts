@@ -4,6 +4,12 @@ import { flowService } from '@/backend/services/flow';
 import type { Flow } from '@/shared/types/flow';
 import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
+import { digestProjectedMessages } from '@/backend/execution/flow/compaction/digest';
+import { digestCanonicalJson } from '@/backend/execution/flow/compaction/digest';
+import type { ResponsesSessionState } from '@/backend/services/model/adapters/responsesSessionState';
+import { loadItem } from '@/utils/storage/backend';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { inspectJson } from '@/backend/execution/flow/compaction/jsonInspection';
 
 beforeEach(async () => {
   await saveItem(StorageKey.MODELS, [{ id: 'model-1', name: 'Pinned model', provider: 'openai', adapter: 'openai', ApiKey: '', promptTemplate: 'Pinned Model instruction.' }]);
@@ -14,6 +20,62 @@ afterEach(() => {
 });
 
 describe('ProcessNode immutable snapshot authority', () => {
+  it('checkpoints native Responses state with the conversation and restores the Process owner hook', async () => {
+    const state = {
+      trackingInfo: { executionId: 'execution-native', startTime: 1, nodeExecutionTracker: [] },
+      messages: [{ id: 'user-1', role: 'user', content: 'Never publish.', timestamp: 1 }],
+      flowId: 'flow-native', conversationId: 'conversation-native', title: 'Native continuity',
+      createdAt: 1, updatedAt: 1,
+      flowSnapshot: { id: 'flow-native', name: 'Native continuity', nodes: [], edges: [] },
+    } as unknown as SharedState;
+    const params = { id: 'process-native', label: 'Process', type: 'process' as const,
+      properties: { boundModel: 'model-1' } };
+    const prepared = await new ProcessNode().prep(state, params);
+    const nativeOutput = [{ type: 'reasoning' as const, id: 'opaque-ñ', summary: [], encrypted_content: 'EXACT\nBYTES' }];
+    const snapshot: ResponsesSessionState = { version: 1, owner: 'a'.repeat(64), workspace: 'default-workspace',
+      conversationId: state.conversationId!, nodeId: params.id, recordsDigest: '', records: [['anchor', {
+        items: [], nativeOutput, nativeInputDigest: 'b'.repeat(64), retainedChars: inspectJson(nativeOutput),
+        inputLength: 1, inputDigest: 'c'.repeat(64), outputLength: 1, outputDigest: 'd'.repeat(64),
+      }]] };
+    snapshot.recordsDigest = digestCanonicalJson(snapshot.records);
+    prepared.onResponsesSessionChange!(snapshot);
+    const canonical = JSON.parse(JSON.stringify(state.messages));
+    const key = `conversations/${state.conversationId}` as StorageKey;
+    await persistConversationState(key, state);
+    const restored = await loadItem<SharedState | undefined>(key, undefined);
+    expect(restored?.responsesSessions?.[params.id]).toEqual(snapshot);
+    const afterRestart = await new ProcessNode().prep(restored!, params);
+    expect(afterRestart.responsesSession).toEqual(snapshot);
+    afterRestart.onResponsesSessionChange!(undefined);
+    expect(restored!.responsesSessions).toBeUndefined();
+    expect(restored!.messages).toEqual(canonical);
+  });
+
+  it('keeps generated system-message identity stable across steps and a saved-state roundtrip', async () => {
+    const state = {
+      trackingInfo: { executionId: 'execution-cache', startTime: 1, nodeExecutionTracker: [] },
+      messages: [{ id: 'user-1', role: 'user', content: 'Never publish.', timestamp: 1 }],
+      flowId: 'flow-cache', conversationId: 'conversation-cache', title: 'Cache continuity',
+      createdAt: 1, updatedAt: 1,
+      flowSnapshot: { id: 'flow-cache', name: 'Cache continuity', nodes: [], edges: [] },
+    } as unknown as SharedState;
+    const params = { id: 'process-cache', label: 'Process', type: 'process' as const,
+      properties: { boundModel: 'model-1', promptTemplate: 'Never publish.' } };
+    const first = await new ProcessNode().prep(state, params);
+    const second = await new ProcessNode().prep(state, params);
+    const restored = JSON.parse(JSON.stringify(state)) as SharedState;
+    const afterRestart = await new ProcessNode().prep(restored, params);
+    const systems = [first, second, afterRestart].map(prepared => prepared.messages.find(message => message.role === 'system')!);
+    expect(systems[0]).toBeDefined();
+    expect(systems[1]).toEqual(systems[0]);
+    expect(systems[2]).toEqual(systems[0]);
+    expect(digestProjectedMessages(second.messages)).toBe(digestProjectedMessages(first.messages));
+    expect(digestProjectedMessages(afterRestart.messages)).toBe(digestProjectedMessages(first.messages));
+    expect(state.messages).toEqual([{ id: 'user-1', role: 'user', content: 'Never publish.', timestamp: 1 }]);
+    expect(digestProjectedMessages([{ ...systems[0], content: 'A changed prohibition.' }]))
+      .not.toBe(digestProjectedMessages([systems[0]]));
+  });
+
   it('renders prompts and enforces permission rules from a Persona-private snapshot with no live record', async () => {
     const denyQuestion = { action: 'question', resource: '*', effect: 'deny' as const };
     const flowSnapshot = {

@@ -422,7 +422,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                 effort: model.reasoningEffort, maxTurns: maxTurns ?? DEFAULT_MAX_TURNS,
                 toolBindings: toolNameMap, exposedToolOrder: (tools ?? []).map(tool => tool.type === 'function' ? tool.function.name : tool.type),
                 localExecutors: Object.entries(localToolExecutors ?? {}).map(([name, executor]) => [name, executor.toString()]),
-                account: allowanceAccountKey('claude', apiKey), runtimeIdentity, semantics: 'claude-lifecycle-v2' },
+                // Allowance groups use a process-random HMAC and cannot bind a
+                // durable session. Only the enclosing private prefix digest is
+                // saved; credential changes must still invalidate reuse.
+                account: sessionValueHash({ scope: 'claude-session-account-v1', credential: apiKey }),
+                runtimeIdentity, semantics: 'claude-lifecycle-v3-durable-account' },
             ),
           }
         : undefined;
@@ -1139,6 +1143,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }] }],
         },
         canUseTool: async (toolName, input, opts) => {
+          try {
           const authority = await prepareToolAuthority(toolName, input, opts);
           if (authority.behavior === 'deny') return authority;
           const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
@@ -1203,6 +1208,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             return { behavior: 'deny', message: rejectionText };
           }
           return { behavior: 'allow', updatedInput: input };
+          } catch (error) {
+            // The SDK translates callback rejections into ordinary tool
+            // denials. Keep host authority/approval failures at the invocation
+            // boundary, as the mandatory PreToolUse hook already does.
+            toolAuthorityFailure = error;
+            abortController.abort();
+            return { behavior: 'deny', message: 'FLUJO tool authority is no longer current.' };
+          }
         },
     };
 
@@ -1621,7 +1634,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // turn never resumes a corrupted or half-torn-down session (#154 — the
         // "drop the cached session on error" contract coordinated with #151).
         if (sessionTracking) invalidateSession(sessionTracking.key);
-        throw err;
+        throw toolAuthorityFailure ?? err;
       }
     } finally {
       toolScopeClosed = true;

@@ -99,6 +99,7 @@ beforeEach(() => {
     conversationId: CONVERSATION_ID,
     messages: [chatMessage('m1', 'user'), chatMessage('m2')],
     status: 'completed',
+    responsesSessions: { process: { checkpoint: 'must be discarded on chat rewind' } },
   });
   projectMessagesMock.mockReturnValue([chatMessage('m1', 'user'), chatMessage('m2')]);
   diffMock.mockResolvedValue('combined diff');
@@ -191,6 +192,7 @@ describe('conversation revert route', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ restoredChat: true, restoredFiles: false });
     expect(revertMock).not.toHaveBeenCalled();
+    expect((await loadConversationStateMock()).responsesSessions).toBeUndefined();
     expect(appendRawForStateMock).toHaveBeenCalledWith(
       expect.objectContaining({ messages: [] }),
       [
@@ -221,6 +223,7 @@ describe('conversation revert route', () => {
     expect(revertMock).toHaveBeenCalledWith(ROOT, 'before', ['file.ts']);
     expect(appendRawForStateMock).not.toHaveBeenCalled();
     expect(state.messages).toHaveLength(2);
+    expect(state.responsesSessions).toBeDefined();
   });
 
   it('restores chat and files together and can undo both immediately', async () => {

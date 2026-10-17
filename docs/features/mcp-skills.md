@@ -63,13 +63,22 @@ is present. The proxy remains localhost-only, encryption-lock gated, and
 stateless; it forwards discovery and optional directory reads but owns no
 approval state.
 
-The standalone `mcp-flujo` process implements the same frozen draft revision. Its
+The standalone `mcp-flujo` process implements the same Final revision. Its
 localhost control route aggregates enabled downstream catalogs with bounded
 pagination, validates the final catalog with the host schema, and rewrites
 server-qualified URIs. The standalone client also validates list/get responses
 against package-local copies of the same URI, digest, containment, duplicate,
 and size rules. Reads of rewritten Skill resources pass through FLUJO's
 size/digest verifier.
+
+Malformed Skills request parameters return JSON-RPC `-32602` before downstream
+execution, including invalid listing/directory cursors and missing or empty
+Skill URIs. Invalid or unknown standalone Skill URIs reported by the control
+route as HTTP 400/404 use the same code, as required by
+[Final SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/b0a66b133ddfaf193a70b526a31bc2aa7172f28a/seps/2640-skills-extension.md#retrieval-via-skillsget).
+Authentication, locked storage, transport failures, malformed server results
+and unexpected backend failures remain service failures. Validation details
+identify fields without returning their supplied values.
 
 ## Explicit exclusions
 

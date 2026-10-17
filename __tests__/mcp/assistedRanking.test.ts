@@ -10,8 +10,8 @@ const base = {
 };
 
 describe('MCP assisted recommendation ranking', () => {
-  it('prefers a DCR remote over manual OAuth when other evidence is equal', () => {
-    const dcr = scoreMcpAssistantCandidate({ ...base, authMode: 'oauth-dcr' });
+  it.each(['oauth-cimd', 'oauth-dcr'] as const)('prefers %s over manual OAuth when other evidence is equal', authMode => {
+    const dcr = scoreMcpAssistantCandidate({ ...base, authMode });
     const manual = scoreMcpAssistantCandidate({ ...base, authMode: 'oauth-manual' });
 
     expect(dcr).toBeGreaterThan(manual);

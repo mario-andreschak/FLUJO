@@ -1,7 +1,11 @@
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { ResolvedInstallPlan } from '@/utils/mcp/registry';
 
-export type McpAssistantAuthMode = 'oauth-dcr' | 'oauth-manual' | 'none' | 'unknown';
+export type McpAssistantAuthMode = 'oauth-cimd' | 'oauth-dcr' | 'oauth-manual' | 'none' | 'unknown';
+
+export function isAutomaticMcpOAuth(mode: McpAssistantAuthMode | undefined): boolean {
+  return mode === 'oauth-cimd' || mode === 'oauth-dcr';
+}
 
 /** Recommendation evidence is advisory; it never supplies execution consent. */
 export type McpRecommendationTier = 'flujo-supported' | 'local-reviewed' | 'local-unreviewed' | 'remote';

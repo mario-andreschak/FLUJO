@@ -27,10 +27,10 @@ const GLOBAL_BINDING_RE = /^\$\{global:([^}]+)\}$/;
 /**
  * Optional OAuth client credentials for streamable/SSE MCP servers.
  *
- * Most MCP servers self-register via Dynamic Client Registration (DCR) — leave these blank and
- * just click "Authenticate". A minority (e.g. Asana's V2 server) disable DCR and require a
- * pre-registered app; enter that app's Client ID / Secret here. These are the standard OAuth
- * 2.0 client-credential fields, so the same two inputs cover every such server.
+ * CIMD-capable servers use FLUJO's public client metadata document, with DCR as a
+ * compatibility fallback. Leave these blank and click "Authenticate" unless the
+ * server requires a pre-registered app; enter that app's Client ID / Secret here.
+ * The same two OAuth 2.0 credential inputs cover each such server.
  *
  * The secret mirrors how model API keys work: it is masked (never shown), can be bound to a
  * global variable, and is encrypted at rest by the backend.
@@ -126,11 +126,11 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
       />
 
       {/* The callback URL the user must register in the provider's OAuth app. */}
-      <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
         <Typography variant="caption" color="text.secondary">
           {t('mcp.local.oauth.redirect')}
         </Typography>
-        <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{callbackUrl}</Typography>
+        <Typography variant="caption" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{callbackUrl}</Typography>
         <Tooltip title={t('mcp.local.oauth.copyRedirect')}>
           <IconButton size="small" onClick={() => navigator.clipboard.writeText(callbackUrl)}>
             <ContentCopyIcon sx={{ fontSize: 14 }} />

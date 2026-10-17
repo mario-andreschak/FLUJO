@@ -1,0 +1,1388 @@
+{
+  "schemaVersion": 1,
+  "issue": 1091,
+  "recordedUtc": "2026-10-15T13:27:59.662Z",
+  "scope": "Focused existing generic compaction prompt, repeated real-model continuation and exact source recovery",
+  "changes": [
+    "Do not translate, spell-correct, expand or rename identifiers",
+    "Decode JSON string escapes once when rendering values as prose",
+    "Preserve structured JSON value types"
+  ],
+  "sourcePromptSha256": "e6775e61040cf8236ef8dac7b347a04f44bbf0ce09916def48b3d65f37e5f8c2",
+  "equipment": {
+    "harnessSha256": "3d96819fc580c8ec72b731b62230b5a1c6f05fdf79187c8e2d1654341132ab6c",
+    "credentialLoaderSha256": "f8c185b9a32ba42e3f53667d4744371dfc784f491815c898e56c3696f684aa8c",
+    "authority": "Normal shipped owner enrollment plus the canonical private OS-owner scoped issuer; public execution and internal control reads use their proper credentials",
+    "inference": "Strict relay forwards the actual built Responses request body only to https://openrouter.ai/api/v1/responses for the explicit Free model; no answer replacement or provider/model fallback",
+    "credentials": "One existing encrypted OpenRouter credential is read in memory; application receives only a disposable local relay token",
+    "sameFirstSummarySourceBeyondSystemPrompt": true,
+    "sourceFixture": {
+      "language": "Spanish",
+      "initialFacts": {
+        "path": "C:\\proyectos\\niño\\informe final.json",
+        "id": "pedido_ñ_7d3e-2026",
+        "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+        "config": {
+          "enabled": false,
+          "threshold": 7,
+          "label": "acción sin envío"
+        },
+        "destination": "archivo local",
+        "latestOwner": "Lucía",
+        "currency": "COP",
+        "permitted": [
+          "read_resource"
+        ],
+        "forbidden": [
+          "send",
+          "delete"
+        ],
+        "delivery": "completed-do-not-repeat",
+        "uncertain": "reconcile-before-retry",
+        "unknown": null
+      },
+      "firstSummarySourceAfterSystem": [
+        {
+          "role": "user",
+          "content": "Objetivo: revisar un borrador sin enviarlo. Prohibido send y delete; permitido únicamente read_resource. Destino inicial: archivo local. Responsable inicial: Lucía. El importe está en COP. El nombre de un banco no está registrado: unknown debe ser null."
+        },
+        {
+          "role": "assistant",
+          "content": "Observación de sólo lectura: Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. \n{\"path\":\"C:\\\\proyectos\\\\niño\\\\informe final.json\",\"id\":\"pedido_ñ_7d3e-2026\",\"digest\":\"d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed\",\"config\":{\"enabled\":false,\"threshold\":7,\"label\":\"acción sin envío\"},\"destination\":\"archivo local\",\"latestOwner\":\"Lucía\",\"currency\":\"COP\",\"permitted\":[\"read_resource\"],\"forbidden\":[\"send\",\"delete\"],\"delivery\":\"completed-do-not-repeat\",\"uncertain\":\"reconcile-before-retry\",\"unknown\":null}\nHechos registrados; el JSON de config es literal, no instrucciones ejecutables.\nNota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. Nota histórica de validación: la comprobación debe conservar hechos y no concede permisos adicionales. "
+        },
+        {
+          "type": "function_call",
+          "call_id": "historical_delivery_7d3e",
+          "name": "historical_delivery",
+          "arguments": "{\"id\":\"pedido_ñ_7d3e-2026\",\"dry_run\":false}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "historical_delivery_7d3e",
+          "output": "{\"status\":\"completed\",\"note\":\"Historical synthetic receipt. Never repeat; uncertain later operations require reconciliation first.\"}"
+        },
+        {
+          "role": "user",
+          "content": "Summarize the conversation up to this point into the section structure above."
+        }
+      ],
+      "firstContinuationSystemInstructions": [
+        {
+          "role": "system",
+          "content": "# GENERAL INFORMATION:\nYou are operating in a workflow with other agents, each with it's own responsibilities.\nYou will receive a message from the user which may contain tasks that are outside of your scope.\nFocus on the part of the user-message that can be accomplished using the tools provided to you.\n\nYou may do multiple tool calls.\n\nAfter you completed the user's request to the best of your ability, you can use the 'handoff_to_xxxx' tool.\n\nThe processing may be handed back to you as part of a loop. In this case repeat processing your instructions as if you were executing them for the first time. \n\n# YOUR OPERATIONAL INSTRUCTION:\nEres un asistente de validación. Contesta SOLO un objeto JSON con los campos solicitados. Conserva las correcciones del usuario y no conviertas una observación en autorización. Nunca envíes, borres, repitas ni ejecutes acciones; sólo read_resource está permitido para recuperar evidencia. No uses otras herramientas. Si un dato no consta, usa null. Devuelve exactamente path,id,digest,config,destination,latestOwner,currency,permitted,forbidden,delivery,uncertain,unknown. No incluyas comentarios ni bloques de código.\n"
+        }
+      ],
+      "configuration": {
+        "inputMode": "full-history",
+        "processMaxTurns": 3,
+        "modelMaxTokens": 4000,
+        "compactionThreshold": 512,
+        "compactionKeepTokens": 256,
+        "visualCompactionEnabled": false,
+        "normalProcessRouting": true
+      },
+      "updates": [
+        {
+          "round": 4,
+          "destination": "carpeta revisada"
+        },
+        {
+          "round": 7,
+          "latestOwner": "Álvaro"
+        }
+      ],
+      "filler": "65 repetitions per block of a synthetic read-only validation note; two blocks per observation",
+      "historicalCallId": "historical_delivery_7d3e",
+      "historicalTool": "historical_delivery",
+      "historicalEffect": "Synthetic completed receipt; no genuine effect is executed"
+    }
+  },
+  "baseline": {
+    "rawReceiptSha256": "6b5b231f409079fc40f8516dbfe7e4c2c5bc03d35d3e383a0a0734f6ad7d4c1e",
+    "status": "failed-semantic-fields",
+    "startedUtc": "2026-10-15T13:03:58.382Z",
+    "finishedUtc": "2026-10-15T13:09:30.968Z",
+    "baseRevision": "ae263f4ce871e3ca1cf9708f64df1485dc627197",
+    "buildId": "ckZJTg85i7KXJIAneNgUv",
+    "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+    "providerModels": [
+      "nvidia/nemotron-3-super-120b-a12b:free"
+    ],
+    "providerRequests": 10,
+    "summaryRequests": 5,
+    "continuationRequests": 5,
+    "totalUsage": {
+      "inputTokens": 68254,
+      "outputTokens": 11035,
+      "reportedCost": 0,
+      "callsWithoutReportedCost": 0
+    },
+    "latency": {
+      "summary": {
+        "calls": 5,
+        "p50Ms": 31603.960699999996,
+        "p95Ms": 57646.53539999999,
+        "method": "nearest rank; strict relay buffers the provider body"
+      },
+      "continuation": {
+        "calls": 5,
+        "p50Ms": 22695.7221,
+        "p95Ms": 38752.97829999999,
+        "method": "nearest rank; strict relay buffers the provider body"
+      }
+    },
+    "checkpoints": [
+      {
+        "round": 5,
+        "passed": false,
+        "canonicalPreserved": true
+      }
+    ],
+    "exactOperatingValueReplies": 0,
+    "preservedPermissionMeaningReplies": 5,
+    "strictTypedFieldReplies": 0,
+    "scoring": {
+      "exactOperatingKeys": [
+        "path",
+        "id",
+        "digest",
+        "config",
+        "destination",
+        "latestOwner",
+        "currency",
+        "delivery",
+        "uncertain",
+        "unknown"
+      ],
+      "permissionMeaning": "Exact token lists; comma-separated strings are decoded only for this separate semantic metric; original strict type failures remain recorded"
+    },
+    "canonicalPreserved": true,
+    "completeSourceArchivesVerified": true,
+    "rounds": [
+      {
+        "round": 1,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\\\proyectos\\\\niño\\\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": null,
+          "config": null,
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "pedido_ñ_7d3e-2026",
+          "uncertain": null,
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": false,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   config: null,\n-   config: {\n-     enabled: false,\n-     label: 'acción sin envío',\n-     threshold: 7\n-   },\n    currency: 'COP',\n+   delivery: 'pedido_ñ_7d3e-2026',\n-   delivery: 'completed-do-not-repeat',\n    destination: 'archivo local',\n+   digest: null,\n-   digest: 'd7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed',\n    forbidden: [\n      'send',\n      'delete'\n    ],\n    id: 'pedido_ñ_7d3e-2026',\n    latestOwner: 'Lucía',\n+   path: 'C:\\\\\\\\proyectos\\\\\\\\niño\\\\\\\\informe final.json',\n-   path: 'C:\\\\proyectos\\\\niño\\\\informe final.json',\n    permitted: [\n      'read_resource'\n    ],\n+   uncertain: null,\n-   uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 7,
+        "canonicalSha256": "8388b8053e3ea19c67b2e80701d67d01ab50b7204ff40c443c32024978c638af",
+        "sourceArchive": {
+          "uri": "flujo://run/59840093-db10-489e-bd84-c9b41ae46c4c/81e3492f-72de-4a42-986a-721ee5f8975c",
+          "sha256": "2466510ed79c7a854a68cc9a58c8f9f20469ab372a419c98c1e136355be1ce39",
+          "size": 15419,
+          "messages": 4,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 2,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": null,
+          "config": null,
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed",
+          "uncertain": null,
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": false,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  {\n+   config: null,\n-   config: {\n-     enabled: false,\n-     label: 'acción sin envío',\n-     threshold: 7\n-   },\n    currency: 'COP',\n+   delivery: 'completed',\n-   delivery: 'completed-do-not-repeat',\n    destination: 'archivo local',\n+   digest: null,\n-   digest: 'd7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed',\n    forbidden: [\n      'send',\n      'delete'\n    ],\n    id: 'pedido_ñ_7d3e-2026',\n...\n    ],\n+   uncertain: null,\n-   uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 10,
+        "canonicalSha256": "725198334b89915ea2eeab43ddefb139945dd7830e081e75e2708c9db114c6d1",
+        "sourceArchive": {
+          "uri": "flujo://run/59840093-db10-489e-bd84-c9b41ae46c4c/e3d34a7f-f968-4244-b25e-ee53951ffb4e",
+          "sha256": "534029e8c8055422eb2cce3fbca3c88545486949366b2f7cafe0455f0f1a2faa",
+          "size": 30344,
+          "messages": 7,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 3,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": null,
+          "config": null,
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": false,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   config: null,\n-   config: {\n-     enabled: false,\n-     label: 'acción sin envío',\n-     threshold: 7\n-   },\n    currency: 'COP',\n+   delivery: 'completed',\n-   delivery: 'completed-do-not-repeat',\n    destination: 'archivo local',\n+   digest: null,\n-   digest: 'd7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed',\n    forbidden: [\n      'send',\n      'delete'\n    ],\n    id: 'pedido_ñ_7d3e-2026',\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 13,
+        "canonicalSha256": "bf6b6ab6c6cb3c10b583958b6a7aa0ae7c57db52279a5682ad59c7579d50093f",
+        "sourceArchive": {
+          "uri": "flujo://run/59840093-db10-489e-bd84-c9b41ae46c4c/dc2ffba3-3968-4b4a-881e-22230e5d8e04",
+          "sha256": "c41230b5e20bf7c01cfd94f64263215942bb290af740c958cb5cf22f16ee1890",
+          "size": 45247,
+          "messages": 10,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 4,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": null,
+          "config": null,
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": false,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   config: null,\n-   config: {\n-     enabled: false,\n-     label: 'acción sin envío',\n-     threshold: 7\n-   },\n    currency: 'COP',\n+   delivery: 'completed',\n-   delivery: 'completed-do-not-repeat',\n    destination: 'carpeta revisada',\n+   digest: null,\n-   digest: 'd7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed',\n    forbidden: [\n      'send',\n      'delete'\n    ],\n    id: 'pedido_ñ_7d3e-2026',\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 17,
+        "canonicalSha256": "b56b7645421da270f6902b89e14e7ac6b0ca03888182d29e9ad70d5fbf42fce3",
+        "sourceArchive": {
+          "uri": "flujo://run/59840093-db10-489e-bd84-c9b41ae46c4c/31129cf9-7487-4c61-b48f-77b400a4d199",
+          "sha256": "6c856d909f1268277ad2a5ac6b8155bb409e2968e05c39ea6a4656eb9d4a0c8c",
+          "size": 60199,
+          "messages": 13,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 5,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": null,
+          "config": null,
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": "read_resource",
+          "forbidden": "send, delete",
+          "delivery": "completed",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": false,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   config: null,\n-   config: {\n-     enabled: false,\n-     label: 'acción sin envío',\n-     threshold: 7\n-   },\n    currency: 'COP',\n+   delivery: 'completed',\n-   delivery: 'completed-do-not-repeat',\n    destination: 'carpeta revisada',\n+   digest: null,\n+   forbidden: 'send, delete',\n-   digest: 'd7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed',\n-   forbidden: [\n-     'send',\n-     'delete'\n-   ],\n    id: 'pedido_ñ_7d3e-2026',\n    latestOwner: 'Lucía',\n    path: 'C:\\\\proyectos\\\\niño\\\\informe final.json',\n+   permitted: 'read_resource',\n-   permitted: [\n-     'read_resource'\n-   ],\n    uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 20,
+        "canonicalSha256": "e8705afdda1c1889bd5be2bd85062b243b85191436ffd64bb09f349eba76fcfe",
+        "sourceArchive": {
+          "uri": "flujo://run/59840093-db10-489e-bd84-c9b41ae46c4c/7ec587fb-1cf6-47e4-a613-3ba0215dbe02",
+          "sha256": "a608237c0170131ee87bfac7224afea8748bdc32dc46f7dde650d39949bf254e",
+          "size": 75370,
+          "messages": 17,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": true
+      }
+    ],
+    "processes": [
+      {
+        "pid": 9940,
+        "number": 1,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "utc": "2026-10-15T13:09:27.806Z"
+        },
+        "closedUtc": "2026-10-15T13:09:27.806Z"
+      },
+      {
+        "pid": 33188,
+        "number": 2,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "utc": "2026-10-15T13:09:30.968Z"
+        },
+        "closedUtc": "2026-10-15T13:09:30.968Z"
+      }
+    ],
+    "applicationClosed": true
+  },
+  "candidate": {
+    "rawReceiptSha256": "0d0ce55f44217b6072892603dc041c4db358bb1cc07a8d170da35cd0237cbe79",
+    "status": "failed-semantic-fields",
+    "startedUtc": "2026-10-15T13:15:26.434Z",
+    "finishedUtc": "2026-10-15T13:23:40.028Z",
+    "baseRevision": "ae263f4ce871e3ca1cf9708f64df1485dc627197",
+    "buildId": "2AyiTy-AIc7I4h2R5sDgY",
+    "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+    "providerModels": [
+      "nvidia/nemotron-3-super-120b-a12b:free"
+    ],
+    "providerRequests": 20,
+    "summaryRequests": 10,
+    "continuationRequests": 10,
+    "totalUsage": {
+      "inputTokens": 217393,
+      "outputTokens": 19018,
+      "reportedCost": 0,
+      "callsWithoutReportedCost": 0
+    },
+    "latency": {
+      "summary": {
+        "calls": 10,
+        "p50Ms": 27937.747699999993,
+        "p95Ms": 40359.288300000015,
+        "method": "nearest rank; strict relay buffers the provider body"
+      },
+      "continuation": {
+        "calls": 10,
+        "p50Ms": 18949.671399999992,
+        "p95Ms": 28696.482200000028,
+        "method": "nearest rank; strict relay buffers the provider body"
+      }
+    },
+    "checkpoints": [
+      {
+        "round": 5,
+        "passed": false,
+        "canonicalPreserved": true
+      },
+      {
+        "round": 10,
+        "passed": false,
+        "canonicalPreserved": true
+      }
+    ],
+    "exactOperatingValueReplies": 10,
+    "preservedPermissionMeaningReplies": 10,
+    "strictTypedFieldReplies": 4,
+    "scoring": {
+      "exactOperatingKeys": [
+        "path",
+        "id",
+        "digest",
+        "config",
+        "destination",
+        "latestOwner",
+        "currency",
+        "delivery",
+        "uncertain",
+        "unknown"
+      ],
+      "permissionMeaning": "Exact token lists; comma-separated strings are decoded only for this separate semantic metric; original strict type failures remain recorded"
+    },
+    "canonicalPreserved": true,
+    "completeSourceArchivesVerified": true,
+    "rounds": [
+      {
+        "round": 1,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": "read_resource",
+          "forbidden": "send, delete",
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  {\n    config: {\n      enabled: false,\n      label: 'acción sin envío',\n      threshold: 7\n...\n    digest: 'd7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed',\n+   forbidden: 'send, delete',\n-   forbidden: [\n-     'send',\n-     'delete'\n-   ],\n    id: 'pedido_ñ_7d3e-2026',\n    latestOwner: 'Lucía',\n    path: 'C:\\\\proyectos\\\\niño\\\\informe final.json',\n+   permitted: 'read_resource',\n-   permitted: [\n-     'read_resource'\n-   ],\n    uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 7,
+        "canonicalSha256": "bf4bb99a116a188631779fd203783280147e976bcafac4efeedbbf699f7c5c00",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/72bf41b6-4608-4f2b-ab07-fa9c9a411295",
+          "sha256": "25b3603e0ebe278137eacfa00c0dd93927c4f17a9b299ed6264d98023b0caeb1",
+          "size": 15419,
+          "messages": 4,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 2,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": "read_resource",
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  {\n    config: {\n      enabled: false,\n      label: 'acción sin envío',\n      threshold: 7\n...\n    path: 'C:\\\\proyectos\\\\niño\\\\informe final.json',\n+   permitted: 'read_resource',\n-   permitted: [\n-     'read_resource'\n-   ],\n    uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 10,
+        "canonicalSha256": "3fc09c548f28b8a62107062eee58b56777f9103ce7b20671735f884a4ea27fbe",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/2ef14d17-9a33-4184-83ab-ca109f6105c3",
+          "sha256": "1299f6d7806b113586dbc861a1e851cf89d8adca62337939708fa2bf1e6d979c",
+          "size": 30483,
+          "messages": 7,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 3,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "archivo local",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": true,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 13,
+        "canonicalSha256": "24a71c340488dd5eec910bcb280b346581c9916c8fd332bc1ccadd45d548dcc8",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/caf3ed3e-078f-4beb-b445-2fc2d6151749",
+          "sha256": "c8274f804f24c86f07776c164dae91073b4a560830aa949271e9bf8b4fdfcac1",
+          "size": 45588,
+          "messages": 10,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 4,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": "read_resource",
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  {\n    config: {\n      enabled: false,\n      label: 'acción sin envío',\n      threshold: 7\n...\n    path: 'C:\\\\proyectos\\\\niño\\\\informe final.json',\n+   permitted: 'read_resource',\n-   permitted: [\n-     'read_resource'\n-   ],\n    uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 17,
+        "canonicalSha256": "b9e27e9aaf803772120ad82d3596878d55b7d769a9d57c261126aa1e3f9e72b2",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/14e38d3d-cfbf-4a4c-bf80-e5591cb9951e",
+          "sha256": "c496a9293c6f4b7168ed05f3d6010091c0ed6ab21c03257afd70282add01496f",
+          "size": 60705,
+          "messages": 13,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 5,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": "read_resource",
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  {\n    config: {\n      enabled: false,\n      label: 'acción sin envío',\n      threshold: 7\n...\n    path: 'C:\\\\proyectos\\\\niño\\\\informe final.json',\n+   permitted: 'read_resource',\n-   permitted: [\n-     'read_resource'\n-   ],\n    uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 20,
+        "canonicalSha256": "6154e98e816b3baee754c7d894454f72a2d986e467c14ce409567c5b8bdcd724",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/93fdc0fc-2a1e-4a68-9cc9-9f35da1aef81",
+          "sha256": "21e5d1ba94edec960d32202af941f9679653dbdb912ebb560c78f39e1c808812",
+          "size": 76031,
+          "messages": 17,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": true
+      },
+      {
+        "round": 6,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Lucía",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": true,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 23,
+        "canonicalSha256": "6b20e74138a025d329971709c5452bf8c5a5b893f5cd925f1fdc817e426ccbd5",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/dc741633-5723-4766-b8ed-8eea3b2d96f1",
+          "sha256": "6bc2508d178da237b1818badbe776cae07af14a8dfacd0eb7e912db0e32e6c7f",
+          "size": 91139,
+          "messages": 20,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 7,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Álvaro",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Álvaro",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": true,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 27,
+        "canonicalSha256": "c8ea5a581b12bfd60983431a0194f8ff60737a8407e64a48d8b82a7706512f95",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/33bba3de-fc8e-4eaa-a696-561de1c516f9",
+          "sha256": "2e7c41167e3a4ae3280eb6468f42fa85e744da03efc09c3143fe16525bfd1498",
+          "size": 106261,
+          "messages": 23,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 8,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Álvaro",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Álvaro",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": true,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 30,
+        "canonicalSha256": "93de4f2719027ce8a6f97fde40a414b5a017388c1bc9d8d35bde723e42c2cc45",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/5c499342-8c8c-4965-a0ca-29c11b6d7904",
+          "sha256": "fc506336ab765d227390d32f7bf23dbf36f5a16ced2e1a4c753e225e0a1a0917",
+          "size": 121603,
+          "messages": 27,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 9,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Álvaro",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Álvaro",
+          "currency": "COP",
+          "permitted": "read_resource",
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  {\n    config: {\n      enabled: false,\n      label: 'acción sin envío',\n      threshold: 7\n...\n    path: 'C:\\\\proyectos\\\\niño\\\\informe final.json',\n+   permitted: 'read_resource',\n-   permitted: [\n-     'read_resource'\n-   ],\n    uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 33,
+        "canonicalSha256": "2bc82784c7e90077df412caf801ca073cf8eea41c148fbe074c7648f62748d84",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/c74afed1-878d-497b-84de-7a8f2c7578f7",
+          "sha256": "b1f490d744e03e36a92a6cdacb089542129ddae37b9cb28a010e3117ec1af863",
+          "size": 136724,
+          "messages": 30,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      },
+      {
+        "round": 10,
+        "expected": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Álvaro",
+          "currency": "COP",
+          "permitted": [
+            "read_resource"
+          ],
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "answer": {
+          "path": "C:\\proyectos\\niño\\informe final.json",
+          "id": "pedido_ñ_7d3e-2026",
+          "digest": "d7a3e19d55c894a16b003f0c2e89b18f8a71c0a9a67c2e71ba3a9a78648761ed",
+          "config": {
+            "enabled": false,
+            "threshold": 7,
+            "label": "acción sin envío"
+          },
+          "destination": "carpeta revisada",
+          "latestOwner": "Álvaro",
+          "currency": "COP",
+          "permitted": "read_resource",
+          "forbidden": [
+            "send",
+            "delete"
+          ],
+          "delivery": "completed-do-not-repeat",
+          "uncertain": "reconcile-before-retry",
+          "unknown": null
+        },
+        "exactFieldsPassed": false,
+        "exactOperatingValuesPassed": true,
+        "permissionMeaningPassed": true,
+        "fieldFailure": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  {\n    config: {\n      enabled: false,\n      label: 'acción sin envío',\n      threshold: 7\n...\n    path: 'C:\\\\proyectos\\\\niño\\\\informe final.json',\n+   permitted: 'read_resource',\n-   permitted: [\n-     'read_resource'\n-   ],\n    uncertain: 'reconcile-before-retry',\n    unknown: null\n  }\n",
+        "responseFormatHasMarkdownFence": false,
+        "canonicalMessages": 36,
+        "canonicalSha256": "2de41838bda44220480aaf3dfddc29401f9aa38c9b4bfb60effef73c49d0f76e",
+        "sourceArchive": {
+          "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/720aa71f-bc80-486c-a6fd-6d4a7e99f615",
+          "sha256": "3d57f6bc25159ec61beed56a779d33358f51fde79c09b93c45b48684b8261cac",
+          "size": 151833,
+          "messages": 33,
+          "verified": true
+        },
+        "summaryCalls": 1,
+        "continuationCalls": 1,
+        "processRestartAfterCheckpoint": false
+      }
+    ],
+    "processes": [
+      {
+        "pid": 25360,
+        "number": 1,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "utc": "2026-10-15T13:19:22.881Z"
+        },
+        "closedUtc": "2026-10-15T13:19:22.881Z"
+      },
+      {
+        "pid": 19860,
+        "number": 2,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "utc": "2026-10-15T13:23:40.027Z"
+        },
+        "closedUtc": "2026-10-15T13:23:40.027Z"
+      }
+    ],
+    "applicationClosed": true
+  },
+  "retainedFailures": [
+    {
+      "receiptSha256": "4c659396b2b7fc9ee5bb715e5df4ecca082be65b5798041248941ca8ad6fb223",
+      "status": "failed",
+      "rounds": 0,
+      "providerRequests": 0,
+      "reportedUsage": {
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "reportedCost": 0,
+        "callsWithoutReportedCost": 0
+      },
+      "failureName": "AssertionError",
+      "observation": "Equipment expected Chat Completions while production selected Responses; no provider request",
+      "applicationClosed": true
+    },
+    {
+      "receiptSha256": "722a5f2820e4ee5fbc79cecbc8f3c323ac05435ec7fc084f90f14c1baf7446c1",
+      "status": "failed",
+      "rounds": 0,
+      "providerRequests": 2,
+      "reportedUsage": {
+        "inputTokens": 7560,
+        "outputTokens": 3506,
+        "reportedCost": 0,
+        "callsWithoutReportedCost": 0
+      },
+      "failureName": "AssertionError",
+      "observation": "The accepted free-router summary renamed pedido_ñ_7d3e-2026 to producto_ñ_7d3e-2026, and the continuation repeated it; post-call read used insufficient harness scopes",
+      "applicationClosed": true
+    },
+    {
+      "receiptSha256": "c0273e78d0c803b75d74ca13271c97399eadcc208f5566323f9915a24642bd52",
+      "status": "failed",
+      "rounds": 0,
+      "providerRequests": 0,
+      "reportedUsage": {
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "reportedCost": 0,
+        "callsWithoutReportedCost": 0
+      },
+      "failureName": "AssertionError",
+      "observation": "Equipment supplied an unsupported optional reasoning-effort setting; no provider request",
+      "applicationClosed": true
+    },
+    {
+      "receiptSha256": "0dea2802d20ea6b4e25f81ce96a0d14ecfd0d0e608f2169bfab8dc74785f91ac",
+      "status": "failed",
+      "rounds": 3,
+      "providerRequests": 8,
+      "reportedUsage": {
+        "inputTokens": 48410,
+        "outputTokens": 8767,
+        "reportedCost": 0,
+        "callsWithoutReportedCost": 0
+      },
+      "failureName": "AssertionError",
+      "observation": "Original tool-free equipment refused an offered archive read; three earlier replies include path-escape and array-type failures",
+      "applicationClosed": true
+    }
+  ],
+  "freshProcessArchiveRecovery": {
+    "utc": "2026-10-15T13:24:09.789Z",
+    "revision": "ae263f4ce871e3ca1cf9708f64df1485dc627197",
+    "buildId": "2AyiTy-AIc7I4h2R5sDgY",
+    "modelCalls": 0,
+    "ranges": [
+      {
+        "round": 5,
+        "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/93fdc0fc-2a1e-4a68-9cc9-9f35da1aef81",
+        "completeArchiveSha256": "21e5d1ba94edec960d32202af941f9679653dbdb912ebb560c78f39e1c808812",
+        "sourceBytes": 76031,
+        "startByte": 75263,
+        "returnedBytes": 768,
+        "returnedSha256": "e5b746c2b5220c119f48c0bc62210405034b14c446e526f51e29a6d2e8f798e5",
+        "status": 206,
+        "contentRange": "bytes 75263-76030/76031",
+        "beyondEofStatus": 416,
+        "exactTail": true
+      },
+      {
+        "round": 10,
+        "uri": "flujo://run/7bfdd46f-130e-40cd-bf4b-bbd994c78903/720aa71f-bc80-486c-a6fd-6d4a7e99f615",
+        "completeArchiveSha256": "3d57f6bc25159ec61beed56a779d33358f51fde79c09b93c45b48684b8261cac",
+        "sourceBytes": 151833,
+        "startByte": 151065,
+        "returnedBytes": 768,
+        "returnedSha256": "af327a8ab6b5f4cc2be892d5bb335daa787ff185dd2d82463ead44968bb4c87b",
+        "status": 206,
+        "contentRange": "bytes 151065-151832/151833",
+        "beyondEofStatus": 416,
+        "exactTail": true
+      }
+    ],
+    "status": "passed",
+    "pid": 36996,
+    "displayJsonSha256BeforeRestart": "2de41838bda44220480aaf3dfddc29401f9aa38c9b4bfb60effef73c49d0f76e",
+    "displayJsonSha256AfterRestart": "2de41838bda44220480aaf3dfddc29401f9aa38c9b4bfb60effef73c49d0f76e",
+    "canonicalAfterFreshProcessMatches": true,
+    "stdoutEnded": true,
+    "stderrEnded": true,
+    "exit": {
+      "code": 143,
+      "signal": null
+    },
+    "closed": true,
+    "finishedUtc": "2026-10-15T13:24:13.307Z",
+    "sourceReceiptSha256": "0d0ce55f44217b6072892603dc041c4db358bb1cc07a8d170da35cd0237cbe79"
+  },
+  "validation": {
+    "baselineBuild": {
+      "step": "inspected-non-container-application-build",
+      "command": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "utc": "2026-10-15T12:50:15.1082854Z",
+      "exitCode": 0,
+      "elapsedSeconds": 339.315371,
+      "revision": "ae263f4ce871e3ca1cf9708f64df1485dc627197",
+      "buildId": "ckZJTg85i7KXJIAneNgUv"
+    },
+    "candidateBuild": {
+      "step": "inspected-non-container-application-build",
+      "command": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "utc": "2026-10-15T13:14:58.7916647Z",
+      "exitCode": 0,
+      "elapsedSeconds": 324.2792387,
+      "revision": "ae263f4ce871e3ca1cf9708f64df1485dc627197",
+      "buildId": "2AyiTy-AIc7I4h2R5sDgY"
+    },
+    "typecheck": {
+      "step": "canonical-typecheck",
+      "utc": "2026-10-15T13:02:46.3100388Z",
+      "exitCode": 0,
+      "elapsedSeconds": 63.2229232,
+      "revision": "ae263f4ce871e3ca1cf9708f64df1485dc627197"
+    },
+    "wholeSourceLint": {
+      "step": "whole-source-lint",
+      "utc": "2026-10-15T13:03:31.0689917Z",
+      "exitCode": 0,
+      "elapsedSeconds": 97.8075514,
+      "revision": "ae263f4ce871e3ca1cf9708f64df1485dc627197"
+    },
+    "focused": {
+      "utc": "2026-10-15T13:09:34.4011716Z",
+      "step": "affected-compaction-regressions",
+      "exitCode": 0,
+      "elapsedSeconds": 3.331557,
+      "sourceDiffNumstat": "7\t0\tsrc/backend/execution/flow/handlers/summarizingCompaction.ts"
+    }
+  },
+  "limits": [
+    "This prompt guidance does not supply a deterministic exact-field validator",
+    "Results cover this fixed Free model and controlled fixture, including any failed fields shown above",
+    "The free router semantic failure remains an observed limitation",
+    "Source archives and canonical integrity are measured separately from semantic correctness",
+    "Historical delivery is seeded; real side-effect replay safety is not qualified",
+    "HTTP byte-tail checks do not qualify model-directed UTF-16 read_resource recovery",
+    "Native sessions, opaque signatures, visual compaction, original #520 workload, endurance and release matrices remain open"
+  ],
+  "remoteWorkflowDispatches": 0,
+  "containerBuilds": 0,
+  "fullSuiteRuns": 0
+}

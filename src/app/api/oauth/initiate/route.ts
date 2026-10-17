@@ -16,7 +16,7 @@ const log = createLogger('api/oauth/initiate');
  *
  * Delegates the entire discovery -> registration -> authorization dance to the MCP SDK's
  * `auth()` orchestrator (RFC 9728 protected-resource discovery, RFC 8414 authorization-server
- * discovery, dynamic client registration, PKCE) via MCPOAuthClientProvider, instead of hand-
+ * discovery, CIMD with a DCR fallback, PKCE) via MCPOAuthClientProvider, instead of hand-
  * rolling each step - so this stays correct as the SDK's auth implementation evolves.
  */
 async function POST_handler(request: NextRequest) {
@@ -88,13 +88,21 @@ async function POST_handler(request: NextRequest) {
       // Registration, so auth() can't self-register and needs a pre-registered app. Turn the
       // SDK's terse error into an actionable instruction pointing at the new credential fields.
       if (/dynamic client registration/i.test(rawMessage) && !serverConfig.oauthClientId) {
+        if (!provider.clientMetadataUrl
+            && provider.discoveryState()?.authorizationServerMetadata?.client_id_metadata_document_supported === true) {
+          return NextResponse.json({
+            error: 'Automatic OAuth registration is unavailable at this FLUJO address. Publish a Client ID Metadata Document allowing this installation’s callback URL and set FLUJO_OAUTH_CLIENT_METADATA_URL, or enter a pre-registered OAuth Client ID and trusted issuer in the server configuration.',
+            needsClientMetadata: true,
+            serverName,
+          }, { status: 400 });
+        }
         log.info(`Server ${serverName} requires manual OAuth client credentials (no DCR)`);
         return NextResponse.json(
           {
             error:
-              'This server does not support automatic app registration. Edit the server and enter ' +
-              'the OAuth Client ID and Client Secret from the provider\'s developer console, then ' +
-              'authenticate again.',
+              'This server does not advertise CIMD or support dynamic app registration. Enter the OAuth Client ID ' +
+              'and, if required, Client Secret from the provider\'s developer console. Set oauthIssuer in the server\'s ' +
+              'JSON configuration to the trusted authorization issuer, then authenticate again.',
             needsClientCredentials: true,
             serverName,
           },

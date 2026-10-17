@@ -94,6 +94,16 @@ beforeEach(() => {
 });
 
 describe('PromptRenderer renderMode', () => {
+  it('requires the current answer before Finish and does not ask models to simulate future requests', async () => {
+    getFlowMock.mockResolvedValue(flow({}));
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
+    expect(result).toContain('provide the requested response before handing off to Finish');
+    expect(result).toContain('Do not invent future user messages, observations or review rounds');
+    expect(result).toContain('For a requested identifier, select the exact ID field from its source record');
+    expect(result).toContain('Return a full record only when requested');
+    expect(result).not.toContain('repeat processing your instructions as if you were executing them for the first time');
+  });
+
   it('defaults to rendered, but tool pills stay RAW (resolveBindings forces raw)', async () => {
     // resolveBindings() hard-sets `renderMode = 'raw'` for tool pills ("keep tool
     // pills raw" override in PromptRenderer.ts), so even the DEFAULT ('rendered')

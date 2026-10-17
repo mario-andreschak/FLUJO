@@ -8,11 +8,15 @@ jest.mock('@/backend/execution/flow/persistConversationState', () => ({
 
 import {
   classifyRecoveryFailure,
+  commitToolCheckpoint,
   describeToolEffects,
   initializeRecovery,
   markDanglingToolEffectsUnknown,
 } from '@/backend/execution/flow/recoveryCheckpoint';
 import type { SharedState } from '@/backend/execution/flow/types';
+import type { StorageKey } from '@/shared/types/storage';
+
+const conversationKey = 'conversations/conversation-1' as StorageKey;
 
 function state(overrides: Partial<SharedState> = {}): SharedState {
   return {
@@ -62,6 +66,44 @@ describe('recovery failure classification', () => {
 });
 
 describe('durable recovery contracts', () => {
+  it('keeps cancelled write effects unknown after the tool batch returns', async () => {
+    const shared = state({ isCancelled: true, currentNodeId: 'node-1', toolNameMap: {
+      write: { server: 'server', tool: 'write', annotations: { readOnlyHint: false, idempotentHint: false } },
+    } });
+    initializeRecovery(shared, 'run-1');
+    const calls = [{ id: 'write-once', type: 'function', function: { name: 'write', arguments: '{}' } }] as any;
+    await commitToolCheckpoint(conversationKey, shared, calls, 'before');
+    await commitToolCheckpoint(conversationKey, shared, calls, 'completed');
+    expect(shared.recovery?.currentCheckpoint).toMatchObject({
+      phase: 'tool:unknown', safe: false, effectStatus: 'unknown',
+      tools: [expect.objectContaining({ toolCallId: 'write-once', readOnly: false, idempotent: false })],
+    });
+    expect(shared.recovery?.lastSafeCheckpoint).toBeUndefined();
+    expect(shared.recovery?.manualActionRequired).toBe(true);
+    expect(shared.recovery?.sideEffectWarning).toMatch(/Automatic replay is disabled/);
+  });
+
+  it('retains completed write checkpoints when the batch was not cancelled', async () => {
+    const shared = state({ toolNameMap: { write: { server: 'server', tool: 'write' } } });
+    initializeRecovery(shared, 'run-1');
+    const calls = [{ id: 'write-once', type: 'function', function: { name: 'write', arguments: '{}' } }] as any;
+    await commitToolCheckpoint(conversationKey, shared, calls, 'completed');
+    expect(shared.recovery?.currentCheckpoint).toMatchObject({ phase: 'tool:after', safe: true, effectStatus: 'completed' });
+    expect(shared.recovery?.lastSafeCheckpoint?.id).toBe(shared.recovery?.currentCheckpoint?.id);
+    expect(shared.recovery?.manualActionRequired).toBeUndefined();
+  });
+
+  it('does not add a side-effect warning for cancelled read-only calls', async () => {
+    const shared = state({ isCancelled: true, toolNameMap: {
+      lookup: { server: 'server', tool: 'lookup', annotations: { readOnlyHint: true } },
+    } });
+    initializeRecovery(shared, 'run-1');
+    const calls = [{ id: 'read-once', type: 'function', function: { name: 'lookup', arguments: '{}' } }] as any;
+    await commitToolCheckpoint(conversationKey, shared, calls, 'completed');
+    expect(shared.recovery?.currentCheckpoint).toBeUndefined();
+    expect(shared.recovery?.manualActionRequired).toBeUndefined();
+  });
+
   it('preserves a logical run across pause/resume while refreshing ownership', () => {
     const shared = state();
     const initial = initializeRecovery(shared, 'run-1');

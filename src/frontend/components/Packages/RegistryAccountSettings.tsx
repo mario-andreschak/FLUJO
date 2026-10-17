@@ -163,13 +163,13 @@ export default function RegistryAccountSettings() {
     setMessage(null);
     try {
       // Enumeration-safe: show the same message whether or not the account exists.
-      await registryService.requestPasswordReset(address);
+      const result = await registryService.requestPasswordReset(address);
       setMessage({
-        type: 'info',
-        text: t('packages.account.resetSent'),
+        type: result.success ? 'info' : 'error',
+        text: t(result.success ? 'packages.account.resetSent' : 'packages.account.resetFailed'),
       });
-    } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : t('packages.account.resetFailed') });
+    } catch {
+      setMessage({ type: 'error', text: t('packages.account.resetFailed') });
     } finally {
       setBusy(false);
     }

@@ -132,10 +132,10 @@ describe('loopback CSP origins (self-hosted exposure modes)', () => {
     (mode) => {
       process.env.FLUJO_EXPOSURE_MODE = mode;
       for (const csp of [buildSandboxCsp(loopbackCsp), buildSandboxProxyCsp('http://127.0.0.1:4200', loopbackCsp)]) {
-        expect(csp).toMatch(/connect-src http:\/\/127\.0\.0\.1:\* ws:\/\/127\.0\.0\.1:\*/);
-        expect(csp).toMatch(/frame-src[^;]*http:\/\/127\.0\.0\.1:\*/);
-        expect(csp).toMatch(/img-src[^;]*http:\/\/127\.0\.0\.1:\*/);
-        expect(csp).toMatch(/base-uri[^;]*http:\/\/127\.0\.0\.1:\*/);
+        expect(csp).toMatch(/connect-src http:\/\/127\.0\.0\.1:59503 ws:\/\/127\.0\.0\.1:59503/);
+        expect(csp).toMatch(/frame-src[^;]*http:\/\/127\.0\.0\.1:59503/);
+        expect(csp).toMatch(/img-src[^;]*http:\/\/127\.0\.0\.1:59503/);
+        expect(csp).toMatch(/base-uri[^;]*http:\/\/127\.0\.0\.1:59503/);
       }
     },
   );
@@ -146,34 +146,40 @@ describe('loopback CSP origins (self-hosted exposure modes)', () => {
     process.env.FLUJO_EXPOSURE_MODE = 'network';
     const gateway = 'http://127.0.0.1:65459';
     const appCsp = { frameDomains: [gateway], connectDomains: [gateway, 'ws://127.0.0.1:65459'] };
-    expect(buildSandboxCsp(appCsp)).toContain('frame-src http://127.0.0.1:*');
+    expect(buildSandboxCsp(appCsp)).toContain('frame-src http://127.0.0.1:65459');
     expect(buildSandboxProxyCsp('http://192.168.1.20:4200', appCsp))
-      .toContain("frame-src 'self' http://127.0.0.1:*");
+      .toContain("frame-src 'self' http://127.0.0.1:65459");
   });
 
-  // Regression: local App servers bind an EPHEMERAL port (`listen(0)`), so the
-  // port declared in `_meta.ui.csp` is stale after the server restarts. The host
-  // commits the CSP once as a response header and never re-issues it, so a pinned
-  // port made the app load once and then fail with the granted and framed ports
-  // exactly one restart apart. The wildcard keeps the committed policy valid.
-  it('survives an ephemeral-port restart of the app server', () => {
+  // A live document cannot loosen its old CSP. Recovery must read the current
+  // resource and replace the proxy/View with a freshly pinned policy.
+  // The actual browser regression also checks graceful teardown and no tool rerun.
+  it('survives ephemeral-port restarts with a fresh exact policy', () => {
     process.env.FLUJO_EXPOSURE_MODE = 'network';
-    const committed = buildSandboxCsp({ frameDomains: ['http://127.0.0.1:56186'] });
-    expect(committed).toContain('frame-src http://127.0.0.1:*');
-    // The port the app frames after its next restart is NOT the granted one.
-    expect(committed).not.toContain('56186');
+    let previousPort = 56186;
     for (const restartedPort of [56315, 56379, 53184]) {
-      expect(committed).toContain('frame-src http://127.0.0.1:*');
-      expect(`http://127.0.0.1:${restartedPort}`).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      const committed = buildSandboxCsp({ frameDomains: [`http://127.0.0.1:${previousPort}`] });
+      const fresh = buildSandboxCsp({ frameDomains: [`http://127.0.0.1:${restartedPort}`] });
+      const proxy = buildSandboxProxyCsp('http://192.168.1.20:4200', {
+        frameDomains: [`http://127.0.0.1:${restartedPort}`],
+      });
+      expect(committed).toContain(`frame-src http://127.0.0.1:${previousPort};`);
+      expect(committed).not.toContain(String(restartedPort));
+      expect(fresh).toContain(`frame-src http://127.0.0.1:${restartedPort};`);
+      expect(proxy).toContain(`frame-src 'self' http://127.0.0.1:${restartedPort};`);
+      expect(fresh).not.toContain(String(previousPort));
+      expect(fresh).not.toContain(':*');
+      previousPort = restartedPort;
     }
   });
 
-  it('collapses several ports on one loopback host into a single source', () => {
+  it('preserves every declared port without granting adjacent ports', () => {
     process.env.FLUJO_EXPOSURE_MODE = 'localhost';
     const csp = buildSandboxCsp({
       frameDomains: ['http://127.0.0.1:4300', 'http://127.0.0.1:4301', 'http://127.0.0.1:4302'],
     });
-    expect(csp).toContain('frame-src http://127.0.0.1:*;');
+    expect(csp).toContain('frame-src http://127.0.0.1:4300 http://127.0.0.1:4301 http://127.0.0.1:4302;');
+    expect(csp).not.toContain(':*');
   });
 
   it('accepts localhost and [::1] loopback spellings', () => {
@@ -181,8 +187,8 @@ describe('loopback CSP origins (self-hosted exposure modes)', () => {
     const csp = buildSandboxCsp({
       connectDomains: ['ws://localhost:4300', 'http://[::1]:4300'],
     });
-    expect(csp).toContain('ws://localhost:*');
-    expect(csp).toContain('http://[::1]:*');
+    expect(csp).toContain('ws://localhost:4300');
+    expect(csp).toContain('http://[::1]:4300');
   });
 
   it('accepts an already-wildcarded loopback port but never a portless host', () => {
@@ -333,10 +339,10 @@ describe('allow-all escape hatch and loopback CSP grants', () => {
   it('keeps loopback frame grants in non-public modes and strips them in public', () => {
     delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
     process.env.FLUJO_EXPOSURE_MODE = 'network';
-    // Exact ports collapse to the canonical port wildcard; the already-
-    // canonical form must round-trip unchanged (frontend mirror sends it).
+    // Exact ports stay exact; an explicitly declared port wildcard also
+    // round-trips unchanged (the frontend mirror sends the same grant).
     expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:45283'] } as any))
-      .toContain('frame-src http://127.0.0.1:*');
+      .toContain('frame-src http://127.0.0.1:45283');
     expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:*'] } as any))
       .toContain('frame-src http://127.0.0.1:*');
 

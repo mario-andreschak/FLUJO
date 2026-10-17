@@ -1,0 +1,875 @@
+{
+  "issue": 1091,
+  "status": "passed-controlled-reference-scope",
+  "frozenUtc": "2026-10-15T23:49:14.489Z",
+  "sourceBaseRevision": "33c05207e44404f7626bff6ffa3c1c4713ac44c5",
+  "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+  "buildId": "cHMDpLQZNs71h8zQA4I9C",
+  "problem": "A retained exact identifier lost its relationship to Observación vigente; the continuation chose surrounding prose. The same summary also treated summarization as the underlying work.",
+  "repair": "Keep source labels, subjects, defining relationships and current/superseded values together. Describe source task state, excluding compaction controls. Keep trusted compaction controls outside source user turns and previous generated anchors at assistant authority. Version policy to reject previous summaries.",
+  "result": {
+    "attemptedSummaries": 10,
+    "freshSummaries": 9,
+    "completeCanonicalFallbacks": 1,
+    "exactReplies": 10,
+    "originalQuestionWithoutPrefixHint": true,
+    "currentReceiptChanges": 9,
+    "roundFiveAndTenRestarts": true,
+    "canonicalHistoryPreserved": true,
+    "sourceTaskStateChecked": true,
+    "compactionControlsOutsideUserTurns": true,
+    "canonicalSnapshotsVerified": 12,
+    "archiveHashesVerified": 9
+  },
+  "retainedFailure": {
+    "file": "C:\\Users\\Moe\\.codex\\tmp\\flujo-maintenance-20261015T1830\\compatibility-84c40466-ad80-4564-9a3e-e19cf3f0458b.json",
+    "sha256": "5ad1f2b45bb2d7d85f76104bd430ed98b977d27ba5567728b877357a0d42297f",
+    "requestSha256": "8ed5d4ad7005df7448ce3f87ec044fb537f18e470bc04893de000d1ddd3e0ec6",
+    "requestedModel": "nvidia/nemotron-3-super-120b-a12b:free",
+    "failure": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   receipt: 'Observación histórica sin permisos nuevos; no autoriza acciones externas.',\n-   receipt: 'receipt-ñ-fe16bf155a3f4ef383b7cbe125622ece',\n    sendAllowed: false,\n    unknown: null\n  }\n",
+    "existingEvidence": "https://github.com/mario-andreschak/FLUJO/blob/e85d887eda75bc78f4cdda074cc8fb53a4443909/docs/performance/compaction-cache-compatibility-2026-10-15.json"
+  },
+  "firstSummarySourceAndOriginalReviewIdentical": true,
+  "acceptedModelDiffersFromOriginalFailure": true,
+  "superFinalAttempt": {
+    "utc": "2026-10-15T23:31:29.717Z",
+    "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+    "status": "failed",
+    "passedExactReplies": 4,
+    "failedRound": 5,
+    "failure": {
+      "name": "AssertionError",
+      "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   receipt: 'receipt-ñ-ef1e086c9ed7bbcf7e1ca0c66b0a6d6b',\n-   receipt: 'receipt-ñ-38ec90ba6ed8b2952aafaebaf81a5ae7',\n    sendAllowed: false,\n    unknown: null\n  }\n",
+      "stack": "AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   receipt: 'receipt-ñ-ef1e086c9ed7bbcf7e1ca0c66b0a6d6b',\n-   receipt: 'receipt-ñ-38ec90ba6ed8b2952aafaebaf81a5ae7',\n    sendAllowed: false,\n    unknown: null\n  }\n\n    at checkReferenceFidelity (file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:318:14)\n    at async file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:366:5"
+    },
+    "sourceTaskState": "All five generated summaries retain the source task rather than claiming a compaction request; original-question receipt selection still fails.",
+    "calls": 10,
+    "totalUsage": {
+      "inputTokens": 128984,
+      "outputTokens": 8988,
+      "reportedCost": 0,
+      "callsWithoutReportedCost": 0
+    },
+    "applicationClosed": true,
+    "decision": "Keep current qualified source; explicitly select another approved Free model and retain this limitation."
+  },
+  "checkerFalsePositive": {
+    "utc": "2026-10-15T23:36:14.960Z",
+    "trace": "compatibility-14f05db2-8216-44d0-8875-607360fffe08.json",
+    "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+    "provider": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "correctReceiptReplies": 5,
+    "status": "Checker false positive; no product semantic failure observed in these five rounds",
+    "negativeStatement": "Unspecified — no new user request beyond the compaction control.",
+    "repair": "Allow the explicit absence of a source request while seven checker regressions retain positive leakage detection.",
+    "timing": {
+      "utc": "2026-10-15T23:33:45.6094318Z",
+      "exitCode": 1,
+      "elapsedSeconds": 130.0826512,
+      "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+      "harnessSha256": "a179698915a45533a2859a49a942d2ed81d5cde3f872d78e815314d8f9a94c59"
+    },
+    "applicationClosed": true,
+    "totalUsage": {
+      "inputTokens": 129310,
+      "outputTokens": 4942,
+      "reportedCost": 0,
+      "callsWithoutReportedCost": 0
+    }
+  },
+  "intendedFallback": {
+    "utc": "2026-10-15T23:43:42.617Z",
+    "trace": "compatibility-c40fc180-3660-49d9-93d9-d7cf142aed8f.json",
+    "status": "Verified intended safe fallback; earlier harness incorrectly required a new artifact",
+    "reason": "Provider summary contains a JSON fence, which the existing production validator correctly refuses",
+    "correctReceiptReplies": 5,
+    "completeCanonicalMessageCount": 20,
+    "previousArtifactPreserved": true,
+    "noSummaryOnContinuationWire": true,
+    "sourceUnchanged": true,
+    "timing": {
+      "utc": "2026-10-15T23:38:36.8648464Z",
+      "exitCode": 1,
+      "elapsedSeconds": 182.8400789,
+      "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+      "harnessSha256": "6e8e80d76b731c44daddd7ddb4a73087049f2bddc401e81d6c570bb04d20659e"
+    },
+    "totalUsage": {
+      "inputTokens": 155947,
+      "outputTokens": 6207,
+      "reportedCost": 0,
+      "callsWithoutReportedCost": 0
+    },
+    "applicationClosed": true
+  },
+  "selectedFreeRoute": {
+    "utc": "2026-10-15T23:31:29.709Z",
+    "status": 200,
+    "model": {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "canonical_slug": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
+      "hugging_face_id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
+      "name": "NVIDIA: Nemotron 3 Ultra (free)",
+      "created": 1780551208,
+      "description": "NVIDIA Nemotron 3 Ultra is an open frontier-reasoning and orchestration model from NVIDIA, with 55B active parameters out of 550B total (MoE). Built on a hybrid Transformer-Mamba mixture-of-experts architecture, it...",
+      "context_length": 1000000,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Other",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "context_length": 1000000,
+        "max_completion_tokens": 65536,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "reasoning_effort",
+        "seed",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p"
+      ],
+      "default_parameters": {
+        "temperature": 1,
+        "top_p": 0.95,
+        "top_k": null,
+        "frequency_penalty": null,
+        "presence_penalty": null,
+        "repetition_penalty": null
+      },
+      "supported_voices": null,
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b-20260604/endpoints"
+      },
+      "benchmarks": {
+        "design_arena": [
+          {
+            "arena": "models",
+            "category": "3d",
+            "elo": 1132,
+            "win_rate": 38.9,
+            "rank": 75
+          },
+          {
+            "arena": "models",
+            "category": "asciiart",
+            "elo": 1097,
+            "win_rate": 37.5,
+            "rank": 60
+          },
+          {
+            "arena": "models",
+            "category": "codecategories",
+            "elo": 1148,
+            "win_rate": 36.1,
+            "rank": 84
+          },
+          {
+            "arena": "models",
+            "category": "dataviz",
+            "elo": 1142,
+            "win_rate": 37.4,
+            "rank": 83
+          },
+          {
+            "arena": "models",
+            "category": "gamedev",
+            "elo": 1141,
+            "win_rate": 36.2,
+            "rank": 78
+          },
+          {
+            "arena": "models",
+            "category": "svg",
+            "elo": 1069,
+            "win_rate": 32.5,
+            "rank": 69
+          },
+          {
+            "arena": "models",
+            "category": "uicomponent",
+            "elo": 1139,
+            "win_rate": 36.1,
+            "rank": 80
+          },
+          {
+            "arena": "models",
+            "category": "website",
+            "elo": 1146,
+            "win_rate": 35.1,
+            "rank": 91
+          }
+        ],
+        "artificial_analysis": {
+          "intelligence_index": 22.9,
+          "coding_index": 49.3,
+          "agentic_index": 20.1
+        }
+      },
+      "reasoning": {
+        "mandatory": false,
+        "default_enabled": true,
+        "supports_max_tokens": true,
+        "supported_efforts": [
+          "high",
+          "medium",
+          "none"
+        ],
+        "default_effort": "high"
+      }
+    },
+    "decision": "Explicit approved Free selection after retained Super semantic failures; no automatic fallback"
+  },
+  "providerRoute": {
+    "adapter": "actual built OpenAiResponsesAdapter, selected by production OpenRouter routing",
+    "requestedModel": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "destination": "https://openrouter.ai/api/v1/responses",
+    "relay": "strict exact-model forwarding; no replacement answers or fallback",
+    "providerCredential": "memory only; application receives a private local relay token"
+  },
+  "credential": {
+    "method": "one explicitly selected existing encrypted account; canonical read-only format",
+    "configuredModelId": "24618177-b739-44a3-b79d-b459ba9151a2",
+    "configuredModel": "openrouter/free",
+    "baseHost": "openrouter.ai",
+    "credentialRetained": "memory only",
+    "configuredInputFilesUnchanged": true,
+    "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+    "configuredInputCount": 2
+  },
+  "qualification": {
+    "negative": {
+      "utc": "2026-10-15T23:18:14.0234858Z",
+      "exitCode": 1,
+      "elapsedSeconds": 2.8522239,
+      "control": "New cache regression with previous production v3 policy despite revised prompt"
+    },
+    "control-negative": {
+      "utc": "2026-10-15T23:13:10.6448983Z",
+      "exitCode": 1,
+      "control": "Existing compaction prompt is injected as a synthetic user turn"
+    },
+    "focused": {
+      "utc": "2026-10-15T23:18:17.6138359Z",
+      "exitCode": 0,
+      "revision": "33c05207e44404f7626bff6ffa3c1c4713ac44c5",
+      "sourcePolicy": "summary-v4-source-relations"
+    },
+    "touched-lint": {
+      "utc": "2026-10-15T23:18:22.2021983Z",
+      "exitCode": 0
+    },
+    "harness-final-lint": {
+      "utc": "2026-10-15T23:42:37.9890794Z",
+      "exitCode": 0,
+      "harnessSha256": "5ad669e81d572aa2d26bbc90bc3ffa008e1aa7f6e323b1f7cec688709757be4c"
+    },
+    "harness-focused": {
+      "utc": "2026-10-15T23:42:38.1504929Z",
+      "exitCode": 0,
+      "cases": 12
+    },
+    "typecheck": {
+      "utc": "2026-10-15T23:18:34.6388319Z",
+      "step": "typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 11.5082338,
+      "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+      "command": "next typegen && tsc --noEmit -p tsconfig.json"
+    },
+    "lint": {
+      "utc": "2026-10-15T23:20:14.5381557Z",
+      "step": "lint",
+      "exitCode": 0,
+      "elapsedSeconds": 99.8961725,
+      "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+      "command": "eslint src"
+    },
+    "build": {
+      "utc": "2026-10-15T23:25:56.4212397Z",
+      "step": "build",
+      "exitCode": 0,
+      "elapsedSeconds": 341.8805799,
+      "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+      "command": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "buildId": "cHMDpLQZNs71h8zQA4I9C"
+    },
+    "journey-timing": {
+      "utc": "2026-10-15T23:48:46.3682617Z",
+      "exitCode": 0,
+      "elapsedSeconds": 368.2153392,
+      "applicationSourceTree": "3bed776ad4547d8e057898dcad72bc519a0b4f58",
+      "harnessSha256": "5ad669e81d572aa2d26bbc90bc3ffa008e1aa7f6e323b1f7cec688709757be4c"
+    }
+  },
+  "focused": {
+    "suites": 3,
+    "passed": 68,
+    "failed": 0,
+    "newCases": 3,
+    "journeyGuardCases": 12,
+    "negativeControl": "Previous v3 cache was reused; expected second generation did not occur"
+  },
+  "initialCandidate": {
+    "assessment": {
+      "utc": "2026-10-15T23:14:46.394Z",
+      "applicationSourceTree": "921fd89963c8b304f0d7392dcf2be3ee8ddbfecf",
+      "receiptScope": "First three exact replies passed; round four returned the prior receipt instead of the newest observation.",
+      "sourceTaskState": "First summary falsely says User requested a summary of the conversation and Emit the sections as requested. The retained source has no such user request.",
+      "diagnosis": "Compaction control is appended as a synthetic user turn; revised system wording alone is insufficient.",
+      "next": "Separate trusted compaction control from source turns; keep prior generated summary at assistant authority.",
+      "newModelRequests": 8,
+      "reportedCostUsd": 0,
+      "allApplicationsClosed": true,
+      "retainedTrace": "compatibility-fd7fa0b2-cb14-4ba6-af47-876d12bba1dc.json"
+    },
+    "build": {
+      "utc": "2026-10-15T23:09:28.2150731Z",
+      "step": "build",
+      "exitCode": 0,
+      "elapsedSeconds": 345.4340023,
+      "applicationSourceTree": "921fd89963c8b304f0d7392dcf2be3ee8ddbfecf",
+      "command": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+      "buildId": "arz9htgTZnV968jHbyLT_"
+    },
+    "journey": {
+      "utc": "2026-10-15T23:12:08.2620451Z",
+      "exitCode": 1,
+      "elapsedSeconds": 124.3208177,
+      "applicationSourceTree": "921fd89963c8b304f0d7392dcf2be3ee8ddbfecf",
+      "harnessSha256": "9f1030ddc6095537a0465a06e8205e5328af91000be0e02bc6ae20cdf1e873de"
+    }
+  },
+  "sourceFiles": {
+    "scripts/compaction-compatibility-acceptance.mjs": {
+      "sha256": "5ad669e81d572aa2d26bbc90bc3ffa008e1aa7f6e323b1f7cec688709757be4c",
+      "gitNormalizedSha256": "5ad669e81d572aa2d26bbc90bc3ffa008e1aa7f6e323b1f7cec688709757be4c",
+      "bytes": 40294
+    },
+    "__tests__/model/contextOverflowRefit.test.ts": {
+      "sha256": "4d85dbe80e8bbab8f99142e508cb8189cb3d59a67dbbc819ae681eeceeba1eda",
+      "gitNormalizedSha256": "4d85dbe80e8bbab8f99142e508cb8189cb3d59a67dbbc819ae681eeceeba1eda",
+      "bytes": 34523
+    },
+    "src/backend/execution/flow/handlers/ModelHandler.ts": {
+      "sha256": "3222d55e27ae465cbdb567d0acb7daaf18d1858c77e8e42807d2849266a53c47",
+      "gitNormalizedSha256": "3222d55e27ae465cbdb567d0acb7daaf18d1858c77e8e42807d2849266a53c47",
+      "bytes": 236368
+    },
+    "src/backend/execution/flow/nodes/ProcessNode.ts": {
+      "sha256": "f4171c98e3e28d773a90f5d13b1f1cd978a62df5699500079e7ed2bc7fe71610",
+      "gitNormalizedSha256": "efaf4c4f7d936e8d854a28d8d3ed14caeac4c441d84bbbc43a17c481a368dd36",
+      "bytes": 99691
+    },
+    "__tests__/flow/processNodeSnapshotAuthority.test.ts": {
+      "sha256": "74e9ef346c9e87aaca7e606e78373a5713ea5777c0a9a664a1fe0a1a31e55111",
+      "gitNormalizedSha256": "fdd94335e61865cdd28734a7e1ae8c5a27823e478ecbc795e6c4894a662d3042",
+      "bytes": 4954
+    },
+    "src/backend/execution/flow/handlers/summarizingCompaction.ts": {
+      "sha256": "67eb4a21f419ee31c3f8b3f7f4516a6d358a218dcbef211e668cdc3e51e130ae",
+      "gitNormalizedSha256": "67eb4a21f419ee31c3f8b3f7f4516a6d358a218dcbef211e668cdc3e51e130ae",
+      "bytes": 22142
+    },
+    "src/backend/execution/flow/compaction/types.ts": {
+      "sha256": "e726c85b854805e76469680d61734ca325a406b8b1254e38f9d953dcfc6c06be",
+      "gitNormalizedSha256": "e726c85b854805e76469680d61734ca325a406b8b1254e38f9d953dcfc6c06be",
+      "bytes": 1345
+    },
+    "__tests__/model/summarizingCompaction.test.ts": {
+      "sha256": "9375c4b995c86dced06b17b1afe8e5649414df06c5251bf3d1dfb97df9370740",
+      "gitNormalizedSha256": "9375c4b995c86dced06b17b1afe8e5649414df06c5251bf3d1dfb97df9370740",
+      "bytes": 24255
+    },
+    "scripts/compaction-source-task-check.mjs": {
+      "sha256": "cfc123b78a1a2d9ce00cf0315ad0f4b72239d3eb2db0b84b0723bfdc16f1a6ee",
+      "gitNormalizedSha256": "cfc123b78a1a2d9ce00cf0315ad0f4b72239d3eb2db0b84b0723bfdc16f1a6ee",
+      "bytes": 1845
+    },
+    "scripts/compaction-source-task-check.test.mjs": {
+      "sha256": "557092a640a091e37870c4c4689892a29df18e5da5ba71ca0aca502f12574bb1",
+      "gitNormalizedSha256": "557092a640a091e37870c4c4689892a29df18e5da5ba71ca0aca502f12574bb1",
+      "bytes": 2717
+    }
+  },
+  "trace": {
+    "file": "docs/performance/compaction-reference-provider-trace-2026-10-15.json.gz",
+    "sha256": "f3a6f97927eabe0d67dd016402191b7b5e6257e0ba881528f368f604b650ca40",
+    "uncompressedSha256": "955eba910929f7184fcc471a2b8ed81c7afe66ce70a775db1f7686d518da31f4",
+    "compressedBytes": 351158,
+    "uncompressedBytes": 13561013,
+    "attempts": [
+      {
+        "file": "compatibility-14f05db2-8216-44d0-8875-607360fffe08.json",
+        "status": "failed",
+        "calls": 10,
+        "totalUsage": {
+          "inputTokens": 129310,
+          "outputTokens": 4942,
+          "reportedCost": 0,
+          "callsWithoutReportedCost": 0
+        },
+        "applicationClosed": true,
+        "failure": {
+          "name": "AssertionError",
+          "message": "The fixture contains no user request to summarize; compaction controls must not become task state",
+          "stack": "AssertionError [ERR_ASSERTION]: The fixture contains no user request to summarize; compaction controls must not become task state\n    at checkReferenceFidelity (file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:324:7)\n    at async file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:367:5"
+        }
+      },
+      {
+        "file": "compatibility-6a3dcf4b-2088-4a9f-9757-ebca9a93f7c9.json",
+        "status": "passed-focused-scope",
+        "calls": 20,
+        "totalUsage": {
+          "inputTokens": 391372,
+          "outputTokens": 14588,
+          "reportedCost": 0,
+          "callsWithoutReportedCost": 0
+        },
+        "applicationClosed": true
+      },
+      {
+        "file": "compatibility-c40fc180-3660-49d9-93d9-d7cf142aed8f.json",
+        "status": "failed",
+        "calls": 10,
+        "totalUsage": {
+          "inputTokens": 155947,
+          "outputTokens": 6207,
+          "reportedCost": 0,
+          "callsWithoutReportedCost": 0
+        },
+        "applicationClosed": true,
+        "failure": {
+          "name": "AssertionError",
+          "message": "Expected \"actual\" to be strictly unequal to:\n\n'f8d045d6-7911-449b-9efc-710aff113b16'",
+          "stack": "AssertionError [ERR_ASSERTION]: Expected \"actual\" to be strictly unequal to:\n\n'f8d045d6-7911-449b-9efc-710aff113b16'\n    at checkReferenceFidelity (file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:332:14)\n    at async file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:367:5"
+        }
+      },
+      {
+        "file": "compatibility-c7c9bab8-2aa2-49c7-a2c3-dbf5003e8f5a.json",
+        "status": "failed",
+        "calls": 10,
+        "totalUsage": {
+          "inputTokens": 128984,
+          "outputTokens": 8988,
+          "reportedCost": 0,
+          "callsWithoutReportedCost": 0
+        },
+        "applicationClosed": true,
+        "failure": {
+          "name": "AssertionError",
+          "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   receipt: 'receipt-ñ-ef1e086c9ed7bbcf7e1ca0c66b0a6d6b',\n-   receipt: 'receipt-ñ-38ec90ba6ed8b2952aafaebaf81a5ae7',\n    sendAllowed: false,\n    unknown: null\n  }\n",
+          "stack": "AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   receipt: 'receipt-ñ-ef1e086c9ed7bbcf7e1ca0c66b0a6d6b',\n-   receipt: 'receipt-ñ-38ec90ba6ed8b2952aafaebaf81a5ae7',\n    sendAllowed: false,\n    unknown: null\n  }\n\n    at checkReferenceFidelity (file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:318:14)\n    at async file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:366:5"
+        }
+      },
+      {
+        "file": "compatibility-fd7fa0b2-cb14-4ba6-af47-876d12bba1dc.json",
+        "status": "failed",
+        "calls": 8,
+        "totalUsage": {
+          "inputTokens": 93597,
+          "outputTokens": 6711,
+          "reportedCost": 0,
+          "callsWithoutReportedCost": 0
+        },
+        "applicationClosed": true,
+        "failure": {
+          "name": "AssertionError",
+          "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   receipt: 'receipt-ñ-48ce5f12e8a54599bbf126be5ac6ad25',\n-   receipt: 'receipt-ñ-2bceb7e445f6d9dc17bbf01c1d669c4a',\n    sendAllowed: false,\n    unknown: null\n  }\n",
+          "stack": "AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   receipt: 'receipt-ñ-48ce5f12e8a54599bbf126be5ac6ad25',\n-   receipt: 'receipt-ñ-2bceb7e445f6d9dc17bbf01c1d669c4a',\n    sendAllowed: false,\n    unknown: null\n  }\n\n    at checkReferenceFidelity (file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:317:14)\n    at async file:///C:/Users/Moe/.codex/source-checkouts/zod-archive-maintenance-20261010/scripts/compaction-compatibility-acceptance.mjs:354:5"
+        }
+      }
+    ]
+  },
+  "providerRequestsIncludingAllNewAttempts": {
+    "requests": 58,
+    "inputTokens": 899210,
+    "outputTokens": 41436,
+    "reportedCostUsd": 0
+  },
+  "priorFailureCostsReused": true,
+  "rounds": [
+    {
+      "round": 1,
+      "expected": {
+        "receipt": "receipt-ñ-fe16bf155a3f4ef383b7cbe125622ece",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-fe16bf155a3f4ef383b7cbe125622ece",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        1
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/d5ab49b8-fb9d-4434-b90f-539994f65f31",
+        "sha256": "36bc7f5e4170bcc70b6a4def419fd7d99d3ebcfd46f1e686305923fffb19a02e",
+        "size": 45999,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "1cba36cce3a9c04ffdd9ee3b2fda8078dbfc91e25119e48d8d5cd7b53a388291",
+      "elapsedMs": 14073.0246,
+      "sourceTaskState": {
+        "Objective": "Maintain prohibition against sending messages, publishing, or taking external actions; preserve exact receipt data.",
+        "Work State": "- Completed: Receipt recorded and prohibition acknowledged\n- Active: Maintaining prohibition and data preservation\n- Blocked: No external actions authorized",
+        "Next Move": "Continue observing prohibition; no external actions permitted unless new explicit authorization provided."
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 2,
+      "expected": {
+        "receipt": "receipt-ñ-f6a167772a97b3a3c4502330d0aa1ce3",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-f6a167772a97b3a3c4502330d0aa1ce3",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        3
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/e9c06692-7e3c-4c0d-8bb5-96e40e869b2e",
+        "sha256": "119f4ec9c3257ec038f44acdcb96a02c41c4528da4812a76a31d6a69fba08bdc",
+        "size": 81226,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "b63f99e35b5864abc9fb16cf4c117db4adee9f3d7a8c7ddd7348118519584d15",
+      "elapsedMs": 19466.163000000004,
+      "sourceTaskState": {
+        "Objective": "Maintain a strict prohibition against sending messages, publishing, or taking any external actions. Preserve exact receipt identifiers from observations.",
+        "Work State": "- **Completed**: Provided JSON response with receipt, sendAllowed: false, unknown: null per user request\n- **Active**: Maintaining the no-external-actions constraint\n- **Blocked**: None",
+        "Next Move": "Await further input while continuing to enforce the prohibition on external actions. No specific next action established by source conversation."
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 3,
+      "expected": {
+        "receipt": "receipt-ñ-f45a8dc164be2ff02b7b817334d278cc",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-f45a8dc164be2ff02b7b817334d278cc",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        5
+      ],
+      "summaryDisposition": "complete-canonical-fallback",
+      "canonicalFallbackVerified": true,
+      "retainedArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/e9c06692-7e3c-4c0d-8bb5-96e40e869b2e",
+        "sha256": "119f4ec9c3257ec038f44acdcb96a02c41c4528da4812a76a31d6a69fba08bdc",
+        "size": 81226,
+        "verified": true
+      },
+      "canonicalSha256": "edcac5473bb7b01360a5804f4c4d04c08aefb3ed8d17f60e43c0c470767ebfc0",
+      "elapsedMs": 18371.630400000002,
+      "sourceTaskState": {
+        "Objective": "Acknowledge each \"Observación vigente\" receipt and confirm no external actions are permitted by returning JSON with the receipt, sendAllowed: false, and unknown: null.",
+        "Work State": "- Completed: Acknowledged first two receipts with correct JSON responses.\n- Active: Latest observation (receipt-ñ-f45a8dc164be2ff02b7b817334d278cc) received; response pending.\n- Blocked: None.",
+        "Next Move": "Return JSON for the current observation:\n```json\n{\n  \"receipt\": \"receipt-ñ-f45a8dc164be2ff02b7b817334d278cc\",\n  \"sendAllowed\": false,\n  \"unknown\": null\n}\n```"
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 4,
+      "expected": {
+        "receipt": "receipt-ñ-513527517d6c572b9bc2af27d6bb22c5",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-513527517d6c572b9bc2af27d6bb22c5",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        7
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/8371374c-67fc-4e43-ab5c-cad1bb3fa5af",
+        "sha256": "48ba045966bea7f4da0e7f1eb4e76e0276654969a6fd895c30d45ee6cc7b74c1",
+        "size": 128884,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "3995e0d3c5328a45b122cad7c6d74f9ff37d158ef6fb3a54879bfa9d355495b6",
+      "elapsedMs": 22955.87739999999,
+      "sourceTaskState": {
+        "Objective": "Return JSON containing the current observation receipt, sendAllowed=false, and unknown=null for each user request; never perform external actions.",
+        "Work State": "- Completed: Returned JSON for three prior receipts (fe16bf155a3f4ef383b7cbe125622ece, f6a167772a97b3a3c4502330d0aa1ce3, f45a8dc164be2ff02b7b817334d278cc)\n- Active: Awaiting next user request to return JSON for receipt-ñ-513527517d6c572b9bc2af27d6bb22c5\n- Blocked: None",
+        "Next Move": "On next user \"Revisión\" request, output JSON with receipt-ñ-513527517d6c572b9bc2af27d6bb22c5, sendAllowed: false, unknown: null."
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 5,
+      "expected": {
+        "receipt": "receipt-ñ-5fa17a0339de30f12dbef2e6c7212d17",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-5fa17a0339de30f12dbef2e6c7212d17",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        9
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/b464ccf9-18a5-4a5e-9657-048862271cae",
+        "sha256": "9c37d6356c7449972c0fb15503b06f8788db9a3f6d57876a72f4cafc10d16989",
+        "size": 152711,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "1f440ae56a15dd1b991354f0a9ddca087649cf6bb5ddf38e7f60e4208087e285",
+      "elapsedMs": 39435.3156,
+      "sourceTaskState": {
+        "Objective": "Verify assistant returns JSON with current observation receipt, sendAllowed: false, unknown: null, without external actions.",
+        "Work State": "- Completed: Returned JSON for receipts receipt-ñ-fe16bf155a3f4ef383b7cbe125622ece, receipt-ñ-f6a167772a97b3a3c4502330d0aa1ce3, receipt-ñ-f45a8dc164be2ff02b7b817334d278cc, receipt-ñ-513527517d6c572b9bc2af27d6bb22c5\n- Active: Current observation receipt-ñ-5fa17a0339de30f12dbef2e6c7212d17 awaiting JSON response\n- Blocked: None",
+        "Next Move": "Return JSON with receipt \"receipt-ñ-5fa17a0339de30f12dbef2e6c7212d17\", sendAllowed: false, unknown: null"
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 6,
+      "expected": {
+        "receipt": "receipt-ñ-72e60c0d19149e47c59d65ef8c5b716f",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-72e60c0d19149e47c59d65ef8c5b716f",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        11
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/489d9f43-733b-48e2-a6a4-3c1ae3e24eab",
+        "sha256": "ce817d6a3401ba72469f38d65a70d4a61ad55d725240302d90d302832b8a271f",
+        "size": 176538,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "37d1ea1121f6348771006610d4fc05139a20b285673ea29ce39c72d1af6285a3",
+      "elapsedMs": 17091.473899999997,
+      "sourceTaskState": {
+        "Objective": "Return a JSON object containing the current observation receipt, sendAllowed=false, and unknown=null — no external actions.",
+        "Work State": "- Completed: Multiple JSON responses returned matching the requested schema\n- Active: Awaiting next revision request\n- Blocked: None",
+        "Next Move": "Return the JSON for the current receipt if another revision is requested; otherwise idle."
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 7,
+      "expected": {
+        "receipt": "receipt-ñ-0113a8a5bcec4007819fd0fdcb20478d",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-0113a8a5bcec4007819fd0fdcb20478d",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        13
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/0de387c2-86fc-4823-9822-30ca3e8bb607",
+        "sha256": "acb786c7d6a28569ec2d26a187e32ecdb21b9e5303fefbdebef55e028c37c82c",
+        "size": 200365,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "4a6c25e0187bb5c86e455ebdfa07239f1d7def05f355349f72cd8c13f7d6ca45",
+      "elapsedMs": 36334.63819999999,
+      "sourceTaskState": {
+        "Objective": "Respond to each \"Observación vigente\" by returning a JSON object containing the exact receipt ID from the observation, `sendAllowed: false`, and `unknown: null`, without performing any external actions.",
+        "Work State": "- Completed: Responded with correct JSON for receipts `receipt-ñ-fe16bf155a3f4ef383b7cbe125622ece`, `receipt-ñ-f6a167772a97b3a3c4502330d0aa1ce3`, `receipt-ñ-f45a8dc164be2ff02b7b817334d278cc`, `receipt-ñ-513527517d6c572b9bc2af27d6bb22c5`, `receipt-ñ-5fa17a0339de30f12dbef2e6c7212d17`, `receipt-ñ-72e60c0d19149e47c59d65ef8c5b716f`.\n- Active: Awaiting response for the latest observation with receipt `receipt-ñ-0113a8a5bcec4007819fd0fdcb20478d`.\n- Blocked: None.",
+        "Next Move": "Return the JSON for the current observation: `{\"receipt\": \"receipt-ñ-0113a8a5bcec4007819fd0fdcb20478d\", \"sendAllowed\": false, \"unknown\": null}`."
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 8,
+      "expected": {
+        "receipt": "receipt-ñ-2e7e8935ed2178a2cbef5532dbb74c24",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-2e7e8935ed2178a2cbef5532dbb74c24",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        15
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/2254b424-638f-4b44-88c1-f99f084efef9",
+        "sha256": "5b43e9f3ebda28700cc7cec2b0c690f021a7cfae5d81ac34291e06db043d204d",
+        "size": 224180,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "4628556113f9d239b43a1ee98656a49d51e91c73a44fb2a0214aa59e3c74e4dd",
+      "elapsedMs": 105479.74070000002,
+      "sourceTaskState": {
+        "Objective": "User repeatedly requests a JSON response containing the current observation receipt, sendAllowed=false, and unknown=null. Assistant complies each time with an updated receipt value.",
+        "Work State": "- Completed: 8 JSON responses delivered with successive receipts.\n- Active: Awaiting next user request (pattern suggests another receipt request).\n- Blocked: None.",
+        "Next Move": "Unspecified — source conversation ends after the last assistant response; no further user turn establishes a new action."
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 9,
+      "expected": {
+        "receipt": "receipt-ñ-3c8da7b6df420f4615b31acfd41e3a5a",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-3c8da7b6df420f4615b31acfd41e3a5a",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        17
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/2086872b-ad4b-42a8-8a73-e086a4b934b6",
+        "sha256": "80f5710e156a83c2decd67c12af66bb4962a9d3a664898837036401bd864d79e",
+        "size": 248009,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "93893f8d226b08c053e5b2526667bf216efc5742bcd17f765159294de2120b08",
+      "elapsedMs": 26686.070699999982,
+      "sourceTaskState": {
+        "Objective": "User repeatedly requests a JSON response containing the current observation receipt, sendAllowed=false, and unknown=null. Assistant complies each time with the latest receipt ID.",
+        "Work State": "- Completed: 9 JSON responses delivered with successive receipt IDs\n- Active: Awaiting next user request for updated receipt JSON\n- Blocked: None",
+        "Next Move": "User will likely request another JSON with the current receipt (receipt-ñ-3c8da7b6df420f4615b31acfd41e3a5a or a newer one). Respond with the same JSON structure."
+      },
+      "policyVersion": "summary-v4-source-relations"
+    },
+    {
+      "round": 10,
+      "expected": {
+        "receipt": "receipt-ñ-890f200e5f884171a1c3ce9cc82970a6",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "answer": {
+        "receipt": "receipt-ñ-890f200e5f884171a1c3ce9cc82970a6",
+        "sendAllowed": false,
+        "unknown": null
+      },
+      "fieldsPassed": true,
+      "summaryCalls": [
+        19
+      ],
+      "sourceArchive": {
+        "uri": "flujo://run/41ee63ce-5a9a-4795-9104-e61767fe015e/36fb413c-fd41-43d9-accd-08b1a956b1f0",
+        "sha256": "3326ccbd6bdbe609aee4a210c14ddfe9f566b60ff7e333c9d4b7d07c7cf7608e",
+        "size": 271824,
+        "verified": true
+      },
+      "summaryDisposition": "persisted",
+      "canonicalSha256": "ace5bf42df50136e380cf6f561da015d7575ad2d8ed4dd11f16ea0494607b7f3",
+      "elapsedMs": 55068.62289999996,
+      "sourceTaskState": {
+        "Objective": "User repeatedly requests JSON response containing only three fields: `receipt` (current observation receipt ID), `sendAllowed` (false), and `unknown` (null). Each request yields a new receipt ID in the assistant's response.",
+        "Work State": "- Completed: 10 JSON responses returned, each with a distinct receipt ID.\n- Active: Awaiting next user request (pattern suggests continuation).\n- Blocked: None.",
+        "Next Move": "Unspecified — source conversation ends after the last assistant message emitting receipt-ñ-890f200e5f884171a1c3ce9cc82970a6."
+      },
+      "policyVersion": "summary-v4-source-relations"
+    }
+  ],
+  "epochs": [
+    {
+      "number": 1,
+      "startedUtc": "2026-10-15T23:42:39.538Z",
+      "pid": 33456,
+      "exit": {
+        "code": 143,
+        "signal": null,
+        "utc": "2026-10-15T23:44:38.366Z"
+      },
+      "closedUtc": "2026-10-15T23:44:38.366Z"
+    },
+    {
+      "number": 2,
+      "startedUtc": "2026-10-15T23:44:38.366Z",
+      "pid": 49120,
+      "exit": {
+        "code": 143,
+        "signal": null,
+        "utc": "2026-10-15T23:48:42.852Z"
+      },
+      "closedUtc": "2026-10-15T23:48:42.852Z"
+    },
+    {
+      "number": 3,
+      "startedUtc": "2026-10-15T23:48:42.852Z",
+      "pid": 48716,
+      "exit": {
+        "code": 143,
+        "signal": null,
+        "utc": "2026-10-15T23:48:46.333Z"
+      },
+      "closedUtc": "2026-10-15T23:48:46.333Z"
+    }
+  ],
+  "limitations": [
+    "Controlled synthetic history; no original #520 workload or endurance claim",
+    "No native session, visual compaction, installed/release or full provider-matrix qualification",
+    "Controlled synthetic history and disposable cache migration; no power-loss or native provider acceptance",
+    "A stochastic, controlled plaintext receipt fixture on one Free model; exact-field or general semantic guarantees remain unqualified",
+    "Final source still fails the retained Super Free receipt check at round five. Accepted Ultra Free selection differs from the original failure; no same-model causal or cross-model fidelity claim."
+  ],
+  "releaseChecksDispatched": 0
+}

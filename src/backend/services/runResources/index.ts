@@ -19,6 +19,7 @@ import type { VisualArchiveResourceMetadata } from '@/shared/types/visualArchive
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { readPayloadProjection } from './readPayloadProjection';
 import { copyPayloadSnapshot } from './copyPayloadSnapshot';
+import { prepareJsonPayload } from './jsonPayload';
 import { withRunResourceCopyAdmission } from './copyAdmission';
 import { clearRunResourceIndexCache, invalidateRunResourceIndex, loadRunResourceIndex, publishRunResourceIndex } from './indexCache';
 export { getRunResourceCopyPressure } from './copyAdmission';
@@ -213,8 +214,9 @@ export type WriteRunResourceInput = {
   name?: string;
   mimeType?: string;
   kind: RunResourceKind;
-  /** Payload; absent for kind 'link' (a tracked pointer, no stored bytes). */
-  data?: { text: string } | { base64: string };
+  /** Payload; absent for kind 'link' (a tracked pointer, no stored bytes).
+   * JSON data is measured before admission and persisted in bounded chunks. */
+  data?: { text: string } | { base64: string } | { json: unknown };
   producedBy: RunResourceProducer;
   origin?: { server: string; uri: string };
   archive?: VisualArchiveResourceMetadata;
@@ -236,6 +238,10 @@ export type CopyRunResourceInput = {
 export async function writeRunResource(input: WriteRunResourceInput): Promise<WriteRunResourceResult> {
   assertSafeId(input.conversationId, 'conversationId');
   const settings = await getRunResourceSettings();
+
+  if (input.data && 'json' in input.data) {
+    return storePreparedRunResource(input, settings, prepareJsonPayload(input.data.json));
+  }
 
   // Decode/measure the payload first so caps are enforced on real bytes.
   let payload: Buffer | null = null;

@@ -19,6 +19,8 @@ import type OpenAI from 'openai';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { z } from 'zod';
 import { v5 as uuidv5 } from 'uuid';
+import { allowanceAccountKey } from '@/backend/services/model/allowance/store';
+import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 const queryMock = jest.fn();
 
@@ -99,6 +101,34 @@ beforeEach(() => {
 });
 
 describe('ClaudeSubscriptionAdapter — session resume (#154)', () => {
+  it('keeps durable session identity across allowance-process restarts but rejects a different credential', async () => {
+    const state = (globalThis as unknown as Record<symbol, { identitySecret: Buffer }>)[Symbol.for('flujo.subscriptionAllowance')];
+    const originalSecret = Buffer.from(state.identitySecret);
+    const adapter = new ClaudeSubscriptionAdapter();
+    const firstMessages: OpenAI.ChatCompletionMessageParam[] = [{ role: 'user', content: 'Remember ticket 123' }];
+    queryMock.mockImplementationOnce(() => successStream('restart-session', 'remembered'));
+    await adapter.createCompletion(baseInput({ sessionResume: true, messages: firstMessages }));
+    const oldAccountGroup = allowanceAccountKey('claude', 'oauth-token');
+    try {
+      // A new backend process has a new allowance HMAC secret. The durable
+      // session is still bound to the same credential and canonical history.
+      state.identitySecret[0] ^= 0xff;
+      expect(allowanceAccountKey('claude', 'oauth-token')).not.toBe(oldAccountGroup);
+      const history: OpenAI.ChatCompletionMessageParam[] = [
+        ...firstMessages, { role: 'assistant', content: 'remembered' }, { role: 'user', content: 'Recall it' },
+      ];
+      queryMock.mockImplementationOnce(() => successStream('restart-session', '123'));
+      await adapter.createCompletion(baseInput({ sessionResume: true, messages: history }));
+      expect(optionsOf(1).resume).toBe('restart-session');
+      expect(await promptContentOf(1)).toBe('Recall it');
+
+      queryMock.mockImplementationOnce(() => successStream('new-account-session'));
+      await adapter.createCompletion(baseInput({ sessionResume: true, apiKey: 'another-oauth-token', messages: [
+        ...history, { role: 'assistant', content: '123' }, { role: 'user', content: 'Next account' },
+      ] }));
+      expect(optionsOf(2).resume).toBeUndefined();
+    } finally { originalSecret.copy(state.identitySecret); }
+  });
   it('uses standard UUID v5 values for deterministic consumption identities', () => {
     expect(uuidv5('https://example.com', uuidv5.URL)).toBe('4fd35a71-71ef-5a55-a9d9-aa75c889a6d0');
   });
@@ -205,6 +235,40 @@ describe('ClaudeSubscriptionAdapter — session resume (#154)', () => {
     }))).rejects.toThrow('cancelled');
     expect(execute).not.toHaveBeenCalled();
   });
+
+  it.each(['initial-fence', 'approval', 'post-approval-fence'] as const)(
+    'preserves a %s failure when the SDK converts callback errors into a denial', async failure => {
+      let current = true;
+      const execute = jest.fn(async () => 'unexpected');
+      const outcomes: unknown[] = [];
+      const expected = failure === 'approval' ? 'Approval service failed' : 'Run authority was lost';
+      queryMock.mockImplementationOnce(({ options }) => (async function* () {
+        try {
+          await options.canUseTool('mcp__flujo__local', {}, {
+            toolUseID: 'failed-authority-call', signal: options.abortController.signal,
+          });
+        } catch { /* The actual SDK converts a rejected control response into a tool denial. */ }
+        yield { type: 'result', subtype: 'success', session_id: 'swallowed-callback', result: 'SDK continued',
+          permission_denials: [{ tool_use_id: 'failed-authority-call' }] };
+      })());
+      await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+        tools: [{ type: 'function', function: { name: 'local', parameters: { type: 'object', properties: {} } } }],
+        localToolExecutors: { local: execute },
+        beforeToolDispatch: async () => {
+          if (failure === 'initial-fence' || !current) throw new FlowExecutionAuthorityError('Run authority was lost');
+        },
+        requestToolApproval: async () => {
+          if (failure === 'approval') throw new Error('Approval service failed');
+          if (failure === 'post-approval-fence') current = false;
+          return true;
+        },
+        onSdkRequest: async () => 'authority-failure-dispatch',
+        onSdkRequestResult: async result => { outcomes.push(result); },
+      }))).rejects.toThrow(expected);
+      expect(execute).not.toHaveBeenCalled();
+      expect(outcomes).toEqual([expect.objectContaining({ outcome: 'error' })]);
+    },
+  );
 
   it('binds a valid hook input to the schema-parsed handler regardless of object key order', async () => {
     const execute = jest.fn(async () => 'done');

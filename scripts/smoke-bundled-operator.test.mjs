@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createSmokeOperator } from './smoke-bundled-operator.mjs';
+import { readPrivateJson, writePrivateJson } from './local-instance.mjs';
 
 test('the packed operator uses a genuine scoped credential with an absent cold ledger and independent cleanup', async () => {
   const operator = await createSmokeOperator();
@@ -20,6 +21,10 @@ test('the packed operator uses a genuine scoped credential with an absent cold l
     assert.equal(policy.credentials[0].workspaceId, undefined);
     assert.ok(!bytes.includes(operator.token));
     assert.ok(!JSON.stringify(operator.env).includes(operator.token));
+    assert.deepEqual(await readPrivateJson(ownerFile), policy);
+    const revoked = { ...policy, credentials: [{ ...policy.credentials[0], revokedAt: Date.now() }] };
+    await writePrivateJson(ownerFile, revoked);
+    assert.deepEqual(await readPrivateJson(ownerFile), revoked);
     await assert.rejects(fs.access(operator.env.FLUJO_MCP_TRUSTED_HOST_FILE), { code: 'ENOENT' });
     const stat = await fs.stat(ownerFile);
     assert.equal(stat.nlink, 1);

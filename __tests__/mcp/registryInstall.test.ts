@@ -127,7 +127,7 @@ describe('installRegistryServer', () => {
     });
   });
 
-  it('lets OAuth DCR own Authorization while preserving other required headers and the reviewed name', async () => {
+  it.each(['oauthAutomaticRegistration', 'oauthDynamicClientRegistration'] as const)('lets %s own Authorization while preserving other required headers and the reviewed name', async registrationOption => {
     const entry = npmEntry('com.paypal.mcp/mcp');
     entry.server.remotes = [{
       type: 'streamable-http',
@@ -142,7 +142,7 @@ describe('installRegistryServer', () => {
     const result = await installRegistryServer(entry.server.name, undefined, {
       preferredTransport: 'streamable',
       serverName: 'paypal',
-      oauthDynamicClientRegistration: true,
+      [registrationOption]: true,
       headerOverrides: { 'X-Tenant': 'merchant-1' },
       worksGate: false,
     });

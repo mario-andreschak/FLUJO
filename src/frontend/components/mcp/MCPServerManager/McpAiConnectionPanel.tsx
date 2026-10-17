@@ -30,6 +30,7 @@ import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import type { Model } from '@/shared/types/model';
 import type { McpAssistantCandidate, McpAssistantResearchResult } from '@/shared/types/mcp/assistant';
+import { isAutomaticMcpOAuth } from '@/shared/types/mcp/assistant';
 import { modelService } from '@/frontend/services/model';
 import { installMcpRecommendation, researchMcpConnection } from '@/frontend/services/mcp/assistant';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -396,7 +397,7 @@ export default function McpAiConnectionPanel({
                         {candidate.cost ? <Chip size="small" variant="outlined" label={t(`mcp.ai.cost.${candidate.cost.kind}`)} /> : null}
                         {candidate.githubStars !== undefined ? <Chip size="small" icon={<GitHubIcon />} label={formatCount(candidate.githubStars)} /> : null}
                         {candidate.weeklyDownloads !== undefined ? <Chip size="small" icon={<DownloadRoundedIcon />} label={`${formatCount(candidate.weeklyDownloads)}/wk`} /> : null}
-                        {candidate.authMode === 'oauth-dcr' ? <Chip size="small" color="success" label={t('mcp.ai.signIn')} /> : null}
+                        {isAutomaticMcpOAuth(candidate.authMode) ? <Chip size="small" color="success" label={t('mcp.ai.signIn')} /> : null}
                         {candidate.authMode === 'none' && candidate.plan.transport !== 'stdio' ? <Chip size="small" color="success" label={t('mcp.ai.noOAuth')} /> : null}
                       </Box>
                     </Paper>
