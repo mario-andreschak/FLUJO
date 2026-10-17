@@ -540,6 +540,11 @@ export const PERSONA_WORK_ITEM_CONTROL_ACTIONS = [
 export type PersonaWorkItemControlAction =
   (typeof PERSONA_WORK_ITEM_CONTROL_ACTIONS)[number];
 
+export interface PersonaGoalControlFence {
+  /** Exact observed Goal version. Stale/unknown requests must be read back, never rebased. */
+  expectedUpdatedAt: number;
+}
+
 export interface PersonaWorkItemControlResult {
   action: PersonaWorkItemControlAction;
   workItem: PersonaWorkItem;
@@ -643,15 +648,25 @@ export async function controlPersonaWorkItem(
   personaId: string,
   workItemId: string,
   action: PersonaWorkItemControlAction,
+  fence?: PersonaGoalControlFence,
 ): Promise<PersonaWorkItemControlResult> {
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(workItemId);
   if (!PERSONA_WORK_ITEM_CONTROL_ACTIONS.includes(action)) {
     throw new TypeError('Unknown Task control.');
   }
+  if (fence !== undefined) {
+    z.object({ expectedUpdatedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) })
+      .strict().parse(fence);
+  }
 
   let inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
-  if (inspected.goal) {
+  if (fence && (!inspected.goal || action === 'move_earlier' || action === 'move_later')) {
+    throw new PersonaDomainConflictError('Versioned controls require an ongoing Goal pause, stop or retry.');
+  }
+  // A fenced request cannot reconcile an older pending effect before checking
+  // its version under the same lock that persists the new native intent.
+  if (inspected.goal && !fence) {
     await reconcilePendingPersonaGoalControls(personaId, workItemId);
     inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
   }
@@ -661,6 +676,18 @@ export async function controlPersonaWorkItem(
     await withPersonaRuntimeLock(personaId, async (lock) => {
       const current = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
       if (!current.goal) throw new PersonaDomainConflictError('This ongoing goal no longer exists.');
+      if (fence && current.updatedAt !== fence.expectedUpdatedAt) {
+        throw new PersonaDomainConflictError(
+          'The Goal changed. Read its original control and runtime before another action.',
+          'PERSONA_GOAL_CONTROL_VERSION_CONFLICT',
+        );
+      }
+      if (fence && current.goal.pendingControlId) {
+        throw new PersonaDomainConflictError(
+          'The original Goal control is still pending. Reconcile it before another action.',
+          'PERSONA_GOAL_CONTROL_PENDING',
+        );
+      }
       if ((current.goal.state === 'completed' || current.goal.state === 'stopped')
         && !(action === 'stop' && current.goal.state === 'stopped')) {
         throw new PersonaDomainConflictError('A completed or stopped goal cannot be resumed.');
