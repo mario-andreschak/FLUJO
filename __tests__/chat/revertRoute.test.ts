@@ -106,6 +106,28 @@ beforeEach(() => {
 });
 
 describe('conversation revert route', () => {
+  it('preserves proven Codex fork checkpoints when restoring chat and drops legacy unproven sessions', async () => {
+    const messages = [chatMessage('m1', 'user'), { ...chatMessage('m2'), processNodeId: 'process' },
+      chatMessage('m3', 'user'), chatMessage('m4')];
+    const metadata = { adapter: 'codex-cli', provider: 'codex', threadId: 'parent-thread',
+      configurationHash: 'prefix', prefixHash: 'prefix', historyHash: 'b'.repeat(64), seenMessageCount: 4, updatedAt: 1,
+      checkpoints: [{ turnId: 'completed-turn', seenMessageCount: 2, historyHash: 'a'.repeat(64),
+        totalUsage: { input_tokens: 100, output_tokens: 20 } }] };
+    const state = { conversationId: CONVERSATION_ID, messages, status: 'completed',
+      codexSessions: { process: metadata, legacy: { ...metadata, checkpoints: undefined } } };
+    loadConversationStateMock.mockResolvedValue(state);
+    projectMessagesMock.mockReturnValue(messages);
+    readConversationLogMock.mockResolvedValue(messages.map(message => ({ type: 'message', message })));
+    const reviewed = await (await preview('m3')).json();
+    expect((await restore({ messageId: 'm3', previewId: reviewed.previewId, mode: 'chat-only' })).status).toBe(200);
+    expect(state.messages.map(message => message.id)).toEqual(['m1', 'm2']);
+    expect(state.codexSessions).toEqual({ process: { ...metadata, forkRequired: true } });
+    expect(metadata).not.toHaveProperty('forkRequired');
+    expect(appendRawForStateMock).toHaveBeenCalledWith(state, [
+      { type: 'message:removed', messageId: 'm3' }, { type: 'message:removed', messageId: 'm4' },
+    ]);
+  });
+
   it('guards Persona previews before reading the event log or worktree', async () => {
     loadConversationStateMock.mockResolvedValue({
       conversationId: CONVERSATION_ID,
