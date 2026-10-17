@@ -13,6 +13,7 @@ import { personaCoreAppNodeId } from '@/backend/services/enduringAgents/personaC
 import { getPersonaRuntimeClock } from '@/backend/services/enduringAgents/runtimeClock';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { assertOriginalApproval } from './administration';
+import { assertOriginalNativeAccount } from './nativeAccount';
 import { readOriginalOwnerBook, mutateOriginalOwnerBook, flushOriginalOwnerBook } from './store';
 import {
   accountModelPlan, bytesDigest, ownerDigest, refuse,
@@ -59,13 +60,20 @@ type Captured = {
   lease: PersonaLease; revisionDigest: string; taskDigest: string; goalDigest: string;
   activityPlanDigest: string;
 };
+export interface CapturedNativeOwnerRun {
+  readonly authority: OriginalOwnerAuthority;
+  readonly personaAuthority: FlowExecutionAuthority;
+  readonly flow: Flow;
+}
 const registryRoot = globalThis as typeof globalThis & {
   __flujoOriginalOwnerAuthorities?: {
     roots: WeakMap<object, OriginalOwnerAuthority>; capabilities: WeakSet<object>;
+    nativeRoots: WeakSet<object>; nativeRuns: Map<string, CapturedNativeOwnerRun>;
   };
 };
 const registry = registryRoot.__flujoOriginalOwnerAuthorities ??= {
   roots: new WeakMap<object, OriginalOwnerAuthority>(), capabilities: new WeakSet<object>(),
+  nativeRoots: new WeakSet<object>(), nativeRuns: new Map<string, CapturedNativeOwnerRun>(),
 };
 type HeldOriginal = { authority: FlowExecutionAuthority; active: boolean };
 const heldRoot = globalThis as typeof globalThis & { __flujoOriginalOwnerFence?: AsyncLocalStorage<HeldOriginal> };
@@ -119,8 +127,9 @@ function assertRecords(enrollment: OriginalOwnerEnrollment | undefined, account:
 }
 function assertSavedModel(model: Model | null | undefined, account: OriginalOwnerAccount) {
   if (!model || model.id !== account.modelId || model.fallbackPolicy || model.ApiKey !== ''
-    || model.ownerCredentialBinding?.ownerId !== account.ownerId
-    || model.ownerCredentialBinding?.credentialId !== account.id
+    || (account.kind === 'codex' ? model.adapter !== 'codex-cli' || Boolean(model.ownerCredentialBinding)
+      : model.ownerCredentialBinding?.ownerId !== account.ownerId
+        || model.ownerCredentialBinding?.credentialId !== account.id)
     || ownerDigest(accountModelPlan(model)) !== account.modelDigest) {
     refuse('original_owner_saved_model_changed');
   }
@@ -224,6 +233,12 @@ async function assertCaptured(captured: Captured): Promise<void> {
     || digest([joined.activity.coreAppRefs, joined.activity.instructionContext,
       joined.activity.instructionContextDigest]) !== captured.activityPlanDigest) refuse('original_owner_binding_changed');
   assertSavedModel(model, account!);
+  if (account!.kind === 'codex') {
+    if (enrollment!.budget.maxModelSteps !== null || enrollment!.budget.maxOutputTokens !== null) {
+      refuse('original_owner_native_budget_unsupported');
+    }
+    await assertOriginalNativeAccount(account!, model!);
+  }
   captured.authority.signal.throwIfAborted();
 }
 
@@ -254,9 +269,6 @@ export async function bindOriginalOwnerAuthority(authority: FlowExecutionAuthori
   if (matches.length !== 1 || registry.roots.has(authority)) refuse('original_owner_capture_conflict');
   const enrollment = matches[0], account = book.accounts.find(item => item.id === enrollment.accountId);
   assertRecords(enrollment, account, workspace, source.personaId, source.taskId);
-  // Native account execution retains its existing host contract. This producer
-  // admits only the implemented Original model sender.
-  if (account!.kind !== 'openai') return;
   const input = freezePlan(structuredClone(source));
   await authority.commitWhileCurrent(async () => {
     const joined = await readJoined(input);
@@ -338,7 +350,28 @@ export async function bindOriginalOwnerAuthority(authority: FlowExecutionAuthori
       await flushOriginalOwnerBook();
       await assertCaptured(captured);
     });
+    if (account!.kind === 'codex') {
+      await assertCaptured(captured);
+      const key = nativeRunKey({ workspace, runId: binding.dispatchId,
+        rootConversationId: binding.conversationId, goalId: binding.goalId });
+      const previous = registry.nativeRuns.get(key);
+      if (previous) {
+        // readJoined proved this is the actual current lease under its fence.
+        // A predecessor can never be current under a different lease epoch.
+        // The durable Worker claim still refuses replay after that replacement.
+        if (previous.authority.binding.leaseEpoch === binding.leaseEpoch
+          && !previous.authority.signal.aborted) refuse('original_owner_native_capture_conflict');
+        registry.nativeRuns.delete(key);
+      }
+      if (registry.nativeRuns.size >= 1024) refuse('original_owner_native_capture_limit');
+      const run = Object.freeze({ authority: capability, personaAuthority: authority, flow: input.flow });
+      registry.nativeRuns.set(key, run);
+      const retire = () => { if (registry.nativeRuns.get(key) === run) registry.nativeRuns.delete(key); };
+      authority.signal.addEventListener('abort', retire, { once: true });
+      if (authority.signal.aborted) retire();
+    }
     registry.capabilities.add(capability);
+    if (account!.kind === 'codex') registry.nativeRoots.add(capability);
     registry.roots.set(authority, capability);
   });
 }
@@ -347,8 +380,41 @@ export async function bindOriginalOwnerAuthority(authority: FlowExecutionAuthori
 export async function getOriginalOwnerAuthority(value: unknown): Promise<OriginalOwnerAuthority | undefined> {
   if (!value || typeof value !== 'object') return undefined;
   const capability = registry.roots.get(value);
-  if (!capability) return undefined;
+  if (!capability || registry.nativeRoots.has(capability)) return undefined;
   assertOriginalOwnerAuthority(capability);
   await capability.assertCurrent();
   return capability;
+}
+
+function nativeRunKey(claim: { workspace: string; runId: string; rootConversationId: string; goalId: string }) {
+  return ownerDigest([claim.workspace, claim.runId, claim.rootConversationId, claim.goalId]);
+}
+
+/** Lookup consumes only already-captured dispatcher capabilities. Claim JSON
+ * cannot create one, recover a lost root, or establish Worker authentication. */
+export async function getCapturedNativeOwnerRun(claim: {
+  workspace: string; runId: string; rootConversationId: string; goalId: string;
+}): Promise<CapturedNativeOwnerRun | undefined> {
+  const key = nativeRunKey(claim), run = registry.nativeRuns.get(key);
+  if (!run) return undefined;
+  try { await run.authority.assertCurrent(); return run; }
+  catch (error) { if (registry.nativeRuns.get(key) === run) registry.nativeRuns.delete(key); throw error; }
+}
+
+export async function getNativeOriginalOwnerAuthority(value: unknown): Promise<OriginalOwnerAuthority | undefined> {
+  if (!value || typeof value !== 'object') return undefined;
+  const capability = registry.roots.get(value);
+  if (!capability || !registry.nativeRoots.has(capability)) return undefined;
+  await capability.assertCurrent(); return capability;
+}
+
+/** Normal dispatcher completion releases its strong Native lookup. Runtime
+ * capabilities and durable claims never become recoverable from that lookup. */
+export function retireNativeOriginalOwnerAuthority(value: object): void {
+  const capability = registry.roots.get(value);
+  if (!capability || !registry.nativeRoots.has(capability)) return;
+  const binding = capability.binding;
+  const key = nativeRunKey({ workspace: binding.workspace, runId: binding.dispatchId,
+    rootConversationId: binding.conversationId, goalId: binding.goalId });
+  if (registry.nativeRuns.get(key)?.authority === capability) registry.nativeRuns.delete(key);
 }

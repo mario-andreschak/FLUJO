@@ -90,6 +90,16 @@
           "suite": "__tests__/enduringAgents/memoryScanPerf.test.ts",
           "name": "Persona record index performance (opt-in) keeps 20k-mailbox warm reads scale-invariant with foreign records",
           "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
+        },
+        {
+          "suite": "__tests__/model/codexNativeQualification.live.test.ts",
+          "name": "qualifies exact Luna/medium through the restrictive Source catalogue and thread-bound MCP bridge",
+          "reason": "Requires an authorized private profile; npm run qualify:live-codex executes it in the separate live-codex stage, rejects skips and retains actual provider/MCP receipts. Ordinary CI has no account."
+        },
+        {
+          "suite": "__tests__/flow/nativeOriginalHost.live.test.ts",
+          "name": "completes actual Luna/medium under a genuine Persona lease and saved Original without SDK or provider mocks",
+          "reason": "Requires an authorized private profile; npm run qualify:live-codex executes it in the separate live-codex stage, rejects skips and retains the genuine saved Original receipt. Ordinary CI has no account."
         }
       ]
     },
@@ -97,6 +107,12 @@
       "description": "npm run test:isolated — child-process and intensive integration suites, serial, dedicated CI job.",
       "minSuites": 9,
       "minTests": 101,
+      "intentionalSkips": []
+    },
+    "live-codex": {
+      "description": "npm run qualify:live-codex — three serial account-backed Source qualifications; private inputs and receipts, no Worker or swarm qualification.",
+      "minSuites": 3,
+      "minTests": 3,
       "intentionalSkips": []
     }
   },

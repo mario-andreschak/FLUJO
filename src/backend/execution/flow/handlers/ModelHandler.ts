@@ -25,7 +25,7 @@ import { assertNativeInvocationSessionHook, createNativeInvocationSession,
   type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
 import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
 import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
-import { assertNativeOriginalProcessHost, createPersonaNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, createProcessNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
 import { NATIVE_HANDOFF_PROTOCOL, CODEX_NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
@@ -1231,20 +1231,22 @@ export class ModelHandler {
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (!input.nativeOriginalHost && input.personaAttribution) {
-      input = { ...input, nativeOriginalHost: await createPersonaNativeOriginalHost({ authority: input.executionAuthority,
+    if (!input.nativeOriginalHost && (input.personaAttribution || input.executionExtensionContext)) {
+      input = { ...input, nativeOriginalHost: await createProcessNativeOriginalHost({ authority: input.executionAuthority,
+        context: input.executionExtensionContext,
         conversationId, runId, nodeId, modelId, personaAttribution: input.personaAttribution }) };
     }
     if (input.nativeOriginalHost) {
       assertNativeOriginalProcessHost(input.nativeOriginalHost.process);
+      assertNativeOriginalExecutionContext(input.nativeOriginalHost.process, input.executionExtensionContext);
       input = { ...input, nativeBrokerAuthority: input.nativeOriginalHost.broker,
         nativeInvocationSessionHook: input.nativeOriginalHost.session };
     }
     if (input.nativeBrokerAuthority) {
       assertNativeBrokerAuthority(input.nativeBrokerAuthority);
-      if (!conversationId || !runId || !nodeId || input.executionExtensionContext
+      if (!conversationId || !runId || !nodeId || input.executionExtensionContext && !input.nativeOriginalHost
         || modelIsFallbackPolicy || (modelAdapter !== 'codex-cli' && modelAdapter !== 'claude-cli')) {
-        throw new Error('Native broker requires an owned native model run and cannot use a private extension or fallback route.');
+        throw new Error('Native broker requires an owned native model run and a matching private host, without fallback.');
       }
     }
     if (input.nativeInvocationSessionHook) {
@@ -2113,6 +2115,9 @@ export class ModelHandler {
       if (opts?.executionExtensionContext) {
         await assertExecutionExtensionCurrent(opts.executionExtensionContext);
       }
+      if (opts?.nativeOriginalProcessHost) {
+        assertNativeOriginalExecutionContext(opts.nativeOriginalProcessHost, opts.executionExtensionContext);
+      }
       // Get the model
       const model = opts?.modelCatalogAdmission?.model ?? await modelService.getModel(modelId);
       await assertFlowExecutionCurrent(opts?.durableContext ?? {});
@@ -2120,7 +2125,7 @@ export class ModelHandler {
       // and Antigravity remain excluded from authenticated private execution.
       if (opts?.executionExtensionContext) {
         const restrictedAdapter = resolveModelAdapter(model?.provider, model?.adapter);
-        if (restrictedAdapter === 'claude-cli' || restrictedAdapter === 'antigravity-cli' || (restrictedAdapter === 'codex-cli'
+        if (restrictedAdapter === 'claude-cli' || restrictedAdapter === 'antigravity-cli' || (restrictedAdapter === 'codex-cli' && !opts.nativeOriginalProcessHost
           && !await executionExtensionCodexProfile(opts.executionExtensionContext))) {
           throw new ExecutionExtensionError('execution_model_adapter_forbidden');
         }
@@ -2137,7 +2142,7 @@ export class ModelHandler {
       }
       if (opts?.nativeBrokerAuthority) {
         assertNativeBrokerAuthority(opts.nativeBrokerAuthority);
-        if (!opts.conversationId || !opts.runId || !opts.nodeId || opts.executionExtensionContext
+        if (!opts.conversationId || !opts.runId || !opts.nodeId || opts.executionExtensionContext && !opts.nativeOriginalProcessHost
           || model.fallbackPolicy || (model.adapter !== 'codex-cli' && model.adapter !== 'claude-cli')) {
           throw new Error('Native broker requires a fully owned native model attempt.');
         }
@@ -2898,7 +2903,10 @@ export class ModelHandler {
                       ? model.adapter === 'claude-cli' ? NATIVE_HANDOFF_PROTOCOL
                         : model.adapter === 'codex-cli' ? CODEX_NATIVE_HANDOFF_PROTOCOL : undefined
                       : undefined;
-                    if (terminationProtocol) assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
+                    if (terminationProtocol) {
+                      assertNativeOriginalProcessHost(opts.nativeOriginalProcessHost);
+                      if (opts.nativeOriginalProcessHost.terminationProtocol !== terminationProtocol) throw new Error('Native Original adapter/termination protocol mismatch.');
+                    }
                     const inventoryDigest = nativeToolInventoryDigest(nativeTools, nativeBindings, nativeExecutors, terminationProtocol);
                     nativeInventory = { digest: inventoryDigest, tools: nativeTools,
                       ...(terminationProtocol ? { terminationProtocol } : {}),
@@ -2918,6 +2926,7 @@ export class ModelHandler {
                       authorizePersonaCoreMcp: opts.authorizePersonaCoreMcp,
                       authority: opts.nativeBrokerAuthority!, signal: abortController.signal,
                       terminationProtocol, originalProcessHost: opts.nativeOriginalProcessHost,
+                      executionExtensionContext: opts.executionExtensionContext,
                     });
                   })()
                 : undefined;

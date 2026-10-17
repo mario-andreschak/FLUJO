@@ -193,7 +193,63 @@ async function currentServerConfig(serverName: string): Promise<MCPServerConfig 
   return configs.find(item => item.name === serverName);
 }
 
+function hasStdioTransport(transport: unknown): boolean {
+  const seen = new Set<object>();
+  let current = transport;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { __flujoKind?: unknown; __flujoStdioKey?: unknown;
+      __flujoInnerTransport?: unknown; constructor?: { name?: string } };
+    if (candidate.__flujoKind === 'stdio' || candidate.__flujoStdioKey !== undefined
+      || candidate.constructor?.name === 'StdioClientTransport') return true;
+    current = candidate.__flujoInnerTransport;
+  }
+  return false;
+}
+
+/** Protected Source servers have no public catalog row. Re-read their current
+ * private config, resolve credential headers independently, and bind dispatch
+ * to the identity token stamped on the connected client. The optional caller
+ * config is deliberately not an authority here. */
+async function assertProtectedStreamableDispatch(client: Client, serverName: string): Promise<boolean> {
+  const extensions = await import('@/backend/execution/extensions');
+  if (!extensions.isProtectedExecutionServer(serverName)) return false;
+  let config: MCPServerConfig | undefined;
+  try { config = extensions.executionProtectedServerConfig(serverName); }
+  catch {
+    try { await client.close(); } catch { /* retain transport cleanup uncertainty */ }
+    throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+  }
+  // Some protected adapters validate an ordinary catalog config without
+  // supplying a private overlay. Keep their existing catalog path intact.
+  if (!config) return false;
+  try {
+    if (!client.transport || getLocalHostLaunch(client.transport) || getManagedTrustedHost(client.transport)
+      || getManagedMcpIsolation(client.transport) || hasStdioTransport(client.transport)) {
+      throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
+    }
+    if (config.name !== serverName || config.disabled || config.transport !== 'streamable') {
+      throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
+    }
+    extensions.assertExecutionServerConfig(config);
+    const connection = await import('./connection');
+    const current = await connection.resolveConfigHeaders(config);
+    extensions.assertExecutionServerConfig(current);
+    const fingerprint = connection.clientProtectedConfigFingerprint(client);
+    if (current.name !== serverName || current.disabled || current.transport !== 'streamable'
+      || !fingerprint || fingerprint !== connection.protectedConfigFingerprint(current)) {
+      throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
+    }
+    return true;
+  } catch (error) {
+    try { await client.close(); } catch { /* retain transport cleanup uncertainty */ }
+    if (error instanceof McpIsolationError) throw error;
+    throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+  }
+}
+
 export async function assertMcpIsolationDispatch(client: Client, serverName: string, config?: MCPServerConfig | null): Promise<void> {
+  if (await assertProtectedStreamableDispatch(client, serverName)) return;
   const localLaunch = getLocalHostLaunch(client.transport);
   if (localLaunch) {
     try {

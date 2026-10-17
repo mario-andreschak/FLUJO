@@ -1,6 +1,7 @@
 import type { ThreadEvent, ThreadOptions, UserInput } from '@openai/codex-sdk';
 import { startOwnedCodexAppServer } from './codexAppServerProcess';
 import { bundledCodexExecutable } from './codexRestrictedProfile';
+import { nativeCodexStartupArguments, nativeCodexThreadConfiguration } from './codexNativeStartup';
 import { assertNativeOriginalProcessHost, type NativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 
 const unavailable = (): never => { throw new Error('Native Codex Original protocol is held.'); };
@@ -47,8 +48,10 @@ export function createOwnedCodexThread(input: {
         let wake: (() => void) | undefined;
         const notifications: Array<{ method?: string; params?: unknown }> = [];
         let retainedBytes = 0;
+        const authentication = input.env.CODEX_API_KEY ? 'api-key' : 'chatgpt';
         const child = await startOwnedCodexAppServer({
-          executable: input.executable ?? bundledCodexExecutable(), args: ['app-server', '--stdio'],
+          executable: input.executable ?? bundledCodexExecutable(), args: ['app-server', '--stdio',
+            ...nativeCodexStartupArguments({ cwd: input.options.workingDirectory!, config: input.config, authentication })],
           env: input.env, cwd: input.options.workingDirectory!, owner: input.host, signal: options.signal,
           register: process => input.host.register(process),
           onNotification: message => {
@@ -65,7 +68,8 @@ export function createOwnedCodexThread(input: {
           await input.host.beforeFirstPrompt();
           const started = record(await child.request('thread/start', {
             model: input.options.model, cwd: input.options.workingDirectory,
-            approvalPolicy: 'never', sandbox: 'read-only', ephemeral: false, config: input.config,
+            approvalPolicy: 'never', sandbox: 'read-only', ephemeral: false,
+            config: nativeCodexThreadConfiguration(input.config, authentication),
           }));
           const threadId = id(record(started.thread).id);
           if (started.model !== input.options.model) return unavailable();
@@ -104,7 +108,8 @@ export function createOwnedCodexThread(input: {
             else if (method === 'thread/tokenUsage/updated') {
               const total = record(record(params.tokenUsage).total);
               usage = { input_tokens: count(total.inputTokens), output_tokens: count(total.outputTokens),
-                cached_input_tokens: count(total.cachedInputTokens), cache_write_input_tokens: count(total.cacheWriteInputTokens),
+                cached_input_tokens: count(total.cachedInputTokens),
+                cache_write_input_tokens: total.cacheWriteInputTokens === undefined ? 0 : count(total.cacheWriteInputTokens),
                 reasoning_output_tokens: count(total.reasoningOutputTokens) };
             } else if (method === 'item/started' || method === 'item/completed') {
               const item = record(params.item);
@@ -118,7 +123,8 @@ export function createOwnedCodexThread(input: {
                 yield { type: method === 'item/started' ? 'item.started' : 'item.completed', item: {
                   ...item, id: itemId, type: 'mcp_tool_call', status: item.status === 'inProgress' ? 'in_progress' : item.status,
                 } } as ThreadEvent;
-              } else if (item.type !== 'reasoning') return unavailable();
+              // A bound user-input echo is not assistant output or a native action.
+              } else if (item.type !== 'reasoning' && item.type !== 'userMessage') return unavailable();
             } else {
               terminal = true;
               if (record(params.turn).status !== 'completed' || !usage) return unavailable();

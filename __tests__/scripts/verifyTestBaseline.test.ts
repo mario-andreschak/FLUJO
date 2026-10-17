@@ -288,12 +288,27 @@ describe('verify-test-baseline recording', () => {
 });
 
 describe('checked-in test-baseline.json', () => {
-  it('declares both CI stages and a quarantine allowlist of real files', () => {
+  it('requires all live cases to execute even though ordinary CI accounts for their private profiles', () => {
+    const parsed=JSON.parse(fs.readFileSync(path.join(ROOT,'test-baseline.json'),'utf8')) as Baseline;
+    const complete:Summary={suites:{total:3,passed:3,failed:0,executed:3},tests:{total:3,passed:3,failed:0,executed:3},
+      failedToRun:[],failedTests:[],skippedTests:[],invalidResults:[]};
+    expect(compareToBaseline({stage:'live-codex',baseline:parsed,summary:complete}).ok).toBe(true);
+    const incomplete:Summary={...complete,suites:{...complete.suites,passed:2,executed:2},tests:{...complete.tests,passed:2,executed:2},
+      skippedTests:[{suite:'__tests__/flow/nativeOriginalHost.live.test.ts',
+        name:'completes actual Luna/medium under a genuine Persona lease and saved Original without SDK or provider mocks',status:'pending'}]};
+    const refused=compareToBaseline({stage:'live-codex',baseline:parsed,summary:incomplete});
+    expect(refused.ok).toBe(false);
+    expect(refused.failures.some(value=>value.includes('Unapproved skipped test'))).toBe(true);
+    expect(refused.failures.some(value=>value.includes('count dropped'))).toBe(true);
+  });
+
+  it('declares CI and explicit live qualification stages with a quarantine allowlist of real files', () => {
     const parsed = JSON.parse(
       fs.readFileSync(path.join(ROOT, 'test-baseline.json'), 'utf8'),
     ) as Baseline;
 
-    expect(Object.keys(parsed.stages).sort()).toEqual(['ci', 'isolated']);
+    expect(Object.keys(parsed.stages).sort()).toEqual(['ci', 'isolated', 'live-codex']);
+    expect(parsed.stages['live-codex']).toMatchObject({minSuites:3,minTests:3,intentionalSkips:[]});
     expect(parsed.stages.ci.minSuites).toBeGreaterThan(0);
     expect(parsed.stages.isolated.minSuites).toBeGreaterThan(0);
     for (const quarantined of parsed.quarantined ?? []) {

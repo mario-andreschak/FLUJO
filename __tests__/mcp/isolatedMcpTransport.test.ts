@@ -4,9 +4,11 @@ import path from 'node:path';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StdioClientTransport as BetaStdioClientTransport, DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
-import { createStdioTransport, createTransport, stdioConfigKey, safelyCloseClient } from '@/backend/services/mcp/connection';
+import { clientProtectedConfigFingerprint, createStdioTransport, createTransport, protectedConfigFingerprint,
+  resolveConfigHeaders, stdioConfigKey, safelyCloseClient } from '@/backend/services/mcp/connection';
 import { createBetaTransport, createNewBetaClient } from '@/backend/services/mcp/betaClient';
 import { createRootsListHandler, unrestrictedHostRoots } from '@/backend/services/mcp/roots';
+import { registerExecutionExtension, type ExecutionExtensionAdapter } from '@/backend/execution/extensions';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 import { createIsolatedMcpLaunch, isolatedMcpPolicyDigest, type IsolatedMcpLaunch } from '@/backend/services/security/isolatedMcp';
 import { approvedIsolationDigest, assertMcpIsolationDispatch, getManagedMcpIsolation, assertIsolatedMcpArguments } from '@/backend/services/mcp/isolation';
@@ -24,9 +26,10 @@ jest.mock('@/backend/services/security/isolatedMcp', () => ({
 }));
 jest.mock('@/backend/services/mcp/config', () => ({ loadServerConfigs: jest.fn() }));
 jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn(async () => undefined), saveItem: jest.fn() }));
-jest.mock('@/backend/utils/resolveGlobalVars', () => ({ resolveGlobalVars: jest.fn(() => {
-  throw new Error('Isolated dispatch must not access the host global store');
-}) }));
+jest.mock('@/backend/utils/resolveGlobalVars', () => ({
+  resolveGlobalVars: jest.fn(() => { throw new Error('Isolated dispatch must not access the host global store'); }),
+  resolveAndDecryptApiKey: jest.fn(async (value: string) => value),
+}));
 
 const create = jest.mocked(createIsolatedMcpLaunch);
 const configs = jest.mocked(loadServerConfigs);
@@ -250,6 +253,89 @@ test('dispatch observes grant revocation and stops the exact managed container',
   approvals.approvals = []; persist();
   await expect(assertMcpIsolationDispatch(client, config.name)).rejects.toMatchObject({ code: 'ISOLATION_RECONSENT_REQUIRED' });
   expect(close).toHaveBeenCalled();
+});
+
+test('private protected streamable dispatch re-resolves its config and matches the connected client', async () => {
+  const serverName = 'source-private-http';
+  const privateConfig = { ...config, name: serverName, transport: 'streamable' as const,
+    serverUrl: 'http://127.0.0.1:43127/mcp', headers: { Authorization: 'Bearer private-fixture-token' },
+    isolation: undefined };
+  const asserted: unknown[] = [];
+  const adapter = {
+    isProtectedServer: (name: string) => name === serverName,
+    protectedServerConfig: (name: string) => name === serverName ? privateConfig : undefined,
+    assertServerConfig: (candidate: unknown) => { asserted.push(candidate); },
+  } as unknown as ExecutionExtensionAdapter;
+  const restore = registerExecutionExtension(adapter);
+  try {
+    const resolved = await resolveConfigHeaders(privateConfig);
+    const client = { transport: {}, close: jest.fn() } as unknown as Client;
+    Object.defineProperty(client, '__flujoProtectedConfigFingerprint', {
+      value: protectedConfigFingerprint(resolved), configurable: true,
+    });
+    // A public same-name record is not authority for this private server.
+    configs.mockResolvedValue([{ ...config, name: serverName, transport: 'streamable',
+      serverUrl: 'https://public.invalid/mcp', headers: { Authorization: 'Bearer public-token' } } as unknown as MCPStdioConfig]);
+
+    await expect(assertMcpIsolationDispatch(client, serverName,
+      { ...privateConfig, headers: { Authorization: 'Bearer caller-forged-token' } } as never)).resolves.toBeUndefined();
+    expect(clientProtectedConfigFingerprint(client)).toBe(protectedConfigFingerprint(resolved));
+    expect(asserted).toHaveLength(3);
+    expect(configs).not.toHaveBeenCalled();
+    expect(client.close).not.toHaveBeenCalled();
+  } finally {
+    restore();
+  }
+});
+
+test.each(['foreign config', 'changed headers', 'retired config', 'missing client fingerprint', 'missing transport'] as const)(
+  'private protected streamable dispatch refuses %s and closes its client', async condition => {
+    const serverName = 'source-private-http';
+    const privateConfig = { ...config, name: serverName, transport: 'streamable' as const,
+      serverUrl: 'http://127.0.0.1:43127/mcp', headers: { Authorization: 'Bearer private-fixture-token' },
+      isolation: undefined };
+    let current: typeof privateConfig | undefined = privateConfig;
+    if (condition === 'foreign config') current = { ...privateConfig, name: 'another-source' };
+    if (condition === 'changed headers') current = { ...privateConfig, headers: { Authorization: 'Bearer rotated-token' } };
+    if (condition === 'retired config') current = undefined;
+    const restore = registerExecutionExtension({
+      isProtectedServer: (name: string) => name === serverName,
+      protectedServerConfig: (name: string) => name === serverName ? current : undefined,
+      assertServerConfig: () => {},
+    } as unknown as ExecutionExtensionAdapter);
+    try {
+      const resolved = await resolveConfigHeaders(privateConfig);
+      const client = { ...(condition === 'missing transport' ? {} : { transport: {} }), close: jest.fn() } as unknown as Client;
+      if (condition !== 'missing client fingerprint') {
+        Object.defineProperty(client, '__flujoProtectedConfigFingerprint', {
+          value: protectedConfigFingerprint(resolved), configurable: true,
+        });
+      }
+      await expect(assertMcpIsolationDispatch(client, serverName)).rejects.toMatchObject({ code: 'ISOLATION_RECONSENT_REQUIRED' });
+      expect(client.close).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  },
+);
+
+test('a protected adapter without a private config retains the authoritative catalog guard', async () => {
+  const serverName = 'catalog-protected-http';
+  const catalogConfig = { ...config, name: serverName, transport: 'streamable',
+    serverUrl: 'https://catalog.invalid/mcp', isolation: undefined } as unknown as MCPStdioConfig;
+  configs.mockResolvedValue([catalogConfig]);
+  const restore = registerExecutionExtension({
+    isProtectedServer: (name: string) => name === serverName,
+    protectedServerConfig: () => undefined,
+    assertServerConfig: () => {},
+  } as unknown as ExecutionExtensionAdapter);
+  try {
+    await expect(assertMcpIsolationDispatch({ transport: {}, close: jest.fn() } as unknown as Client, serverName))
+      .resolves.toBeUndefined();
+    expect(configs).toHaveBeenCalledTimes(1);
+  } finally {
+    restore();
+  }
 });
 
 test('actual tool dispatch keeps literal arguments, denies host-secret interpolation and rechecks revoked approval', async () => {

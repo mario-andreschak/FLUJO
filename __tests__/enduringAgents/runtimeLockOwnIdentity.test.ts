@@ -6,6 +6,7 @@ import {
   _setPersonaRuntimeLockProcessBirthProbeForTests,
   _setPersonaRuntimeLockProcessBirthProbeRunnerForTests,
   initializePersonaRuntimeLockProcessIdentity,
+  probeRuntimeProcessIdentity,
   captureRuntimeChildIdentity,
   withPersonaRuntimeLock,
 } from '@/backend/services/enduringAgents/runtimeLock';
@@ -59,6 +60,24 @@ afterEach(() => {
 });
 
 describe('Persona runtime own-process birth identity', () => {
+  it('requires a fresh comparable birth observation for admission on every probe', async () => {
+    const identity = { pid: 12345, processInstanceId: 'owned-instance', processBirthMarkerV2: marker };
+    const probe = jest.fn().mockResolvedValueOnce(marker).mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('win32-v2:638927322190000001')
+      .mockRejectedValueOnce(Object.assign(new Error('private probe details'), { killed: true }));
+    _setPersonaRuntimeLockProcessBirthProbeForTests(probe);
+    await expect(probeRuntimeProcessIdentity(identity)).resolves.toBe(true);
+    await expect(probeRuntimeProcessIdentity(identity)).resolves.toBe(false);
+    await expect(probeRuntimeProcessIdentity(identity)).resolves.toBe(false);
+    await expect(probeRuntimeProcessIdentity(identity)).resolves.toBe(false);
+    expect(probe.mock.calls).toEqual([[12345], [12345], [12345], [12345]]);
+    for (const invalid of [{ ...identity, pid: 0 }, { ...identity, processInstanceId: '' },
+      { ...identity, processBirthMarkerV2: 'unversioned-marker' }]) {
+      await expect(probeRuntimeProcessIdentity(invalid)).resolves.toBe(false);
+    }
+    expect(probe).toHaveBeenCalledTimes(4);
+  });
+
   it('uses bounded startup probes for a new owned child and retains fail-closed exhaustion', async () => {
     // Keep the production platform/startup selection; replace only its OS runner.
     Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });

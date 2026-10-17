@@ -21,6 +21,50 @@ describe('descriptor-bound plain file reads', () => {
     await expect(readPlainFile(file, { maxBytes: 7 })).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
   });
 
+  it('keeps a short read classified as FILE_CHANGED before a failing final descriptor probe', async () => {
+    const original = await fs.lstat(file, { bigint: true });
+    const open = fs.open.bind(fs);
+    let stat: jest.SpyInstance | undefined;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      stat = jest.spyOn(handle, 'stat').mockResolvedValueOnce(original)
+        .mockRejectedValueOnce(new Error('Final descriptor unavailable'));
+      type PositionalRead = (buffer: Buffer, offset: number, length: number, position: number) => Promise<{ bytesRead: number; buffer: Buffer }>;
+      const positional: { read: PositionalRead } = handle;
+      jest.spyOn(positional, 'read').mockImplementation(async buffer => ({ bytesRead: 0, buffer }));
+      return handle;
+    });
+    await expect(readPlainFile(file)).rejects.toMatchObject({ code: 'FILE_CHANGED' });
+    expect(stat).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains a delayed named probe before rejecting its paired descriptor failure or closing the FD', async () => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const lstat = fs.lstat.bind(fs);
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      if (String(args[0]) === file) { entered(); await gate; }
+      return lstat(...args);
+    });
+    const failure = new Error('Descriptor probe refused');
+    const open = fs.open.bind(fs);
+    let close: jest.SpyInstance | undefined;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      jest.spyOn(handle, 'stat').mockRejectedValue(failure);
+      close = jest.spyOn(handle, 'close');
+      return handle;
+    });
+    let settled = false;
+    const result = readPlainFile(file).then(value => { settled = true; return value; }, error => { settled = true; return error; });
+    await started;
+    try { expect(settled).toBe(false); expect(close).not.toHaveBeenCalled(); }
+    finally { release(); }
+    expect(await result).toBe(failure);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses replacement after the caller checked identity, before reading bytes', async () => {
     const expected = await fs.lstat(file, { bigint: true });
     await fs.rename(file, path.join(root, 'old.json'));

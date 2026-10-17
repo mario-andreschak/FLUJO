@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { SharedState } from '../types';
 import { MAX_SUBFLOW_DEPTH } from '../constants';
 import { assertFlowExecutionCurrent } from '../executionAuthority';
+import { withExecutionParentConversationRead } from '../../extensions';
 import { getDetachedTaskLaunchOwner } from '@/backend/services/subflowTasks/ownership';
 import type { SubflowTaskRecord } from '@/shared/types/subflowTasks';
 import { assertSafeCollectionId, loadItem as loadItemBackend } from '@/utils/storage/backend';
@@ -98,6 +99,10 @@ type StateSnapshot = Pick<SharedState,
   'recovery' | 'createdAt'>;
 
 async function readState(id: string, heldRead?: NativeHeldLineageRead): Promise<StateSnapshot> {
+  return withExecutionParentConversationRead(id, () => readStateWithinScope(id, heldRead));
+}
+
+async function readStateWithinScope(id: string, heldRead?: NativeHeldLineageRead): Promise<StateSnapshot> {
   const safeId = requireId(id);
   const { loadConversationStateReadOnly } = await import('../loadConversationState');
   if (heldRead) assertNativeHeldLineageRead(heldRead);
@@ -261,11 +266,15 @@ export async function readNativeOriginLineage(input: {
       input.signal.throwIfAborted();
       await authority.assertCurrent();
       input.signal.throwIfAborted();
-      await root.assertCurrent();
-      input.signal.throwIfAborted();
-      // The root gate can await long enough for the Worker lease to change.
-      await authority.assertCurrent();
-      input.signal.throwIfAborted();
+      // Both branded capabilities can share one complete authority gate. Do
+      // not multiply its joined store reads through aliases of that function.
+      if (root.assertCurrent !== authority.assertCurrent) {
+        await root.assertCurrent();
+        input.signal.throwIfAborted();
+        // A distinct root gate can await long enough for the Worker lease to change.
+        await authority.assertCurrent();
+        input.signal.throwIfAborted();
+      }
     };
     const status = async () => {
       const current = await nativeInvocationStatus(receipt.invocationId, receipt.owner);

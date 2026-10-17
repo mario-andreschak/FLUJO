@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import { bindPersonaNativeOriginalAuthority } from '@/backend/execution/flow/handlers/nativeOriginalHost';
-import { captureOriginalOwnerAuthority } from '@/backend/services/originalOwner/producer';
+import { captureOriginalOwnerAuthority, runOriginalOwnerNativeFlow } from '@/backend/services/originalOwner/producer';
 import { ownerDigest } from '@/backend/services/originalOwner/types';
 import { createHeldReadScope } from '@/backend/execution/flow/heldReadScope';
 
@@ -3190,7 +3190,7 @@ export class PersonaFlowDispatcher {
       }));
       await this.inWorkspace(() => bindPersonaNativeOriginalAuthority(authority, originalInput));
       await this.inWorkspace(() => captureOriginalOwnerAuthority(authority, originalInput));
-      result = await this.inWorkspace(() => this.dependencies.runFlow({
+      result = await this.inWorkspace(() => runOriginalOwnerNativeFlow({
         ...flowInput,
         // Persona Apps are projected only into this Activity-local Core clone.
         // The persisted Core revision and generic Behavior Flow remain unchanged.
@@ -3209,7 +3209,7 @@ export class PersonaFlowDispatcher {
         ...(instructionContext
           ? { personaInstructionContext: structuredClone(instructionContext) }
           : {}),
-      }));
+      },input => this.dependencies.runFlow(input)));
       if (
         record.maintenancePlan
         && claim.activity.kind === 'maintenance'

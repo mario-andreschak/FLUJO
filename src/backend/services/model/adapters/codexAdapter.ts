@@ -25,8 +25,9 @@ import { CompletionAdapter, CompletionInput, CompletionResult, type SteeringDeli
 import { steeringSource, watchSteering, UncertainSteeringSubmissionError } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
-import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
-import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { assertNativeToolPort, assertNativeToolPortModelTools } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { assertNativeCodexQualification } from './codexNativeQualification';
 import { createOwnedCodexThread, nativeCodexEnvironment } from './codexOwnedThread';
 import { paceToolCallArguments } from './toolArgumentPacing';
 import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
@@ -238,23 +239,31 @@ export class CodexAdapter implements CompletionAdapter {
     // API-key models can select an OpenAI-compatible endpoint. Subscription
     // credentials continue to use the managed ChatGPT route.
     const apiBaseUrl = apiKey ? model.baseUrl?.trim() || undefined : undefined;
-    if (nativeOriginalProcessHost) assertNativeOriginalProcessHost(nativeOriginalProcessHost);
+    if (nativeOriginalProcessHost) {
+      assertNativeOriginalProcessHost(nativeOriginalProcessHost);
+      assertNativeOriginalExecutionContext(nativeOriginalProcessHost, executionExtensionContext);
+      if (executionExtensionContext) {
+        if (!nativeToolPort || apiKey) throw new Error('Native Codex Worker Original requires its keyless owned broker.');
+        assertNativeCodexQualification(nativeOriginalProcessHost.codexProfile);
+      }
+    }
     if (nativeToolPort) {
       assertNativeToolPort(nativeToolPort);
       if (!onSdkRequest || !onSdkRequestResult) throw new Error('Native Codex broker requires a durable SDK dispatch receipt.');
-      if (executionExtensionContext || toolNameMap || localToolExecutors || requestToolApproval || sessionResume
+      if ((executionExtensionContext && !nativeOriginalProcessHost) || toolNameMap || localToolExecutors || requestToolApproval || sessionResume
         || input.steering || input.consumeSteeringMessages || codexSession || onCodexSessionChange) {
         throw new Error('Native Codex broker cannot use host tool facilities or session resume.');
       }
     }
     let privateCodexPath: string | undefined;
     let privateCodexProfile: RestrictedCodexProfile | undefined;
-    if (executionExtensionContext) {
-      await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
+    if (executionExtensionContext || nativeOriginalProcessHost?.codexProfile) {
+      if (executionExtensionContext) await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
       if (localToolExecutors !== undefined) {
         throw new ExecutionExtensionError('execution_local_tools_forbidden');
       }
-      const profile = await executionExtensionCodexProfile(executionExtensionContext);
+      const profile = nativeOriginalProcessHost?.codexProfile ?? (executionExtensionContext
+        ? await executionExtensionCodexProfile(executionExtensionContext) : undefined);
       if (!profile || apiKey || requestToolApproval) {
         throw new ExecutionExtensionError('execution_model_adapter_forbidden');
       }
@@ -262,10 +271,14 @@ export class CodexAdapter implements CompletionAdapter {
       privateCodexPath = await assertRestrictedCodexProfile(privateCodexProfile, model.name);
       // Validate the complete offered bridge before starting the CLI. A private
       // profile cannot add local executors or borrow a different server's tools.
-      for (const tool of tools ?? []) {
-        if (tool.type !== 'function') continue;
-        await assertExecutionModelTool(executionExtensionContext, tool.function.name,
-          toolNameMap?.[tool.function.name]);
+      if (executionExtensionContext && nativeToolPort) {
+        await assertNativeToolPortModelTools(nativeToolPort, executionExtensionContext);
+      } else {
+        for (const tool of tools ?? []) {
+          if (tool.type !== 'function') continue;
+          if (executionExtensionContext) await assertExecutionModelTool(executionExtensionContext, tool.function.name,
+            toolNameMap?.[tool.function.name]);
+        }
       }
     }
     // Lazy-load the Codex SDK: ESM-only, so a module-scope import would break
@@ -815,7 +828,7 @@ export class CodexAdapter implements CompletionAdapter {
         ? undefined : await acquireOrdinaryCodexExecutable();
       codexLeaseCleanup = ordinaryCodex?.release;
       const codexExecutable = privateCodexPath ?? ordinaryCodex?.executable;
-      const ordinaryModelCatalog = executionExtensionContext
+      const ordinaryModelCatalog = executionExtensionContext || nativeOriginalProcessHost?.codexProfile
         ? undefined
         : await prepareCodexModelCatalogSnapshot(abortController.signal, codexExecutable);
       modelCatalogCleanup = ordinaryModelCatalog?.cleanup;
@@ -1179,7 +1192,12 @@ export class CodexAdapter implements CompletionAdapter {
             // end when the model produces a message without another call — or at
             // the runaway cap.
             if (handoffCalls.length > 0 && (endSpawning || handoffCalls.length >= MAX_SPAWN_CALLS)) {
-              abortController.abort();
+              // Native handoff stops this owned turn, not the enclosing run.
+              // Its independent exit/pipe-close confirmation below decides
+              // completion; real cancellation and tool failures still abort
+              // the enclosing controller.
+              if (nativeToolPort) turnAbortController.abort();
+              else abortController.abort();
               break;
             }
             if (
@@ -1231,7 +1249,8 @@ export class CodexAdapter implements CompletionAdapter {
                 // A message AFTER spawning means the model stopped queueing
                 // workers: end the run without accumulating post-handoff narration.
                 if (handoffCalls.length > 0) {
-                  abortController.abort();
+                  if (nativeToolPort) turnAbortController.abort();
+                  else abortController.abort();
                   break;
                 }
                 if (item.text || messageMedia.length > 0) {

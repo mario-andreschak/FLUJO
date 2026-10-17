@@ -1,6 +1,12 @@
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
-import { ExecutionExtensionError, isExecutionProtectedState } from '@/backend/execution/extensions';
+import {
+  assertExecutionExtensionCurrent,
+  executionExtensionSubflowCapacity,
+  executionExtensionSupportsNativeWorkerRoot,
+  ExecutionExtensionError,
+  isExecutionProtectedState,
+} from '@/backend/execution/extensions';
 import {
   SharedState,
   SubflowNodeParams,
@@ -52,6 +58,24 @@ import {
 } from '../sessionTranscriptPolicy';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
+const nativePreparedSubflows = new WeakMap<
+  SubflowNodePrepResult,
+  NonNullable<SharedState['executionExtensionContext']>
+>();
+const consumedNativeSubflows = new WeakSet<SubflowNodePrepResult>();
+
+function isNativeRootExecutionContext(
+  context: SharedState['executionExtensionContext'],
+): boolean {
+  if (!context) return false;
+  try {
+    return executionExtensionSupportsNativeWorkerRoot(context);
+  } catch {
+    // Fabricated/stale contexts remain an ordinary protected denial.
+    return false;
+  }
+}
+
 
 /** The dynamically-imported runFlow module type (import is lazy to break a cycle). */
 export type RunFlowModule = typeof import('../runFlow');
@@ -685,14 +709,28 @@ function buildChildEmit(
  */
 export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, SubflowNodePrepResult, SubflowNodeExecResult> {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
-    // Child runs do not yet receive an owner-issued execution context. Stop
-    // before prompt projection, durable invocation, or either child run path.
-    if (sharedState.executionExtensionContext || isExecutionProtectedState(sharedState)) {
+    const extensionContext = sharedState.executionExtensionContext;
+    const protectedParent = Boolean(extensionContext) || isExecutionProtectedState(sharedState);
+    const nativeRoot = isNativeRootExecutionContext(extensionContext);
+    // Protected children are available only through the captured Native root's
+    // installed, one-child plan. Ordinary protected adapters and synthetic
+    // callers still stop before prompt projection or durable invocation.
+    if (protectedParent && !nativeRoot) {
       throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+    }
+    if (nativeRoot) {
+      await assertExecutionExtensionCurrent(extensionContext, {
+        conversationId: sharedState.conversationId,
+        runId: sharedState.logicalRunId,
+      });
+      if (await executionExtensionSubflowCapacity(extensionContext!, node_params?.id ?? '') !== 1) {
+        throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+      }
     }
     const subflowId = node_params?.properties?.subflowId;
     const existingInvocation = activeInvocationForNode(sharedState, node_params?.id);
     if (existingInvocation) {
+      if (nativeRoot) throw new ExecutionExtensionError('execution_subflow_child_authority_required');
       log.info('Reusing durable Subflow invocation', {
         invocationId: existingInvocation.id,
         nodeId: node_params?.id,
@@ -793,6 +831,22 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       .map((b) => (typeof b === 'string' ? b.trim() : ''))
       .filter((b) => b !== '');
     let spawnTasks = callerTasks ?? (authorBriefs.length > 0 ? authorBriefs : undefined);
+    if (nativeRoot && (
+      !subflowId
+      || parallelIds.length > 0
+      || Boolean(node_params?.properties?.parallelSubflowIdsVar?.trim())
+      || mapOverList
+      || Boolean(spawnTasks && spawnTasks.length > 1)
+      || node_params?.properties?.allowCallerFanout === true
+      || Boolean(handoffForThisNode?.parallelFlows?.length)
+      || Boolean(handoffForThisNode?.tasks && handoffForThisNode.tasks.length > 1)
+      || Boolean(callerSessionKeys?.length)
+      || node_params?.properties?.sessionScope !== undefined
+      || node_params?.properties?.sessionKey !== undefined
+      || node_params?.properties?.saveConversation === false
+    )) {
+      throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+    }
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
     // Back-compat: a promptTemplate saved before the explicit 'isolated' mode
     // existed used to override the history unconditionally. Preserve that by
@@ -1091,7 +1145,19 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     // Validate the complete resolved plan before durable child admission. In a
     // Persona run a dynamic ID outside this node's authored set fails loudly.
     for (const lane of prepResult.lanes ?? []) pinnedSubflowDefinition(prepResult, lane.subflowId);
+    if (nativeRoot) {
+      if (prepResult.lanes?.length !== 1 || prepResult.lanes[0]?.subflowId !== subflowId) {
+        throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+      }
+      // Native children require a fresh persisted conversation and one attached
+      // lane. This removes the session-resume and detached/ephemeral run paths.
+      prepResult.persistConversation = true;
+      prepResult.concurrencyLimit = 1;
+      prepResult.sessionScope = undefined;
+      prepResult.sessionKeyTemplate = undefined;
+    }
     await attachDurableInvocation(sharedState, prepResult);
+    if (nativeRoot) nativePreparedSubflows.set(prepResult, extensionContext!);
 
     log.info('prep() completed', {
       subflowId,
@@ -1531,16 +1597,77 @@ export async function runSubflowLanes(
     const parentState = prepResult.parentRunId
       ? FlowExecutor.conversationStates.get(prepResult.parentRunId)
       : undefined;
-    // Every lane entry point converges here, including synthetic inline and
-    // detached tools that do not call SubflowNode.prep. A protected parent
-    // cannot mint a child run by presenting a fabricated prep result.
-    if (prepResult.executionExtensionContext || isExecutionProtectedState(prepResult)
-      || (parentState && (parentState.executionExtensionContext || isExecutionProtectedState(parentState)))) {
-      throw new ExecutionExtensionError('execution_subflow_child_authority_required');
-    }
+    const extensionContext = parentState?.executionExtensionContext;
+    const nativeRoot = isNativeRootExecutionContext(extensionContext);
     const invocation = prepResult.invocationId && parentState
       ? parentState.subflowInvocations?.[prepResult.invocationId]
       : undefined;
+    // Every lane entry point converges here, including synthetic inline and
+    // detached tools that do not call SubflowNode.prep. A protected parent
+    // cannot mint a child run by presenting a fabricated prep result. The only
+    // exception is a current Native root with the exact durable one-lane plan
+    // minted by prep(); the adapter revalidates that lane again at runFlow.
+    const protectedPlan = Boolean(prepResult.executionExtensionContext)
+      || isExecutionProtectedState(prepResult)
+      || Boolean(parentState && (parentState.executionExtensionContext || isExecutionProtectedState(parentState)));
+    if (protectedPlan && !nativeRoot) {
+      throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+    }
+    if (nativeRoot) {
+      if (nativePreparedSubflows.get(prepResult) !== extensionContext
+        || consumedNativeSubflows.has(prepResult)) {
+        throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+      }
+      // Reserve synchronously before the first await so concurrent/replayed
+      // callers cannot both consume the same durable lane plan.
+      consumedNativeSubflows.add(prepResult);
+      await assertExecutionExtensionCurrent(extensionContext, {
+        conversationId: parentState?.conversationId,
+        runId: parentState?.logicalRunId,
+      });
+      const lane = lanes[0];
+      const durableLane = lane?.laneId && invocation
+        ? invocation.lanes.find((candidate) => candidate.id === lane.laneId)
+        : undefined;
+      if (
+        prepResult.executionExtensionContext
+        || !parentState
+        || parentState.runDepth !== 0
+        || parentState.parentRunId
+        || parentState.parentConversationId
+        || parentState.subflowLane
+        || parentState.isCancelled
+        || parentState.status !== 'running'
+        || !parentState.logicalRunId
+        || prepResult.parentRunId !== parentState.conversationId
+        || !prepResult.invocationId
+        || !invocation
+        || invocation.status !== 'running'
+        || invocation.parentRunId !== parentState.conversationId
+        || invocation.parentConversationId !== parentState.conversationId
+        || invocation.parentNodeId !== prepResult.nodeId
+        || invocation.concurrencyLimit !== 1
+        || invocation.lanes.length !== 1
+        || !durableLane
+        || durableLane.status !== 'pending'
+        || durableLane.attempt !== 0
+        || durableLane.conversationId !== lane?.conversationId
+        || durableLane.subflowId !== lane?.subflowId
+        || lane?.subflowId !== prepResult.subflowId
+        || lane?.sessionKey !== undefined
+        || lane?.callerSessionKey !== undefined
+        || prepResult.persistConversation !== true
+        || prepResult.concurrencyLimit !== 1
+        || prepResult.sessionScope !== undefined
+        || prepResult.mapOverList
+        || prepResult.fanOutResolvedEmpty
+        || prepResult.laneResolutionError
+        || laneCount !== 1
+        || await executionExtensionSubflowCapacity(extensionContext!, prepResult.nodeId ?? '') !== 1
+      ) {
+        throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+      }
+    }
 
     log.info('runSubflowLanes() running queued subflow jobs', {
       laneCount,
@@ -1716,6 +1843,19 @@ export async function runSubflowLanes(
         invocation!.status = 'running';
         invocation!.updatedAt = Date.now();
         if (parentState) await persistSubflowParent(parentState);
+      }
+      if (nativeRoot) {
+        await assertExecutionExtensionCurrent(extensionContext, {
+          conversationId: parentState?.conversationId,
+          runId: parentState?.logicalRunId,
+        });
+        if (await executionExtensionSubflowCapacity(extensionContext!, prepResult.nodeId ?? '') !== 1
+          || invocation?.status !== 'running'
+          || durableLane?.status !== 'running'
+          || durableLane.attempt !== 1
+          || durableLane.conversationId !== laneConversationId) {
+          throw new ExecutionExtensionError('execution_subflow_child_authority_required');
+        }
       }
       try {
         // Briefed jobs carry their own input. Unbriefed jobs fall back to the

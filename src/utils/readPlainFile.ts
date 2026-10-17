@@ -45,8 +45,13 @@ export async function readPlainFile(file: string, options: {
   options.signal?.throwIfAborted();
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
-    const opened = await handle.stat({ bigint: true });
-    const named = await fs.lstat(file, { bigint: true });
+    const opening = await Promise.allSettled([
+      handle.stat({ bigint: true }), fs.lstat(file, { bigint: true }),
+    ]);
+    if (opening[0].status === 'rejected') throw opening[0].reason;
+    if (opening[1].status === 'rejected') throw opening[1].reason;
+    const opened = opening[0].value;
+    const named = opening[1].value;
     if (!opened.isFile() || !named.isFile() || named.isSymbolicLink() || opened.nlink !== BigInt(1)
         || !sameFile(opened, named) || (options.expected && !sameFile(options.expected, opened))
         || (options.ownerOnly && process.platform !== 'win32' && (opened.mode & BigInt(0o077)) !== BigInt(0))) {
@@ -79,8 +84,14 @@ export async function readPlainFile(file: string, options: {
       if (options.consume) await options.consume(bytes.subarray(0, bytesRead));
       offset += bytesRead;
     }
-    if (BigInt(offset) !== opened.size || !sameFile(opened, await handle.stat({ bigint: true }))) throw new PlainFileReadError('FILE_CHANGED');
-    const finalNamed = await fs.lstat(file, { bigint: true });
+    if (BigInt(offset) !== opened.size) throw new PlainFileReadError('FILE_CHANGED');
+    const final = await Promise.allSettled([
+      handle.stat({ bigint: true }), fs.lstat(file, { bigint: true }),
+    ]);
+    if (final[0].status === 'rejected') throw final[0].reason;
+    if (!sameFile(opened, final[0].value)) throw new PlainFileReadError('FILE_CHANGED');
+    if (final[1].status === 'rejected') throw final[1].reason;
+    const finalNamed = final[1].value;
     if (finalNamed.isSymbolicLink() || !sameFile(opened, finalNamed)) throw new PlainFileReadError('FILE_CHANGED');
     await options.verifyPath?.();
     options.signal?.throwIfAborted();

@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { nativeDigest } from './nativeDigest';
+export { nativeDigest } from './nativeDigest';
 import type OpenAI from 'openai';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { DecodedTool, ToolIdentityService } from './toolNamespace';
@@ -14,9 +15,11 @@ import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { combineAbortSignals } from '../combineAbortSignals';
 import { isNativeHandoffProtocol, type NativeHandoffProtocol } from './nativeHandoffProtocol';
-import { assertNativeOriginalProcessHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, type NativeOriginalProcessHost } from './nativeOriginalHost';
+import type { ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 const ports = new WeakSet<object>();
+const modelToolGates = new WeakMap<object, (context: ExecutionExtensionContext) => Promise<void>>();
 const authorities = new WeakSet<object>();
 const MAX_PORT_RESULT_BYTES = 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES = 64 * 1024;
@@ -46,14 +49,15 @@ export function assertNativeToolPort(value: unknown): asserts value is NativeToo
   }
 }
 
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`;
+/** Validate the actual Native bridge from its sealed Source-owned bindings.
+ * Host tool maps deliberately do not cross the SDK boundary. */
+export async function assertNativeToolPortModelTools(port: NativeToolPort, context: ExecutionExtensionContext): Promise<void> {
+  assertNativeToolPort(port);
+  const gate = modelToolGates.get(port);
+  if (!gate) throw new Error('Native tool inventory lacks its trusted Source context.');
+  await gate(context);
 }
-export const nativeDigest = (value: unknown): string => createHash('sha256').update(canonical(value)).digest('hex');
+
 const isHandoff = (name: string) => name === 'handoff' || name.startsWith('handoff_to_');
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -114,14 +118,18 @@ export interface NativeBrokerInput {
   signal: AbortSignal;
   terminationProtocol?: NativeHandoffProtocol;
   originalProcessHost?: NativeOriginalProcessHost;
+  executionExtensionContext?: ExecutionExtensionContext;
 }
 
 /** Freeze exactly the tools on this provider attempt; retain executors only here. */
 export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
   assertNativeBrokerAuthority(input.authority);
+  const executionContext = input.executionExtensionContext;
+  if (executionContext) assertNativeOriginalExecutionContext(input.originalProcessHost, executionContext);
   if (input.terminationProtocol !== undefined) {
     if (!isNativeHandoffProtocol(input.terminationProtocol)) throw new Error('Unknown native termination protocol.');
     assertNativeOriginalProcessHost(input.originalProcessHost);
+    if(input.originalProcessHost.terminationProtocol!==input.terminationProtocol)throw new Error('Native termination protocol differs from its Original host.');
   }
   const advertised = structuredClone(input.tools.filter(tool => tool.type === 'function').map(tool => ({
     name: tool.function.name,
@@ -259,6 +267,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
             undefined, decoded.nodeId, combined, 'model',
             ownerScopeForRun({ runId: input.receipt.owner.runId, conversationId: input.receipt.owner.conversationId }),
             { conversationId: input.receipt.owner.conversationId },
+            executionContext,
           );
           await input.authority.assertCurrent();
           await input.afterToolDispatch?.();
@@ -301,5 +310,21 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
     },
   });
   ports.add(port);
+  if (executionContext) modelToolGates.set(port, async context => {
+    if (context !== executionContext) throw new Error('Native tool inventory Source context changed.');
+    assertNativeOriginalExecutionContext(input.originalProcessHost, context);
+    input.signal.throwIfAborted();
+    controller.signal.throwIfAborted();
+    await input.authority.assertCurrent();
+    const { assertExecutionModelTool } = await import('@/backend/execution/extensions');
+    for (const tool of advertised) {
+      await assertExecutionModelTool(context, tool.name, bound[tool.name]);
+      input.signal.throwIfAborted();
+      controller.signal.throwIfAborted();
+    }
+    await input.authority.assertCurrent();
+    input.signal.throwIfAborted();
+    controller.signal.throwIfAborted();
+  });
   return port;
 }

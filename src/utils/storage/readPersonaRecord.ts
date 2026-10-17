@@ -35,24 +35,33 @@ async function parentsFor(root: string, filename: string): Promise<Parent[] | nu
   for (const segment of segments) directories.push(path.join(directories[directories.length - 1], segment));
   const parents: Parent[] = [];
   for (const directory of directories) {
-    const stats = await statOrNull(directory);
+    // Keep admission parent-by-parent. Only the two observations of this
+    // same named parent overlap, and both drain before admitting its child.
+    const [statsResult, canonicalResult] = await Promise.allSettled([
+      statOrNull(directory), fs.realpath(directory),
+    ]);
+    if (statsResult.status === 'rejected') throw statsResult.reason;
+    const stats = statsResult.value;
     if (!stats) return null;
     if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error('Persona record parent is not a link-free directory.');
-    const canonical = await fs.realpath(directory);
+    if (canonicalResult.status === 'rejected') throw canonicalResult.reason;
+    const canonical = canonicalResult.value;
     if (parents.length) contained(parents[0].canonical, canonical);
     parents.push({ filename: directory, stats, canonical });
   }
   return parents;
 }
 async function verifyParents(parents: Parent[]) {
-  for (const parent of parents) {
-    // Both reads inspect an already-admitted parent. Validate every field at
-    // the same strict read checkpoints, without serial metadata round trips.
-    const [currentResult, canonicalResult] = await Promise.allSettled([
-      fs.lstat(parent.filename, { bigint: true }),
-      fs.realpath(parent.filename),
-    ]);
-    // Drain both reads even on refusal; no metadata promise survives unlock.
+  // All paths belong to the already-admitted chain. Sample its independent
+  // metadata together, then retain root-first refusal and every identity check.
+  const observations = await Promise.allSettled(parents.flatMap(parent => [
+    fs.lstat(parent.filename, { bigint: true }),
+    fs.realpath(parent.filename),
+  ]));
+  for (const [index, parent] of parents.entries()) {
+    const currentResult = observations[index * 2] as PromiseSettledResult<BigIntStats>;
+    const canonicalResult = observations[index * 2 + 1] as PromiseSettledResult<string>;
+    // Drain every read even on refusal; no metadata promise survives unlock.
     if (currentResult.status === 'rejected') throw currentResult.reason;
     const current = currentResult.value;
     if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== parent.stats.dev

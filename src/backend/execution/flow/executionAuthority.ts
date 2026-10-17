@@ -29,7 +29,10 @@ export interface FlowDurableMutationContext {
 }
 
 /** Causal children inherit fencing and audit attribution, never Persona abilities. */
-const forwardingAuthorityParents = new WeakMap<FlowExecutionAuthority, FlowExecutionAuthority>();
+const authorityForwardingRoot = globalThis as typeof globalThis & {
+  __flujoFlowAuthorityParents?: WeakMap<FlowExecutionAuthority, FlowExecutionAuthority>;
+};
+const forwardingAuthorityParents = authorityForwardingRoot.__flujoFlowAuthorityParents ??= new WeakMap<FlowExecutionAuthority, FlowExecutionAuthority>();
 
 /** Only wrappers constructed here prove exact assertion forwarding. */
 export function flowAssertionRoot(authority: FlowExecutionAuthority): FlowExecutionAuthority {

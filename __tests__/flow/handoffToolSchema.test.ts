@@ -12,6 +12,11 @@
  * mocked so the test never touches disk or a model.
  */
 import { flowService } from '@/backend/services/flow/index';
+import * as executionExtensions from '@/backend/execution/extensions';
+jest.mock('@/backend/execution/extensions', () => ({
+  ...jest.requireActual('@/backend/execution/extensions'),
+  executionExtensionSubflowCapacity: jest.fn(),
+}));
 
 jest.mock('@/backend/services/flow/index', () => ({
   flowService: { getFlow: jest.fn() },
@@ -89,6 +94,22 @@ describe('ProcessNode.generateHandoffTools — Signal body (#307)', () => {
 });
 
 describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
+  it('advertises one child instead of an unbounded queue for an installed one-child execution plan', async () => {
+    const capacity = (executionExtensions.executionExtensionSubflowCapacity as jest.Mock).mockResolvedValue(1);
+    const context = {} as executionExtensions.ExecutionExtensionContext;
+    const proc = makeProcessNode([{ edgeId: 'e-child', nodeId: 'sub-child' }]);
+    const flowSnapshot = { id: 'flow-1', nodes: [{ id: 'sub-child', data: { properties: {} } }], edges: [] };
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1', flowSnapshot, executionExtensionContext: context } as unknown as SharedState);
+    const handoff = tools.find((tool: any) => tool.name.startsWith('handoff_to_'));
+    expect(capacity).toHaveBeenCalledWith(context, 'sub-child');
+    expect(handoff.description).toContain('exactly ONCE');
+    expect(handoff.description).not.toContain('MULTIPLE TIMES');
+    expect(handoff.inputSchema.properties.task).toBeDefined();
+    capacity.mockResolvedValue(0);
+    const exhausted = await (proc as any).generateHandoffTools({ flowId: 'flow-1', flowSnapshot, executionExtensionContext: context } as unknown as SharedState);
+    expect(exhausted.some((tool: any) => tool.name.startsWith('handoff_to_'))).toBe(false);
+  });
+
   it('exposes a caller-chosen sessionKey for an enabled per-key Subflow and lists reusable keys', async () => {
     const proc = makeProcessNode([{ edgeId: 'e-keyed', nodeId: 'sub-keyed' }]);
     getFlowMock.mockResolvedValue({

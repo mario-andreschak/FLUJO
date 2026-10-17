@@ -32,11 +32,11 @@ const receiptFor = (id: string, runId: string, nodeId: string) => prepareNativeI
   conversationId: id, runId, nodeId, modelId: 'native-model', leaseEpoch: 'lease-1',
   inventoryDigest: 'inventory', inputDigest: 'input', attemptOrdinal: 1,
 });
-const rootBinding = (assertCurrent = async () => undefined) => createNativeLineageRootBinding({
+const rootBinding = (assertCurrent: () => Promise<void> = async () => {}) => createNativeLineageRootBinding({
   fleetRunId: 'fleet-run', workerId: 'worker-1', goalId: 'goal-1', workspace: 'default-workspace',
   rootConversationId: rootId, rootLogicalRunId: rootRun, rootFlowId: rootFlow,
 }, assertCurrent);
-const authority = (assertCurrent = async () => undefined) => createNativeBrokerAuthority('lease-1', assertCurrent);
+const authority = (assertCurrent: () => Promise<void> = async () => {}) => createNativeBrokerAuthority('lease-1', assertCurrent);
 
 async function detachedChild(parent: SharedState, childId: string, flowId = `flow-${childId}`) {
   const task = await createTask({
@@ -75,6 +75,30 @@ afterEach(async () => {
 });
 
 describe('saved native origin lineage', () => {
+  it('coalesces reference-identical broker and root checks at each freshness boundary', async () => {
+    const assertCurrent = jest.fn(async () => undefined);
+    const receipt = await receiptFor(rootId, rootRun, 'lead-process');
+    await expect(readNativeOriginLineage({
+      receipt, signal, authority: authority(assertCurrent), root: rootBinding(assertCurrent),
+    })).resolves.toMatchObject({ rootConversationId: rootId, edges: [] });
+    // A root-only proof keeps its existing eight freshness boundaries (before/
+    // after status, both endpoints of each of two traces, and final status).
+    // The exact same branded callback proves both gates, so it should run once
+    // at each boundary rather than three times through A -> R -> A.
+    expect(assertCurrent).toHaveBeenCalledTimes(8);
+  });
+
+  it('preserves broker-root-broker ordering when the branded callbacks differ', async () => {
+    const order: string[] = [];
+    const assertBrokerCurrent = jest.fn(async () => { order.push('broker'); });
+    const assertRootCurrent = jest.fn(async () => { order.push('root'); });
+    const receipt = await receiptFor(rootId, rootRun, 'lead-process');
+    await expect(readNativeOriginLineage({
+      receipt, signal, authority: authority(assertBrokerCurrent), root: rootBinding(assertRootCurrent),
+    })).resolves.toMatchObject({ rootConversationId: rootId, edges: [] });
+    expect(order).toEqual(Array.from({ length: 8 }, () => ['broker', 'root', 'broker']).flat());
+  });
+
   it('keeps unknown issuers on the actual original reader and retains its live guards', async () => {
     let revoked = false;
     const assertCurrent = jest.fn(async () => { if (revoked) throw new Error('original guard revoked'); });
@@ -240,18 +264,20 @@ describe('saved native origin lineage', () => {
   it('rechecks Worker authority after an awaited root gate revokes it', async () => {
     const receipt = await receiptFor(rootId, rootRun, 'lead-process');
     let workerCurrent = true;
+    const order: string[] = [];
     let entered!: () => void;
     let release!: () => void;
     const rootEntered = new Promise<void>(resolve => { entered = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
     const pending = readNativeOriginLineage({
       receipt, signal,
-      authority: authority(async () => { if (!workerCurrent) throw new Error('Worker lease revoked'); }),
-      root: rootBinding(async () => { entered(); await gate; workerCurrent = false; }),
+      authority: authority(async () => { order.push('broker'); if (!workerCurrent) throw new Error('Worker lease revoked'); }),
+      root: rootBinding(async () => { order.push('root'); entered(); await gate; workerCurrent = false; }),
     });
     await rootEntered;
     release();
     await expect(pending).rejects.toBeInstanceOf(NativeLineageHeldError);
+    expect(order.slice(0, 3)).toEqual(['broker', 'root', 'broker']);
   });
 
   it('rechecks Worker authority and abort after the final journal status read', async () => {

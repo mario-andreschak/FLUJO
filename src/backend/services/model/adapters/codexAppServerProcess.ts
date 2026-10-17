@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { captureRuntimeChildIdentity, type RuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
+import { captureRuntimeChildIdentity, probeRuntimeProcessIdentity, type RuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
 
 export interface CodexOwnedProcessRegistration {
   readonly identity: Readonly<RuntimeProcessIdentity>;
@@ -10,10 +10,19 @@ export interface CodexOwnedProcessRegistration {
 
 const registrationRoot = globalThis as typeof globalThis & { __flujoCodexOwnedRegistrations?: WeakMap<object, object> };
 const registrations = registrationRoot.__flujoCodexOwnedRegistrations ??= new WeakMap<object, object>();
+const probeRoot=globalThis as typeof globalThis & {__flujoCodexOwnedProbes?:WeakMap<object,()=>Promise<boolean>>};
+const probes=probeRoot.__flujoCodexOwnedProbes??=new WeakMap<object,()=>Promise<boolean>>();
 export function assertCodexOwnedProcessRegistration(value: unknown, owner: object): asserts value is CodexOwnedProcessRegistration {
   if (!value || typeof value !== 'object' || registrations.get(value) !== owner) {
     throw new Error('Owned Codex process registration is unavailable or mismatched.');
   }
+}
+
+/** Return the same owned registration only after a fresh positive OS birth
+ * observation. Session phases, JSON identities and PID-only probes cannot pass. */
+export async function probeCodexOwnedProcessRegistration(value:unknown,owner:object):Promise<CodexOwnedProcessRegistration|null> {
+  assertCodexOwnedProcessRegistration(value,owner);
+  return await probes.get(value)?.() ? value : null;
 }
 
 type Message = {id?: number | string; method?: string; params?: unknown; result?: unknown; error?: unknown};
@@ -177,14 +186,24 @@ export async function startOwnedCodexAppServer(input: {
   const stop = async () => {
     if (closed) return;
     stopping=true;clearIncoming();child.stdin.end();
-    if (!await waitClose(2000)) {requestStop();if(!await waitClose(5000))throw new Error('Owned Codex process close remains unconfirmed.');}
+    // The pinned app-server drains RPC/session work after stdin EOF and bounds
+    // its own shutdown at 45s. Do not kill a successful normal drain at 2s.
+    // Cancellation still calls requestStop immediately through the abort hook.
+    if (!await waitClose(45000)) {requestStop();if(!await waitClose(5000))throw new Error('Owned Codex process close remains unconfirmed.');}
   };
   try {
     await new Promise<void>((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});
+    // The shared identity capture owns the bounded startup warmup. Retrying
+    // that entire sequence here would multiply exhausted OS probes by three.
     const identity=Object.freeze(await captureRuntimeChildIdentity(child.pid!));
-    if (exited || closed || input.signal?.aborted) throw unavailable();
+    if (exited || closed || stopping || input.signal?.aborted) throw unavailable();
     const registration=Object.freeze({identity,requestStop,exit,close});
     registrations.set(registration,input.owner);
+    probes.set(registration,async()=>{
+      if(exited||closed||stopping||input.signal?.aborted)return false;
+      const live=await probeRuntimeProcessIdentity(identity);
+      return live&&!exited&&!closed&&!stopping&&!input.signal?.aborted;
+    });
     let admissionTimer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([input.register(registration),close.then(()=>{throw unavailable();}),

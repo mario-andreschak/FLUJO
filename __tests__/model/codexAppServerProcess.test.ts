@@ -1,7 +1,18 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
+import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, probeCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
+import { probeRuntimeProcessIdentity, _setPersonaRuntimeLockProcessBirthProbeForTests } from '@/backend/services/enduringAgents/runtimeLock';
+let uncertainProbe=false;
+let birthReads=0,lastBirthPid=0;
+jest.mock('@/backend/services/enduringAgents/runtimeLock',()=>{
+  const actual=jest.requireActual<typeof import('@/backend/services/enduringAgents/runtimeLock')>('@/backend/services/enduringAgents/runtimeLock');
+  return {...actual,probeRuntimeProcessIdentity:async(identity:Parameters<typeof actual.probeRuntimeProcessIdentity>[0])=>
+    uncertainProbe?false:actual.probeRuntimeProcessIdentity(identity),captureRuntimeChildIdentity:async(pid:number)=>{
+    birthReads++;lastBirthPid=pid;
+    return actual.captureRuntimeChildIdentity(pid);
+  }};
+});
 
 // A real child process exercises wire ordering and exit/close ownership. This
 // deterministic fixture performs no provider execution and uses no credentials.
@@ -46,8 +57,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 let root: string;
 const children: Array<Awaited<ReturnType<typeof startOwnedCodexAppServer>>> = [];
 const registrations: CodexOwnedProcessRegistration[] = [];
-beforeEach(async()=>{root=await fs.mkdtemp(path.join(os.tmpdir(),'codex-owned-process-'));});
+beforeEach(async()=>{uncertainProbe=false;birthReads=0;lastBirthPid=0;root=await fs.mkdtemp(path.join(os.tmpdir(),'codex-owned-process-'));});
 afterEach(async()=>{
+  _setPersonaRuntimeLockProcessBirthProbeForTests();
   const stopped=await Promise.allSettled(children.splice(0).map(child=>child.stop()));
   try {
     for(const registration of registrations.splice(0)){registration.requestStop();await registration.close;}
@@ -101,6 +113,34 @@ function options(mode='normal') {
     onNotification:()=>{},register:async(registration: CodexOwnedProcessRegistration)=>{registrations.push(registration);}};
 }
 async function wire() {return fs.readFile(path.join(root,'wire.jsonl'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});}
+
+it('retains only the same owned original with positive OS identity and refuses uncertainty or closure',async()=>{
+  const input=options();const child=await startOwnedCodexAppServer(input);children.push(child);
+  expect(await probeCodexOwnedProcessRegistration(child.registration,input.owner)).toBe(child.registration);
+  expect(await probeRuntimeProcessIdentity({...child.registration.identity,processBirthMarkerV2:'invalid'})).toBe(false);
+  uncertainProbe=true;expect(await probeCodexOwnedProcessRegistration(child.registration,input.owner)).toBeNull();
+  uncertainProbe=false;
+  await expect(probeCodexOwnedProcessRegistration({...child.registration},input.owner)).rejects.toThrow('mismatched');
+  await expect(probeCodexOwnedProcessRegistration(child.registration,{})).rejects.toThrow('mismatched');
+  await child.stop();expect(await probeCodexOwnedProcessRegistration(child.registration,input.owner)).toBeNull();
+});
+
+it('uses the shared startup warmup on the same child before any wire input',async()=>{
+  const observations=jest.fn().mockResolvedValueOnce(null).mockResolvedValue('win32-v2:638927322190000000');
+  _setPersonaRuntimeLockProcessBirthProbeForTests(observations);
+  const child=await startOwnedCodexAppServer(options());children.push(child);
+  expect(birthReads).toBe(1);expect(observations.mock.calls).toEqual([[lastBirthPid],[lastBirthPid]]);
+  expect(child.registration.identity.pid).toBe(lastBirthPid);
+  expect(child.registration.identity.processBirthMarkerV2).toBeDefined();expect(await wire()).toBe('');
+});
+it('does not multiply exhausted startup probes and closes without registration or input',async()=>{
+  const observations=jest.fn().mockResolvedValue(null);
+  _setPersonaRuntimeLockProcessBirthProbeForTests(observations);
+  await expect(startOwnedCodexAppServer(options())).rejects.toThrow('Child process birth identity is unavailable');
+  expect(observations.mock.calls).toEqual([[lastBirthPid],[lastBirthPid],[lastBirthPid]]);
+  expect(birthReads).toBe(1);expect(registrations).toHaveLength(0);expect(await wire()).toBe('');
+  expect(()=>process.kill(lastBirthPid,0)).toThrow();
+});
 
 it('keeps native/default admission requests refused without an input callback',async()=>{
   const child=await startOwnedCodexAppServer(options('incoming'));children.push(child);

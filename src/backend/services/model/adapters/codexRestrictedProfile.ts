@@ -45,6 +45,7 @@ export const RESTRICTED_CODEX_CONFIG = Object.freeze({
     plugins: false,
     browser_use: false,
     browser_use_external: false,
+    browser_use_full_cdp_access: false,
     computer_use: false,
     code_mode: false,
     code_mode_host: false,
