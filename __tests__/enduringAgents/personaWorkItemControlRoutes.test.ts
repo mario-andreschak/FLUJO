@@ -35,15 +35,15 @@ jest.mock('@/backend/services/enduringAgents', () => {
 import { NextRequest, NextResponse } from 'next/server';
 
 import { POST } from '@/app/v1/personas/[personaId]/work-items/[workItemId]/control/route';
-import { PersonaDomainNotFoundError } from '@/backend/services/enduringAgents';
+import { PersonaDomainConflictError, PersonaDomainNotFoundError } from '@/backend/services/enduringAgents';
 
-function request(action: string): NextRequest {
+function request(action: string, extra: Record<string, unknown> = {}): NextRequest {
   return new NextRequest(
     'http://localhost:4200/v1/personas/persona_test/work-items/work_test/control',
     {
       method: 'POST',
       headers: { host: 'localhost:4200', 'content-type': 'application/json' },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, ...extra }),
     },
   );
 }
@@ -83,6 +83,33 @@ describe('Persona Task control route', () => {
 
     expect(response.status).toBe(400);
     expect(controlPersonaWorkItemMock).not.toHaveBeenCalled();
+  });
+
+  it('forwards an exact optional Goal fence and prevents caching the result', async () => {
+    const response = await POST(request('retry', { expectedUpdatedAt: 100 }), context());
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(controlPersonaWorkItemMock).toHaveBeenCalledWith(
+      'persona_test', 'work_test', 'retry', { expectedUpdatedAt: 100 },
+    );
+  });
+
+  it.each([null, true, '100', -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid supplied Goal version %s before the service', async (expectedUpdatedAt) => {
+      const response = await POST(request('pause', { expectedUpdatedAt }), context());
+      expect(response.status).toBe(400);
+      expect(controlPersonaWorkItemMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('returns a stale Goal conflict without rebasing the caller', async () => {
+    controlPersonaWorkItemMock.mockRejectedValueOnce(new PersonaDomainConflictError(
+      'The Goal changed.', 'PERSONA_GOAL_CONTROL_VERSION_CONFLICT',
+    ));
+    const response = await POST(request('retry', { expectedUpdatedAt: 100 }), context());
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'PERSONA_GOAL_CONTROL_VERSION_CONFLICT' });
+    expect(controlPersonaWorkItemMock).toHaveBeenCalledTimes(1);
   });
 
   it('rejects the hidden resume synonym in favor of the single Resume or retry action', async () => {

@@ -99,6 +99,17 @@ describe('Persona Task work controls', () => {
     });
   });
 
+  it('refuses a Goal version fence on ordinary Tasks rather than promising unsupported fencing', async () => {
+    await inFreshWorkspace(async () => {
+      const { personaId, task } = await createTask('not-a-goal');
+      await expect(controlPersonaWorkItem(personaId, task.id, 'retry', {
+        expectedUpdatedAt: task.updatedAt,
+      })).rejects.toThrow('ongoing Goal');
+      expect(await getPersonaWorkItem(personaId, task.id)).toEqual(task);
+      expect(submitPersonaFlowDispatchMock).not.toHaveBeenCalled();
+    });
+  });
+
   it('returns the durable caller attempt receipt after a lost ACK or stale retry', async () => {
     await inFreshWorkspace(async () => {
       const { personaId, task } = await createTask('caller-attempt');
