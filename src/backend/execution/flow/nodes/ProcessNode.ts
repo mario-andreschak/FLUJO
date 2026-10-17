@@ -963,7 +963,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       && typeof message.content === 'string'
       && (message.content.includes('${') || message.content.includes('@'))
     )) {
-      wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
+      const resolvedWireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
         if (message.role !== 'user' || typeof message.content !== 'string') return message;
         await assertModelCatalogLeaseOwned();
         let content = await promptRenderer.resolveChatMessageReferences(
@@ -994,6 +994,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           ? message
           : { ...message, content } as FlujoChatMessage;
       }));
+      // A literal @path or unresolved reference can pass through unchanged.
+      // Preserve the full-history identity in that case: a wire-only array
+      // disables native session resume even when its content is identical.
+      if (resolvedWireBase.some((message, index) => message !== wireBase[index])) {
+        wireBase = resolvedWireBase;
+      }
     }
 
     let resolvedIsolatedPrompt: string | undefined;
@@ -1040,7 +1046,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     let materialized = finalizeModelInputMaterialization({
       ...materializationBase,
       folded: wireBase,
-      systemContent: completePrompt,
+      systemContent: systemPromptContent,
       inputMode,
       isolatedPrompt: resolvedIsolatedPrompt,
       mcpAppContexts: sharedState.mcpAppContexts,
@@ -1152,7 +1158,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       materialized = finalizeModelInputMaterialization({
         ...materializationBase,
         folded: wireBase,
-        systemContent: completePrompt,
+        systemContent: systemPromptContent,
         inputMode,
         isolatedPrompt: resolvedIsolatedPrompt,
         mcpAppContexts: sharedState.mcpAppContexts,

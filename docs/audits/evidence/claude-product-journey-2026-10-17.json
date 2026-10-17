@@ -1,0 +1,1598 @@
+{
+  "schemaVersion": 1,
+  "observedUtc": "2026-10-17T07:52:44.391Z",
+  "scope": "Existing #1124, #1092 and #1096 saved HTTP/Process-node/Agent SDK gateway qualification",
+  "source": {
+    "previousPrHead": "d1949f03603acdf907d8e7c71152fefb9a7aa096",
+    "incomingMain": "c13af2e55fd65c3d25b7362a6b52f45fec292b0e",
+    "qualifiedSourceTree": "f78baefa02368b6d16232879550d4a24ef13fd9c",
+    "qualifiedIndexTree": "a031508ee117390df31f0dd8e0b6fb24cc9bf258",
+    "buildId": "fgxgIDrF2kW8IdQafpstZ"
+  },
+  "repairs": [
+    "Preserve full-history eligibility when literal reference resolution changes no message",
+    "Archive effective stable/per-turn instructions in both finalization paths"
+  ],
+  "regressions": {
+    "before": "Three failures: unchanged @path, unchanged unresolved global, effective stable archive prompt",
+    "final": "57 unique checks in five selected suites; four passing suites reused and three resource-authority cases rerun after saving their model fixture",
+    "assertionsPreserved": true
+  },
+  "localChecks": {
+    "build-final": {
+      "command": "npm run build",
+      "elapsedSeconds": 325.2918081,
+      "finishedUtc": "2026-10-17T07:30:12.8852531Z",
+      "exitCode": 0
+    },
+    "lint-final": {
+      "elapsedSeconds": 95.565285,
+      "finishedUtc": "2026-10-17T07:26:23.6359746Z",
+      "command": "npm run lint -- --max-warnings=0",
+      "exitCode": 0
+    },
+    "typecheck-final": {
+      "exitCode": 0,
+      "elapsedSeconds": 57.1002583,
+      "command": "npm run typecheck",
+      "finishedUtc": "2026-10-17T07:31:17.5064070Z"
+    }
+  },
+  "sdk": {
+    "version": "0.3.296",
+    "bundledRuntime": "2.1.296",
+    "transport": "Production adapter and genuine SDK, supported Anthropic Messages gateway, approved OpenRouter Free model pinned in every SDK slot",
+    "directClaudeCredentialsRead": false,
+    "paidFallback": false
+  },
+  "semantic": {
+    "receipt": "product-1724c53f-36a7-4860-9a18-77d565350fc0.json",
+    "overallReceiptFailedLaterAtUnconnectedStdioFixture": true,
+    "qualifiedScopes": "Four passed semantic stages and both passed phone stages; later fixture failure is not semantic failure",
+    "stages": [
+      {
+        "stage": "saved-node-A",
+        "policy": "A",
+        "nativeSessionId": "7f68c2bf-78cf-4f99-b774-b0b66d256da2",
+        "resumed": false,
+        "resumeReason": "no-compatible-checkpoint",
+        "hostDeltaOnly": false,
+        "rememberedTicketAndPolicyPassed": true,
+        "archiveDispatchId": "4fc2deb9-4d16-4a94-b795-8cfa0b2bc66d",
+        "usage": {
+          "prompt_tokens": 660,
+          "completion_tokens": 682,
+          "total_tokens": 1342
+        },
+        "providerUsage": [
+          {
+            "input_tokens": 660,
+            "output_tokens": 682,
+            "output_tokens_details": {
+              "thinking_tokens": 610
+            },
+            "cache_creation_input_tokens": null,
+            "cache_read_input_tokens": 0,
+            "cache_creation": null,
+            "inference_geo": null,
+            "server_tool_use": null,
+            "service_tier": null,
+            "speed": "standard",
+            "cost": 0,
+            "is_byok": false,
+            "cost_details": {
+              "upstream_inference_cost": 0,
+              "upstream_inference_prompt_cost": 0,
+              "upstream_inference_completions_cost": 0
+            }
+          }
+        ],
+        "latencyMs": 8058,
+        "providerRequests": 1
+      },
+      {
+        "stage": "saved-node-B-after-restart",
+        "policy": "B",
+        "nativeSessionId": "7f68c2bf-78cf-4f99-b774-b0b66d256da2",
+        "resumed": true,
+        "resumeReason": "compatible-history-and-transcript",
+        "hostDeltaOnly": true,
+        "rememberedTicketAndPolicyPassed": true,
+        "archiveDispatchId": "c8ecc8f1-7046-46fd-8915-f5b3d4842db1",
+        "usage": {
+          "prompt_tokens": 753,
+          "completion_tokens": 254,
+          "total_tokens": 1007
+        },
+        "providerUsage": [
+          {
+            "input_tokens": 753,
+            "output_tokens": 254,
+            "output_tokens_details": {
+              "thinking_tokens": 203
+            },
+            "cache_creation_input_tokens": null,
+            "cache_read_input_tokens": 0,
+            "cache_creation": null,
+            "inference_geo": null,
+            "server_tool_use": null,
+            "service_tier": null,
+            "speed": "standard",
+            "cost": 0,
+            "is_byok": false,
+            "cost_details": {
+              "upstream_inference_cost": 0,
+              "upstream_inference_prompt_cost": 0,
+              "upstream_inference_completions_cost": 0
+            }
+          }
+        ],
+        "latencyMs": 3388,
+        "providerRequests": 1
+      },
+      {
+        "stage": "saved-node-A-return",
+        "policy": "A",
+        "nativeSessionId": "7f68c2bf-78cf-4f99-b774-b0b66d256da2",
+        "resumed": true,
+        "resumeReason": "compatible-history-and-transcript",
+        "hostDeltaOnly": true,
+        "rememberedTicketAndPolicyPassed": true,
+        "archiveDispatchId": "b33525a7-a54a-4083-93c2-e0bc819cf705",
+        "usage": {
+          "prompt_tokens": 826,
+          "completion_tokens": 321,
+          "total_tokens": 1147
+        },
+        "providerUsage": [
+          {
+            "input_tokens": 826,
+            "output_tokens": 321,
+            "output_tokens_details": {
+              "thinking_tokens": 270
+            },
+            "cache_creation_input_tokens": null,
+            "cache_read_input_tokens": 0,
+            "cache_creation": null,
+            "inference_geo": null,
+            "server_tool_use": null,
+            "service_tier": null,
+            "speed": "standard",
+            "cost": 0,
+            "is_byok": false,
+            "cost_details": {
+              "upstream_inference_cost": 0,
+              "upstream_inference_prompt_cost": 0,
+              "upstream_inference_completions_cost": 0
+            }
+          }
+        ],
+        "latencyMs": 4522,
+        "providerRequests": 1
+      },
+      {
+        "stage": "saved-node-A-repeat",
+        "policy": "A",
+        "nativeSessionId": "7f68c2bf-78cf-4f99-b774-b0b66d256da2",
+        "resumed": true,
+        "resumeReason": "compatible-history-and-transcript",
+        "hostDeltaOnly": true,
+        "rememberedTicketAndPolicyPassed": true,
+        "archiveDispatchId": "3f822829-ce78-4a8b-8e7e-fc57fc7f18d5",
+        "usage": {
+          "prompt_tokens": 897,
+          "completion_tokens": 267,
+          "total_tokens": 1164
+        },
+        "providerUsage": [
+          {
+            "input_tokens": 897,
+            "output_tokens": 267,
+            "output_tokens_details": {
+              "thinking_tokens": 216
+            },
+            "cache_creation_input_tokens": null,
+            "cache_read_input_tokens": 0,
+            "cache_creation": null,
+            "inference_geo": null,
+            "server_tool_use": null,
+            "service_tier": null,
+            "speed": "standard",
+            "cost": 0,
+            "is_byok": false,
+            "cost_details": {
+              "upstream_inference_cost": 0,
+              "upstream_inference_prompt_cost": 0,
+              "upstream_inference_completions_cost": 0
+            }
+          }
+        ],
+        "latencyMs": 3327,
+        "providerRequests": 1
+      }
+    ],
+    "backendEpochs": [
+      {
+        "number": 1,
+        "startedUtc": "2026-10-17T07:31:27.741Z",
+        "pid": 15872,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "at": "2026-10-17T07:31:39.792Z"
+        },
+        "closedUtc": "2026-10-17T07:31:39.792Z"
+      },
+      {
+        "number": 2,
+        "startedUtc": "2026-10-17T07:31:39.793Z",
+        "pid": 27356,
+        "exit": {
+          "code": 143,
+          "signal": null,
+          "at": "2026-10-17T07:32:01.027Z"
+        },
+        "closedUtc": "2026-10-17T07:32:01.027Z"
+      }
+    ],
+    "phone": [
+      {
+        "width": 320,
+        "afterReload": {
+          "retainedTicket": true,
+          "documentWidth": 320
+        },
+        "status": "passed",
+        "documentWidth": 320,
+        "visibleButtons": [
+          {
+            "label": "Navigationsmenü öffnen",
+            "x": 8,
+            "right": 50,
+            "width": 42,
+            "height": 42,
+            "visible": true
+          },
+          {
+            "label": "Link zu diesem Chat kopieren",
+            "x": 112,
+            "right": 150,
+            "width": 38,
+            "height": 38,
+            "visible": true
+          },
+          {
+            "label": "Ask FLUJO",
+            "x": 152,
+            "right": 190,
+            "width": 38,
+            "height": 38,
+            "visible": true
+          },
+          {
+            "label": "Sprache ändern",
+            "x": 192,
+            "right": 230,
+            "width": 38,
+            "height": 38,
+            "visible": true
+          },
+          {
+            "label": "Fehler melden",
+            "x": 232,
+            "right": 272,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Zum dunklen Modus wechseln",
+            "x": 274,
+            "right": 312,
+            "width": 38,
+            "height": 38,
+            "visible": true
+          },
+          {
+            "label": "Teilen deaktivieren",
+            "x": 84.25,
+            "right": 198.0625,
+            "width": 113.8125,
+            "height": 22.5,
+            "visible": true
+          },
+          {
+            "label": "Nicht mehr benachrichtigen",
+            "x": 84.25,
+            "right": 232.75,
+            "width": 148.5,
+            "height": 30.09375,
+            "visible": true
+          },
+          {
+            "label": "Schließen",
+            "x": 244.75,
+            "right": 267.25,
+            "width": 22.5,
+            "height": 16.875,
+            "visible": true
+          },
+          {
+            "label": "Unterhaltungsleiste anzeigen",
+            "x": 8,
+            "right": 38,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Unterhaltung umbenennen",
+            "x": 244,
+            "right": 274,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Bereich der ausgeführten Schritte umschalten",
+            "x": 282,
+            "right": 312,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "SDK product receipt 1724c53f-36a7-4860-9a18-77d565350fc0",
+            "x": 8,
+            "right": 30,
+            "width": 22,
+            "height": 36,
+            "visible": true
+          },
+          {
+            "label": "Diesen Agenten im Editor öffnen",
+            "x": 12,
+            "right": 42,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "1. Receipt clerk · Isolated OpenRouter Free SDK acceptance · 02:31:32",
+            "x": 24,
+            "right": 31,
+            "width": 7,
+            "height": 14,
+            "visible": true
+          },
+          {
+            "label": "2. Receipt clerk · Isolated OpenRouter Free SDK acceptance · 02:31:43",
+            "x": 36,
+            "right": 43,
+            "width": 7,
+            "height": 14,
+            "visible": true
+          },
+          {
+            "label": "3. Receipt clerk · Isolated OpenRouter Free SDK acceptance · 02:31:46",
+            "x": 48,
+            "right": 55,
+            "width": 7,
+            "height": 14,
+            "visible": true
+          },
+          {
+            "label": "4. Receipt clerk · Isolated OpenRouter Free SDK acceptance · 02:31:51",
+            "x": 60,
+            "right": 70,
+            "width": 10,
+            "height": 22,
+            "visible": true
+          },
+          {
+            "label": "Chat",
+            "x": 48.46875,
+            "right": 84.46875,
+            "width": 36,
+            "height": 25.59375,
+            "visible": true
+          },
+          {
+            "label": "Modelleingabe",
+            "x": 85.46875,
+            "right": 121.46875,
+            "width": 36,
+            "height": 25.59375,
+            "visible": true
+          },
+          {
+            "label": "Nachricht kopieren",
+            "x": 246,
+            "right": 276,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Weitere Nachrichtenaktionen",
+            "x": 278,
+            "right": 308,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Nachricht kopieren",
+            "x": 20,
+            "right": 50,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Weitere Nachrichtenaktionen",
+            "x": 52,
+            "right": 82,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Nachricht kopieren",
+            "x": 246,
+            "right": 276,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Weitere Nachrichtenaktionen",
+            "x": 278,
+            "right": 308,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Nachricht kopieren",
+            "x": 20,
+            "right": 50,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Weitere Nachrichtenaktionen",
+            "x": 52,
+            "right": 82,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Zum Anfang der geladenen Nachrichten scrollen",
+            "x": 256,
+            "right": 296,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Zum Anfang der letzten Nachricht scrollen",
+            "x": 256,
+            "right": 296,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Zu den neuesten Nachrichten scrollen",
+            "x": 256,
+            "right": 296,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Dokument anhängen",
+            "x": 138.609375,
+            "right": 178.609375,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Audio aufnehmen",
+            "x": 181.40625,
+            "right": 221.40625,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Ausführungsoptionen",
+            "x": 224.203125,
+            "right": 264.203125,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Nachricht senden",
+            "x": 267,
+            "right": 311,
+            "width": 44,
+            "height": 44,
+            "visible": true
+          }
+        ]
+      },
+      {
+        "width": 390,
+        "afterReload": {
+          "retainedTicket": true,
+          "documentWidth": 390
+        },
+        "status": "passed",
+        "documentWidth": 390,
+        "visibleButtons": [
+          {
+            "label": "Navigationsmenü öffnen",
+            "x": 8,
+            "right": 50,
+            "width": 42,
+            "height": 42,
+            "visible": true
+          },
+          {
+            "label": "Link zu diesem Chat kopieren",
+            "x": 182,
+            "right": 220,
+            "width": 38,
+            "height": 38,
+            "visible": true
+          },
+          {
+            "label": "Ask FLUJO",
+            "x": 222,
+            "right": 260,
+            "width": 38,
+            "height": 38,
+            "visible": true
+          },
+          {
+            "label": "Sprache ändern",
+            "x": 262,
+            "right": 300,
+            "width": 38,
+            "height": 38,
+            "visible": true
+          },
+          {
+            "label": "Fehler melden",
+            "x": 302,
+            "right": 342,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Zum dunklen Modus wechseln",
+            "x": 344,
+            "right": 382,
+            "width": 38,
+            "height": 38,
+            "visible": true
+          },
+          {
+            "label": "Unterhaltungsleiste anzeigen",
+            "x": 8,
+            "right": 38,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Unterhaltung umbenennen",
+            "x": 314,
+            "right": 344,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Bereich der ausgeführten Schritte umschalten",
+            "x": 352,
+            "right": 382,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "SDK product receipt 1724c53f-36a7-4860-9a18-77d565350fc0",
+            "x": 8,
+            "right": 30,
+            "width": 22,
+            "height": 36,
+            "visible": true
+          },
+          {
+            "label": "Diesen Agenten im Editor öffnen",
+            "x": 12,
+            "right": 42,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "1. Receipt clerk · Isolated OpenRouter Free SDK acceptance · 02:31:32",
+            "x": 24,
+            "right": 31,
+            "width": 7,
+            "height": 14,
+            "visible": true
+          },
+          {
+            "label": "2. Receipt clerk · Isolated OpenRouter Free SDK acceptance · 02:31:43",
+            "x": 36,
+            "right": 43,
+            "width": 7,
+            "height": 14,
+            "visible": true
+          },
+          {
+            "label": "3. Receipt clerk · Isolated OpenRouter Free SDK acceptance · 02:31:46",
+            "x": 48,
+            "right": 55,
+            "width": 7,
+            "height": 14,
+            "visible": true
+          },
+          {
+            "label": "4. Receipt clerk · Isolated OpenRouter Free SDK acceptance · 02:31:51",
+            "x": 60,
+            "right": 70,
+            "width": 10,
+            "height": 22,
+            "visible": true
+          },
+          {
+            "label": "Chat",
+            "x": 118.46875,
+            "right": 154.46875,
+            "width": 36,
+            "height": 25.59375,
+            "visible": true
+          },
+          {
+            "label": "Modelleingabe",
+            "x": 155.46875,
+            "right": 191.46875,
+            "width": 36,
+            "height": 25.59375,
+            "visible": true
+          },
+          {
+            "label": "Nachricht kopieren",
+            "x": 313.671875,
+            "right": 343.671875,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Weitere Nachrichtenaktionen",
+            "x": 345.671875,
+            "right": 375.671875,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Nachricht kopieren",
+            "x": 316,
+            "right": 346,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Weitere Nachrichtenaktionen",
+            "x": 348,
+            "right": 378,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Nachricht kopieren",
+            "x": 310.09375,
+            "right": 340.09375,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Weitere Nachrichtenaktionen",
+            "x": 342.09375,
+            "right": 372.09375,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Nachricht kopieren",
+            "x": 316,
+            "right": 346,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Weitere Nachrichtenaktionen",
+            "x": 348,
+            "right": 378,
+            "width": 30,
+            "height": 30,
+            "visible": true
+          },
+          {
+            "label": "Zum Anfang der geladenen Nachrichten scrollen",
+            "x": 326,
+            "right": 366,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Zum Anfang der letzten Nachricht scrollen",
+            "x": 326,
+            "right": 366,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Zu den neuesten Nachrichten scrollen",
+            "x": 326,
+            "right": 366,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Dokument anhängen",
+            "x": 208.609375,
+            "right": 248.609375,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Audio aufnehmen",
+            "x": 251.40625,
+            "right": 291.40625,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Ausführungsoptionen",
+            "x": 294.203125,
+            "right": 334.203125,
+            "width": 40,
+            "height": 40,
+            "visible": true
+          },
+          {
+            "label": "Nachricht senden",
+            "x": 337,
+            "right": 381,
+            "width": 44,
+            "height": 44,
+            "visible": true
+          }
+        ]
+      }
+    ],
+    "allNativeSessionIdsEqual": true,
+    "allReportedUsageReconciles": true
+  },
+  "controls": {
+    "receipt": "product-445f1960-966d-4618-9c9d-26cb3c048c67.json",
+    "reusedSemantic": {
+      "file": "product-1724c53f-36a7-4860-9a18-77d565350fc0.json",
+      "sha256": "e12f14e706e956b580caa632721768e736a99e6a4b2da55e30f2259bb961c08c",
+      "scopes": [
+        "saved Process A/B/A/A, durable restart and unchanged native session",
+        "320/390px Chat persistence and controls"
+      ],
+      "sourceAndBuildUnchanged": true
+    },
+    "app": {
+      "status": "connected",
+      "resourceListVersion": 0
+    },
+    "server": {
+      "pid": 54084,
+      "startedUtc": "2026-10-17T07:51:31.325Z",
+      "stderr": "",
+      "exit": {
+        "code": 0,
+        "signal": null,
+        "at": "2026-10-17T07:52:08.591Z"
+      },
+      "closedUtc": "2026-10-17T07:52:08.591Z"
+    },
+    "decisions": [
+      {
+        "decision": "approved",
+        "status": "passed",
+        "noWriteWhilePending": true,
+        "physicalWrites": 1,
+        "decisionMethod": "Actual 320px Chat approval control",
+        "phone": {
+          "x": 139.953125,
+          "y": 614.71875,
+          "width": 134.046875,
+          "height": 40
+        },
+        "phoneDocumentWidth": 320,
+        "finalStatus": "completed",
+        "completion": {
+          "id": "chatcmpl-1792223501800",
+          "object": "chat.completion",
+          "created": 1792223492,
+          "model": "flow-Receipt_approval_acceptance_445f1960-966d-4618-9c9d-26cb3c048c67",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "The receipt was written successfully.\n\nOutcome: `recorded: true`, `id: 8920315f-0e7d-46cb-83e3-d07879f6cdbe`, `value: approved`, recorded at `2026-10-17T07:51:38.140Z` (pid 54084).\n\nI called `write_receipt` exactly once with `value: \"approved\"` and did not retry.\n"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 3338,
+            "completion_tokens": 294,
+            "total_tokens": 3632
+          },
+          "messages": [
+            {
+              "role": "user",
+              "content": "Call write_receipt exactly once with value approved. Then report its outcome. Do not retry.",
+              "id": "7a7b0d3c-e8a0-45a0-8256-3f1296039da2",
+              "timestamp": 1792223492137
+            },
+            {
+              "role": "system",
+              "content": "Call the requested receipt tool exactly once. After success or denial, report what happened briefly. Never retry a denied tool.",
+              "id": "95c9fe8f-11cb-40e9-bd46-55dd288a78ca",
+              "timestamp": 1792223492319
+            },
+            {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "call-51f657dd-362b-4558-b6d1-97dd5efe125b",
+                  "type": "function",
+                  "function": {
+                    "name": "ReceiptAcceptance__write_receipt",
+                    "arguments": "{\"value\":\"approved\"}"
+                  }
+                }
+              ],
+              "id": "stream_claude_msg_N8k3j8RIe2NFi2S1lBHp_tool_1",
+              "timestamp": 1792223492662,
+              "processNodeId": "a28abe40-841e-4142-a70a-3e73ad8a1362"
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call-51f657dd-362b-4558-b6d1-97dd5efe125b",
+              "content": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"recorded\\\":true,\\\"id\\\":\\\"8920315f-0e7d-46cb-83e3-d07879f6cdbe\\\",\\\"value\\\":\\\"approved\\\",\\\"pid\\\":54084,\\\"at\\\":\\\"2026-10-17T07:51:38.140Z\\\"}\"}],\"_meta\":{\"io.flujo/host-owner-scope\":\"run:43f838cd-ba9c-41a3-82d0-7dbff1d2cf98\"}}",
+              "id": "m_56dbf2bf-dd49-4187-9321-7e67dfb9c085",
+              "timestamp": 1792223492663,
+              "processNodeId": "a28abe40-841e-4142-a70a-3e73ad8a1362"
+            },
+            {
+              "role": "assistant",
+              "content": "The receipt was written successfully.\n\nOutcome: `recorded: true`, `id: 8920315f-0e7d-46cb-83e3-d07879f6cdbe`, `value: approved`, recorded at `2026-10-17T07:51:38.140Z` (pid 54084).\n\nI called `write_receipt` exactly once with `value: \"approved\"` and did not retry.\n",
+              "id": "stream_claude_msg_szk4PsSzZpoEUncNR1w2",
+              "timestamp": 1792223492664,
+              "processNodeId": "a28abe40-841e-4142-a70a-3e73ad8a1362"
+            },
+            {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call-366842f0-acee-4995-b538-dee9d3579401",
+                  "type": "function",
+                  "function": {
+                    "name": "handoff_to_finish_node",
+                    "arguments": "{}"
+                  }
+                }
+              ],
+              "id": "m_8503a927-1865-4493-b33c-73d45b826235",
+              "timestamp": 1792223492665,
+              "processNodeId": "a28abe40-841e-4142-a70a-3e73ad8a1362",
+              "usage": {
+                "promptTokens": 3338,
+                "completionTokens": 294,
+                "totalTokens": 3632,
+                "cacheReadTokens": 0,
+                "cacheWriteTokens": 0
+              },
+              "contextUsage": {
+                "promptTokens": 1760,
+                "completionTokens": 231,
+                "totalTokens": 1991
+              }
+            },
+            {
+              "id": "ea7f2c8c-27f3-48c2-b6e6-8664eaa1b711",
+              "role": "tool",
+              "tool_call_id": "call-366842f0-acee-4995-b538-dee9d3579401",
+              "content": "{\"status\":\"Handoff processed\",\"targetNodeId\":\"97770029-8082-4920-817c-b2f8c46c4814\"}",
+              "timestamp": 1792223501614,
+              "processNodeId": "a28abe40-841e-4142-a70a-3e73ad8a1362"
+            }
+          ],
+          "conversation_id": "81c5fb62-ebdc-4f8b-a761-eccfbed524a2",
+          "status": "completed"
+        },
+        "pendingToolCall": {
+          "id": "call-51f657dd-362b-4558-b6d1-97dd5efe125b",
+          "type": "function",
+          "function": {
+            "name": "ReceiptAcceptance__write_receipt",
+            "arguments": "{\"value\":\"approved\"}"
+          }
+        },
+        "routingPending": {
+          "id": "call-366842f0-acee-4995-b538-dee9d3579401",
+          "type": "function",
+          "function": {
+            "name": "handoff_to_finish_node",
+            "arguments": "{}"
+          }
+        },
+        "routingDecisionResponse": {
+          "status": "running",
+          "conversation_id": "81c5fb62-ebdc-4f8b-a761-eccfbed524a2"
+        },
+        "effects": [
+          {
+            "id": "8920315f-0e7d-46cb-83e3-d07879f6cdbe",
+            "value": "approved",
+            "pid": 54084,
+            "at": "2026-10-17T07:51:38.140Z"
+          }
+        ]
+      },
+      {
+        "decision": "denied",
+        "status": "passed",
+        "noWriteWhilePending": true,
+        "physicalWrites": 0,
+        "decisionMethod": "Actual 320px Chat approval control",
+        "phone": {
+          "x": 157.09375,
+          "y": 857.71875,
+          "width": 116.90625,
+          "height": 40
+        },
+        "phoneDocumentWidth": 320,
+        "finalStatus": "completed",
+        "completion": {
+          "id": "chatcmpl-1792223513923",
+          "object": "chat.completion",
+          "created": 1792223501,
+          "model": "flow-Receipt_approval_acceptance_445f1960-966d-4618-9c9d-26cb3c048c67",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "I called `write_receipt` exactly once with value `denied`. The call was denied (tool returned \"tool denied\"). As instructed, I did not retry."
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 3257,
+            "completion_tokens": 176,
+            "total_tokens": 3433
+          },
+          "messages": [
+            {
+              "role": "user",
+              "content": "Call write_receipt exactly once with value denied. Then report its outcome. Do not retry.",
+              "id": "ae15ef0c-1ca4-45ae-b9ae-e8ad6ec01b3d",
+              "timestamp": 1792223501854
+            },
+            {
+              "role": "system",
+              "content": "Call the requested receipt tool exactly once. After success or denial, report what happened briefly. Never retry a denied tool.",
+              "id": "180dc7c5-ed60-48c6-81a0-f0838cacece1",
+              "timestamp": 1792223501998
+            },
+            {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "call-ba6a2466-4b20-4b0a-8d9a-ae2ade024d73",
+                  "type": "function",
+                  "function": {
+                    "name": "ReceiptAcceptance__write_receipt",
+                    "arguments": "{\"value\":\"denied\"}"
+                  }
+                }
+              ],
+              "id": "stream_claude_msg_YijhrIMI19AeyaP1wT9M_tool_1",
+              "timestamp": 1792223502200,
+              "processNodeId": "a28abe40-841e-4142-a70a-3e73ad8a1362"
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call-ba6a2466-4b20-4b0a-8d9a-ae2ade024d73",
+              "content": "tool denied",
+              "id": "m_b1239e3b-b754-4042-b9bd-1ffcc67dffb3",
+              "timestamp": 1792223502201,
+              "processNodeId": "a28abe40-841e-4142-a70a-3e73ad8a1362"
+            },
+            {
+              "role": "assistant",
+              "content": "I called `write_receipt` exactly once with value `denied`. The call was denied (tool returned \"tool denied\"). As instructed, I did not retry.",
+              "id": "stream_claude_msg_mGNUvsISMqMgn1BN0Smb",
+              "timestamp": 1792223502202,
+              "processNodeId": "a28abe40-841e-4142-a70a-3e73ad8a1362",
+              "usage": {
+                "promptTokens": 3257,
+                "completionTokens": 176,
+                "totalTokens": 3433,
+                "cacheReadTokens": 0,
+                "cacheWriteTokens": 0
+              },
+              "contextUsage": {
+                "promptTokens": 1679,
+                "completionTokens": 117,
+                "totalTokens": 1796,
+                "contextWindow": 200000,
+                "contextWindowSource": "runtime"
+              }
+            }
+          ],
+          "conversation_id": "38e4d262-9103-47bd-9e27-e07784009c68",
+          "status": "completed"
+        },
+        "pendingToolCall": {
+          "id": "call-ba6a2466-4b20-4b0a-8d9a-ae2ade024d73",
+          "type": "function",
+          "function": {
+            "name": "ReceiptAcceptance__write_receipt",
+            "arguments": "{\"value\":\"denied\"}"
+          }
+        },
+        "effects": [
+          {
+            "id": "8920315f-0e7d-46cb-83e3-d07879f6cdbe",
+            "value": "approved",
+            "pid": 54084,
+            "at": "2026-10-17T07:51:38.140Z"
+          }
+        ]
+      },
+      {
+        "decision": "cancelled",
+        "status": "passed",
+        "noWriteWhilePending": true,
+        "physicalWrites": 0,
+        "decisionMethod": "Actual conversation cancellation API",
+        "finalStatus": "error",
+        "completion": {
+          "error": {
+            "message": "Model execution failed: Execution cancelled by user.",
+            "type": "model",
+            "code": "cancelled",
+            "error_class": "cancelled",
+            "details": {
+              "message": "Execution cancelled by user.",
+              "type": "model",
+              "code": "cancelled",
+              "stack": "Error: Model execution failed: Execution cancelled by user.\n    at as.execCore (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\15662.js:117:10284)\n    at async as.execWrapper (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\15662.js:131:32302)\n    at async as.run (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\15662.js:131:32742)\n    at async aV.runNode (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\15662.js:118:17323)\n    at async aT.executeStep (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\28398.js:123:23585)\n    at async ag (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\30676.js:2:10378)\n    at async h (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\30676.js:6:12074)\n    at async af (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\30676.js:1:6493)\n    at async x (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\chunks\\91277.js:1:1175)\n    at async x (C:\\Users\\Moe\\.codex\\worktrees\\claude-session-hardening\\FLUJO\\.next\\server\\app\\v1\\chat\\completions\\route.js:1:15498)",
+              "name": "Error"
+            }
+          }
+        },
+        "pendingToolCall": {
+          "id": "call-ee005690-87a2-4568-8bb5-cd87cab9c9cf",
+          "type": "function",
+          "function": {
+            "name": "ReceiptAcceptance__write_receipt",
+            "arguments": "{\"value\":\"cancelled\"}"
+          }
+        },
+        "effects": [
+          {
+            "id": "8920315f-0e7d-46cb-83e3-d07879f6cdbe",
+            "value": "approved",
+            "pid": 54084,
+            "at": "2026-10-17T07:51:38.140Z"
+          }
+        ]
+      }
+    ],
+    "duplicateSuppression": false,
+    "allAttemptsPhysicalWrites": 3,
+    "earlierUnqualifiedPhysicalWrites": 2
+  },
+  "cost": {
+    "modelEndpointRequests": 23,
+    "reportedUsd": 0,
+    "missingReports": 0,
+    "requests": [
+      {
+        "receipt": "product-1724c53f-36a7-4860-9a18-77d565350fc0.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 660,
+        "output": 682
+      },
+      {
+        "receipt": "product-1724c53f-36a7-4860-9a18-77d565350fc0.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 753,
+        "output": 254
+      },
+      {
+        "receipt": "product-1724c53f-36a7-4860-9a18-77d565350fc0.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 826,
+        "output": 321
+      },
+      {
+        "receipt": "product-1724c53f-36a7-4860-9a18-77d565350fc0.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 897,
+        "output": 267
+      },
+      {
+        "receipt": "product-1796e2aa-6794-4280-9a2b-e73af29b71f8.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1576,
+        "output": 62
+      },
+      {
+        "receipt": "product-1badf8e9-d03a-40dd-8281-bed0daa60316.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1571,
+        "output": 62
+      },
+      {
+        "receipt": "product-3ada6f8c-380c-4a59-8378-eb60ec86305f.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 658,
+        "output": 702
+      },
+      {
+        "receipt": "product-43ebfd7b-e6a0-4c11-bb03-0d8eb122039e.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1574,
+        "output": 62
+      },
+      {
+        "receipt": "product-43ebfd7b-e6a0-4c11-bb03-0d8eb122039e.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1756,
+        "output": 419
+      },
+      {
+        "receipt": "product-445f1960-966d-4618-9c9d-26cb3c048c67.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1578,
+        "output": 63
+      },
+      {
+        "receipt": "product-445f1960-966d-4618-9c9d-26cb3c048c67.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1760,
+        "output": 231
+      },
+      {
+        "receipt": "product-445f1960-966d-4618-9c9d-26cb3c048c67.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 2034,
+        "output": 32
+      },
+      {
+        "receipt": "product-445f1960-966d-4618-9c9d-26cb3c048c67.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1578,
+        "output": 59
+      },
+      {
+        "receipt": "product-445f1960-966d-4618-9c9d-26cb3c048c67.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1679,
+        "output": 117
+      },
+      {
+        "receipt": "product-445f1960-966d-4618-9c9d-26cb3c048c67.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1578,
+        "output": 64
+      },
+      {
+        "receipt": "product-445f1960-966d-4618-9c9d-26cb3c048c67.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1698,
+        "output": 187
+      },
+      {
+        "receipt": "product-5b0e391b-7a59-414e-9c1f-69dce2f33a26.json",
+        "status": 200,
+        "selectedModel": "openrouter/free",
+        "reportedUsd": 0,
+        "input": 619,
+        "output": 127
+      },
+      {
+        "receipt": "product-5b43ea04-b271-4a6e-b1a2-c3eccd0801d4.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1574,
+        "output": 62
+      },
+      {
+        "receipt": "product-c532bbd6-c342-4d6d-96ff-2fac61cce872.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1572,
+        "output": 62
+      },
+      {
+        "receipt": "product-c532bbd6-c342-4d6d-96ff-2fac61cce872.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1728,
+        "output": 233
+      },
+      {
+        "receipt": "product-c98ab0fa-653c-4000-a6bf-2f6dcbcf0268.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1572,
+        "output": 65
+      },
+      {
+        "receipt": "product-decb4228-c55f-4384-b780-b400e5cc360f.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1572,
+        "output": 62
+      },
+      {
+        "receipt": "product-decb4228-c55f-4384-b780-b400e5cc360f.json",
+        "status": 200,
+        "selectedModel": "nvidia/nemotron-3.5-super-vl:free",
+        "reportedUsd": 0,
+        "input": 1748,
+        "output": 214
+      }
+    ],
+    "sdkEstimatesAreNotBills": true
+  },
+  "trace": {
+    "file": "claude-product-journey-2026-10-17-trace.json.gz",
+    "sha256": "d36b168f6f90e6c123261a9c39b51fce037bb2b35bbfb4864d716690911a4b7d",
+    "bytes": 113343,
+    "includesFailedEquipmentAndGenericFreeSemanticAttempt": true
+  },
+  "nativeEvidence": {
+    "retainedPrivately": true,
+    "sha256": "725590511ee056dbc67d97ed6d3cd6faf244570c51e664d49dfa0545bfd91467",
+    "files": 50,
+    "contents": "SDK transcripts/checkpoints, product conversation journals, model-turn archives and physical effect records",
+    "index": [
+      {
+        "file": "product-profile-1724c53f-36a7-4860-9a18-77d565350fc0/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-1724c53f-36a7-4860-9a18-77d565350fc0-workspaces-default-workspace-db-claude-runtime-workspace/7f68c2bf-78cf-4f99-b774-b0b66d256da2.jsonl",
+        "sha256": "c01039bb370c08a9cff869ace58cb47c831cf2e48c480fd390c9b5cfd634f796",
+        "bytes": 28492
+      },
+      {
+        "file": "product-profile-1724c53f-36a7-4860-9a18-77d565350fc0/workspaces/default-workspace/db/claude-sessions-v2/3e0200a43e7bdb618fd49f02cc8883555e80b1f7d62ecb30fcd46a8cb4de6207.json",
+        "sha256": "3a31a86736d162c8a2a6a69ea763f310aee11d97c88fe9ff6cabb9c921a10833",
+        "bytes": 786
+      },
+      {
+        "file": "product-profile-1724c53f-36a7-4860-9a18-77d565350fc0/workspaces/default-workspace/db/model-turns/ada350fa-1a49-47ff-ac1d-6aef79dba68a/3f822829-ce78-4a8b-8e7e-fc57fc7f18d5.outcome.json",
+        "sha256": "328f7381f4559746d46e1c7e30e87f3b1991d375aa9ba48ebe85d8a39c1316b2",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-1724c53f-36a7-4860-9a18-77d565350fc0/workspaces/default-workspace/db/model-turns/ada350fa-1a49-47ff-ac1d-6aef79dba68a/4fc2deb9-4d16-4a94-b795-8cfa0b2bc66d.outcome.json",
+        "sha256": "b2792970bcbf14cf662a5dff8b19e4b7b3a861ec8814c56393e542a1d9daefb6",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-1724c53f-36a7-4860-9a18-77d565350fc0/workspaces/default-workspace/db/model-turns/ada350fa-1a49-47ff-ac1d-6aef79dba68a/b33525a7-a54a-4083-93c2-e0bc819cf705.outcome.json",
+        "sha256": "532326da9ac6f6d096b97ee31ebc8dd0a46f3dbfe08aa2df259dc82e60a5f293",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-1724c53f-36a7-4860-9a18-77d565350fc0/workspaces/default-workspace/db/model-turns/ada350fa-1a49-47ff-ac1d-6aef79dba68a/c8ecc8f1-7046-46fd-8915-f5b3d4842db1.outcome.json",
+        "sha256": "59503a00193f6a64f87cecb8e13f463621352550724624b905b5e93f691bb348",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-1724c53f-36a7-4860-9a18-77d565350fc0/workspaces/default-workspace/db/conversation-logs/ada350fa-1a49-47ff-ac1d-6aef79dba68a.jsonl",
+        "sha256": "6bc7a04ecf4fab7cd3cb4c1ef6c7b5009f0a466116992871eaf144c5d8044e75",
+        "bytes": 40188
+      },
+      {
+        "file": "product-profile-1796e2aa-6794-4280-9a2b-e73af29b71f8/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-1796e2aa-6794-4280-9a2b-e73af29b71f8-workspaces-default-workspace-db-claude-runtime-workspace/dd66ae54-85c5-4e5b-bc37-a89f8a06edfe.jsonl",
+        "sha256": "0bc45f7fca9b51046f66444645781d077050476bac078957c99e98d3ae98ff85",
+        "bytes": 9867
+      },
+      {
+        "file": "product-profile-1796e2aa-6794-4280-9a2b-e73af29b71f8/workspaces/default-workspace/db/claude-sessions-v2/leases/e7f636f5ebfd0ffcf04c770a6058036ccc537fdaa18fcfe221abccb67398adf1.lock/43260.a212f865-3c56-44a7-adac-9857b4446980.json",
+        "sha256": "7679081e36fecee88a780341a7522016c8edfb0d0dc819dd2c9ae75696bccc14",
+        "bytes": 60
+      },
+      {
+        "file": "product-profile-1796e2aa-6794-4280-9a2b-e73af29b71f8/workspaces/default-workspace/db/conversation-logs/5dcca50c-e9bc-49d5-b809-a745523af0d9.jsonl",
+        "sha256": "3695a3bdb93afd75008a1c0a28b4d304d132239fab82a988ff9fcd4d46d9d33c",
+        "bytes": 4525
+      },
+      {
+        "file": "product-profile-1badf8e9-d03a-40dd-8281-bed0daa60316/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-1badf8e9-d03a-40dd-8281-bed0daa60316-workspaces-default-workspace-db-claude-runtime-workspace/91abe619-6f9a-454b-8466-80e83c83232b.jsonl",
+        "sha256": "03c444cf8fd1a1926e205e3a779564a90254429f1dd9471378a3a44397e8af42",
+        "bytes": 9868
+      },
+      {
+        "file": "product-profile-1badf8e9-d03a-40dd-8281-bed0daa60316/workspaces/default-workspace/db/claude-sessions-v2/leases/e02fc2d2f3b51d15d468ca612ae7b3b5f4a004b24d11b6b0f45d470d11e4ec7b.lock/13852.782c4e9e-5085-43c2-9ddf-866346998482.json",
+        "sha256": "44be28520b5dc2bdab135f9891f068602e14a0da127b2b70ded3d9b3c6d00112",
+        "bytes": 60
+      },
+      {
+        "file": "product-profile-1badf8e9-d03a-40dd-8281-bed0daa60316/workspaces/default-workspace/db/conversation-logs/ceb61047-8123-46a1-859c-da0e86ff1083.jsonl",
+        "sha256": "a173c8d6a5359f93c37035745bbb87c8363e532c658da24f772c8e3e7d9bc027",
+        "bytes": 4525
+      },
+      {
+        "file": "product-profile-3ada6f8c-380c-4a59-8378-eb60ec86305f/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-3ada6f8c-380c-4a59-8378-eb60ec86305f-workspaces-default-workspace-db-claude-runtime-workspace/66354834-194f-47f9-bfde-d1fede5c61e1.jsonl",
+        "sha256": "e878d5de651a1bfbaaba6260c79a70dbc3988cc9151954883b43b78e33b173e6",
+        "bytes": 11620
+      },
+      {
+        "file": "product-profile-3ada6f8c-380c-4a59-8378-eb60ec86305f/workspaces/default-workspace/db/claude-sessions-v2/5f4357429ef995d3043425c7b64a613e5bbd6bc22d6ab79d88f0bd8cf78dac4d.json",
+        "sha256": "ee68227b0cc7d5576be9c47f83bd5d9d272c86db41538dcdfd0cbbad6788435e",
+        "bytes": 784
+      },
+      {
+        "file": "product-profile-3ada6f8c-380c-4a59-8378-eb60ec86305f/workspaces/default-workspace/db/model-turns/98799922-226b-43e7-b049-5d31b65e164f/34334cdd-60fa-40a8-b730-644725b2cfe3.outcome.json",
+        "sha256": "297a67beb3a14ce3861dab3819d759a0c2e3478135d162eaa0b55f54b336549d",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-3ada6f8c-380c-4a59-8378-eb60ec86305f/workspaces/default-workspace/db/conversation-logs/98799922-226b-43e7-b049-5d31b65e164f.jsonl",
+        "sha256": "05d11e4a040b370a446cb7d07fe2655c8e77bda1ab22d1b9f5f2919da704efb8",
+        "bytes": 10025
+      },
+      {
+        "file": "product-profile-43ebfd7b-e6a0-4c11-bb03-0d8eb122039e/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-43ebfd7b-e6a0-4c11-bb03-0d8eb122039e-workspaces-default-workspace-db-claude-runtime-workspace/ea0442a0-d473-4892-baba-966638c6c6b0.jsonl",
+        "sha256": "b75e9be87e8d4d9c8b26322347e4031027b5d2ad61509dd3e374d0e3708d6ecc",
+        "bytes": 22997
+      },
+      {
+        "file": "product-profile-43ebfd7b-e6a0-4c11-bb03-0d8eb122039e/workspaces/default-workspace/db/claude-sessions-v2/leases/55bce60697f0a78e41226cc315be15d940fb34e7fb201e6af4112341f2ff1ed6.lock/8948.ec58fd06-9b0e-46d2-aec8-69996c339172.json",
+        "sha256": "85dcd93cac00b20791549189f2de56c3771f40e97384b57d25be91b32a17755b",
+        "bytes": 59
+      },
+      {
+        "file": "product-profile-43ebfd7b-e6a0-4c11-bb03-0d8eb122039e/workspaces/default-workspace/db/conversation-logs/3f494f52-bc42-40f2-b52a-6331484ab537.jsonl",
+        "sha256": "f1a285fcd2d73b312173a2442b525aa77138566b21ad66e940f561491a47795a",
+        "bytes": 5770
+      },
+      {
+        "file": "product-profile-43ebfd7b-e6a0-4c11-bb03-0d8eb122039e/write-receipts.jsonl",
+        "sha256": "966fc4708d472f58e26386c54a15551b13a45ba58054d4915dcf06b60ea68323",
+        "bytes": 109
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-445f1960-966d-4618-9c9d-26cb3c048c67-workspaces-default-workspace-db-claude-runtime-workspace/513aebd6-d785-4038-b2b3-71e73d8c5241.jsonl",
+        "sha256": "f43aa514cec8c90535a913913cee4ddbb0deed5bdb8cf7ebc8c0ad068aef92fe",
+        "bytes": 20928
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-445f1960-966d-4618-9c9d-26cb3c048c67-workspaces-default-workspace-db-claude-runtime-workspace/c6b5b4e5-ae05-491e-b6b8-83dbb46df4ee.jsonl",
+        "sha256": "10d7263d15cd9700bfc5fe8ea59149cc301b9cd83e58744cc125426b59ab557d",
+        "bytes": 27446
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-445f1960-966d-4618-9c9d-26cb3c048c67-workspaces-default-workspace-db-claude-runtime-workspace/d7ed469f-fe49-4beb-990b-691c0b7c2865.jsonl",
+        "sha256": "5f6c9f25f20b2901c859a8cfd531f4108fa125dc43b287306b2f616ccf75de21",
+        "bytes": 17304
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/claude-sessions-v2/68dde497a2d8bce6699b12f738a73198cee783330ebdd59b61dbd32bc5b09399.json",
+        "sha256": "32dbeed05dfeffd1661427108788e43b0c0a0198309033c8810ee17eaaf4b593",
+        "bytes": 765
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/model-turns/0c63b198-b455-403c-9eec-38432639a57b/90d2514e-2cfe-4fbf-b9fa-52ff2e6c3d09.outcome.json",
+        "sha256": "347a767daf81f4744f00922054430035a9aa12f34cfaaae824ffac80670a2348",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/model-turns/38e4d262-9103-47bd-9e27-e07784009c68/c619508a-26b6-4f71-b965-5750783c98c0.outcome.json",
+        "sha256": "9ec5cf179e65cad344b4d5a77d5231175b3fd30216df91311e01eeb388bf9e22",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/model-turns/81c5fb62-ebdc-4f8b-a761-eccfbed524a2/233aef7f-6dc3-4cad-912b-0b5c29c74048.outcome.json",
+        "sha256": "c3720dda3692fa05a5381bedd84ce615c0a236477b4c8af3c68735dedc394b92",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/conversation-logs/0c63b198-b455-403c-9eec-38432639a57b.jsonl",
+        "sha256": "b635d0578e19fc732672c5a1d5f4010579dab5c89cd5b8592a1d0990d5fdd44c",
+        "bytes": 8698
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/conversation-logs/38e4d262-9103-47bd-9e27-e07784009c68.jsonl",
+        "sha256": "18523d67a7fc6b3329db92542ac4d5cd8edf6232525ffd91ae5589812ea80e19",
+        "bytes": 9900
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/workspaces/default-workspace/db/conversation-logs/81c5fb62-ebdc-4f8b-a761-eccfbed524a2.jsonl",
+        "sha256": "55ee03623804dd0217ae09f57f31ac0c5c0fd3f97ffc842e32c6f0d80ff7a45d",
+        "bytes": 13679
+      },
+      {
+        "file": "product-profile-445f1960-966d-4618-9c9d-26cb3c048c67/write-receipts.jsonl",
+        "sha256": "3e2338b4300da9c85192be3b3f605c4d5de1f10b59b02bbf100c2a4b7344e3b6",
+        "bytes": 109
+      },
+      {
+        "file": "product-profile-5b0e391b-7a59-414e-9c1f-69dce2f33a26/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-5b0e391b-7a59-414e-9c1f-69dce2f33a26-workspaces-default-workspace-db-claude-runtime-workspace/cc21110f-3da9-49ed-b36f-8392ac8a85c6.jsonl",
+        "sha256": "85ed49934e83d9d73c625f26f7974c504b399078d0cc8deb19a9dd2d1769c844",
+        "bytes": 8973
+      },
+      {
+        "file": "product-profile-5b0e391b-7a59-414e-9c1f-69dce2f33a26/workspaces/default-workspace/db/model-turns/105e3fa7-9f78-41e2-b1ca-baab038546a1/3db0f60e-ed33-4cd4-875d-61936508e163.outcome.json",
+        "sha256": "d817f445ecdaf1dd5f6a7db8e92a31519055159990c76dc6100c35719c7d0d39",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-5b0e391b-7a59-414e-9c1f-69dce2f33a26/workspaces/default-workspace/db/conversation-logs/105e3fa7-9f78-41e2-b1ca-baab038546a1.jsonl",
+        "sha256": "5e365b9b246123015598518e7b2d295cdde8a6320c3e793da77f3ec80d04400d",
+        "bytes": 9738
+      },
+      {
+        "file": "product-profile-5b43ea04-b271-4a6e-b1a2-c3eccd0801d4/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-5b43ea04-b271-4a6e-b1a2-c3eccd0801d4-workspaces-default-workspace-db-claude-runtime-workspace/f51005f9-4643-4518-82c2-0669f7975d48.jsonl",
+        "sha256": "950ee387683f4e2f1db19e48c928ffad639f5874125270e0e6d2766c2ec22ecd",
+        "bytes": 9867
+      },
+      {
+        "file": "product-profile-5b43ea04-b271-4a6e-b1a2-c3eccd0801d4/workspaces/default-workspace/db/claude-sessions-v2/leases/56880a18d782d20ecd56d553e1211c812d701dac729e394babcf9e8ef6b7500a.lock/56028.69aacf1e-09e0-4079-b65a-4da9a9db5100.json",
+        "sha256": "9344ec0df414168247dfbf9b3e37640c7d8b2361ce53b6585c9f1039f1e00410",
+        "bytes": 60
+      },
+      {
+        "file": "product-profile-5b43ea04-b271-4a6e-b1a2-c3eccd0801d4/workspaces/default-workspace/db/conversation-logs/3e63b969-865d-4b47-9c36-d8994001ad1d.jsonl",
+        "sha256": "7154403ad21c1a81ad5ebd88e64c467b5430b74511e45d08ce2a79fec496cd07",
+        "bytes": 4525
+      },
+      {
+        "file": "product-profile-c532bbd6-c342-4d6d-96ff-2fac61cce872/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-c532bbd6-c342-4d6d-96ff-2fac61cce872-workspaces-default-workspace-db-claude-runtime-workspace/6f48d004-6bb9-4777-8e2b-a35b603b4c9f.jsonl",
+        "sha256": "444835ac0aa260476fd2ec13017befdc1a47c7c92053b9d8728470ccc741e080",
+        "bytes": 21926
+      },
+      {
+        "file": "product-profile-c532bbd6-c342-4d6d-96ff-2fac61cce872/workspaces/default-workspace/db/claude-sessions-v2/c964eb757e412c1bc8088de1c90fbc919b29277150ceabdbb0945c794b9838ef.json",
+        "sha256": "6a0b67334897a95f50a1fea8d568212aed7b7d3094f69f31278cb903459c7a99",
+        "bytes": 753
+      },
+      {
+        "file": "product-profile-c532bbd6-c342-4d6d-96ff-2fac61cce872/workspaces/default-workspace/db/model-turns/4298cf99-12da-4277-86b0-b8e1d88a0ea1/67462457-6ae8-4270-af26-5d73056b2c81.outcome.json",
+        "sha256": "7c985ff892737bd59d0a8aa8c863904ce934f8f0fa303a520cd0b64289fe937d",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-c532bbd6-c342-4d6d-96ff-2fac61cce872/workspaces/default-workspace/db/conversation-logs/4298cf99-12da-4277-86b0-b8e1d88a0ea1.jsonl",
+        "sha256": "c7b6241c9ad5fdd734289623afdfc5039c30eb6ea248f21f378716cf949ab7e6",
+        "bytes": 10041
+      },
+      {
+        "file": "product-profile-c98ab0fa-653c-4000-a6bf-2f6dcbcf0268/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-c98ab0fa-653c-4000-a6bf-2f6dcbcf0268-workspaces-default-workspace-db-claude-runtime-workspace/421d03ca-26aa-4ca3-8e97-e01074c834fc.jsonl",
+        "sha256": "e263ebdd2c9f8b9de3daf08bf100eba6e9a33c0fb84559261b45303720a6e893",
+        "bytes": 9871
+      },
+      {
+        "file": "product-profile-c98ab0fa-653c-4000-a6bf-2f6dcbcf0268/workspaces/default-workspace/db/claude-sessions-v2/leases/abe60ca90f52c6fd437182bd48de62202a49996d7650801a02d5fc40c6862675.lock/49480.ee68972d-21a5-4fbf-aef3-50eed6b0c068.json",
+        "sha256": "af7282ccff2531a6643d7be8d3fd01b2d469626492ec2b39c97367e705607fae",
+        "bytes": 60
+      },
+      {
+        "file": "product-profile-c98ab0fa-653c-4000-a6bf-2f6dcbcf0268/workspaces/default-workspace/db/conversation-logs/89b998ed-7152-41f4-94ea-3898c5753b42.jsonl",
+        "sha256": "dd20f8402214b3136ecb8cd3360b054ad89db4385b7f5396f092fb7a2b2764a3",
+        "bytes": 4525
+      },
+      {
+        "file": "product-profile-decb4228-c55f-4384-b780-b400e5cc360f/workspaces/default-workspace/db/claude-runtime/projects/C--Users-Moe--codex-tmp-flujo-maintenance-20261017T0713-product-profile-decb4228-c55f-4384-b780-b400e5cc360f-workspaces-default-workspace-db-claude-runtime-workspace/21a14c64-dc38-4e5a-aaf1-a7b7f72b1266.jsonl",
+        "sha256": "ad3fd8cec5d25594fff63196532c49e4055d2bf481254720c7ed967dfc46369e",
+        "bytes": 21437
+      },
+      {
+        "file": "product-profile-decb4228-c55f-4384-b780-b400e5cc360f/workspaces/default-workspace/db/claude-sessions-v2/d9757ad2783f8f1b190f3e5a1db4cf61cba62c38dff6b2d13f23861888fb8580.json",
+        "sha256": "cc3aaeb14ac353ba5aa241c1e69e33ff1b8eadc9e79c9de43a3e1d8de47bf3c1",
+        "bytes": 751
+      },
+      {
+        "file": "product-profile-decb4228-c55f-4384-b780-b400e5cc360f/workspaces/default-workspace/db/model-turns/592df59a-311b-45ff-a3e5-4adfc5e4413a/8b0d4403-a49d-4af6-b62d-f86472afa007.outcome.json",
+        "sha256": "2ae3793cd8123dee6d075bb33729b3cdb65cd4dd1f9abd5a91cf1aea11fd683e",
+        "bytes": 162
+      },
+      {
+        "file": "product-profile-decb4228-c55f-4384-b780-b400e5cc360f/workspaces/default-workspace/db/conversation-logs/592df59a-311b-45ff-a3e5-4adfc5e4413a.jsonl",
+        "sha256": "ef6d6c959bb4cd6a687034e402b4ebeca1509d89ed3f8617290a47f5ea071af6",
+        "bytes": 10443
+      },
+      {
+        "file": "product-profile-decb4228-c55f-4384-b780-b400e5cc360f/write-receipts.jsonl",
+        "sha256": "a177fee5d5d74963826915e7646c54c52416dd207f334439a5a0869897917367",
+        "bytes": 108
+      }
+    ]
+  },
+  "remaining": [
+    "Steering/background, forks and compaction outcomes remain outside this focused live run",
+    "Direct Claude subscription authentication remains unavailable and was not probed; it is a route limitation, not an invented sign-off",
+    "Native broker/attached-child and installed Windows/relocated Linux remain unqualified",
+    "Broader/full CI, remote verification, containers and release checks remain release pre-flight; no workflow dispatched"
+  ],
+  "issueDisposition": "Keep #1092 and #1096 open for their actual remaining acceptance; no issue closure is implied"
+}

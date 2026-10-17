@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertRestartWindows, rotatedActionCorrection, assertUncertainActionNotConsulted, assertSummarySources } from './compaction-action-state.mjs';
+import { assertRestartWindows, rotatedActionCorrection, assertUncertainActionNotConsulted, assertSummarySources, assertExternalObservations } from './compaction-action-state.mjs';
 
 const summaryAttempt = (input, status = 'completed') => ({ kind: 'summary', status: 200,
   request: { model: 'approved-model', input }, response: { status } });
@@ -38,6 +38,25 @@ test('verification of a completed write does not falsely imply premature uncerta
   assert.doesNotThrow(() => assertUncertainActionNotConsulted(calls, 'uncertain'));
   assert.throws(() => assertUncertainActionNotConsulted([...calls,
     { tool: 'lookup_action', actionId: 'uncertain' }], 'uncertain'));
+  assert.doesNotThrow(() => assertUncertainActionNotConsulted([
+    { tool: 'lookup_action', actionId: 'uncertain' }, ...calls,
+  ], 'uncertain'), 'A not-found read before the write is not reconciliation of its later uncertain acknowledgement');
+  assert.throws(() => assertUncertainActionNotConsulted([], 'uncertain'));
+});
+
+test('a correct answer cannot hide an external observation repeated during its review', () => {
+  const read = round => ({ tool: 'read_observation', round, result: { content: [{ type: 'text', text: 'external observation' }] } });
+  const observed = [read(0), read(1)];
+  assert.doesNotThrow(() => assertExternalObservations(observed, 1));
+  // The genuine Free run answered correctly, then its ledger exposed this
+  // extra original-tool read. Check again after the review, including round 10.
+  assert.throws(() => assertExternalObservations([...observed, read(1)], 1));
+  const complete = Array.from({ length: 11 }, (_, round) => read(round));
+  assert.doesNotThrow(() => assertExternalObservations(complete, 10));
+  assert.throws(() => assertExternalObservations([...complete, read(10)], 10));
+  assert.throws(() => assertExternalObservations([read(0), { ...read(1), result: { isError: true } }], 1));
+  assert.throws(() => assertExternalObservations([read(0), { ...read(1), result: undefined }], 1));
+  assert.throws(() => assertExternalObservations([read(0), read(2)], 1));
 });
 
 test('ten corrections rotate exact Spanish fields without reordering their source', () => {

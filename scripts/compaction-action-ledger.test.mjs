@@ -13,6 +13,36 @@ const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/cli
 const directory = process.env.COMPACTION_LEDGER_TEST_DIR;
 assert(directory, 'Set a private owned COMPACTION_LEDGER_TEST_DIR; cleanup uses flujo-bash');
 
+test('external observations expose only happened rounds and every read stays visible', async () => {
+  const observations = Array.from({ length: 11 }, (_, round) => `Source round ${round}: autorización no concedida, destino ñ-${round}`);
+  const ledger = await startActionLedger({ directory: path.join(directory, randomUUID()), repo, observations });
+  const client = new Client({ name: 'compaction-external-observation-control', version: '1.0.0' });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(ledger.url + '/mcp'), {
+      requestInit: { headers: { Authorization: 'Bearer ' + ledger.token } },
+    }));
+    const tools = await client.listTools();
+    assert(tools.tools.some(tool => tool.name === 'read_observation' && tool.annotations.readOnlyHint));
+    const read = round => client.callTool({ name: 'read_observation', arguments: { round } });
+    assert.equal((await read(0)).content[0].text, observations[0]);
+    const future = await read(1);
+    assert.equal(future.isError, true);
+    assert(!JSON.stringify(future).includes('ñ-1'));
+    assert.throws(() => ledger.setObservationRound(2));
+    ledger.setObservationRound(1);
+    assert.equal((await read(1)).content[0].text, observations[1]);
+    assert.equal((await read(0)).content[0].text, observations[0]);
+    const state = await ledger.snapshot();
+    assert.equal(state.rows.length, 0, 'Observations cannot commit a local action');
+    assert.deepEqual(state.calls.map(call => [call.tool, call.round]),
+      [['read_observation', 0], ['read_observation', 1], ['read_observation', 1], ['read_observation', 0]]);
+    assert.equal(state.calls[1].result.isError, true, 'The failed future read cannot be erased from evidence');
+  } finally {
+    await client.close();
+    await ledger.close();
+  }
+});
+
 for (const operation of ['abort request', 'close server']) {
   test('fsynced pending acknowledgement survives ' + operation, { timeout: 15000 }, async () => {
     const ledger = await startActionLedger({ directory: path.join(directory, randomUUID()), repo,
