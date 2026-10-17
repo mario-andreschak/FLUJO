@@ -1007,3 +1007,30 @@ Claude SDK lifecycle, broader semantic/position/visual comparisons and
 installed/endurance/release acceptance remain outside this result. #1091 stays
 open for those existing criteria. No full/remote CI, container build, release,
 deployment or automation change is introduced.
+
+## Paired semantic recovery and provider failures — October 16, 2026
+
+Repeated summarization could copy the runtime's source-observation and execution-receipt sections into generated narrative. Validation correctly rejected that output and retained complete history. The prompt now explicitly leaves those sections, records and archive footers to FLUJO. Existing rejection and exact-source restoration stay active.
+
+The [frozen evidence](compaction-semantic-2026-10-16.json) and [provider/source corpus](compaction-semantic-provider-trace-2026-10-16.json.gz) contain five paired ten-round matrices. Each round shares its original update and question across four treatments. Early/middle/late observations, temporal reversals, Spanish names and relationships, an original user prohibition, unsupported-date null and bounded source recovery are tested. Every inference uses a fresh emitted adapter worker. Earlier generated answers are discarded from subsequent rewrite sources. Narrative ablation is a diagnostic projection; production applies protected source restoration.
+
+Cells show exact task answers; parentheses count genuine model summaries, excluding canonical fallback. Masking performs ten mechanical transforms per matrix.
+
+| Treatment | Free before | Free repaired | DeepSeek 0731 before | DeepSeek 0731 repaired | DeepSeek v4.1 repaired |
+| --- | --- | --- | --- | --- | --- |
+| Full history | 7/10 | 9/10 | 8/10 | 7/10 | 10/10 |
+| Selective masking | 9/10 | 10/10 | 9/10 | 7/10 | 10/10 |
+| Narrative ablation | 9/10 (10 summaries) | 8/10 (10 summaries) | 10/10 (8 summaries) | 9/10 (7 summaries) | 6/10 (10 summaries) |
+| Protected summary | 7/10 (5 summaries) | 4/10 (10 summaries) | 10/10 (1 summary) | 9/10 (7 summaries) | 10/10 (10 summaries) |
+
+The repaired protected route qualifies on explicit `deepseek/deepseek-v4.1-flash` through OpenRouter: five-round and ten-round checkpoints both retain every tested field, prohibition and unknown null, with ten genuine successive summaries. All 26 recovery reads request hash verification and return exact original ranges of at most 1,200 UTF-16 code units. Full history and selective masking also answer 10/10. The narrative ablation's four failed cases include invalid recovery requests; those requests are refused and retained as failures.
+
+Free completes ten summaries after the repair but its protected continuation answers remain unqualified, including permission errors. One Free request also returned HTTP 200 with provider status `failed`; the adapter incorrectly exposed an empty successful completion. The shared Responses translator now raises an error for failed, cancelled and nonterminal responses, and for an explicit provider error. Valid incomplete-response handling remains covered. The [official terminal-event contract](https://developers.openai.com/api/reference/resources/responses/streaming-events) distinguishes provider failure from completion.
+
+Seven new regressions fail on the old translator. The final focused checks pass: 158 summary/Responses/dependent OpenRouter cases plus four scorer/protocol cases. The built SDK replay forwards the genuine captured failure through JSON and streaming HTTP 200, verifies that the last valid checkpoint survives both errors, then recovers on explicit retry. Its seed/retry/opaque items are controlled fixtures and incur zero upstream requests.
+
+The ten-round real-model run uses source tree `62e11530`; final tree `60e6df08` adds only the Responses failure guard. All 93 actual completed responses from the qualifying run produce identical IDs, reply text, tool calls and usage through the final emitted translator. This checks the affected translation boundary while reusing genuine model evidence for unchanged successful paths. Final typecheck, changed-source lint and the inspected five-MCP/Next non-container build pass. No full/remote CI, image build or release runs.
+
+Offline replay verifies 200 source chains, original user/system authority on actual continuation requests, tool pairing, unchanged model replies/scores and all 283 persisted source payloads. Failed provider output earns no successful acceptance credit. Explicit initial/previous/current source locators are supplied; retrieval discovery is outside this protocol. Read-only synthetic recovery does not establish genuine external-tool/duplicate-effect safety, Claude lifecycle, visual benefit, installed-release or endurance acceptance. #1091 remains open for those criteria and unqualified model routes.
+
+Provider-reported cost across all retained attempts: USD 0.299765383; 6 requests lack reported cost. The qualifying v4.1 matrix reports USD 0.133784436. Ordinary Codex subscription usage was exhausted; Free was tried first, then approved DeepSeek routes selected using the measured token mix and live catalogs. Model-selection prices are estimates; reported charges come from actual responses. Four treatments overlap within a matrix, and repaired model matrices overlap; measured phase/case times are not added into a wall-clock claim.

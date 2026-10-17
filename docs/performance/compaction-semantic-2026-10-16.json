@@ -1,0 +1,1920 @@
+{
+  "schemaVersion": 1,
+  "issue": 1091,
+  "recordedUtc": "2026-10-17T04:41:49.927428+00:00",
+  "baseRevision": "2018631e017ea1ce93df8ac8f557882abc179cf6",
+  "baseApplicationSourceTree": "4cd792f4d88180a093f653c440b7223b31428fa9",
+  "qualifiedApplicationSourceTree": "60e6df082059c7d9bfbad51f0abf6c2b49074f84",
+  "realModelApplicationSourceTree": "62e1153058a830197308daa1282e9589998f25d4",
+  "applicationSourceChanged": true,
+  "buildId": "69VHJfiTnqBylbrYff4zJ",
+  "realModelBuildId": "C-VlDWrpVJ3RIZFUjW18_",
+  "repair": "Keep runtime-owned source observation/receipt records out of model-generated narrative; retain existing rejection and deterministic restoration",
+  "sourceSha256": {
+    "scripts/compaction-semantic-acceptance.mjs": "bd21386f02aaf2df3c8cc4d32c37e4d62e40eabe6481615c3affc6dad1427404",
+    "scripts/compaction-semantic-protocol.mjs": "26bdf34e50f2dd40a414d4c4f350f74f6a3028b1958d0adaef823f3eacba613e",
+    "scripts/compaction-semantic-protocol.test.mjs": "e5a20703a262f37eb4f9aa23cf14c1d338033feb0a7dd04203e38e440226cefb",
+    "scripts/validate-compaction-semantic-evidence.mjs": "b3e586f30ef9e56881b9bb981473efe8fc00f8742ca37d3956bd486a16c19f83",
+    "scripts/responses-terminal-status-acceptance.mjs": "30ccd92930b4969f0e9a71e12312cd53db1d9f1352ac8aeda9e4bb0ff6611915",
+    "src/backend/services/model/adapters/openaiResponsesAdapter.ts": "61f78a4629478c0a1986af34bf3abfa8427996668c323511abbd73542af541cf",
+    "__tests__/model/openaiResponsesAdapter.test.ts": "21fa77e48b74e87ffb2c6fcc85245643a3ea1abcfd7f631917e52677a1c8fb64",
+    "src/backend/execution/flow/handlers/summarizingCompaction.ts": "3a3b0280183c336144b81aa1028d893c730fbf74b421c59bf46adec7f2b44f72",
+    "src/backend/execution/flow/handlers/compactForWire.ts": "f00e4562c6211b11b5db5b9d45a41546198aca2487c08fdfefdde86356cd1a94",
+    "src/backend/services/runResources/index.ts": "096e3b5a604199064157ecdf1cf91c98afdb2d8737ae2d7a17926602dd3ecc66",
+    "package-lock.json": "00a0aa4044199f6337f95e6b0c910e1c851667853675f7563861328b9cd0210b"
+  },
+  "validation": {
+    "build": {
+      "exitCode": 0,
+      "command": "npm run build",
+      "seconds": 347.6997551,
+      "revision": "2018631e017ea1ce93df8ac8f557882abc179cf6"
+    },
+    "typecheck": {
+      "exitCode": 0,
+      "command": "npm run typecheck",
+      "seconds": 64.4869336,
+      "revision": "2018631e017ea1ce93df8ac8f557882abc179cf6"
+    },
+    "lint": {
+      "exitCode": 0,
+      "command": "eslint source and semantic acceptance",
+      "seconds": 99.1443073,
+      "revision": "2018631e017ea1ce93df8ac8f557882abc179cf6"
+    },
+    "lint-harness-final": {
+      "exitCode": 0,
+      "command": "eslint final acceptance and offline replay",
+      "seconds": 2.9681582,
+      "revision": "2018631e017ea1ce93df8ac8f557882abc179cf6"
+    },
+    "build-fixed": {
+      "exitCode": 0,
+      "sourceTree": "62e1153058a830197308daa1282e9589998f25d4",
+      "buildId": "C-VlDWrpVJ3RIZFUjW18_",
+      "command": "npm run build",
+      "baseRevision": "2018631e017ea1ce93df8ac8f557882abc179cf6",
+      "sourceSha256": "3a3b0280183c336144b81aa1028d893c730fbf74b421c59bf46adec7f2b44f72",
+      "seconds": 351.9490669
+    },
+    "typecheck-fixed": {
+      "exitCode": 0,
+      "command": "npm run typecheck",
+      "baseRevision": "2018631e017ea1ce93df8ac8f557882abc179cf6",
+      "seconds": 62.538641999999996,
+      "sourceTree": "62e1153058a830197308daa1282e9589998f25d4"
+    },
+    "lint-fixed": {
+      "exitCode": 0,
+      "command": "eslint all source and final acceptance scripts",
+      "baseRevision": "2018631e017ea1ce93df8ac8f557882abc179cf6",
+      "seconds": 99.09415609999999
+    },
+    "build-terminal": {
+      "exitCode": 0,
+      "sourceTree": "60e6df082059c7d9bfbad51f0abf6c2b49074f84",
+      "command": "npm run build",
+      "baseRevision": "2018631e017ea1ce93df8ac8f557882abc179cf6",
+      "buildId": "69VHJfiTnqBylbrYff4zJ",
+      "seconds": 349.55194769999997
+    },
+    "typecheck-terminal": {
+      "exitCode": 0,
+      "command": "npm run typecheck",
+      "baseRevision": "2018631e017ea1ce93df8ac8f557882abc179cf6",
+      "seconds": 61.348125599999996,
+      "sourceTree": "60e6df082059c7d9bfbad51f0abf6c2b49074f84"
+    }
+  },
+  "free": {
+    "status": "completed",
+    "route": {
+      "adapter": "openai-responses",
+      "model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "authentication": "existing encrypted OpenRouter account, in memory only",
+      "reason": "Native Codex subscription allowance exhausted",
+      "credential": {
+        "method": "one explicitly selected existing encrypted account; canonical read-only format",
+        "configuredModel": "openrouter/free",
+        "baseHost": "openrouter.ai",
+        "credentialRetained": "memory only",
+        "configuredInputFilesUnchanged": true,
+        "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+        "configuredInputCount": 2
+      },
+      "catalog": {
+        "checkedUtc": "2026-10-17T03:24:18.551Z",
+        "id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "pricing": {
+          "prompt": "0",
+          "completion": "0"
+        },
+        "contextLength": 262144,
+        "supportedParameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ]
+      }
+    },
+    "startedUtc": "2026-10-17T03:24:15.247Z",
+    "finishedUtc": "2026-10-17T03:39:02.203Z",
+    "rounds": 10,
+    "treatments": {
+      "full": {
+        "rounds": 10,
+        "exact": 7,
+        "transformed": 0,
+        "reads": 5,
+        "failures": [
+          1,
+          4,
+          9
+        ],
+        "p50Seconds": 24.872314400000004,
+        "p95Seconds": 47.22838189999998,
+        "permissionErrors": 2,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 5,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 3,
+        "wireCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "selective": {
+        "rounds": 10,
+        "exact": 9,
+        "transformed": 10,
+        "reads": 29,
+        "failures": [
+          6
+        ],
+        "p50Seconds": 60.522688749999986,
+        "p95Seconds": 77.58926410000002,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 3,
+        "narrowReadsWithRequestedHash": 26,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          7092,
+          11553,
+          15765,
+          19977,
+          24189,
+          28401,
+          32613,
+          36825,
+          41037,
+          45251
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "anchored": {
+        "rounds": 10,
+        "exact": 9,
+        "transformed": 10,
+        "reads": 27,
+        "failures": [
+          9
+        ],
+        "p50Seconds": 84.26583334999998,
+        "p95Seconds": 108.16675910000002,
+        "permissionErrors": 1,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 5,
+        "narrowReadsWithRequestedHash": 22,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 16,
+        "wireCharacters": [
+          10089,
+          10469,
+          10711,
+          10635,
+          10702,
+          11035,
+          10919,
+          10954,
+          11245,
+          10972
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "protected": {
+        "rounds": 10,
+        "exact": 7,
+        "transformed": 5,
+        "reads": 21,
+        "failures": [
+          1,
+          6,
+          9
+        ],
+        "p50Seconds": 86.11245930000001,
+        "p95Seconds": 101.62051150000002,
+        "permissionErrors": 1,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [
+          6,
+          9
+        ],
+        "pairingValid": false,
+        "narrowReadsWithoutRequestedHash": 3,
+        "narrowReadsWithRequestedHash": 18,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 12,
+        "wireCharacters": [
+          11805,
+          12537,
+          36866,
+          14058,
+          38386,
+          14848,
+          15149,
+          39482,
+          63810,
+          88146
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      }
+    },
+    "requests": 142,
+    "completedResponses": 141,
+    "reportedCostUsd": 0,
+    "requestsWithoutReportedCost": 0,
+    "reportedCostPerExactTaskUsd": 0.0,
+    "usage": {
+      "input_tokens": 1420430,
+      "output_tokens": 102805,
+      "total_tokens": 1523235
+    },
+    "cachedInputTokens": 700128,
+    "summaryLatency": {
+      "p50Seconds": 27.070939599999985,
+      "p95Seconds": 67.79854020000005
+    },
+    "genuineSummaries": 15,
+    "summariesCopyingRuntimeBlocks": {
+      "anchored": 0,
+      "protected": 3
+    },
+    "allWorkersClosed": true
+  },
+  "approvedPaidBaseline": {
+    "status": "completed",
+    "route": {
+      "adapter": "openai-responses",
+      "model": "deepseek/deepseek-v4-flash-0731",
+      "authentication": "existing encrypted OpenRouter account, in memory only",
+      "reason": "Explicit standing-approved OpenRouter model after the completed Free matrix failed protected fidelity and ten genuine compactions",
+      "prerequisite": {
+        "file": "semantic-final.json",
+        "sha256": "b35df4c496d664968c57878a70afd3f41dc380bd5e71f9971064cd85bc2ebfb9",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "summary": {
+          "full": {
+            "rounds": 10,
+            "exact": 7,
+            "transformed": 0,
+            "reads": 5,
+            "failures": [
+              1,
+              4,
+              9
+            ]
+          },
+          "selective": {
+            "rounds": 10,
+            "exact": 9,
+            "transformed": 10,
+            "reads": 29,
+            "failures": [
+              6
+            ]
+          },
+          "anchored": {
+            "rounds": 10,
+            "exact": 9,
+            "transformed": 10,
+            "reads": 27,
+            "failures": [
+              9
+            ]
+          },
+          "protected": {
+            "rounds": 10,
+            "exact": 7,
+            "transformed": 5,
+            "reads": 21,
+            "failures": [
+              1,
+              6,
+              9
+            ]
+          }
+        }
+      },
+      "credential": {
+        "method": "one explicitly selected existing encrypted account; canonical read-only format",
+        "configuredModel": "openrouter/free",
+        "baseHost": "openrouter.ai",
+        "credentialRetained": "memory only",
+        "configuredInputFilesUnchanged": true,
+        "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+        "configuredInputCount": 2
+      },
+      "catalog": {
+        "checkedUtc": "2026-10-17T03:40:16.239Z",
+        "id": "deepseek/deepseek-v4-flash-0731",
+        "pricing": {
+          "prompt": "0.00000007",
+          "completion": "0.00000014",
+          "input_cache_read": "0.000000014"
+        },
+        "contextLength": 1048576,
+        "supportedParameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "parallel_tool_calls",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_a",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ]
+      }
+    },
+    "startedUtc": "2026-10-17T03:40:12.928Z",
+    "finishedUtc": "2026-10-17T03:47:07.426Z",
+    "rounds": 10,
+    "treatments": {
+      "full": {
+        "rounds": 10,
+        "exact": 8,
+        "transformed": 0,
+        "reads": 29,
+        "failures": [
+          3,
+          8
+        ],
+        "p50Seconds": 17.779493250000023,
+        "p95Seconds": 33.76477719999998,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 29,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "selective": {
+        "rounds": 10,
+        "exact": 9,
+        "transformed": 10,
+        "reads": 29,
+        "failures": [
+          4
+        ],
+        "p50Seconds": 10.473389049999989,
+        "p95Seconds": 16.699438800000003,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 9,
+        "narrowReadsWithRequestedHash": 20,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          7092,
+          11553,
+          15765,
+          19977,
+          24189,
+          28401,
+          32613,
+          36825,
+          41037,
+          45251
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "anchored": {
+        "rounds": 10,
+        "exact": 10,
+        "transformed": 8,
+        "reads": 29,
+        "failures": [],
+        "p50Seconds": 16.007063550000012,
+        "p95Seconds": 25.399128500000007,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 6,
+        "narrowReadsWithRequestedHash": 23,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          10334,
+          11285,
+          11694,
+          11978,
+          12130,
+          36463,
+          12677,
+          13089,
+          37417,
+          12581
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "protected": {
+        "rounds": 10,
+        "exact": 10,
+        "transformed": 1,
+        "reads": 29,
+        "failures": [],
+        "p50Seconds": 40.216309649999985,
+        "p95Seconds": 65.14764690000005,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 29,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          12458,
+          37040,
+          61369,
+          85702,
+          110030,
+          134363,
+          158692,
+          183025,
+          207353,
+          231689
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      }
+    },
+    "requests": 102,
+    "completedResponses": 100,
+    "reportedCostUsd": 0.10682586888,
+    "requestsWithoutReportedCost": 0,
+    "reportedCostPerExactTaskUsd": 0.0028871856454054053,
+    "usage": {
+      "input_tokens": 1923471,
+      "output_tokens": 79405,
+      "total_tokens": 2002876
+    },
+    "cachedInputTokens": 1195663,
+    "summaryLatency": {
+      "p50Seconds": 9.81580004999999,
+      "p95Seconds": 35.239211
+    },
+    "genuineSummaries": 9,
+    "summariesCopyingRuntimeBlocks": {
+      "anchored": 0,
+      "protected": 6
+    },
+    "allWorkersClosed": true
+  },
+  "repairedDeepSeek0731": {
+    "status": "completed",
+    "route": {
+      "adapter": "openai-responses",
+      "model": "deepseek/deepseek-v4-flash-0731",
+      "authentication": "existing encrypted OpenRouter account, in memory only",
+      "reason": "Explicit standing-approved OpenRouter model after the completed Free matrix failed protected fidelity and ten genuine compactions",
+      "prerequisite": {
+        "file": "semantic-final.json",
+        "sha256": "b35df4c496d664968c57878a70afd3f41dc380bd5e71f9971064cd85bc2ebfb9",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "summary": {
+          "full": {
+            "rounds": 10,
+            "exact": 7,
+            "transformed": 0,
+            "reads": 5,
+            "failures": [
+              1,
+              4,
+              9
+            ]
+          },
+          "selective": {
+            "rounds": 10,
+            "exact": 9,
+            "transformed": 10,
+            "reads": 29,
+            "failures": [
+              6
+            ]
+          },
+          "anchored": {
+            "rounds": 10,
+            "exact": 9,
+            "transformed": 10,
+            "reads": 27,
+            "failures": [
+              9
+            ]
+          },
+          "protected": {
+            "rounds": 10,
+            "exact": 7,
+            "transformed": 5,
+            "reads": 21,
+            "failures": [
+              1,
+              6,
+              9
+            ]
+          }
+        }
+      },
+      "credential": {
+        "method": "one explicitly selected existing encrypted account; canonical read-only format",
+        "configuredModel": "openrouter/free",
+        "baseHost": "openrouter.ai",
+        "credentialRetained": "memory only",
+        "configuredInputFilesUnchanged": true,
+        "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+        "configuredInputCount": 2
+      },
+      "catalog": {
+        "checkedUtc": "2026-10-17T03:54:57.246Z",
+        "id": "deepseek/deepseek-v4-flash-0731",
+        "pricing": {
+          "prompt": "0.00000007",
+          "completion": "0.00000014",
+          "input_cache_read": "0.000000014"
+        },
+        "contextLength": 1048576,
+        "supportedParameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "parallel_tool_calls",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_a",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ]
+      }
+    },
+    "startedUtc": "2026-10-17T03:54:52.627Z",
+    "finishedUtc": "2026-10-17T03:57:52.932Z",
+    "rounds": 10,
+    "treatments": {
+      "full": {
+        "rounds": 10,
+        "exact": 7,
+        "transformed": 0,
+        "reads": 26,
+        "failures": [
+          4,
+          5,
+          6
+        ],
+        "p50Seconds": 9.984022650000004,
+        "p95Seconds": 15.769047599999992,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 6,
+        "narrowReadsWithRequestedHash": 20,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 15,
+        "wireCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "selective": {
+        "rounds": 10,
+        "exact": 7,
+        "transformed": 10,
+        "reads": 29,
+        "failures": [
+          1,
+          4,
+          5
+        ],
+        "p50Seconds": 6.608345850000009,
+        "p95Seconds": 7.593117999999988,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 6,
+        "narrowReadsWithRequestedHash": 23,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          7092,
+          11553,
+          15765,
+          19977,
+          24189,
+          28401,
+          32613,
+          36825,
+          41037,
+          45251
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "anchored": {
+        "rounds": 10,
+        "exact": 9,
+        "transformed": 7,
+        "reads": 29,
+        "failures": [
+          1
+        ],
+        "p50Seconds": 15.012650999999998,
+        "p95Seconds": 28.271406500000005,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 29,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          32472,
+          57054,
+          11778,
+          36111,
+          11920,
+          12396,
+          12555,
+          12214,
+          12667,
+          12372
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "protected": {
+        "rounds": 10,
+        "exact": 9,
+        "transformed": 7,
+        "reads": 27,
+        "failures": [
+          8
+        ],
+        "p50Seconds": 13.909872599999998,
+        "p95Seconds": 19.140970700000004,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 3,
+        "narrowReadsWithRequestedHash": 24,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 16,
+        "wireCharacters": [
+          12170,
+          13549,
+          14123,
+          38456,
+          16248,
+          16005,
+          40334,
+          64667,
+          18858,
+          18459
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      }
+    },
+    "requests": 99,
+    "completedResponses": 98,
+    "reportedCostUsd": 0.059155078304,
+    "requestsWithoutReportedCost": 0,
+    "reportedCostPerExactTaskUsd": 0.001848596197,
+    "usage": {
+      "input_tokens": 1304762,
+      "output_tokens": 66940,
+      "total_tokens": 1371702
+    },
+    "cachedInputTokens": 851712,
+    "summaryLatency": {
+      "p50Seconds": 7.056041200000007,
+      "p95Seconds": 10.6329467
+    },
+    "genuineSummaries": 14,
+    "summariesCopyingRuntimeBlocks": {
+      "anchored": 0,
+      "protected": 1
+    },
+    "allWorkersClosed": true
+  },
+  "freeFixed": {
+    "status": "completed",
+    "route": {
+      "adapter": "openai-responses",
+      "model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "authentication": "existing encrypted OpenRouter account, in memory only",
+      "reason": "Native Codex subscription allowance exhausted",
+      "credential": {
+        "method": "one explicitly selected existing encrypted account; canonical read-only format",
+        "configuredModel": "openrouter/free",
+        "baseHost": "openrouter.ai",
+        "credentialRetained": "memory only",
+        "configuredInputFilesUnchanged": true,
+        "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+        "configuredInputCount": 2
+      },
+      "catalog": {
+        "checkedUtc": "2026-10-17T03:59:33.647Z",
+        "id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "pricing": {
+          "prompt": "0",
+          "completion": "0"
+        },
+        "contextLength": 262144,
+        "supportedParameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ]
+      }
+    },
+    "startedUtc": "2026-10-17T03:59:30.212Z",
+    "finishedUtc": "2026-10-17T04:17:17.021Z",
+    "rounds": 10,
+    "treatments": {
+      "full": {
+        "rounds": 10,
+        "exact": 9,
+        "transformed": 0,
+        "reads": 11,
+        "failures": [
+          3
+        ],
+        "p50Seconds": 46.24491895000002,
+        "p95Seconds": 59.121019100000034,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 11,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 4,
+        "wireCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "selective": {
+        "rounds": 10,
+        "exact": 10,
+        "transformed": 10,
+        "reads": 29,
+        "failures": [],
+        "p50Seconds": 67.18906819999992,
+        "p95Seconds": 88.75043369999999,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 6,
+        "narrowReadsWithRequestedHash": 23,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          7092,
+          11553,
+          15765,
+          19977,
+          24189,
+          28401,
+          32613,
+          36825,
+          41037,
+          45251
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "anchored": {
+        "rounds": 10,
+        "exact": 8,
+        "transformed": 10,
+        "reads": 29,
+        "failures": [
+          1,
+          5
+        ],
+        "p50Seconds": 96.90498235000001,
+        "p95Seconds": 152.6166591,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 29,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          9851,
+          10316,
+          10635,
+          10588,
+          10697,
+          10940,
+          10979,
+          11101,
+          11388,
+          11379
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "protected": {
+        "rounds": 10,
+        "exact": 4,
+        "transformed": 10,
+        "reads": 20,
+        "failures": [
+          1,
+          5,
+          6,
+          7,
+          8,
+          10
+        ],
+        "p50Seconds": 88.83479535000001,
+        "p95Seconds": 119.28458140000014,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [
+          6
+        ],
+        "pairingValid": false,
+        "narrowReadsWithoutRequestedHash": 3,
+        "narrowReadsWithRequestedHash": 17,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 9,
+        "wireCharacters": [
+          11595,
+          12529,
+          12861,
+          13665,
+          14198,
+          14534,
+          15338,
+          15917,
+          16248,
+          17053
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      }
+    },
+    "requests": 149,
+    "completedResponses": 148,
+    "reportedCostUsd": 0,
+    "requestsWithoutReportedCost": 0,
+    "reportedCostPerExactTaskUsd": 0.0,
+    "usage": {
+      "input_tokens": 1502882,
+      "output_tokens": 104977,
+      "total_tokens": 1607859
+    },
+    "cachedInputTokens": 855712,
+    "summaryLatency": {
+      "p50Seconds": 27.214513999999994,
+      "p95Seconds": 56.89084159999992
+    },
+    "genuineSummaries": 20,
+    "summariesCopyingRuntimeBlocks": {
+      "anchored": 0,
+      "protected": 0
+    },
+    "allWorkersClosed": true
+  },
+  "approvedPaid": {
+    "status": "completed",
+    "route": {
+      "adapter": "openai-responses",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "authentication": "existing encrypted OpenRouter account, in memory only",
+      "reason": "Explicit standing-approved OpenRouter model after the completed Free matrix failed protected fidelity and ten genuine compactions",
+      "prerequisite": {
+        "file": "semantic-final.json",
+        "sha256": "b35df4c496d664968c57878a70afd3f41dc380bd5e71f9971064cd85bc2ebfb9",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "summary": {
+          "full": {
+            "rounds": 10,
+            "exact": 7,
+            "transformed": 0,
+            "reads": 5,
+            "failures": [
+              1,
+              4,
+              9
+            ]
+          },
+          "selective": {
+            "rounds": 10,
+            "exact": 9,
+            "transformed": 10,
+            "reads": 29,
+            "failures": [
+              6
+            ]
+          },
+          "anchored": {
+            "rounds": 10,
+            "exact": 9,
+            "transformed": 10,
+            "reads": 27,
+            "failures": [
+              9
+            ]
+          },
+          "protected": {
+            "rounds": 10,
+            "exact": 7,
+            "transformed": 5,
+            "reads": 21,
+            "failures": [
+              1,
+              6,
+              9
+            ]
+          }
+        }
+      },
+      "credential": {
+        "method": "one explicitly selected existing encrypted account; canonical read-only format",
+        "configuredModel": "openrouter/free",
+        "baseHost": "openrouter.ai",
+        "credentialRetained": "memory only",
+        "configuredInputFilesUnchanged": true,
+        "sourceFormatSha256": "97fb586616d497e086286420cf570c8936150121f99d4023954506340cd05414",
+        "configuredInputCount": 2
+      },
+      "catalog": {
+        "checkedUtc": "2026-10-17T04:04:43.211Z",
+        "id": "deepseek/deepseek-v4.1-flash",
+        "pricing": {
+          "prompt": "0.00000004",
+          "completion": "0.0000007",
+          "input_cache_read": "0.000000009"
+        },
+        "contextLength": 1048576,
+        "supportedParameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ]
+      }
+    },
+    "startedUtc": "2026-10-17T04:04:39.726Z",
+    "finishedUtc": "2026-10-17T04:07:51.027Z",
+    "rounds": 10,
+    "treatments": {
+      "full": {
+        "rounds": 10,
+        "exact": 10,
+        "transformed": 0,
+        "reads": 23,
+        "failures": [],
+        "p50Seconds": 7.1502011500000044,
+        "p95Seconds": 12.155863200000022,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 23,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 13,
+        "wireCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "selective": {
+        "rounds": 10,
+        "exact": 10,
+        "transformed": 10,
+        "reads": 29,
+        "failures": [],
+        "p50Seconds": 5.724477350000001,
+        "p95Seconds": 6.640161800000001,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 29,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 18,
+        "wireCharacters": [
+          7092,
+          11553,
+          15765,
+          19977,
+          24189,
+          28401,
+          32613,
+          36825,
+          41037,
+          45251
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "anchored": {
+        "rounds": 10,
+        "exact": 6,
+        "transformed": 10,
+        "reads": 17,
+        "failures": [
+          4,
+          5,
+          6,
+          7
+        ],
+        "p50Seconds": 11.427460699999996,
+        "p95Seconds": 16.187621000000014,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [
+          4,
+          5,
+          6,
+          7
+        ],
+        "pairingValid": false,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 17,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 9,
+        "wireCharacters": [
+          11341,
+          11807,
+          12300,
+          12236,
+          12521,
+          12880,
+          12816,
+          12428,
+          12588,
+          12505
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      },
+      "protected": {
+        "rounds": 10,
+        "exact": 10,
+        "transformed": 10,
+        "reads": 26,
+        "failures": [],
+        "p50Seconds": 17.802669,
+        "p95Seconds": 29.360856700000003,
+        "permissionErrors": 0,
+        "unknownAnswerErrors": 0,
+        "modelToolFailures": [],
+        "pairingValid": true,
+        "narrowReadsWithoutRequestedHash": 0,
+        "narrowReadsWithRequestedHash": 26,
+        "repeatedRangesWithinCase": 0,
+        "repeatedRangesAcrossRounds": 15,
+        "wireCharacters": [
+          12845,
+          14006,
+          14740,
+          15749,
+          16614,
+          17178,
+          18291,
+          19149,
+          19582,
+          20802
+        ],
+        "canonicalCharacters": [
+          32472,
+          57054,
+          81383,
+          105716,
+          130044,
+          154377,
+          178706,
+          203039,
+          227367,
+          251703
+        ]
+      }
+    },
+    "requests": 93,
+    "completedResponses": 93,
+    "reportedCostUsd": 0.133784436,
+    "requestsWithoutReportedCost": 0,
+    "reportedCostPerExactTaskUsd": 0.0037162343333333337,
+    "usage": {
+      "input_tokens": 1078396,
+      "output_tokens": 51802,
+      "total_tokens": 1130198
+    },
+    "cachedInputTokens": 633088,
+    "summaryLatency": {
+      "p50Seconds": 7.846800150000011,
+      "p95Seconds": 15.441486000000005
+    },
+    "genuineSummaries": 20,
+    "summariesCopyingRuntimeBlocks": {
+      "anchored": 0,
+      "protected": 0
+    },
+    "allWorkersClosed": true
+  },
+  "modelSelection": {
+    "selection": {
+      "model": "deepseek/deepseek-v4-flash-0731",
+      "inputPerMillion": 0.07,
+      "outputPerMillion": 0.14,
+      "estimatedCostForObservedMix": 0.1138228
+    },
+    "estimation": "For route selection only; actual DeepSeek tokenization, caching and reported charges will be measured",
+    "observedInputTokens": 1420430.0,
+    "synchronousApprovedOptions": [
+      {
+        "model": "deepseek/deepseek-v4-flash-0731",
+        "inputPerMillion": 0.07,
+        "outputPerMillion": 0.14,
+        "estimatedCostForObservedMix": 0.1138228
+      },
+      {
+        "model": "deepseek/deepseek-v4.1-flash",
+        "inputPerMillion": 0.04,
+        "outputPerMillion": 0.7,
+        "estimatedCostForObservedMix": 0.1287807
+      },
+      {
+        "model": "deepseek/deepseek-v4-flash",
+        "inputPerMillion": 0.091,
+        "outputPerMillion": 0.182,
+        "estimatedCostForObservedMix": 0.14796963999999999
+      },
+      {
+        "model": "anthropic/claude-haiku-5.5",
+        "inputPerMillion": 0.09999999999999999,
+        "outputPerMillion": 0.5,
+        "estimatedCostForObservedMix": 0.1934455
+      },
+      {
+        "model": "openai/gpt-6-luna-pro",
+        "inputPerMillion": 0.09999999999999999,
+        "outputPerMillion": 0.5,
+        "estimatedCostForObservedMix": 0.1934455
+      },
+      {
+        "model": "openai/gpt-6-luna",
+        "inputPerMillion": 0.09999999999999999,
+        "outputPerMillion": 0.5,
+        "estimatedCostForObservedMix": 0.1934455
+      },
+      {
+        "model": "deepseek/deepseek-v4-pro",
+        "inputPerMillion": 0.20879999999999999,
+        "outputPerMillion": 0.41759999999999997,
+        "estimatedCostForObservedMix": 0.339517152
+      },
+      {
+        "model": "deepseek/deepseek-v4-flash-vision-exp",
+        "inputPerMillion": 0.21559999999999999,
+        "outputPerMillion": 0.6468,
+        "estimatedCostForObservedMix": 0.37273898199999994
+      },
+      {
+        "model": "openai/gpt-5.6-luna",
+        "inputPerMillion": 0.19999999999999998,
+        "outputPerMillion": 1.2,
+        "estimatedCostForObservedMix": 0.407452
+      },
+      {
+        "model": "openai/gpt-5.6-luna-pro",
+        "inputPerMillion": 0.19999999999999998,
+        "outputPerMillion": 1.2,
+        "estimatedCostForObservedMix": 0.407452
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-exp",
+        "inputPerMillion": 0.27,
+        "outputPerMillion": 0.41,
+        "estimatedCostForObservedMix": 0.42566615
+      },
+      {
+        "model": "deepseek/deepseek-v3.2",
+        "inputPerMillion": 0.28,
+        "outputPerMillion": 0.42,
+        "estimatedCostForObservedMix": 0.4408985
+      },
+      {
+        "model": "deepseek/deepseek-chat-v3.1",
+        "inputPerMillion": 0.25,
+        "outputPerMillion": 0.95,
+        "estimatedCostForObservedMix": 0.45277225
+      },
+      {
+        "model": "deepseek/deepseek-v3.1-terminus",
+        "inputPerMillion": 0.27,
+        "outputPerMillion": 1.0,
+        "estimatedCostForObservedMix": 0.48632110000000006
+      },
+      {
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "inputPerMillion": 0.29,
+        "outputPerMillion": 1.1400000000000001,
+        "estimatedCostForObservedMix": 0.5291223999999999
+      },
+      {
+        "model": "deepseek/deepseek-chat",
+        "inputPerMillion": 0.32,
+        "outputPerMillion": 0.8899999999999999,
+        "estimatedCostForObservedMix": 0.54603405
+      },
+      {
+        "model": "deepseek/deepseek-r1-0528",
+        "inputPerMillion": 0.5,
+        "outputPerMillion": 2.1500000000000004,
+        "estimatedCostForObservedMix": 0.93124575
+      },
+      {
+        "model": "deepseek/deepseek-v4-pro-0813",
+        "inputPerMillion": 0.66,
+        "outputPerMillion": 1.9800000000000002,
+        "estimatedCostForObservedMix": 1.1410377000000003
+      },
+      {
+        "model": "anthropic/claude-haiku-4.5",
+        "inputPerMillion": 1.0,
+        "outputPerMillion": 5.0,
+        "estimatedCostForObservedMix": 1.934455
+      }
+    ],
+    "catalogCheckedUtc": "2026-10-16T22:26:29.793879-05:00",
+    "source": "https://openrouter.ai/api/v1/models",
+    "observedOutputTokens": 102805.0
+  },
+  "qualifiedModelSelection": {
+    "observedOutputTokens": 66940.0,
+    "source": "https://openrouter.ai/api/v1/models",
+    "synchronousApprovedOptions": [
+      {
+        "model": "deepseek/deepseek-v4.1-flash",
+        "inputPerMillion": 0.04,
+        "outputPerMillion": 0.7,
+        "estimatedCostForObservedMix": 0.09904848000000001
+      },
+      {
+        "model": "deepseek/deepseek-v4-flash",
+        "inputPerMillion": 0.091,
+        "outputPerMillion": 0.182,
+        "estimatedCostForObservedMix": 0.130916422
+      },
+      {
+        "model": "anthropic/claude-haiku-5.5",
+        "inputPerMillion": 0.09999999999999999,
+        "outputPerMillion": 0.5,
+        "estimatedCostForObservedMix": 0.1639462
+      },
+      {
+        "model": "openai/gpt-6-luna",
+        "inputPerMillion": 0.09999999999999999,
+        "outputPerMillion": 0.5,
+        "estimatedCostForObservedMix": 0.1639462
+      }
+    ],
+    "observedInputTokens": 1304762.0,
+    "rejectedSummary": {
+      "rounds": 10,
+      "exact": 9,
+      "transformed": 7,
+      "reads": 27,
+      "failures": [
+        8
+      ]
+    },
+    "catalogCheckedUtc": "2026-10-16T22:26:29.793879-05:00",
+    "rejectedModel": "deepseek/deepseek-v4-flash-0731",
+    "estimation": "Selection estimate only; actual usage and reported costs are recorded independently",
+    "selection": {
+      "model": "deepseek/deepseek-v4.1-flash",
+      "inputPerMillion": 0.04,
+      "outputPerMillion": 0.7,
+      "estimatedCostForObservedMix": 0.09904848000000001
+    }
+  },
+  "fiveRoundCheckpoints": {
+    "free": {
+      "full": 3,
+      "selective": 5,
+      "anchored": 5,
+      "protected": 4
+    },
+    "approvedPaidBaseline": {
+      "full": 4,
+      "selective": 4,
+      "anchored": 5,
+      "protected": 5
+    },
+    "repairedDeepSeek0731": {
+      "full": 3,
+      "selective": 2,
+      "anchored": 4,
+      "protected": 5
+    },
+    "freeFixed": {
+      "full": 4,
+      "selective": 5,
+      "anchored": 3,
+      "protected": 3
+    },
+    "approvedPaid": {
+      "full": 5,
+      "selective": 5,
+      "anchored": 3,
+      "protected": 5
+    }
+  },
+  "probeAttempts": [
+    {
+      "name": "semantic-probe-2.json",
+      "sha256": "b3bfa00347466e0dfd6793b1b598e17c2a2e3b7e8b71e65ac7615ea124813691",
+      "status": "failed",
+      "requests": 0
+    },
+    {
+      "name": "semantic-probe-3.json",
+      "sha256": "731be1de6d312988352c7e1ce0e9276c16f1a3d96f4bc7df87a335608e2170ea",
+      "status": "failed",
+      "requests": 6
+    },
+    {
+      "name": "semantic-probe-4.json",
+      "sha256": "5d874497d0b49724a27db5e7097231e33354e10ce5d4347557a8d4ec6539705b",
+      "status": "failed",
+      "requests": 10
+    }
+  ],
+  "trace": {
+    "path": "compaction-semantic-provider-trace-2026-10-16.json.gz",
+    "sha256": "6d7efdbe38f1b959866861b33fc8517255da8e4130d2b9e236f6d14a33c44da2",
+    "gzipBytes": 3300055,
+    "uncompressedBytes": 51611015,
+    "storedSources": 283
+  },
+  "limits": [
+    "Synthetic observations-only tasks with explicit original-source locators; retrieval discovery is not evaluated",
+    "Anchored is a diagnostic ablation, not a production configuration",
+    "No generated prior answers are carried into subsequent rewrites and no hidden native sessions are used",
+    "Read-only resource recovery does not qualify duplicate side effects or genuine external tool operations",
+    "No Claude, visual, installed artifact, default-heap endurance, full CI or release acceptance"
+  ],
+  "outcome": "Acceptance results remain scoped to the named models, emitted source, protocol and retained failed attempts",
+  "terminalStatusReplay": {
+    "issue": 1091,
+    "kind": "captured-failure-built-adapter-replay",
+    "profile": "[operator]\\.codex\\tmp\\flujo-maintenance-20261017T0310\\semantic-profile-1b76f6bb-67e0-457c-9d06-5771e25ab72d",
+    "buildId": "69VHJfiTnqBylbrYff4zJ",
+    "factory": {
+      "id": "630817",
+      "sha256": "6ca18c7cb35ef20bbdbeb473f71e1876478370a96fc3566d21a44dbf27f4eb03"
+    },
+    "actualProviderFailure": {
+      "responseId": "gen-1792210286-nv7zktKZJE9meN9hx8QK",
+      "httpStatus": 200,
+      "status": "failed",
+      "error": {
+        "code": "server_error",
+        "message": "stream closed with reason: error"
+      },
+      "rawSha256": "28f14a0f1fa090c8d8dcf8543c99daa4ecb40d88f0e7f52f614df3e1c1e615e8"
+    },
+    "realCompletedResponsesReplayed": 93,
+    "originalQualifiedSourceTree": "62e1153058a830197308daa1282e9589998f25d4",
+    "upstreamRequests": 0,
+    "limits": [
+      "Controlled SDK HTTP transports; synthetic seed/retry/opaque items",
+      "Real inference/semantic fidelity belongs to the unchanged qualified matrix, not this local replay"
+    ],
+    "finalApplicationSourceTree": "60e6df082059c7d9bfbad51f0abf6c2b49074f84",
+    "completedResponseTranslationUnchanged": true,
+    "status": "passed",
+    "calls": [
+      {
+        "phase": "seed",
+        "body": {
+          "model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "input": [
+            {
+              "role": "user",
+              "content": "Check the saved observation."
+            }
+          ],
+          "store": false,
+          "include": [
+            "reasoning.encrypted_content"
+          ]
+        }
+      },
+      {
+        "phase": "failed-json",
+        "body": {
+          "model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "input": [
+            {
+              "role": "user",
+              "content": "Check the saved observation."
+            },
+            {
+              "type": "reasoning",
+              "id": "fixture-reasoning",
+              "summary": [],
+              "encrypted_content": "SYNTHETIC-LOCAL-OPAQUE-ONLY"
+            },
+            {
+              "type": "function_call",
+              "id": "fixture-call-item",
+              "call_id": "fixture-call",
+              "name": "read_status",
+              "arguments": "{}"
+            },
+            {
+              "type": "function_call_output",
+              "call_id": "fixture-call",
+              "output": "Observed."
+            },
+            {
+              "role": "user",
+              "content": "Continue."
+            }
+          ],
+          "store": false,
+          "include": [
+            "reasoning.encrypted_content"
+          ]
+        }
+      },
+      {
+        "phase": "failed-stream",
+        "body": {
+          "model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "input": [
+            {
+              "role": "user",
+              "content": "Check the saved observation."
+            },
+            {
+              "type": "reasoning",
+              "id": "fixture-reasoning",
+              "summary": [],
+              "encrypted_content": "SYNTHETIC-LOCAL-OPAQUE-ONLY"
+            },
+            {
+              "type": "function_call",
+              "id": "fixture-call-item",
+              "call_id": "fixture-call",
+              "name": "read_status",
+              "arguments": "{}"
+            },
+            {
+              "type": "function_call_output",
+              "call_id": "fixture-call",
+              "output": "Observed."
+            },
+            {
+              "role": "user",
+              "content": "Continue."
+            }
+          ],
+          "store": false,
+          "stream": true,
+          "include": [
+            "reasoning.encrypted_content"
+          ]
+        }
+      },
+      {
+        "phase": "retry",
+        "body": {
+          "model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "input": [
+            {
+              "role": "user",
+              "content": "Check the saved observation."
+            },
+            {
+              "type": "reasoning",
+              "id": "fixture-reasoning",
+              "summary": [],
+              "encrypted_content": "SYNTHETIC-LOCAL-OPAQUE-ONLY"
+            },
+            {
+              "type": "function_call",
+              "id": "fixture-call-item",
+              "call_id": "fixture-call",
+              "name": "read_status",
+              "arguments": "{}"
+            },
+            {
+              "type": "function_call_output",
+              "call_id": "fixture-call",
+              "output": "Observed."
+            },
+            {
+              "role": "user",
+              "content": "Continue."
+            }
+          ],
+          "store": false,
+          "include": [
+            "reasoning.encrypted_content"
+          ]
+        }
+      }
+    ],
+    "checkpointPreservedThroughFailures": true,
+    "explicitRetryRecovered": true,
+    "canonicalInputUnchanged": true,
+    "finishedUtc": "2026-10-17T04:38:04.645Z"
+  },
+  "qualificationReuse": {
+    "realModelSourceTree": "62e1153058a830197308daa1282e9589998f25d4",
+    "finalSourceTree": "60e6df082059c7d9bfbad51f0abf6c2b49074f84",
+    "reason": "Only failed/nonterminal/error-bearing Responses translation changed after the genuine model run; compaction, request and completed-output paths remain unchanged",
+    "finalBuiltCompletedResponseComparisons": 93,
+    "allComparedReplyTextToolCallsUsageAndIdsUnchanged": true,
+    "capturedFailureRejectedThroughBothSdkPaths": true,
+    "validCheckpointPreservedAndExplicitRetryRecovered": true,
+    "additionalUpstreamRequests": 0
+  },
+  "totalReportedCostUsd": 0.299765383184,
+  "totalRequests": 601,
+  "totalRequestsWithoutReportedCost": 6,
+  "focusedValidation": {
+    "summaryCasesPassed": 40,
+    "responseCasesPassed": 88,
+    "dependentOpenRouterCasesPassed": 30,
+    "protocolCasesPassed": 4,
+    "uniqueFocusedCasesPassed": 162,
+    "newCasesFailingBeforeRepair": 7,
+    "summaryLogSha256": "252d5546b107a78e1ae942cffb457fe432093994d519dfe60c364f0590699796",
+    "protocolLogSha256": "d09c5e3f8ea584296405e913f742e38fdc6c94a05089aff9b94c75276da3a112",
+    "responseBeforeLogSha256": "b85bb05fd3b2429d317b1f293bd1ed58351f6530ad6674faf58b0d7ee9a5c98e",
+    "responseAfterLogSha256": "b295d7e0af75994b9435dd1a827fe356c5d3f6595151c7809356c003ef3e4b10",
+    "dependentLogSha256": "bc78517ee4bc70e70b3686950647091c0c9aeae17b179e958fdad6a66b83fba1"
+  },
+  "measurementNotes": [
+    "Four treatments overlap within each matrix; repaired Free and DeepSeek matrices also overlap",
+    "Case latency includes process startup, summaries and recovery; do not sum overlapping phase times",
+    "Model-selection prices are estimates; reported cost fields come from actual provider responses"
+  ],
+  "offlineReplay": {
+    "sourceChainsVerified": 200,
+    "storedSourcesVerified": 283,
+    "variants": 5,
+    "failedProviderRepliesRetained": 1,
+    "rawReplyAndAuthorityChecks": true
+  }
+}

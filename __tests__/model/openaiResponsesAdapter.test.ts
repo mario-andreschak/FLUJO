@@ -259,6 +259,16 @@ describe('toResponsesTools', () => {
 });
 
 describe('fromResponse', () => {
+  it.each(['failed', 'cancelled', 'queued', 'in_progress'])('does not expose output from a %s response as a completion', status => {
+    expect(() => fromResponse(responseWithToolCall({ status }) as never, 'gpt-5'))
+      .toThrow('The AI provider did not complete the reply');
+  });
+
+  it('rejects an error even when the provider labels the response completed', () => {
+    expect(() => fromResponse(responseWithToolCall({ error: { code: 'server_error', message: 'upstream failed' } }) as never, 'gpt-5'))
+      .toThrow('upstream failed');
+  });
+
   it('produces a ChatCompletion with tool calls keyed by call_id', () => {
     const { completion } = fromResponse(responseWithToolCall() as never, 'gpt-5');
     const message = completion.choices[0].message;
@@ -798,6 +808,29 @@ describe('complete native output replay', () => {
 });
 
 describe('native Responses streaming', () => {
+  it.each([false, true])('rejects an HTTP-200 provider failure without advancing the valid checkpoint (stream=%s)', async stream => {
+    let session: ResponsesSessionState | undefined;
+    const scope = { conversationId: 'failed-terminal-' + stream, nodeId: 'node' };
+    const messages: OpenAI.ChatCompletionMessageParam[] = [{ role: 'user', content: 'Check the weather.' }];
+    const first = await call(model(), messages, { ...scope,
+      onResponsesSessionChange: (state: ResponsesSessionState | undefined) => { session = state; } });
+    const before = structuredClone(session);
+    messages.push(first.completion.choices[0].message, { role: 'tool', tool_call_id: 'call_abc', content: 'Sunny.' },
+      { role: 'user', content: 'Continue.' });
+    const failed = responseWithToolCall({ status: 'failed', error: { code: 'server_error', message: 'stream closed with reason: error' } });
+    const changed = jest.fn();
+    mockResponsesCreate.mockResolvedValueOnce(stream ? (async function* () {
+      yield { type: 'response.output_text.delta', delta: 'Partial preview' };
+      yield { type: 'response.failed', response: failed };
+    })() : failed);
+    const input = { model: model(), apiKey: 'sk-test', messages, ...scope, responsesSession: session,
+      onResponsesSessionChange: changed };
+    const result = stream ? new OpenAiResponsesAdapter().createStreamCompletion(input) : call(model(), messages, input);
+    await expect(result).rejects.toThrow('stream closed with reason: error');
+    expect(session).toEqual(before);
+    for (const [published] of changed.mock.calls) expect(published).toEqual(before);
+  });
+
   it.each(['max_output_tokens', 'content_filter'])('retains an incomplete terminal response (%s) without caching native output', async reason => {
     const output = [{ type: 'message', id: 'partial-message', role: 'assistant',
       content: [{ type: 'output_text', text: 'Partial answer' }] }];

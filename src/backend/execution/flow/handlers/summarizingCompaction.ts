@@ -110,6 +110,12 @@ export function buildCompactionPrompt(opts?: BuildCompactionPromptOptions): {
     'the conversation was summarized or compacted.\n\n' +
     'Sections (always output all of them, even if a section is empty):\n' +
     `${sections}\n\n` +
+    'Return exactly these five headings, once each, and no other headings. ' +
+    'Do not copy the runtime-owned "## Recorded Source Observations" or ' +
+    '"## Execution Receipts" sections, their records, source offsets or archive ' +
+    'footers into your output. FLUJO restores those blocks from the actual source ' +
+    'after this narrative is validated. Use their contents only as historical ' +
+    'evidence for the five narrative sections; never fabricate or rewrite their records.\n\n' +
     'Rules:\n' +
     '- Use terse bullet points; aim for at most 600 words. Consolidate repeated ' +
     'unchanged observations and reminders. Omit filler, copied logs and incidental ' +
