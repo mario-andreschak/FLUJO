@@ -26,6 +26,24 @@
   authorization is not permission for other Google calls or future chats.
 - Local acceptance evidence:
   `C:/Users/Moe/.codex/visualizations/2026/10/19/01a155e5-bc06-70c3-bdd8-dcb8c8632483/antigravity-live-test.png`.
+- Catalog follow-up: Google's current Windows installer manifest also offers
+  CLI 1.4.2. A fresh isolated API-key catalog check with an invalid placeholder
+  returns the same 11 entries without Argon. FLUJO discovers the CLI's catalog;
+  it does not thereby query Google's complete live API catalog or verify access.
+- User-authorized Argon setup and acceptance on 2026-10-19: created Gemini 4
+  Argon (`gemini-4-argon`), native `gemini` provider/adapter, model ID
+  `a907238c-eee3-443d-a9db-1a039783e54f` in default-workspace. Reused the exact
+  encrypted key from Antigravity CLI Default without changing that connection.
+  Google's native model-list API advertised Argon. The saved model passed the
+  normal UI check: HTTP 200 / `pong` in 3,636 ms, FLUJO tool schema/arguments/
+  execution/result-receipt check in 19,134 ms. No application source changed.
+  Evidence: `C:/Users/Moe/.codex/visualizations/2026/10/19/01a155e5-bc06-70c3-bdd8-dcb8c8632483/argon-native-live-test.png`.
+- API status: native Gemini currently uses `generateContent`. Google's
+  [migration guide](https://ai.google.dev/gemini-api/docs/migrate-to-interactions)
+  labels that API legacy but fully supported, recommending Interactions for
+  new development. The [Argon announcement](https://antigravity.google/blog/gemini-4-argon-in-google-antigravity)
+  describes both eligible Antigravity subscription access and API availability;
+  it does not require using the CLI. Argon authorization covers this test only.
 - Cleanup through flujo-bash: removed abandoned pinned download, replaced build,
   compiler caches and obsolete command shims; 174,328,888 bytes removed in total.
   Free disk after cleanup: 178,848,612,352 bytes. Active build/MCP output retained
