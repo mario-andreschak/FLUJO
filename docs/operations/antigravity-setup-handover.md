@@ -16,13 +16,21 @@
 - Real diagnostics: official CLI 1.4.2 accepts the integration flags. The saved
   model `32463ede-b34a-4201-b3dd-0a335238b444` loads 11 Gemini models in API-key
   mode through its editor. Credentials and saved `default` selection unchanged.
-- Model calls: none. A narrow current-chat Google exception was requested for
-  the saved connection's live model/tool check; approval remains pending.
-  Catalog visibility does not establish model entitlement or successful inference.
+- Live acceptance on 2026-10-19: the user directly authorized this saved
+  connection's Google API-key model/tool check in this chat. The normal test
+  dialog passed with official CLI 1.4.2: the flow adapter returned `pong`
+  (HTTP 200, 5,810 ms), and the FLUJO tool round-trip passed (10,141 ms),
+  including schema acceptance, argument validation, execution and model receipt.
+  The axios cross-check was correctly skipped for this native CLI adapter.
+  Billing cost was not exposed by the test; no amount is asserted. This narrow
+  authorization is not permission for other Google calls or future chats.
+- Local acceptance evidence:
+  `C:/Users/Moe/.codex/visualizations/2026/10/19/01a155e5-bc06-70c3-bdd8-dcb8c8632483/antigravity-live-test.png`.
 - Cleanup through flujo-bash: removed abandoned pinned download, replaced build,
-  compiler caches and obsolete command shims; 173,041,625 bytes removed in total.
-  Free disk after cleanup: 178,847,416,320 bytes. Active build/MCP output retained
+  compiler caches and obsolete command shims; 174,328,888 bytes removed in total.
+  Free disk after cleanup: 178,848,612,352 bytes. Active build/MCP output retained
   for the running app. Original AGENTS.md and legacy bin.cjs changes preserved.
-- Next: run the paid model/tool check only if directly authorized; record its
-  result here. Full regression and packaged-consumer suites remain release gates.
-  No Google-call approval or inference result should be inferred from this file.
+- Next: review the draft PR. Full regression and packaged-consumer suites
+  remain release gates. Local build/typecheck/lint results cover the unchanged
+  source revision above and were reused for this acceptance-only record update.
+  No additional Google-call authorization should be inferred from this file.
