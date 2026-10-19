@@ -33,6 +33,7 @@ import {
   type PersonaFlowDispatchRecord,
 } from './personaDispatcher';
 import {
+  PersonaDomainBusyError,
   PersonaDomainConflictError,
   PersonaDomainNotFoundError,
   type PersonaDomainMutationOptions,
@@ -53,7 +54,10 @@ import {
 } from './runtimeLock';
 import {
   deletePersonaWorkItemRecord,
+  getPersona,
   getPersonaActivity,
+  getPersonaDeletionTombstone,
+  getPersonaLease,
   getPersonaWorkItem,
   listPersonaWorkItems as listStoredPersonaWorkItems,
   savePersonaWorkItem,
@@ -177,7 +181,7 @@ export async function createPersonaWorkItem(
     || !parsed.goal || parsed.parentGoalId || options.executionAuthority)) {
     throw new PersonaDomainConflictError('Paused admission requires an owner-created Goal root.');
   }
-  const created = await withPersonaDomainMutation(parsed.personaId, options, async ({ activity }) => {
+  const create = async ({ activity }: { activity?: PersonaActivity }) => {
     const now = Date.now();
     const id = parsed.id ?? randomEnduringAgentId('work');
     const existing = await getPersonaWorkItem(parsed.personaId, id);
@@ -235,7 +239,24 @@ export async function createPersonaWorkItem(
     }) as PersonaWorkItem;
     assertDependencyGraph(parsed.personaId, record, await listStoredPersonaWorkItems(parsed.personaId));
     return savePersonaWorkItem(record);
-  });
+  };
+  // An owner may append independent work while the Persona runs. Keep the same
+  // runtime lock and tombstone checks, without granting authority to edit the
+  // active Task, its Goal graph, memory, or Persona state. Flow mutations still
+  // require the exact live Activity fence through withPersonaDomainMutation.
+  const created = options.executionAuthority
+    ? await withPersonaDomainMutation(parsed.personaId, options, create)
+    : await withPersonaRuntimeLock(parsed.personaId, async () => {
+      if (!await getPersona(parsed.personaId) || await getPersonaDeletionTombstone(parsed.personaId)) {
+        throw new PersonaDomainNotFoundError('Persona', parsed.personaId);
+      }
+      const lease = await getPersonaLease(parsed.personaId);
+      if (lease?.status === 'active' && lease.expiresAt > Date.now()
+        && (parsed.goal || parsed.parentGoalId || parsed.createdByActivityId || options.nextRoleVersionId)) {
+        throw new PersonaDomainBusyError(parsed.personaId);
+      }
+      return create({});
+    });
   if (created.goal || created.parentGoalId) notifyPersonaGoalChanged(created.personaId);
   return created;
 }
