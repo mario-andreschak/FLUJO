@@ -6,7 +6,6 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { assertPackagedBinary } from './antigravity-cli-test-utils.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -94,7 +93,7 @@ async function runNpm(phase, args, cwd, phaseTimeoutMs, deadlineAt) {
   });
 }
 
-test('a packed production consumer installs and executes its own verified Antigravity runtime', { timeout: TEST_TIMEOUT_MS }, async () => {
+test('a packed production consumer includes official CLI discovery without a bundled runtime', { timeout: TEST_TIMEOUT_MS }, async () => {
   await access(path.join(root, '.next', 'BUILD_ID'));
   const deadlineAt = Date.now() + TEST_TIMEOUT_MS - CLEANUP_RESERVE_MS;
   const sandbox = await mkdtemp(path.join(os.tmpdir(), 'flujo-antigravity-consumer-'));
@@ -107,9 +106,8 @@ test('a packed production consumer installs and executes its own verified Antigr
     const files = packed.files.map(entry => entry.path.replaceAll('\\', '/'));
     assert.ok(files.includes('packages/avatar-sdk/flujo-ai-avatar-sdk-0.1.0.tgz'), 'Root tarball omitted the pinned Avatar SDK');
     assert.ok(files.includes('packages/avatar-sdk/package.json'), 'Root tarball omitted the SDK directory');
-    for (const required of ['package.json', 'index.cjs', 'install.cjs', 'bin.cjs', 'artifacts.json']) {
-      assert.ok(files.includes('packages/antigravity-cli/' + required), 'Root tarball omitted ' + required);
-    }
+    assert.ok(files.includes('bin/antigravity-runtime.cjs'), 'Root tarball omitted official CLI discovery');
+    assert.ok(!files.some(file => file.startsWith('packages/antigravity-cli/')), 'Legacy wrapper must not ship');
     assert.ok(!files.some(file => file.startsWith('packages/antigravity-cli/.cache/')), 'Published package contains a host native cache');
     const packages = [path.join(tarballs, packed.filename)];
     for (const name of ['filesystem', 'bash', 'browser', 'flujo']) {
@@ -120,14 +118,15 @@ test('a packed production consumer installs and executes its own verified Antigr
     await runNpm('production install', ['install', '--omit=dev', '--prefer-offline', '--no-audit', '--no-fund', '--package-lock=false', ...packages], consumer, INSTALL_TIMEOUT_MS, deadlineAt);
     const manifest = path.join(consumer, 'node_modules', 'flujo-ai', 'package.json');
     const installed = JSON.parse(await readFile(manifest, 'utf8'));
-    assert.equal(installed.dependencies['@flujo-ai/antigravity-cli'], 'file:packages/antigravity-cli');
-    assert.equal(installed.bin['flujo-agy'], 'packages/antigravity-cli/bin.cjs');
+    assert.equal(installed.dependencies['@flujo-ai/antigravity-cli'], undefined);
+    assert.equal(installed.bin['flujo-agy'], undefined);
     const sdk = JSON.parse(await readFile(createRequire(manifest).resolve('@flujo-ai/avatar-sdk/package.json'), 'utf8'));
     assert.equal(sdk.name, '@flujo-ai/avatar-sdk');
     assert.equal(sdk.version, '0.1.0');
-    const result = assertPackagedBinary(manifest);
-    const relative = path.relative(consumer, result.binary);
-    assert.ok(relative && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative), 'Consumer resolved the source checkout binary');
+    const native = createRequire(manifest)('./bin/antigravity-runtime.cjs');
+    assert.equal(typeof native.resolveBinary, 'function');
+    assert.ok(native.supportedVersion('1.4.2'));
+    assert.ok(!native.supportedVersion('1.2.13'));
     await assert.rejects(access(path.join(consumer, 'node_modules', 'typescript')), 'Production consumer installed root dev dependencies');
   } finally {
     assert.equal(path.dirname(sandbox), path.resolve(os.tmpdir()));

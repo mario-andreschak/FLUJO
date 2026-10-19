@@ -17,7 +17,6 @@ jest.mock('@/frontend/components/BugReport/BugReportButton', () => ({
 
 import ModelConnectionWizard from '@/frontend/components/models/ModelConnectionWizard';
 import { Model } from '@/shared/types';
-import { ANTIGRAVITY_CLI_GUIDED_MODELS } from '@/shared/types/model/provider';
 
 const originalFetch = global.fetch;
 const originalTextDecoder = global.TextDecoder;
@@ -480,6 +479,9 @@ describe('ModelConnectionWizard', () => {
   });
 
   it.each(['subscription', 'free'] as const)('requires account login confirmation and creates Antigravity CLI models through %s setup', async route => {
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), json: async () => url === '/api/model/provider'
+      ? { models: [{ id: 'gemini-new-model', name: 'New Gemini model' }] }
+      : { platform: 'win32', installMode: 'git', oneClickInstall: true } }));
     const props = renderWizard();
     fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
     if (route === 'subscription') {
@@ -491,39 +493,40 @@ describe('ModelConnectionWizard', () => {
     fireEvent.click(screen.getByRole('heading', { name: 'Antigravity CLI' }).closest('button')!);
 
     expect(await screen.findByText('irm https://antigravity.google/cli/install.ps1 | iex')).toBeInTheDocument();
-    expect(screen.getByText('flujo-agy', { exact: true })).toBeInTheDocument();
-    expect(screen.getByText(/Optional standalone alternative/)).toBeInTheDocument();
-    expect(screen.getByText(/Over SSH, open the printed authorization URL locally/)).toBeInTheDocument();
+    expect(screen.getByText('& "$env:LOCALAPPDATA\\agy\\bin\\agy.exe"', { exact: true })).toBeInTheDocument();
+    expect(screen.getByText(/FLUJO handles CLI setup automatically/)).toBeInTheDocument();
     expect(screen.getByText(/Personal Google accounts can use Antigravity/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Account plans and model availability' })).toHaveAttribute('href', 'https://antigravity.google/docs/plans/');
     expect(screen.queryByRole('button', { name: 'Install with WinGet' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Gemini API key')).toHaveValue('');
 
-    fireEvent.click(screen.getByRole('button', { name: /create my(?: \d+)? models?/i }));
+    fireEvent.click(screen.getByRole('button', { name: /connect Antigravity models/i }));
     expect(props.onCreateModels).not.toHaveBeenCalled();
     expect(screen.getByText(/Enter a Gemini API key, or confirm Antigravity account sign-in/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('checkbox', { name: /completed Antigravity account sign-in/i }));
-    fireEvent.click(screen.getByRole('button', { name: /create my(?: \d+)? models?/i }));
+    fireEvent.click(screen.getByRole('button', { name: /connect Antigravity models/i }));
     await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
     const models = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
-    expect(models.map(model => model.name)).toEqual([...ANTIGRAVITY_CLI_GUIDED_MODELS]);
+    expect(models.map(model => model.name)).toEqual(['default', 'gemini-new-model']);
     expect(models.every(model => model.provider === 'antigravity-cli' && model.adapter === 'antigravity-cli' && model.ApiKey === '')).toBe(true);
   });
 
   it('creates Antigravity CLI API-key models without requiring an account login confirmation', async () => {
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), json: async () => url === '/api/model/provider'
+      ? { models: [{ id: 'gemini-new-model', name: 'New Gemini model' }] }
+      : { platform: 'win32', installMode: 'git', oneClickInstall: true } }));
     const props = renderWizard();
     fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
     fireEvent.click(screen.getByRole('button', { name: /i can pay/i }));
     fireEvent.click(screen.getByRole('heading', { name: 'Antigravity CLI' }).closest('button')!);
     fireEvent.change(screen.getByLabelText('Gemini API key'), { target: { value: '  gemini-api-test  ' } });
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.getByText('Antigravity Gemini 3.8 Flash (Medium)')).toBeInTheDocument();
-    expect(screen.getByText('Antigravity Gemini 3.8 Flash (High)')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /create my(?: \d+)? models?/i }));
+    expect(screen.getByText('Antigravity CLI Default')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /connect Antigravity models/i }));
     await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
     const models = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
-    expect(models.map(model => model.name)).toEqual(['default', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high']);
+    expect(models.map(model => model.name)).toEqual(['default', 'gemini-new-model']);
     expect(models.every(model => model.ApiKey === 'gemini-api-test' && model.adapter === 'antigravity-cli')).toBe(true);
   });
 

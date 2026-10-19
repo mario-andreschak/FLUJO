@@ -554,18 +554,20 @@ export default function ModelConnectionWizard({
         return;
       }
     }
-    if (kind === 'codex-subscription') {
+    if (kind === 'codex-subscription' || kind === 'antigravity-cli') {
       const session = sessionRef.current;
       operationRef.current = true;
       setBusy(true);
       setError(null);
       try {
-        const models = await modelService.fetchProviderModels('', '', undefined, undefined, 'codex');
+        const models = await modelService.fetchProviderModels('', '', undefined,
+          kind === 'antigravity-cli' ? apiKey.trim() : undefined,
+          kind === 'antigravity-cli' ? 'antigravity-cli' : 'codex');
         if (session !== sessionRef.current) return;
         if (!models.length) throw new Error(t('models.wizard.createFailed'));
-        await finish(buildGuidedModels({ kind, codexModels: models }), session);
+        await finish(buildGuidedModels({ kind, apiKey, codexModels: models, antigravityModels: models }), session);
       } catch {
-        if (session === sessionRef.current) setError(t('models.wizard.createFailed'));
+        if (session === sessionRef.current) setError(t(kind === 'antigravity-cli' ? 'models.modal.antigravityCli.unavailable' : 'models.wizard.createFailed'));
       } finally {
         if (session === sessionRef.current) { operationRef.current = false; setBusy(false); }
       }
@@ -674,12 +676,6 @@ export default function ModelConnectionWizard({
           : setupHost ? t('models.wizard.serverSetup', { platform: setupHost.platform === 'win32' ? 'Windows' : setupHost.platform === 'darwin' ? 'macOS' : setupHost.platform === 'linux' ? 'Linux' : setupHost.platform })
             : t('models.wizard.unknownHostSetup')}
       </Alert>
-      {tool === 'antigravity' && authCommand ? (
-        <CommandRow command={authCommand} copied={copiedCommand === authCommand} onCopy={() => void copyCommand(authCommand)} />
-      ) : null}
-      {tool === 'antigravity' && installCommand ? (
-        <Typography variant="body2" color="text.secondary">{t('models.wizard.antigravityCli.standaloneAlternative')}</Typography>
-      ) : null}
       {installCommand && <CommandRow command={installCommand} copied={copiedCommand === installCommand} onCopy={() => void copyCommand(installCommand)} />}
       {oneClickInstall && <Button
         variant="outlined"
@@ -693,7 +689,7 @@ export default function ModelConnectionWizard({
       <Button href={documentationUrl} target="_blank" rel="noreferrer" startIcon={<OpenInNewRoundedIcon />} sx={{ alignSelf: 'flex-start' }}>
         {t('models.wizard.installationInstructions')}
       </Button>
-      {authCommand && tool !== 'antigravity' ? (
+      {authCommand ? (
         <CommandRow command={authCommand} copied={copiedCommand === authCommand} onCopy={() => void copyCommand(authCommand)} />
       ) : null}
       {installResult === 'success' ? <Alert severity="success">{t('models.wizard.installedContinue')}</Alert> : null}
@@ -916,7 +912,7 @@ export default function ModelConnectionWizard({
           {isAntigravityCli && !apiKey.trim() ? (
             <Box sx={{ mb: 2 }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.installAntigravityCli')}</Typography>
-              {installerPanel('antigravity', undefined, 'flujo-agy')}
+              {installerPanel('antigravity', undefined, setupHost?.platform === 'win32' ? '& "$env:LOCALAPPDATA\\agy\\bin\\agy.exe"' : 'agy')}
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{t('models.wizard.antigravityCli.signInHelp')}</Typography>
               <FormControlLabel
                 sx={{ mt: 1 }}
@@ -982,6 +978,7 @@ export default function ModelConnectionWizard({
           <Stack direction="row" sx={{ gap: 0.8, flexWrap: "wrap",  mb: 2.5 }}>
             {bundleNames.map((name) => <Chip key={name} label={name} variant="outlined" />)}
           </Stack>
+          {isAntigravityCli && <Typography color="text.secondary" sx={{ mb: 2 }}>{t('models.modal.antigravityCli.catalogHelp')}</Typography>}
           <Button
             variant="contained"
             size="large"
@@ -989,7 +986,7 @@ export default function ModelConnectionWizard({
             onClick={() => void finishStandardSetup()}
             disabled={busy || Boolean(installTool)}
           >
-            {tp('models.wizard.createModels', bundleNames.length)}
+            {isAntigravityCli ? t('models.wizard.antigravityCli.connect') : tp('models.wizard.createModels', bundleNames.length)}
           </Button>
         </>
       );

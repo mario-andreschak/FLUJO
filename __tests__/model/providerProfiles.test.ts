@@ -153,19 +153,12 @@ describe('provider profiles', () => {
   it('keeps Antigravity CLI local authentication separate from native Gemini', () => {
     expect(getProviderProfileById('antigravity-cli')).toMatchObject({
       provider: 'antigravity-cli', adapter: 'antigravity-cli', sdkLabel: 'Antigravity CLI',
-      baseUrl: '', showBaseUrl: false, supportsModelDiscovery: false,
-      defaultModels: [
-        'default',
-        'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
-        'gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low',
-        'gemini-3.6-flash-high', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-low',
-        'gemini-3.1-pro-high', 'gemini-3.1-pro-low',
-        'claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium',
-      ],
+      baseUrl: '', showBaseUrl: false, supportsModelDiscovery: true,
+      defaultModels: ['default'],
     });
     expect(resolveModelAdapter('antigravity-cli')).toBe('antigravity-cli');
     expect(getProviderProfile('antigravity-cli').id).toBe('antigravity-cli');
-    expect(supportsProviderModelDiscovery(getProviderProfileById('antigravity-cli')!, '')).toBe(false);
+    expect(supportsProviderModelDiscovery(getProviderProfileById('antigravity-cli')!, '')).toBe(true);
     for (const adapter of ['codex-cli', 'antigravity-cli']) {
       expect(supportsLocalModelAuth(adapter)).toBe(true);
       expect(isSelfOrchestratingAdapter(adapter)).toBe(true);
@@ -176,14 +169,8 @@ describe('provider profiles', () => {
     expect(isSelfOrchestratingAdapter('gemini')).toBe(false);
   });
 
-  it('suggests only the verified Gemini slugs for Antigravity API-key mode', () => {
-    expect(ANTIGRAVITY_CLI_API_KEY_MODELS).toEqual([
-      'default',
-      'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
-      'gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low',
-      'gemini-3.6-flash-high', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-low',
-      'gemini-3.1-pro-high', 'gemini-3.1-pro-low',
-    ]);
+  it('never substitutes a stale static catalog when Antigravity discovery is unavailable', () => {
+    expect(ANTIGRAVITY_CLI_API_KEY_MODELS).toEqual(['default']);
   });
 });
 

@@ -412,61 +412,13 @@ export const GEMINI_NATIVE_GUIDED_MODELS = [
 /** FLUJO sentinel: omit --model and let the CLI select its configured default. */
 export const ANTIGRAVITY_CLI_DEFAULT_MODEL = 'default';
 
-/** Fallback membership observed with the verified 1.3.3 account catalog.
- * Native discovery is authoritative; membership does not prove entitlement. */
-export const ANTIGRAVITY_CLI_MODELS = [
-  ANTIGRAVITY_CLI_DEFAULT_MODEL,
-  'gemini-3.8-flash-high',
-  'gemini-3.8-flash-medium',
-  'gemini-3.8-flash-low',
-  'claude-sonnet-4-6',
-  'claude-opus-4-6-thinking',
-  'gpt-oss-120b-medium',
-] as const;
-
-/** The CLI's verified API-key catalog; actual access depends on the saved key. */
-export const ANTIGRAVITY_CLI_API_KEY_MODELS = [
-  ANTIGRAVITY_CLI_DEFAULT_MODEL,
-  'gemini-3.8-flash-high',
-  'gemini-3.8-flash-medium',
-  'gemini-3.8-flash-low',
-  'gemini-3.7-flash-high',
-  'gemini-3.7-flash-medium',
-  'gemini-3.7-flash-low',
-  'gemini-3.6-flash-high',
-  'gemini-3.6-flash-medium',
-  'gemini-3.6-flash-low',
-  'gemini-3.1-pro-high',
-  'gemini-3.1-pro-low',
-] as const;
-
-/** A practical starter bundle rather than every account model. */
-export const ANTIGRAVITY_CLI_GUIDED_MODELS = [
-  ANTIGRAVITY_CLI_DEFAULT_MODEL,
-  'gemini-3.8-flash-medium',
-  'gemini-3.8-flash-high',
-] as const;
-
-const ANTIGRAVITY_CLI_MODEL_LABELS: Record<string, string> = {
-  default: 'Antigravity CLI Default',
-  'gemini-3.8-flash-high': 'Gemini 3.8 Flash (High)',
-  'gemini-3.8-flash-medium': 'Gemini 3.8 Flash (Medium)',
-  'gemini-3.8-flash-low': 'Gemini 3.8 Flash (Low)',
-  'gemini-3.7-flash-high': 'Gemini 3.7 Flash (High)',
-  'gemini-3.7-flash-medium': 'Gemini 3.7 Flash (Medium)',
-  'gemini-3.7-flash-low': 'Gemini 3.7 Flash (Low)',
-  'gemini-3.6-flash-high': 'Gemini 3.6 Flash (High)',
-  'gemini-3.6-flash-medium': 'Gemini 3.6 Flash (Medium)',
-  'gemini-3.6-flash-low': 'Gemini 3.6 Flash (Low)',
-  'gemini-3.1-pro-high': 'Gemini 3.1 Pro (High)',
-  'gemini-3.1-pro-low': 'Gemini 3.1 Pro (Low)',
-  'claude-sonnet-4-6': 'Claude Sonnet 4.6',
-  'claude-opus-4-6-thinking': 'Claude Opus 4.6 (Thinking)',
-  'gpt-oss-120b-medium': 'GPT-OSS 120B (Medium)',
-};
+/** Only the stable CLI default is suggested offline. Model names come from agy models. */
+export const ANTIGRAVITY_CLI_MODELS = [ANTIGRAVITY_CLI_DEFAULT_MODEL] as const;
+export const ANTIGRAVITY_CLI_API_KEY_MODELS = ANTIGRAVITY_CLI_MODELS;
+export const ANTIGRAVITY_CLI_GUIDED_MODELS = ANTIGRAVITY_CLI_MODELS;
 
 export function getAntigravityCliModelLabel(name: string): string {
-  return ANTIGRAVITY_CLI_MODEL_LABELS[name] ?? name;
+  return name === 'default' ? 'Antigravity CLI Default' : name;
 }
 
 /**

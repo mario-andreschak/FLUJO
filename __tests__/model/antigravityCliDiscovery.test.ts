@@ -4,7 +4,7 @@ import { prepareAntigravityCliRuntime } from '@/backend/services/model/adapters/
 import { readAntigravityCliCommand } from '@/backend/services/model/adapters/antigravityCliProcess';
 import { readStableFile } from '@/utils/readStableFile';
 jest.mock('@/backend/services/model/adapters/antigravityCliRuntime', () => ({ ANTIGRAVITY_CLI_VERSION: '1.3.3', prepareAntigravityCliRuntime: jest.fn() }));
-jest.mock('@/backend/services/model/adapters/antigravityCliProcess', () => ({ readAntigravityCliCommand: jest.fn(), isAntigravityCliInstalled: jest.fn(() => true) }));
+jest.mock('@/backend/services/model/adapters/antigravityCliProcess', () => ({ readAntigravityCliCommand: jest.fn(), isAntigravityCliInstalled: jest.fn(() => true), isSupportedAntigravityVersion: jest.fn((v: string) => v === '1.3.3' || v === '1.4.2') }));
 jest.mock('@/utils/readStableFile', () => ({ readStableFile: jest.fn() }));
 jest.mock('@/backend/services/model/cache', () => ({ modelCache: { get: jest.fn(), set: jest.fn(), credentialFingerprint: jest.fn((s: string) => `private:${s.length}`) } }));
 const cleanup = jest.fn(async () => {});
@@ -25,6 +25,14 @@ test('discovery uses separate commands and keys cache by version/auth mode and c
 test('keyring-only catalogs are not cached across account changes', async () => {
   await fetchAntigravityCliModels('');
   expect(modelCache.get).not.toHaveBeenCalled(); expect(modelCache.set).not.toHaveBeenCalled();
+});
+
+test('an updated official CLI supplies new model IDs and a distinct cache identity', async () => {
+  jest.mocked(readAntigravityCliCommand).mockImplementation(async (_runtime, command) => command === 'version'
+    ? '1.4.2\n' : JSON.stringify({ models: [{ id: 'gemini-future-model', name: 'Future Gemini' }], entitlementVerified: false }));
+  expect(await fetchAntigravityCliModels('key')).toMatchObject([{ id: 'gemini-future-model' }]);
+  expect(modelCache.set).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'antigravity-cli:1.4.2:api-key' }), expect.any(Array));
+  expect(await inspectAntigravityRuntime()).toMatchObject({ actualVersion: '1.4.2', verified: true });
 });
 test('account cache rotation participates without putting credential bytes in cache identity', async () => {
   jest.mocked(readStableFile).mockResolvedValue(Buffer.from('synthetic-account-cache'));

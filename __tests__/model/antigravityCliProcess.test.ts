@@ -4,8 +4,8 @@ import type { AntigravityCliRuntime } from '@/backend/services/model/adapters/an
 
 const mockSpawn = jest.fn();
 jest.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => mockSpawn(...args) }));
-import { runAntigravityCli, resolveAntigravityCliEntry, prepareAntigravityCliPrompt, readAntigravityCliCommand } from '@/backend/services/model/adapters/antigravityCliProcess';
-import { ANTIGRAVITY_CLI_VERSION } from '@/backend/services/model/adapters/antigravityCliRuntime';
+import { runAntigravityCli, resolveAntigravityCliEntry, prepareAntigravityCliPrompt, readAntigravityCliCommand, parseAntigravityModels } from '@/backend/services/model/adapters/antigravityCliProcess';
+jest.mock('node:module', () => ({ createRequire: () => () => ({ findBinary: () => '/official/agy', resolveBinary: async () => '/official/agy', supportedVersion: () => true }) }));
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -28,10 +28,19 @@ const run = (signal = new AbortController().signal, onEvent = jest.fn(), prompt 
   runtime, model: 'default', prompt, signal, onEvent,
 });
 
+test('native TSV catalogs accept new IDs and reject malformed or duplicate records', () => {
+  expect(JSON.parse(parseAntigravityModels('gemini-new-model\tNew Gemini\n'))).toEqual({
+    models: [{ id: 'gemini-new-model', name: 'New Gemini' }], entitlementVerified: false,
+  });
+  for (const invalid of ['', 'unexpected output', 'model\tName\nmodel\tDuplicate', 'bad id\tName']) {
+    expect(() => parseAntigravityModels(invalid)).toThrow(/model catalog/);
+  }
+});
+
 test('resolves the verified native executable and sends large prompts through one JSON stdin record', async () => {
   const binary = await resolveAntigravityCliEntry();
-  expect(binary).toContain(`${ANTIGRAVITY_CLI_VERSION}`);
-  expect(binary).toMatch(/\.cache.*agy(?:\.exe)?$/);
+  expect(binary).toBe('/official/agy');
+  expect(binary).not.toContain('.cache');
   const prompt = 'long prompt '.repeat(3000);
   let sent = '';
   child.stdin.on('data', chunk => { sent += String(chunk); });
@@ -112,14 +121,14 @@ test('explicit deadline terminates a run even when it emitted partial assistant 
 
 test.each(['version', 'models'] as const)('runs %s as a separate closed command without a prompt or stream flags', async command => {
   child.stdin.on('finish', () => {
-    child.stdout.write(command === 'version' ? '1.3.3\n' : '{"models":[{"id":"custom","name":"Custom"}],"entitlementVerified":false}\n');
+    child.stdout.write(command === 'version' ? '1.3.3\n' : 'custom\tCustom\n');
     setImmediate(() => child.emit('close', 0));
   });
   const result = await readAntigravityCliCommand(runtime, command);
   const [entry, args, options] = mockSpawn.mock.calls[0];
   expect(options).toMatchObject({ shell: false, windowsHide: true, cwd: 'neutral' });
   if (command === 'version') { expect(entry).toMatch(/agy(?:\.exe)?$/); expect(args).toEqual(['--version']); }
-  else { expect(entry).toBe(process.execPath); expect(args).toEqual([expect.stringMatching(/antigravity-cli.*bin\.cjs$/), 'models', '--output-format', 'json']); }
+  else { expect(entry).toBe('/official/agy'); expect(args).toEqual(['models']); }
   expect(result).toContain(command === 'version' ? '1.3.3' : 'custom');
 });
 

@@ -50,7 +50,7 @@ describe('guided model bundles', () => {
   it('creates a practical account-mode Antigravity bundle without native generation controls', () => {
     const models = buildGuidedModels({ kind: 'antigravity-cli' });
     expect(models.map(model => model.name)).toEqual([...ANTIGRAVITY_CLI_GUIDED_MODELS]);
-    expect(models.map(model => model.name)).toEqual(['default', 'gemini-3.8-flash-medium', 'gemini-3.1-pro-high']);
+    expect(models.map(model => model.name)).toEqual(['default']);
     expect(models.every(model => model.provider === 'antigravity-cli' && model.adapter === 'antigravity-cli')).toBe(true);
     expect(models.every(model => model.ApiKey === '' && model.baseUrl === '')).toBe(true);
     expect(models.every(model => model.temperature === undefined && model.reasoningEffort === undefined)).toBe(true);
@@ -61,9 +61,17 @@ describe('guided model bundles', () => {
 
   it('creates a practical Gemini-only API-key bundle and excludes account-only models', () => {
     const models = buildGuidedModels({ kind: 'antigravity-cli', apiKey: '  gemini-api-key  ' });
-    expect(models.map(model => model.name)).toEqual(['default', 'gemini-3.8-flash-medium', 'gemini-3.1-pro-high']);
+    expect(models.map(model => model.name)).toEqual(['default']);
     expect(models.every(model => model.ApiKey === 'gemini-api-key')).toBe(true);
     expect(models[0].displayName).toBe('Antigravity CLI Default');
+  });
+
+  it('uses discovered Antigravity IDs and labels without maintaining a versioned model list', () => {
+    const models = buildGuidedModels({ kind: 'antigravity-cli', apiKey: 'key', antigravityModels: [
+      { id: 'gemini-future-model', name: 'Future Gemini' },
+    ] });
+    expect(models.map(model => model.name)).toEqual(['default', 'gemini-future-model']);
+    expect(models[1]).toMatchObject({ displayName: 'Antigravity Future Gemini', ApiKey: 'key' });
   });
 
   it('normalizes an Ollama server root to its OpenAI-compatible endpoint', () => {

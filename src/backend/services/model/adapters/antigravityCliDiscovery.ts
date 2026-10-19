@@ -4,7 +4,7 @@ import { modelCache } from '../cache';
 import type { NormalizedModel } from '@/shared/types/model/response';
 import { hasExecutionExtensionContext, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { ANTIGRAVITY_CLI_VERSION, prepareAntigravityCliRuntime } from './antigravityCliRuntime';
-import { readAntigravityCliCommand, isAntigravityCliInstalled } from './antigravityCliProcess';
+import { readAntigravityCliCommand, isAntigravityCliInstalled, isSupportedAntigravityVersion } from './antigravityCliProcess';
 
 export interface AntigravityRuntimeStatus {
   configuredVersion: string; installed: boolean; verified: boolean; actualVersion: string | null;
@@ -17,8 +17,9 @@ export async function inspectAntigravityRuntime(): Promise<AntigravityRuntimeSta
   const runtime = await prepareAntigravityCliRuntime({ model: 'default', maxTurns: 1, apiKey: '', diagnosticsOnly: true });
   try {
     const version = (await readAntigravityCliCommand(runtime, 'version')).trim();
+    status.installed = isAntigravityCliInstalled();
     if (/^\d+\.\d+\.\d+$/.test(version)) status.actualVersion = version;
-    status.verified = status.actualVersion === status.configuredVersion;
+    status.verified = isSupportedAntigravityVersion(version);
   } catch { /* Missing/changed runtime is unavailable, never a successful probe. */ }
   finally { await runtime.cleanup(); }
   return status;
@@ -48,7 +49,7 @@ export async function fetchAntigravityCliModels(apiKey: string): Promise<Normali
     // Verification precedes cached results. A changed runtime cannot keep an
     // earlier catalog alive, and authentication rotation gets a new identity.
     const actualVersion = (await readAntigravityCliCommand(runtime, 'version')).trim();
-    if (actualVersion !== ANTIGRAVITY_CLI_VERSION) throw new Error('Antigravity runtime version is unsupported. Reinstall or update FLUJO.');
+    if (!isSupportedAntigravityVersion(actualVersion)) throw new Error('Antigravity runtime version is unsupported. Update the official CLI.');
     let material: string | undefined = apiKey || undefined;
     if (!apiKey) {
       try { material = (await readStableFile(path.join(runtime.home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), 64 * 1024)).toString('base64'); }

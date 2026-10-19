@@ -1,32 +1,40 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as nodeModule from 'node:module';
-import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import { AntigravityCliEventDecoder, type AntigravityCliEvent } from './antigravityCliEvents';
-import { ANTIGRAVITY_CLI_VERSION, ANTIGRAVITY_CLI_TIMEOUT_MS, ANTIGRAVITY_LOGIN_INSTRUCTIONS, type AntigravityCliRuntime } from './antigravityCliRuntime';
+import { ANTIGRAVITY_CLI_TIMEOUT_MS, ANTIGRAVITY_LOGIN_INSTRUCTIONS, type AntigravityCliRuntime } from './antigravityCliRuntime';
+
+function nativeRuntime(): { findBinary(): string | undefined; resolveBinary(): Promise<string>; supportedVersion(version: string): boolean } {
+  const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
+  return nativeCreateRequire(path.join(process.cwd(), 'package.json'))('./bin/antigravity-runtime.cjs');
+}
 
 export function isAntigravityCliInstalled(): boolean {
-  const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
-  try {
-    const runtime = nativeCreateRequire(path.join(process.cwd(), 'package.json'))('@flujo-ai/antigravity-cli') as {
-      paths?: () => { binary: string };
-    };
-    return typeof runtime.paths === 'function' && lstatSync(runtime.paths().binary).isFile();
-  } catch { return false; }
+  return Boolean(nativeRuntime().findBinary());
 }
 
 export async function resolveAntigravityCliEntry(): Promise<string> {
-  const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
-  const requirePackage = nativeCreateRequire(path.join(process.cwd(), 'package.json'));
-  let runtime: { version?: string; resolveBinary?: () => string };
-  try { runtime = requirePackage('@flujo-ai/antigravity-cli'); } catch {
-    throw new Error('The bundled Antigravity CLI is missing. Reinstall or update FLUJO.');
+  return nativeRuntime().resolveBinary();
+}
+
+export function isSupportedAntigravityVersion(version: string): boolean {
+  return nativeRuntime().supportedVersion(version);
+}
+
+export function parseAntigravityModels(output: string): string {
+  const models: Array<{ id: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const parts = line.split('\t');
+    if (parts.length !== 2 || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(parts[0])
+      || !parts[1].trim() || parts[1].length > 500 || /[\x00-\x1f\x7f]/.test(parts[1])
+      || seen.has(parts[0]) || models.length >= 512) throw new Error('Antigravity returned an unsupported model catalog.');
+    seen.add(parts[0]);
+    models.push({ id: parts[0], name: parts[1].trim() });
   }
-  if (runtime.version !== ANTIGRAVITY_CLI_VERSION || typeof runtime.resolveBinary !== 'function') {
-    throw new Error('The bundled Antigravity CLI version is unsupported. Reinstall or update FLUJO.');
-  }
-  // The wrapper verifies checksum, receipt, platform and package-owned realpath.
-  return runtime.resolveBinary();
+  if (!models.length) throw new Error('Antigravity returned an empty model catalog.');
+  return JSON.stringify({ models, entitlementVerified: false });
 }
 
 export function antigravityCliAbortError(): Error {
@@ -71,14 +79,10 @@ export async function readAntigravityCliCommand(
 ): Promise<string> {
   if (signal?.aborted) throw antigravityCliAbortError();
   const binary = await resolveAntigravityCliEntry();
-  const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
-  const requirePackage = nativeCreateRequire(path.join(process.cwd(), 'package.json'));
-  const entry = command === 'version' ? binary : process.execPath;
-  const args = command === 'version' ? ['--version']
-    : [requirePackage.resolve('@flujo-ai/antigravity-cli/bin.cjs'), 'models', '--output-format', 'json'];
+  const args = command === 'version' ? ['--version'] : ['models'];
   if (signal?.aborted) throw antigravityCliAbortError();
   return new Promise((resolve, reject) => {
-    const child = spawn(entry, args, { cwd: runtime.workingDirectory, env: runtime.env as NodeJS.ProcessEnv,
+    const child = spawn(binary, args, { cwd: runtime.workingDirectory, env: runtime.env as NodeJS.ProcessEnv,
       shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', bytes = 0, stderrBytes = 0;
     let failure: Error | undefined;
@@ -106,7 +110,10 @@ export async function readAntigravityCliCommand(
       await stopped;
       if (failure) reject(failure);
       else if (code !== 0) reject(new Error('Antigravity model discovery failed. Check the connection authentication and runtime.'));
-      else resolve(output);
+      else {
+        try { resolve(command === 'models' ? parseAntigravityModels(output) : output); }
+        catch (error) { reject(error); }
+      }
     });
     if (signal?.aborted) abort();
   });

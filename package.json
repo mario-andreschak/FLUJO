@@ -18,12 +18,10 @@
     "mcp-servers/browser",
     "mcp-servers/filesystem",
     "mcp-servers/flujo",
-    "mcp-servers/shared",
-    "packages/antigravity-cli"
+    "mcp-servers/shared"
   ],
   "bin": {
-    "flujo": "bin/flujo.mjs",
-    "flujo-agy": "packages/antigravity-cli/bin.cjs"
+    "flujo": "bin/flujo.mjs"
   },
   "files": [
     "LICENSE",
@@ -52,11 +50,7 @@
     "mcp-servers/*/LICENSE",
     "mcp-servers/browser/scripts/install-browser.mjs",
     "next.config.mjs",
-    "packages/antigravity-cli/*.cjs",
-    "packages/antigravity-cli/package.json",
-    "packages/antigravity-cli/artifacts.json",
-    "packages/avatar-sdk/**",
-    "!packages/antigravity-cli/.cache/**"
+    "packages/avatar-sdk/**"
   ],
   "scripts": {
     "dev": "node scripts/launch-next.mjs dev --webpack",
@@ -98,8 +92,7 @@
     "release": "node scripts/release.mjs",
     "endurance:personas": "node scripts/run-persona-goal-endurance.mjs --mode=live --profile=structured-tools --duration-seconds=3600 --active-seconds=3540 --budget-usd=25 --confirm=controlled-effects",
     "soak:personas": "node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 --with-learning",
-    "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5 --with-learning",
-    "postinstall": "node packages/antigravity-cli/install.cjs"
+    "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5 --with-learning"
   },
   "dependencies": {
     "@flujo-ai/avatar-sdk": "file:packages/avatar-sdk",
@@ -107,7 +100,6 @@
     "@anthropic-ai/sdk": "^0.133.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
-    "@flujo-ai/antigravity-cli": "file:packages/antigravity-cli",
     "@google/genai": "^2.29.1",
     "@mario.andreschak/mcp-bash": "3.46.3",
     "@mario.andreschak/mcp-browser": "3.46.3",

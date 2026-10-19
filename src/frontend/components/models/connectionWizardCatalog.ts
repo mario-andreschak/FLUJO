@@ -4,7 +4,6 @@ import { Model } from '@/shared/types';
 import type { NormalizedModel } from '@/shared/types/model/response';
 import {
   AZURE_OPENAI_DEFAULT_API_VERSION,
-  ANTIGRAVITY_CLI_API_KEY_MODELS,
   ANTIGRAVITY_CLI_GUIDED_MODELS,
   getAntigravityCliModelLabel,
   GEMINI_NATIVE_GUIDED_MODELS,
@@ -33,6 +32,7 @@ interface GuidedModelInput {
   azureDeployment?: string;
   azureApiVersion?: string;
   codexModels?: NormalizedModel[];
+  antigravityModels?: NormalizedModel[];
 }
 
 interface ModelTemplate {
@@ -245,9 +245,11 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
           name: model.id, displayName: model.name, description: model.description ?? '',
           provider: 'codex' as const, adapter: 'codex-cli' as const,
         }))
-    : input.kind === 'antigravity-cli' && apiKey
-      ? TEMPLATES[input.kind].filter(template =>
-        (ANTIGRAVITY_CLI_API_KEY_MODELS as readonly string[]).includes(template.name))
+    : input.kind === 'antigravity-cli'
+      ? [...TEMPLATES[input.kind], ...(input.antigravityModels ?? []).filter(model => model.id !== 'default').map(model => ({
+        name: model.id, displayName: `Antigravity ${model.name}`, description: model.description ?? '',
+        provider: 'antigravity-cli' as const, adapter: 'antigravity-cli' as const, supportsTools: true,
+      }))]
       : TEMPLATES[input.kind];
 
   return templates.map((template) => ({

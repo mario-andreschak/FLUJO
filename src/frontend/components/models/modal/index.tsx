@@ -37,7 +37,6 @@ import {
   resolveModelAdapter,
   supportsProviderModelDiscovery,
   supportsLocalModelAuth,
-  ANTIGRAVITY_CLI_API_KEY_MODELS,
   getAntigravityCliModelLabel,
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
@@ -84,6 +83,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [showBindModal, setShowBindModal] = useState(false);
   const [openRouterModels, setOpenRouterModels] = useState<NormalizedModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [catalogUnavailable, setCatalogUnavailable] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const discoveryRequestIdRef = useRef(0);
@@ -212,6 +212,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       });
 
       if (Array.isArray(fetchedModels)) {
+        setCatalogUnavailable(fetchedModels.length === 0);
         setOpenRouterModels(fetchedModels);
         // Editing an existing model should discover metadata too; requiring the
         // user to re-select the already-exact technical name would not be
@@ -235,7 +236,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     } catch (error) {
       if (requestId !== discoveryRequestIdRef.current) return;
       log.warn("Error fetching models", { baseUrl, searchTerm, error });
-      // Silently fail - don't show error messages in the UI.
+      setCatalogUnavailable(true);
       setOpenRouterModels([]);
     } finally {
       if (requestId === discoveryRequestIdRef.current) {
@@ -250,6 +251,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     setIsLoadingModels(false);
     if (open) {
       setOpenRouterModels([]);
+      setCatalogUnavailable(false);
     }
   }, [open]);
 
@@ -259,6 +261,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     discoveryRequestIdRef.current += 1;
     setIsLoadingModels(false);
     setOpenRouterModels([]);
+    setCatalogUnavailable(false);
     if (canDiscoverProviderModels) {
       log.debug('Provider discovery identity changed', {
         baseUrl: formState.baseUrl,
@@ -314,12 +317,12 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     fetchModels,
   ]);
 
-  // Refresh the live Codex catalogue while the editor is open.
+  // Refresh CLI catalogues while the editor is open.
   useEffect(() => {
-    if (!open || currentProfile.id !== 'codex') return;
+    if (!open || !['codex', 'antigravity-cli'].includes(currentProfile.id)) return;
     // Pick up account/catalogue changes and a completed background CLI update.
     const interval = setInterval(() => {
-      fetchModels('', undefined, 'codex', discoveryCredential);
+      fetchModels('', undefined, currentProfile.id, discoveryCredential);
     }, 60_000);
     return () => clearInterval(interval);
   }, [open, currentProfile.id, discoveryCredential, fetchModels]);
@@ -760,15 +763,25 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   />
                 </Box>
 
+                {currentProfile.adapter === 'antigravity-cli' && (
+                  <Box sx={{ my: 1 }}>
+                    <Alert severity={catalogUnavailable ? 'warning' : 'info'}>
+                      {t(isLoadingModels ? 'models.modal.antigravityCli.loading'
+                        : catalogUnavailable ? 'models.modal.antigravityCli.unavailable'
+                          : 'models.modal.antigravityCli.catalogHelp')}
+                    </Alert>
+                    <Button disabled={isLoadingModels} onClick={() => void fetchModels('', undefined, currentProfile.id, discoveryCredential)}>
+                      {t('models.modal.antigravityCli.refresh')}
+                    </Button>
+                  </Box>
+                )}
                 <Autocomplete
                   freeSolo
                   loading={isLoadingModels}
                   options={
                     canDiscoverProviderModels && visibleProviderModels.length > 0
-                      ? visibleProviderModels.map(model => model.id)
-                      : currentProfile.adapter === 'antigravity-cli' && (isApiKeyBound || formState.ApiKey?.trim())
-                        ? [...ANTIGRAVITY_CLI_API_KEY_MODELS]
-                        : (currentProfile.defaultModels ?? [])
+                      ? [...new Set([...(currentProfile.adapter === 'antigravity-cli' ? ['default'] : []), ...visibleProviderModels.map(model => model.id)])]
+                      : (currentProfile.defaultModels ?? [])
                   }
                   groupBy={currentProfile.adapter === 'antigravity-cli'
                     ? option => option === 'default' ? t('models.modal.antigravityCli.defaultGroup')
