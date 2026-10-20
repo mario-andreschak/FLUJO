@@ -18,8 +18,6 @@ let logDirOverride: string | undefined;
 const logDir = () =>
   logDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'meeting-logs');
 
-const appendChains = new Map<string, Promise<unknown>>();
-
 interface MeetingLogState {
   nextSeq: number;
   eventsById: Map<string, MeetingEvent>;
@@ -35,8 +33,20 @@ interface PersistedMeetingEventBatch {
   events: MeetingEvent[];
 }
 
-const states = new Map<string, MeetingLogState>();
-const stateInitializers = new Map<string, Promise<MeetingLogState>>();
+// Next can instantiate this module in multiple route bundles while the meeting
+// bus is process-global. Share its append lock and cursor caches as well, or a
+// different bundle can freeze each new round at an old sequence indefinitely.
+const runtimeRoot = globalThis as typeof globalThis & {
+  __flujoMeetingEventLogRuntime?: {
+    appendChains: Map<string, Promise<unknown>>;
+    states: Map<string, MeetingLogState>;
+    stateInitializers: Map<string, Promise<MeetingLogState>>;
+  };
+};
+const runtime = runtimeRoot.__flujoMeetingEventLogRuntime ??= {
+  appendChains: new Map(), states: new Map(), stateInitializers: new Map(),
+};
+const { appendChains, states, stateInitializers } = runtime;
 
 function cacheKey(meetingId: string): string {
   return workspaceCacheKey('meeting-event-log', logDir(), meetingId);

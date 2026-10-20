@@ -49,3 +49,17 @@
 - Next: finish local validation/build, restart the existing service, resume the
   same participants for completed assessments and mutual critique, then deliver
   convergence and update draft PR 1222. No model/effort or billing route changes.
+
+- Second repair build `gSH-1Kf0_KEw3N3jI02IC` passed (compile 6.1 min,
+  TypeScript 46 sec, static pages 12.4 sec); source commit `c15747f6`.
+  Both original participants completed recovered assessments (events 26–27)
+  and substantive critiques (42–43), proving both streaming paths work live.
+- Found a production-only coordination defect: the global meeting bus wrote
+  through one Next route module while another module retained a stale event
+  cursor (`snapshotSeq` 22 across rounds 3–5). Relayed actual peer assessments
+  through interventions 39–41. Both critiques are preserved. Checkpointed using
+  cancellation after round 5 to activate shared event-log state/append locks.
+  Added a separate-module regression covering cursor visibility and sequencing.
+- Next: build/restart after local typecheck/lint, resume these same participants
+  for final reconciliation of events 42–43, verify advancing round snapshots,
+  then deliver consensus and clean scratch files through flujo-bash.

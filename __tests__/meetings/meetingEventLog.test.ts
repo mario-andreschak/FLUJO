@@ -55,6 +55,25 @@ describe('meeting event log', () => {
     expect(await latestMeetingSequence(meetingId)).toBe(29);
   });
 
+  it('shares round cursors and append serialization across separately loaded route modules', async () => {
+    let other!: typeof import('@/backend/services/meetings/eventLog');
+    jest.isolateModules(() => { other = require('@/backend/services/meetings/eventLog'); });
+    other._setMeetingEventLogDirForTests(tempDir);
+    const meetingId = 'multi-bundle-meeting';
+    await appendMeetingEvent(meetingId, created('Seed', 'seed'));
+    expect(await other.latestMeetingSequence(meetingId)).toBe(0);
+    await appendMeetingEventBatch(meetingId, 'round:1', [created('Peer A', 'peer-a'), created('Peer B', 'peer-b')]);
+    expect(await other.latestMeetingSequence(meetingId)).toBe(2);
+    const appended = await Promise.all([
+      appendMeetingEvent(meetingId, created('First module', 'first')),
+      other.appendMeetingEvent(meetingId, created('Other module', 'other')),
+    ]);
+    expect(appended.map(result => result.event.seq)).toEqual([3, 4]);
+    expect(await latestMeetingSequence(meetingId)).toBe(4);
+    expect(await other.latestMeetingSequence(meetingId)).toBe(4);
+    expect((await readMeetingEvents(meetingId)).map(event => event.seq)).toEqual([0, 1, 2, 3, 4]);
+  });
+
   it('deduplicates a retried eventId and returns the original committed event', async () => {
     const first = await appendMeetingEvent('dedupe-meeting', created('Original', 'turn:alice:0'));
     const duplicate = await appendMeetingEvent('dedupe-meeting', created('Replacement', 'turn:alice:0'));
