@@ -60,14 +60,14 @@ describe('generation settings validation (#329)', () => {
     })).toMatch(/reasoning effort is not supported/);
   });
 
-  it('keeps the two Gemini thinking controls apart', () => {
+  it('accepts Interactions thinking levels and rejects old numeric budgets', () => {
     expect(validateModelConfiguration({
       provider: 'gemini', adapter: 'gemini', name: 'gemini-2.5-pro', thinkingBudget: 1024,
-    })).toBeUndefined();
+    })).toMatch(/Thinking budget/);
 
     expect(validateModelConfiguration({
       provider: 'gemini', adapter: 'gemini', name: 'gemini-2.5-pro', thinkingLevel: 'high',
-    })).toMatch(/thinking level is not supported/);
+    })).toBeUndefined();
 
     expect(validateModelConfiguration({
       provider: 'gemini', adapter: 'gemini', name: 'gemini-3.1-pro-preview', thinkingLevel: 'high',
@@ -79,7 +79,7 @@ describe('generation settings validation (#329)', () => {
   });
 
   it('rejects minimal thinking for Gemini 3.7 and 3.8 Flash', () => {
-    for (const name of ['gemini-3.7-flash', 'gemini-3.8-flash']) {
+    for (const name of ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon']) {
       expect(validateModelConfiguration({
         provider: 'gemini', adapter: 'gemini', name, thinkingLevel: 'minimal',
       })).toMatch(/thinking level is not supported/);
@@ -100,7 +100,7 @@ describe('generation settings validation (#329)', () => {
     }
     expect(validateModelConfiguration({
       provider: 'gemini', adapter: 'gemini', name: 'gemini-2.5-flash', thinkingBudget: -1,
-    })).toBeUndefined();
+    })).toMatch(/Thinking budget/);
   });
 
   it('only allows the Codex priority tier where the runtime offers it', () => {

@@ -104,6 +104,7 @@ export interface LazyToolCallPayloads {
  * needed for Flujo's chat functionality.
  */
 export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
+  providerMetadata?: import('./openai').ModelProviderMetadata;
   /** FLUJO executes function tools only; SDK custom tools are rejected at ingress. */
   tool_calls?: FlujoFunctionToolCall[];
 

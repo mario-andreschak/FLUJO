@@ -16,7 +16,7 @@ let respond: (request: IncomingMessage, response: ServerResponse) => void;
 const chat = { id: 'test', object: 'chat.completion', created: 1, model: 'fixture', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'fixture' } }] };
 const responses = { id: 'response', created_at: 1, status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'fixture' }] }] };
 const anthropic = { id: 'message', type: 'message', role: 'assistant', model: 'fixture', content: [{ type: 'text', text: 'fixture' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } };
-const gemini = { candidates: [{ content: { role: 'model', parts: [{ text: 'fixture' }] }, finishReason: 'STOP' }] };
+const gemini = { id: 'fixture', status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: 'fixture' }] }] };
 
 beforeEach(async () => {
   server = createServer(async (request, response) => {
@@ -37,7 +37,7 @@ beforeEach(() => {
   respond = (_request, response) => {
     response.setHeader('Content-Type', 'application/json');
     const path = _request.url!;
-    response.end(JSON.stringify(path.includes(':generateContent') ? gemini : path.includes('responses') ? responses : path.includes('/anthropic/') ? anthropic : chat));
+    response.end(JSON.stringify(path.includes('/interactions') ? gemini : path.includes('responses') ? responses : path.includes('/anthropic/') ? anthropic : chat));
   };
 });
 
@@ -63,9 +63,9 @@ it.each(cases)('%s sends one real tool-free request with the output cap', async 
   expect(body).not.toHaveProperty('cachedContent');
   expect(body).not.toHaveProperty('previous_response_id');
   if (adapter === 'gemini') {
-    expect(receipts[0].path).toBe('/v1beta/models/fixture:generateContent');
+    expect(receipts[0].path).toBe('/v1beta/interactions');
     expect(receipts[0].key).toBe('fixture-key');
-    expect(body).toMatchObject({ generationConfig: { maxOutputTokens: 321, responseModalities: ['TEXT'] }, systemInstruction: { parts: [{ text: 'Only assess.' }] } });
+    expect(body).toMatchObject({ model: 'fixture', store: false, generation_config: { max_output_tokens: 321 }, response_modalities: ['text'], system_instruction: 'Only assess.' });
   } else expect(body).toHaveProperty(adapter === 'openai-responses' ? 'max_output_tokens' : 'max_tokens', 321);
 });
 

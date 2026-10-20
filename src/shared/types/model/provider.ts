@@ -159,6 +159,9 @@ export function validateModelConfiguration(
     }
   }
   if (model.thinkingBudget !== undefined && model.thinkingBudget !== '') {
+    if (resolveModelAdapter(model.provider, model.adapter) === 'gemini') {
+      return 'Thinking budget is no longer supported by Gemini Interactions; open and save the model to clear it, or choose a thinking level';
+    }
     if (!capabilities.thinkingBudget || typeof model.thinkingBudget !== 'number' ||
       !Number.isInteger(model.thinkingBudget) || model.thinkingBudget < -1) {
       return 'Thinking budget must be an integer greater than or equal to -1 for this model';
@@ -264,17 +267,13 @@ export function getModelConfigurationCapabilities(
   }
 
   if (resolvedAdapter === 'gemini') {
-    const thinkingLevels: GeminiThinkingLevel[] = /^gemini-3\.[78]-flash$/i.test(name)
+    const thinkingLevels: GeminiThinkingLevel[] = /^(?:gemini-3\.[78]-flash$|gemini-4)/i.test(name)
       ? ['low', 'medium', 'high']
       : ['minimal', 'low', 'medium', 'high'];
 
     return {
-      creativity: { min: 0, max: 2, step: 0.1 },
-      ...(/^gemini-2\.5/i.test(name)
-        ? { thinkingBudget: true }
-        : !/^gemini-2\.0/i.test(name)
-          ? { thinkingLevels }
-          : {}),
+      ...(!/^gemini-4/i.test(name) ? { creativity: { min: 0, max: 2, step: 0.1 } } : {}),
+      ...(!/^gemini-2\.0/i.test(name) ? { thinkingLevels } : {}),
       maxOutputTokens: true,
     };
   }

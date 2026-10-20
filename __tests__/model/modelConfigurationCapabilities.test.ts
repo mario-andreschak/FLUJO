@@ -26,10 +26,10 @@ describe('provider-aware model configuration capabilities (#329)', () => {
     ).toBe(false);
   });
 
-  it('uses model-specific thinking levels for Gemini 3+ and a token budget for Gemini 2.5', () => {
+  it('uses Interactions thinking levels including Argon', () => {
     expect(
       getModelConfigurationCapabilities('gemini', 'gemini', 'gemini-2.5-pro')
-    ).toMatchObject({ thinkingBudget: true, maxOutputTokens: true });
+    ).toMatchObject({ thinkingLevels: ['minimal', 'low', 'medium', 'high'], maxOutputTokens: true });
 
     for (const model of ['gemini-3.1-pro-preview', 'gemini-3.5-flash-lite']) {
       expect(
@@ -40,7 +40,7 @@ describe('provider-aware model configuration capabilities (#329)', () => {
       });
     }
 
-    for (const model of ['gemini-3.7-flash', 'gemini-3.8-flash']) {
+    for (const model of ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon']) {
       expect(
         getModelConfigurationCapabilities('gemini', 'gemini', model)
       ).toMatchObject({

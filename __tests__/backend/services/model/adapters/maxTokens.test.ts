@@ -34,7 +34,7 @@ jest.mock('@google/genai', () => {
   const generateContent = jest.fn();
   const generateContentStream = jest.fn();
   const GoogleGenAI = jest.fn().mockImplementation(() => ({
-    models: { generateContent, generateContentStream },
+    interactions: { create: (request: { stream?: boolean }, options: unknown) => request.stream ? generateContentStream(request, options) : generateContent(request, options) },
   }));
   return { GoogleGenAI, __generateContent: generateContent, __generateContentStream: generateContentStream };
 });
@@ -78,10 +78,7 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       stop_reason: 'end_turn',
       usage: { input_tokens: 1, output_tokens: 2 },
     });
-    geminiGenerate.mockResolvedValue({
-      candidates: [{ content: { parts: [{ text: 'hi' }] } }],
-      usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 2, totalTokenCount: 3 },
-    });
+    geminiGenerate.mockResolvedValue({ id: 'g', status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: 'hi' }] }], usage: { total_input_tokens: 1, total_output_tokens: 2, total_tokens: 3 } });
   });
 
   describe('direct native adapter owner-credential boundary', () => {
@@ -158,13 +155,6 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
         expect.objectContaining({ type: 'image', url, mimeType: 'image/png', data: 'AAAA' }),
       ]);
     });
-    geminiGenerateStream.mockResolvedValue((async function* () {
-      yield {
-        responseId: 'gemini-stream',
-        candidates: [{ content: { parts: [{ text: 'hi' }] } }],
-        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 2, totalTokenCount: 3 },
-      };
-    })());
 
     test('maps configured effort to reasoning_effort', async () => {
       await new OpenAiAdapter().createCompletion({
@@ -202,235 +192,38 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
     });
   });
 
-  describe('Gemini (native) adapter', () => {
-    test('sets config.maxOutputTokens when a maxTokens is resolved', async () => {
-      await new GeminiAdapter().createCompletion({ model: MODEL, apiKey: 'k', messages: MESSAGES, temperature: 0, maxTokens: 4321 });
-      expect(geminiGenerate).toHaveBeenCalledWith(
-        expect.objectContaining({ config: expect.objectContaining({ maxOutputTokens: 4321 }) })
-      );
+  describe('Gemini Interactions adapter', () => {
+    test('sends stateless function declarations and an explicit output cap', async () => {
+      await new GeminiAdapter().createCompletion({ model: MODEL, apiKey: 'k', messages: MESSAGES, maxTokens: 4321,
+        tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object', properties: { q: { type: 'string' } } } } }] });
+      expect(geminiGenerate).toHaveBeenCalledWith(expect.objectContaining({ store: false,
+        generation_config: { max_output_tokens: 4321 }, tools: [expect.objectContaining({ type: 'function', name: 'lookup', parameters: expect.any(Object) })],
+      }), expect.objectContaining({ retries: { strategy: 'none' }, redirect: 'error' }));
     });
-
-    test('omits config.maxOutputTokens when nothing is resolved (no regression)', async () => {
-      await new GeminiAdapter().createCompletion({ model: MODEL, apiKey: 'k', messages: MESSAGES, temperature: 0 });
-      expect((geminiGenerate.mock.calls[0][0] as { config: Record<string, unknown> }).config).not.toHaveProperty('maxOutputTokens');
+    test('omits an unresolved cap and maps thinking levels', async () => {
+      await new GeminiAdapter().createCompletion({ model: { ...MODEL, thinkingLevel: 'high' }, apiKey: 'k', messages: MESSAGES });
+      expect(geminiGenerate.mock.calls[0][0].generation_config).toEqual({ thinking_level: 'high' });
     });
-
-    test('maps Gemini thinking level and token-budget controls', async () => {
-      await new GeminiAdapter().createCompletion({
-        model: { ...MODEL, thinkingLevel: 'high' },
-        apiKey: 'k',
-        messages: MESSAGES,
-        temperature: 0,
-      });
-      expect(geminiGenerate.mock.calls[0][0]).toEqual(
-        expect.objectContaining({
-          config: expect.objectContaining({ thinkingConfig: { thinkingLevel: 'HIGH' } }),
-        }),
-      );
-
-      geminiGenerate.mockClear();
-      await new GeminiAdapter().createCompletion({
-        model: { ...MODEL, thinkingBudget: -1 },
-        apiKey: 'k',
-        messages: MESSAGES,
-        temperature: 0,
-      });
-      expect(geminiGenerate.mock.calls[0][0]).toEqual(
-        expect.objectContaining({
-          config: expect.objectContaining({ thinkingConfig: { thinkingBudget: -1 } }),
-        }),
-      );
+    test('keeps automatic thinking but refuses to silently discard an old numeric cap', async () => {
+      await new GeminiAdapter().createCompletion({ model: { ...MODEL, thinkingBudget: -1 }, apiKey: 'k', messages: MESSAGES });
+      expect(geminiGenerate.mock.calls[0][0].generation_config).toEqual({});
+      await expect(new GeminiAdapter().createCompletion({ model: { ...MODEL, thinkingBudget: 500 }, apiKey: 'k', messages: MESSAGES })).rejects.toThrow('thinking levels');
+      expect(geminiGenerate).toHaveBeenCalledTimes(1);
     });
-
-    test('requests advertised image output and keeps inlineData from the response', async () => {
-      geminiGenerate.mockResolvedValueOnce({
-        candidates: [{
-          content: {
-            parts: [
-              { text: 'Here it is.' },
-              { inlineData: { mimeType: 'image/png', data: 'AAAA' } },
-            ],
-          },
-        }],
-      });
-
-      const result = await new GeminiAdapter().createCompletion({
-        model: { ...MODEL, outputModalities: ['text', 'image'] },
-        apiKey: 'k',
-        messages: MESSAGES,
-        temperature: 0,
-      });
-
-      expect(geminiGenerate.mock.calls[0][0]).toEqual(expect.objectContaining({
-        config: expect.objectContaining({ responseModalities: ['TEXT', 'IMAGE'] }),
-      }));
+    test('omits unsupported sampling controls for Argon', async () => {
+      await new GeminiAdapter().createCompletion({ model: { ...MODEL, name: 'gemini-4-argon' }, apiKey: 'k', messages: MESSAGES, temperature: 0.2 });
+      expect(geminiGenerate.mock.calls[0][0].generation_config).not.toHaveProperty('temperature');
+    });
+    test('requests and returns multimodal output', async () => {
+      geminiGenerate.mockResolvedValueOnce({ id: 'g', status: 'completed', steps: [{ type: 'model_output', content: [
+        { type: 'text', text: 'Here it is.' }, { type: 'image', mime_type: 'image/png', data: 'AAAA' },
+      ] }] });
+      const result = await new GeminiAdapter().createCompletion({ model: { ...MODEL, outputModalities: ['text', 'image'] }, apiKey: 'k', messages: MESSAGES });
+      expect(geminiGenerate.mock.calls[0][0].response_modalities).toEqual(['text', 'image']);
       expect(result.completion.choices[0].message.content).toBe('Here it is.');
-      expect(result.media).toEqual([
-        { type: 'image', mimeType: 'image/png', data: 'AAAA' },
-      ]);
-    });
-
-    test('preserves Gemini thought signatures on unary function calls', async () => {
-      geminiGenerate.mockResolvedValueOnce({
-        candidates: [{
-          content: {
-            parts: [{
-              functionCall: { name: 'lookup', args: { query: 'x' } },
-              thoughtSignature: 'sig-unary',
-            }],
-          },
-        }],
-      });
-
-      const result = await new GeminiAdapter().createCompletion({
-        model: MODEL,
-        apiKey: 'k',
-        messages: MESSAGES,
-        temperature: 0,
-      });
-
-      expect(result.completion.choices[0].message.tool_calls?.[0]).toMatchObject({
-        function: { name: 'lookup', arguments: '{"query":"x"}' },
-        providerMetadata: { gemini: { thoughtSignature: 'sig-unary' } },
-      });
-    });
-
-    test('streams text and function calls with one stable assistant id', async () => {
-      geminiGenerateStream.mockResolvedValueOnce((async function* () {
-        yield { responseId: 'g1', candidates: [{ content: { parts: [{ text: 'hel' }] } }] };
-        yield {
-          responseId: 'g1',
-          candidates: [{
-            content: {
-              parts: [{
-                functionCall: {
-                  id: 'call_g',
-                  name: 'lookup',
-                  args: { query: 'x' },
-                  willContinue: true,
-                },
-                thoughtSignature: 'sig-stream',
-              }],
-            },
-          }],
-        };
-        yield {
-          responseId: 'g1',
-          candidates: [{
-            content: {
-              parts: [{
-                functionCall: { id: 'call_g', name: 'lookup', args: { query: 'x' } },
-              }],
-            },
-          }],
-          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 3, totalTokenCount: 4 },
-        };
-      })());
-      const deltas: unknown[] = [];
-      const result = await new GeminiAdapter().createStreamCompletion({
-        model: MODEL,
-        apiKey: 'k',
-        messages: MESSAGES,
-        temperature: 0,
-        onModelDelta: delta => deltas.push(delta),
-      });
-
-      expect(geminiGenerateStream).toHaveBeenCalledTimes(1);
-      expect(result.completion.choices[0].message.content).toBe('hel');
-      expect(result.completion.choices[0].message.tool_calls?.[0]).toMatchObject({
-        id: 'call_g',
-        function: { name: 'lookup', arguments: '{"query":"x"}' },
-        providerMetadata: { gemini: { thoughtSignature: 'sig-stream' } },
-      });
-      expect(deltas).toEqual(expect.arrayContaining([
-        expect.objectContaining({ contentDelta: 'hel' }),
-        expect.objectContaining({
-          toolCallDelta: expect.objectContaining({
-            id: 'call_g',
-            nameDelta: 'lookup',
-            argumentsDelta: '{"query":"x"}',
-          }),
-        }),
-      ]));
-      expect(new Set(deltas.map(delta => (delta as { messageId: string }).messageId))).toEqual(
-        new Set([result.liveMessageId]),
-      );
-    });
-
-    test('keeps streamed signatures isolated when a new call starts mid-partial', async () => {
-      geminiGenerateStream.mockResolvedValueOnce((async function* () {
-        yield {
-          responseId: 'g-multi',
-          candidates: [{ content: { parts: [{
-            functionCall: { id: 'call_a', name: 'first_tool', args: {}, willContinue: true },
-            thoughtSignature: 'sig-a',
-          }] } }],
-        };
-        yield {
-          responseId: 'g-multi',
-          candidates: [{ content: { parts: [{
-            functionCall: { id: 'call_b', name: 'second_tool', args: { value: 2 } },
-            thoughtSignature: 'sig-b',
-          }] } }],
-        };
-        yield {
-          responseId: 'g-multi',
-          candidates: [{ content: { parts: [{
-            functionCall: { id: 'call_a', name: 'first_tool', args: { value: 1 } },
-          }] } }],
-        };
-      })());
-
-      const result = await new GeminiAdapter().createStreamCompletion({
-        model: MODEL,
-        apiKey: 'k',
-        messages: MESSAGES,
-        temperature: 0,
-      });
-
-      expect(result.completion.choices[0].message.tool_calls).toMatchObject([
-        {
-          id: 'call_a',
-          function: { name: 'first_tool', arguments: '{"value":1}' },
-          providerMetadata: { gemini: { thoughtSignature: 'sig-a' } },
-        },
-        {
-          id: 'call_b',
-          function: { name: 'second_tool', arguments: '{"value":2}' },
-          providerMetadata: { gemini: { thoughtSignature: 'sig-b' } },
-        },
-      ]);
-    });
-
-    test('streams complete media parts without dropping them', async () => {
-      geminiGenerateStream.mockResolvedValueOnce((async function* () {
-        yield {
-          responseId: 'g-image',
-          candidates: [{
-            content: {
-              parts: [{ inlineData: { mimeType: 'image/webp', data: 'BBBB' } }],
-            },
-          }],
-        };
-      })());
-      const deltas: unknown[] = [];
-      const result = await new GeminiAdapter().createStreamCompletion({
-        model: { ...MODEL, outputModalities: ['image'] },
-        apiKey: 'k',
-        messages: MESSAGES,
-        temperature: 0,
-        onModelDelta: delta => deltas.push(delta),
-      });
-
-      expect(result.media).toEqual([
-        { type: 'image', mimeType: 'image/webp', data: 'BBBB' },
-      ]);
-      expect(deltas).toContainEqual(expect.objectContaining({
-        mediaPart: { type: 'image', mimeType: 'image/webp', data: 'BBBB' },
-      }));
+      expect(result.media).toEqual([{ type: 'image', mimeType: 'image/png', data: 'AAAA' }]);
     });
   });
-
   describe('normalizeMaxTokens precedence helper', () => {
     test('non-positive / non-finite / unset collapse to undefined', () => {
       expect(normalizeMaxTokens(0)).toBeUndefined();

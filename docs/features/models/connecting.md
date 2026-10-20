@@ -46,6 +46,12 @@ See [Codex model and runtime updates](codex-updates.md).
 
 ## Antigravity CLI
 
+Argon availability can differ between the CLI's Google-account and Gemini-key
+modes. In CLI 1.4.2, the Gemini-key catalog omits Argon and rejects its model
+names; Google tracks this in [CLI issue #1228](https://github.com/google-antigravity/antigravity-cli/issues/1228).
+FLUJO displays the catalog the installed CLI actually accepts. For Argon with
+a Gemini API key, choose **Gemini (Native)** and select `gemini-4-argon` instead.
+
 Choose **Antigravity CLI** in guided setup or manual creation. FLUJO detects or installs Google’s official CLI automatically. Enter a Gemini API key, or confirm an existing local Google account login. Model availability and quota depend on your account or API key.
 
 With a Gemini API key, paste the key and connect: FLUJO finds or installs the official Antigravity CLI automatically. For account login, launch Google’s `agy` as the user running FLUJO and complete browser sign-in. Immediately after installing on Windows, use `& "$env:LOCALAPPDATA\agy\bin\agy.exe"`; FLUJO detects this location without a PATH refresh. Leave the API key empty for account mode.

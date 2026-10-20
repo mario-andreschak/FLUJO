@@ -360,6 +360,7 @@ export interface NativeToolPort {
  * them in the conversation. Request/response adapters omit it.
  */
 export interface CompletionResult {
+  providerMetadata?: import('@/shared/types/openai').ModelProviderMetadata;
   /** True only after the original native SDK emitted its terminal turn/result. */
   nativeSdkTerminal?: boolean;
   routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt;
