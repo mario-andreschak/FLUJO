@@ -199,6 +199,16 @@ export async function readInteractionStream(stream: AsyncIterable<Interactions.I
         if (last?.type === 'text') last.text = (last.text ?? '') + (delta.text ?? '');
         else content.push({ type: 'text', text: delta.text ?? '' });
         emitText(delta.text ?? '');
+      } else if (step.type === 'model_output' && delta.type === 'text_annotation_delta') {
+        // Citations may arrive after text, or before its first text delta.
+        // Retain them in native history without emitting duplicate prose.
+        const content = step.content ??= [];
+        let last = content.at(-1);
+        if (last?.type !== 'text') {
+          last = { type: 'text', text: '' };
+          content.push(last);
+        }
+        (last.annotations ??= []).push(...structuredClone(delta.annotations ?? []));
       } else if (step.type === 'model_output' && ['image', 'audio', 'video', 'document'].includes(delta.type)) {
         // Binary deltas are independently base64 encoded; concatenate decoded bytes.
         const part = delta as Interactions.ImageContent | Interactions.AudioContent | Interactions.VideoContent | Interactions.DocumentContent;

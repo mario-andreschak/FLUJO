@@ -16,7 +16,7 @@
   Astra conversation `7ea5f59d-272c-4055-a956-27eb533abd73`.
 - Initial blocker: Gemini rejected the browser click tool's valid JSON Schema
   composition because a required name was declared only in the enclosing
-  object's properties. Argon failed before its first response; Astra is
+  object's properties. Argon failed before its first response; Astra
   published a sourced checkpoint in event 8. The initial segment completed at
   event 11 expressly to allow repair, not as research completion.
 - Implemented locally: Gemini composition-branch property normalization;
@@ -36,5 +36,16 @@
 - Service: localhost:4200, launcher PID 1672, canonical `.next` production
   build. Logs live under this chat's visualization directory. SSE watcher is
   unified-exec session 3303. Round 2 has both participants active.
-- Next: supervise critique/convergence,
-  deliver the recommendation and PR, then clean task artifacts via flujo-bash.
+- Round 2 exposed two further interruptions: Astra's owned Codex connection
+  closed during a long streamed reply, and Gemini rejected `text_annotation_delta`.
+  Partial research remains in both conversations. Event 20 ended the segment
+  because neither participant remained active; it is not substantive completion.
+- Follow-up repair: retain streamed Gemini citation annotations; filter unused
+  Codex diagnostic notifications and coalesce adjacent text deltas within the
+  existing buffer bounds; preserve buffer-overflow diagnostics; report all-seat
+  failure as meeting error instead of successful completion. The original Codex
+  closure cause was not exposed by the old adapter, so buffering is a verified
+  weakness addressed here, not a proven upstream failure diagnosis.
+- Next: finish local validation/build, restart the existing service, resume the
+  same participants for completed assessments and mutual critique, then deliver
+  convergence and update draft PR 1222. No model/effort or billing route changes.

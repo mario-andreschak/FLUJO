@@ -8,6 +8,7 @@ import type { CodexAsyncUserInputResult } from './codexUserInput';
 
 type Notification = { method?: string; params?: unknown };
 type Child = Awaited<ReturnType<typeof startOwnedCodexAppServer>>;
+const STREAM_METHODS = new Set(['turn/completed', 'item/started', 'item/completed', 'item/agentMessage/delta', 'thread/tokenUsage/updated', 'error']);
 function wireInput(prompt: string | UserInput[]) {
   const entries = typeof prompt === 'string' ? [{ type: 'text', text: prompt }] : prompt.map(entry =>
     entry.type === 'local_image' ? { type: 'localImage', path: entry.path } : entry);
@@ -41,6 +42,7 @@ export function createCodexAppServerThread(input: {
   const lifecycle = new AbortController();
   const queue: Notification[] = [];
   let queueBytes = 0, wake: (() => void) | undefined;
+  let streamFailure: Error | undefined;
   const messageText = new Map<string, string>();
   let totalUsage: CodexUsageLike | undefined;
   let completedTurnId: string | undefined;
@@ -48,8 +50,31 @@ export function createCodexAppServerThread(input: {
   let resumedTurnIds = new Set<string>();
   const endedTurns = new Set<string>();
   const enqueue = (message: Notification) => {
+    // Legacy/diagnostic notifications are not consumed by this adapter. Do not
+    // let their duplicate output exhaust the bounded application-event queue.
+    if (!STREAM_METHODS.has(message.method ?? '')) return;
+    const previous = queue.at(-1);
+    const params = record(message.params), prior = previous ? record(previous.params) : {};
+    if (message.method === 'item/agentMessage/delta' && previous?.method === message.method
+      && params.threadId === prior.threadId && params.turnId === prior.turnId && params.itemId === prior.itemId
+      && typeof params.delta === 'string' && typeof prior.delta === 'string') {
+      const combined = { ...message, params: { ...params, delta: prior.delta + params.delta } };
+      const bytes = Buffer.byteLength(JSON.stringify(combined));
+      const nextBytes = queueBytes - Buffer.byteLength(JSON.stringify(previous)) + bytes;
+      if (nextBytes > 8 * 1024 * 1024) {
+        streamFailure = new Error('Codex output exceeded the stream buffer.');
+        throw streamFailure;
+      }
+      queue[queue.length - 1] = combined;
+      queueBytes = nextBytes;
+      wake?.();
+      return;
+    }
     const bytes = Buffer.byteLength(JSON.stringify(message));
-    if (queue.length >= 2048 || queueBytes + bytes > 8 * 1024 * 1024) throw new Error('Codex output exceeded the stream buffer.');
+    if (queue.length >= 2048 || queueBytes + bytes > 8 * 1024 * 1024) {
+      streamFailure = new Error('Codex output exceeded the stream buffer.');
+      throw streamFailure;
+    }
     queue.push(message); queueBytes += bytes; wake?.();
   };
   const open = async () => {
@@ -235,7 +260,7 @@ export function createCodexAppServerThread(input: {
                 try {
                   await Promise.race([
                     new Promise<void>(resolve => { wake = resolve; if (queue.length || options.signal?.aborted || closed) resolve(); }),
-                    child!.registration.close.then(() => { throw new Error('Codex connection closed; the submitted turn was not replayed.'); }),
+                    child!.registration.close.then(() => { throw streamFailure ?? new Error('Codex connection closed; the submitted turn was not replayed.'); }),
                     ...(questionTerminalDeadline ? [new Promise<never>((_resolve, reject) => {
                       terminalTimer = setTimeout(() => reject(new Error('Codex question interrupt had no confirmed terminal; no answer was submitted.')),
                         Math.max(1, questionTerminalDeadline! - Date.now()));
@@ -250,7 +275,7 @@ export function createCodexAppServerThread(input: {
               if (!message) continue;
               queueBytes -= Buffer.byteLength(JSON.stringify(message));
               const method = message.method;
-              if (!['turn/completed', 'item/started', 'item/completed', 'item/agentMessage/delta', 'thread/tokenUsage/updated', 'error'].includes(method ?? '')) continue;
+              if (!STREAM_METHODS.has(method ?? '')) continue;
               const params = record(message.params);
               if (params.threadId !== threadId) throw new Error('Codex emitted output for a different conversation.');
               const turnId = method === 'turn/completed' ? record(params.turn).id : params.turnId;

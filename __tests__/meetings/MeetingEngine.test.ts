@@ -187,6 +187,16 @@ describe('MeetingEngine', () => {
     expect((alpha.messages as FlujoChatMessage[]).at(-1)?.role).toBe('user');
   });
 
+  it.each([1, 2])('reports all-participant failure as an error with a %s-round limit', async limit => {
+    runFlowMock.mockRejectedValue(new Error('Transport unavailable'));
+    const meeting = await createMeeting(limit);
+    await meetingEngine.runToCompletion(meeting.id);
+    expect((await getMeeting(meeting.id))!.status).toBe('error');
+    const events = await readMeetingEvents(meeting.id);
+    expect(events.at(-1)?.type).toBe('meeting:error');
+    expect(events.some(event => event.type === 'meeting:completed')).toBe(false);
+  });
+
   it('publishes a participant failure before a slower peer finishes and only logs it once', async () => {
     const originalRun = runFlowMock.getMockImplementation()!;
     let releasePeer!: () => void;

@@ -1914,6 +1914,9 @@ export class MeetingEngine {
     if (acceptedMotion?.kind === 'cancel') {
       return this.cancel(meeting.id, terminationReason);
     }
+    if (!discussionParticipants().length && meeting.participants.some(participant => participant.status === 'error')) {
+      throw new Error('No active discussion participants remain after participant failures. Resume the meeting to recover them.');
+    }
 
     if (meeting.policy.moderatorMode !== 'none' && meeting.moderatorParticipantId) {
       const moderator = meeting.participants.find((participant) =>
