@@ -2040,6 +2040,7 @@ export class MeetingEngine {
     participant: MeetingParticipant,
     round: MeetingRound,
     handle: RuntimeHandle,
+    error?: string,
   ): Promise<void> {
     await withControlLock(meeting.id, async () => {
       const durable = await getMeeting(meeting.id);
@@ -2054,8 +2055,24 @@ export class MeetingEngine {
       }
       const durableParticipant = durable.participants.find((item) => item.id === participant.id);
       if (!durableParticipant || durableParticipant.status !== 'running') return;
-      durableParticipant.status = 'waiting';
-      participant.status = 'waiting';
+      durableParticipant.status = error ? 'error' : 'waiting';
+      participant.status = durableParticipant.status;
+      if (error) {
+        durableParticipant.error = error;
+        participant.error = error;
+        // Surface a failed turn while slower peers are still researching. The
+        // round commit uses this same event id, so replay remains idempotent.
+        await this.emit(durable, {
+          type: 'participant:error',
+          audience: 'public',
+          roundId: round.id,
+          participantId: participant.id,
+          participantName: participant.name,
+          turnId: round.participantTurnIds[participant.id],
+          error,
+          eventId: `${round.id}:${participant.id}:error`,
+        });
+      }
       await saveMeeting(durable);
     });
   }
@@ -2129,7 +2146,7 @@ export class MeetingEngine {
       async (participant) => {
         await this.markParticipantThinking(meeting, participant, round, handle);
         const outcome = await runParticipantTurn(meeting, participant, round, allEvents, handle);
-        await this.markParticipantWaiting(meeting, participant, round, handle);
+        await this.markParticipantWaiting(meeting, participant, round, handle, outcome.error);
         return outcome;
       },
     );

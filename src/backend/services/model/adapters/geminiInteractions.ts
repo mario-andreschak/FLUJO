@@ -8,6 +8,7 @@ import type { CompletionInput, CompletionResult } from './types';
 import { extractText, parseToolArgs } from './messageUtils';
 import { toGeminiContents } from './geminiMessages';
 import { mapInteractionUsage, interactionContextUsage } from './geminiUsage';
+import { geminiToolSchema } from './geminiToolSchema';
 
 type Assistant = OpenAI.ChatCompletionAssistantMessageParam & { providerMetadata?: ModelProviderMetadata };
 
@@ -95,7 +96,7 @@ export async function interactionRequest(input: CompletionInput): Promise<Intera
     },
     ...(tools?.length ? { tools: tools.map(tool => ({ type: 'function' as const,
       name: tool.function.name, description: tool.function.description,
-      parameters: tool.function.parameters ?? { type: 'object', properties: {} },
+      parameters: geminiToolSchema(tool.function.parameters ?? { type: 'object', properties: {} }),
     })) } : {}),
     ...(modalities?.some(value => value !== 'text') ? { response_modalities: modalities } : {}),
   };

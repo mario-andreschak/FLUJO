@@ -32,6 +32,8 @@ export const meetingsMessageRows = {
   'meetings.followup': m('Create follow-up'),
   'meetings.createLog': m('Create meeting log'),
   'meetings.openChat': m('Open full chat'),
+  'meetings.brief.expand': m('Read full brief'),
+  'meetings.brief.collapse': m('Collapse brief'),
   'meetings.back': m('All meetings', 'Todas las reuniones', 'Alle Besprechungen', 'Toutes les réunions', 'Tutte le riunioni', 'Todas as reuniões', '所有会议'),
   'meetings.round': m('Round', 'Ronda', 'Runde', 'Tour', 'Turno', 'Rodada', '轮次'),
   'meetings.agents': m('Agents', 'Agentes', 'Agenten', 'Agents', 'Agenti', 'Agentes', '智能体'),

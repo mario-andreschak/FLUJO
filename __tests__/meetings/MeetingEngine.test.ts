@@ -187,6 +187,37 @@ describe('MeetingEngine', () => {
     expect((alpha.messages as FlujoChatMessage[]).at(-1)?.role).toBe('user');
   });
 
+  it('publishes a participant failure before a slower peer finishes and only logs it once', async () => {
+    const originalRun = runFlowMock.getMockImplementation()!;
+    let releasePeer!: () => void;
+    const peerGate = new Promise<void>(resolve => { releasePeer = resolve; });
+    runFlowMock.mockImplementation(async input => {
+      if (input.meetingParticipant!.participantId === 'alpha') throw new Error('Provider rejected tool schema');
+      await peerGate;
+      return originalRun(input);
+    });
+    const meeting = await createMeeting(1);
+    let observeFailure!: () => void;
+    const failure = new Promise<void>(resolve => { observeFailure = resolve; });
+    const unsubscribe = meetingEventBus.subscribe(meeting.id, event => {
+      if (event.type === 'participant:error') observeFailure();
+    });
+    const completion = meetingEngine.runToCompletion(meeting.id);
+    try {
+      await failure;
+      const events = await readMeetingEvents(meeting.id);
+      expect(events.some(event => event.type === 'participant:spoke')).toBe(false);
+      expect(events.filter(event => event.type === 'participant:error')).toHaveLength(1);
+    } finally {
+      releasePeer();
+      unsubscribe();
+      await completion;
+    }
+    expect((await readMeetingEvents(meeting.id)).filter(event => event.type === 'participant:error')).toHaveLength(1);
+    expect((await getMeeting(meeting.id))!.participants.find(participant => participant.id === 'alpha'))
+      .toMatchObject({ status: 'error', error: 'Provider rejected tool schema' });
+  });
+
   it('persists opening files into every participant conversation before the first turn', async () => {
     const meeting = await createMeeting(1);
     meeting.openingMedia = [{
