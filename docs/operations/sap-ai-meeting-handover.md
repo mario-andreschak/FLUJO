@@ -21,26 +21,39 @@
   segment without replaying its round. Repeated participant Stop after the meeting
   revoked its authority returns an owner-controlled acknowledgement, with no
   unfenced writes or fabricated terminal success.
-- Research: recovered assessments committed in events 26–27, corrected critiques
-  in 42–43. They recommend authorized-export/RAG, bounded outbound ABAP inference,
-  and conditional external MCP. Contract, extraction, training, identity, and
-  support qualifications remain explicit. Earlier broad matrix claims are
-  superseded by the critiques. Final mutual acceptance is still pending.
-- Live defects/evidence: event cursor froze at 22 across rounds 3–5; supervisor
-  relayed peer evidence in 39–41. Checkpoint cancellation preserved round 5;
+- Research completed: final syntheses are events 56–57; Astra's closing summary
+  is 64. Motion 2 was accepted unanimously (Astra yes, Argon yes) at event 72,
+  and completion is durable at event 74. Both participants are idle. Earlier
+  broad claims are superseded by these final qualifications.
+- Agreed recommendation: authorized-export/RAG first; bounded outbound ABAP
+  inference next; live external MCP conditional on endpoint/identity support and
+  architecture-specific policy confirmation. The matrix covers every requested
+  transport. Contract incorporation, extraction/refresh/downstream use, training,
+  database entitlements and FAQ Q39/Q56 remain explicit uncertainties. Draft
+  SAP/counsel requests were not sent. No live SAP system was accessed.
+- Live defects/evidence: event cursor froze at 22 across rounds 3â€“5; supervisor
+  relayed peer evidence in 39â€“41. Checkpoint cancellation preserved round 5;
   interrupted round 6 exposed the continuation bug at event 50. No model calls
   were replayed. Original Codex closure cause was not exposed by its old adapter;
   buffering weakness was addressed without claiming a proven upstream diagnosis.
-- Validation: local typecheck/lint and prior production builds passed. Latest
-  source repair is undergoing the same checks and non-container build. Added
-  regressions cover schema scope, citations, long streams, early failures,
-  cross-bundle cursors, explicit recovery and revoked-owner cancellation.
-  Broader suites, remote CI, and container builds remain deferred to release.
-- Live service: stopped for the final repair build (unified exec session 79369).
-  Resume the SAME meeting using the saved final-convergence direction, verify
-  advancing snapshot cursors and peer delivery, and obtain both participants'
-  final agreement. Do not treat checkpoint events as research completion.
-- Evidence lives in this chat's visualization folder under
-  `C:/Users/Moe/.codex/visualizations/2026/10/20/01a156c5-c536-7260-92b3-7b438bdd9e41`.
-  Agents reported no remaining research scratch. Final cleanup/free-space check
-  must run through flujo-bash; retain the production outputs needed by the service.
+- Validation: source `fea3657b`; local typecheck, source/changed-test lint and
+  non-container production build `8GYK3CPj9kmcEweNAYK-q` passed. Measured build
+  phases: compile 5.4 min, TypeScript 46 sec, page generation 10.8 sec.
+  Live acceptance: both long responses completed; explicit interrupted-round
+  recovery succeeded; both prompts contained the latest peer critique; round
+  cursors advanced 52 → 58 → 65; both voted to finish. Brief expansion/collapse
+  was verified in the browser. Regression suites were added but not run under
+  the release-only broader-test policy. No remote CI or container build ran.
+- Service remains available on localhost:4200, launcher PID 2548, with the build
+  above. No active meeting watcher remains. No further research/model calls are
+  needed. Models, effort, billing routes and flow configurations are unchanged.
+- Evidence: this chat's visualization directory
+  `C:/Users/Moe/.codex/visualizations/2026/10/20/01a156c5-c536-7260-92b3-7b438bdd9e41`
+  contains `meeting-validation.json`, final `meeting-overview.png`, and service
+  logs. The API meeting log is the canonical research record.
+- Cleanup: flujo-bash MCP removed task caches and temporary PR text; verified no
+  target remains. About 5.17 MB reclaimed across cleanup passes; measured C:
+  free space 178,647,134,208 bytes (166.4 GiB). Both participants report no
+  research scratch paths. Active production/MCP outputs and deliverables remain.
+- Next: user can review the completed meeting and draft PR 1222. Research and
+  local implementation are delivered; release pre-flight remains a future step.
