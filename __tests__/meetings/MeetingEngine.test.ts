@@ -570,6 +570,16 @@ describe('MeetingEngine', () => {
     expect(events.filter((event) => event.type === 'round:started')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'round:completed')).toHaveLength(0);
     expect(events.at(-1)?.type).toBe('meeting:error');
+
+    // Explicit continuation starts a new round; the interrupted one is neither
+    // replayed nor fabricated as completed, and cannot poison future resumes.
+    await meetingEngine.resume(meeting.id, 'Continue after the acknowledged interruption.');
+    const continued = await meetingEngine.runToCompletion(meeting.id);
+    expect(continued.status).toBe('completed');
+    expect(continued.roundNumber).toBe(2);
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+    expect(runFlowMock.mock.calls.every(([input]) => input.meetingTurn?.roundId.endsWith('round-2'))).toBe(true);
+    expect((await readMeetingEvents(meeting.id)).some(event => event.type === 'round:completed' && event.roundId === roundId)).toBe(false);
   });
 
   it('projects a committed round before cancellation becomes terminal', async () => {

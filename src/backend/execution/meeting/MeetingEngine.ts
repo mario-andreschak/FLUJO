@@ -930,13 +930,17 @@ type RoundStartedMeetingEvent = Extract<MeetingEvent, { type: 'round:started' }>
 function latestUncommittedRoundStart(
   events: MeetingEvent[],
 ): RoundStartedMeetingEvent | undefined {
+  // An explicit resume acknowledges the prior segment's interruption. Preserve
+  // its orphaned round in the log, but do not mistake it for a new crash and
+  // reject every future continuation (or replay that interrupted model turn).
+  const resumedAt = [...events].reverse().find(event => event.type === 'meeting:resumed')?.seq ?? -1;
   const completedRoundIds = new Set(
     events
     .filter((event) => event.type === 'round:completed')
     .map((event) => event.roundId),
   );
   return [...events].reverse().find((event): event is RoundStartedMeetingEvent =>
-    event.type === 'round:started' && !completedRoundIds.has(event.roundId));
+    event.type === 'round:started' && event.seq > resumedAt && !completedRoundIds.has(event.roundId));
 }
 
 /** Fold an orphaned start batch into a snapshot before terminalizing it. */
