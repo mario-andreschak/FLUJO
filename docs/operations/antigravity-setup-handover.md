@@ -1,54 +1,69 @@
-# Antigravity setup handover
+# Google model setup handover
 
-- Owner: this chat; branch `codex/antigravity-setup-recovery`, source revision `aa97b3ec3688384c34e3f32e5be1220c20ae80ad`.
-- Delivery: [draft PR #1221](https://github.com/mario-andreschak/FLUJO/pull/1221);
-  this handover commit only records the validated source revision above.
-- Delivered locally: official `agy` execution, Windows detection without a PATH
-  refresh, automatic vendor installation when missing, no shipped `flujo-agy`,
-  live CLI catalog in guided setup/editor, visible recovery and stable default.
-- Validation: local application build, source lint and changed-script/test lint
-  passed for the source revision above. Final full local typecheck passed,
-  including the last regression-fixture edits. No test suite, remote CI or container
-  build was run; release pre-flight checks remain in place.
-- Live app: 127.0.0.1:4200, Next PID 27092, launcher PID 30792; build
-  `AFwKXjSit8I4FEIfkxH40`. The staged build was activated at the normal `.next`
-  path and generated route types refreshed. Normal `npm start` uses this build.
-- Real diagnostics: official CLI 1.4.2 accepts the integration flags. The saved
-  model `32463ede-b34a-4201-b3dd-0a335238b444` loads 11 Gemini models in API-key
-  mode through its editor. Credentials and saved `default` selection unchanged.
-- Live acceptance on 2026-10-19: the user directly authorized this saved
-  connection's Google API-key model/tool check in this chat. The normal test
-  dialog passed with official CLI 1.4.2: the flow adapter returned `pong`
-  (HTTP 200, 5,810 ms), and the FLUJO tool round-trip passed (10,141 ms),
-  including schema acceptance, argument validation, execution and model receipt.
-  The axios cross-check was correctly skipped for this native CLI adapter.
-  Billing cost was not exposed by the test; no amount is asserted. This narrow
-  authorization is not permission for other Google calls or future chats.
-- Local acceptance evidence:
-  `C:/Users/Moe/.codex/visualizations/2026/10/19/01a155e5-bc06-70c3-bdd8-dcb8c8632483/antigravity-live-test.png`.
-- Catalog follow-up: Google's current Windows installer manifest also offers
-  CLI 1.4.2. A fresh isolated API-key catalog check with an invalid placeholder
-  returns the same 11 entries without Argon. FLUJO discovers the CLI's catalog;
-  it does not thereby query Google's complete live API catalog or verify access.
-- User-authorized Argon setup and acceptance on 2026-10-19: created Gemini 4
-  Argon (`gemini-4-argon`), native `gemini` provider/adapter, model ID
-  `a907238c-eee3-443d-a9db-1a039783e54f` in default-workspace. Reused the exact
-  encrypted key from Antigravity CLI Default without changing that connection.
-  Google's native model-list API advertised Argon. The saved model passed the
-  normal UI check: HTTP 200 / `pong` in 3,636 ms, FLUJO tool schema/arguments/
-  execution/result-receipt check in 19,134 ms. No application source changed.
-  Evidence: `C:/Users/Moe/.codex/visualizations/2026/10/19/01a155e5-bc06-70c3-bdd8-dcb8c8632483/argon-native-live-test.png`.
-- API status: native Gemini currently uses `generateContent`. Google's
-  [migration guide](https://ai.google.dev/gemini-api/docs/migrate-to-interactions)
-  labels that API legacy but fully supported, recommending Interactions for
-  new development. The [Argon announcement](https://antigravity.google/blog/gemini-4-argon-in-google-antigravity)
-  describes both eligible Antigravity subscription access and API availability;
-  it does not require using the CLI. Argon authorization covers this test only.
-- Cleanup through flujo-bash: removed abandoned pinned download, replaced build,
-  compiler caches and obsolete command shims; 174,328,888 bytes removed in total.
-  Free disk after cleanup: 178,848,612,352 bytes. Active build/MCP output retained
-  for the running app. Original AGENTS.md and legacy bin.cjs changes preserved.
-- Next: review the draft PR. Full regression and packaged-consumer suites
-  remain release gates. Local build/typecheck/lint results cover the unchanged
-  source revision above and were reused for this acceptance-only record update.
-  No additional Google-call authorization should be inferred from this file.
+- Owner: this chat. Branch `codex/antigravity-setup-recovery`; validated source
+  revision `f5ab7a1645ce930c486257eeac44384bbfbc474f`.
+- Delivery: [draft PR #1221](https://github.com/mario-andreschak/FLUJO/pull/1221).
+  This handover records the source revision; no merge or release was requested.
+- Delivered: official `agy` detection/installation (including Windows's known
+  install directory without a PATH refresh), no shipped `flujo-agy` wrapper,
+  dynamic CLI catalog and recovery UI. Gemini Native now uses Interactions for
+  unary, streaming and restricted assessment calls. Existing API keys and model
+  IDs remain valid. FLUJO owns history (`store: false`) and tool execution;
+  signed native steps survive canonical assistant writeback and projection.
+  Output limits, usage/cache/thinking telemetry, media and cancellation remain
+  supported. Argon exposes low/medium/high thinking and hides temperature.
+- CLI research, 2026-10-19: official Windows CLI and installer manifest both
+  report 1.4.2. The Gemini-key catalog has 11 entries and omits Argon. Isolated
+  offline probes reject both `gemini-4-argon` and `gemini-4-argon-high` before
+  inference (zero turns/usage). The binary already contains Argon strings.
+  [Google CLI issue #1228](https://github.com/google-antigravity/antigravity-cli/issues/1228)
+  documents the same API-key catalog omission; reports persist after the Pro
+  account rollout. Account mode and Gemini-key mode have different catalogs.
+  No binary patches, fabricated catalog entries or account entitlement claims.
+- Google recommends [Interactions](https://ai.google.dev/gemini-api/docs/migrate-to-interactions);
+  GenerateContent remains supported. The [Argon announcement](https://antigravity.google/blog/gemini-4-argon-in-google-antigravity)
+  does not require a CLI. Native discovery still reads Google's paginated
+  `models.list`; the CLI list is the list the installed CLI accepts.
+- Validation for the source revision: full local typecheck; source lint and
+  changed-fixture lint; non-container application build, including MCP builds;
+  diff whitespace check. Build ID `qEcqzcVLqfV-ZALmEr_84`. Regression fixtures
+  cover signed/parallel tool replay after persistence, streaming fragments,
+  media, cancellation, incomplete/error responses, one-attempt transport and
+  restricted assessment. Suites were updated but NOT run: broad suites, remote
+  CI and container builds remain release pre-flight gates under the user's policy.
+- Live app: localhost:4200, launcher PID 33352, Next PID 34108; normal `.next`
+  build path, generated route types refreshed after activation. Logs/evidence:
+  `C:/Users/Moe/.codex/visualizations/2026/10/19/01a155e5-bc06-70c3-bdd8-dcb8c8632483/`.
+- User-authorized Google Argon acceptance, 2026-10-19 (local date): existing
+  Gemini 4 Argon, `gemini-4-argon`, model ID
+  `a907238c-eee3-443d-a9db-1a039783e54f`, default-workspace. Native provider and
+  adapter remain `gemini`; its encrypted key still exactly matches Antigravity
+  CLI Default (`32463ede-b34a-4201-b3dd-0a335238b444`). Neither connection was
+  reconfigured during this migration.
+- Normal Test model dialog passed through Interactions: HTTP 200 / `pong` in
+  6,520 ms; FLUJO tool schema/arguments/execution/result-receipt check in
+  14,998 ms. Evidence: `argon-interactions-live-test.png` in the folder above.
+- Actual streamed Flow passed in 10,494 ms: one synthetic session `todo` call,
+  executed result, and exact generated todo ID returned by Argon. Durable roles
+  were user/assistant/tool/assistant. Both assistant turns retained signed
+  native steps; archive operations were two `interactions.create(stream)`
+  calls. Only `gemini-4-argon` was invoked. Evidence summary:
+  `argon-interactions-stream.json`. Temporary conversation/logs/archive removed.
+  Provider billing cost was not exposed; no monetary cost is asserted. Direct
+  user authorization in this chat covered these tests only and does not transfer.
+- Earlier official CLI acceptance remains valid for its unchanged source:
+  HTTP 200 / `pong` in 5,810 ms and FLUJO tool test in 10,141 ms. Evidence:
+  `antigravity-live-test.png`. The original CLI connection remains `default`.
+- Cleanup through flujo-bash: removed research scratch (158,521 bytes), replaced
+  build/compiler caches and disposable model-turn archive (75,759,946 bytes),
+  plus the temporary conversation through the normal deletion API. No Docker
+  images/caches or scratch dependency installations were created. Active build,
+  active MCP output, credentials, service logs and evidence retained. Free disk
+  after cleanup: 178,609,381,376 bytes. Original user changes in `AGENTS.md` and
+  legacy `packages/antigravity-cli/bin.cjs` remain untouched and uncommitted.
+- Compatibility note: Interactions has no numeric thinking-budget field. An old
+  explicit budget fails with recovery guidance; opening/saving the model clears
+  it, and thinking-level selection is available. Argon's existing setup required
+  no change. There is no silent legacy API/model/provider fallback.
+- Next: review the draft PR; run the retained broad/packaged regression and
+  release checks immediately before a release. No active blocker remains.
