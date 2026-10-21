@@ -544,6 +544,26 @@ Describe 'Corporate-network installer source contracts' {
         $script:InnoSource | Should -Match "Result := 'The FLUJO installer failed during stage"
         $script:InnoSource | Should -Match 'SuppressibleMsgBox'
         $script:InnoSource | Should -Match "WizardSilent then[\s\S]+FLUJO_SET_POLICY', '0'"
+        $script:InnoSource | Should -Match "SetRequiredEnvironmentVariable\('PSModulePath', ''\)"
+        $script:InnoSource | Should -Match ([regex]::Escape('{sys}\WindowsPowerShell\v1.0\powershell.exe'))
+    }
+
+    It 'honors a declined persistent policy change without probing or loading the policy module' {
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($script:InstallSource, [ref]$tokens, [ref]$errors)
+        $definition = $ast.Find({ param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-PersistentExecutionPolicy'
+        }, $true)
+        . ([scriptblock]::Create($definition.Extent.Text))
+        function Get-FutureExecutionPolicy { throw 'Declined policy must not be inspected' }
+        $savedPolicy = $env:FLUJO_SET_POLICY
+        try {
+            foreach ($choice in @('0', 'false', 'no')) {
+                $env:FLUJO_SET_POLICY = $choice
+                Set-PersistentExecutionPolicy | Should -BeFalse
+            }
+        } finally { $env:FLUJO_SET_POLICY = $savedPolicy }
     }
 
     It 'warns about inherited TLS bypasses without forwarding them to installer commands' {

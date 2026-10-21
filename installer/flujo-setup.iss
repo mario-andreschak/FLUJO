@@ -174,7 +174,11 @@ begin
   WizardForm.StatusLabel.Caption :=
     'Running the FLUJO installer - a console window shows its progress ...';
 
-  if not Exec('powershell.exe',
+  // A wizard started from PowerShell 7 inherits its incompatible module search
+  // path. Let Windows PowerShell construct its own defaults before loading the
+  // built-in Security module (Get/Set-ExecutionPolicy).
+  SetRequiredEnvironmentVariable('PSModulePath', '');
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
               '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}') + '\install.ps1"',
               '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
   begin

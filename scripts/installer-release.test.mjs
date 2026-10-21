@@ -185,6 +185,7 @@ for (const [name, change] of [
   ['build publication authority', (jobs) => { jobs['installer-build'].permissions = { contents: 'write' }; }],
   ['signing without installed acceptance', (jobs) => { jobs['installer-attest'].needs.pop(); }],
   ['optional installed acceptance', (jobs) => { jobs['installer-acceptance']['continue-on-error'] = true; }],
+  ['reduced fresh Windows coverage', (jobs) => { jobs['installer-acceptance'].strategy.matrix.os = ['windows-2025']; }],
   ['skipped installed acceptance', (jobs) => { jobs['installer-acceptance'].if = 'false'; }],
   ['unbound installed acceptance bytes', (jobs) => { delete jobs['installer-acceptance'].env.EXPECTED_INSTALLER_SHA256; }],
   ['omitted real installation', (jobs) => { jobs['installer-acceptance'].steps = jobs['installer-acceptance'].steps.filter(step => step.run !== './scripts/verify-windows-install.ps1'); }],

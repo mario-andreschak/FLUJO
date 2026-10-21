@@ -175,6 +175,8 @@ trap {
     if ($script:InstallerLogPath -and (Get-Command Protect-InstallerDiagnostic -ErrorAction SilentlyContinue)) {
         $safeError = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
         Add-Content -LiteralPath $script:InstallerLogPath -Value $safeError -Encoding UTF8
+        $safeLocation = Protect-InstallerDiagnostic -Text ([string]$_.ScriptStackTrace) -SensitiveValues $script:InstallerSensitiveValues
+        Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLocation -Encoding UTF8
         $failedStage = Get-Content -LiteralPath $script:InstallerStagePath -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($failedStage) { Write-InstallerStage -Name $failedStage -State failed -ExitCode 1 }
         Stop-Installer -Message $safeError
@@ -514,6 +516,9 @@ function Get-FutureExecutionPolicy {
 }
 
 function Set-PersistentExecutionPolicy {
+    # Declining a persistent change needs no policy-module access. The wizard
+    # already starts this one process with Bypass, and native npm.cmd is used.
+    if ($env:FLUJO_SET_POLICY -in @('0', 'false', 'no')) { return $false }
     # Check the policy future terminals will inherit, NOT just the CurrentUser
     # scope: a machine can already allow scripts via LocalMachine (or a GPO) with
     # CurrentUser left Undefined, in which case there is nothing to do.

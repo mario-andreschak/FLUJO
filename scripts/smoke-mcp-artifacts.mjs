@@ -379,7 +379,7 @@ async function smokePackedArtifacts(candidateDirectory) {
     await fs.writeFile(path.join(installDir, 'package.json'), JSON.stringify({ private: true }), 'utf8');
     await run(npmCommand, [
       'install',
-      '--prefer-offline',
+      '--prefer-online',
       '--ignore-scripts',
       '--no-audit',
       '--no-fund',
@@ -391,7 +391,9 @@ async function smokePackedArtifacts(candidateDirectory) {
       // one realistic exception is installation: npm packages do not bundle
       // their third-party dependencies, so a clean consumer resolves them from
       // the registry just like `npm install flujo-ai` does.
-      env: cleanEnv({ npm_config_offline: 'false', npm_config_prefer_offline: 'true' }),
+      // Refresh packuments: a warm developer cache may predate the versions in
+      // these candidate packages even when their lockfile tarballs are present.
+      env: cleanEnv({ npm_config_offline: 'false', npm_config_prefer_offline: 'false' }),
     });
 
     const installedModules = path.join(installDir, 'node_modules');

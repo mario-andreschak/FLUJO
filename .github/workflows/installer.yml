@@ -248,9 +248,13 @@ jobs:
           generate_release_notes: true
 
   installer-acceptance:
-    name: Install and launch original installer bytes
+    name: Install and launch original installer bytes (${{ matrix.os }})
     needs: installer-build
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
       EXPECTED_INSTALLER_SHA256: ${{ needs.installer-build.outputs.sha256 }}
@@ -279,7 +283,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: windows-release-installation
+          name: windows-release-installation-${{ matrix.os }}
           path: ${{ runner.temp }}/flujo-install-evidence/**
           if-no-files-found: error
           retention-days: 30
@@ -318,8 +322,12 @@ jobs:
 
   clean-windows:
     if: ${{ inputs.clean_windows }}
-    name: Fresh Windows installer and first launch
-    runs-on: windows-2025
+    name: Fresh Windows installer and first launch (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
       NEXT_TELEMETRY_DISABLED: '1'
@@ -362,7 +370,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: windows-first-install
+          name: windows-first-install-${{ matrix.os }}
           include-hidden-files: true
           path: |
             installer/Output/flujo-setup.exe

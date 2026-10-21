@@ -112,7 +112,8 @@ function assertInstallerProvenance(workflow) {
   const acceptanceDownload = acceptance?.steps?.find(step => step.uses?.startsWith('actions/download-artifact@'));
   const installedCheck = acceptance?.steps?.find(step => step.run === './scripts/verify-windows-install.ps1');
   if (acceptance?.needs !== 'installer-build' || acceptance.if || acceptance['continue-on-error']
-      || acceptance['runs-on'] !== 'windows-2025'
+      || acceptance['runs-on'] !== '${{ matrix.os }}'
+      || JSON.stringify(acceptance.strategy?.matrix?.os) !== JSON.stringify(['windows-2022', 'windows-2025'])
       || acceptanceDownload?.with?.['artifact-ids'] !== '${{ needs.installer-build.outputs.artifact_id }}'
       || acceptanceDownload.with.path !== 'installer/Output'
       || acceptance.env?.EXPECTED_INSTALLER_SHA256 !== '${{ needs.installer-build.outputs.sha256 }}'

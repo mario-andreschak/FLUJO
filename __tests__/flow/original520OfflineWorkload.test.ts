@@ -57,6 +57,8 @@ import { persistSubflowParent } from '@/backend/execution/flow/subflowRecovery';
 import { _setModelTurnArchiveDirForTests, readModelTurnSnapshot, archiveModelDispatch, readModelTurnMedia } from '@/backend/execution/flow/modelTurnArchive';
 import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { ModelTurnArchiveReadError } from '@/backend/execution/flow/modelTurnArchiveReadBudget';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 let observations = 0;
 const observationsByModel: Record<string, number> = {};
@@ -205,6 +207,11 @@ async function workerScenario(root: string) {
     const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
     getModelMock.mockImplementation(async (id: string) => ({ id, name: id, displayName: id, provider: 'openai',
       adapter: 'openai', ApiKey: 'offline-fixture', baseUrl, inputModalities: ['text'], outputModalities: ['text'] }));
+    // Process preparation admits the persisted catalog before calling the model
+    // service. Seed the disposable catalog with the same loopback-only models.
+    await saveItem(StorageKey.MODELS, await Promise.all(
+      ['parent', ...characters.map((_size, i) => `child-${i}`), 'retry-control'].map(id => getModelMock(id)),
+    ));
     getFlowMock.mockImplementation(async (id: string) => flow(id));
     phase = 'parent-and-three-completed-one-400';
     const parent = await runFlow({ flowDefinition: flow('parent'), conversationId: 'parent', source: 'api',
@@ -427,7 +434,7 @@ if (process.env.FLUJO_520_WORKER) {
       // Neither timeout nor arbitrary child failure is accepted as an OOM proof.
       if (spawnError || timedOut || !exitEvent || exitEvent.code !== 0 || exitEvent.signal !== null
           || exit.code !== 0 || exit.signal !== null || !stdoutEnded || !stderrEnded || !closeObserved || streamErrors.length) {
-        throw new Error(`Workload failed or drainage unproven; evidence preserved: ${owned.root}`);
+        throw new Error(`Workload failed or drainage unproven; evidence preserved: ${owned.root}\n${Buffer.concat(stderr).toString('utf8').slice(-8192)}`);
       }
       const proof = JSON.parse(await fs.readFile(path.join(owned.root, 'proof.json'), 'utf8'));
       expect(proof.nodeOptions).toBeNull();

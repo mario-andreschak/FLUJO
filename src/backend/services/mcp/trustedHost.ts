@@ -12,7 +12,23 @@ import { parseRuntimeHomeIsolationOverride, resolveRuntimeHomeIsolation, MCP_RUN
 
 const BROKER_NAMES = ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'];
 const RESERVED_RUNTIME_NAMES = [...BROKER_NAMES, GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_WORKER_MODE', 'FLUJO_MCP_WORKLOAD_TOKEN', 'FLUJO_MCP_WORKLOAD_AUDIENCE'];
-const managedHosts = new WeakMap<object, ManagedTrustedHost>();
+// MCP clients are shared across Next's route/instrumentation module graphs.
+// Their captured launch identity must follow the same process-wide lifetime.
+// This stores the original guard, never a cached approval verdict: every use
+// still rechecks the private grant, configuration and source through that guard.
+const managedHostsKey = Symbol.for('FLUJO:managed-trusted-host-transports:v1');
+const managedHosts = (() => {
+  const existing = Object.getOwnPropertyDescriptor(globalThis, managedHostsKey);
+  if (existing) {
+    if (!('value' in existing) || existing.configurable || existing.writable || !(existing.value instanceof WeakMap)) {
+      throw new Error('Trusted host transport registry refused.');
+    }
+    return existing.value as WeakMap<object, ManagedTrustedHost>;
+  }
+  const hosts = new WeakMap<object, ManagedTrustedHost>();
+  Object.defineProperty(globalThis, managedHostsKey, { value: hosts, writable: false, configurable: false, enumerable: false });
+  return hosts;
+})();
 interface VerifiedWorkloadStart { config: MCPStdioConfig; generation: string; ownerId: string; digest: string; assertLive(): void }
 const workloadStartProofs = new WeakMap<object, { capsule: PendingBundledFlujoWorkload; verified: VerifiedWorkloadStart }>();
 export function assertVerifiedBundledFlujoWorkloadStart(proof: unknown, capsule: PendingBundledFlujoWorkload): VerifiedWorkloadStart {
