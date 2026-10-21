@@ -31,6 +31,10 @@ function run(): HarnessRun {
 }
 
 describe('Harness experiment evidence boundary', () => {
+  it('can evolve an empty saved step while standalone experiments still need instructions', () => {
+    expect(HarnessInputSchema.safeParse({ ...input, basePrompt: '' }).success).toBe(false);
+    expect(HarnessInputSchema.safeParse({ ...input, basePrompt: '', target: { kind: 'flow', flowId: 'flow', nodeId: 'agent' } }).success).toBe(true);
+  });
   it('rejects duplicate tasks across splits and dynamic prompt authority', () => {
     const duplicated = structuredClone(input);
     duplicated.cases[2].input = '  FIRST   training request ';

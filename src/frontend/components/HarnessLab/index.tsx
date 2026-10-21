@@ -11,6 +11,8 @@ import type { Flow } from '@/shared/types/flow';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import CaseEditor from './CaseEditor';
 import RunEvidence from './RunEvidence';
+import TargetVersions from './TargetVersions';
+import { HarnessPolicySchema, type HarnessTarget } from '@/shared/types/harnessIntegration';
 
 interface ModelOption { id: string; label: string; name: string; authentication: string }
 interface RunSummary { id: string; name: string; status: HarnessRun['status']; createdAt: number }
@@ -43,6 +45,16 @@ export default function HarnessLab() {
   const [reuseLessons, setReuseLessons] = useState(true);
   const [cases, setCases] = useState(initialCases);
   const [importStep, setImportStep] = useState('');
+  const [target, setTarget] = useState<HarnessTarget>();
+  const [rubric, setRubric] = useState('');
+  const selectTarget = useCallback((option: { target: HarnessTarget; prompt: string; label: string; id: string; modelId?: string } | undefined) => {
+    setTarget(option?.target);
+    if (option) {
+      setBasePrompt(option.prompt); setName(option.label.slice(0, 100)); setDomain(`target:${option.id}`);
+      if (option.modelId) setModelId(option.modelId);
+      setRubric(HarnessPolicySchema.parse({ modelId: option.modelId ?? 'select-model' }).rubric);
+    }
+  }, []);
   const controller = useRef<AbortController | null>(null);
   const pause = useRef(false);
   const createIdentity = useRef<{ id: string; payload: string } | null>(null);
@@ -94,7 +106,7 @@ export default function HarnessLab() {
   }
 
   function create() {
-    const parsed = HarnessInputSchema.safeParse({ name, domain, modelId, basePrompt, rounds, reuseLessons,
+    const parsed = HarnessInputSchema.safeParse({ name, domain, modelId, basePrompt, rounds, reuseLessons, target, rubric: rubric.trim() || undefined,
       cases: cases.map(item => ({ ...item, required: item.required.map(value => value.trim()).filter(Boolean), forbidden: item.forbidden.map(value => value.trim()).filter(Boolean) })),
     });
     if (!parsed.success) { setError(parsed.error.issues.map(issue => issue.message).join(' ')); return; }
@@ -118,6 +130,8 @@ export default function HarnessLab() {
       <Alert severity="info">{t('harness.scope')}</Alert>
       {!enabled && settingsHydrated && <Alert severity="info" action={<Button component="a" href={withWorkspaceUrl('/settings', workspace)}>{t('nav.settings')}</Button>}>{t('harness.off')}</Alert>}
       {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
+      <TargetVersions workspace={workspace} enabled={enabled && !busy} models={models} onSelect={selectTarget}
+        onExperiment={id => { void perform(async () => setRun(await api<HarnessRun>(`/${id}`, undefined, controller.current!.signal))); }} />
       {loading ? <CircularProgress aria-label={t('common.loading')} /> : <>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField select fullWidth label={t('harness.history')} value={run?.id ?? ''} disabled={busy}
@@ -151,7 +165,7 @@ export default function HarnessLab() {
             <TextField select label={t('harness.model')} value={modelId} disabled={busy || !models.length} onChange={event => setModelId(event.target.value)}>
               {models.map(model => <MenuItem value={model.id} key={model.id}>{model.label} · {model.authentication}</MenuItem>)}
             </TextField>
-            {importOptions.length > 0 && <TextField select label={t('harness.import')} value={importStep} disabled={busy}
+            {!target && importOptions.length > 0 && <TextField select label={t('harness.import')} value={importStep} disabled={busy}
               onChange={event => {
                 setImportStep(event.target.value); const choice = importOptions.find(item => item.value === event.target.value);
                 if (choice) { setBasePrompt(String(choice.node.data.properties?.promptTemplate)); setName(choice.flow.name);
@@ -159,7 +173,8 @@ export default function HarnessLab() {
               }}>
               <MenuItem value="">—</MenuItem>{importOptions.map(choice => <MenuItem key={choice.value} value={choice.value}>{choice.flow.name} / {choice.node.data.label}</MenuItem>)}
             </TextField>}
-            <TextField label={t('harness.prompt')} value={basePrompt} disabled={busy} fullWidth multiline minRows={5} onChange={event => setBasePrompt(event.target.value)} />
+            <TextField label={t('harness.prompt')} value={basePrompt} disabled={busy || Boolean(target)} fullWidth multiline minRows={5} onChange={event => setBasePrompt(event.target.value)} />
+            <TextField label={t('harness.rubric')} value={rubric} disabled={busy} fullWidth multiline minRows={2} onChange={event => setRubric(event.target.value)} />
             <TextField select label={t('harness.rounds')} value={rounds} disabled={busy} onChange={event => setRounds(Number(event.target.value))}>
               {[1, 2, 3].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
             </TextField>

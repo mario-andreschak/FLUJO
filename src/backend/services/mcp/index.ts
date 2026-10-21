@@ -1,4 +1,5 @@
 import { subscribeModernResource, retireModernSubscriptions } from './modernSubscriptions';
+import { getHarnessExecution, replayHarnessTool, harnessResourceSnapshot } from '@/backend/services/harness/executionScope';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { executionApprovalFailure } from './executionApproval';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -561,6 +562,7 @@ export class MCPService {
    * update between steps.
    */
   async subscribeToResource(serverName: string, uri: string): Promise<void> {
+    if (getHarnessExecution()) return;
     try {
       const client = this.getClient(serverName);
       if (!client) return;
@@ -2388,6 +2390,11 @@ export class MCPService {
     executionExtensionContext?: ExecutionExtensionContext,
   ): Promise<MCPServiceResponse> {
     const protectedDispatch = Boolean(executionExtensionContext) || isProtectedExecutionServer(serverName);
+    if (getHarnessExecution()) {
+      const output = replayHarnessTool(`${serverName}::${toolName}`, args);
+      try { return { success: true, data: JSON.parse(output) }; }
+      catch { return { success: true, data: { content: [{ type: 'text', text: output }] } }; }
+    }
     // Customer authority is checked before config side effects, connections or leases.
     // Testers, Apps, proxy, scheduler and missing-context resumes cannot mint assertions.
     try {
@@ -2783,6 +2790,10 @@ export class MCPService {
     serverName: string,
     uri: string,
   ): Promise<MCPServiceResponse<MCPReadResourceResult>> {
+    return harnessResourceSnapshot(JSON.stringify([serverName, uri]), () => this.readResourceUncached(serverName, uri));
+  }
+
+  private async readResourceUncached(serverName: string, uri: string): Promise<MCPServiceResponse<MCPReadResourceResult>> {
     if (isProtectedExecutionServer(serverName)) return { success: false, error: 'execution_protocol_surface_forbidden' };
     log.debug(
       `readResource: Entering method for server ${serverName}, uri ${uri}`,

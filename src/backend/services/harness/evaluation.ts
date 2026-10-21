@@ -6,7 +6,7 @@ export function scoreHarnessOutput(example: HarnessCase, output: string) {
   const missing = example.required.filter(value => !includes(value));
   const violations = example.forbidden.filter(includes);
   return {
-    quality: (example.required.length - missing.length) / example.required.length,
+    quality: example.required.length ? (example.required.length - missing.length) / example.required.length : 1,
     compliance: violations.length ? 0 : 1,
     missing,
     violations,
@@ -72,6 +72,6 @@ export function decideHarnessAdoption(baseline: HarnessCandidate, selected: Harn
     reasons.push('No measured training improvement in required checks, forbidden-output checks, or prompt length.');
   }
   const eligible = reasons.length === 0;
-  if (eligible) reasons.push('Training improved and no per-example check regressed on the held-out set. Review the outputs before creating an agent.');
+  if (eligible) reasons.push('Training improved and no per-example check regressed on the held-out set. The selected revision qualifies for activation.');
   return { eligible, reasons };
 }

@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
+import { getHarnessExecution, harnessResourceSnapshot } from '@/backend/services/harness/executionScope';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { loadItem, writeFileAtomic, runInWriteChain } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -117,6 +118,16 @@ const indexCache: Map<string, KvEntry[]> =
 const cacheKey = (scope: KvScopeId) => workspaceCacheKey('kv', scope);
 
 async function loadIndex(scope: KvScopeId): Promise<KvEntry[]> {
+  const evaluation = getHarnessExecution();
+  if (evaluation) {
+    const boards = evaluation.kvBoards ??= {};
+    boards[scope] ??= await harnessResourceSnapshot(`kv:${scope}`, () => loadLiveIndex(scope));
+    return boards[scope];
+  }
+  return loadLiveIndex(scope);
+}
+
+async function loadLiveIndex(scope: KvScopeId): Promise<KvEntry[]> {
   const cached = indexCache.get(cacheKey(scope));
   if (cached) return cached;
   let entries: KvEntry[] = [];
@@ -150,6 +161,12 @@ async function mutateIndex<T>(
   return runInWriteChain(chainKey(scope), async () => {
     const entries = await loadIndex(scope);
     const { next, result } = mutator(entries);
+    const evaluation = getHarnessExecution();
+    if (evaluation) {
+      // Run the normal key/value policy and state transitions without durable effects.
+      (evaluation.kvBoards ??= {})[scope] = next;
+      return result;
+    }
     if (next !== entries) {
       indexCache.set(cacheKey(scope), next);
       await fs.mkdir(scopeDir(scope), { recursive: true });

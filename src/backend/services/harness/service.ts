@@ -5,11 +5,18 @@ import { flowService } from '@/backend/services/flow';
 import { resolveCompletionAdapterRoute } from '@/backend/services/model/adapters/completionRoute';
 import { assertSafeCollectionId, listCollectionItemEntriesStrict, loadCollectionItem, loadItem, saveCollectionItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage';
-import { HarnessInputSchema, harnessCallLimit, normalizeHarnessTask, type HarnessRun } from '@/shared/types/harness';
+import { HarnessInputSchema, harnessCallLimit, normalizeHarnessTask, type HarnessRun, type HarnessProbe } from '@/shared/types/harness';
 import type { Flow } from '@/shared/types/flow';
 import { acceptHarnessLesson, acceptHarnessProposal, nextHarnessOperation, promptHash } from './engine';
 import { scoreHarnessOutput } from './evaluation';
 import { completeHarnessOperation, getHarnessModel, modelFingerprint } from './model';
+import { captureHarnessTarget, harnessTargetId, harnessTargetPrompt } from './targets';
+import { configureHarnessProfile, getHarnessProfile, publishHarnessVersion } from './profiles';
+import { probeHarnessRuntime } from './runtimeProbe';
+import { harnessAssessmentOperation, parseHarnessAssessment } from './assessment';
+import { harnessDigest } from './executionScope';
+import { isEncryptionLocked } from '@/utils/encryption/secure';
+import { initializeHarnessHistory, readHarnessSummaries, indexHarnessRun, hasSeenHarnessTask, reserveHarnessTasks } from './history';
 
 const COLLECTION = 'harness-experiments';
 export class HarnessError extends Error {
@@ -17,6 +24,7 @@ export class HarnessError extends Error {
 }
 
 export async function assertHarnessEnabled() {
+  if (await isEncryptionLocked()) throw new HarnessError('Unlock this workspace before running Harness Lab.', 423);
   const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
   if (settings?.experimental?.harnessLabEnabled !== true) throw new HarnessError('Enable Harness Lab in Settings → Experimental first.', 403);
 }
@@ -42,9 +50,15 @@ export async function getHarnessRun(id: string): Promise<HarnessRun> {
 async function persist(run: HarnessRun) {
   run.updatedAt = Date.now();
   await saveCollectionItem(COLLECTION, run.id, run);
+  await indexHarnessRun(run);
 }
 
-export async function createHarnessRun(raw: unknown) {
+export async function listHarnessRunSummaries() {
+  await withWorkspaceRuntimeLock('harness-create', () => initializeHarnessHistory(listHarnessRuns));
+  return readHarnessSummaries();
+}
+
+export async function createHarnessRun(raw: unknown, automatic?: { profileId: string; caseMessages?: HarnessRun['caseMessages']; caseInputs?: HarnessRun['caseInputs']; caseInvocations?: HarnessRun['caseInvocations'] }) {
   await assertHarnessEnabled();
   const parsed = z.object({ id: z.uuid(), input: HarnessInputSchema }).strict().safeParse(raw);
   if (!parsed.success) throw new HarnessError(parsed.error.issues.map(issue => issue.message).join(' '));
@@ -54,29 +68,62 @@ export async function createHarnessRun(raw: unknown) {
     await assertHarnessEnabled();
     const existing = await loadCollectionItem<HarnessRun | null>(COLLECTION, id, null);
     if (existing) {
-      if (JSON.stringify(existing.input) !== JSON.stringify(input)) throw new HarnessError('Experiment ID already used for another input.', 409);
+      const normalized = input.target ? { ...input, basePrompt: existing.input.basePrompt } : input;
+      if (JSON.stringify(existing.input) !== JSON.stringify(normalized)) throw new HarnessError('Experiment ID already used for another input.', 409);
       return existing;
     }
     const { model, route } = await getHarnessModel(input.modelId);
-    const history = await listHarnessRuns();
-    const seen = new Set(history.flatMap(run => run.input.cases.map(item => normalizeHarnessTask(item.input))));
-    if (input.cases.some(item => item.split === 'holdout' && seen.has(normalizeHarnessTask(item.input)))) {
+    const profileId = input.target ? harnessTargetId(input.target) : undefined;
+    let profile = profileId ? await getHarnessProfile(profileId) : null;
+    if (input.target && !profile) profile = await configureHarnessProfile(input.target, { modelId: input.modelId });
+    if (automatic && (!profile?.policy.automatic || profile.id !== automatic.profileId)) throw new HarnessError('Automatic improvement is disabled.', 409);
+    if (automatic && (profile!.policy.modelId !== input.modelId || profile!.policy.rubric !== input.rubric || profile!.policy.rounds !== input.rounds)) {
+      throw new HarnessError('Automatic improvement settings changed before admission.', 409);
+    }
+    const runtime = input.target ? await captureHarnessTarget(input.target, profile?.policy.maxModelCallsPerProbe) : undefined;
+    const runtimeVariants: HarnessRun['runtimeVariants'] = {};
+    if (input.target?.kind === 'persona') {
+      for (const invocation of new Set(Object.values(automatic?.caseInvocations ?? {}))) {
+        if (invocation === 'flow' || invocation === runtime?.invocation) continue;
+        runtimeVariants[invocation] = await captureHarnessTarget(input.target, profile?.policy.maxModelCallsPerProbe, 'evaluation', invocation);
+        if (runtimeVariants[invocation]!.baseRevision !== runtime?.baseRevision) throw new HarnessError('The Persona behavior changed during context capture.', 409);
+      }
+    }
+    if (runtime) {
+      input.basePrompt = harnessTargetPrompt(runtime.flow, runtime.target.nodeId);
+      runtime.policyHash = profile ? harnessDigest(profile.policy) : undefined;
+      const active = profile?.versions.find(version => version.id === profile.activeVersionId);
+      if (automatic && (runtime.target.kind === 'persona' ? active?.behaviorRevisionId : active?.flowHash) !== runtime.baseRevision) {
+        throw new HarnessError('The selected source changed outside Harness Lab. Capture its baseline before resuming automatic improvement.', 409);
+      }
+    }
+    await initializeHarnessHistory(listHarnessRuns);
+    if ((await Promise.all(input.cases.filter(item => item.split === 'holdout').map(item => hasSeenHarnessTask(item.input)))).some(Boolean)) {
       throw new HarnessError('Held-out inputs must be fresh in this workspace. Previously inspected examples may be reused as training examples.');
     }
     const fingerprint = modelFingerprint(model);
-    const lessons = input.reuseLessons ? history.filter(run => run.status === 'completed'
-      && run.decision?.eligible && run.promotedPromptHash && run.lesson && run.modelFingerprint === fingerprint
-      && normalizeHarnessTask(run.input.domain) === normalizeHarnessTask(input.domain)).slice(0, 5)
-      .map(run => ({ sourceId: run.id, domain: run.input.domain, text: run.lesson! })) : [];
+    const lessonScope = harnessDigest({ domain: normalizeHarnessTask(input.domain), fingerprint,
+      models: runtime?.modelFingerprints, invocations: automatic?.caseInvocations
+        ? [...new Set(Object.values(automatic.caseInvocations))].sort() : runtime ? [runtime.invocation] : undefined,
+      rubric: input.rubric });
+    const lessons = input.reuseLessons ? (await readHarnessSummaries()).filter(run => run.status === 'completed'
+      && run.eligible && run.promotedPromptHash && run.lesson && run.modelFingerprint === fingerprint
+      && (run.lessonScope === lessonScope || (!runtime && !input.rubric && !run.lessonScope && normalizeHarnessTask(run.domain) === normalizeHarnessTask(input.domain)))).slice(0, 5)
+      .map(run => ({ sourceId: run.id, domain: run.domain, text: run.lesson! })) : [];
     const run: HarnessRun = {
       schemaVersion: 1, id, createdAt: Date.now(), updatedAt: Date.now(), status: 'pending', input,
       model: { id: model.id, name: model.name, adapter: resolveCompletionAdapterRoute(model), authentication: route },
-      modelFingerprint: fingerprint, lessons, frontierIds: [], callsStarted: 0, callsCompleted: 0,
+      modelFingerprint: fingerprint, lessonScope, lessons, frontierIds: [], callsStarted: 0, callsCompleted: 0,
+      runtime, runtimeVariants, caseInvocations: automatic?.caseInvocations, profileId, origin: automatic ? 'automatic' : 'manual',
+      caseMessages: automatic?.caseMessages, caseInputs: automatic?.caseInputs,
+      toolReplays: Object.fromEntries(input.cases.map(item => [item.id, item.tools ?? []])),
+      modelCallsStarted: 0, modelCallsCompleted: 0,
       totalTokens: 0, unknownUsageCalls: 0, modelTimeMs: 0,
       candidates: [{ id: 'baseline', round: 0, scope: 'baseline', prompt: input.basePrompt,
         promptHash: promptHash(input.basePrompt), rationale: 'Original instructions.', probes: [] }],
     };
     await lock.assertOwned();
+    await reserveHarnessTasks(run);
     await persist(run);
     return run;
   });
@@ -88,6 +135,12 @@ export async function advanceHarnessRun(id: string, signal: AbortSignal) {
   return withWorkspaceRuntimeLock(`harness-${id}`, async lock => {
     const run = await getHarnessRun(id);
     if (run.status !== 'pending') return run;
+    const assertPolicy = async () => {
+      if (run.origin !== 'automatic') return;
+      const profile = await getHarnessProfile(run.profileId!);
+      if (!profile?.policy.automatic || harnessDigest(profile.policy) !== run.runtime?.policyHash) throw new HarnessError('Automatic improvement settings changed or were disabled.', 409);
+    };
+    await assertPolicy();
     if (run.pendingOperation) {
       run.status = 'failed';
       run.error = 'A previous model request has an unknown outcome. Its call was counted and will not be replayed. Start a new experiment with fresh held-out examples.';
@@ -105,21 +158,51 @@ export async function advanceHarnessRun(id: string, signal: AbortSignal) {
     run.pendingOperation = operation.key;
     run.callsStarted++;
     await persist(run);
-    try {
-      const result = await completeHarnessOperation(model, operation, signal);
+    const beforeCall = async () => {
+      await assertHarnessEnabled();
+      await assertPolicy();
       await lock.assertOwned();
-      run.callsCompleted++;
+      run.modelCallsStarted = (run.modelCallsStarted ?? 0) + 1;
+      await persist(run);
+    };
+    const afterCall = async (tokens: number | null, completedCalls = 1) => {
+      run.modelCallsCompleted = (run.modelCallsCompleted ?? 0) + completedCalls;
+      if (tokens === null) run.unknownUsageCalls += completedCalls; else run.totalTokens += tokens;
+      await lock.assertOwned(); await persist(run);
+    };
+    const invoke = async (next: import('./engine').HarnessOperation) => {
+      await getHarnessModel(run.input.modelId, run.modelFingerprint);
+      await beforeCall();
+      const result = await completeHarnessOperation(model, next, signal);
+      await afterCall(result.tokens);
+      return result;
+    };
+    try {
+      const result: Awaited<ReturnType<typeof completeHarnessOperation>> & Partial<HarnessProbe> = operation.kind === 'probe' && run.runtime
+        ? await probeHarnessRuntime(run, operation, signal, beforeCall, afterCall) : await invoke(operation);
+      await lock.assertOwned();
       run.modelTimeMs += result.durationMs;
-      if (result.tokens === null) run.unknownUsageCalls++; else run.totalTokens += result.tokens;
       if (operation.kind === 'probe') {
         const candidate = run.candidates.find(item => item.id === operation.candidateId)!;
+        const textScore = scoreHarnessOutput(operation.example, result.output);
+        const evaluationFailure = 'evaluationFailure' in result && result.evaluationFailure;
+        const originalSystemPrompts = candidate.id === 'baseline'
+          ? ('systemPrompts' in result ? result.systemPrompts : undefined)
+          : run.candidates[0].probes.find(probe => probe.caseId === operation.example.id)?.systemPrompts;
+        const assessment = run.input.rubric && !evaluationFailure ? await invoke(harnessAssessmentOperation(run, operation.example, result.output,
+          { originalSystemPrompts, toolTrace: 'toolTrace' in result ? result.toolTrace : undefined })) : undefined;
+        if (assessment) run.modelTimeMs += assessment.durationMs;
+        const assessed = evaluationFailure ? { quality: 0, compliance: 0, evaluatorReason: String(evaluationFailure) }
+          : assessment ? parseHarnessAssessment(assessment.output) : undefined;
         candidate.probes.push({ caseId: operation.example.id, split: operation.example.split,
-          promptHash: candidate.promptHash, ...result, ...scoreHarnessOutput(operation.example, result.output) });
+          promptHash: candidate.promptHash, ...result, ...textScore,
+          ...(assessed ? { quality: Math.min(textScore.quality, assessed.quality), compliance: Math.min(textScore.compliance, assessed.compliance), evaluatorReason: assessed.evaluatorReason } : {}) });
       } else if (operation.kind === 'propose') {
         acceptHarnessProposal(run, operation, result.output);
       } else {
         run.lesson = acceptHarnessLesson(result.output);
       }
+      run.callsCompleted++;
       run.pendingOperation = undefined;
       nextHarnessOperation(run); // Freeze selection before returning any held-out evidence.
     } catch {
@@ -147,12 +230,20 @@ export async function cancelHarnessRun(id: string) {
   });
 }
 
-export async function promoteHarnessRun(id: string) {
+export async function promoteHarnessRun(id: string, automatic = false) {
   await assertHarnessEnabled();
   z.uuid().parse(id);
   return withWorkspaceRuntimeLock(`harness-${id}`, async lock => {
     const run = await getHarnessRun(id);
     if (run.status !== 'completed' || !run.decision?.eligible || !run.selectedId) throw new HarnessError('This experiment has no eligible candidate.', 409);
+    if (run.runtime) {
+      if (run.activatedVersionId) return run;
+      const profile = await publishHarnessVersion(run, automatic);
+      run.activatedVersionId = profile.versions.find(version => version.experimentId === run.id)!.id;
+      run.promotedPromptHash = run.candidates.find(candidate => candidate.id === run.selectedId)!.promptHash;
+      await lock.assertOwned(); await persist(run);
+      return run;
+    }
     await getHarnessModel(run.input.modelId, run.modelFingerprint);
     await assertHarnessEnabled();
     const selected = run.candidates.find(candidate => candidate.id === run.selectedId)!;

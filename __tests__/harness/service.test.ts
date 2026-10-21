@@ -12,11 +12,15 @@ const mockModel = { id: 'luna', name: 'gpt-6-luna', ApiKey: '', provider: 'codex
 jest.mock('@/utils/storage/backend', () => ({
   assertSafeCollectionId: jest.fn(),
   loadItem: jest.fn(async () => ({ experimental: { harnessLabEnabled: mockEnabled } })),
-  loadCollectionItem: jest.fn(async (_collection, id, fallback) => structuredClone(mockRecords.get(`${mockWorkspace}/${id}`) ?? fallback)),
-  saveCollectionItem: jest.fn(async (_collection, id, value) => { mockRecords.set(`${mockWorkspace}/${id}`, structuredClone(value)); }),
-  listCollectionItemEntriesStrict: jest.fn(async () => [...mockRecords.entries()].filter(([key]) => key.startsWith(`${mockWorkspace}/`))
-    .map(([key, value]) => ({ id: key.split('/')[1], item: structuredClone(value) }))),
+  loadCollectionItem: jest.fn(async (collection, id, fallback) => structuredClone(mockRecords.get(`${mockWorkspace}/${collection}/${id}`) ?? fallback)),
+  saveCollectionItem: jest.fn(async (collection, id, value) => { mockRecords.set(`${mockWorkspace}/${collection}/${id}`, structuredClone(value)); }),
+  listCollectionItemEntriesStrict: jest.fn(async collection => [...mockRecords.entries()].filter(([key]) => key.startsWith(`${mockWorkspace}/${collection}/`))
+    .map(([key, value]) => ({ id: key.split('/').at(-1), item: structuredClone(value) }))),
 }));
+jest.mock('@/utils/encryption/secure', () => ({ isEncryptionLocked: jest.fn(async () => false) }));
+jest.mock('@/backend/services/harness/profiles', () => ({ configureHarnessProfile: jest.fn(), getHarnessProfile: jest.fn(), publishHarnessVersion: jest.fn() }));
+jest.mock('@/backend/services/harness/runtimeProbe', () => ({ probeHarnessRuntime: jest.fn() }));
+jest.mock('@/backend/services/harness/targets', () => ({ captureHarnessTarget: jest.fn(), harnessTargetId: jest.fn(), harnessTargetPrompt: jest.fn() }));
 jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
   withWorkspaceRuntimeLock: jest.fn(async (_name, task) => task({ assertOwned: async () => {} })),
 }));
@@ -55,17 +59,17 @@ it('defaults off at the server boundary and dispatches nothing', async () => {
 it('reuses a creation ID but rejects known held-out inputs in a new experiment', async () => {
   await createHarnessRun({ id, input });
   await createHarnessRun({ id, input });
-  expect(mockRecords.size).toBe(1);
+  expect([...mockRecords.keys()].filter(key => key.includes('/harness-experiments/'))).toHaveLength(1);
   await expect(createHarnessRun({ id: 'c643594a-0d10-4c38-a1d8-32af8e9726c8', input })).rejects.toThrow('fresh');
   mockWorkspace = 'two';
   await expect(createHarnessRun({ id, input })).resolves.toMatchObject({ id });
-  expect(mockRecords.size).toBe(2);
+  expect([...mockRecords.keys()].filter(key => key.includes('/harness-experiments/'))).toHaveLength(2);
 });
 
 it('never replays an uncertain persisted provider dispatch', async () => {
   const run = await createHarnessRun({ id, input });
   run.pendingOperation = 'probe:baseline:t1'; run.callsStarted = 1;
-  mockRecords.set(`one/${id}`, run);
+  mockRecords.set(`one/harness-experiments/${id}`, run);
   const recovered = await advanceHarnessRun(id, new AbortController().signal);
   expect(recovered.status).toBe('failed');
   expect(recovered.callsStarted).toBe(1);
@@ -99,7 +103,7 @@ it('creates one exact, tool-free agent copy and refuses to overwrite later edits
   const run = await createHarnessRun({ id, input });
   const selected = { ...run.candidates[0], id: 'composed:1', prompt: 'Improved instructions', promptHash: 'hash' };
   run.candidates.push(selected); run.selectedId = selected.id; run.status = 'completed'; run.decision = { eligible: true, reasons: [] };
-  mockRecords.set(`one/${id}`, run);
+  mockRecords.set(`one/harness-experiments/${id}`, run);
   const promoted = await promoteHarnessRun(id);
   await promoteHarnessRun(id);
   expect(flowService.saveFlow).toHaveBeenCalledTimes(1);

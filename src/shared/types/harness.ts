@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { findPromptRefs } from '@/utils/shared/promptRefs';
+import { HarnessTargetSchema, type HarnessRuntimeSnapshot, type HarnessToolReplay } from './harnessIntegration';
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const checks = z.array(text(500)).max(12);
@@ -9,19 +10,28 @@ export const HarnessCaseSchema = z.object({
   id: text(64),
   split: z.enum(['train', 'holdout']),
   input: text(6000),
-  required: checks.min(1),
+  required: checks.default([]),
   forbidden: checks.default([]),
+  tools: z.array(z.object({ name: text(256), arguments: z.record(z.string(), z.unknown()), output: z.string().max(32000), recordingId: text(64).optional() }).strict()).max(32).optional(),
 }).strict();
 
 export const HarnessInputSchema = z.object({
   name: text(100),
   domain: text(80),
   modelId: text(128),
-  basePrompt: HarnessPromptSchema,
+  basePrompt: z.string().trim().max(12000),
   rounds: z.number().int().min(1).max(3).default(1),
   cases: z.array(HarnessCaseSchema).min(4).max(12),
   reuseLessons: z.boolean().default(true),
+  target: HarnessTargetSchema.optional(),
+  rubric: z.string().trim().min(20).max(4000).optional(),
 }).strict().superRefine((value, ctx) => {
+  if (!value.target && !HarnessPromptSchema.safeParse(value.basePrompt).success) {
+    ctx.addIssue({ code: 'custom', message: 'Standalone experiments accept plain-text instructions only.', path: ['basePrompt'] });
+  }
+  if (value.cases.some(item => item.required.length === 0) && !value.rubric) {
+    ctx.addIssue({ code: 'custom', message: 'Supply required phrases or an evaluation rubric.', path: ['cases'] });
+  }
   for (const split of ['train', 'holdout'] as const) {
     if (value.cases.filter(item => item.split === split).length < 2) {
       ctx.addIssue({ code: 'custom', message: `Provide at least two distinct ${split} examples.`, path: ['cases'] });
@@ -46,6 +56,13 @@ export function normalizeHarnessTask(input: string): string {
   return input.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+/** A revision may preserve existing authority-bearing bindings, never add or remove one. */
+export function harnessBindingsUnchanged(before: string, after: string): boolean {
+  const bindings = (value: string) => [...value.matchAll(/\$\{[^}]*\}/g)].map(match => match[0]).sort();
+  const known = (value: string) => findPromptRefs(value).map(ref => ref.fullMatch).sort();
+  return JSON.stringify(bindings(before)) === JSON.stringify(bindings(after)) && JSON.stringify(known(before)) === JSON.stringify(known(after));
+}
+
 export type HarnessInput = z.infer<typeof HarnessInputSchema>;
 export type HarnessCase = z.infer<typeof HarnessCaseSchema>;
 export type HarnessScope = 'baseline' | 'general' | 'domain' | 'composed';
@@ -60,6 +77,11 @@ export interface HarnessProbe {
   violations: string[];
   durationMs: number;
   tokens: number | null;
+  evaluatorReason?: string;
+  evaluationFailure?: string;
+  systemPrompts?: Array<{ nodeId: string; hash: string; text: string }>;
+  replayedTools?: number;
+  toolTrace?: Array<{ name: string; arguments: Record<string, unknown>; matched: boolean }>;
 }
 export interface HarnessCandidate {
   id: string;
@@ -91,6 +113,7 @@ export interface HarnessRun {
   frontierIds: string[];
   decision?: { eligible: boolean; reasons: string[] };
   lesson?: string;
+  lessonScope?: string;
   /** Written before dispatch. An uncertain provider outcome is never replayed. */
   pendingOperation?: string;
   callsStarted: number;
@@ -101,6 +124,19 @@ export interface HarnessRun {
   error?: string;
   promotedFlowId?: string;
   promotedPromptHash?: string;
+  runtime?: HarnessRuntimeSnapshot;
+  runtimeVariants?: Partial<Record<HarnessRuntimeSnapshot['invocation'], HarnessRuntimeSnapshot>>;
+  caseInvocations?: Record<string, HarnessRuntimeSnapshot['invocation']>;
+  toolReplays?: Record<string, HarnessToolReplay[]>;
+  profileId?: string;
+  activatedVersionId?: string;
+  origin?: 'manual' | 'automatic';
+  modelCallsStarted?: number;
+  modelCallsCompleted?: number;
+  caseMessages?: Record<string, import('@/shared/types/chat').FlujoChatMessage[]>;
+  caseInputs?: Record<string, Pick<import('@/backend/execution/flow/runFlow').FlowRunInput, 'variables' | 'mcpAppContexts'>>;
+  /** Read-only resource responses frozen by the first probe and reused by every candidate. */
+  resourceSnapshots?: Record<string, unknown>;
 }
 
 export function harnessCallLimit(input: HarnessInput): number {

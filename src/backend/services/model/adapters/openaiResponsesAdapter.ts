@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
@@ -796,10 +797,10 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
           { adapter: 'openai-responses', operation: 'responses.create', request: body },
           () => openai.responses.create(
               body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
-              readOnlyAssessment ? { signal, maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
+              readOnlyAssessment || getHarnessExecution() ? { signal, maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
             ),
         ),
-        { signal, onAttempt: onProviderAttempt, ...(readOnlyAssessment ? { maxAttempts: 1 } : {}) },
+        { signal, onAttempt: onProviderAttempt, ...(readOnlyAssessment || getHarnessExecution() ? { maxAttempts: 1 } : {}) },
       ) as Promise<OpenAI.Responses.Response>;
     };
 
@@ -812,7 +813,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
         response = await send(omit);
         break;
       } catch (error) {
-        if (readOnlyAssessment) throw error;
+        if (readOnlyAssessment || getHarnessExecution()) throw error;
         const param = rejectedParam(error, omit);
         if (!param) throw error;
         omit.add(param);
