@@ -88,7 +88,9 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
             ? thinkingNames.length
               ? t('meetings.participant.waitingFor', { names: thinkingNames.join(', ') })
               : t('meetings.participant.waiting')
-            : null;
+            : participant?.status === 'error'
+              ? t('meetings.status.error')
+              : null;
         const title = participant
           ? `${participant.name} · ${sourceLabel}${overflow.length && index === 6 ? ` · ${overflow.map((item) => item.name).join(', ')}` : ''}`
           : t('meetings.table.emptySeat');
@@ -160,7 +162,7 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
                       {participant.status === 'running' && <CircularProgress size={10} thickness={5} />}
                       <Typography
                         variant="caption"
-                        color={participant.status === 'running' ? 'primary.main' : 'secondary.main'}
+                        color={participant.status === 'error' ? 'error.main' : participant.status === 'running' ? 'primary.main' : 'secondary.main'}
                         noWrap
                         sx={{ maxWidth: '100%', fontWeight: 700, fontSize: { xs: '0.58rem', sm: '0.68rem' } }}
                       >

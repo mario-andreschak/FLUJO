@@ -127,6 +127,22 @@ async function POST_handler(
       }, { status: dispatch.state === 'cancelled' ? 200 : 202 });
     }
 
+    // A meeting stop already revoked this participant's mutation authority.
+    // Repeated Stop may still wake local work, but must not write through that
+    // revoked fence (which turns an accepted owner cancellation into a 500).
+    if (sharedState.meetingParticipant && sharedState.executionAuthority?.signal.aborted) {
+      clearSteeringInbox(conversationId);
+      cancelAllToolCalls(conversationId);
+      clearPendingQuestions(conversationId);
+      clearPendingElicitations(conversationId);
+      clearPendingApprovals(conversationId);
+      return NextResponse.json({
+        success: true,
+        message: 'The meeting has already stopped this participant. Completion is managed by the meeting.',
+        owner_stopped: true,
+      }, { status: 202 });
+    }
+
     // 3. Durably record the cancellation request BEFORE signalling the live
     // state. The legacy isCancelled flag remains the cooperative abort signal;
     // recovery metadata distinguishes this from provider/tool failure.

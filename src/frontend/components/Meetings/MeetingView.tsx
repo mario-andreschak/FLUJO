@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
@@ -84,6 +84,8 @@ export default function MeetingView({
   const router = useRouter();
   const theme = useTheme();
   const [confirmStop, setConfirmStop] = useState(false);
+  const [briefExpanded, setBriefExpanded] = useState(false);
+  const briefId = useId();
   const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [humanMotions, setHumanMotions] = useState<MeetingMotion[]>([]);
   const isRunning = meeting.status === 'running';
@@ -123,7 +125,10 @@ export default function MeetingView({
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { xs: 'flex-start', md: 'center' } }}>
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="h5" sx={{ fontWeight: 790, letterSpacing: '-0.03em' }}>{meeting.title}</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75, maxWidth: 760, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{meeting.openingPrompt}</Typography>
+              <Typography id={briefId} variant="body2" color="text.secondary" sx={{ mt: 0.75, maxWidth: 760, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', display: '-webkit-box', WebkitLineClamp: briefExpanded ? undefined : 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{meeting.openingPrompt}</Typography>
+              <Button size="small" aria-expanded={briefExpanded} aria-controls={briefId} onClick={() => setBriefExpanded(value => !value)} sx={{ mt: 0.5 }}>
+                {t(briefExpanded ? 'meetings.brief.collapse' : 'meetings.brief.expand')}
+              </Button>
               {meeting.openingMedia?.length ? <Chip size="small" icon={<DescriptionRounded />} label={t('meetings.attachments.count', { count: meeting.openingMedia.length })} variant="outlined" sx={{ mt: 1 }} /> : null}
             </Box>
             <Stack direction="row" spacing={2.5} sx={{ flexShrink: 0 }}>

@@ -930,13 +930,17 @@ type RoundStartedMeetingEvent = Extract<MeetingEvent, { type: 'round:started' }>
 function latestUncommittedRoundStart(
   events: MeetingEvent[],
 ): RoundStartedMeetingEvent | undefined {
+  // An explicit resume acknowledges the prior segment's interruption. Preserve
+  // its orphaned round in the log, but do not mistake it for a new crash and
+  // reject every future continuation (or replay that interrupted model turn).
+  const resumedAt = [...events].reverse().find(event => event.type === 'meeting:resumed')?.seq ?? -1;
   const completedRoundIds = new Set(
     events
     .filter((event) => event.type === 'round:completed')
     .map((event) => event.roundId),
   );
   return [...events].reverse().find((event): event is RoundStartedMeetingEvent =>
-    event.type === 'round:started' && !completedRoundIds.has(event.roundId));
+    event.type === 'round:started' && event.seq > resumedAt && !completedRoundIds.has(event.roundId));
 }
 
 /** Fold an orphaned start batch into a snapshot before terminalizing it. */
@@ -1914,6 +1918,9 @@ export class MeetingEngine {
     if (acceptedMotion?.kind === 'cancel') {
       return this.cancel(meeting.id, terminationReason);
     }
+    if (!discussionParticipants().length && meeting.participants.some(participant => participant.status === 'error')) {
+      throw new Error('No active discussion participants remain after participant failures. Resume the meeting to recover them.');
+    }
 
     if (meeting.policy.moderatorMode !== 'none' && meeting.moderatorParticipantId) {
       const moderator = meeting.participants.find((participant) =>
@@ -2040,6 +2047,7 @@ export class MeetingEngine {
     participant: MeetingParticipant,
     round: MeetingRound,
     handle: RuntimeHandle,
+    error?: string,
   ): Promise<void> {
     await withControlLock(meeting.id, async () => {
       const durable = await getMeeting(meeting.id);
@@ -2054,8 +2062,24 @@ export class MeetingEngine {
       }
       const durableParticipant = durable.participants.find((item) => item.id === participant.id);
       if (!durableParticipant || durableParticipant.status !== 'running') return;
-      durableParticipant.status = 'waiting';
-      participant.status = 'waiting';
+      durableParticipant.status = error ? 'error' : 'waiting';
+      participant.status = durableParticipant.status;
+      if (error) {
+        durableParticipant.error = error;
+        participant.error = error;
+        // Surface a failed turn while slower peers are still researching. The
+        // round commit uses this same event id, so replay remains idempotent.
+        await this.emit(durable, {
+          type: 'participant:error',
+          audience: 'public',
+          roundId: round.id,
+          participantId: participant.id,
+          participantName: participant.name,
+          turnId: round.participantTurnIds[participant.id],
+          error,
+          eventId: `${round.id}:${participant.id}:error`,
+        });
+      }
       await saveMeeting(durable);
     });
   }
@@ -2129,7 +2153,7 @@ export class MeetingEngine {
       async (participant) => {
         await this.markParticipantThinking(meeting, participant, round, handle);
         const outcome = await runParticipantTurn(meeting, participant, round, allEvents, handle);
-        await this.markParticipantWaiting(meeting, participant, round, handle);
+        await this.markParticipantWaiting(meeting, participant, round, handle, outcome.error);
         return outcome;
       },
     );

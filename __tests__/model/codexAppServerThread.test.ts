@@ -125,7 +125,8 @@ it('resumes over RPC, streams true deltas, preserves token subsets and completes
   send('thread/tokenUsage/updated', { tokenUsage: usage });
   send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
   const collected = []; for await (const event of events) collected.push(event);
-  expect(collected.map(event => event.type)).toEqual(['item.updated', 'item.updated', 'item.completed', 'turn.completed']);
+  expect(collected.map(event => event.type)).toEqual(['item.updated', 'item.completed', 'turn.completed']);
+  expect(collected[0]).toMatchObject({ item: { text: 'Hi there' } });
   expect(observed).toHaveBeenCalledWith(expect.objectContaining({ reasoning_output_tokens: 20, cached_input_tokens: 60 }), expect.objectContaining({ contextWindow: 200000, promptTokens: 80 }));
   await thread.close(); expect(stop).toHaveBeenCalledTimes(1);
 });
@@ -423,4 +424,19 @@ it('refuses async questions with an unresolved MCP effect and without a bound lo
   await expect(events.next()).rejects.toThrow('overlapping'); expect(onAsyncQuestion).not.toHaveBeenCalled();
   const unbound = make(), otherEvents = await begin(unbound); send('item/completed', { item: asyncQuestion });
   await expect(otherEvents.next()).rejects.toThrow('not enabled');
+});
+
+
+it('bounds a long streamed reply without queueing ignored diagnostic notifications', async () => {
+  const thread = make(), events = await begin(thread);
+  for (let index = 0; index < 3000; index++) {
+    send('codex/event/agent_message_delta', { delta: 'duplicate' });
+    send('item/agentMessage/delta', { itemId: 'long-message', delta: 'word ' });
+  }
+  send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  const collected = []; for await (const event of events) collected.push(event);
+  expect(collected).toHaveLength(2);
+  expect(collected[0]).toMatchObject({ type: 'item.updated', item: { text: 'word '.repeat(3000) } });
+  expect(collected[1].type).toBe('turn.completed');
+  await thread.close();
 });

@@ -234,3 +234,24 @@ it('does not retry an HTTP 503 or follow a redirect', async () => {
     expect(receipts).toHaveLength(1);
   }
 });
+
+
+it.each([true, false])('retains streamed citations without duplicate text (annotation first=%s)', async annotationFirst => {
+  const annotation = { type: 'url_citation' as const, url: 'https://example.com/source', title: 'Source', start_index: 0, end_index: 5 };
+  const text: Interactions.InteractionSSEEvent = { event_type: 'step.delta', index: 0, delta: { type: 'text', text: 'Cited' } };
+  const citation: Interactions.InteractionSSEEvent = { event_type: 'step.delta', index: 0, delta: { type: 'text_annotation_delta', annotations: [annotation] } };
+  respond = response => sendEvents(response, [
+    { event_type: 'interaction.created', interaction: { id: 'citation', status: 'in_progress' } },
+    { event_type: 'step.start', index: 0, step: { type: 'model_output', content: [] } },
+    ...(annotationFirst ? [citation, text] : [text, citation]),
+    { event_type: 'step.stop', index: 0 },
+    { event_type: 'interaction.completed', interaction: { id: 'citation', status: 'completed' } },
+  ]);
+  const onModelDelta = jest.fn();
+  const result = await new GeminiAdapter().createStreamCompletion(input({ onModelDelta }));
+  expect(result.completion.choices[0].message.content).toBe('Cited');
+  expect(result.providerMetadata?.geminiInteraction?.steps).toEqual([
+    { type: 'model_output', content: [{ type: 'text', text: 'Cited', annotations: [annotation] }] },
+  ]);
+  expect(onModelDelta.mock.calls.map(([delta]) => delta.contentDelta).join('')).toBe('Cited');
+});

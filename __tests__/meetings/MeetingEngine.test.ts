@@ -187,6 +187,47 @@ describe('MeetingEngine', () => {
     expect((alpha.messages as FlujoChatMessage[]).at(-1)?.role).toBe('user');
   });
 
+  it.each([1, 2])('reports all-participant failure as an error with a %s-round limit', async limit => {
+    runFlowMock.mockRejectedValue(new Error('Transport unavailable'));
+    const meeting = await createMeeting(limit);
+    await meetingEngine.runToCompletion(meeting.id);
+    expect((await getMeeting(meeting.id))!.status).toBe('error');
+    const events = await readMeetingEvents(meeting.id);
+    expect(events.at(-1)?.type).toBe('meeting:error');
+    expect(events.some(event => event.type === 'meeting:completed')).toBe(false);
+  });
+
+  it('publishes a participant failure before a slower peer finishes and only logs it once', async () => {
+    const originalRun = runFlowMock.getMockImplementation()!;
+    let releasePeer!: () => void;
+    const peerGate = new Promise<void>(resolve => { releasePeer = resolve; });
+    runFlowMock.mockImplementation(async input => {
+      if (input.meetingParticipant!.participantId === 'alpha') throw new Error('Provider rejected tool schema');
+      await peerGate;
+      return originalRun(input);
+    });
+    const meeting = await createMeeting(1);
+    let observeFailure!: () => void;
+    const failure = new Promise<void>(resolve => { observeFailure = resolve; });
+    const unsubscribe = meetingEventBus.subscribe(meeting.id, event => {
+      if (event.type === 'participant:error') observeFailure();
+    });
+    const completion = meetingEngine.runToCompletion(meeting.id);
+    try {
+      await failure;
+      const events = await readMeetingEvents(meeting.id);
+      expect(events.some(event => event.type === 'participant:spoke')).toBe(false);
+      expect(events.filter(event => event.type === 'participant:error')).toHaveLength(1);
+    } finally {
+      releasePeer();
+      unsubscribe();
+      await completion;
+    }
+    expect((await readMeetingEvents(meeting.id)).filter(event => event.type === 'participant:error')).toHaveLength(1);
+    expect((await getMeeting(meeting.id))!.participants.find(participant => participant.id === 'alpha'))
+      .toMatchObject({ status: 'error', error: 'Provider rejected tool schema' });
+  });
+
   it('persists opening files into every participant conversation before the first turn', async () => {
     const meeting = await createMeeting(1);
     meeting.openingMedia = [{
@@ -529,6 +570,16 @@ describe('MeetingEngine', () => {
     expect(events.filter((event) => event.type === 'round:started')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'round:completed')).toHaveLength(0);
     expect(events.at(-1)?.type).toBe('meeting:error');
+
+    // Explicit continuation starts a new round; the interrupted one is neither
+    // replayed nor fabricated as completed, and cannot poison future resumes.
+    await meetingEngine.resume(meeting.id, 'Continue after the acknowledged interruption.');
+    const continued = await meetingEngine.runToCompletion(meeting.id);
+    expect(continued.status).toBe('completed');
+    expect(continued.roundNumber).toBe(2);
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+    expect(runFlowMock.mock.calls.every(([input]) => input.meetingTurn?.roundId.endsWith('round-2'))).toBe(true);
+    expect((await readMeetingEvents(meeting.id)).some(event => event.type === 'round:completed' && event.roundId === roundId)).toBe(false);
   });
 
   it('projects a committed round before cancellation becomes terminal', async () => {

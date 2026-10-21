@@ -97,6 +97,21 @@ beforeEach(() => {
 });
 
 describe('cancel route', () => {
+  it('acknowledges a meeting-owned stop without persisting through its revoked authority', async () => {
+    const controller = new AbortController(); controller.abort();
+    const state = seedState({
+      meetingParticipant: { protocolVersion: 1, meetingId: 'meeting', participantId: 'peer', participantName: 'Peer', role: 'participant' },
+      executionAuthority: { signal: controller.signal, assertCurrent: async () => { controller.signal.throwIfAborted(); } },
+    });
+    const res = await cancel();
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ success: true, owner_stopped: true });
+    expect(persistMock).not.toHaveBeenCalled();
+    expect(emitMock).not.toHaveBeenCalled();
+    expect(state.status).toBe('running'); // No terminal success is fabricated.
+    expect(state.recovery).toBeUndefined();
+  });
+
   it('flags a live running conversation and leaves finalization to the run loop', async () => {
     const state = seedState({ status: 'running' });
 
