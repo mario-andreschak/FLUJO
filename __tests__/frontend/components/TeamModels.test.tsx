@@ -20,7 +20,8 @@ jest.mock('@/frontend/services/teams', () => ({
   teamService: { teams: () => mockTeams(), resources: (...args: unknown[]) => mockResources(...args),
     acquire: (...args: unknown[]) => mockAcquire(...args), create: (...args: unknown[]) => mockCreate(...args),
     save: (...args: unknown[]) => mockSave(...args), release: (...args: unknown[]) => mockRelease(...args),
-    renew: (...args: unknown[]) => mockRenew(...args), historyUrl: () => '/_account/resources?team=fixture' },
+    renew: (...args: unknown[]) => mockRenew(...args), historyUrl: () => '/_account/resources?team=fixture',
+    accessUrl: () => '/_account/resources?team=fixture&access=1' },
 }));
 jest.mock('@/frontend/components/BugReport/BugReportButton', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/shared/PromptBuilder', () => ({ __esModule: true, default: () => null }));

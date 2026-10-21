@@ -31,7 +31,7 @@ export class Ledger {
       const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
       // The unreleased OIDC prototype's identities must never silently become local
       // accounts. Keep that ledger intact; deliberate migration is separate work.
-      if (![0, 2, 3, 4, 5, 6, 7, 8].includes(Number(version))) throw new Error('Unsupported controller ledger schema.');
+      if (![0, 2, 3, 4, 5, 6, 7, 8, 9].includes(Number(version))) throw new Error('Unsupported controller ledger schema.');
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS actors (
           id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
@@ -112,11 +112,24 @@ export class Ledger {
           content TEXT NOT NULL, digest TEXT NOT NULL, bytes INTEGER NOT NULL,
           restored_from INTEGER, PRIMARY KEY(resource_id,version)
         );
+        CREATE TABLE IF NOT EXISTS team_model_access (
+          resource_id TEXT PRIMARY KEY REFERENCES team_resources(id), generation INTEGER NOT NULL,
+          enabled INTEGER NOT NULL CHECK(enabled IN (0,1)), version INTEGER NOT NULL,
+          runtime_id TEXT NOT NULL REFERENCES runtimes(id), runtime_revision TEXT NOT NULL,
+          grant_id TEXT NOT NULL, grant_generation INTEGER NOT NULL,
+          member_generation INTEGER NOT NULL, auth_revision INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS team_model_access_events (
+          sequence INTEGER PRIMARY KEY, resource_id TEXT NOT NULL REFERENCES team_resources(id),
+          actor_id TEXT NOT NULL REFERENCES actors(id), time INTEGER NOT NULL,
+          action TEXT NOT NULL, version INTEGER NOT NULL, generation INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS team_model_access_events_resource ON team_model_access_events(resource_id,sequence);
       `);
       if (!this.db.prepare('PRAGMA table_info(team_resources)').all().some(column => column.name === 'format')) {
         this.db.exec("ALTER TABLE team_resources ADD COLUMN format TEXT NOT NULL DEFAULT 'json'");
       }
-      this.db.exec('PRAGMA user_version=8; COMMIT;');
+      this.db.exec('PRAGMA user_version=9; COMMIT;');
     } catch (error) {
       try { this.db.exec('ROLLBACK'); } finally { this.db.close(); }
       throw error;

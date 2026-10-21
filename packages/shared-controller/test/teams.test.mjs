@@ -131,7 +131,7 @@ test('team forms cannot use a forged session, invisible team or invalid name, an
   assert.throws(() => teams.rename(bob, id, 0, 'Guess'), status(404));
   assert.throws(() => teams.invite(alice, id, version(teams, alice, id), 'unknown'), status(400));
   assert.equal(teams.list(bob).teams.length, 0);
-  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 9);
 });
 
 test('schema 5 upgrades preserve enrolled accounts and current sessions without creating memberships', async t => {
@@ -139,7 +139,7 @@ test('schema 5 upgrades preserve enrolled accounts and current sessions without 
   // Reconstruct the preceding unreleased schema: it has no team tables.
   f.ledger.db.exec('DROP TABLE team_resource_versions; DROP TABLE team_resources; DROP TABLE team_events; DROP TABLE team_members; DROP TABLE teams; PRAGMA user_version=5;');
   const teams = f.reopen();
-  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 9);
   for (const session of Object.values(f.sessions)) {
     assert.equal(f.ledger.sessionCurrent(session), true);
     assert.deepEqual(teams.list(session), { teams: [], invitations: [] });

@@ -4,9 +4,13 @@ import { z } from 'zod';
 import { grantId, MODEL_BODY_BYTES } from './model-grant.js';
 
 const id = z.string().regex(/^[a-f0-9]{32}$/);
+const resourceId = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 export const runtimeModelFrame = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready') }).strict(), z.object({ type: z.literal('pong') }).strict(),
   z.object({ type: z.literal('request'), id, grant: grantId, operation: z.enum(['models', 'chat', 'embeddings']), body: z.unknown().optional() }).strict(),
+  z.object({ type: z.literal('team-request'), id, teamId: resourceId, resourceId,
+    version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    operation: z.enum(['configuration', 'models', 'chat', 'embeddings']), body: z.unknown().optional() }).strict(),
   z.object({ type: z.literal('cancel'), id }).strict(),
   z.object({ type: z.literal('ack'), id, sequence: z.number().int().nonnegative() }).strict(),
 ]);

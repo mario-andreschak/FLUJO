@@ -57,6 +57,17 @@ test('native model JSON API uses the same session, membership, lock and immutabl
     name: 'Shared configuration', content: JSON.stringify(document), consent: 'share' } });
   assert.equal(created.status, 200); const location = JSON.parse(created.body).location;
   const id = new URL(location, 'https://alice.localhost:4280').searchParams.get('resource');
+  const access = await send('alice', { path: `${location}&access=1`, headers });
+  assert.equal(access.status, 200);
+  assert.deepEqual(JSON.parse(access.body), { generation: 0, enabled: false, grantedBy: null, version: 1, options: [], history: [] });
+  const accessPage = await send('alice', { path: `${location}&access=1` });
+  assert.match(accessPage.body, /No matching local service/);
+  for (const generation of ['0', 'garbage']) {
+    const denied = await send('alice', { method: 'POST', headers, data: { action: 'model-authorize', teamId,
+      resourceId: id, version: '1', generation, grantId: 'forged', consent: 'execute' } });
+    assert.equal(denied.status, generation === '0' ? 403 : 400);
+  }
+  assert.equal((await send('alice', { path: `${location}&access=1&download=1`, headers })).status, 400);
   const listed = await send('bob', { path: `/_account/resources?team=${teamId}`, headers });
   assert.equal(JSON.parse(listed.body).resources[0].format, SHARED_MODEL_FORMAT);
   const detail = await send('bob', { path: location, headers });

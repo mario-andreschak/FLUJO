@@ -13,6 +13,10 @@ import { ModelChannel } from '../dist/model-channel.js';
 import { ModelBrokers } from '../dist/model-brokers.js';
 import { createRuntimeModelServer } from '../dist/runtime-model-server.js';
 import { Ledger } from '../dist/ledger.js';
+import { Teams } from '../dist/teams.js';
+import { TeamResources } from '../dist/team-resources.js';
+import { TeamModelAccess } from '../dist/team-model-access.js';
+import { publishableModel } from '../dist/shared-model.js';
 import { privateFixture } from './private-fixture.mjs';
 
 async function bounded(promise, ms = 10_000) {
@@ -33,7 +37,7 @@ function owner(actor, letter, endpoint, bearerFile) {
     modelGrants: [{ id: 'host', endpoint, models: [`fixture-${actor}`], bearerFile }] };
 }
 
-async function fixture(t, handler) {
+async function fixture(t, handler, recipientWithoutGrants = false) {
   const { directory, close } = privateFixture(t, { preserveOnCloseFailure: true });
   const calls = []; let ledger; let brokers; let refresh;
   const service = createServer(async (request, response) => {
@@ -56,14 +60,19 @@ async function fixture(t, handler) {
   await new Promise(resolve => service.listen(0, '127.0.0.1', resolve));
   const endpoint = `http://127.0.0.1:${service.address().port}/v1`;
   const bearerFile = join(directory, 'model-token'); writeFileSync(bearerFile, 'fixture-host-key\n', { mode: 0o600 });
-  const config = configSchema.parse({ schemaVersion: 2, stateDirectory: directory,
-    runtimes: [owner('alice', 'a', endpoint, bearerFile), owner('bob', 'b', endpoint, bearerFile)] });
+  const runtimeInputs = [owner('alice', 'a', endpoint, bearerFile), owner('bob', 'b', endpoint, bearerFile)];
+  if (recipientWithoutGrants) delete runtimeInputs[1].modelGrants;
+  const config = configSchema.parse({ schemaVersion: 2, stateDirectory: directory, runtimes: runtimeInputs });
   ledger = new Ledger(directory); ledger.reconcile(config);
   for (const intent of ledger.intents()) ledger.observeRuntime(intent);
   // This is a transport fixture, not evidence of an installed runtime. Keep its
   // explicitly simulated running observations fresh during slow native ACL checks.
   refresh = setInterval(() => { for (const intent of ledger.intents()) if (intent.phase === 'confirmed') ledger.observeRuntime(intent); }, 5000);
   const children = []; const ports = [];
+  const portSignals = new Map(config.runtimes.map(runtime => {
+    let resolve; const promise = new Promise(done => { resolve = done; });
+    return [runtime.localRuntime.containerId, { promise, resolve }];
+  }));
   const engine = { spawn(policy, args) {
     assert.deepEqual(args, ['container', 'exec', '--interactive', '--user', '1000:1000', '--workdir', '/app', policy.containerId,
       '/usr/local/bin/node', '/app/packages/shared-controller/dist/runtime-model-broker.js']);
@@ -76,17 +85,133 @@ async function fixture(t, handler) {
       process.once('SIGTERM', broker.close); process.once('SIGINT', broker.close);
     `], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], windowsHide: true });
     children.push(child);
-    ports.push(bounded(new Promise((resolve, reject) => { child.once('message', value => resolve(value.port)); child.once('error', reject); })));
+    const port = bounded(new Promise((resolve, reject) => { child.once('message', value => resolve(value.port)); child.once('error', reject); }));
+    ports.push(port); void port.then(value => portSignals.get(policy.containerId).resolve(value)).catch(() => {});
     return child;
   } };
   brokers = new ModelBrokers(config, ledger, engine); brokers.start();
   const [alice, bob] = await Promise.all(ports);
   return { config, ledger, calls, brokers, children, alice, bob, endpoint,
+    portFor: actor => bounded(portSignals.get(config.runtimes.find(runtime => runtime.actorId === actor).localRuntime.containerId).promise),
     url: (port, path = 'models', grant = 'host') => `http://127.0.0.1:${port}/grants/${grant}/v1/${path}`,
     post: (port, body, path = 'chat/completions') => fetch(`http://127.0.0.1:${port}/grants/host/v1/${path}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer caller-must-not-choose-host-key' }, body: JSON.stringify(body),
     }) };
 }
+
+async function sharedFixture(f) {
+  const sessions = {}; const password = 'offline team model fixture password';
+  for (const runtime of f.config.runtimes) {
+    const revision = runtimeRevision(f.config, runtime);
+    await f.ledger.setPassword(runtime, revision, password);
+    const token = await f.ledger.authenticate(runtime, revision, password, 3600);
+    sessions[runtime.actorId] = f.ledger.session(token, runtime, revision);
+  }
+  const teams = new Teams(f.ledger); const resources = new TeamResources(f.ledger);
+  const access = new TeamModelAccess(f.config, f.ledger);
+  const teamId = teams.create(sessions.alice, 'Offline model team');
+  const join = () => {
+    teams.invite(sessions.alice, teamId, teams.detail(sessions.alice, teamId).team.generation, 'bob');
+    teams.respond(sessions.bob, teamId, teams.list(sessions.bob).invitations[0].invitation, true);
+  };
+  join();
+  const document = publishableModel({ name: 'fixture-alice', displayName: 'Shared fixture', provider: 'ollama', adapter: 'openai',
+    baseUrl: 'http://127.0.0.1:1/never-used', ApiKey: 'never-publish', promptTemplate: 'Shared prompt' });
+  const id = resources.create(sessions.alice, teamId, 'model', 'Shared fixture', JSON.stringify(document));
+  const url = (operation, version = 1) => `http://127.0.0.1:${f.bob}/teams/${teamId}/${id}/revisions/${version}/v1/${operation}`;
+  const post = (body, version = 1) => fetch(url('chat/completions', version), { method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ignored-runtime-value' }, body: JSON.stringify(body) });
+  const body = { model: 'fixture-alice', messages: [{ role: 'user', content: 'Shared fixture request' }] };
+  return { access, teams, resources, sessions, teamId, id, document, url, post, body, join };
+}
+
+test('team model execution requires explicit current-revision permission and never publishes host credentials', async t => {
+  const f = await fixture(t); const s = await sharedFixture(f);
+  assert.equal((await s.post(s.body)).status, 403);
+  assert.throws(() => s.access.authorize(s.sessions.bob, s.teamId, s.id, 1, 0, 'host'), /current local model grants/);
+  assert.equal(f.calls.length, 0);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 0, 'host');
+  assert.throws(() => s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 0, 'host'), /permission changed/);
+  const state = s.access.describe(s.sessions.bob, s.teamId, s.id);
+  assert.equal(state.enabled, true); assert.deepEqual(state.options, []); assert.equal(state.history[0].action, 'enabled');
+  assert.ok(!JSON.stringify(state).includes(f.endpoint)); assert.ok(!JSON.stringify(state).includes('bearerFile'));
+  const config = await fetch(s.url('configuration')); assert.equal(config.status, 200);
+  assert.deepEqual(await config.json(), s.document);
+  assert.deepEqual((await (await fetch(s.url('models'))).json()).data.map(model => model.id), ['fixture-alice']);
+  assert.equal((await s.post({ ...s.body, model: 'fixture-bob' })).status, 400);
+  const result = await s.post(s.body); assert.equal(result.status, 200);
+  assert.equal((await result.json()).choices[0].message.content, 'reply for fixture-alice');
+  assert.equal(f.calls[0].headers.authorization, 'Bearer fixture-host-key');
+  assert.equal(f.calls[0].url, '/v1/chat/completions');
+  s.access.revoke(s.sessions.bob, s.teamId, s.id, 1);
+  assert.equal((await s.post(s.body)).status, 403); assert.equal(f.calls.length, 1);
+  assert.equal(s.access.describe(s.sessions.alice, s.teamId, s.id).history[0].action, 'disabled');
+});
+
+test('model edits, restore, source-grant generation and recovery invalidate delegated execution', async t => {
+  const f = await fixture(t); const s = await sharedFixture(f);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 0, 'host');
+  const lease = s.resources.acquire(s.sessions.bob, s.teamId, s.id, 1);
+  s.resources.save(s.sessions.bob, s.teamId, s.id, lease.token, lease.fence, 1, 'Revised', JSON.stringify(s.document));
+  assert.equal((await s.post(s.body)).status, 403); assert.equal((await s.post(s.body, 2)).status, 403);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 2, 1, 'host');
+  assert.equal((await s.post(s.body, 2)).status, 200);
+  s.resources.restore(s.sessions.alice, s.teamId, s.id, 2, 1);
+  assert.equal((await s.post(s.body, 3)).status, 403);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 3, 2, 'host');
+  f.ledger.setModelEnabled('alice', 'host', false); f.ledger.setModelEnabled('alice', 'host', true);
+  assert.equal((await s.post(s.body, 3)).status, 403);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 3, 3, 'host');
+  const alice = f.config.runtimes[0];
+  await f.ledger.setPassword(alice, runtimeRevision(f.config, alice), 'replacement local fixture password');
+  assert.equal((await s.post(s.body, 3)).status, 403);
+  assert.equal(f.calls.length, 1);
+});
+
+test('member removal cancels a running shared stream and a later rejoin cannot revive its admission', async t => {
+  let closeUpstream; const upstreamClosed = new Promise(resolve => { closeUpstream = resolve; });
+  const f = await fixture(t, (_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' }); response.write('data: {"shared":true}\n\n');
+    response.once('close', closeUpstream);
+  });
+  const s = await sharedFixture(f); s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 0, 'host');
+  const bob = f.config.runtimes[1]; const admission = s.access.admit(bob, s.teamId, s.id, 1);
+  const response = await s.post({ ...s.body, stream: true }); const reader = response.body.getReader(); await reader.read();
+  s.teams.remove(s.sessions.alice, s.teamId, s.teams.detail(s.sessions.alice, s.teamId).team.generation, 'bob');
+  await bounded(assert.rejects(reader.read())); await bounded(upstreamClosed);
+  assert.equal((await s.post(s.body)).status, 403); s.join();
+  assert.equal(s.access.current(bob, admission), false);
+  assert.notEqual(s.access.admit(bob, s.teamId, s.id, 1).generation, admission.generation);
+});
+
+test('an owner without personal model grants receives a relay only after explicit team delegation', async t => {
+  const f = await fixture(t, undefined, true); assert.equal(f.bob, undefined);
+  const s = await sharedFixture(f);
+  assert.deepEqual(s.access.describe(s.sessions.bob, s.teamId, s.id).options, []);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 0, 'host');
+  f.bob = await f.portFor('bob');
+  const response = await s.post(s.body); assert.equal(response.status, 200);
+  assert.equal((await response.json()).model, 'fixture-alice');
+  assert.equal((await fetch(f.url(f.bob))).status, 403, 'Team membership does not grant the source owner private grant route');
+});
+
+test('grantor removal and rejoin cannot silently revive the delegated service', async t => {
+  const f = await fixture(t); const s = await sharedFixture(f);
+  const teamId = s.teams.create(s.sessions.bob, 'Bob manages membership');
+  const joinAlice = () => {
+    s.teams.invite(s.sessions.bob, teamId, s.teams.detail(s.sessions.bob, teamId).team.generation, 'alice');
+    s.teams.respond(s.sessions.alice, teamId, s.teams.list(s.sessions.alice).invitations.find(item => item.id === teamId).invitation, true);
+  };
+  joinAlice();
+  const id = s.resources.create(s.sessions.alice, teamId, 'model', 'Delegated fixture', JSON.stringify(s.document));
+  s.access.authorize(s.sessions.alice, teamId, id, 1, 0, 'host');
+  const bob = f.config.runtimes[1]; const original = s.access.admit(bob, teamId, id, 1);
+  s.teams.remove(s.sessions.bob, teamId, s.teams.detail(s.sessions.bob, teamId).team.generation, 'alice');
+  joinAlice(); assert.equal(s.access.current(bob, original), false);
+  assert.throws(() => s.access.admit(bob, teamId, id, 1), /grant ended/);
+  s.access.authorize(s.sessions.alice, teamId, id, 1, 1, 'host');
+  assert.notEqual(s.access.admit(bob, teamId, id, 1).generation, original.generation);
+});
 
 test('owner pipes expose only granted catalogues and ignore caller credentials and host response cookies', async t => {
   const f = await fixture(t);

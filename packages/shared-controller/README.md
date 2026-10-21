@@ -36,7 +36,7 @@ private Model, MCP server, Flow, Chat or Execution, authorize a cross-owner runt
 request, or expose credentials. The document library below uses the local
 membership authority; a client-provided team ID is never proof.
 
-Schema 8 retains teams, invitation state, monotonically increasing membership
+Schema 9 retains teams, invitation state, monotonically increasing membership
 generations and the latest 200 membership events per team in the private SQLite
 ledger. Forms carry the displayed team generation, so a stale member-management
 page cannot overwrite a newer change. Invitation identifiers rotate on reissue,
@@ -157,13 +157,63 @@ a failed draft and offers a local credential-excluded draft download. Closing an
 editor requires a discard decision; release on close/unmount is best effort and
 the local expiry remains authoritative. Drafts are not persisted in browser storage.
 
-This delivers native model **configuration sharing/editing**, not shared model
-execution or credential grants. No provider is contacted by this editor, and
-existing private model setup behavior is unchanged. Linking shared models into
-Flows/Chats and granting execution dependencies remain #212 work. Release-only
+This delivers native model **configuration sharing/editing**. The separate local
+execution permission and relay described below do not contact providers while
+editing, and existing private model setup behavior is unchanged. Linking shared
+models into native Flows/Chats remains #212 work. Release-only
 HTTP/SQLite and React regression sources cover projection, forged secret fields,
 format downgrade, legacy migration, provider-discovery suppression, shared saves
 and denied-save draft recovery. Native offline browser acceptance is still pending.
+
+### Explicit team model execution permission
+
+**Team models → Execution permission** delegates one already configured local
+model service to the whole team for one shared model revision. Only the signed-in
+account's current `modelGrants` are selectable. The model name must already be
+granted, and this path supports OpenAI Chat Completions compatible configurations
+(`openai`, `ollama` or `litellm` with the `openai` adapter). It cannot authorize a
+caller-supplied destination, another account's grant, CLI/subscription adapter or
+remote fallback. The model's stored base URL is never the execution destination.
+Enabling execution requires explicit consent; all current members can disable it.
+Stale revision/permission generations cannot replace a newer decision. The latest
+200 permission events are visible alongside the full configuration history.
+
+Schema 9 records the source runtime revision, source grant generation, granting
+member generation and local account authentication revision. Its upgrade preserves
+existing model/history data and creates no execution grants. Model save/restore,
+source grant disable/re-enable, grantor removal/rejoin or password recovery require
+explicit reauthorization. Runtime requests derive the requester from its fixed
+owner pipe; they never accept an actor or credential from request data. Each
+admission captures the current recipient membership/authentication generation and
+shared revision. Membership changes, source revocation and runtime retirement end
+active requests; rejoining cannot revive an old stream admission. A new accepted
+member can make a fresh request while the team's permission is current.
+
+The existing networkless owner model relay exposes:
+
+```
+http://127.0.0.1:4290/teams/<team-id>/<resource-id>/revisions/<version>/v1/configuration
+http://127.0.0.1:4290/teams/<team-id>/<resource-id>/revisions/<version>/v1/models
+http://127.0.0.1:4290/teams/<team-id>/<resource-id>/revisions/<version>/v1/chat/completions
+http://127.0.0.1:4290/teams/<team-id>/<resource-id>/revisions/<version>/v1/embeddings
+```
+
+These are inside-owner loopback addresses, not browser/host URLs. Configuration
+and catalogue reads use GET; completion/embedding requests use POST. Configuration
+returns only the validated shared document and catalogue returns only the one
+delegated model. The host's endpoint, token and CA paths are never returned.
+Existing request/body/response limits, chunk credits and live authority checks
+apply. Runtime model channels are capped at 64, requests at four per channel and
+16 per controller. Owners without personal model grants can obtain a channel when
+they have a shared execution permission; the channel retires when that access ends.
+
+This is a controller/runtime execution path, not yet native model-picker,
+Flow/Chat admission or application catalogue integration. Those consumers still
+need an explicit shared-model reference and must resolve the current revision
+through this channel rather than copying it into private `models.json`. Release
+regressions cover permission replacement, credential exclusion, revision changes,
+revocation, stream cancellation and schema migration; installed offline acceptance
+is still required.
 
 ## Current development profile
 
@@ -404,7 +454,7 @@ runtime cannot change its owner, origin or isolation identity in place.
 Schema 1 OIDC configuration/ledgers are not silently converted to local accounts.
 They are rejected and preserved. The draft has no automatic migration of existing
 user data; explicit ownership mapping, backup and recovery remain required work.
-The local account ledger upgrades from schema 2/3/4/5/6/7 to schema 8 for runtime intent,
+The local account ledger upgrades from schema 2/3/4/5/6/7/8 to schema 9 for runtime intent,
 provisioning, credential-rotation journals, revocable model grants, local teams and shared documents;
 config schema remains 2. Earlier
 controller binaries reject the newer ledger rather than ignoring pending work.

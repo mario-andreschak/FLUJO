@@ -49,16 +49,19 @@ export function createRuntimeModelServer(input: Readable, output: Writable) {
   }, finish);
   const server = createServer({ maxHeaderSize: 16 * 1024, headersTimeout: 10_000, requestTimeout: 30_000 }, async (request, response) => {
     const match = /^\/grants\/([a-zA-Z0-9_-]{1,64})\/v1\/(models|chat\/completions|embeddings)$/.exec(request.url ?? '');
-    const operation = match?.[2] === 'chat/completions' ? 'chat' : match?.[2];
+    const team = /^\/teams\/([A-Za-z0-9_-]{43})\/([A-Za-z0-9_-]{43})\/revisions\/([1-9][0-9]{0,14})\/v1\/(configuration|models|chat\/completions|embeddings)$/.exec(request.url ?? '');
+    const path = match?.[2] ?? team?.[4];
+    const operation = path === 'chat/completions' ? 'chat' : path;
+    const reading = operation === 'models' || operation === 'configuration';
     const deny = (status: number) => {
       if (response.destroyed) return;
       if (response.headersSent) { response.destroy(); return; }
       response.writeHead(status, { 'Connection': 'close', 'Cache-Control': 'no-store' }); response.end();
     };
     if (stopped || performance.now() - heartbeat > 10_000) { deny(503); return; }
-    if (!match || !operation || !['models', 'chat', 'embeddings'].includes(operation)
-        || request.method !== (operation === 'models' ? 'GET' : 'POST') || request.headers.origin
-        || (operation !== 'models' && request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json')) { deny(400); return; }
+    if ((!match && !team) || !operation || !['configuration', 'models', 'chat', 'embeddings'].includes(operation)
+        || request.method !== (reading ? 'GET' : 'POST') || request.headers.origin
+        || (!reading && request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json')) { deny(400); return; }
     if (active >= 4) { deny(429); return; }
     active++; let released = false;
     response.once('close', () => { if (!released) { released = true; active--; } });
@@ -66,18 +69,21 @@ export function createRuntimeModelServer(input: Readable, output: Writable) {
     try {
       const chunks: Buffer[] = []; let bytes = 0;
       for await (const chunk of request) {
-        bytes += chunk.length; if (bytes > MODEL_BODY_BYTES || (operation === 'models' && bytes)) { deny(413); return; }
+        bytes += chunk.length; if (bytes > MODEL_BODY_BYTES || (reading && bytes)) { deny(413); return; }
         chunks.push(chunk);
       }
       if (response.destroyed || stopped) return;
-      const body = operation === 'models' ? undefined : JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const body = reading ? undefined : JSON.parse(Buffer.concat(chunks).toString('utf8'));
       const cancel = () => {
         const item = pending.get(id); if (!item) return;
         pending.delete(id); clearTimeout(item.timer); void send({ type: 'cancel', id });
       };
       pending.set(id, { response, timer: setTimeout(() => { cancel(); response.destroy(); }, MODEL_LIFETIME_MS), sequence: 0, writing: false, headers: false });
       response.once('close', cancel);
-      await send({ type: 'request', id, grant: match[1], operation: operation as 'models' | 'chat' | 'embeddings', ...(body === undefined ? {} : { body }) });
+      const payload = body === undefined ? {} : { body };
+      if (team) await send({ type: 'team-request', id, teamId: team[1], resourceId: team[2], version: Number(team[3]),
+        operation: operation as 'configuration' | 'models' | 'chat' | 'embeddings', ...payload });
+      else await send({ type: 'request', id, grant: match![1], operation: operation as 'models' | 'chat' | 'embeddings', ...payload });
     } catch { if (!response.headersSent) deny(400); else response.destroy(); }
   });
   server.on('error', finish);

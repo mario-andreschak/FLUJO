@@ -4,6 +4,7 @@ import { escapeHtml as html, jsonReply as json, readLocalForm, redirect, reply, 
 import { TeamError, Teams } from './teams.js';
 import { EDIT_SECONDS, RESOURCE_KINDS, TeamResources, type EditorLease, type ResourceRevision, type SharedResource } from './team-resources.js';
 import { renderTeamPage } from './team-page.js';
+import type { TeamModelAccess } from './team-model-access.js';
 
 const ROOT = '/_account/resources';
 const hidden = (key: string, value: string | number) => `<input type="hidden" name="${html(key)}" value="${html(String(value))}">`;
@@ -19,6 +20,8 @@ const fields: Readonly<Record<string, readonly string[]>> = {
   renew: ['action', 'teamId', 'resourceId', 'token', 'fence'],
   release: ['action', 'teamId', 'resourceId', 'token', 'fence'],
   restore: ['action', 'teamId', 'resourceId', 'version', 'restoredFrom', 'consent'],
+  'model-authorize': ['action', 'teamId', 'resourceId', 'version', 'generation', 'grantId', 'consent'],
+  'model-revoke': ['action', 'teamId', 'resourceId', 'generation'],
 };
 
 // All script bytes are trusted static source. Resource text and tokens stay in
@@ -89,28 +92,43 @@ function editor(resource: SharedResource, revision: ResourceRevision, lease: Edi
 }
 
 export async function resourcePage(request: IncomingMessage, response: ServerResponse, teams: Teams, resources: TeamResources,
-  session: Session, url: URL, current: () => boolean): Promise<void> {
+  session: Session, url: URL, current: () => boolean, models: TeamModelAccess): Promise<void> {
   const ajax = request.headers.accept === 'application/json';
   let submitted: Record<string, string> | undefined;
   try {
     if (!current()) throw new TeamError(401, 'Your session ended. Sign in again.');
     if (request.method === 'GET') {
-      if ([...url.searchParams.keys()].some(key => !['team', 'resource', 'version', 'download'].includes(key))
+      if ([...url.searchParams.keys()].some(key => !['team', 'resource', 'version', 'download', 'access'].includes(key))
           || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1)) throw new TeamError(400, 'Invalid resource address.');
       const teamId = url.searchParams.get('team') ?? ''; const resourceId = url.searchParams.get('resource');
       const { team } = teams.detail(session, teamId);
       if (!resourceId) {
-        if (url.searchParams.has('version') || url.searchParams.has('download')) throw new TeamError(400, 'Select a resource first.');
+        if (url.searchParams.has('version') || url.searchParams.has('download') || url.searchParams.has('access')) throw new TeamError(400, 'Select a resource first.');
         const rows = resources.list(session, teamId);
         if (ajax) { json(response, { team, resources: rows }); return; }
         render(response, `<h1>${html(team.name)} · Shared resources</h1><p>Shared JSON is visible and editable by every current team member. Private originals stay in their owner’s workspace. These documents do not automatically run, connect services, or grant access to referenced private resources.</p>
           <ul>${rows.map(row => `<li><a href="${link(teamId, row.id)}">${html(row.name)}</a> · ${row.kind} · revision ${row.version}</li>`).join('')}</ul>
-          <h2>Share a resource</h2><p>Review the complete JSON before sharing. The resource is stored locally. Native app editors and execution are not connected to this library yet.</p>
+          <h2>Share a resource</h2><p>Review the complete JSON before sharing. The resource is stored locally. Native model configurations have a model editor and separate execution permissions. Other documents remain passive snapshots.</p>
           ${form('create', { teamId }, `<label for="kind">Kind</label><select id="kind" name="kind">${RESOURCE_KINDS.map(kind => `<option value="${kind}">${kind}</option>`).join('')}</select>
             <label for="name">Name</label><input id="name" name="name" required maxlength="120">
             <label for="content">Resource JSON (up to 1 MiB)</label><textarea id="content" name="content" required spellcheck="false"></textarea>
             <label><input type="checkbox" name="consent" value="share" required>Share this complete content with every team member.</label>
             <p><button type="submit">Share resource</button> <button type="button" data-download-draft>Download draft</button></p>`, true)}`);
+        return;
+      }
+      if (url.searchParams.has('access')) {
+        if (url.searchParams.get('access') !== '1' || url.searchParams.has('version') || url.searchParams.has('download')) throw new TeamError(400, 'Invalid model access address.');
+        const state = models.describe(session, teamId, resourceId);
+        if (ajax) { json(response, state); return; }
+        render(response, `<p><a href="${link(teamId, resourceId)}">Model and revision history</a></p><h1>Team model execution</h1>
+          <p>${state.enabled ? 'Enabled' : 'Disabled'} for revision ${state.version}. Changing the model requires a new execution permission.</p>
+          <p>Choose one of your configured local model services to make this model available to every current team member. Credentials remain on this machine. The model service destination is fixed by your installation administrator.</p>
+          ${state.options.length ? form('model-authorize', { teamId, resourceId, version: state.version, generation: state.generation },
+            `<label for="grantId">Your local model service</label><select id="grantId" name="grantId">${state.options.map(option => `<option value="${html(option.id)}">${html(option.id)} · ${html(option.model)}</option>`).join('')}</select>
+              <label><input type="checkbox" name="consent" value="execute" required>Allow this team to use this local service for this model revision.</label><button>Enable team execution</button>`)
+            : '<p>No matching local service is granted to your account. Configure one locally before enabling execution.</p>'}
+          ${state.generation ? form('model-revoke', { teamId, resourceId, generation: state.generation }, '<button>Disable team execution</button>') : ''}
+          <h2>Execution permission history (latest 200)</h2><ol>${state.history.map(event => `<li>${html(event.action)} · ${html(event.actorId)} · revision ${event.version} · ${date(event.time)}</li>`).join('')}</ol>`);
         return;
       }
       const selected = url.searchParams.has('version') ? number(url.searchParams.get('version')) : undefined;
@@ -124,7 +142,7 @@ export async function resourcePage(request: IncomingMessage, response: ServerRes
       const versions = resources.history(session, teamId, resourceId);
       if (ajax) { json(response, { ...data, history: versions }); return; }
       render(response, `<p><a href="${link(teamId)}">All shared resources</a></p><h1>${html(data.revision.name)}</h1>
-        ${data.resource.format === 'flujo.model.v1' ? `<p><a href="/teams/models?team=${teamId}&resource=${resourceId}">Open model editor</a></p>` : ''}
+        ${data.resource.format === 'flujo.model.v1' ? `<p><a href="/teams/models?team=${teamId}&resource=${resourceId}">Open model editor</a> · <a href="${link(teamId, resourceId)}&access=1">Execution permission</a></p>` : ''}
         <p>${data.resource.kind} · revision ${data.revision.version} · saved by ${html(data.revision.actorId)} at ${date(data.revision.time)}</p>
         <p><a href="${link(teamId, resourceId)}&version=${data.revision.version}&download=1">Download this revision</a></p>
         ${data.editor ? `<p>${html(data.editor.actorId)} is editing until ${date(data.editor.expiresAt)}. Reload after their lock ends.</p>`
@@ -145,7 +163,14 @@ export async function resourcePage(request: IncomingMessage, response: ServerRes
     submitted = data;
     if (!current()) throw new TeamError(401, 'Your session ended. Sign in again.');
     let destination = link(data.teamId, data.resourceId);
+    if (data.action.startsWith('model-') && !/^(?:0|[1-9][0-9]{0,14})$/.test(data.generation)) throw new TeamError(400, 'Invalid execution permission generation.');
     switch (data.action) {
+      case 'model-authorize':
+        if (data.consent !== 'execute') throw new TeamError(400, 'Confirm enabling execution for this team.');
+        models.authorize(session, data.teamId, data.resourceId, number(data.version), Number(data.generation), data.grantId);
+        destination += '&access=1'; break;
+      case 'model-revoke':
+        models.revoke(session, data.teamId, data.resourceId, Number(data.generation)); destination += '&access=1'; break;
       case 'create':
         if (data.consent !== 'share') throw new TeamError(400, 'Confirm sharing with this team.');
         destination = link(data.teamId, resources.create(session, data.teamId, data.kind, data.name, data.content)); break;

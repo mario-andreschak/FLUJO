@@ -172,7 +172,8 @@ export default function TeamModels() {
       {rows.map(row => <Paper key={row.id} variant="outlined" sx={{ p: 2, overflowWrap: 'anywhere' }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'space-between' }}>
           <Box><Typography variant="h6">{row.name}</Typography><Typography color="text.secondary">{t('teams.models.revision', { version: row.version })}</Typography></Box>
-          <Stack direction="row" spacing={1}><Button disabled={busy} onClick={() => void openEditor(row)}>{t('teams.models.edit')}</Button>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}><Button disabled={busy} onClick={() => void openEditor(row)}>{t('teams.models.edit')}</Button>
+            <Button component="a" href={teamService.accessUrl(teamId, row.id)}>{t('teams.models.executionAccess')}</Button>
             <Button component="a" href={teamService.historyUrl(teamId, row.id)}>{t('teams.models.history')}</Button></Stack>
         </Stack>
       </Paper>)}

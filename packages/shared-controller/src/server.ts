@@ -12,6 +12,7 @@ import { Teams } from './teams.js';
 import { teamPage } from './team-page.js';
 import { TeamResources } from './team-resources.js';
 import { resourcePage } from './resource-page.js';
+import { TeamModelAccess } from './team-model-access.js';
 import { accountPage, browserRequestAllowed, cookie, readPasswordForm, redirect, reply,
   securityHeaders, SESSION_COOKIE, sessionCookie } from './http.js';
 
@@ -32,6 +33,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
   const sandboxes = new AppSandboxes();
   const teams = new Teams(ledger);
   const resources = new TeamResources(ledger);
+  const teamModels = new TeamModelAccess(config, ledger);
   const teamRate = new Map<string, { count: number; reset: number }>();
   const reserve = (runtime: Runtime, pool = ordinaryRequests): (() => void) | undefined => {
     const count = pool.inflight.get(runtime.id) ?? 0;
@@ -153,7 +155,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
       }
       try {
         const current = () => server.listening && (!localTLS || localTLS.valid()) && ledger.sessionCurrent(session);
-        if (isResource) await resourcePage(request, response, teams, resources, session, url, current);
+        if (isResource) await resourcePage(request, response, teams, resources, session, url, current, teamModels);
         else await teamPage(request, response, teams, session, url, current);
       } finally { if (!isResource) finished(); }
       return;

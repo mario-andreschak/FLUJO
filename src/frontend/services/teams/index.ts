@@ -46,4 +46,5 @@ export const teamService = {
   release: (teamId: string, id: string, lease: EditorLease) => request<{ location: string }>(root,
     { action: 'release', ...leaseFields(teamId, id, lease) }, true),
   historyUrl: address,
+  accessUrl: (teamId: string, id: string) => `${address(teamId, id)}&access=1`,
 };

@@ -6,6 +6,7 @@ import { ModelChannel, runtimeModelFrame } from './model-channel.js';
 import { admittedModelBody, MODEL_LIFETIME_MS, type ModelGrant } from './model-grant.js';
 import { localModelRequest } from './local-model-request.js';
 import type { RuntimeIntent } from './local-runtime-policy.js';
+import { TeamModelAccess } from './team-model-access.js';
 
 interface Job { abort: AbortController; current: () => boolean; sequence: number;
   credit?: { sequence: number; resolve: () => void; reject: () => void }; }
@@ -18,14 +19,19 @@ export class ModelBrokers {
   private readonly jobs = new Set<Job>();
   private readonly retries = new Map<string, { count: number; next: number }>();
   private timer?: ReturnType<typeof setTimeout>; private stopping = false;
-  constructor(readonly config: ControllerConfig, readonly ledger: Ledger, readonly engine: Pick<LocalEngine, 'spawn'>) {}
+  private readonly teamModels: TeamModelAccess;
+  constructor(readonly config: ControllerConfig, readonly ledger: Ledger, readonly engine: Pick<LocalEngine, 'spawn'>) {
+    this.teamModels = new TeamModelAccess(config, ledger);
+  }
 
   start(): void {
     const tick = () => {
       if (this.stopping) return;
       try {
         for (const runtime of this.config.runtimes) {
-          if (!runtime.modelGrants?.length || this.connections.has(runtime.id) || (this.retries.get(runtime.id)?.next ?? 0) > performance.now()) continue;
+          if (this.connections.size >= 64) break;
+          if (this.connections.has(runtime.id) || (this.retries.get(runtime.id)?.next ?? 0) > performance.now()
+            || (!runtime.modelGrants?.length && !this.teamModels.hasAccess(runtime))) continue;
           const intent = this.ledger.intents().find(item => item.runtimeId === runtime.id);
           if (intent && runtime.localRuntime && this.ledger.available(runtime, runtimeRevision(this.config, runtime))) this.open(runtime, intent);
         }
@@ -42,7 +48,8 @@ export class ModelBrokers {
     let stopped = false; let ready = false; let lastHeartbeat = performance.now(); let diagnostics = 0;
     const started = performance.now(); const jobs = new Map<string, Job>();
     let kill: ReturnType<typeof setTimeout> | undefined;
-    const current = () => !stopped && !this.stopping && this.ledger.intentCurrent(intent) && this.ledger.available(runtime, revision);
+    const current = () => !stopped && !this.stopping && this.ledger.intentCurrent(intent) && this.ledger.available(runtime, revision)
+      && (Boolean(runtime.modelGrants?.length) || this.teamModels.hasAccess(runtime));
     const cancel = (job: Job) => { job.abort.abort(); job.credit?.reject(); job.credit = undefined; };
     const stop = () => {
       if (stopped) return; stopped = true;
@@ -55,22 +62,28 @@ export class ModelBrokers {
     const sendError = (id: string, code: 'denied' | 'invalid_request' | 'busy' | 'unavailable') => {
       void channel.send({ type: 'error', id, code }).catch(stop);
     };
-    const request = async (id: string, grant: ModelGrant, operation: 'models' | 'chat' | 'embeddings', body: unknown, generation: number) => {
+    const request = async (id: string, grant: ModelGrant, operation: 'configuration' | 'models' | 'chat' | 'embeddings', body: unknown,
+      authorized: () => boolean, configuration?: unknown) => {
       const job: Job = { abort: new AbortController(), sequence: 0,
-        current: () => current() && this.ledger.modelGeneration(runtime, revision, grant) === generation };
+        current: () => current() && authorized() };
       jobs.set(id, job); this.jobs.add(job);
       const deadline = setTimeout(() => cancel(job), MODEL_LIFETIME_MS);
       try {
-        await localModelRequest(grant, operation, body, job.abort.signal, job.current,
-          contentType => channel.send({ type: 'headers', id, contentType }),
-          async bytes => {
-            if (job.abort.signal.aborted || !job.current()) throw new Error('Model grant revoked.');
-            const sequence = job.sequence++;
-            const credit = new Promise<void>((resolve, reject) => { job.credit = { sequence, resolve, reject: () => reject(new Error('Model response cancelled.')) }; });
-            // Attach before writing: cancellation can occur while stdin is backpressured.
-            const written = channel.send({ type: 'chunk', id, sequence, bytes: bytes.toString('base64') });
-            await Promise.all([written, credit]);
-          });
+        const chunk = async (bytes: Buffer) => {
+          if (job.abort.signal.aborted || !job.current()) throw new Error('Model grant revoked.');
+          const sequence = job.sequence++;
+          const credit = new Promise<void>((resolve, reject) => { job.credit = { sequence, resolve, reject: () => reject(new Error('Model response cancelled.')) }; });
+          // Attach before writing: cancellation can occur while stdin is backpressured.
+          const written = channel.send({ type: 'chunk', id, sequence, bytes: bytes.toString('base64') });
+          await Promise.all([written, credit]);
+        };
+        if (operation === 'configuration') {
+          if (!job.current()) throw new Error('Model grant revoked.');
+          const bytes = Buffer.from(JSON.stringify(configuration));
+          await channel.send({ type: 'headers', id, contentType: 'application/json' });
+          for (let at = 0; at < bytes.length; at += 48 * 1024) await chunk(bytes.subarray(at, at + 48 * 1024));
+        } else await localModelRequest(grant, operation, body, job.abort.signal, job.current,
+          contentType => channel.send({ type: 'headers', id, contentType }), chunk);
         if (!job.current() || job.abort.signal.aborted) throw new Error('Model grant revoked.');
         await channel.send({ type: 'end', id });
       } catch { if (!stopped) sendError(id, 'unavailable'); }
@@ -89,15 +102,30 @@ export class ModelBrokers {
         job.credit.resolve(); job.credit = undefined; return;
       }
       if (jobs.has(frame.id)) throw new Error('Duplicate model request.');
-      const grant = runtime.modelGrants!.find(item => item.id === frame.grant);
+      if (jobs.size >= 4 || this.jobs.size >= 16) { sendError(frame.id, 'busy'); return; }
+      if (frame.type === 'team-request') {
+        let admission;
+        try { admission = this.teamModels.admit(runtime, frame.teamId, frame.resourceId, frame.version); }
+        catch { sendError(frame.id, 'denied'); return; }
+        try {
+          if (frame.operation === 'models' || frame.operation === 'configuration') {
+            if (frame.body !== undefined) throw new Error('Unexpected model read body.');
+          } else admittedModelBody(admission.grant, frame.operation, frame.body);
+        } catch { sendError(frame.id, 'invalid_request'); return; }
+        const snapshot = admission;
+        void request(frame.id, snapshot.grant, frame.operation, frame.body,
+          () => this.teamModels.current(runtime, snapshot), snapshot.document).catch(stop);
+        return;
+      }
+      const grant = runtime.modelGrants?.find(item => item.id === frame.grant);
       const generation = grant ? this.ledger.modelGeneration(runtime, revision, grant) : null;
       if (!grant || generation === null) { sendError(frame.id, 'denied'); return; }
-      if (jobs.size >= 4 || this.jobs.size >= 16) { sendError(frame.id, 'busy'); return; }
       try {
         if (frame.operation === 'models') { if (frame.body !== undefined) throw new Error('Unexpected catalogue body.'); }
         else admittedModelBody(grant, frame.operation, frame.body);
       } catch { sendError(frame.id, 'invalid_request'); return; }
-      void request(frame.id, grant, frame.operation, frame.body, generation).catch(stop);
+      void request(frame.id, grant, frame.operation, frame.body,
+        () => this.ledger.modelGeneration(runtime, revision, grant) === generation).catch(stop);
     }, stop);
     const watch = setInterval(() => {
       try {

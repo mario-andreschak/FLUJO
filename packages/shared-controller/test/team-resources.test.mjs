@@ -5,6 +5,7 @@ import { digest, Ledger } from '../dist/ledger.js';
 import { Teams, TeamError } from '../dist/teams.js';
 import { RESOURCE_BYTES, RESOURCE_KINDS, TeamResources } from '../dist/team-resources.js';
 import { modelConfigurationFields, publishableModel, readSharedModel, SHARED_MODEL_FORMAT } from '../dist/shared-model.js';
+import { TeamModelAccess } from '../dist/team-model-access.js';
 import { privateFixture } from './private-fixture.mjs';
 
 const password = 'local resource fixture password';
@@ -151,7 +152,7 @@ test('schema 6 upgrade preserves membership and account sessions without publish
   const f = await fixture(t); f.joinBob();
   f.ledger.db.exec('DROP TABLE team_resource_versions; DROP TABLE team_resources; PRAGMA user_version=6;');
   const resources = f.reopen(); const teams = new Teams(f.ledger);
-  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 9);
   for (const session of [f.sessions.alice, f.sessions.bob]) {
     assert.equal(f.ledger.sessionCurrent(session), true);
     assert.equal(teams.list(session).teams[0].id, f.teamId);
@@ -198,5 +199,17 @@ test('schema 7 migration retains legacy JSON as passive documents without upgrad
   f.ledger.db.exec('ALTER TABLE team_resources DROP COLUMN format; PRAGMA user_version=7;');
   const reopened = f.reopen(); const saved = reopened.read(alice, f.teamId, id);
   assert.equal(saved.resource.format, 'json'); assert.equal(saved.revision.content, legacy);
-  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 8);
+  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 9);
+});
+
+test('schema 8 upgrade preserves model configuration and grants no execution automatically', async t => {
+  const f = await fixture(t); const resources = new TeamResources(f.ledger);
+  const document = publishableModel({ name: 'local-fixture', provider: 'ollama', adapter: 'openai' });
+  const id = resources.create(f.sessions.alice, f.teamId, 'model', 'Configuration only', JSON.stringify(document));
+  const previous = resources.read(f.sessions.alice, f.teamId, id);
+  f.ledger.db.exec('DROP TABLE team_model_access_events; DROP TABLE team_model_access; PRAGMA user_version=8;');
+  const reopened = f.reopen();
+  assert.deepEqual(reopened.read(f.sessions.alice, f.teamId, id), previous);
+  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 9);
+  assert.equal(new TeamModelAccess(f.config, f.ledger).describe(f.sessions.alice, f.teamId, id).enabled, false);
 });
