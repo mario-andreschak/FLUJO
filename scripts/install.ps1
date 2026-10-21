@@ -115,6 +115,10 @@ function Stop-Installer {
         [int]$ExitCode = 1
     )
 
+    if ($script:InstallerErrorPath) {
+        $safeMessage = Protect-InstallerDiagnostic -Text $Message -SensitiveValues $script:InstallerSensitiveValues -MaximumLength 2400
+        Set-Content -LiteralPath $script:InstallerErrorPath -Value $safeMessage -Encoding UTF8
+    }
     Write-Host "`nERROR: $Message" -ForegroundColor Red
     if ($PSCommandPath) {
         exit $ExitCode
@@ -148,6 +152,7 @@ $script:InstallerStagePath = if ($env:FLUJO_INSTALL_STAGE_FILE) {
     Join-Path $installerDiagnosticRoot 'install-stage.txt'
 }
 $script:InstallerResultPath = Join-Path $installerDiagnosticRoot 'browser-install-result.json'
+$script:InstallerErrorPath = Join-Path $installerDiagnosticRoot 'install-error.txt'
 $script:InstallerSensitiveValues = @(
     $env:FLUJO_HTTP_PROXY,
     $env:FLUJO_HTTPS_PROXY,
@@ -162,6 +167,7 @@ $script:InstallerSensitiveValues = @(
     $env:npm_config_cafile
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 Set-Content -LiteralPath $script:InstallerLogPath -Value '' -Encoding UTF8
+Set-Content -LiteralPath $script:InstallerErrorPath -Value '' -Encoding UTF8
 
 function Write-InstallerStage {
     param(
@@ -201,13 +207,33 @@ function Invoke-InstallerCommand {
 
     $exitCode = 1
     $failure = $null
+    $recentOutput = New-Object 'System.Collections.Generic.Queue[string]'
+    $commandResult = @{ ExitCode = $null }
     try {
-        & $Command @Arguments 2>&1 | ForEach-Object {
+        # Resolve the native executable before relaxing stderr handling. This
+        # also selects npm.cmd instead of the execution-policy-dependent npm.ps1.
+        $application = Get-Command -Name $Command -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        & {
+            # Windows PowerShell 5.1 turns redirected native stderr (including
+            # Git's normal "Cloning into..." progress) into ErrorRecords.
+            # Only this child scope accepts that stream; logging errors still
+            # terminate, and the native exit code remains authoritative.
+            $ErrorActionPreference = 'Continue'
+            $PSNativeCommandUseErrorActionPreference = $false
+            $global:LASTEXITCODE = $null
+            & $application.Source @Arguments 2>&1
+            $commandResult.ExitCode = $global:LASTEXITCODE
+        } | ForEach-Object {
             $safeLine = Protect-InstallerDiagnostic -Text ([string]$_) -SensitiveValues $script:InstallerSensitiveValues
             Write-Host $safeLine
-            Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLine -Encoding UTF8
+            Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLine -Encoding UTF8 -ErrorAction Stop
+            if (-not [string]::IsNullOrWhiteSpace($safeLine)) {
+                $recentOutput.Enqueue($safeLine)
+                if ($recentOutput.Count -gt 8) { $null = $recentOutput.Dequeue() }
+            }
         }
-        $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+        if ($null -eq $commandResult.ExitCode) { throw "Could not obtain the exit code from $Command." }
+        $exitCode = [int]$commandResult.ExitCode
     } catch {
         $failure = $_
         $safeLine = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
@@ -230,7 +256,7 @@ function Invoke-InstallerCommand {
         $detail = if ($failure) {
             Protect-InstallerDiagnostic -Text $failure.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
         } else {
-            "exit code $exitCode"
+            "exit code $exitCode`n$($recentOutput -join "`n")"
         }
         Stop-Installer -Message "Installer stage '$Stage' failed ($detail). Sanitized log: $script:InstallerLogPath" -ExitCode $exitCode
     }

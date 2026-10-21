@@ -115,6 +115,9 @@ var
   LogPath: string;
   StagePath: string;
   StageName: AnsiString;
+  ErrorLines: TArrayOfString;
+  ErrorDetail: string;
+  ErrorIndex: Integer;
 begin
   if CurStep <> ssPostInstall then
     exit;
@@ -154,7 +157,10 @@ begin
   // FLUJO runs npm/npx (PowerShell shims) on every start and when building MCP
   // servers on demand, so persisting the execution policy is worthwhile here.
   // Same consent question install.ps1 would ask on a terminal.
-  if MsgBox('Windows blocks running PowerShell scripts by default, and FLUJO needs to run npm/npx (PowerShell shims) for this install and later when building MCP servers.' + #13#10#13#10 +
+  // Unattended installs never grant persistent policy consent implicitly.
+  if WizardSilent then
+    SetRequiredEnvironmentVariable('FLUJO_SET_POLICY', '0')
+  else if MsgBox('Windows blocks running PowerShell scripts by default, and FLUJO needs to run npm/npx (PowerShell shims) for this install and later when building MCP servers.' + #13#10#13#10 +
             'Set the execution policy to RemoteSigned for your user account? (recommended)',
             mbConfirmation, MB_YESNO) = IDYES then
     SetRequiredEnvironmentVariable('FLUJO_SET_POLICY', '1')
@@ -177,11 +183,20 @@ begin
       StageName := 'unknown';
     WizardForm.StatusLabel.Caption :=
       'FLUJO installation failed during stage "' + Trim(StageName) + '".';
+    ErrorDetail := '';
+    if LoadStringsFromFile(ExpandConstant('{localappdata}\FLUJO-cli\install-error.txt'), ErrorLines) then
+      for ErrorIndex := 0 to GetArrayLength(ErrorLines) - 1 do
+        ErrorDetail := ErrorDetail + ErrorLines[ErrorIndex] + #13#10;
+    if ErrorDetail = '' then
+      ErrorDetail := 'Open the diagnostic log below for the reported cause.';
+    if Trim(StageName) = 'patchright-chromium' then
+      ErrorDetail := ErrorDetail + #13#10 +
+        'Retry managed Chromium from the FLUJO directory with:' + #13#10 +
+        'node mcp-servers/browser/scripts/install-browser.mjs';
     RaiseException('The FLUJO installer failed during stage "' + Trim(StageName) +
                    '" (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
+                   ErrorDetail + #13#10 +
                    'A sanitized diagnostic log was saved to:' + #13#10 + LogPath + #13#10#13#10 +
-                   'Correct the reported proxy, certificate, network, or build issue and run setup again. ' +
-                   'For managed Chromium only, retry from the FLUJO directory with:' + #13#10 +
-                   'node mcp-servers/browser/scripts/install-browser.mjs');
+                   'Copy this message or share that log when reporting the installation failure.');
   end;
 end;
