@@ -132,7 +132,7 @@
     "react-window": "^2.3.4",
     "remark-gfm": "^4.0.1",
     "simple-git": "^4.0.2",
-    "slate": "^0.142.1",
+    "slate": "^0.146.0",
     "slate-dom": "^0.142.0",
     "slate-history": "^0.128.1",
     "slate-react": "^0.133.8",
