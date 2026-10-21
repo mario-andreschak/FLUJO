@@ -13,6 +13,25 @@ change Security's authentication, encryption or MCP enforcement primitives.
 Newer principal/recheck and credential migration contracts must be integrated
 under their own exact reviewed pins before implementation acceptance.
 
+Current inventory baseline, October 21, 2026:
+`791682ff54b3b37284171f4e33f940ed52e71673`. Regenerate the source survey with
+`node scripts/inventory-shared-runtime.mjs`; its source-tree digest also records
+uncommitted source inputs. This refresh does not rerun the prototype or accept
+the shared-deployment design. The current owner-only runtime already has durable
+browser sessions in `ownerSession.ts` and revocable request witnesses in
+`ownerAccess.ts`. Neither supplies multi-user identity selection, team grants or
+cross-owner runtime dispatch. The shared controller must remain separate from
+these private runtime modules and their process-wide state.
+
+The first implementation batch is the separate
+[private-owner controller](../../packages/shared-controller/README.md). It adds
+verified OIDC identity, a transactional session/revocation ledger and dispatch to
+operator-provisioned private runtimes with distinct browser origins. Its supported
+deployment profile is one unprivileged POSIX controller on a local disk. It does
+not establish the physical runtime boundary, team grants, execution revocation or
+the full protocol matrix. Candidate-artifact qualification remains pending; this
+implementation does not turn the proposal into accepted shared-deployment support.
+
 ## Proposed topology and alternatives
 
 Choose one controller and a dedicated OS-isolated runtime/data root per owner.
@@ -113,9 +132,12 @@ Cross-owner missing/forbidden reads use the same non-disclosing response.
 | Administrative controls/auth/key recovery | Installation operator | No team member privilege escalation | Out-of-band recovery, audit, revocation and explicit passphrase/key protection. |
 | OAuth/webhook/worker/adapter callbacks | Their independently authenticated protocol | No blanket exemption | Exact method/path, replay/current identity checks; sibling endpoints default deny. |
 
-The [source inventory](shared-runtime-inventory.json) enumerates all 201 `route.ts`
-paths at the baseline for method-level classification. It is a lexical inventory,
-not evidence that these routes enforce the proposed matrix. #574 must cover
+The [source inventory](shared-runtime-inventory.json) enumerates 229 App Router
+handlers at the current inventory baseline, with 313 explicit HTTP method exports
+parsed from their TypeScript syntax. `routeMethods` separately records Next's
+implicit HEAD and OPTIONS methods and any unresolved exports. Every method remains
+unreviewed for ownership. This is a source inventory, not evidence that these
+routes enforce the proposed matrix. #574 must cover
 list/read/write/delete/run/approve/subscribe/export for both principals, including
 guessed valid IDs and conflicting workspace selectors. Unclassified methods deny.
 
@@ -152,10 +174,14 @@ independent users completing the candidate-artifact share/edit/run/revoke journe
 
 ## State, budgets and migration
 
-The lexical state inventory records 400 occurrences in 105 backend/utility files
-at the baseline. It is deliberately marked incomplete pending semantic review.
-Each record identifies its exact file/line and requires a dedicated-owner runtime
-boundary; no runtime module may be imported into the shared controller.
+The refreshed lexical state inventory records 1,653 candidates in 377 files,
+covering backend/utility files and App Router handlers. It includes global access,
+singleton lookups and Map/Set/WeakMap/WeakSet allocations. Local allocations and
+comments can match; other forms of mutable state can be missed. The count is not
+comparable to the earlier narrower survey's 400 matches and is deliberately marked
+incomplete pending semantic review. Each record identifies its exact file/line for
+review under the dedicated-owner runtime boundary; no runtime module may be
+imported into the shared controller.
 
 | Actual state seam | Specific isolation plan |
 | --- | --- |

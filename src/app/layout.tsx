@@ -5,6 +5,7 @@ import "./living-watershed.css";
 import { createLogger } from '@/utils/logger';
 import AppWrapper from "@/frontend/components/AppWrapper";
 import { connection } from 'next/server';
+import { headers } from 'next/headers';
 
 const log = createLogger('app/layout');
 
@@ -42,6 +43,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   await connection();
+  // UI hint only; all identity and authority stays at the controller boundary.
+  const controllerAccount = (await headers()).get('x-flujo-controller-account') === '1';
   log.debug('Rendering RootLayout');
   return ( 
     <html
@@ -54,7 +57,7 @@ export default async function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AppWrapper phoneHost={process.env.FLUJO_AVATAR_PHONE_HOST === '1'}>
+        <AppWrapper phoneHost={process.env.FLUJO_AVATAR_PHONE_HOST === '1'} controllerAccount={controllerAccount}>
           {children}
         </AppWrapper>
       </body>

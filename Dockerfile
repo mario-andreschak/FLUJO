@@ -111,6 +111,8 @@ COPY --from=builder /app/mcp-servers ./mcp-servers
 # Keep local lockfile targets available during the production install.
 COPY --from=builder /app/tooling/next-lint-glob ./tooling/next-lint-glob
 COPY --from=builder /app/packages/avatar-sdk ./packages/avatar-sdk
+COPY --from=builder /app/packages/shared-controller/dist ./packages/shared-controller/dist
+COPY --from=builder /app/packages/shared-controller/package.json /app/packages/shared-controller/README.md ./packages/shared-controller/
 # Reuse the browser payload downloaded by the workspace install lifecycle in the
 # builder. The following npm ci sees the version marker and does not download it again.
 COPY --from=builder /home/node/.cache/ms-playwright /home/node/.cache/ms-playwright

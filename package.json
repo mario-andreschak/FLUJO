@@ -21,7 +21,8 @@
     "mcp-servers/shared"
   ],
   "bin": {
-    "flujo": "bin/flujo.mjs"
+    "flujo": "bin/flujo.mjs",
+    "flujo-controller": "bin/flujo-controller.mjs"
   },
   "files": [
     "LICENSE",
@@ -50,12 +51,18 @@
     "mcp-servers/*/LICENSE",
     "mcp-servers/browser/scripts/install-browser.mjs",
     "next.config.mjs",
-    "packages/avatar-sdk/**"
+    "packages/avatar-sdk/**",
+    "packages/shared-controller/dist/**",
+    "packages/shared-controller/package.json",
+    "packages/shared-controller/README.md"
   ],
   "scripts": {
     "dev": "node scripts/launch-next.mjs dev --webpack",
     "turbo": "node scripts/launch-next.mjs dev --turbopack",
-    "build": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+    "build": "npm run build:controller && npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
+    "build:controller": "npm run build --prefix packages/shared-controller",
+    "typecheck:controller": "npm run typecheck --prefix packages/shared-controller",
+    "test:controller": "npm run build:controller && node --test packages/shared-controller/test/*.test.mjs",
     "dockerbuild": "gh workflow run publish-image.yml -R mario-andreschak/FLUJO --ref main",
     "build:mcp": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
     "typecheck": "next typegen && tsc --noEmit -p tsconfig.json",
@@ -74,8 +81,8 @@
     "start": "node scripts/launch-next.mjs start",
     "demo:migration-ui": "node scripts/migration-landscape-demo.mjs",
     "check:parallel-mcp:no-oauth": "node scripts/check-parallel-mcp-no-oauth.mjs",
-    "lint": "eslint src",
-    "lint:all": "eslint src __tests__ scripts --max-warnings=0",
+    "lint": "eslint src packages/shared-controller/src",
+    "lint:all": "eslint src __tests__ scripts packages/shared-controller/src packages/shared-controller/test --max-warnings=0",
     "test": "node scripts/run-local-jest.cjs",
     "test:memory-experiment": "node scripts/run-memory-experiment.cjs",
     "test:memory-recall-benchmark": "node scripts/run-memory-semantic-benchmark.cjs",
@@ -95,11 +102,11 @@
     "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5 --with-learning"
   },
   "dependencies": {
-    "@flujo-ai/avatar-sdk": "file:packages/avatar-sdk",
     "@anthropic-ai/claude-agent-sdk": "^0.3.296",
     "@anthropic-ai/sdk": "^0.135.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@flujo-ai/avatar-sdk": "file:packages/avatar-sdk",
     "@google/genai": "^2.30.0",
     "@mario.andreschak/mcp-bash": "3.46.3",
     "@mario.andreschak/mcp-browser": "3.46.3",
@@ -114,6 +121,7 @@
     "@mui/icons-material": "^9.5.0",
     "@mui/material": "^9.5.0",
     "@openai/codex-sdk": "0.163.0",
+    "@openrouter/agent": "^0.11.0",
     "@xyflow/react": "^12.12.0",
     "axios": "^1.20.0",
     "chokidar": "^5.0.0",
@@ -126,6 +134,7 @@
     "next": "16.4.2",
     "node-fetch": "^3.3.2",
     "openai": "7.34.0",
+    "openid-client": "6.8.8",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
@@ -140,8 +149,7 @@
     "undici": "^8.12.2",
     "uuid": "^14.0.3",
     "yaml": "^2.9.1",
-    "zod": "^4.6.7",
-    "@openrouter/agent": "^0.11.0"
+    "zod": "^4.6.7"
   },
   "overrides": {
     "fast-glob": "$fast-glob",

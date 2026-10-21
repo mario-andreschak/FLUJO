@@ -46,6 +46,8 @@ const messageRows = {
   'nav.chainChat': ['Chain Chat', 'Chat en cadena', 'Ketten-Chat', 'Chat en chaîne', 'Chat a catena', 'Chat em cadeia', '对话链'],
   'nav.help': ['Help', 'Ayuda', 'Hilfe', 'Aide', 'Aiuto', 'Ajuda', '帮助'],
   'nav.settings': ['Settings', 'Configuración', 'Einstellungen', 'Paramètres', 'Impostazioni', 'Configurações', '设置'],
+  'nav.account': ['Account and sign out', 'Cuenta y cerrar sesión', 'Konto und Abmelden', 'Compte et déconnexion', 'Account e disconnessione', 'Conta e sair', '账户和退出登录'],
+  'nav.privateRuntime': ['Private FLUJO', 'FLUJO privado', 'Privates FLUJO', 'FLUJO privé', 'FLUJO privato', 'FLUJO privado', '私人 FLUJO'],
   'nav.tagline': ['Private AI, made simple', 'IA privada, sin complicaciones', 'Private KI, ganz einfach', 'L’IA privée, en toute simplicité', 'IA privata, resa semplice', 'IA privada, de forma simples', '私有 AI，简单易用'],
   'nav.privateDevice': ['Private on this device', 'Privado en este dispositivo', 'Privat auf diesem Gerät', 'Privé sur cet appareil', 'Privato su questo dispositivo', 'Privado neste dispositivo', '仅存于此设备'],
   'nav.privateWorkspace': ['Private workspace on this device', 'Espacio privado en este dispositivo', 'Privater Arbeitsbereich auf diesem Gerät', 'Espace privé sur cet appareil', 'Spazio privato su questo dispositivo', 'Espaço privado neste dispositivo', '此设备上的私有工作区'],
