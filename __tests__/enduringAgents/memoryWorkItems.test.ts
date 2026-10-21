@@ -83,6 +83,25 @@ async function claimAssignment(personaId: string, key: string): Promise<PersonaA
 }
 
 describe('issue #415 phase 4 WorkItems', () => {
+  it('allows owner append during a live Activity without allowing edits to existing work', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createPersonaFromRole({ name: 'Queue owner', idempotencyKey: 'owner-append' });
+      const original = await createPersonaWorkItem({ personaId: persona.id, title: 'Existing task' });
+      const claim = await claimAssignment(persona.id, 'owner-append-live');
+      const queued = await createPersonaWorkItem({ personaId: persona.id, id: 'work_owner_append', title: 'New independent task' });
+      expect(queued).toMatchObject({ status: 'open', personaId: persona.id });
+      expect(queued.createdByActivityId).toBeUndefined();
+      await expect(createPersonaWorkItem({ personaId: persona.id, id: queued.id, title: 'Duplicate' }))
+        .rejects.toBeInstanceOf(PersonaDomainConflictError);
+      await expect(updatePersonaWorkItem(persona.id, original.id, { title: 'Unsafe edit' }))
+        .rejects.toMatchObject({ code: 'PERSONA_DOMAIN_BUSY' });
+      await expect(createPersonaWorkItem({ personaId: persona.id, title: 'Forged attribution', createdByActivityId: claim.activity.id }))
+        .rejects.toMatchObject({ code: 'PERSONA_DOMAIN_BUSY' });
+      expect(await getPersonaWorkItem(persona.id, original.id)).toEqual(original);
+      await commitWithPersonaActivityLease(fenceForClaim(claim), async () => undefined);
+    });
+  });
+
   it('reports an identifiable stale Task conflict without changing stored work', async () => {
     await inFreshWorkspace(async () => {
       const { persona } = await createPersonaFromRole({ name: 'Jim', idempotencyKey: 'stale-task-jim' });
