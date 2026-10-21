@@ -1,5 +1,12 @@
 # Identity, storage and sharing contracts v1
 
+Product constraint, confirmed October 21, 2026: FLUJO is local first. Multi-user
+operation must work with internet disconnected and LAN disabled. Identity,
+authorization, isolation, revocation, sharing, locks and history are local
+responsibilities. Cold start, enrollment, recovery and restart cannot require a
+cloud VM, hosted identity provider, online DNS or remote control-plane lease.
+Optional online integrations do not establish or maintain the isolation boundary.
+
 Status: design proposal for #573, with a runnable source prototype. Security and
 maintainer review, #564 agreement, migration/artifact qualification and independent
 acceptance remain pending. #574/#575 must not enable shared/public deployment on
@@ -25,8 +32,9 @@ these private runtime modules and their process-wide state.
 
 The first implementation batch is the separate
 [private-owner controller](../../packages/shared-controller/README.md). It adds
-verified OIDC identity, a transactional session/revocation ledger and dispatch to
-operator-provisioned private runtimes with distinct browser origins. Its supported
+local password accounts, a transactional session/revocation ledger and dispatch to
+local private runtimes with distinct browser hostnames. The earlier OIDC-only
+draft is superseded because it depended on network identity discovery. Its current
 deployment profile is one unprivileged POSIX controller on a local disk. It does
 not establish the physical runtime boundary, team grants, execution revocation or
 the full protocol matrix. Candidate-artifact qualification remains pending; this
@@ -34,7 +42,10 @@ implementation does not turn the proposal into accepted shared-deployment suppor
 
 ## Proposed topology and alternatives
 
-Choose one controller and a dedicated OS-isolated runtime/data root per owner.
+The incremental proposal uses one local controller and a locally OS-isolated
+runtime/data root per owner on the same computer. This is not a requirement for
+one VM per user, a hosting service or any internet connection. The exact local
+OS mechanism still needs platform-specific implementation and qualification.
 The controller handles identity, current grants, metadata and admission. It never
 loads FLUJO execution/MCP modules or any owner's keyring. Each runtime serves only
 its assigned owner namespace over a private authenticated channel. Team execution
@@ -67,12 +78,14 @@ Separate Node processes under one unrestricted OS account are insufficient.
 
 ## Identity and authority
 
-For hosted humans, choose a configured OpenID Connect provider and authorization
-code login with PKCE. Verify issuer, signature, audience, nonce/state and token
-lifetime; resolve `(issuer, subject)` to an operator-owned immutable actor ID.
-Email, parsed claims, proxy headers and selected workspace never create grants.
-Provider validation follows the [OpenID Connect validation contract](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation).
-This provider/session implementation is not present in the prototype.
+Local accounts use immutable, operator-assigned actor IDs and locally verified
+passwords. Enrollment and recovery are performed by the local installation
+operator; no email delivery, external identity provider or online account is
+required. Password changes revoke sessions and in-flight authentication attempts.
+Email, proxy headers and selected workspace never create grants. The controller
+stores salted scrypt verifiers in private local storage, with persistent login
+backoff and bounded concurrent verification. This implementation is separate from
+the older ownership fixture prototype and does not qualify runtime isolation.
 
 Browser sessions use server-issued opaque IDs, HttpOnly/Secure/SameSite cookies,
 exact allowed Origin/CSRF checks for mutations, rotation after authentication,
@@ -222,6 +235,16 @@ does not restore an execution permit. Operator recovery is out of band, audited
 and must not allow a team admin to recover another owner's raw credentials.
 
 ## Runnable prototype and remaining gates
+
+Offline release acceptance must cold-start the installed candidate with external
+network access blocked and LAN disabled, retaining only host-local communication.
+Create/recover two local accounts; sign in, use private data, share exact resources,
+edit with conflict protection, inspect history, revoke access, restart and restore
+backups. Confirm cross-user file, process, credential and execution denials before
+and after revocation. Use installed local tools or deterministic local workloads;
+no cloud inference is needed to demonstrate tenancy. Cached sessions or a mocked
+identity service do not satisfy this acceptance. Do not disconnect a user's live
+machine or services to run this drill; use an owned release-acceptance environment.
 
 From an owned checkout with Node 22+, dev dependencies and the pinned Security
 source, run:

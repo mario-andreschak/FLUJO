@@ -4,10 +4,10 @@ import { closeSync, existsSync, openSync } from 'node:fs';
 import { join } from 'node:path';
 import { assertPrivateDirectory, assertPrivateFile } from './private-storage.js';
 import { runtimeRevision, type ControllerConfig, type Runtime } from './config.js';
+import { hashPassword, verifyPassword } from './password.js';
 
 export const opaque = (): string => randomBytes(32).toString('base64url');
 export const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
-export interface LoginAttempt { verifier: string; nonce: string; state: string; }
 export interface Session { hash: string; actorId: string; runtimeId: string; revision: string; expiresAt: number; }
 
 /** Controller metadata only. No runtime module, keyring, provider token or transcript. */
@@ -24,15 +24,17 @@ export class Ledger {
     this.db = new DatabaseSync(filename, { enableForeignKeyConstraints: true, allowExtension: false });
     this.db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
-    if (version !== 0 && version !== 1) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
+    // The unreleased OIDC prototype's identities must never silently become local
+    // accounts. Keep that ledger intact; deliberate migration is separate work.
+    if (version !== 0 && version !== 2) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS actors (
-        id TEXT PRIMARY KEY, issuer TEXT NOT NULL, subject TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), UNIQUE(issuer,subject)
+        id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+        auth_revision INTEGER NOT NULL DEFAULT 1
       );
       CREATE TABLE IF NOT EXISTS runtimes (
         id TEXT PRIMARY KEY, actor_id TEXT NOT NULL UNIQUE REFERENCES actors(id),
-        origin TEXT NOT NULL UNIQUE, isolation_id TEXT NOT NULL UNIQUE,
+        origin TEXT NOT NULL UNIQUE, hostname TEXT NOT NULL UNIQUE, isolation_id TEXT NOT NULL UNIQUE,
         revision TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))
       );
       CREATE TABLE IF NOT EXISTS sessions (
@@ -40,18 +42,17 @@ export class Ledger {
         runtime_id TEXT NOT NULL REFERENCES runtimes(id), revision TEXT NOT NULL,
         expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS logins (
-        hash TEXT PRIMARY KEY, runtime_id TEXT NOT NULL REFERENCES runtimes(id),
-        revision TEXT NOT NULL, verifier TEXT NOT NULL, nonce TEXT NOT NULL,
-        state TEXT NOT NULL, expires_at INTEGER NOT NULL
+      CREATE TABLE IF NOT EXISTS passwords (
+        actor_id TEXT PRIMARY KEY REFERENCES actors(id), hash TEXT NOT NULL,
+        version TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS audit (
         sequence INTEGER PRIMARY KEY, time INTEGER NOT NULL,
         action TEXT NOT NULL, actor_id TEXT, runtime_id TEXT
       );
       CREATE INDEX IF NOT EXISTS session_expiry ON sessions(expires_at);
-      CREATE INDEX IF NOT EXISTS login_expiry ON logins(expires_at);
-      PRAGMA user_version=1;
+      PRAGMA user_version=2;
     `);
   }
 
@@ -73,18 +74,13 @@ export class Ledger {
       for (const row of this.db.prepare('SELECT id,actor_id FROM runtimes WHERE enabled=1').all()) {
         if (!configured.has(String(row.id))) {
           this.db.prepare('DELETE FROM sessions WHERE runtime_id=?').run(row.id);
-          this.db.prepare('DELETE FROM logins WHERE runtime_id=?').run(row.id);
+          this.db.prepare('UPDATE actors SET auth_revision=auth_revision+1 WHERE id=?').run(row.actor_id);
           this.audit('runtime.removed', String(row.actor_id), String(row.id));
         }
       }
       this.db.exec('UPDATE runtimes SET enabled=0');
       for (const runtime of config.runtimes) {
-        const actor = this.db.prepare('SELECT issuer,subject FROM actors WHERE id=?').get(runtime.actorId);
-        if (actor && (actor.issuer !== config.issuer || actor.subject !== runtime.subject)) {
-          throw new Error('An actor cannot be rebound to another identity.');
-        }
-        this.db.prepare('INSERT OR IGNORE INTO actors(id,issuer,subject) VALUES(?,?,?)')
-          .run(runtime.actorId, config.issuer, runtime.subject);
+        this.db.prepare('INSERT OR IGNORE INTO actors(id) VALUES(?)').run(runtime.actorId);
         const previous = this.db.prepare('SELECT actor_id,origin,isolation_id,revision FROM runtimes WHERE id=?').get(runtime.id);
         if (previous && (previous.actor_id !== runtime.actorId || previous.origin !== runtime.origin
             || previous.isolation_id !== runtime.isolationId)) {
@@ -93,11 +89,11 @@ export class Ledger {
         const revision = runtimeRevision(config, runtime);
         if (previous && previous.revision !== revision) {
           this.db.prepare('DELETE FROM sessions WHERE runtime_id=?').run(runtime.id);
-          this.db.prepare('DELETE FROM logins WHERE runtime_id=?').run(runtime.id);
+          this.db.prepare('UPDATE actors SET auth_revision=auth_revision+1 WHERE id=?').run(runtime.actorId);
         }
-        this.db.prepare(`INSERT INTO runtimes(id,actor_id,origin,isolation_id,revision) VALUES(?,?,?,?,?)
+        this.db.prepare(`INSERT INTO runtimes(id,actor_id,origin,hostname,isolation_id,revision) VALUES(?,?,?,?,?,?)
           ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,enabled=1`)
-          .run(runtime.id, runtime.actorId, runtime.origin, runtime.isolationId, revision);
+          .run(runtime.id, runtime.actorId, runtime.origin, new URL(runtime.origin).hostname, runtime.isolationId, revision);
         if (!previous || previous.revision !== revision) this.audit('runtime.configured', runtime.actorId, runtime.id);
       }
       this.prune();
@@ -109,33 +105,44 @@ export class Ledger {
       WHERE r.id=? AND r.revision=? AND r.enabled=1 AND a.enabled=1`).get(runtime.id, revision));
   }
 
-  beginLogin(runtime: Runtime, revision: string, attempt: LoginAttempt): string {
-    return this.transaction(() => {
-      this.prune();
-      if (!this.available(runtime, revision)) throw new Error('Runtime unavailable.');
-      const count = Number(this.db.prepare('SELECT COUNT(*) AS count FROM logins').get()?.count);
-      if (count >= 10000) throw new Error('Too many pending sign-ins.');
-      const token = opaque();
-      this.db.prepare('INSERT INTO logins VALUES(?,?,?,?,?,?,?)')
-        .run(digest(token), runtime.id, revision, attempt.verifier, attempt.nonce, attempt.state, Date.now() + 600_000);
-      return token;
+  /** Local operator enrollment/recovery. No email, provider, automatic enable or
+   * inherited session. Check the exact configuration again after expensive work. */
+  async setPassword(runtime: Runtime, revision: string, password: string): Promise<void> {
+    const hash = await hashPassword(password);
+    this.transaction(() => {
+      const row = this.db.prepare('SELECT actor_id,revision,enabled FROM runtimes WHERE id=?').get(runtime.id);
+      if (row?.actor_id !== runtime.actorId || row.revision !== revision || row.enabled !== 1) {
+        throw new Error('Runtime configuration changed.');
+      }
+      this.db.prepare(`INSERT INTO passwords(actor_id,hash,version) VALUES(?,?,?)
+        ON CONFLICT(actor_id) DO UPDATE SET hash=excluded.hash,version=excluded.version,attempts=0,next_attempt_at=0`)
+        .run(runtime.actorId, hash, opaque());
+      this.db.prepare('UPDATE actors SET auth_revision=auth_revision+1 WHERE id=?').run(runtime.actorId);
+      this.db.prepare('DELETE FROM sessions WHERE actor_id=?').run(runtime.actorId);
+      this.audit('password.changed', runtime.actorId, runtime.id);
     });
   }
 
-  consumeLogin(token: string, runtime: Runtime, revision: string): LoginAttempt | null {
-    return this.transaction(() => {
-      const row = this.db.prepare('SELECT * FROM logins WHERE hash=?').get(digest(token));
-      this.db.prepare('DELETE FROM logins WHERE hash=?').run(digest(token));
-      if (!row || row.runtime_id !== runtime.id || row.revision !== revision
-          || Number(row.expires_at) <= Date.now() || !this.available(runtime, revision)) return null;
-      return { verifier: String(row.verifier), nonce: String(row.nonce), state: String(row.state) };
+  async authenticate(runtime: Runtime, revision: string, password: string, seconds: number): Promise<string | null> {
+    const attempt = this.transaction(() => {
+      if (!this.available(runtime, revision)) return null;
+      const row = this.db.prepare(`SELECT p.*,a.auth_revision FROM passwords p JOIN actors a ON a.id=p.actor_id
+        WHERE p.actor_id=?`).get(runtime.actorId);
+      if (!row || Number(row.next_attempt_at) > Date.now()) return null;
+      // Reserve before awaiting the KDF. Persistent backoff survives restarts and
+      // applies to concurrent connections, without retaining any submitted secret.
+      const count = Math.min(10, Number(row.attempts) + 1);
+      this.db.prepare('UPDATE passwords SET attempts=?,next_attempt_at=? WHERE actor_id=?')
+        .run(count, Date.now() + Math.min(300_000, 1000 * 2 ** (count - 1)), runtime.actorId);
+      return { hash: String(row.hash), version: String(row.version), authRevision: Number(row.auth_revision) };
     });
-  }
-
-  createSession(runtime: Runtime, revision: string, issuer: string, subject: string, seconds: number): string | null {
+    if (!attempt || !await verifyPassword(password, attempt.hash)) return null;
     return this.transaction(() => {
-      const actor = this.db.prepare('SELECT id FROM actors WHERE issuer=? AND subject=? AND enabled=1').get(issuer, subject);
-      if (actor?.id !== runtime.actorId || !this.available(runtime, revision)) return null;
+      const current = this.db.prepare(`SELECT p.version,a.auth_revision FROM passwords p JOIN actors a ON a.id=p.actor_id
+        WHERE p.actor_id=?`).get(runtime.actorId);
+      if (!current || current.version !== attempt.version || current.auth_revision !== attempt.authRevision
+          || !this.available(runtime, revision)) return null;
+      this.db.prepare('UPDATE passwords SET attempts=0,next_attempt_at=0 WHERE actor_id=?').run(runtime.actorId);
       this.prune();
       // Bound durable sessions per actor without evicting every existing browser on login.
       this.db.prepare(`DELETE FROM sessions WHERE hash IN (SELECT hash FROM sessions WHERE actor_id=?
@@ -169,16 +176,14 @@ export class Ledger {
   setActorEnabled(actorId: string, enabled: boolean): void {
     this.transaction(() => {
       if (!this.db.prepare('SELECT id FROM actors WHERE id=?').get(actorId)) throw new Error('Unknown actor.');
-      this.db.prepare('UPDATE actors SET enabled=? WHERE id=?').run(enabled ? 1 : 0, actorId);
+      this.db.prepare('UPDATE actors SET enabled=?,auth_revision=auth_revision+1 WHERE id=?').run(enabled ? 1 : 0, actorId);
       this.db.prepare('DELETE FROM sessions WHERE actor_id=?').run(actorId);
-      this.db.prepare('DELETE FROM logins WHERE runtime_id IN (SELECT id FROM runtimes WHERE actor_id=?)').run(actorId);
       this.audit(enabled ? 'actor.enabled' : 'actor.disabled', actorId, null);
     });
   }
 
   prune(): void {
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
-    this.db.prepare('DELETE FROM logins WHERE expires_at<=?').run(Date.now());
   }
 
   close(): void { this.db.close(); }

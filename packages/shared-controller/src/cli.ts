@@ -1,30 +1,42 @@
-import { configSchema } from './config.js';
+import { configSchema, runtimeRevision } from './config.js';
 import { readPrivateFile } from './private-storage.js';
 import { Ledger } from './ledger.js';
 import { lockController } from './process-lock.js';
 import { createController } from './server.js';
+import { promptPassword } from './password-prompt.js';
 
 export async function main(args: string[]): Promise<void> {
   const [action, filename, actorId] = args;
-  if (!filename || !['serve', 'disable', 'enable', 'status'].includes(action)
-      || (['disable', 'enable'].includes(action) ? !actorId || args.length !== 3 : args.length !== 2)) {
-    throw new Error('Usage: flujo-controller <serve|status|disable|enable> /absolute/config.json [actor-id]');
+  if (!filename || !['init', 'serve', 'disable', 'enable', 'status', 'password'].includes(action)
+      || (['disable', 'enable', 'password'].includes(action) ? !actorId || args.length !== 3 : args.length !== 2)) {
+    throw new Error('Usage: flujo-controller <init|serve|status|disable|enable|password> /absolute/config.json [actor-id]');
   }
   // Protect SQLite sidecars as well as the original database.
   process.umask(0o077);
   const parsed = configSchema.safeParse(JSON.parse(readPrivateFile(filename).toString('utf8')));
   if (!parsed.success) throw new Error('Invalid controller configuration. Check the documented schema.');
   const config = parsed.data;
-  const release = action === 'serve' ? lockController(config.stateDirectory) : undefined;
+  const release = ['serve', 'init'].includes(action) ? lockController(config.stateDirectory) : undefined;
   let ledger: Ledger | undefined;
   try {
     ledger = new Ledger(config.stateDirectory);
-    if (action === 'disable' || action === 'enable') {
+    if (action === 'init') {
+      ledger.reconcile(config);
+      process.stdout.write('Local accounts configured. Set each account password before signing in.\n');
+    } else if (action === 'password') {
+      const runtime = config.runtimes.find(candidate => candidate.actorId === actorId);
+      if (!runtime) throw new Error('Unknown configured actor.');
+      let password = await promptPassword();
+      await ledger.setPassword(runtime, runtimeRevision(config, runtime), password);
+      password = '';
+      process.stdout.write('Local password updated; existing sessions revoked. Account enablement is unchanged.\n');
+    } else if (action === 'disable' || action === 'enable') {
       ledger.setActorEnabled(actorId, action === 'enable');
       process.stdout.write(`Actor ${action === 'enable' ? 'enabled' : 'disabled'}; existing browser sessions revoked.\n`);
     } else if (action === 'status') {
-      const rows = ledger.db.prepare(`SELECT a.id AS actorId,a.enabled,r.id AS runtimeId,r.origin,r.enabled AS configured
-        FROM actors a JOIN runtimes r ON r.actor_id=a.id ORDER BY a.id`).all();
+      const rows = ledger.db.prepare(`SELECT a.id AS actorId,a.enabled,r.id AS runtimeId,r.origin,r.enabled AS configured,
+        (p.actor_id IS NOT NULL) AS passwordConfigured
+        FROM actors a JOIN runtimes r ON r.actor_id=a.id LEFT JOIN passwords p ON p.actor_id=a.id ORDER BY a.id`).all();
       process.stdout.write(`${JSON.stringify({ actors: rows }, null, 2)}\n`);
     } else {
       const server = await createController(config, ledger);

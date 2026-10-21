@@ -1,17 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
-import * as oidc from 'openid-client';
 import { runtimeRevision, type ControllerConfig, type Runtime } from './config.js';
 import { Ledger } from './ledger.js';
 import { readPrivateFile } from './private-storage.js';
 import { proxy } from './proxy.js';
-import { accountPage, browserRequestAllowed, cookie, LOGIN_COOKIE, redirect, reply,
+import { accountPage, browserRequestAllowed, cookie, readPasswordForm, redirect, reply,
   securityHeaders, SESSION_COOKIE, sessionCookie } from './http.js';
 
 export async function createController(config: ControllerConfig, ledger: Ledger): Promise<Server> {
-  const identity = await oidc.discovery(new URL(config.issuer), config.clientId, config.clientSecret,
-    undefined, { timeout: 15, execute: [oidc.enableNonRepudiationChecks] });
-  if (identity.serverMetadata().issuer !== config.issuer) throw new Error('OIDC issuer does not match configuration.');
-  // The ledger is reconciled only after successful issuer discovery.
+  // Identity and authority are local. Startup never discovers a remote issuer.
   ledger.reconcile(config);
   const runtimes = new Map(config.runtimes.map(runtime => [new URL(runtime.origin).host, runtime]));
   const authorities = new Map(config.runtimes.map(runtime => [runtime.id,
@@ -25,23 +21,21 @@ export async function createController(config: ControllerConfig, ledger: Ledger)
     const previous = loginRate.get(runtime.id);
     const rate = previous && previous.reset > Date.now() ? previous : { count: 0, reset: Date.now() + 60_000 };
     loginRate.set(runtime.id, rate);
-    if (++rate.count > 20 || pendingLogins >= 32) { reply(response, 429, 'Please wait before signing in again.'); return; }
+    if (++rate.count > 20 || pendingLogins >= 2) { reply(response, 429, 'Please wait before signing in again.'); return; }
     pendingLogins++;
     try {
-      const revision = runtimeRevision(config, runtime);
-      const verifier = oidc.randomPKCECodeVerifier();
-      const nonce = oidc.randomNonce();
-      const state = oidc.randomState();
-      const challenge = await oidc.calculatePKCECodeChallenge(verifier);
-      const destination = oidc.buildAuthorizationUrl(identity, {
-        redirect_uri: `${runtime.origin}/_account/callback`, scope: 'openid',
-        code_challenge: challenge, code_challenge_method: 'S256', state, nonce,
-        response_mode: 'query',
-      });
-      if (destination.protocol !== 'https:') throw new Error('OIDC authorization requires HTTPS.');
-      const attempt = ledger.beginLogin(runtime, revision, { verifier, nonce, state });
-      response.setHeader('Set-Cookie', sessionCookie(LOGIN_COOKIE, attempt, 600));
-      redirect(response, destination.href);
+      let password = await readPasswordForm(request);
+      if (password === null) { reply(response, 400, 'Invalid sign-in form.'); return; }
+      const token = await ledger.authenticate(runtime, runtimeRevision(config, runtime), password, config.sessionSeconds);
+      password = '';
+      if (!token) {
+        accountPage(response, false, 'Sign-in failed. Check your password and account access, then wait before retrying.', 401);
+        return;
+      }
+      const previousToken = cookie(request, SESSION_COOKIE);
+      if (previousToken) ledger.revokeSession(previousToken);
+      response.setHeader('Set-Cookie', sessionCookie(SESSION_COOKIE, token, config.sessionSeconds));
+      redirect(response, '/');
     } finally { pendingLogins--; }
   }
 
@@ -68,35 +62,6 @@ export async function createController(config: ControllerConfig, ledger: Ledger)
     const sessionToken = cookie(request, SESSION_COOKIE);
     const session = ledger.session(sessionToken, runtime, revision);
 
-    if (url.pathname === '/_account/callback') {
-      // The only cross-site callback. Its one-use attempt is bound to this browser,
-      // runtime, revision, PKCE verifier, state and ID-token nonce.
-      if (request.method !== 'GET') { reply(response, 405, 'Method not allowed.'); return; }
-      if (pendingLogins >= 32) { reply(response, 429, 'Please retry sign-in shortly.'); return; }
-      const attempt = ledger.consumeLogin(cookie(request, LOGIN_COOKIE), runtime, revision);
-      response.setHeader('Set-Cookie', sessionCookie(LOGIN_COOKIE, '', 0));
-      if (!attempt) { reply(response, 401, 'Sign-in expired. Return to /_account and try again.'); return; }
-      pendingLogins++;
-      let tokens: Awaited<ReturnType<typeof oidc.authorizationCodeGrant>>;
-      try {
-        tokens = await oidc.authorizationCodeGrant(identity, url, {
-          pkceCodeVerifier: attempt.verifier, expectedState: attempt.state,
-          expectedNonce: attempt.nonce, idTokenExpected: true,
-        });
-      } finally { pendingLogins--; }
-      const claims = tokens.claims();
-      // No email matching, forwarded identity, access-token storage or inferred membership.
-      if (!claims || claims.iss !== config.issuer || typeof claims.sub !== 'string') {
-        reply(response, 401, 'Identity could not be verified.'); return;
-      }
-      const token = ledger.createSession(runtime, revision, claims.iss, claims.sub, config.sessionSeconds);
-      if (!token) { reply(response, 403, 'This account does not have access to this FLUJO.'); return; }
-      if (sessionToken) ledger.revokeSession(sessionToken);
-      response.setHeader('Set-Cookie', [sessionCookie(LOGIN_COOKIE, '', 0),
-        sessionCookie(SESSION_COOKIE, token, config.sessionSeconds)]);
-      redirect(response, '/');
-      return;
-    }
     if (url.pathname === '/_account' && request.method === 'GET') { accountPage(response, !!session); return; }
     if (!browserRequestAllowed(request, runtime.origin)) {
       // An email/bookmark link can enter the sign-in page without admitting a
@@ -109,7 +74,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger)
     if ((url.pathname === '/_account/logout' && request.method === 'POST')
         || (url.pathname === '/api/owner/session' && request.method === 'DELETE')) {
       if (session) ledger.revokeSession(sessionToken);
-      response.setHeader('Set-Cookie', [sessionCookie(SESSION_COOKIE, '', 0), sessionCookie(LOGIN_COOKIE, '', 0)]);
+      response.setHeader('Set-Cookie', sessionCookie(SESSION_COOKIE, '', 0));
       response.setHeader('Clear-Site-Data', '"cache", "storage"');
       if (url.pathname.startsWith('/api/')) {
         securityHeaders(response);
@@ -146,7 +111,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger)
 
   const server = createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 120_000, headersTimeout: 15_000 },
     (request, response) => { void handle(request, response).catch(() => {
-      // Never log URLs, OIDC responses, cookies, config or provider error objects.
+      // Never log URLs, passwords, cookies, configuration or upstream errors.
       reply(response, 503, 'Sign-in or private runtime is temporarily unavailable. Return to /_account to retry.');
     }); });
   server.maxConnections = 1024;
