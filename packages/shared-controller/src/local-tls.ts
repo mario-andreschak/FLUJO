@@ -12,7 +12,7 @@ const generation = z.string().regex(/^[a-f0-9]{32}$/);
 const fingerprint = z.string().regex(/^(?:[A-F0-9]{2}:){31}[A-F0-9]{2}$/);
 const rootSchema = z.object({ schemaVersion: z.literal(1), generation, fingerprint: fingerprint.optional() }).strict();
 const leafSchema = z.object({ schemaVersion: z.literal(1), generation, rootFingerprint: fingerprint,
-  hosts: z.array(z.string().regex(/^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\.localhost$/)).min(1).max(1000) }).strict();
+  hosts: z.array(z.string().regex(/^(?:\*\.)?[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\.localhost$/)).min(1).max(2000) }).strict();
 type TLSConfig = NonNullable<ControllerConfig['tls']>;
 export interface LocalTLSMaterial {
   key: Buffer; cert: Buffer; notBefore: number; expiresAt: number;
@@ -91,19 +91,24 @@ function readLeaf(tls: TLSConfig, record: z.infer<typeof leafSchema>, root: Retu
       || !leaf.verify(root.certificate.publicKey) || record.rootFingerprint !== root.certificate.fingerprint256
       || dates.notBefore < rootDates.notBefore || dates.expiresAt > rootDates.expiresAt
       || !leaf.keyUsage?.includes('1.3.6.1.5.5.7.3.1') || JSON.stringify(names) !== JSON.stringify(record.hosts)
-      || record.hosts.some(host => leaf.checkHost(host, { subject: 'never', wildcards: false }) !== host)) throw invalid();
+      || record.hosts.some(host => !host.startsWith('*.')
+        && leaf.checkHost(host, { subject: 'never', wildcards: false }) !== host)) throw invalid();
   return { key: leafKey, cert, ...dates, fingerprint: leaf.fingerprint256,
     rootFingerprint: root.certificate.fingerprint256, caFile: root.caFile };
 }
 
-/** Caller holds the controller lock. Only exact local hostnames are signed.
+/** Caller holds the controller lock. Only owner localhost names and their
+ * single-label app namespaces are signed; never a general *.localhost wildcard.
  * Root identity is pinned durably; leaf publication is atomic and recoverable. */
 export async function ensureLocalTLS(config: ControllerConfig, options: { initialize?: boolean; renew?: boolean } = {}): Promise<LocalTLSMaterial> {
   const tls = config.tls;
   if (!tls) throw invalid();
   if (options.initialize) await initializeRoot(tls);
   const root = localTLSRoot(config);
-  const hosts = config.runtimes.map(runtime => new URL(runtime.origin).hostname).sort();
+  const hosts = config.runtimes.flatMap(runtime => {
+    const host = new URL(runtime.origin).hostname;
+    return runtime.localRuntime ? [host, `*.${host}`] : [host];
+  }).sort();
   const filename = join(tls.directory, 'current.json');
   const original = existsSync(filename) ? readPrivateFile(filename) : undefined;
   if (original) {

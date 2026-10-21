@@ -2,8 +2,9 @@
 // no caller-selected address, command, filesystem path or host-network access.
 import { createConnection } from 'node:net';
 
-if (process.argv.length !== 2) process.exit(1);
-const socket = createConnection({ host: '127.0.0.1', port: 4200 });
+const sandbox = process.argv.length === 3 && process.argv[2] === '--sandbox';
+if (process.argv.length !== 2 && !sandbox) process.exit(1);
+const socket = createConnection({ host: '127.0.0.1', port: sandbox ? 4201 : 4200 });
 let done = false;
 const connectDeadline = setTimeout(() => finish(1), 10_000);
 const lifetime = setTimeout(() => finish(1), 60 * 60 * 1000);

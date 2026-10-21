@@ -20,6 +20,31 @@ const EXPOSURE_SOURCE_ENV = 'FLUJO_EXPOSURE_MODE_SOURCE';
 const APP_A = `app${'a'.repeat(60)}`;
 const APP_B = `app${'b'.repeat(60)}`;
 
+test('managed local owners pin the app namespace, transport and embedder despite persisted escape hatches', () => {
+  const mod = loadSandboxModule({
+    FLUJO_CONTAINER: '1', FLUJO_OWNER_AUTH_FILE: '/run/flujo-owner/owner.json',
+    FLUJO_OWNER_BROWSER_ORIGIN: 'https://alice.localhost:4280',
+    FLUJO_MCP_APP_SANDBOX_ALLOW_ALL: '1', FLUJO_MCP_APP_HOST_ORIGINS: 'https://evil.example',
+    [PUBLIC_URL_ENV]: 'https://{app}.evil.example/sandbox.html', [PORT_ENV]: '4999',
+    [EXPOSURE_ENV]: 'public',
+  });
+  expect(mod.sandboxAllowAllContent()).toBe(false);
+  expect(mod.getSandboxPort()).toBe(4201);
+  expect(mod.getConfiguredSandboxHostOrigins()).toEqual(['https://alice.localhost:4280']);
+  expect(mod.deriveSandboxPublicUrl('https://evil.example', 4999, APP_A))
+    .toBe(`https://${APP_A}.alice.localhost:4280/sandbox.html`);
+  expect(mod.deriveOriginKeyFromHost(`${APP_A}.alice.localhost:4280`)).toBe(APP_A);
+  for (const host of [`${APP_A}.bob.localhost:4280`, `${APP_A}.localhost:4201`, 'alice.localhost:4280']) {
+    expect(mod.deriveOriginKeyFromHost(host)).toBeUndefined();
+  }
+  const policy = mod.buildSandboxProxyCsp(mod.getConfiguredSandboxHostOrigins(), { connectDomains: ['*'] });
+  expect(policy).toContain('frame-ancestors https://alice.localhost:4280');
+  expect(policy).toContain("connect-src 'none'");
+  const html = mod.buildSandboxProxyHtml();
+  expect(html).toContain('var HOST_ALLOWLIST_CONFIGURED = true');
+  expect(html).not.toContain('https://evil.example');
+});
+
 /**
  * The module reads deployment variables lazily. Keep them in place through the
  * test body, then restore them after each isolated module instance is stopped.

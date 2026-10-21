@@ -39,6 +39,7 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual, createHmac } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
 import { getExposureMode } from '@/utils/http/exposureMode';
+import { managedSandboxOwnerOrigin } from '@/backend/mcpApps/managedSandbox';
 import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
 import {
   canonicalizeLoopbackCspOrigin,
@@ -77,6 +78,7 @@ const MAX_CONFIGURED_HOST_ORIGINS = 16;
  * hatch; the long-term fix is correct `FLUJO_MCP_APP_HOST_ORIGINS` config.
  */
 export function sandboxAllowAllContent(): boolean {
+  if (managedSandboxOwnerOrigin()) return false;
   const value = process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
   if (!value) return false;
   return value === '1' || value === 'true' || value === 'yes' || value === 'on';
@@ -243,6 +245,7 @@ export function getSandboxServerStatus(): SandboxServerStatus {
 }
 
 export function getSandboxPort(): number {
+  if (managedSandboxOwnerOrigin()) return DEFAULT_SANDBOX_PORT;
   const raw = process.env.FLUJO_MCP_APP_SANDBOX_PORT;
   const n = raw ? Number.parseInt(raw, 10) : NaN;
   return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_SANDBOX_PORT;
@@ -250,6 +253,7 @@ export function getSandboxPort(): number {
 
 /** The sandbox follows the same single exposure mode as the main server. */
 function getSandboxBindHost(): string {
+  if (managedSandboxOwnerOrigin()) return '127.0.0.1';
   const configured = process.env[SANDBOX_BIND_HOST_ENV]?.trim();
   if (configured) return configured;
   if (process.env.FLUJO_CONTAINER) return '0.0.0.0';
@@ -281,6 +285,8 @@ function parseHttpOrigin(value: string): string | undefined {
  * empty (fail closed); same-host fallback applies only when it is omitted.
  */
 export function getConfiguredSandboxHostOrigins(): string[] {
+  const ownerOrigin = managedSandboxOwnerOrigin();
+  if (ownerOrigin) return [ownerOrigin];
   if (!shouldUseSandboxEndpointConfiguration()) return [];
   const raw = process.env[SANDBOX_HOST_ORIGINS_ENV];
   if (!raw?.trim()) return [];
@@ -298,6 +304,7 @@ export function getConfiguredSandboxHostOrigins(): string[] {
 }
 
 function hasConfiguredSandboxHostOrigins(): boolean {
+  if (managedSandboxOwnerOrigin()) return true;
   return shouldUseSandboxEndpointConfiguration()
     && Boolean(process.env[SANDBOX_HOST_ORIGINS_ENV]?.trim());
 }
@@ -410,6 +417,14 @@ export function deriveSandboxPublicUrl(
   originKey?: string,
 ): string | undefined {
   if (!isValidSandboxOriginKey(originKey)) return undefined;
+
+  const ownerOrigin = managedSandboxOwnerOrigin();
+  if (ownerOrigin) {
+    const url = new URL(ownerOrigin);
+    url.hostname = `${originKey}.${url.hostname}`;
+    url.pathname = '/sandbox.html';
+    return url.href;
+  }
 
   let hostUrl: URL;
   try {
@@ -1192,6 +1207,13 @@ function parseHostHeaderHostname(hostHeader: string | undefined): string | undef
 export function deriveOriginKeyFromHost(hostHeader: string | undefined): string | undefined {
   const requestHostname = parseHostHeaderHostname(hostHeader);
   if (!requestHostname) return undefined;
+
+  const ownerOrigin = managedSandboxOwnerOrigin();
+  if (ownerOrigin) {
+    const suffix = `.${new URL(ownerOrigin).hostname}`;
+    const candidate = requestHostname.endsWith(suffix) ? requestHostname.slice(0, -suffix.length) : '';
+    return /^app[a-f0-9]{60}$/.test(candidate) ? candidate : undefined;
+  }
 
   const suffix = '.localhost';
   if (requestHostname.endsWith(suffix)) {

@@ -127,7 +127,7 @@ export async function main(args: string[]): Promise<void> {
       process.stdout.write(`${JSON.stringify({ runtimes }, null, 2)}\n`);
       if (runtimes.some(intent => intent.phase !== 'confirmed')) process.exitCode = 2;
     } else {
-      const server = await createController(config, ledger, runtime => pipes?.connect(runtime));
+      const server = await createController(config, ledger, (runtime, channel) => pipes?.connect(runtime, channel));
       controller = server;
       if (ledger.intents().length) {
         const engine = new LocalEngine(config.stateDirectory);

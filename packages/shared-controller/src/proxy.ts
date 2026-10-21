@@ -18,6 +18,8 @@ export interface ProxyOptions {
   connect?: () => Duplex | undefined;
   current: () => boolean;
   finished: () => void;
+  rewriteJson?: (value: unknown) => unknown;
+  sandbox?: { origin: string; path: string };
 }
 
 /** One owner per origin and runtime. Client identity/workspace headers never select an upstream. */
@@ -36,6 +38,15 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
   headers.authorization = `Bearer ${runtime.credential}`;
   // Presentation only. The runtime never uses this hint for authentication.
   headers['x-flujo-controller-account'] = '1';
+  if (options.rewriteJson) headers['accept-encoding'] = 'identity';
+  if (options.sandbox) {
+    // The sandbox channel is never the owner's application API. Forward only
+    // presentation headers; no owner bearer, browser cookies or caller hints.
+    for (const name of Object.keys(headers)) delete headers[name];
+    headers.host = new URL(options.sandbox.origin).host;
+    headers.referer = `${runtime.origin}/`;
+    headers['accept-encoding'] = 'identity';
+  }
   // The browser origin is preserved for the runtime's existing same-origin gate.
   const upstreamUrl = new URL(runtime.upstream);
   const send = upstreamUrl.protocol === 'https:' ? httpsRequest : httpRequest;
@@ -62,7 +73,7 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
     upstream = send({
       protocol: upstreamUrl.protocol,
       hostname: upstreamUrl.hostname.replace(/^\[|\]$/g, ''), port: upstreamUrl.port,
-      path: request.url, method: request.method, headers,
+      path: options.sandbox?.path ?? request.url, method: request.method, headers,
       // Supplying createConnection without agent bypasses the default Agent.
       // Never fall back to a host network request when a managed pipe fails.
       ...(connection ? { createConnection: () => connection } : { agent: false }),
@@ -108,6 +119,12 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
     for (const name of Object.keys(outgoing)) {
       if (name === 'set-cookie' || name === 'clear-site-data' || name.startsWith('access-control-')) delete outgoing[name];
     }
+    if (options.sandbox && (incoming.statusCode !== 200
+        || !incoming.headers['content-type']?.startsWith('text/html')
+        || typeof incoming.headers['content-security-policy'] !== 'string'
+        || incoming.headers['content-encoding'] !== undefined || outgoing.location !== undefined)) {
+      fail(502, 'Private app sandbox is unavailable.'); return;
+    }
     if (typeof outgoing.location === 'string') {
       try {
         const location = new URL(outgoing.location, runtime.origin);
@@ -118,8 +135,45 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
         } else if (location.protocol !== 'https:') { fail(502, 'Invalid runtime redirect.'); return; }
       } catch { fail(502, 'Invalid runtime redirect.'); return; }
     }
+    if (options.rewriteJson && incoming.statusCode === 200) {
+      if (!incoming.headers['content-type']?.startsWith('application/json') || incoming.headers['content-encoding'] !== undefined) {
+        fail(502, 'Invalid private sandbox discovery.'); return;
+      }
+      let size = 0; const chunks: Buffer[] = [];
+      incoming.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > 64 * 1024) fail(502, 'Invalid private sandbox discovery.');
+        else chunks.push(chunk);
+      });
+      incoming.on('error', () => { if (!complete) fail(502, 'Private sandbox discovery failed.'); });
+      incoming.on('end', () => {
+        if (complete) return;
+        try {
+          if (!isCurrent()) { fail(401, 'Sign in again.'); return; }
+          const body = JSON.stringify(options.rewriteJson!(JSON.parse(Buffer.concat(chunks).toString('utf8'))));
+          securityHeaders(response);
+          response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+          response.end(body); finish();
+        } catch { fail(502, 'Private sandbox discovery is unavailable.'); }
+      });
+      return;
+    }
     for (const [key, value] of Object.entries(outgoing)) if (value !== undefined) response.setHeader(key, value);
     securityHeaders(response);
+    if (options.sandbox) {
+      response.removeHeader('X-Frame-Options');
+      // Preserve the runtime's content policy and narrow embedding to this one
+      // owner. Local app hosts never admit the owner's session cookie/API.
+      const policy = String(incoming.headers['content-security-policy']).split(';')
+        .filter(directive => !/^\s*frame-ancestors(?:\s|$)/i.test(directive)).join(';');
+      response.setHeader('Content-Security-Policy', `${policy}; frame-ancestors ${runtime.origin}`);
+      response.setHeader('Origin-Agent-Cluster', '?1');
+      let size = 0;
+      incoming.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > 2 * 1024 * 1024) fail(502, 'Private sandbox document is too large.');
+      });
+    }
     response.writeHead(incoming.statusCode ?? 502);
     pipeline(incoming, response, () => finish());
   });

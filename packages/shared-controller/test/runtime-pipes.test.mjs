@@ -135,6 +135,20 @@ test('aborting a request cannot free its process quota before owned exit is obse
   assert.throws(() => pipes.connect(runtime), /unavailable/);
 });
 
+test('sandbox transport permits only its fixed helper flag and shares the owner pipe quota', async t => {
+  const { config, runtime, ledger } = fixture();
+  const engine = delayedExitEngine();
+  const spawnChild = engine.spawn; const commands = [];
+  engine.spawn = (policy, args) => { commands.push(args); return spawnChild(policy, args); };
+  const pipes = new RuntimePipes(config, ledger, engine);
+  t.after(async () => { engine.children.forEach(child => child.finish()); await pipes.close(); });
+  assert.throws(() => pipes.connect(runtime, 'http://127.0.0.1:9999'));
+  pipes.connect(runtime, 'sandbox');
+  assert.deepEqual(commands[0].slice(-2), ['/app/packages/shared-controller/dist/runtime-bridge.js', '--sandbox']);
+  for (let i = 0; i < 7; i++) pipes.connect(runtime);
+  assert.throws(() => pipes.connect(runtime, 'sandbox'));
+});
+
 test('separate owners retain individual quotas within the global process bound', async t => {
   const { config, runtime, ledger } = fixture();
   config.runtimes = Array.from({ length: 9 }, (_, index) => ({ ...runtime, id: `owner-${index}`, actorId: `owner-${index}` }));

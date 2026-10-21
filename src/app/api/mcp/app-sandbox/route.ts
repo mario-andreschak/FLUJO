@@ -7,6 +7,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { getEffectiveMcpAppConsent } from '@/backend/mcpApps/appConsent';
 import { deriveVerifiedMcpAppOriginKey } from '@/backend/mcpApps/appOrigin';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { managedSandboxOwnerOrigin } from '@/backend/mcpApps/managedSandbox';
 import {
   deriveSandboxPublicUrl,
   ensureSandboxForOriginKey,
@@ -42,6 +43,8 @@ import {
  * an active chat, which already requires the encryption unlock.
  */
 function externalOrigin(request: NextRequest): string {
+  const ownerOrigin = managedSandboxOwnerOrigin();
+  if (ownerOrigin) return ownerOrigin;
   const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
   const forwardedHost = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
   const protocol = forwardedProto || request.nextUrl.protocol.replace(/:$/, '') || 'http';

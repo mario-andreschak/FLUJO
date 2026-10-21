@@ -71,8 +71,10 @@ never binds a LAN interface. Different ports on one hostname cannot separate
 owners' cookies and are rejected. No public DNS resolver, ACME service or
 certificate-validation bypass supplies the offline profile.
 
-`tls-init` creates and pins a private installation CA, then issues an exact-host
-server certificate locally. `tls-trust` is an explicit operator action to trust
+`tls-init` creates and pins a private installation CA, then issues a server
+certificate for enrolled owner hosts and, for managed owners, their single-label
+app namespaces (`*.alice.localhost`). It never signs a general `*.localhost`
+wildcard. `tls-trust` is an explicit operator action to trust
 only its public CA in the current Windows user's Root store or a Linux browser
 NSS database. These commands never transmit a private key or request an online
 certificate. The CA has a localhost DNS name constraint and no subordinate CA
@@ -405,6 +407,36 @@ host-network path. Services, helpers and models must already be installed:
 no DNS, image pull or download is needed for this channel. Actual Docker/stdin
 failure behavior and cold offline model journeys still require release acceptance.
 
+## Local MCP App rendering
+
+With direct local HTTPS, a verified MCP App opens at
+`https://app<resource-hash>.alice.localhost:4280/sandbox.html`. Another owner's
+copy has a different hostname. The runtime still checks workspace, server,
+resource identity and consent before discovery. The controller replaces the
+runtime's token with a single-use, 60-second launch ticket tied to that owner
+session and exact app origin. Concurrent mounts receive separate tickets.
+Restart discards tickets, and logout, account/runtime revocation or expired
+authority prevents admission and cuts an in-flight response. Already rendered
+content is not erased by revocation; subsequent tool calls require the parent's
+current authenticated session.
+
+Only an iframe navigation from the exact owner page can consume a ticket. The
+controller uses a fixed owner exec pipe to container loopback port 4201, without
+publishing a container port or enabling networking. The sandbox receives no
+owner bearer, parent session cookie or caller identity headers. Its CSP limits
+embedding to that owner, retains the content policy and disables workers; the
+managed runtime pins its embedder/port and ignores the allow-all escape hatch.
+The app hostname never routes ordinary FLUJO APIs, registration requests or an
+arbitrary URL to the container. Up to 64 pending launches per owner and 4,096
+globally share the existing bounded pipe/request quotas.
+
+This carries inline MCP Apps and their parent-mediated tool calls, including
+the terminal's tool-call polling. Apps requiring separate sidecar HTTP routes
+or WebSocket connections still need capability integration and fail closed.
+No shared browser origin, cloud gateway, DNS service or sandbox cookie supplies
+this path. Local CA trust, nested localhost resolution and actual browser/
+terminal operation with both internet and LAN disabled remain release gates.
+
 ## Remaining boundaries and release acceptance
 
 HTTP/SSE forwarding has 64 MiB upload, 64 per-owner and 512 global request limits,
@@ -413,7 +445,7 @@ at eight per owner and 64 globally. Cancelled requests retain their process slot
 until the owned child actually exits. Streams recheck authority each second;
 shutdown waits for child exit and reports unconfirmed exit instead of treating a
 kill request as success. Native API/MCP,
-webhooks, WebSocket upgrades, MCP App origins and OAuth callbacks still require
+webhooks, WebSocket upgrades, MCP App sidecar routes and OAuth callbacks still require
 protocol integration. None of these gaps may be filled by a cloud isolation
 service.
 
@@ -453,6 +485,11 @@ acceptance environment. Do not disconnect the user's active machine or services.
   stalled pipes and CLI loss; require helper listener expiry without a network
   fallback or disclosure of host credentials. Use only model/provider routes
   authorized for the acceptance run; transport fixtures make no inference claim.
+  Open inline apps and terminal sessions for both owners in real browsers;
+  verify separate app storage, concurrent mounts, ticket expiry/replay, logout
+  during discovery/load/tool calls, sibling-app/owner attempts and CSP denial.
+  Prove controller restart and fixed-port pipe failure cannot fall back to the
+  application API, host networking or a shared sandbox origin.
   Disable during a running tool/stream and during controller/engine failure;
   require observed process exit without touching the other owner's jobs.
 - Verify explicit team resource/dependency grants, edit conflicts, history and

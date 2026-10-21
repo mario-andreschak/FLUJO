@@ -14,16 +14,17 @@ export class RuntimePipes {
   private closing = false;
   constructor(readonly config: ControllerConfig, readonly ledger: Ledger, readonly engine: Pick<LocalEngine, 'spawn'>) {}
 
-  connect(runtime: Runtime): Duplex {
+  connect(runtime: Runtime, channel: 'application' | 'sandbox' = 'application'): Duplex {
     const intent = this.ledger.intents().find(item => item.runtimeId === runtime.id);
     const revision = runtimeRevision(this.config, runtime);
-    if (this.closing || !runtime.localRuntime || !intent || intent.desired !== 'running'
+    if (!['application', 'sandbox'].includes(channel) || this.closing || !runtime.localRuntime || !intent || intent.desired !== 'running'
         || !this.ledger.available(runtime, revision)
         || this.children.size >= 64 || (this.counts.get(runtime.id) ?? 0) >= 8) {
       throw new Error('Local runtime transport is unavailable.');
     }
     const child = this.engine.spawn(runtime.localRuntime, ['container', 'exec', '--interactive', '--user', '1000:1000',
-      '--workdir', '/app', runtime.localRuntime.containerId, '/usr/local/bin/node', '/app/packages/shared-controller/dist/runtime-bridge.js']);
+      '--workdir', '/app', runtime.localRuntime.containerId, '/usr/local/bin/node', '/app/packages/shared-controller/dist/runtime-bridge.js',
+      ...(channel === 'sandbox' ? ['--sandbox'] : [])]);
     const pipe = Duplex.from({ readable: child.stdout, writable: child.stdin });
     // A spawn failure can precede the HTTP client's listeners. Keep it handled;
     // the client still receives the same error event and returns a generic 502.

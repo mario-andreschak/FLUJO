@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { X509Certificate } from 'node:crypto';
 import { renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { request as httpsRequest } from 'node:https';
@@ -21,6 +22,20 @@ function configuration(directory) {
       origin: `https://${actorId}.localhost:4280`, upstream: `http://127.0.0.1:${4211 + index}`,
       isolationId: `fixture-${actorId}`, credential: `flo_v1_${String(index).repeat(43)}` })) });
 }
+
+test('managed app certificates cover only one label beneath the enrolled owner', { timeout: 180_000 }, async t => {
+  const { directory } = privateFixture(t);
+  const config = configuration(directory);
+  config.runtimes[0].localRuntime = { containerId: 'fixture' };
+  const material = await ensureLocalTLS(config, { initialize: true });
+  const leaf = new X509Certificate(material.cert);
+  assert.equal(leaf.checkHost('alice.localhost'), 'alice.localhost');
+  assert.equal(leaf.checkHost(`app${'a'.repeat(60)}.alice.localhost`), '*.alice.localhost');
+  for (const host of ['mallory.localhost', 'app.bob.localhost', 'nested.app.alice.localhost', 'app.alice.example']) {
+    assert.equal(leaf.checkHost(host), undefined);
+  }
+  assert.equal((await ensureLocalTLS(config)).fingerprint, material.fingerprint);
+});
 
 function send(port, ca, { servername = 'alice.localhost', host = 'alice.localhost:4280', method = 'GET',
   path = '/_account', body, headers = {} } = {}) {

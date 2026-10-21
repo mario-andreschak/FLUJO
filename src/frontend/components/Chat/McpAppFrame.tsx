@@ -349,6 +349,8 @@ interface AppResource {
 }
 
 interface SandboxEndpointResponse {
+  /** Controller launch tickets are consumed once and must never be cached. */
+  reusable?: boolean;
   port?: number;
   token?: string;
   url?: string;
@@ -464,7 +466,14 @@ async function resolveSandboxBaseUrl(
       });
     sandboxEndpointCache.set(cacheKey, promise);
   }
-  const response = await sandboxEndpointCache.get(cacheKey)!;
+  const discovery = sandboxEndpointCache.get(cacheKey)!;
+  const response = await discovery;
+  if (response.reusable === false) {
+    // Concurrent mounts may have awaited the same discovery promise. Only one
+    // can consume a controller ticket; each sibling mount discovers its own.
+    if (sandboxEndpointCache.get(cacheKey) !== discovery) return resolveSandboxBaseUrl(serverName, uri, conversationId);
+    sandboxEndpointCache.delete(cacheKey);
+  }
   return {
     href: buildSandboxUrl(response, window.location),
     allowAll: response.allowAll === true,
