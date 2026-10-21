@@ -20,6 +20,49 @@ local private runtime, data root, home and service credential. Browser sessions
 are opaque host-only cookies. Passwords and administrative bearer credentials are
 never supplied to the private runtime through the browser.
 
+## Local teams
+
+From **Your account → Your teams**, a signed-in account can create a team and
+invite another enrolled local account by its exact account ID. The recipient sees
+the invitation in their own account page and accepts or declines it there. No
+email, account directory, online identity or network service is involved. Pending
+invitations expire after seven days; they grant no access. The creator manages
+invitations, membership and the team name. Members can leave. The creator can
+archive a team, which removes all memberships and pending invitations while
+retaining its local record. Rejoining requires a fresh invitation and acceptance.
+
+This implements the membership journey. **Resource sharing, editing locks and
+resource version history are still pending.** Joining a team does not publish a
+private Model, MCP server, Flow, Chat or Execution, authorize a cross-owner runtime
+request, or expose credentials. These resource operations must use the local
+membership authority when implemented; a client-provided team ID is never proof.
+
+Schema 6 stores teams, invitation state, monotonically increasing membership
+generations and the latest 200 membership events per team in the private SQLite
+ledger. Forms carry the displayed team generation, so a stale member-management
+page cannot overwrite a newer change. Invitation identifiers rotate on reissue,
+are bound to the intended recipient, and are cleared on acceptance, decline,
+withdrawal or archive. Authority witnesses include the exact parent session and
+team generation; every check rereads SQLite. Removal followed by reinvitation,
+logout, password recovery and account revocation cannot revive an older witness.
+Restarts preserve memberships and do not require online refresh.
+
+Membership reads and writes run in transactions with current session checks.
+Account pages enforce exact Origin admission, no-store responses, no embedding,
+bounded form decoding and a post-upload authority check. Team forms never reach
+a private runtime. At most 30 mutations per account per minute and the controller's
+ordinary in-flight limits apply. Limits are 256 active teams per installation,
+32 created by one account, 128 active or invited members per team and 32 pending
+invitations per recipient. Retained directory limits are 4,096 teams overall and
+512 created by one account, including archives. Reaching a retained limit requires
+operator attention; archiving does not erase records to bypass that bound.
+Membership activity is not resource revision history.
+
+Release qualification must exercise two real offline browser sessions, consent,
+stale forms, logout during uploads, membership removal and restart with internet
+and LAN disabled. The SQLite and HTTP regression sources do not establish that
+installed acceptance.
+
 ## Current development profile
 
 Use Node 22.19+ or 24.2+, preinstalled OpenSSL 3, a dedicated unprivileged account, one controller
@@ -259,8 +302,9 @@ runtime cannot change its owner, origin or isolation identity in place.
 Schema 1 OIDC configuration/ledgers are not silently converted to local accounts.
 They are rejected and preserved. The draft has no automatic migration of existing
 user data; explicit ownership mapping, backup and recovery remain required work.
-The local account ledger upgrades from schema 2/3/4 to schema 5 for runtime intent,
-provisioning, credential-rotation journals and revocable model grants; config schema remains 2. Earlier
+The local account ledger upgrades from schema 2/3/4/5 to schema 6 for runtime intent,
+provisioning, credential-rotation journals, revocable model grants and local teams;
+config schema remains 2. Earlier
 controller binaries reject the newer ledger rather than ignoring pending work.
 
 ## Execution revocation and recovery

@@ -28,7 +28,7 @@ export class Ledger {
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
     // The unreleased OIDC prototype's identities must never silently become local
     // accounts. Keep that ledger intact; deliberate migration is separate work.
-    if (version !== 0 && version !== 2 && version !== 3 && version !== 4 && version !== 5) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
+    if (version !== 0 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS actors (
         id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
@@ -78,7 +78,24 @@ export class Ledger {
         configured INTEGER NOT NULL DEFAULT 1 CHECK(configured IN (0,1)),
         PRIMARY KEY(runtime_id,id)
       );
-      PRAGMA user_version=5;
+      CREATE TABLE IF NOT EXISTS teams (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, creator_id TEXT NOT NULL REFERENCES actors(id),
+        generation INTEGER NOT NULL DEFAULT 1, archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS team_members (
+        team_id TEXT NOT NULL REFERENCES teams(id), actor_id TEXT NOT NULL REFERENCES actors(id),
+        state TEXT NOT NULL CHECK(state IN ('invited','member','removed')),
+        generation INTEGER NOT NULL DEFAULT 1, invitation TEXT, expires_at INTEGER,
+        PRIMARY KEY(team_id,actor_id)
+      );
+      CREATE INDEX IF NOT EXISTS team_members_actor ON team_members(actor_id,state);
+      CREATE TABLE IF NOT EXISTS team_events (
+        sequence INTEGER PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), time INTEGER NOT NULL,
+        actor_id TEXT NOT NULL REFERENCES actors(id), action TEXT NOT NULL, subject_id TEXT REFERENCES actors(id)
+      );
+      CREATE INDEX IF NOT EXISTS team_events_team ON team_events(team_id,sequence);
+      PRAGMA user_version=6;
     `);
   }
 
@@ -228,6 +245,19 @@ export class Ledger {
       this.db.prepare('DELETE FROM sessions WHERE hash=?').run(digest(token));
       if (row) this.audit('session.revoked', String(row.actor_id), String(row.runtime_id));
     });
+  }
+
+  /** Revalidate a controller-authored witness without retaining its bearer token. */
+  sessionCurrent(session: Session): boolean {
+    return Boolean(this.db.prepare(`SELECT 1 FROM sessions s JOIN runtimes r ON r.id=s.runtime_id
+      JOIN actors a ON a.id=s.actor_id LEFT JOIN runtime_lifecycle l ON l.runtime_id=r.id
+      WHERE s.hash=? AND s.actor_id=? AND s.runtime_id=? AND s.revision=? AND s.expires_at=?
+      AND s.expires_at>? AND r.revision=s.revision AND r.actor_id=s.actor_id AND r.enabled=1 AND a.enabled=1
+      AND NOT EXISTS(SELECT 1 FROM runtime_rotations rotation WHERE rotation.runtime_id=r.id AND rotation.phase!='complete')
+      AND (l.runtime_id IS NULL OR (l.desired='running' AND l.phase='confirmed' AND l.verified_at>?
+        AND json_extract(l.policy,'$.credentialExpiresAt')>?))`)
+      .get(session.hash, session.actorId, session.runtimeId, session.revision, session.expiresAt,
+        Date.now(), Date.now() - 30_000, Date.now()));
   }
 
   setActorEnabled(actorId: string, enabled: boolean): void {

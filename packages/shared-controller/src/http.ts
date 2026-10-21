@@ -33,10 +33,10 @@ export function redirect(response: ServerResponse, location: string): void {
   response.end();
 }
 
-const escapeHtml = (text: string): string => text.replace(/[&<>"']/g,
+export const escapeHtml = (text: string): string => text.replace(/[&<>"']/g,
   character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 
-export function accountPage(response: ServerResponse, signedIn: boolean, error = '', status = 200): void {
+export function accountPage(response: ServerResponse, signedIn: boolean, error = '', status = 200, actorId?: string): void {
   securityHeaders(response);
   response.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
   response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -50,26 +50,26 @@ export function accountPage(response: ServerResponse, signedIn: boolean, error =
   <form method="post" action="/_account/${signedIn ? 'logout' : 'login'}">
   ${signedIn ? '' : '<label for="password">Password</label><input style="display:block;box-sizing:border-box;width:100%;margin:.5rem 0 1rem;padding:.8rem;font:inherit" id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" aria-describedby="password-help"><p id="password-help">This account works without an internet connection.</p>'}
   <button>${signedIn ? 'Sign out' : 'Sign in'}</button></form>
-  ${signedIn ? '<a href="/">Back to FLUJO</a>' : ''}</main></body></html>`);
+  ${signedIn ? `${actorId ? `<p>Your local account ID: <strong>${escapeHtml(actorId)}</strong></p>` : ''}<p><a href="/_account/teams">Your teams</a></p><a href="/">Back to FLUJO</a>` : ''}</main></body></html>`);
 }
 
-/** Small, time-bounded local login form. No JSON, duplicate fields, query-string
- * passwords or decoder replacement of invalid UTF-8. */
-export async function readPasswordForm(request: IncomingMessage): Promise<string | null> {
+/** Small, time-bounded local form. Reject duplicate fields, invalid UTF-8 and
+ * malformed escapes. Callers admit their exact field set; bodies are never logged. */
+export async function readLocalForm(request: IncomingMessage): Promise<Record<string, string> | null> {
   if (request.headers['content-type']?.split(';')[0].trim() !== 'application/x-www-form-urlencoded'
       || request.headers['content-encoding'] !== undefined) return null;
   const chunks: Buffer[] = [];
   return new Promise(resolve => {
     let size = 0;
     let done = false;
-    const finish = (password: string | null) => {
+    const finish = (form: Record<string, string> | null) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       request.off('data', data); request.off('end', end);
       request.off('aborted', aborted); request.off('error', aborted);
       for (const chunk of chunks) chunk.fill(0);
-      resolve(password);
+      resolve(form);
     };
     const data = (chunk: Buffer) => {
       size += chunk.length;
@@ -87,7 +87,8 @@ export async function readPasswordForm(request: IncomingMessage): Promise<string
           return [decodeURIComponent(pair.slice(0, at).replace(/\+/g, ' ')),
             decodeURIComponent(pair.slice(at + 1).replace(/\+/g, ' '))];
         });
-        finish(pairs.length === 1 && pairs[0][0] === 'password' ? pairs[0][1] : null);
+        finish(pairs.length <= 12 && pairs.every(([key]) => /^[a-zA-Z][a-zA-Z0-9]{0,31}$/.test(key))
+          && new Set(pairs.map(([key]) => key)).size === pairs.length ? Object.fromEntries(pairs) : null);
       } catch { finish(null); }
       finally { bytes.fill(0); }
     };
@@ -96,6 +97,12 @@ export async function readPasswordForm(request: IncomingMessage): Promise<string
     request.on('data', data); request.once('end', end);
     request.once('aborted', aborted); request.once('error', aborted);
   });
+}
+
+/** Passwords are accepted only in this one-field POST form. */
+export async function readPasswordForm(request: IncomingMessage): Promise<string | null> {
+  const form = await readLocalForm(request);
+  return form && Object.keys(form).length === 1 && typeof form.password === 'string' ? form.password : null;
 }
 
 /** Exact origin even for same-site sibling hosts. Forwarded headers grant nothing. */

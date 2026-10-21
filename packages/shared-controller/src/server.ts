@@ -8,6 +8,8 @@ import { proxy } from './proxy.js';
 import { ensureLocalTLS, LocalTLS } from './local-tls.js';
 import { AppSandboxes } from './app-sandboxes.js';
 import { appWebSocket, rejectAppUpgrade } from './app-websocket.js';
+import { Teams } from './teams.js';
+import { teamPage } from './team-page.js';
 import { accountPage, browserRequestAllowed, cookie, readPasswordForm, redirect, reply,
   securityHeaders, SESSION_COOKIE, sessionCookie } from './http.js';
 
@@ -26,6 +28,8 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
   let totalRequests = 0;
   const localTLS = config.tls ? new LocalTLS(config, await ensureLocalTLS(config)) : undefined;
   const sandboxes = new AppSandboxes();
+  const teams = new Teams(ledger);
+  const teamRate = new Map<string, { count: number; reset: number }>();
   const reserve = (runtime: Runtime): (() => void) | undefined => {
     const count = inflight.get(runtime.id) ?? 0;
     if (count >= 64 || totalRequests >= 512) return undefined;
@@ -101,7 +105,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
     const sessionToken = cookie(request, SESSION_COOKIE);
     const session = ledger.session(sessionToken, runtime, revision);
 
-    if (url.pathname === '/_account' && request.method === 'GET') { accountPage(response, !!session); return; }
+    if (url.pathname === '/_account' && request.method === 'GET') { accountPage(response, !!session, '', 200, session?.actorId); return; }
     if (!browserRequestAllowed(request, runtime.origin)) {
       // An email/bookmark link can enter the sign-in page without admitting a
       // cross-site navigation to an arbitrary private API or effectful endpoint.
@@ -120,6 +124,22 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end('{"authenticated":false}');
       } else redirect(response, '/_account');
+      return;
+    }
+    if (url.pathname === '/_account/teams') {
+      if (!session) { redirect(response, '/_account'); return; }
+      if (request.method === 'POST') {
+        const prior = teamRate.get(session.actorId);
+        const rate = prior && prior.reset > Date.now() ? prior : { count: 0, reset: Date.now() + 60_000 };
+        teamRate.set(session.actorId, rate);
+        if (++rate.count > 30) { reply(response, 429, 'Please wait a minute before changing teams again.'); return; }
+      }
+      const finished = reserve(runtime);
+      if (!finished) { reply(response, 429, 'Too many active requests.'); return; }
+      try {
+        await teamPage(request, response, teams, session, url,
+          () => server.listening && (!localTLS || localTLS.valid()) && ledger.sessionCurrent(session));
+      } finally { finished(); }
       return;
     }
     if (url.pathname.startsWith('/_account/')) { reply(response, 404, 'Not found.'); return; }
