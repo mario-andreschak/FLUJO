@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { localRuntimePolicySchema } from './local-runtime-policy.js';
+import { modelGrantSchema } from './model-grant.js';
 
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
 const privatePath = z.string().min(1).refine(value => isAbsolute(value) && !value.includes('\0'));
@@ -28,7 +29,12 @@ const runtimeSchema = z.object({
   // Operator's immutable local OS isolation identity, not proof of isolation.
   isolationId: z.string().min(1).max(255),
   localRuntime: localRuntimePolicySchema.optional(),
+  modelGrants: z.array(modelGrantSchema).max(32).optional(),
 }).strict().superRefine((runtime, context) => {
+  if (runtime.modelGrants?.length && (!runtime.localRuntime
+      || new Set(runtime.modelGrants.map(grant => grant.id)).size !== runtime.modelGrants.length)) {
+    context.addIssue({ code: 'custom', message: 'Model grants require a managed runtime and unique grant identities' });
+  }
   if (runtime.localRuntime && (runtime.isolationId !== `local-docker:${runtime.localRuntime.containerId}`
       || runtime.upstream !== 'http://127.0.0.1:4200' || runtime.caFile !== undefined)) {
     context.addIssue({ code: 'custom', message: 'Managed runtime requires its exact local container identity and internal HTTP endpoint' });
@@ -54,6 +60,9 @@ export const configSchema = z.object({
   sessionSeconds: z.number().int().min(300).max(28800).default(28800),
   runtimes: z.array(runtimeSchema).min(1).max(1000),
 }).strict().superRefine((config, ctx) => {
+  if (config.runtimes.filter(runtime => runtime.modelGrants?.length).length > 64) {
+    ctx.addIssue({ code: 'custom', message: 'At most 64 managed owners may have model relay grants per controller' });
+  }
   if (config.tls && config.runtimes.some(runtime => {
     try {
       const url = new URL(runtime.origin);

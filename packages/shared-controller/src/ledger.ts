@@ -6,6 +6,7 @@ import { assertPrivateDirectory, assertPrivateFile, createPrivateFile } from './
 import { runtimeRevision, type ControllerConfig, type Runtime } from './config.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { localRuntimePolicySchema, type RuntimeIntent, type RuntimeProblem } from './local-runtime-policy.js';
+import { modelGrantRevision, type ModelGrant } from './model-grant.js';
 
 export const opaque = (): string => randomBytes(32).toString('base64url');
 export const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
@@ -27,7 +28,7 @@ export class Ledger {
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
     // The unreleased OIDC prototype's identities must never silently become local
     // accounts. Keep that ledger intact; deliberate migration is separate work.
-    if (version !== 0 && version !== 2 && version !== 3 && version !== 4) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
+    if (version !== 0 && version !== 2 && version !== 3 && version !== 4 && version !== 5) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS actors (
         id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
@@ -70,7 +71,14 @@ export class Ledger {
         created_at INTEGER NOT NULL
       );
       CREATE UNIQUE INDEX IF NOT EXISTS one_pending_rotation ON runtime_rotations(runtime_id) WHERE phase!='complete';
-      PRAGMA user_version=4;
+      CREATE TABLE IF NOT EXISTS runtime_model_grants (
+        runtime_id TEXT NOT NULL REFERENCES runtimes(id), id TEXT NOT NULL, revision TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 1,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+        configured INTEGER NOT NULL DEFAULT 1 CHECK(configured IN (0,1)),
+        PRIMARY KEY(runtime_id,id)
+      );
+      PRAGMA user_version=5;
     `);
   }
 
@@ -105,6 +113,7 @@ export class Ledger {
         }
       }
       this.db.exec('UPDATE runtimes SET enabled=0');
+      this.db.exec('UPDATE runtime_model_grants SET configured=0');
       for (const runtime of config.runtimes) {
         this.db.prepare('INSERT OR IGNORE INTO actors(id) VALUES(?)').run(runtime.actorId);
         const previous = this.db.prepare('SELECT actor_id,origin,isolation_id,revision FROM runtimes WHERE id=?').get(runtime.id);
@@ -121,6 +130,11 @@ export class Ledger {
           ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,enabled=1`)
           .run(runtime.id, runtime.actorId, runtime.origin, new URL(runtime.origin).hostname, runtime.isolationId, revision);
         if (!previous || previous.revision !== revision) this.audit('runtime.configured', runtime.actorId, runtime.id);
+        for (const grant of runtime.modelGrants ?? []) {
+          this.db.prepare(`INSERT INTO runtime_model_grants(runtime_id,id,revision) VALUES(?,?,?)
+            ON CONFLICT(runtime_id,id) DO UPDATE SET generation=generation+(revision!=excluded.revision),revision=excluded.revision,configured=1`)
+            .run(runtime.id, grant.id, modelGrantRevision(grant));
+        }
         const prior = this.db.prepare('SELECT policy,credential_digest FROM runtime_lifecycle WHERE runtime_id=?').get(runtime.id);
         if (prior && (JSON.stringify(runtime.localRuntime) !== prior.policy || digest(runtime.credential) !== prior.credential_digest)) {
           throw new Error('A managed runtime cannot change its local execution boundary in place.');
@@ -237,6 +251,24 @@ export class Ledger {
 
   prune(): void {
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
+  }
+
+  modelGeneration(runtime: Runtime, revision: string, grant: ModelGrant): number | null {
+    if (!this.available(runtime, revision)) return null;
+    const row = this.db.prepare(`SELECT generation FROM runtime_model_grants
+      WHERE runtime_id=? AND id=? AND revision=? AND enabled=1 AND configured=1`)
+      .get(runtime.id, grant.id, modelGrantRevision(grant));
+    return row ? Number(row.generation) : null;
+  }
+
+  setModelEnabled(actorId: string, grantId: string, enabled: boolean): void {
+    this.transaction(() => {
+      const runtime = this.db.prepare(`SELECT r.id FROM runtimes r JOIN runtime_model_grants g ON g.runtime_id=r.id
+        WHERE r.actor_id=? AND r.enabled=1 AND g.id=? AND g.configured=1`).get(actorId, grantId);
+      if (!runtime) throw new Error('Unknown configured model grant.');
+      this.db.prepare('UPDATE runtime_model_grants SET enabled=?,generation=generation+1 WHERE runtime_id=? AND id=?').run(enabled ? 1 : 0, runtime.id, grantId);
+      this.audit(`model.${enabled ? 'enabled' : 'disabled'}.${grantId}`, actorId, String(runtime.id));
+    });
   }
 
   intents(): RuntimeIntent[] {

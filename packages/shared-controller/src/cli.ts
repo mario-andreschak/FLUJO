@@ -14,6 +14,7 @@ import { rotateRuntime } from './rotate-runtime.js';
 import { setupController } from './setup.js';
 import { ensureLocalTLS } from './local-tls.js';
 import { updateLocalTrust } from './tls-trust.js';
+import { ModelBrokers } from './model-brokers.js';
 
 const runtimeStatus = (intent: RuntimeIntent) => ({ runtimeId: intent.runtimeId, actorId: intent.actorId,
   desired: intent.desired, phase: intent.phase, generation: intent.generation,
@@ -31,8 +32,9 @@ export async function main(args: string[]): Promise<void> {
     return;
   }
   if (!filename || !['init', 'serve', 'disable', 'enable', 'status', 'password', 'reconcile', 'provision',
-    'tls-init', 'tls-renew', 'tls-trust', 'tls-untrust', 'rotate', 'resume-rotation'].includes(action)
-      || (['disable', 'enable', 'password', 'provision', 'rotate', 'resume-rotation'].includes(action) ? !actorId || args.length !== 3
+    'tls-init', 'tls-renew', 'tls-trust', 'tls-untrust', 'rotate', 'resume-rotation', 'disable-model', 'enable-model'].includes(action)
+      || (['disable-model', 'enable-model'].includes(action) ? !actorId || !args[3] || args.length !== 4
+        : ['disable', 'enable', 'password', 'provision', 'rotate', 'resume-rotation'].includes(action) ? !actorId || args.length !== 3
         : ['tls-trust', 'tls-untrust'].includes(action) ? args.length < 2 || args.length > 3 : args.length !== 2)) {
     throw new Error('Invalid local controller command. Use --help for arguments.');
   }
@@ -57,10 +59,15 @@ export async function main(args: string[]): Promise<void> {
   let ledger: Ledger | undefined;
   let supervisor: RuntimeSupervisor | undefined;
   let pipes: RuntimePipes | undefined;
+  let models: ModelBrokers | undefined;
   let controller: ControllerServer | undefined;
   try {
     ledger = new Ledger(config.stateDirectory);
-    if (action === 'rotate' || action === 'resume-rotation') {
+    if (action === 'disable-model' || action === 'enable-model') {
+      ledger.setModelEnabled(actorId, args[3], action === 'enable-model');
+      process.stdout.write(`${JSON.stringify({ actorId, grantId: args[3], accessRequested: action === 'enable-model',
+        note: 'Grant changes are durable. The running relay rechecks active requests each second; disconnect does not prove upstream inference stopped.' })}\n`);
+    } else if (action === 'rotate' || action === 'resume-rotation') {
       const result = await rotateRuntime(filename, config, ledger, actorId, action === 'resume-rotation');
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       if (!result.verified) process.exitCode = 2;
@@ -110,7 +117,8 @@ export async function main(args: string[]): Promise<void> {
         FROM actors a JOIN runtimes r ON r.actor_id=a.id LEFT JOIN passwords p ON p.actor_id=a.id ORDER BY a.id`).all();
       const provisioning = ledger.db.prepare('SELECT runtime_id AS runtimeId,phase FROM runtime_provisioning ORDER BY runtime_id').all();
       const rotations = ledger.db.prepare('SELECT id AS operationId,runtime_id AS runtimeId,phase,created_at AS createdAt FROM runtime_rotations ORDER BY created_at').all();
-      process.stdout.write(`${JSON.stringify({ actors: rows, runtimes: ledger.intents().map(runtimeStatus), provisioning, rotations }, null, 2)}\n`);
+      const modelGrants = ledger.db.prepare('SELECT runtime_id AS runtimeId,id AS grantId,enabled AS accessRequested,configured,generation FROM runtime_model_grants ORDER BY runtime_id,id').all();
+      process.stdout.write(`${JSON.stringify({ actors: rows, runtimes: ledger.intents().map(runtimeStatus), provisioning, rotations, modelGrants }, null, 2)}\n`);
     } else if (action === 'reconcile') {
       ledger.reconcile(config);
       supervisor = new RuntimeSupervisor(ledger, new LocalRuntimeDriver(new LocalEngine(config.stateDirectory)));
@@ -125,12 +133,14 @@ export async function main(args: string[]): Promise<void> {
         const engine = new LocalEngine(config.stateDirectory);
         supervisor = new RuntimeSupervisor(ledger, new LocalRuntimeDriver(engine));
         pipes = new RuntimePipes(config, ledger, engine);
+        models = new ModelBrokers(config, ledger, engine);
       }
       await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
         server.listen(config.port, '127.0.0.1', () => { server.off('error', reject); resolve(); });
       });
       supervisor?.start();
+      models?.start();
       process.stdout.write(`FLUJO controller listening on 127.0.0.1:${config.port}. ${config.tls ? 'Local HTTPS enabled.' : 'TLS proxy required for this legacy configuration.'}\n`);
       for (const runtime of config.runtimes) process.stdout.write(`Open ${runtime.origin}/_account\n`);
       await new Promise<void>((resolve, reject) => {
@@ -152,7 +162,7 @@ export async function main(args: string[]): Promise<void> {
   } finally {
     try {
       try { await supervisor?.stop(); }
-      finally { try { await pipes?.close(); } finally { await controller?.stopTLS(); } }
+      finally { try { await models?.close(); } finally { try { await pipes?.close(); } finally { await controller?.stopTLS(); } } }
     }
     finally { ledger?.close(); release?.(); }
   }

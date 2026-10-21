@@ -257,8 +257,8 @@ runtime cannot change its owner, origin or isolation identity in place.
 Schema 1 OIDC configuration/ledgers are not silently converted to local accounts.
 They are rejected and preserved. The draft has no automatic migration of existing
 user data; explicit ownership mapping, backup and recovery remain required work.
-The local account ledger upgrades from schema 2/3 to schema 4 for runtime intent,
-provisioning and credential-rotation journals; config schema remains 2. Earlier
+The local account ledger upgrades from schema 2/3/4 to schema 5 for runtime intent,
+provisioning, credential-rotation journals and revocable model grants; config schema remains 2. Earlier
 controller binaries reject the newer ledger rather than ignoring pending work.
 
 ## Execution revocation and recovery
@@ -334,6 +334,77 @@ local rotation before requesting a restart. No online credential issuer, lease,
 identity service or image download is used. Native crash/power-loss and engine
 acceptance remain release gates; fixtures cannot establish those guarantees.
 
+## Host-local model services
+
+A managed owner can use an explicitly granted, already installed local model
+service while its container remains networkless. Add `modelGrants` to that
+owner's runtime entry in the private controller config, then restart the
+controller. The following example grants only a model that the operator has
+already installed and approved on the host:
+
+```json
+"modelGrants": [{
+  "id": "local",
+  "endpoint": "http://127.0.0.1:11434/v1",
+  "models": ["your-installed-model-name"]
+}]
+```
+
+Endpoints must be canonical HTTP(S) URLs with an explicit non-default port, the
+literal loopback address `127.0.0.1` or `[::1]`, and exactly `/v1`. Hostnames,
+LAN/internet addresses, credentials in URLs, queries and fragments are rejected.
+An optional `bearerFile` contains the service token in private host storage; an
+optional `caFile` pins a local HTTPS service's trust material. Neither file nor
+the host endpoint is sent into the owner container. The operator must trust the
+configured local service with that owner's submitted model inputs. Granting a
+service does not authorize its administration, model downloads or arbitrary URLs.
+
+Inside that owner's FLUJO, use the existing local/Ollama connection option with
+server URL `http://127.0.0.1:4290/grants/local` (the wizard appends `/v1`), or edit
+an existing local model's base URL to
+`http://127.0.0.1:4290/grants/local/v1`. Select an exact granted model name and the
+OpenAI-compatible adapter. This address is inside the private container; it is
+not a host listener. The local profile uses a non-secret placeholder key; never
+copy the host service token into a model. The configured catalogue lists only
+that owner's granted models. Listing models is not proof that the host service
+or model is ready; its connection test performs an actual model request.
+
+The controller launches a fixed UID 1000 helper through the exact owned exec
+pipe after fresh runtime verification. It relays catalogue, chat completions
+(including SSE/tool-call messages and inline images) and embeddings. Each
+request is bound to its owner, grant revision/generation and model allowlist.
+Caller headers and URLs cannot select host credentials or destinations. The
+relay follows no redirects, forwards no host cookies/diagnostics, and rejects
+external image URLs, external schema references, unknown operations and
+unsupported body extensions. It does not retry or replay requests; a caller's
+own configured retry behavior remains its responsibility. Native subscription
+adapters, Responses/audio/image-generation APIs and internet providers are not
+carried by this local-model channel yet.
+
+```sh
+flujo-controller disable-model /absolute/private/config.json alice local
+flujo-controller enable-model /absolute/private/config.json alice local
+```
+
+Revocation is durable and survives restarts/reconfiguration. Re-enabling creates
+a new grant generation; it cannot revive an older in-flight stream. Requests
+recheck authority before sends/chunks and at one-second intervals, including
+while waiting for response credit. Account disable, expired runtime authority,
+lost observations and shutdown also close the relay. Closing a host connection
+does not prove that a model service stopped inference already accepted; the
+service remains responsible for its own cancellation/resource enforcement.
+
+Framing, body reads and pipe writes are bounded. There are at most 64 owners with
+relay grants, four active requests per owner and 16 upstream requests globally.
+Requests are limited to 8 MiB, responses to 64 MiB, and channel input to about
+64 MiB/4,096 frames per ten seconds. Chunk acknowledgements apply backpressure;
+unconfirmed child exits retain their channel slot. Requests retain the normal
+five-hour model ceiling. A helper loses its listener within ten seconds without
+controller heartbeats; restart uses bounded backoff and never switches to a
+host-network path. Services, helpers and models must already be installed:
+no DNS, image pull or download is needed for this channel. Actual Docker/stdin
+failure behavior and cold offline model journeys still require release acceptance.
+
 ## Remaining boundaries and release acceptance
 
 HTTP/SSE forwarding has 64 MiB upload, 64 per-owner and 512 global request limits,
@@ -346,11 +417,11 @@ webhooks, WebSocket upgrades, MCP App origins and OAuth callbacks still require
 protocol integration. None of these gaps may be filled by a cloud isolation
 service.
 
-The networkless runtime currently cannot call internet providers, sibling
-containers, host-local model servers or download new tools. Local tools already
-in its image/volumes can run. A separately authorized local capability broker is
-pending for optional external integrations and host model services; it must not
-weaken owner isolation or become an online prerequisite. Persistent disk quotas and
+The networkless runtime cannot directly call internet providers, sibling
+containers or download new tools. Local tools already in its image/volumes can
+run, and explicit model grants use the local relay described above. Capability
+support for optional external integrations and native subscription adapters is
+still pending; it must not weaken owner isolation or become an online prerequisite. Persistent disk quotas and
 full process-tree/pipe exhaustion qualification remain pending.
 Native TLS trust and browser/offline installation qualification
 remain release gates.
@@ -376,6 +447,12 @@ acceptance environment. Do not disconnect the user's active machine or services.
   ledger commit; lose the helper reply, expire the interrupted candidate, and
   disable the account concurrently. Verify recovery retains owner/data identity,
   never restores a disabled account and never admits mismatched credentials.
+  Exercise local model catalogue/chat/streaming/tool-call/embedding use through
+  the real installed UI with LAN disabled. Check cross-owner model denials,
+  disable/re-enable during a stream, slow consumers, host-service failure,
+  stalled pipes and CLI loss; require helper listener expiry without a network
+  fallback or disclosure of host credentials. Use only model/provider routes
+  authorized for the acceptance run; transport fixtures make no inference claim.
   Disable during a running tool/stream and during controller/engine failure;
   require observed process exit without touching the other owner's jobs.
 - Verify explicit team resource/dependency grants, edit conflicts, history and
