@@ -38,6 +38,7 @@ import {
   MenuRounded,
   PeopleAltRounded,
   SettingsRounded,
+  ScienceRounded,
   WavesRounded,
 } from '@mui/icons-material';
 import { alpha } from '@mui/material/styles';
@@ -89,6 +90,7 @@ const navItems: NavItem[] = [
     label: 'nav.more',
     icon: MenuRounded,
     children: [
+      { type: 'link', label: 'harness.title', path: '/harness', tour: 'nav-harness', icon: ScienceRounded, experimental: true },
       {
         type: 'link',
         label: 'nav.automations',

@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { v4 as uuidv4 } from 'uuid';
 import os from 'os';
 import path from 'path';
@@ -202,7 +203,15 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
  */
 export class CodexAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    const harnessExecution = getHarnessExecution();
     assertOwnerCredentialAdapterRoute(input.model, 'codex-cli');
+    if (input.harnessTextOnly && (input.apiKey || input.model.ApiKey?.trim() || input.model.baseUrl?.trim()
+      || !input.signal || input.tools?.length || input.localToolExecutors || input.nativeToolPort
+      || input.nativeOriginalProcessHost || input.executionExtensionContext || input.conversationId
+      || input.nodeId || input.codexSession || input.sessionResume || input.steering
+      || process.env.FLUJO_CODEX_APP_SERVER === '0')) {
+      throw new Error('Harness text inference requires a fresh, tool-free Codex subscription request.');
+    }
     const invocationStartedAt = Date.now();
     const {
       model,
@@ -504,7 +513,9 @@ export class CodexAdapter implements CompletionAdapter {
                 let resultContent: string;
                 let isError = false;
                 try {
-                  resultContent = JSON.stringify(await localExec(args ?? {}));
+                  const localResult = await localExec(args ?? {});
+                  // Replay evidence already contains the original serialized tool result.
+                  resultContent = harnessExecution && typeof localResult === 'string' ? localResult : JSON.stringify(localResult);
                 } catch (err) {
                   if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost') throw err;
                   resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -974,7 +985,9 @@ export class CodexAdapter implements CompletionAdapter {
             code_mode_host: true,
             default_mode_request_user_input: Boolean(ordinaryQuestion) } : {}),
         },
-        ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_CONFIG : {}),
+        ...(executionExtensionContext || nativeToolPort || input.harnessTextOnly || getHarnessExecution() ? RESTRICTED_CODEX_CONFIG : {}),
+        // CodeModeOnly models need the computational bridge to access recorded FLUJO tools.
+        ...(harnessExecution && ordinaryThreadPath ? { features: { ...RESTRICTED_CODEX_CONFIG.features, code_mode_host: true } } : {}),
         ...(modelCatalogPath ? { model_catalog_json: modelCatalogPath } : {}),
         ...(bridge
           ? {
@@ -1010,7 +1023,7 @@ export class CodexAdapter implements CompletionAdapter {
         workingDirectory: runtime.workingDirectory,
         skipGitRepoCheck: true,
         approvalPolicy: 'never',
-        ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_THREAD_OPTIONS : {}),
+        ...(executionExtensionContext || nativeToolPort || input.harnessTextOnly || getHarnessExecution() ? RESTRICTED_CODEX_THREAD_OPTIONS : {}),
       } as const;
       const ownedThread = nativeOriginalProcessHost ? createOwnedCodexThread({
         host: nativeOriginalProcessHost, env: nativeCodexEnvironment(runtime.env, apiKey),
@@ -1378,7 +1391,7 @@ export class CodexAdapter implements CompletionAdapter {
           continue;
         }
         if (endedByCaller || !attemptFailure || handoffCalls.length > 0) break;
-        if (!ordinaryThread && !nativeToolPort && !executionExtensionContext && !connectionRetryUsed && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
+        if (!input.harnessTextOnly && !getHarnessExecution() && !ordinaryThread && !nativeToolPort && !executionExtensionContext && !connectionRetryUsed && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
           connectionRetryUsed = true;
           nextTurnInput = continuationInput;
           nextTurnWireMessages = [{ role: 'user', content: continuationInput }];
@@ -1401,7 +1414,7 @@ export class CodexAdapter implements CompletionAdapter {
       // A stale/missing persisted thread must not lose the current user request.
       // Retry exactly once from the full flattened history on a new SDK thread.
       // Cancellation is terminal and must not start a replacement run.
-      if (!ordinaryThread && !nativeToolPort && resumeThreadId && !signal?.aborted && handoffCalls.length === 0 && !endedByCaller
+      if (!input.harnessTextOnly && !getHarnessExecution() && !ordinaryThread && !nativeToolPort && resumeThreadId && !signal?.aborted && handoffCalls.length === 0 && !endedByCaller
         && transcript.length === 0) {
         log.warn('Codex SDK thread resume failed; retrying on a fresh thread', {
           conversationId,

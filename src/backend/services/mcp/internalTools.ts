@@ -101,6 +101,7 @@ import {
   personaCompositionToolDefinitions,
 } from './personaCompositionTools';
 
+import { harnessToolDefinitions, isHarnessTool, callHarnessTool } from './harnessTools';
 const log = createLogger('backend/services/mcp/internalTools');
 
 /**
@@ -210,6 +211,7 @@ export function internalToolDefinitions(): Tool[] {
     // create_flow and the four MCP discovery/install tools).
     ...authoringToolDefinitions(),
     ...personaCompositionToolDefinitions(),
+    ...harnessToolDefinitions(),
     {
       name: 'create_ticket_for_human',
       description: 'Create a dashboard ticket for the human operator. Use a concise plain-text message and optional comma-separated labels. Pass conversation_id or flow_id when known so the human can navigate back to the related work.',
@@ -1831,6 +1833,7 @@ export async function internalCallTool(
     if (isAuthoringTool(toolName)) {
       return await authoringCallTool(toolName, args);
     }
+    if (isHarnessTool(toolName)) return await callHarnessTool(toolName, args);
     if (isPersonaCompositionTool(toolName)) {
       return await callPersonaCompositionTool(toolName, args);
     }

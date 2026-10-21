@@ -2,6 +2,8 @@
 
 This section provides detailed documentation for Flujo's features.
 
+- **[Harness Lab — experimental](./harness-lab.md)**: Evolve plain-text agent instructions with comparative probes, held-out checks, scoped lessons and reviewable agent copies. Off by default.
+
 - **[Chat commands and dynamic tool parameters](./dynamic-references.md)**: Current context, entity pickers, tool/resource references, and hidden parameter presets
 
 ## Quick Chat

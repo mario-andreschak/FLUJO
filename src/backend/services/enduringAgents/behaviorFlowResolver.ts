@@ -176,6 +176,9 @@ export async function resolveEffectiveBehaviorRevision(
       );
     }
 
+    if (await (await import('../harness/profiles')).isHarnessBehaviorSelection(persona.id, binding.id, active.id, selectedFlowRef, contentHash)) {
+      return { binding, revision: active };
+    }
     if (
       active.contentHash === contentHash
       && canonicalJson(active.flowSnapshot) === canonicalJson(flowSnapshot)

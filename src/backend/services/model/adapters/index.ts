@@ -1,4 +1,5 @@
 import type { Model } from '@/shared/types/model';
+import { guardHarnessAdapter } from '@/backend/services/harness/executionScope';
 import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { CompletionAdapter } from './types';
 import { OpenAiAdapter } from './openaiAdapter';
@@ -58,6 +59,10 @@ export type {
  * Gateway profiles also resolve older Chat Completions records to Responses.
  */
 export function getCompletionAdapter(model: Model, requiredRoute?: CompletionAdapterRoute): CompletionAdapter {
+  return guardHarnessAdapter(createCompletionAdapter(model, requiredRoute));
+}
+
+function createCompletionAdapter(model: Model, requiredRoute?: CompletionAdapterRoute): CompletionAdapter {
   // Resolve once for this factory call. A protected ModelHandler supplies the
   // qualified route after its async preparation, before any native adapter can run.
   const route = resolveCompletionAdapterRoute(model);

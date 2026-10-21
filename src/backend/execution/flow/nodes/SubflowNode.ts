@@ -1,5 +1,6 @@
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import {
   assertExecutionExtensionCurrent,
   executionExtensionSubflowCapacity,
@@ -861,7 +862,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     // Honored on the single-child path AND per parallel lane (issue #156
     // defect 1 — spawned/fan-out/map lanes used to stay force-ephemeral, so
     // sub-agent conversations never reached the sidebar).
-    const persistConversation = node_params?.properties?.saveConversation !== false;
+    const persistConversation = !getHarnessExecution() && node_params?.properties?.saveConversation !== false;
 
     // 'isolated' mode sends `promptTemplate` as the subflow's single user prompt,
     // ignoring the parent conversation. Otherwise, pass the parent conversation so

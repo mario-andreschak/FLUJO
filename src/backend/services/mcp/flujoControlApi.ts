@@ -36,6 +36,10 @@ export const FLUJO_FLOW_TOOLS = [
   'list_flow_versions',
   'read_flow_version',
   'revert_flow',
+  'list_harness_targets',
+  'configure_harness',
+  'read_harness_history',
+  'activate_harness_version',
   'delete_flow',
 ] as const;
 
