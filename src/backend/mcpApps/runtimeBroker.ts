@@ -25,6 +25,7 @@ import {
 import { deriveVerifiedMcpAppOriginKey } from '@/backend/mcpApps/appOrigin';
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { managedSandboxOwnerOrigin } from '@/backend/mcpApps/managedSandbox';
 
 const log = createLogger('backend/mcpApps/runtimeBroker');
 
@@ -89,6 +90,7 @@ interface RuntimeRegistration {
   targetOrigin: string;
   routes: McpAppRuntimeRoute[];
   registeredAt: number;
+  connections?: Set<() => void>;
 }
 
 interface RuntimeBrokerState {
@@ -134,6 +136,7 @@ function serverKey(workspace: string, serverName: string): string {
 }
 
 function registrationUrl(): string {
+  if (managedSandboxOwnerOrigin()) return `http://127.0.0.1:${DEFAULT_SANDBOX_PORT}${MCP_APP_RUNTIME_REGISTER_PATH}`;
   const configured = Number.parseInt(process.env.FLUJO_MCP_APP_SANDBOX_PORT ?? '', 10);
   const port = Number.isInteger(configured) && configured > 0 && configured < 65_536
     ? configured
@@ -162,8 +165,25 @@ function revokeWhere(predicate: (capability: RuntimeCapability) => boolean): voi
     runtimeState.capabilities.delete(hash);
   }
   for (const [originKey, registration] of runtimeState.registrations) {
-    if (leaseIds.has(registration.leaseId)) runtimeState.registrations.delete(originKey);
+    if (leaseIds.has(registration.leaseId)) retireRegistration(originKey);
   }
+}
+
+function retireRegistration(originKey: string): void {
+  const registration = state().registrations.get(originKey);
+  state().registrations.delete(originKey);
+  for (const close of [...(registration?.connections ?? [])]) {
+    try { close(); } catch { /* Continue closing the remaining owned connections. */ }
+  }
+}
+
+function retainConnection(registration: RuntimeRegistration, close: () => void): (() => void) | undefined {
+  const registrations = state().registrations;
+  if (registrations.get(registration.originKey) !== registration || (registration.connections?.size ?? 0) >= 64
+      || [...registrations.values()].reduce((count, item) => count + (item.connections?.size ?? 0), 0) >= 512) return undefined;
+  const connections = registration.connections ??= new Set();
+  connections.add(close);
+  return () => { connections.delete(close); };
 }
 
 /**
@@ -205,7 +225,7 @@ export function revokeMcpAppRuntimeBrokerLease(leaseId: string | undefined): voi
   revokeWhere(capability => capability.leaseId === leaseId);
   const runtimeState = state();
   for (const [originKey, registration] of runtimeState.registrations) {
-    if (registration.leaseId === leaseId) runtimeState.registrations.delete(originKey);
+    if (registration.leaseId === leaseId) retireRegistration(originKey);
   }
 }
 
@@ -219,7 +239,7 @@ export function revokeMcpAppRuntimeBrokerForServer(
   const runtimeState = state();
   for (const [originKey, registration] of runtimeState.registrations) {
     if (serverKey(registration.workspace, registration.serverName) === key) {
-      runtimeState.registrations.delete(originKey);
+      retireRegistration(originKey);
     }
   }
 }
@@ -466,8 +486,9 @@ async function registerRuntime(
 
   const runtimeState = state();
   for (const [key, registration] of runtimeState.registrations) {
-    if (registration.leaseId === capability.leaseId) runtimeState.registrations.delete(key);
+    if (registration.leaseId === capability.leaseId) retireRegistration(key);
   }
+  retireRegistration(originKey);
   runtimeState.registrations.set(originKey, {
     leaseId: capability.leaseId,
     workspace: capability.workspace,
@@ -485,7 +506,7 @@ async function registerRuntime(
   while (runtimeState.registrations.size > MAX_REGISTRATIONS) {
     const oldest = runtimeState.registrations.keys().next().value as string | undefined;
     if (!oldest) break;
-    runtimeState.registrations.delete(oldest);
+    retireRegistration(oldest);
   }
 
   json(res, 201, {
@@ -562,7 +583,20 @@ function forwardHttp(
   registration: RuntimeRegistration,
 ): void {
   const target = new URL(registration.targetOrigin);
-  const upstream = http.request({
+  let upstream: http.ClientRequest | undefined;
+  let incoming: http.IncomingMessage | undefined;
+  let done = false;
+  const close = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(lifetime); release?.();
+    upstream?.destroy(); incoming?.destroy(); res.destroy();
+  };
+  const release = retainConnection(registration, close);
+  if (!release) { json(res, 429, { error: 'runtime_connection_unavailable' }); return; }
+  const lifetime = setTimeout(close, 60 * 60_000); lifetime.unref();
+  try { upstream = http.request({
+    agent: false,
     protocol: target.protocol,
     hostname: target.hostname,
     port: target.port,
@@ -570,19 +604,23 @@ function forwardHttp(
     path: req.url,
     headers: forwardedHeaders(req.headers, target),
   }, (upstreamResponse) => {
+    incoming = upstreamResponse;
+    if (done || state().registrations.get(registration.originKey) !== registration) { close(); upstreamResponse.destroy(); return; }
     res.writeHead(
       upstreamResponse.statusCode ?? 502,
       upstreamResponse.statusMessage,
       upstreamResponse.headers,
     );
     upstreamResponse.pipe(res);
-  });
+    upstreamResponse.once('error', close);
+  }); } catch { close(); return; }
+  upstream.setTimeout(120_000, close);
   upstream.once('error', (error) => {
     log.warn(`MCP App runtime HTTP proxy failed for ${registration.serverName}`, error);
     if (!res.headersSent) json(res, 502, { error: 'runtime_gateway_unavailable' });
-    else res.destroy(error);
+    else close();
   });
-  req.once('aborted', () => upstream.destroy());
+  req.once('aborted', close); req.once('error', close); res.once('close', close);
   req.pipe(upstream);
 }
 
@@ -647,31 +685,48 @@ export function handleMcpAppRuntimeUpgrade(
   if (!match) return false;
 
   const target = new URL(match.registration.targetOrigin);
-  const upstream = http.request({
+  let upstream: http.ClientRequest | undefined;
+  let peer: Duplex | undefined;
+  let done = false;
+  const close = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(lifetime); release?.();
+    upstream?.destroy(); peer?.destroy(); socket.destroy();
+  };
+  const release = retainConnection(match.registration, close);
+  if (!release) { socket.destroy(); return true; }
+  const lifetime = setTimeout(close, 60 * 60_000); lifetime.unref();
+  try { upstream = http.request({
+    agent: false,
     protocol: target.protocol,
     hostname: target.hostname,
     port: target.port,
     method: req.method ?? 'GET',
     path: req.url,
     headers: forwardedHeaders(req.headers, target, true),
-  });
+  }); } catch { close(); return true; }
+  upstream.setTimeout(120_000, close);
   upstream.once('upgrade', (response, upstreamSocket, upstreamHead) => {
+    peer = upstreamSocket;
+    if (done || state().registrations.get(match.registration.originKey) !== match.registration) { close(); upstreamSocket.destroy(); return; }
+    upstreamSocket.once('close', close); upstreamSocket.once('error', close);
     writeUpgradeResponse(socket, response);
     if (head.length > 0) upstreamSocket.write(head);
     if (upstreamHead.length > 0) socket.write(upstreamHead);
     upstreamSocket.pipe(socket).pipe(upstreamSocket);
   });
   upstream.once('response', (response) => {
+    if (done) { response.destroy(); return; }
     writeUpgradeResponse(socket, response);
     response.pipe(socket);
-    response.once('end', () => socket.end());
+    response.once('end', () => socket.end()); response.once('error', close);
   });
   upstream.once('error', (error) => {
     log.warn(`MCP App runtime WebSocket proxy failed for ${match.registration.serverName}`, error);
-    socket.destroy();
+    close();
   });
-  socket.once('error', () => upstream.destroy());
-  socket.once('close', () => upstream.destroy());
+  socket.once('error', close); socket.once('close', close);
   upstream.end();
   return true;
 }
@@ -679,7 +734,7 @@ export function handleMcpAppRuntimeUpgrade(
 /** Test/diagnostic accessor. Contains no registration bearer tokens. */
 export function getMcpAppRuntimeBrokerSnapshot(): {
   capabilities: Array<Omit<RuntimeCapability, 'tokenHash'>>;
-  registrations: Array<Omit<RuntimeRegistration, 'routes'> & {
+  registrations: Array<Omit<RuntimeRegistration, 'routes' | 'connections'> & {
     routes: Array<{ path: string; match: RuntimeRouteMatch; httpMethods: string[]; websocket: boolean }>;
   }>;
 } {
@@ -689,7 +744,7 @@ export function getMcpAppRuntimeBrokerSnapshot(): {
     capabilities: Array.from(runtimeState.capabilities.values()).map(({ tokenHash: _tokenHash, ...entry }) => ({
       ...entry,
     })),
-    registrations: Array.from(runtimeState.registrations.values()).map(entry => ({
+    registrations: Array.from(runtimeState.registrations.values()).map(({ connections: _connections, ...entry }) => ({
       ...entry,
       routes: entry.routes.map(route => ({
         path: route.path,
@@ -703,5 +758,6 @@ export function getMcpAppRuntimeBrokerSnapshot(): {
 
 /** Tests can remove global state without learning any bearer credential. */
 export function resetMcpAppRuntimeBrokerForTests(): void {
+  for (const key of state().registrations.keys()) retireRegistration(key);
   delete globalRegistry[RUNTIME_BROKER_STATE_KEY];
 }

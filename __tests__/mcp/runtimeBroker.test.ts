@@ -329,6 +329,63 @@ describe('MCP App sidecar runtime broker', () => {
     })).status).toBe(404);
   });
 
+  it('retiring a registration closes established HTTP streams and both WebSocket peers', async () => {
+    const issued = runWithWorkspace('active-streams', () => issueMcpAppRuntimeBrokerEnvironment('active-app'));
+    const token = issued.env[MCP_APP_RUNTIME_REGISTER_TOKEN_ENV];
+    let httpClosed!: () => void;
+    let websocketClosed!: () => void;
+    const closedHttp = new Promise<void>(resolve => { httpClosed = resolve; });
+    const closedWebSocket = new Promise<void>(resolve => { websocketClosed = resolve; });
+    const target = http.createServer((req, res) => {
+      if (req.url === MCP_APP_RUNTIME_PROOF_PATH) {
+        res.writeHead(204, { [MCP_APP_RUNTIME_PROOF_HEADER]: createHmac('sha256', token)
+          .update(`${PROOF_PREFIX}${String(req.headers[MCP_APP_RUNTIME_PROOF_CHALLENGE_HEADER])}`).digest('base64url') });
+        res.end(); return;
+      }
+      res.once('close', httpClosed);
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write('data: ready\n\n');
+    });
+    target.on('upgrade', (req, socket) => {
+      const accept = createHash('sha1').update(`${String(req.headers['sec-websocket-key'])}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+      socket.once('close', websocketClosed); socket.on('error', () => {});
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    });
+    servers.push(target); const targetPort = await listen(target);
+    const broker = http.createServer((req, res) => {
+      if (!handleMcpAppRuntimeHttpRequest(req, res, { originKey: appKeyFromHost(req.headers.host),
+        publicUrlForOriginKey: key => `https://${key}.localhost/` })) { res.writeHead(404); res.end(); }
+    });
+    broker.on('upgrade', (req, socket, head) => {
+      if (!handleMcpAppRuntimeUpgrade(req, socket, head, appKeyFromHost(req.headers.host))) socket.destroy();
+    });
+    servers.push(broker); const port = await listen(broker);
+    const registered = await request({ host: '127.0.0.1', port, path: '/_flujo/runtime/register', method: 'POST',
+      headers: { authorization: `Bearer ${token}` } }, { version: 1, resourceUri: 'ui://active-app/workbench.html',
+      targetOrigin: `http://127.0.0.1:${targetPort}`, routes: [
+        { path: '/events', match: 'exact', httpMethods: ['GET'] }, { path: '/socket', match: 'exact', websocket: true },
+      ] });
+    expect(registered.status).toBe(201);
+    const host = `${(JSON.parse(registered.body) as { originKey: string }).originKey}.localhost`;
+    const incoming = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      const req = http.get({ host: '127.0.0.1', port, path: '/events', headers: { host } }, resolve); req.once('error', reject);
+    });
+    incoming.on('error', () => {});
+    const clientHttpClosed = new Promise<void>(resolve => incoming.once('close', resolve));
+    await new Promise<void>(resolve => incoming.once('data', () => resolve()));
+    const websocket = await new Promise<import('node:stream').Duplex>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/socket', headers: { host,
+        connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': Buffer.alloc(16, 2).toString('base64') } });
+      req.once('upgrade', (_res, socket) => resolve(socket)); req.once('error', reject); req.end();
+    });
+    websocket.on('error', () => {});
+    const clientWebSocketClosed = new Promise<void>(resolve => websocket.once('close', resolve));
+    websocket.resume();
+    revokeMcpAppRuntimeBrokerForServer('active-app', 'active-streams');
+    await Promise.all([closedHttp, closedWebSocket, clientHttpClosed, clientWebSocketClosed]);
+    expect((await request({ host: '127.0.0.1', port, path: '/events', headers: { host } })).status).toBe(404);
+  }, 20_000);
+
   it('rejects a target that cannot prove possession of the child capability', async () => {
     const issued = runWithWorkspace('broker-workspace', () =>
       issueMcpAppRuntimeBrokerEnvironment('unproved'));

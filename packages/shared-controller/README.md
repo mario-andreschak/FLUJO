@@ -431,11 +431,41 @@ arbitrary URL to the container. Up to 64 pending launches per owner and 4,096
 globally share the existing bounded pipe/request quotas.
 
 This carries inline MCP Apps and their parent-mediated tool calls, including
-the terminal's tool-call polling. Apps requiring separate sidecar HTTP routes
-or WebSocket connections still need capability integration and fail closed.
-No shared browser origin, cloud gateway, DNS service or sandbox cookie supplies
-this path. Local CA trust, nested localhost resolution and actual browser/
-terminal operation with both internet and LAN disabled remain release gates.
+the terminal's tool-call polling. A successful launch also sets a separate,
+host-only `__Host-flujo-app` cookie with Secure, HttpOnly and SameSite=Strict.
+It authorizes only this app's registered sidecar routes on the fixed sandbox
+listener, never the owner's application API. Each app session is bound to its
+parent session and expires with it; concurrent mounts reuse the app session,
+while launch tickets remain single-use. Restart discards app sessions. There
+are at most 64 active app sessions per owner and 4,096 globally.
+
+Sidecar HTTP requires same-origin browser metadata and an exact app Origin for
+mutations. WebSocket handshakes require that exact Origin too. Every request,
+response chunk and established stream checks current local authority; logout,
+account/runtime revocation or lease retirement cuts active connections. The
+controller also ends upgraded connections when its listener closes, before
+waiting for owned pipe processes to exit. The
+runtime still requires proof of control of the target and a path/method manifest.
+Registration/replacement/eviction now closes already-established HTTP/WebSocket
+connections as well as removing their routes. The broker caps connections at
+64 per registered app and 512 globally, in addition to controller/pipe bounds.
+
+Sidecar cookies may remain on their own app hostname; Domain attributes and
+controller cookie names are rejected, and controller cookies are stripped from
+requests. Forwarding hints name only the pinned public app origin. Content CSP
+is preserved while frame ancestors are restricted to the owner/app chain;
+service-worker registration is denied. Dedicated workers can use registered app
+assets. Redirects stay on that app origin. HTTP uploads/responses are bounded
+at 64 MiB. WebSockets have a ten-second handshake, two-minute inactivity,
+one-hour lifetime and 256 MiB per-direction limit, and do not negotiate compression.
+Both transports retain backpressure and use the existing owned pipe quotas.
+
+No shared browser origin, cloud gateway or online DNS service supplies this
+path. Local CA trust, nested localhost resolution/cookie behavior and actual
+browser/terminal/sidecar operation with both internet and LAN disabled remain
+release gates. Cookie semantics follow the browser's [host and same-site
+rules](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie);
+the controller additionally enforces exact origins rather than relying on SameSite alone.
 
 ## Remaining boundaries and release acceptance
 
@@ -445,7 +475,7 @@ at eight per owner and 64 globally. Cancelled requests retain their process slot
 until the owned child actually exits. Streams recheck authority each second;
 shutdown waits for child exit and reports unconfirmed exit instead of treating a
 kill request as success. Native API/MCP,
-webhooks, WebSocket upgrades, MCP App sidecar routes and OAuth callbacks still require
+webhooks, non-App WebSocket upgrades and OAuth callbacks still require
 protocol integration. None of these gaps may be filled by a cloud isolation
 service.
 
@@ -488,6 +518,10 @@ acceptance environment. Do not disconnect the user's active machine or services.
   Open inline apps and terminal sessions for both owners in real browsers;
   verify separate app storage, concurrent mounts, ticket expiry/replay, logout
   during discovery/load/tool calls, sibling-app/owner attempts and CSP denial.
+  Exercise a proved sidecar's real assets, cookies, uploads and bidirectional
+  WebSocket traffic; retire the MCP lease during both stream types and require
+  closure of both peers. Check cross-site/cross-app attempts, reserved paths,
+  foreign redirects, worker restrictions, slow peers and connection/byte limits.
   Prove controller restart and fixed-port pipe failure cannot fall back to the
   application API, host networking or a shared sandbox origin.
   Disable during a running tool/stream and during controller/engine failure;

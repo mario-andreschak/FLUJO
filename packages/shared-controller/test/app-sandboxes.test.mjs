@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer, request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
-import { AppSandboxes, appSandboxOrigin } from '../dist/app-sandboxes.js';
+import { AppSandboxes, appSandboxOrigin, APP_SESSION_COOKIE } from '../dist/app-sandboxes.js';
+import { appResponseCookies, appRequestHeaders } from '../dist/app-headers.js';
 import { proxy } from '../dist/proxy.js';
 
 const app = `app${'a'.repeat(60)}`;
@@ -122,12 +123,94 @@ test('sandbox channel strips owner/browser secrets and preserves CSP with exact 
   assert.equal(accepted.headers['access-control-allow-origin'], undefined);
   assert.match(accepted.headers['content-security-policy'], /script-src 'self' 'unsafe-inline'/);
   assert.equal(accepted.headers['content-security-policy'].includes('frame-ancestors *'), false);
-  assert.match(accepted.headers['content-security-policy'], /frame-ancestors https:\/\/alice.localhost:4280$/);
+  assert.ok(accepted.headers['content-security-policy'].endsWith(`frame-ancestors ${runtime.origin} ${appSandboxOrigin(runtime, app)}`));
   assert.equal(accepted.headers['origin-agent-cluster'], '?1');
   revoke = true;
   const denied = await send(front);
   assert.equal(denied.status, 401);
   assert.equal(denied.body.includes('proxy document'), false);
   revoke = false; current = true; redirect = true;
+  assert.equal((await send(front)).status, 502);
+});
+
+test('app cookies authorize only their app and current parent, never a sibling or reserved route', () => {
+  const grants = new AppSandboxes(); let current = true;
+  const parent = { hash: 'd'.repeat(64), expiresAt: Date.now() + 3600_000 };
+  const launch = grants.issue(runtime, discovery, () => current, parent);
+  const admitted = grants.admit(requestFor(launch));
+  assert.match(admitted.cookie, /; Path=\/; Secure; HttpOnly; SameSite=Strict;/);
+  const cookie = admitted.cookie.split(';')[0];
+  const request = { method: 'GET', url: '/ide/session/file.js', headers: {
+    host: new URL(launch.url).host, cookie, 'sec-fetch-site': 'same-origin',
+  } };
+  assert.equal(grants.sidecar(request).runtime, runtime);
+  const second = grants.admit(requestFor(grants.issue(runtime, discovery, () => current, parent)));
+  assert.equal(second.cookie.split(';')[0], cookie, 'Concurrent mounts share an app session, not a one-use ticket');
+  for (const headers of [{ cookie: undefined }, { cookie: `${cookie}; ${cookie}` },
+    { host: `${app}.bob.localhost:4280` }, { host: 'alice.localhost:4280' },
+    { 'sec-fetch-site': 'same-site' }, { 'sec-fetch-site': undefined },
+    { 'sec-fetch-dest': 'serviceworker' }, { 'service-worker': 'script' },
+    { origin: runtime.origin }, { origin: 'null' }]) {
+    assert.equal(grants.sidecar({ ...request, headers: { ...request.headers, ...headers } }), undefined);
+  }
+  for (const url of ['/sandbox.html', '/', '/_flujo/runtime/register', '/.well-known/flujo/mcp-app-runtime', '/x/../ide', '/ide%2ffile']) {
+    assert.equal(grants.sidecar({ ...request, url }), undefined);
+  }
+  assert.equal(grants.sidecar({ ...request, method: 'POST' }), undefined);
+  assert.ok(grants.sidecar({ ...request, method: 'POST', headers: { ...request.headers, origin: appSandboxOrigin(runtime, app) } }));
+  assert.equal(grants.sidecar(request, true), undefined);
+  assert.ok(grants.sidecar({ ...request, headers: { ...request.headers, origin: appSandboxOrigin(runtime, app) } }, true));
+  const stream = grants.sidecar(request);
+  current = false;
+  assert.equal(stream.current(), false);
+  assert.equal(grants.sidecar(request), undefined);
+  assert.equal(new AppSandboxes().sidecar(request), undefined);
+});
+
+test('sidecar headers preserve app cookies without leaking or setting controller/sibling cookies', () => {
+  const headers = appRequestHeaders({ headers: { cookie: `${APP_SESSION_COOKIE}=private; __Host-flujo-controller=owner; editor=app`,
+    'x-flujo-owner': 'alice', 'x-forwarded-host': 'bob', origin: discovery.url, authorization: 'Bearer app-token' } }, appSandboxOrigin(runtime, app));
+  assert.equal(headers.cookie, 'editor=app');
+  assert.equal(headers.authorization, 'Bearer app-token');
+  assert.equal(headers['x-flujo-owner'], undefined);
+  assert.equal(headers['x-forwarded-host'], new URL(appSandboxOrigin(runtime, app)).host);
+  assert.equal(headers['x-forwarded-proto'], 'https');
+  assert.deepEqual(appResponseCookies([`${APP_SESSION_COOKIE}=forged; Secure; Path=/`, '__Host-flujo-controller=forged; Path=/',
+    'editor=foreign; Domain=alice.localhost', 'editor=empty; Domain=', 'editor=local; Path=/ide; HttpOnly']),
+  ['editor=local; Path=/ide; HttpOnly; Secure']);
+});
+
+test('sidecar HTTP carries bodies/app cookies and rejects external redirects', async t => {
+  let observed; let redirect = false;
+  const upstream = await listen(createServer((request, response) => {
+    const chunks = [];
+    request.on('data', chunk => chunks.push(chunk));
+    request.on('end', () => {
+      observed = { headers: request.headers, body: Buffer.concat(chunks).toString(), path: request.url };
+      response.writeHead(redirect ? 302 : 200, { 'Content-Type': 'application/javascript',
+        'Set-Cookie': ['editor=local; Path=/ide', `${APP_SESSION_COOKIE}=forged; Secure; Path=/`],
+        ...(redirect ? { Location: 'https://other.example/file.js' } : {}) });
+      response.end('sidecar asset');
+    });
+  }), t);
+  const front = await listen(createServer((request, response) => proxy(request, response, {
+    runtime, current: () => true, finished: () => {}, connect: () => createConnection({ host: '127.0.0.1', port: upstream }),
+    sandbox: { sidecar: true, origin: appSandboxOrigin(runtime, app), path: '/ide/session/asset.js' },
+  })), t);
+  const result = await new Promise((resolve, reject) => {
+    const request = httpRequest({ hostname: '127.0.0.1', port: front, method: 'POST', headers: {
+      'content-type': 'text/plain', cookie: `${APP_SESSION_COOKIE}=private; editor=app`, origin: appSandboxOrigin(runtime, app),
+    } }, response => {
+      response.resume(); response.once('end', () => resolve(response));
+    });
+    request.once('error', reject); request.end('file contents');
+  });
+  assert.equal(result.statusCode, 200);
+  assert.equal(observed.body, 'file contents');
+  assert.equal(observed.path, '/ide/session/asset.js');
+  assert.equal(observed.headers.cookie, 'editor=app');
+  assert.equal(observed.headers.authorization, undefined);
+  assert.deepEqual(result.headers['set-cookie'], ['editor=local; Path=/ide; Secure']);
+  redirect = true;
   assert.equal((await send(front)).status, 502);
 });

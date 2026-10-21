@@ -3,6 +3,8 @@ import { request as httpsRequest } from 'node:https';
 import { Transform, pipeline, type Duplex } from 'node:stream';
 import type { Runtime } from './config.js';
 import { reply, securityHeaders } from './http.js';
+import { appRequestHeaders, appResponseCookies, appFramePolicy } from './app-headers.js';
+import { appRequestPath } from './app-sandboxes.js';
 
 const hopByHop = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
   'te', 'trailer', 'transfer-encoding', 'upgrade']);
@@ -19,7 +21,7 @@ export interface ProxyOptions {
   current: () => boolean;
   finished: () => void;
   rewriteJson?: (value: unknown) => unknown;
-  sandbox?: { origin: string; path: string };
+  sandbox?: { origin: string; path: string; sidecar?: boolean; cookie?: string };
 }
 
 /** One owner per origin and runtime. Client identity/workspace headers never select an upstream. */
@@ -43,8 +45,9 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
     // The sandbox channel is never the owner's application API. Forward only
     // presentation headers; no owner bearer, browser cookies or caller hints.
     for (const name of Object.keys(headers)) delete headers[name];
+    if (options.sandbox.sidecar) Object.assign(headers, appRequestHeaders(request, options.sandbox.origin));
     headers.host = new URL(options.sandbox.origin).host;
-    headers.referer = `${runtime.origin}/`;
+    if (!options.sandbox.sidecar) headers.referer = `${runtime.origin}/`;
     headers['accept-encoding'] = 'identity';
   }
   // The browser origin is preserved for the runtime's existing same-origin gate.
@@ -119,7 +122,7 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
     for (const name of Object.keys(outgoing)) {
       if (name === 'set-cookie' || name === 'clear-site-data' || name.startsWith('access-control-')) delete outgoing[name];
     }
-    if (options.sandbox && (incoming.statusCode !== 200
+    if (options.sandbox && !options.sandbox.sidecar && (incoming.statusCode !== 200
         || !incoming.headers['content-type']?.startsWith('text/html')
         || typeof incoming.headers['content-security-policy'] !== 'string'
         || incoming.headers['content-encoding'] !== undefined || outgoing.location !== undefined)) {
@@ -127,8 +130,13 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
     }
     if (typeof outgoing.location === 'string') {
       try {
-        const location = new URL(outgoing.location, runtime.origin);
-        if (location.origin === runtime.upstream) {
+        const location = new URL(outgoing.location, options.sandbox?.origin ?? runtime.origin);
+        if (options.sandbox) {
+          if (location.origin !== options.sandbox.origin || !appRequestPath(`${location.pathname}${location.search}`)) {
+            fail(502, 'Invalid app redirect.'); return;
+          }
+          outgoing.location = location.href;
+        } else if (location.origin === runtime.upstream) {
           const target = new URL(runtime.origin);
           target.pathname = location.pathname; target.search = location.search; target.hash = location.hash;
           outgoing.location = target.href;
@@ -164,14 +172,19 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
       response.removeHeader('X-Frame-Options');
       // Preserve the runtime's content policy and narrow embedding to this one
       // owner. Local app hosts never admit the owner's session cookie/API.
-      const policy = String(incoming.headers['content-security-policy']).split(';')
-        .filter(directive => !/^\s*frame-ancestors(?:\s|$)/i.test(directive)).join(';');
-      response.setHeader('Content-Security-Policy', `${policy}; frame-ancestors ${runtime.origin}`);
+      response.setHeader('Content-Security-Policy', appFramePolicy(incoming.headers['content-security-policy'],
+        runtime.origin, options.sandbox.origin));
       response.setHeader('Origin-Agent-Cluster', '?1');
+      response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+      response.removeHeader('Service-Worker-Allowed');
+      const cookies = options.sandbox.sidecar ? appResponseCookies(incoming.headers['set-cookie']) : [];
+      if (options.sandbox.cookie) cookies.push(options.sandbox.cookie);
+      if (cookies.length) response.setHeader('Set-Cookie', cookies);
       let size = 0;
       incoming.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > 2 * 1024 * 1024) fail(502, 'Private sandbox document is too large.');
+        if (!isCurrent()) fail(401, 'Sign in again.');
+        else if (size > (options.sandbox?.sidecar ? 64 : 2) * 1024 * 1024) fail(502, 'Private app response is too large.');
       });
     }
     response.writeHead(incoming.statusCode ?? 502);

@@ -7,6 +7,7 @@ import { readPrivateFile } from './private-storage.js';
 import { proxy } from './proxy.js';
 import { ensureLocalTLS, LocalTLS } from './local-tls.js';
 import { AppSandboxes } from './app-sandboxes.js';
+import { appWebSocket, rejectAppUpgrade } from './app-websocket.js';
 import { accountPage, browserRequestAllowed, cookie, readPasswordForm, redirect, reply,
   securityHeaders, SESSION_COOKIE, sessionCookie } from './http.js';
 
@@ -25,6 +26,17 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
   let totalRequests = 0;
   const localTLS = config.tls ? new LocalTLS(config, await ensureLocalTLS(config)) : undefined;
   const sandboxes = new AppSandboxes();
+  const reserve = (runtime: Runtime): (() => void) | undefined => {
+    const count = inflight.get(runtime.id) ?? 0;
+    if (count >= 64 || totalRequests >= 512) return undefined;
+    inflight.set(runtime.id, count + 1); totalRequests++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      inflight.set(runtime.id, (inflight.get(runtime.id) ?? 1) - 1); totalRequests--;
+    };
+  };
 
   async function login(request: IncomingMessage, response: ServerResponse, runtime: Runtime): Promise<void> {
     const previous = loginRate.get(runtime.id);
@@ -71,14 +83,14 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
       // Only an authenticated discovery response can create a one-use ticket.
       // An arbitrary wildcard hostname never selects an owner or API endpoint.
       const launch = localTLS && connect ? sandboxes.admit(request) : undefined;
-      if (!launch) { reply(response, 421, 'Unknown or expired app launch. Reopen the app from FLUJO.'); return; }
-      const count = inflight.get(launch.runtime.id) ?? 0;
-      if (count >= 64 || totalRequests >= 512) { reply(response, 429, 'Too many active requests.'); return; }
-      inflight.set(launch.runtime.id, count + 1); totalRequests++;
-      proxy(request, response, { runtime: launch.runtime, connect: () => connect!(launch.runtime, 'sandbox'),
-        sandbox: { origin: launch.origin, path: launch.path },
-        current: launch.current,
-        finished: () => { inflight.set(launch.runtime.id, (inflight.get(launch.runtime.id) ?? 1) - 1); totalRequests--; } });
+      const app = launch ?? (localTLS && connect ? sandboxes.sidecar(request) : undefined);
+      if (!app) { reply(response, 421, 'Unknown or expired app session. Reopen the app from FLUJO.'); return; }
+      const finished = reserve(app.runtime);
+      if (!finished) { reply(response, 429, 'Too many active requests.'); return; }
+      try {
+        proxy(request, response, { runtime: app.runtime, connect: () => connect!(app.runtime, 'sandbox'),
+          sandbox: { origin: app.origin, path: app.path, sidecar: !launch, cookie: launch?.cookie }, current: app.current, finished });
+      } catch (error) { finished(); throw error; }
       return;
     }
     const url = new URL(target, runtime.origin);
@@ -124,20 +136,17 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
     if (runtime.localRuntime && url.pathname === '/api/mcp/app-sandbox' && (!localTLS || !connect)) {
       reply(response, 503, 'MCP Apps require local controller HTTPS and the private sandbox transport.'); return;
     }
-    const count = inflight.get(runtime.id) ?? 0;
-    if (count >= 64 || totalRequests >= 512) { reply(response, 429, 'Too many active requests.'); return; }
-    inflight.set(runtime.id, count + 1);
-    totalRequests++;
+    const finished = reserve(runtime);
+    if (!finished) { reply(response, 429, 'Too many active requests.'); return; }
     try {
-      const current = () => (!localTLS || localTLS.valid()) && !!ledger.session(sessionToken, runtime, revision);
+      const current = () => server.listening && (!localTLS || localTLS.valid()) && !!ledger.session(sessionToken, runtime, revision);
       proxy(request, response, { runtime, ca: authorities.get(runtime.id), connect: connect ? () => connect(runtime) : undefined,
         current,
         ...(runtime.localRuntime && localTLS && url.pathname === '/api/mcp/app-sandbox' && request.method === 'GET'
-          ? { rewriteJson: (value: unknown) => sandboxes.issue(runtime, value, current) } : {}),
-        finished: () => { inflight.set(runtime.id, (inflight.get(runtime.id) ?? 1) - 1); totalRequests--; },
+          ? { rewriteJson: (value: unknown) => sandboxes.issue(runtime, value, current, session) } : {}), finished,
       });
     } catch (error) {
-      inflight.set(runtime.id, (inflight.get(runtime.id) ?? 1) - 1); totalRequests--;
+      finished();
       throw error;
     }
   }
@@ -154,7 +163,16 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
     server.once('close', () => { void localTLS.stop(); });
   }
   server.maxConnections = 1024;
-  server.on('upgrade', (_request, socket) => { socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n'); });
+  server.on('upgrade', (request, socket, head) => {
+    try {
+      const app = localTLS?.valid() && connect ? sandboxes.sidecar(request, true) : undefined;
+      if (!app) { rejectAppUpgrade(socket); return; }
+      const finished = reserve(app.runtime);
+      if (!finished) { rejectAppUpgrade(socket, 429); return; }
+      appWebSocket(request, socket, head, { origin: app.origin, current: app.current,
+        connect: () => connect!(app.runtime, 'sandbox'), finished });
+    } catch { rejectAppUpgrade(socket, 503); }
+  });
   server.on('connect', (_request, socket) => { socket.destroy(); });
   server.on('clientError', (_error, socket) => { socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); });
   return Object.assign(server, { stopTLS: () => localTLS?.stop() ?? Promise.resolve() });
