@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, fsyncSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { configSchema, runtimeRevision, type ControllerConfig, type Runtime } from './config.js';
@@ -7,7 +7,7 @@ import { digest, Ledger } from './ledger.js';
 import { LocalEngine } from './local-engine.js';
 import { localRuntimePolicySchema, type LocalRuntimePolicy, type RuntimeIntent } from './local-runtime-policy.js';
 import { verifyLocalRuntime } from './local-runtime.js';
-import { assertPrivateDirectory, readPrivateFile } from './private-storage.js';
+import { assertPrivateDirectory, createPrivateFile, readPrivateFile, syncPrivateDirectory } from './private-storage.js';
 
 const planSchema = z.object({ policy: localRuntimePolicySchema, issuedAt: z.number().int().nonnegative() }).strict();
 const fixedEnvironment = (runtime: Runtime): string[] => [
@@ -35,15 +35,14 @@ export function runtimeCreateArguments(runtime: Runtime, policy: LocalRuntimePol
 function publishConfiguration(filename: string, original: string, config: ControllerConfig): void {
   assertPrivateDirectory(dirname(filename));
   const temporary = join(dirname(filename), `.controller-${randomBytes(16).toString('hex')}.json`);
-  const fd = openSync(temporary, 'wx', 0o600);
+  const fd = createPrivateFile(temporary);
   try { writeFileSync(fd, JSON.stringify(configSchema.parse(config), null, 2) + '\n'); fsyncSync(fd); }
   finally { closeSync(fd); }
   // Preserve a completed private candidate for recovery if concurrent operator
   // edits or publication fail. Never overwrite a different configuration.
   if (readPrivateFile(filename).toString('utf8') !== original) throw new Error('Configuration changed during provisioning.');
   renameSync(temporary, filename);
-  const directory = openSync(dirname(filename), 'r');
-  try { fsyncSync(directory); } finally { closeSync(directory); }
+  syncPrivateDirectory(dirname(filename));
 }
 
 /** One-time local provisioning under the controller's process lock. A private

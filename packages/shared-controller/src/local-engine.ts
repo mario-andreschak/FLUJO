@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertPrivateDirectory, readPrivateFile } from './private-storage.js';
+import { assertPrivateDirectory, createPrivateDirectory, createPrivateFile, readPrivateFile } from './private-storage.js';
 import { type LocalRuntimePolicy, RuntimeControlError } from './local-runtime-policy.js';
 
 /** Only an explicit local Unix socket/named pipe. No inherited Docker context,
@@ -11,10 +11,13 @@ export class LocalEngine {
   constructor(stateDirectory: string) {
     assertPrivateDirectory(stateDirectory);
     this.directory = join(stateDirectory, 'local-engine');
-    if (!existsSync(this.directory)) mkdirSync(this.directory, { mode: 0o700 });
+    if (!existsSync(this.directory)) createPrivateDirectory(this.directory);
     assertPrivateDirectory(this.directory);
     const filename = join(this.directory, 'config.json');
-    if (!existsSync(filename)) writeFileSync(filename, '{}\n', { flag: 'wx', mode: 0o600 });
+    if (!existsSync(filename)) {
+      const fd = createPrivateFile(filename);
+      try { writeFileSync(fd, '{}\n'); } finally { closeSync(fd); }
+    }
     if (readPrivateFile(filename, 16).toString('utf8').trim() !== '{}') {
       throw new RuntimeControlError('local-engine-unavailable');
     }

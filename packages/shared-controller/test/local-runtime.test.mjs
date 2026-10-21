@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { localRuntimePolicySchema } from '../dist/local-runtime-policy.js';
@@ -8,6 +8,7 @@ import { verifyLocalRuntime, LocalRuntimeDriver } from '../dist/local-runtime.js
 import { provisionRuntime, runtimeCreateArguments } from '../dist/provision-runtime.js';
 import { configSchema, runtimeRevision } from '../dist/config.js';
 import { digest, Ledger } from '../dist/ledger.js';
+import { privateFixture } from './private-fixture.mjs';
 
 function fixture() {
   const generation = 'a'.repeat(32);
@@ -156,12 +157,11 @@ test('unprovisioned owners can share a placeholder loopback endpoint but not bro
   assert.equal(configSchema.safeParse(config).success, false);
 });
 
-test('durable runtime admission expires and stale observations cannot undo revocation', { skip: process.platform === 'win32' }, t => {
+test('durable runtime admission expires and stale observations cannot undo revocation', t => {
   let now = Date.now(); t.mock.method(Date, 'now', () => now);
-  const directory = mkdtempSync(join(homedir(), '.flujo-local-runtime-')); chmodSync(directory, 0o700);
-  const mask = process.umask(0o077);
+  const { directory, close } = privateFixture(t);
   let ledger = new Ledger(directory);
-  t.after(() => { ledger.close(); process.umask(mask); rmSync(directory, { recursive: true, force: true }); });
+  close.push(() => ledger.close());
   const { runtime } = fixture();
   const config = configSchema.parse({ schemaVersion: 2, stateDirectory: directory, runtimes: [runtime] });
   ledger.reconcile(config);
@@ -184,11 +184,10 @@ test('durable runtime admission expires and stale observations cannot undo revoc
   assert.throws(() => ledger.reconcile(changed), /cannot change its local execution boundary/);
 });
 
-test('a lost create response resumes the same journaled container without creating another owner', { skip: process.platform === 'win32' }, async t => {
-  const directory = mkdtempSync(join(homedir(), '.flujo-provision-')); chmodSync(directory, 0o700);
-  const mask = process.umask(0o077);
+test('a lost create response resumes the same journaled container without creating another owner', async t => {
+  const { directory, close } = privateFixture(t);
   const ledger = new Ledger(directory);
-  t.after(() => { ledger.close(); process.umask(mask); rmSync(directory, { recursive: true, force: true }); });
+  close.push(() => ledger.close());
   const source = fixture();
   const { localRuntime: policy, ...owner } = source.runtime;
   const config = configSchema.parse({ schemaVersion: 2, stateDirectory: directory,

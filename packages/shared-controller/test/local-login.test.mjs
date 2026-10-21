@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { request as httpRequest, createServer } from 'node:http';
-import { mkdtempSync, chmodSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { privateFixture } from './private-fixture.mjs';
 import { configSchema, runtimeRevision } from '../dist/config.js';
 import { Ledger } from '../dist/ledger.js';
 import { createController } from '../dist/server.js';
@@ -42,14 +40,10 @@ test('password form decoding rejects duplicate fields, malformed UTF-8, encoding
   assert.equal((await send(port, { headers: { ...headers, 'content-encoding': 'gzip' }, body: 'password=a' })).status, 400);
 });
 
-test('local sign-in, private dispatch, recovery and logout require no online identity', { skip: process.platform === 'win32' }, async t => {
-  const directory = mkdtempSync(join(homedir(), '.flujo-local-login-'));
-  chmodSync(directory, 0o700);
-  const oldMask = process.umask(0o077);
-  // Release-only fixture cleanup. These tests are not invoked during development.
-  t.after(() => { process.umask(oldMask); rmSync(directory, { recursive: true, force: true }); });
+test('local sign-in, private dispatch, recovery and logout require no online identity', async t => {
+  const { directory, close } = privateFixture(t);
   const ledger = new Ledger(directory);
-  t.after(() => ledger.close());
+  close.push(() => ledger.close());
   let forwarded = 0;
   const upstreamPort = await listen(createServer((_request, response) => { forwarded++; response.end('alice private data'); }), t);
   const config = configSchema.parse({ schemaVersion: 2, stateDirectory: directory, runtimes: [

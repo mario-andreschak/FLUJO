@@ -10,6 +10,7 @@ import { RuntimeSupervisor } from './runtime-supervisor.js';
 import { RuntimePipes } from './runtime-pipes.js';
 import type { RuntimeIntent } from './local-runtime-policy.js';
 import { provisionRuntime } from './provision-runtime.js';
+import { setupController } from './setup.js';
 
 const runtimeStatus = (intent: RuntimeIntent) => ({ runtimeId: intent.runtimeId, actorId: intent.actorId,
   desired: intent.desired, phase: intent.phase, generation: intent.generation,
@@ -17,12 +18,19 @@ const runtimeStatus = (intent: RuntimeIntent) => ({ runtimeId: intent.runtimeId,
 
 export async function main(args: string[]): Promise<void> {
   const [action, filename, actorId] = args;
+  // Protect SQLite sidecars as well as the original database.
+  process.umask(0o077);
+  if (action === 'setup') {
+    if (args.length !== 4) throw new Error('Usage: flujo-controller setup /absolute/new-directory actor-id sha256:image-id');
+    const created = setupController(filename, actorId, args[3]);
+    process.stdout.write(`${JSON.stringify({ ...created,
+      next: 'Provision this owner, initialize the local ledger, enroll its password and configure local TLS before serving.' }, null, 2)}\n`);
+    return;
+  }
   if (!filename || !['init', 'serve', 'disable', 'enable', 'status', 'password', 'reconcile', 'provision'].includes(action)
       || (['disable', 'enable', 'password', 'provision'].includes(action) ? !actorId || args.length !== 3 : args.length !== 2)) {
     throw new Error('Usage: flujo-controller <provision|init|serve|status|disable|enable|password|reconcile> /absolute/config.json [actor-id]');
   }
-  // Protect SQLite sidecars as well as the original database.
-  process.umask(0o077);
   const parsed = configSchema.safeParse(JSON.parse(readPrivateFile(filename).toString('utf8')));
   if (!parsed.success) throw new Error('Invalid controller configuration. Check the documented schema.');
   const config = parsed.data;
@@ -86,12 +94,11 @@ export async function main(args: string[]): Promise<void> {
       process.stdout.write(`${JSON.stringify({ runtimes }, null, 2)}\n`);
       if (runtimes.some(intent => intent.phase !== 'confirmed')) process.exitCode = 2;
     } else {
-      const server = await createController(config, ledger, runtime => pipes?.path(runtime));
+      const server = await createController(config, ledger, runtime => pipes?.connect(runtime));
       if (ledger.intents().length) {
         const engine = new LocalEngine(config.stateDirectory);
         supervisor = new RuntimeSupervisor(ledger, new LocalRuntimeDriver(engine));
         pipes = new RuntimePipes(config, ledger, engine);
-        await pipes.open();
       }
       await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
@@ -116,8 +123,7 @@ export async function main(args: string[]): Promise<void> {
       });
     }
   } finally {
-    await supervisor?.stop();
-    await pipes?.close();
-    ledger?.close(); release?.();
+    try { await supervisor?.stop(); await pipes?.close(); }
+    finally { ledger?.close(); release?.(); }
   }
 }

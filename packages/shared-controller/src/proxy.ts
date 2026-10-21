@@ -1,6 +1,6 @@
-import { request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
+import { request as httpRequest, type ClientRequest, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { Transform, pipeline } from 'node:stream';
+import { Transform, pipeline, type Duplex } from 'node:stream';
 import type { Runtime } from './config.js';
 import { reply, securityHeaders } from './http.js';
 
@@ -15,7 +15,7 @@ function headersWithoutHopByHop(headers: IncomingMessage['headers']): OutgoingHt
 export interface ProxyOptions {
   runtime: Runtime;
   ca?: Buffer;
-  socketPath?: string;
+  connect?: () => Duplex | undefined;
   current: () => boolean;
   finished: () => void;
 }
@@ -23,7 +23,7 @@ export interface ProxyOptions {
 /** One owner per origin and runtime. Client identity/workspace headers never select an upstream. */
 export function proxy(request: IncomingMessage, response: ServerResponse, options: ProxyOptions): void {
   const { runtime, current, finished } = options;
-  if (runtime.localRuntime && !options.socketPath) {
+  if (runtime.localRuntime && !options.connect) {
     reply(response, 503, 'Local runtime transport is unavailable.'); finished(); return;
   }
   const headers = headersWithoutHopByHop(request.headers);
@@ -52,19 +52,31 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
   }
   if (!current()) { response.setHeader('Connection', 'close'); reply(response, 401, 'Sign in again.'); finished(); return; }
 
-  const upstream = send({
-    protocol: upstreamUrl.protocol,
-    ...(options.socketPath ? { socketPath: options.socketPath }
-      : { hostname: upstreamUrl.hostname.replace(/^\[|\]$/g, ''), port: upstreamUrl.port }),
-    path: request.url, method: request.method, headers,
-    // No shared connection pool, redirects, ambient proxy or disabled TLS checks.
-    agent: false, ...(options.ca ? { ca: options.ca } : {}),
-  });
+  let upstream: ClientRequest;
+  let connection: Duplex | undefined;
+  try {
+    if (runtime.localRuntime) {
+      connection = options.connect?.();
+      if (!connection) throw new Error('Managed transport unavailable.');
+    }
+    upstream = send({
+      protocol: upstreamUrl.protocol,
+      hostname: upstreamUrl.hostname.replace(/^\[|\]$/g, ''), port: upstreamUrl.port,
+      path: request.url, method: request.method, headers,
+      // Supplying createConnection without agent bypasses the default Agent.
+      // Never fall back to a host network request when a managed pipe fails.
+      ...(connection ? { createConnection: () => connection } : { agent: false }),
+      ...(options.ca ? { ca: options.ca } : {}),
+    });
+  } catch {
+    connection?.destroy(); reply(response, 503, 'Local runtime transport is unavailable.'); finished(); return;
+  }
   const finish = () => {
     if (complete) return;
     complete = true;
     clearInterval(recheck);
     clearTimeout(deadline);
+    clearTimeout(idle);
     request.unpipe(limit);
     limit.destroy();
     upstream.destroy();
@@ -83,11 +95,15 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
   // Streams reconnect through the current session; abandoned connections cannot live indefinitely.
   const deadline = setTimeout(() => fail(504, 'Connection expired. Reconnect to continue.'), 60 * 60 * 1000);
   deadline.unref();
-  upstream.setTimeout(120_000, () => fail(504, 'Private runtime did not respond.'));
+  // A stdio duplex is not a net.Socket. Bound HTTP inactivity directly rather
+  // than invoking socket-only timeout methods on the managed transport.
+  const idle = setTimeout(() => fail(504, 'Private runtime did not respond.'), 120_000); idle.unref();
   upstream.on('error', () => { if (!complete) fail(502, 'Private runtime is unavailable.'); });
   upstream.on('response', incoming => {
+    if (complete) { incoming.destroy(); return; }
     upstreamResponse = incoming;
     if (!isCurrent()) { fail(401, 'Sign in again.'); return; }
+    idle.refresh(); incoming.on('data', () => { if (!complete) idle.refresh(); });
     const outgoing = headersWithoutHopByHop(incoming.headers);
     for (const name of Object.keys(outgoing)) {
       if (name === 'set-cookie' || name === 'clear-site-data' || name.startsWith('access-control-')) delete outgoing[name];
@@ -108,6 +124,8 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
     pipeline(incoming, response, () => finish());
   });
   const limit = new Transform({ transform(chunk: Buffer, _encoding, callback) {
+    if (complete) { callback(new Error('Request admission ended.')); return; }
+    idle.refresh();
     uploaded += chunk.length;
     if (uploaded > maxBody || !isCurrent()) {
       fail(uploaded > maxBody ? 413 : 401, uploaded > maxBody ? 'Upload limit exceeded.' : 'Sign in again.');

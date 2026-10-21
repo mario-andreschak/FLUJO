@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { runtimeRevision, type ControllerConfig, type Runtime } from './config.js';
 import { Ledger } from './ledger.js';
 import { readPrivateFile } from './private-storage.js';
@@ -7,7 +8,7 @@ import { accountPage, browserRequestAllowed, cookie, readPasswordForm, redirect,
   securityHeaders, SESSION_COOKIE, sessionCookie } from './http.js';
 
 export async function createController(config: ControllerConfig, ledger: Ledger,
-  socketPath?: (runtime: Runtime) => string | undefined): Promise<Server> {
+  connect?: (runtime: Runtime) => Duplex | undefined): Promise<Server> {
   // Identity and authority are local. Startup never discovers a remote issuer.
   ledger.reconcile(config);
   const runtimes = new Map(config.runtimes.map(runtime => [new URL(runtime.origin).host, runtime]));
@@ -100,7 +101,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
     inflight.set(runtime.id, count + 1);
     totalRequests++;
     try {
-      proxy(request, response, { runtime, ca: authorities.get(runtime.id), socketPath: socketPath?.(runtime),
+      proxy(request, response, { runtime, ca: authorities.get(runtime.id), connect: connect ? () => connect(runtime) : undefined,
         current: () => !!ledger.session(sessionToken, runtime, revision),
         finished: () => { inflight.set(runtime.id, (inflight.get(runtime.id) ?? 1) - 1); totalRequests--; },
       });

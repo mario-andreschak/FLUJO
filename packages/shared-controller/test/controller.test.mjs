@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, chmodSync, rmSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { privateFixture } from './private-fixture.mjs';
 import { configSchema, runtimeRevision } from '../dist/config.js';
 import { browserRequestAllowed, cookie, SESSION_COOKIE } from '../dist/http.js';
 import { Ledger } from '../dist/ledger.js';
@@ -11,7 +11,7 @@ import { hashPassword, passwordAllowed, verifyPassword } from '../dist/password.
 import { createController } from '../dist/server.js';
 
 function configuration() {
-  return configSchema.parse({ schemaVersion: 2, stateDirectory: '/srv/private-controller', runtimes: [
+  return configSchema.parse({ schemaVersion: 2, stateDirectory: homedir(), runtimes: [
       { id: 'alice-runtime', actorId: 'alice', origin: 'https://alice.localhost',
         upstream: 'http://127.0.0.1:4211', isolationId: 'vm-alice', credential: `flo_v1_${'a'.repeat(43)}` },
       { id: 'bob-runtime', actorId: 'bob', origin: 'https://bob.localhost',
@@ -82,16 +82,12 @@ test('password hashes are salted, bounded and reject wrong or malformed credenti
   assert.equal(await verifyPassword(password, first.replace('scrypt-v1', 'scrypt-v2')), false);
 });
 
-test('local authority survives offline restart without resurrecting revoked sessions', { skip: process.platform === 'win32' }, async t => {
+test('local authority survives offline restart without resurrecting revoked sessions', async t => {
   // The durable backoff check must not depend on how long CI takes to reopen SQLite.
   t.mock.method(Date, 'now', () => 1_800_000_000_000);
-  const directory = mkdtempSync(join(homedir(), '.flujo-controller-test-'));
-  chmodSync(directory, 0o700);
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const oldMask = process.umask(0o077);
-  t.after(() => process.umask(oldMask));
+  const { directory, close } = privateFixture(t);
   let ledger = new Ledger(directory);
-  t.after(() => ledger?.close());
+  close.push(() => ledger?.close());
   const config = configuration();
   const [alice, bob] = config.runtimes;
   const revision = runtimeRevision(config, alice);
@@ -164,10 +160,8 @@ test('local authority survives offline restart without resurrecting revoked sess
   assert.equal(ledger.session(replacement, alice, revision), null);
 });
 
-test('only one controller can own a state directory; the lock releases without deleting files', { skip: process.platform === 'win32' }, t => {
-  const directory = mkdtempSync(join(homedir(), '.flujo-controller-lock-test-'));
-  chmodSync(directory, 0o700);
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+test('only one controller can own a state directory; the lock releases without deleting files', t => {
+  const { directory } = privateFixture(t);
   const release = lockController(directory);
   try { assert.throws(() => lockController(directory), /Another controller/); }
   finally { release(); }

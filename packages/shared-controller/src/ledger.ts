@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { closeSync, existsSync, openSync } from 'node:fs';
+import { closeSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertPrivateDirectory, assertPrivateFile } from './private-storage.js';
+import { assertPrivateDirectory, assertPrivateFile, createPrivateFile } from './private-storage.js';
 import { runtimeRevision, type ControllerConfig, type Runtime } from './config.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { localRuntimePolicySchema, type RuntimeIntent, type RuntimeProblem } from './local-runtime-policy.js';
@@ -18,7 +18,7 @@ export class Ledger {
   constructor(directory: string) {
     assertPrivateDirectory(directory);
     const filename = join(directory, 'controller.sqlite');
-    if (!existsSync(filename)) closeSync(openSync(filename, 'wx', 0o600));
+    if (!existsSync(filename)) closeSync(createPrivateFile(filename));
     for (const suffix of ['', '-wal', '-shm', '-journal']) {
       if (existsSync(filename + suffix)) assertPrivateFile(filename + suffix);
     }
