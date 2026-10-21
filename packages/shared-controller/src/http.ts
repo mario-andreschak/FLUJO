@@ -55,7 +55,8 @@ export function accountPage(response: ServerResponse, signedIn: boolean, error =
 
 /** Small, time-bounded local form. Reject duplicate fields, invalid UTF-8 and
  * malformed escapes. Callers admit their exact field set; bodies are never logged. */
-export async function readLocalForm(request: IncomingMessage): Promise<Record<string, string> | null> {
+export async function readLocalForm(request: IncomingMessage, maxBytes = 8192): Promise<Record<string, string> | null> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 4 * 1024 * 1024) throw new Error('Invalid form bound.');
   if (request.headers['content-type']?.split(';')[0].trim() !== 'application/x-www-form-urlencoded'
       || request.headers['content-encoding'] !== undefined) return null;
   const chunks: Buffer[] = [];
@@ -73,7 +74,7 @@ export async function readLocalForm(request: IncomingMessage): Promise<Record<st
     };
     const data = (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 8192) { finish(null); request.resume(); }
+      if (size > maxBytes) { finish(null); request.resume(); }
       else chunks.push(Buffer.from(chunk));
     };
     const end = () => {

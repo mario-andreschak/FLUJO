@@ -10,6 +10,8 @@ import { AppSandboxes } from './app-sandboxes.js';
 import { appWebSocket, rejectAppUpgrade } from './app-websocket.js';
 import { Teams } from './teams.js';
 import { teamPage } from './team-page.js';
+import { TeamResources } from './team-resources.js';
+import { resourcePage } from './resource-page.js';
 import { accountPage, browserRequestAllowed, cookie, readPasswordForm, redirect, reply,
   securityHeaders, SESSION_COOKIE, sessionCookie } from './http.js';
 
@@ -22,23 +24,24 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
   const runtimes = new Map(config.runtimes.map(runtime => [new URL(runtime.origin).host, runtime]));
   const authorities = new Map(config.runtimes.map(runtime => [runtime.id,
     runtime.caFile ? readPrivateFile(runtime.caFile) : undefined]));
-  const inflight = new Map<string, number>();
+  const ordinaryRequests = { inflight: new Map<string, number>(), total: 0, ownerLimit: 64, totalLimit: 512 };
+  const resourceRequests = { inflight: new Map<string, number>(), total: 0, ownerLimit: 4, totalLimit: 16 };
   const loginRate = new Map<string, { count: number; reset: number }>();
   let pendingLogins = 0;
-  let totalRequests = 0;
   const localTLS = config.tls ? new LocalTLS(config, await ensureLocalTLS(config)) : undefined;
   const sandboxes = new AppSandboxes();
   const teams = new Teams(ledger);
+  const resources = new TeamResources(ledger);
   const teamRate = new Map<string, { count: number; reset: number }>();
-  const reserve = (runtime: Runtime): (() => void) | undefined => {
-    const count = inflight.get(runtime.id) ?? 0;
-    if (count >= 64 || totalRequests >= 512) return undefined;
-    inflight.set(runtime.id, count + 1); totalRequests++;
+  const reserve = (runtime: Runtime, pool = ordinaryRequests): (() => void) | undefined => {
+    const count = pool.inflight.get(runtime.id) ?? 0;
+    if (count >= pool.ownerLimit || pool.total >= pool.totalLimit) return undefined;
+    pool.inflight.set(runtime.id, count + 1); pool.total++;
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      inflight.set(runtime.id, (inflight.get(runtime.id) ?? 1) - 1); totalRequests--;
+      pool.inflight.set(runtime.id, (pool.inflight.get(runtime.id) ?? 1) - 1); pool.total--;
     };
   };
 
@@ -126,20 +129,33 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
       } else redirect(response, '/_account');
       return;
     }
-    if (url.pathname === '/_account/teams') {
-      if (!session) { redirect(response, '/_account'); return; }
+    if (url.pathname === '/_account/teams' || url.pathname === '/_account/resources') {
+      if (!session) {
+        if (request.headers.accept === 'application/json') reply(response, 401, 'Your session ended. Sign in again.');
+        else redirect(response, '/_account');
+        return;
+      }
       if (request.method === 'POST') {
         const prior = teamRate.get(session.actorId);
         const rate = prior && prior.reset > Date.now() ? prior : { count: 0, reset: Date.now() + 60_000 };
         teamRate.set(session.actorId, rate);
-        if (++rate.count > 30) { reply(response, 429, 'Please wait a minute before changing teams again.'); return; }
+        if (++rate.count > 30) { reply(response, 429, 'Please wait a minute before changing teams or shared resources again.'); return; }
       }
-      const finished = reserve(runtime);
+      const isResource = url.pathname === '/_account/resources';
+      const finished = reserve(runtime, isResource ? resourceRequests : ordinaryRequests);
       if (!finished) { reply(response, 429, 'Too many active requests.'); return; }
+      if (isResource) {
+        // A slow reader must keep its slot until the bounded response drains.
+        // This lifetime also bounds uploads whose peers never finish reading.
+        const timer = setTimeout(() => response.destroy(), 20_000).unref();
+        const drained = () => { clearTimeout(timer); finished(); };
+        response.once('finish', drained); response.once('close', drained);
+      }
       try {
-        await teamPage(request, response, teams, session, url,
-          () => server.listening && (!localTLS || localTLS.valid()) && ledger.sessionCurrent(session));
-      } finally { finished(); }
+        const current = () => server.listening && (!localTLS || localTLS.valid()) && ledger.sessionCurrent(session);
+        if (isResource) await resourcePage(request, response, teams, resources, session, url, current);
+        else await teamPage(request, response, teams, session, url, current);
+      } finally { if (!isResource) finished(); }
       return;
     }
     if (url.pathname.startsWith('/_account/')) { reply(response, 404, 'Not found.'); return; }

@@ -10,8 +10,8 @@ or maintain that boundary.
 This #212/#574 candidate verifies local passwords, provisions owner containers
 through a local engine, and persists execution revocation on the local machine.
 The earlier OIDC-only draft is superseded. **Full multi-tenant support is still
-incomplete:** installed Linux/Windows isolation acceptance, team sharing,
-protocol integration, edit leases and history require further work. Keep #212
+incomplete:** installed Linux/Windows isolation acceptance, native team resource
+editors and execution, dependency authorization and protocol integration require further work. Keep #212
 open. No online isolation implementation is included.
 
 The controller is a separate Node process. It imports no FLUJO execution, MCP,
@@ -31,13 +31,12 @@ invitations, membership and the team name. Members can leave. The creator can
 archive a team, which removes all memberships and pending invitations while
 retaining its local record. Rejoining requires a fresh invitation and acceptance.
 
-This implements the membership journey. **Resource sharing, editing locks and
-resource version history are still pending.** Joining a team does not publish a
+This implements the membership journey. Joining a team does not publish a
 private Model, MCP server, Flow, Chat or Execution, authorize a cross-owner runtime
-request, or expose credentials. These resource operations must use the local
-membership authority when implemented; a client-provided team ID is never proof.
+request, or expose credentials. The document library below uses the local
+membership authority; a client-provided team ID is never proof.
 
-Schema 6 stores teams, invitation state, monotonically increasing membership
+Schema 7 retains teams, invitation state, monotonically increasing membership
 generations and the latest 200 membership events per team in the private SQLite
 ledger. Forms carry the displayed team generation, so a stale member-management
 page cannot overwrite a newer change. Invitation identifiers rotate on reissue,
@@ -62,6 +61,65 @@ Release qualification must exercise two real offline browser sessions, consent,
 stale forms, logout during uploads, membership removal and restart with internet
 and LAN disabled. The SQLite and HTTP regression sources do not establish that
 installed acceptance.
+
+### Shared documents, edit locks and revision history
+
+**Your teams → a team → Shared resources and revision history** stores explicitly
+submitted JSON documents locally. Kind labels cover Models, MCP, Flows, Chats and
+Executions. They are passive snapshots: **native FLUJO editors, dependency access
+and execution are not connected yet.** This library does not satisfy Tier 1 by
+itself. The JSON is structurally bounded, not validated against each native
+resource schema. It does not discover private resources, dereference dependency
+IDs, import keyrings, execute pasted commands, or confer runtime permissions.
+Submitted content is shared verbatim after JSON formatting, including any secret
+the submitter includes; there is no automatic credential redaction. Native
+publication must use the existing secret-safe serialization path and explicit
+dependency selection before it can be enabled in ordinary app editors.
+
+Every current team member can view, download and edit a submitted document. The
+create form requires explicit sharing consent. Each document has one current edit
+lease, acquired against its displayed version in an immediate SQLite transaction.
+The opaque lease is stored only as a hash and bound to the exact parent session,
+actor, membership generation and increasing fence. Its lifetime is at most 120
+seconds, bounded by the session expiry. The page renews it every 20 seconds;
+without JavaScript it expires after 120 seconds. Another tab, including one with
+the same account, cannot acquire a second live lease. A save checks current
+membership, session, lease, fence and version in the same transaction as the new
+revision and releases the lease. Team renaming and unrelated invitations do not
+evict the editor. Removal/rejoin, logout, password recovery, account disablement,
+expiry and controller restart cannot revive the old lease. Startup reconciliation
+clears leases and advances their fences without removing documents or history.
+
+Revisions retain author, timestamp, name, content, content digest and source
+revision for restores. Restoring requires confirmation, an unchanged displayed
+version and no live editor; it appends a revision instead of overwriting history.
+Validation failures and rolled-back writes preserve the saved version and lock.
+The page keeps a failed draft in memory, offers download and warns before leaving
+an edited form. A failed non-JavaScript submission echoes only the submitted
+name/content, escaped, without hidden lease fields or fresh reads after a denial.
+A lost response has an ambiguous outcome: check current history before retrying.
+Closing the tab without retaining a draft can still lose unsaved work; drafts are
+not persisted to browser storage.
+
+Limits are 1 MiB per formatted document, depth 64, 50,000 JSON values, 1,000
+documents per team and 1,000 revisions per document. Revision payload budgets are
+128 MiB per team and 512 MiB per installation; these exclude SQLite/index/WAL
+overhead and do not constitute a filesystem disk quota. History is never silently
+pruned. Archives retain their payload budget. A reached limit stops new writes
+with a recoverable error and requires a deliberate operator retention/export
+decision. HTTP forms are capped at 4 MiB and 10 seconds, with exact field sets,
+duplicate/encoding rejection, exact-origin admission, no-store and a nonce-based
+script policy. Resource requests have a separate pool of four per account and
+16 overall; a slot lasts through response drain, with a 20-second request/response
+lifetime. The 30-per-minute team mutation budget includes lease renewals.
+
+Release-only regression sources in `test/team-resources.test.mjs` and
+`test/resource-page.test.mjs` cover separate SQLite connections, stale saves,
+membership/session loss, restart, schema upgrades, restore history, quota and
+write failure atomicity, consent, escaped content and draft recovery. They are
+not a substitute for native two-user offline browser acceptance or native editor
+integration. Schema 6 upgrades create an empty document library and preserve
+existing memberships/accounts; they do not publish private runtime data.
 
 ## Current development profile
 
@@ -302,8 +360,8 @@ runtime cannot change its owner, origin or isolation identity in place.
 Schema 1 OIDC configuration/ledgers are not silently converted to local accounts.
 They are rejected and preserved. The draft has no automatic migration of existing
 user data; explicit ownership mapping, backup and recovery remain required work.
-The local account ledger upgrades from schema 2/3/4/5 to schema 6 for runtime intent,
-provisioning, credential-rotation journals, revocable model grants and local teams;
+The local account ledger upgrades from schema 2/3/4/5/6 to schema 7 for runtime intent,
+provisioning, credential-rotation journals, revocable model grants, local teams and shared documents;
 config schema remains 2. Earlier
 controller binaries reject the newer ledger rather than ignoring pending work.
 

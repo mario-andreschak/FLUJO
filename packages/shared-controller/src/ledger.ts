@@ -12,7 +12,8 @@ export const opaque = (): string => randomBytes(32).toString('base64url');
 export const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
 export interface Session { hash: string; actorId: string; runtimeId: string; revision: string; expiresAt: number; }
 
-/** Controller metadata only. No runtime module, keyring, provider token or transcript. */
+/** Local account authority and explicitly submitted team data. No runtime or
+ * keyring imports, private resource discovery, or execution of shared content. */
 export class Ledger {
   readonly db: DatabaseSync;
 
@@ -28,7 +29,7 @@ export class Ledger {
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
     // The unreleased OIDC prototype's identities must never silently become local
     // accounts. Keep that ledger intact; deliberate migration is separate work.
-    if (version !== 0 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
+    if (![0, 2, 3, 4, 5, 6, 7].includes(Number(version))) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS actors (
         id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
@@ -95,7 +96,20 @@ export class Ledger {
         actor_id TEXT NOT NULL REFERENCES actors(id), action TEXT NOT NULL, subject_id TEXT REFERENCES actors(id)
       );
       CREATE INDEX IF NOT EXISTS team_events_team ON team_events(team_id,sequence);
-      PRAGMA user_version=6;
+      CREATE TABLE IF NOT EXISTS team_resources (
+        id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), kind TEXT NOT NULL,
+        name TEXT NOT NULL, creator_id TEXT NOT NULL REFERENCES actors(id), version INTEGER NOT NULL,
+        fence INTEGER NOT NULL DEFAULT 0, lease_hash TEXT, lease_session TEXT, lease_actor TEXT,
+        lease_member_generation INTEGER, lease_expires_at INTEGER, created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS team_resources_team ON team_resources(team_id);
+      CREATE TABLE IF NOT EXISTS team_resource_versions (
+        resource_id TEXT NOT NULL REFERENCES team_resources(id), version INTEGER NOT NULL,
+        actor_id TEXT NOT NULL REFERENCES actors(id), time INTEGER NOT NULL, name TEXT NOT NULL,
+        content TEXT NOT NULL, digest TEXT NOT NULL, bytes INTEGER NOT NULL,
+        restored_from INTEGER, PRIMARY KEY(resource_id,version)
+      );
+      PRAGMA user_version=7;
     `);
   }
 
@@ -130,6 +144,10 @@ export class Ledger {
         }
       }
       this.db.exec('UPDATE runtimes SET enabled=0');
+      // A restart/config reconciliation ends editor leases, but advances their
+      // fences so pre-restart tabs cannot publish after a new editor starts.
+      this.db.exec(`UPDATE team_resources SET fence=fence+1,lease_hash=NULL,lease_session=NULL,
+        lease_actor=NULL,lease_member_generation=NULL,lease_expires_at=NULL WHERE lease_hash IS NOT NULL`);
       this.db.exec('UPDATE runtime_model_grants SET configured=0');
       for (const runtime of config.runtimes) {
         this.db.prepare('INSERT OR IGNORE INTO actors(id) VALUES(?)').run(runtime.actorId);
@@ -258,6 +276,12 @@ export class Ledger {
         AND json_extract(l.policy,'$.credentialExpiresAt')>?))`)
       .get(session.hash, session.actorId, session.runtimeId, session.revision, session.expiresAt,
         Date.now(), Date.now() - 30_000, Date.now()));
+  }
+
+  sessionHashCurrent(hash: string): boolean {
+    const row = this.db.prepare(`SELECT hash,actor_id AS actorId,runtime_id AS runtimeId,
+      revision,expires_at AS expiresAt FROM sessions WHERE hash=?`).get(hash);
+    return !!row && this.sessionCurrent(row as unknown as Session);
   }
 
   setActorEnabled(actorId: string, enabled: boolean): void {

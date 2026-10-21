@@ -202,4 +202,15 @@ export class Teams {
     try { return this.ledger.transaction(() => this.member(authority.session, authority.teamId).generation === authority.generation); }
     catch (error) { if (error instanceof TeamError) return false; throw error; }
   }
+
+  /** Synchronous resource operations commit with membership in one transaction.
+   * The member generation changes on removal/rejoin, independently of renaming
+   * the team or inviting another person. Never await inside this callback. */
+  withMember<T>(session: Session, teamId: string, operation: (generation: number) => T): T {
+    return this.ledger.transaction(() => {
+      this.member(session, teamId);
+      const row = this.ledger.db.prepare('SELECT generation FROM team_members WHERE team_id=? AND actor_id=?').get(teamId, session.actorId)!;
+      return operation(Number(row.generation));
+    });
+  }
 }
