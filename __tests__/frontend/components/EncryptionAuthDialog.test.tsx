@@ -14,24 +14,28 @@ let mockFetch: jest.Mock;
 function response(body: unknown, ok = true) { return { ok, json: async () => body } as Response; }
 beforeEach(() => {
   mockVerify.mockReset().mockResolvedValue(true);
-  mockFetch = jest.fn().mockResolvedValue(response({ initialized: false, locked: true, protection: 'uninitialized' }));
+  mockFetch = jest.fn().mockResolvedValue(response({ initialized: false, locked: false, protection: 'uninitialized' }));
   global.fetch = mockFetch;
   sessionStorage.clear();
 });
 afterEach(() => { global.fetch = savedFetch; });
-async function setup() {
+test('fresh local use has no password modal or initialization request', async () => {
+  mockFetch.mockResolvedValue(response({ initialized: false, locked: false, protection: 'uninitialized' }));
   render(<EncryptionAuthDialog />);
-  return await screen.findByLabelText('settings.encryption.newPassword');
-}
-test('fresh stores show passphrase setup without requesting default encryption', async () => {
-  await setup();
-  expect(screen.getByLabelText('settings.encryption.confirmPassword')).toBeInTheDocument();
-  expect(mockFetch).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(mockVerify).not.toHaveBeenCalled();
   expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ action: 'status' });
 });
 
-test('password visibility survives form migration and Escape cannot dismiss required setup', async () => {
-  const password = await setup();
+async function locked() {
+  mockFetch.mockResolvedValue(response({ initialized: true, locked: true, protection: 'passphrase' }));
+  render(<EncryptionAuthDialog />);
+  return screen.findByLabelText('encryption.unlock.password');
+}
+
+test('password visibility works and Escape cannot bypass an existing password', async () => {
+  const password = await locked();
   expect(password).toHaveAttribute('type', 'password');
   fireEvent.click(screen.getByRole('button', { name: 'encryption.unlock.showPassword' }));
   expect(password).toHaveAttribute('type', 'text');
@@ -39,45 +43,39 @@ test('password visibility survives form migration and Escape cannot dismiss requ
   expect(password).toHaveAttribute('type', 'password');
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
   expect(screen.getByRole('dialog')).toBeInTheDocument();
-  expect(mockFetch).toHaveBeenCalledTimes(1);
 });
-test('setup rejects short or mismatched confirmation before sending a passphrase', async () => {
-  const password = await setup();
-  fireEvent.change(password, { target: { value: 'short' } });
-  fireEvent.click(screen.getByRole('button', { name: 'settings.encryption.setAction' }));
-  expect(await screen.findByText('settings.encryption.minLength')).toBeInTheDocument();
-  fireEvent.change(password, { target: { value: 'long-owner-passphrase' } });
-  fireEvent.change(screen.getByLabelText('settings.encryption.confirmPassword'), { target: { value: 'different' } });
-  fireEvent.click(screen.getByRole('button', { name: 'settings.encryption.setAction' }));
-  expect(await screen.findByText('settings.encryption.mismatch')).toBeInTheDocument();
-  expect(mockFetch).toHaveBeenCalledTimes(1);
+
+test('unlock rejects an empty password before sending a request', async () => {
+  await locked();
+  fireEvent.click(screen.getByRole('button', { name: 'encryption.unlock.action' }));
+  expect(await screen.findByText('encryption.unlock.required')).toBeInTheDocument();
+  expect(mockVerify).not.toHaveBeenCalled();
 });
-test('setup initializes then unlocks and broadcasts reload without storing the passphrase', async () => {
-  const password = await setup();
+
+test('unlock broadcasts reload without storing or replacing the password', async () => {
+  const password = await locked();
   const storage = jest.spyOn(Storage.prototype, 'setItem');
   const unlocked = jest.fn(); window.addEventListener('fixture-unlocked', unlocked);
-  mockFetch.mockResolvedValueOnce(response({ success: true }));
   fireEvent.change(password, { target: { value: 'long-owner-passphrase' } });
-  fireEvent.change(screen.getByLabelText('settings.encryption.confirmPassword'), { target: { value: 'long-owner-passphrase' } });
-  fireEvent.click(screen.getByRole('button', { name: 'settings.encryption.setAction' }));
+  fireEvent.click(screen.getByRole('button', { name: 'encryption.unlock.action' }));
   await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('long-owner-passphrase'));
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-  expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({ action: 'initialize', password: 'long-owner-passphrase' });
+  expect(mockFetch).toHaveBeenCalledTimes(1);
   expect(storage).not.toHaveBeenCalled(); expect(unlocked).toHaveBeenCalledTimes(1);
   window.removeEventListener('fixture-unlocked', unlocked); storage.mockRestore();
 });
-test('failed setup ignores raw diagnostics, clears both password fields and retains setup', async () => {
-  const password = await setup();
-  mockFetch.mockResolvedValueOnce(response({ error: 'private-server-secret' }, false));
+
+test('failed unlock ignores raw diagnostics and clears the password', async () => {
+  const password = await locked();
+  mockVerify.mockRejectedValueOnce(new Error('private-server-secret'));
   fireEvent.change(password, { target: { value: 'long-owner-passphrase' } });
-  fireEvent.change(screen.getByLabelText('settings.encryption.confirmPassword'), { target: { value: 'long-owner-passphrase' } });
-  fireEvent.click(screen.getByRole('button', { name: 'settings.encryption.setAction' }));
+  fireEvent.click(screen.getByRole('button', { name: 'encryption.unlock.action' }));
   expect(await screen.findByText('encryption.unlock.error')).toBeInTheDocument();
   expect(password).toHaveValue('');
-  expect(screen.getByLabelText('settings.encryption.confirmPassword')).toHaveValue('');
   expect(screen.queryByText('private-server-secret')).not.toBeInTheDocument();
-  expect(mockVerify).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
 });
+
 test('a browser authentication flag cannot hide a server lock after restart', async () => {
   sessionStorage.setItem('encryption_authenticated', 'true');
   mockFetch.mockResolvedValue(response({ initialized: true, locked: true, protection: 'passphrase' }));

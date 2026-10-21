@@ -120,8 +120,10 @@ async function metadataOrInitialize(): Promise<EncryptionMetadata> {
   const existing = await readMetadata();
   if (existing) return existing;
   const secret = readOperatorSecret();
-  if (!secret) throw new EncryptionLockedError('Initialize private encryption with a passphrase or operator secret before saving credentials');
-  return persist(newKeyring(), 'user', secret, 'operator-file', true);
+  // A custom password is optional. Explicit operator provisioning still fails
+  // closed in readOperatorSecret; ordinary local use keeps default encryption.
+  return secret ? persist(newKeyring(), 'user', secret, 'operator-file', true)
+    : persist(newKeyring(), 'default', DEFAULT_PASSWORD, undefined, true);
 }
 
 /** Upgrade metadata only; keep v1 ciphertext decryptable without a bulk rewrite. */
@@ -363,7 +365,7 @@ async function encryptionLockState(): Promise<boolean> {
   if (!metadata && process.env.FLUJO_ENCRYPTION_SECRET_FILE !== undefined) {
     try { metadata = await withMetadataLock(metadataOrInitialize); } catch { return true; }
   }
-  if (!metadata) { invalidateOperatorKeyring(); return true; }
+  if (!metadata) { invalidateOperatorKeyring(); return false; }
   const cached = getServerDek();
   if (cached) {
     try {

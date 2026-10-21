@@ -1,19 +1,23 @@
 # Private encryption profiles and legacy recovery
 
-Fresh stores never create key metadata wrapped with the public `DEFAULT_PASSWORD`.
-Without an explicit passphrase or protected operator mount, credential writes
-fail closed and leave metadata absent. Decryption never invents replacement
-metadata. Owner authentication remains separate from encryption unlock.
+Custom passwords are optional for ordinary local use. A fresh store is unlocked
+and lazily creates a random data key using the existing default-encryption
+format when credentials are first saved. Its public `DEFAULT_PASSWORD` wrapping
+is compatibility/obfuscation, not private protection. The owner can opt into
+passphrase protection in Settings, using credential migration when default
+credentials already exist. Decryption never invents replacement metadata.
+Owner authentication remains separate from encryption unlock.
 
-Interactive setup collects and confirms a passphrase in the encryption dialog,
-then initializes and unlocks the workspace. The passphrase is transient browser
+Optional password setup is available in Settings; it never blocks first launch.
+The unlock dialog appears only for existing locked profiles or recovery errors.
+The passphrase is transient browser
 state, cleared after each submitted attempt, and never stored in browser storage
 or server metadata. The UI requires at least twelve characters. Server sessions
 carry the existing unlock capability; browser flags cannot assert server unlock.
 Loss of the passphrase requires a matching protected recovery backup, not a reset
 that replaces the key and strands ciphertext.
 
-Headless/container installs set `FLUJO_ENCRYPTION_SECRET_FILE` to an absolute
+Headless/container installs can set `FLUJO_ENCRYPTION_SECRET_FILE` to an absolute
 operator-provisioned regular file outside the complete application data tree.
 Provision at least 32 random bytes encoded as base64url (43 characters); a single
 trailing newline is allowed. Mount the file separately from data and snapshot
