@@ -122,6 +122,34 @@ describe('MCPService.getServerProxyCapabilities', () => {
 });
 
 describe('MCPService.listServerResources', () => {
+  it('preserves an active discovery lease when another caller revalidates the same client', async () => {
+    loadServerConfigsMock.mockResolvedValue((await loadServerConfigsMock()).map(config => ({
+      ...config, transport: 'streamable', serverUrl: 'http://127.0.0.1:54880/mcp',
+    })));
+    createNewClientMock.mockImplementation(() => makeClient());
+    const svc = new MCPService();
+    const held = await svc.acquireServerLease('srv');
+    expect(held.lease).toBeDefined();
+    listResourcesMock.mockImplementation(async () => {
+      // Proxy metadata reads revalidate authority while discovery is in flight.
+      await expect(svc.connectServer('srv')).resolves.toMatchObject({ success: true });
+      return { resources: [{ uri: 'file://current', name: 'Current' }] };
+    });
+    try {
+      await expect(svc.listServerResources('srv')).resolves.toEqual({
+        resources: [{ uri: 'file://current', name: 'Current' }],
+      });
+      expect(held.lease!.isStale()).toBe(false);
+      expect(listResourcesMock).toHaveBeenCalledTimes(1);
+      expect(createNewClientMock).toHaveBeenCalledTimes(1);
+      expect(safelyCloseClientMock).not.toHaveBeenCalled();
+      await svc.forceReconnect('srv');
+      expect(held.lease!.isStale()).toBe(true);
+    } finally {
+      held.lease!.release();
+    }
+  });
+
   it('cold discovery cannot disconnect a concurrently authorizing tool or repeat its effect', async () => {
     loadServerConfigsMock.mockResolvedValue((await loadServerConfigsMock()).map(config => ({
       ...config, transport: 'streamable', serverUrl: 'http://127.0.0.1:54880/mcp',

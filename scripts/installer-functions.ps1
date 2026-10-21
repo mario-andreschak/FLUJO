@@ -25,6 +25,24 @@ function Test-WingetAvailable {
     return Test-CommandAvailable -CommandName 'winget' -CommandResolver $CommandResolver
 }
 
+function Merge-InstallerPath {
+    param(
+        [AllowEmptyString()] [string]$ProcessPath,
+        [AllowEmptyString()] [string]$MachinePath,
+        [AllowEmptyString()] [string]$UserPath
+    )
+    $separator = [System.IO.Path]::PathSeparator
+    $seen = @{}
+    $entries = foreach ($entry in (@($ProcessPath, $MachinePath, $UserPath) -join $separator).Split($separator)) {
+        $path = $entry.Trim()
+        if ($path -and -not $seen.ContainsKey($path)) {
+            $seen[$path] = $true
+            $path
+        }
+    }
+    return $entries -join $separator
+}
+
 function Get-DefaultInstallDirectory {
     param(
         [AllowEmptyString()] [string]$LocalAppData,

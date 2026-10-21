@@ -8,6 +8,25 @@ BeforeAll {
 }
 
 Describe 'Windows installer prerequisite planning' {
+    It 'finds newly installed tools without replacing the explicitly selected Node runtime' {
+        $selectedNode = 'C:\selected node'
+        $wingetLinks = 'C:\Users\tester\AppData\Local\Microsoft\WinGet\Links'
+        $merged = Merge-InstallerPath -ProcessPath "$selectedNode;C:\Windows\System32" `
+            -MachinePath 'C:\Program Files\nodejs;C:\WINDOWS\system32' -UserPath " ;$wingetLinks;"
+        $merged.Split(';') | Should -HaveCount 4
+        $merged.Split(';')[0] | Should -Be $selectedNode
+        $merged.Split(';')[-1] | Should -Be $wingetLinks
+    }
+
+    It 'refreshes inherited PATH before the first prerequisite probe on rerun' {
+        $source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\scripts\install.ps1') -Raw
+        $start = $source.IndexOf("Write-InstallerStage -Name 'prerequisites'")
+        $refresh = $source.IndexOf('Update-SessionEnvironment', $start)
+        $probe = $source.IndexOf('$nodeResult = Test-FlujoNodeVersion', $start)
+        $refresh | Should -BeGreaterThan $start
+        $refresh | Should -BeLessThan $probe
+    }
+
     It 'includes the ripgrep search accelerator in the managed prerequisite catalog' {
         $ripgrep = Get-KnownInstallerPrerequisites | Where-Object Command -eq 'rg'
         $ripgrep | Should -Not -BeNullOrEmpty

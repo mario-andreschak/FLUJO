@@ -71,6 +71,10 @@ export async function createPrivateSmokeEnv(sandbox, dataDir, extra = {}) {
     FLUJO_ENCRYPTION_SECRET_FILE: secretFile, FLUJO_EXPOSURE_MODE: 'localhost' });
   delete env.FLUJO_OWNER_AUTH_FILE;
   delete env.FLUJO_PARENT_DATA_DIR;
+  // The installed CLI derives these from its reserved --port. An inherited URL
+  // can otherwise send bundled MCP requests into a different running instance.
+  delete env.FLUJO_BASE_URL;
+  delete env.FLUJO_BROWSER_URL;
   return env;
 }
 

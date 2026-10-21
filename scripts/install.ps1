@@ -295,8 +295,6 @@ function Test-Command([string]$Name) {
 # this same session without reopening the terminal. winget writes the new PATH
 # entries to the registry during install; this re-reads them.
 function Update-SessionEnvironment {
-    $pathSep = [System.IO.Path]::PathSeparator   # ';' on Windows
-
     # Preserve PATH entries already added to the live process (e.g. by uv), so a
     # registry refresh does not drop them.
     $processPath = $env:Path
@@ -311,15 +309,10 @@ function Update-SessionEnvironment {
         }
     }
 
-    # PATH = Machine + User + existing process PATH, de-duplicated, order preserved.
+    # Keep explicitly selected tools first; append newly installed registry paths.
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $seen = @{}
-    $merged = foreach ($p in (@($machinePath, $userPath, $processPath) -join $pathSep).Split($pathSep)) {
-        $t = $p.Trim()
-        if ($t -and -not $seen.ContainsKey($t)) { $seen[$t] = $true; $t }
-    }
-    $env:Path = $merged -join $pathSep
+    $env:Path = Merge-InstallerPath -ProcessPath $processPath -MachinePath $machinePath -UserPath $userPath
 }
 
 # Install a package via winget only if the given command is missing.
@@ -662,6 +655,9 @@ if ($env:FLUJO_OLLAMA -in @('1', 'true', 'yes')) {
 # 1. Validate Node.js version BEFORE any side effects (execution policy, etc.)
 # ---------------------------------------------------------------------------
 Write-InstallerStage -Name 'prerequisites'
+# A second setup launched by the same desktop/parent inherits its old PATH even
+# though the first setup installed tools. Refresh before deciding what is missing.
+Update-SessionEnvironment
 Write-Step "Validating Node.js version (requires 22.19+ within 22.x, or 24.2+ within 24.x)"
 $nodeResult = Test-FlujoNodeVersion
 switch ($nodeResult.Status) {

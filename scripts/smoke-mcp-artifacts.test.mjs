@@ -43,10 +43,13 @@ test('the smoke profile mounts a private external secret and works across real e
     const env = await createPrivateSmokeEnv(sandbox, dataDir, {
       FLUJO_OWNER_AUTH_FILE: path.join(sandbox, 'unrelated-owner-policy'), FLUJO_EXPOSURE_MODE: 'public',
       FLUJO_PARENT_DATA_DIR: path.join(sandbox, 'unrelated-parent-data'),
+      FLUJO_BASE_URL: 'http://127.0.0.1:4200', FLUJO_BROWSER_URL: 'http://localhost:4200',
     });
     assert.equal(env.FLUJO_EXPOSURE_MODE, 'localhost');
     assert.equal(env.FLUJO_OWNER_AUTH_FILE, undefined);
     assert.equal(env.FLUJO_PARENT_DATA_DIR, undefined);
+    assert.equal(env.FLUJO_BASE_URL, undefined);
+    assert.equal(env.FLUJO_BROWSER_URL, undefined);
     const secretFile = env.FLUJO_ENCRYPTION_SECRET_FILE;
     assert.equal(path.dirname(secretFile), sandbox);
     assert.ok(!secretFile.startsWith(`${dataDir}${path.sep}`));
