@@ -253,4 +253,14 @@ it('keeps repeated exact-source persistence inside its capped-process allocation
     .toEqual({ error: undefined, status: 0, stderr: '', measurement: '' });
   expect(JSON.parse(await fs.readFile(path.join(root, 'measurement.json'), 'utf8')))
     .toMatchObject({ complete: true, withinEnvelope: true, samples: [expect.any(Object), expect.any(Object), expect.any(Object)] });
-}, 35_000);
+  const controlRoot = path.join(root, 'bulk-control');
+  await fs.mkdir(controlRoot);
+  const control = spawnSync(process.execPath, ['--expose-gc', '--max-old-space-size=192', '--max-semi-space-size=1',
+    path.resolve('__tests__/flow/fixtures/compactionSourceAllocation.cjs'), controlRoot, path.join(controlRoot, 'measurement.json'), '--bulk-control'],
+  { encoding: 'utf8', timeout: 30_000, maxBuffer: 128 * 1024, windowsHide: true, env: { ...process.env, NODE_OPTIONS: '' } });
+  expect({ error: control.error?.message, status: control.status, stderr: control.stderr })
+    .toEqual({ error: undefined, status: 1, stderr: '' });
+  const rejected = JSON.parse(await fs.readFile(path.join(controlRoot, 'measurement.json'), 'utf8'));
+  expect(rejected).toMatchObject({ complete: true, withinEnvelope: false });
+  expect(rejected.samples.every((sample: { writerEntryHeapGrowth: number }) => sample.writerEntryHeapGrowth > 16 * 1024 * 1024)).toBe(true);
+}, 65_000);

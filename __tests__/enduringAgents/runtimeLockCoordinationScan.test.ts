@@ -92,6 +92,9 @@ describe('Persona lock acquisition directory observations', () => {
   });
 
   it('keeps persistent lock read denial closed after bounded retries', async () => {
+    await fs.mkdir(lockRoot, { recursive: true });
+    const existingOwner = JSON.stringify(foreignOwner(foreignOwnerId));
+    await fs.writeFile(lockPath, existingOwner, { flag: 'wx' });
     const readFile = fs.readFile.bind(fs);
     const denied = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
     jest.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
@@ -101,7 +104,9 @@ describe('Persona lock acquisition directory observations', () => {
     const protectedWork = jest.fn();
     await expect(withPersonaRuntimeLock(personaId, protectedWork)).rejects.toBe(denied);
     expect(protectedWork).not.toHaveBeenCalled();
-    // Admission, ownership assertion and retirement each make bounded reads.
+    // The unreadable foreign owner must remain untouched; no local owner was
+    // admitted, so this test cannot race its teardown with deferred retirement.
+    expect(await readFile(lockPath, 'utf8')).toBe(existingOwner);
     expect(elapsed).toBeLessThan(2_000);
   });
 

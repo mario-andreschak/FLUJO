@@ -120,6 +120,9 @@ async function metadataOrInitialize(): Promise<EncryptionMetadata> {
   const existing = await readMetadata();
   if (existing) return existing;
   const secret = readOperatorSecret();
+  if (!secret && isWorkerMode()) {
+    throw new EncryptionLockedError('Restore the worker workspace encryption metadata before accessing credentials');
+  }
   // A custom password is optional. Explicit operator provisioning still fails
   // closed in readOperatorSecret; ordinary local use keeps default encryption.
   return secret ? persist(newKeyring(), 'user', secret, 'operator-file', true)
@@ -365,7 +368,7 @@ async function encryptionLockState(): Promise<boolean> {
   if (!metadata && process.env.FLUJO_ENCRYPTION_SECRET_FILE !== undefined) {
     try { metadata = await withMetadataLock(metadataOrInitialize); } catch { return true; }
   }
-  if (!metadata) { invalidateOperatorKeyring(); return false; }
+  if (!metadata) { invalidateOperatorKeyring(); return isWorkerMode(); }
   const cached = getServerDek();
   if (cached) {
     try {
