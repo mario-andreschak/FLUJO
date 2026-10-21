@@ -484,7 +484,7 @@ async function testModelTransports(params: ModelTestParams): Promise<ModelTestRe
   if (adapter && adapter !== 'openai' && adapter !== 'openai-responses' && model) {
     const antigravityRuntime = adapter === 'antigravity-cli' ? await inspectAntigravityRuntime() : undefined;
     const sdk: ModelTestAttempt = antigravityRuntime && !antigravityRuntime.verified
-      ? { ok: false, durationMs: 0, error: { message: 'The configured Antigravity runtime is missing, changed or unsupported. Reinstall or update FLUJO.' } }
+      ? { ok: false, durationMs: 0, error: { message: 'FLUJO could not start a compatible Antigravity CLI. Check internet access and installation permissions, or repair the official agy installation, then retry.' } }
       : await attemptViaAdapter(model, apiKey);
     const naAxios: ModelTestAttempt = {
       ok: false,
@@ -511,7 +511,7 @@ async function testModelTransports(params: ModelTestParams): Promise<ModelTestRe
       provider,
       sdk,
       axios: naAxios,
-      diagnosis: antigravityRuntime ? `${diagnosis} Antigravity configured ${antigravityRuntime.configuredVersion}; installed ${antigravityRuntime.installed ? 'yes' : 'no'}; checksum/version verified ${antigravityRuntime.verified ? 'yes' : 'no'}; actual version ${antigravityRuntime.actualVersion ?? 'unavailable'}.` : diagnosis,
+      diagnosis: antigravityRuntime ? `${diagnosis} Antigravity required ${antigravityRuntime.configuredVersion}; installed ${antigravityRuntime.installed ? 'yes' : 'no'}; compatibility verified ${antigravityRuntime.verified ? 'yes' : 'no'}; actual version ${antigravityRuntime.actualVersion ?? 'unavailable'}.` : diagnosis,
       ...(antigravityRuntime ? { antigravityRuntime } : {}),
       adapterRoute,
       adapter: sdk,

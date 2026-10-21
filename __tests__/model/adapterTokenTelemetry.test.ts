@@ -22,7 +22,7 @@ jest.mock('@anthropic-ai/sdk', () => {
 jest.mock('@google/genai', () => {
   const generateContent = jest.fn();
   const generateContentStream = jest.fn();
-  return { GoogleGenAI: jest.fn(() => ({ models: { generateContent, generateContentStream } })),
+  return { GoogleGenAI: jest.fn(() => ({ interactions: { create: (request: { stream?: boolean }) => request.stream ? generateContentStream(request) : generateContent(request) } })),
     __generateContent: generateContent, __generateContentStream: generateContentStream };
 });
 
@@ -95,11 +95,10 @@ describe.each([false, true])('token telemetry (streaming=%s)', streaming => {
   });
 
   it('Gemini includes thinking in output, preserves cache reads, and measures its input limit against input only', async () => {
-    const response = { responseId: 'response', candidates: [{ content: { parts: [{ text: 'hi' }] } }],
-      usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 40, thoughtsTokenCount: 60,
-        cachedContentTokenCount: 800, totalTokenCount: 1100 } };
+    const response = { id: 'response', status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: 'hi' }] }],
+      usage: { total_input_tokens: 1000, total_output_tokens: 40, total_thought_tokens: 60, total_cached_tokens: 800, total_tokens: 1100 } };
     google.__generateContent.mockResolvedValue(response);
-    google.__generateContentStream.mockResolvedValue(stream(response));
+    google.__generateContentStream.mockResolvedValue(stream({ event_type: 'interaction.completed', interaction: response }));
     const result = await call(new GeminiAdapter());
     expect(mapOpenAiUsage(result.completion.usage)).toMatchObject({
       promptTokens: 1000, completionTokens: 100, totalTokens: 1100, cacheReadTokens: 800,
@@ -111,11 +110,11 @@ describe.each([false, true])('token telemetry (streaming=%s)', streaming => {
 
   it.each([['OpenAI', OpenAiAdapter], ['Responses', OpenAiResponsesAdapter], ['Gemini', GeminiAdapter]] as const)(
     '%s leaves missing telemetry unavailable instead of inventing zero context', async (_name, Adapter) => {
-      const response = { id: 'response', choices: [], output: [], candidates: [] };
+      const response = { id: 'response', status: 'completed', choices: [], output: [], steps: [] };
       openai.__create.mockResolvedValue(streaming ? stream(response) : response);
       openai.__responsesCreate.mockResolvedValue(streaming ? stream({ type: 'response.completed', response }) : response);
       google.__generateContent.mockResolvedValue(response);
-      google.__generateContentStream.mockResolvedValue(stream(response));
+      google.__generateContentStream.mockResolvedValue(stream({ event_type: 'interaction.completed', interaction: response }));
       const result = await call(new Adapter());
       expect(result.contextUsage).toBeNull();
       expect(result.completion.usage).toBeUndefined();

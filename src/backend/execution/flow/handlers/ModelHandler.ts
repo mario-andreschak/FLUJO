@@ -1889,6 +1889,7 @@ export class ModelHandler {
       // Create the assistant message with timestamp and ID
       const projectedMcpToolCalls = projectMcpToolCalls(completionToolCalls);
       const assistantMessage = {
+        ...(modelResponse.providerMetadata ? { providerMetadata: modelResponse.providerMetadata } : {}),
         id: modelResponse.liveMessageId ?? uuidv4(),
         role: 'assistant',
         content: assistantContent,
@@ -2222,7 +2223,7 @@ export class ModelHandler {
         );
         return media === message.media ? message : { ...message, media };
       }));
-      const projectedMessages = toApiMessages(messagesWithMaterializedMedia);
+      const projectedMessages = toApiMessages(messagesWithMaterializedMedia, resolveModelAdapter(model.provider, model.adapter) === 'gemini');
       // Antigravity CLI rejects unsupported attachments explicitly in its preflight.
       // Filtering them here would turn an image request into text before that
       // check and allow a response from a model that never received the image.
@@ -2867,6 +2868,7 @@ export class ModelHandler {
           let chatCompletion: OpenAI.Chat.Completions.ChatCompletion;
           let transcript: FlujoChatMessage[] | undefined;
           let liveMessageId: string | undefined;
+          let providerMetadata: ModelCallResult['providerMetadata'];
           let media: ModelMediaPart[] | undefined;
           let contextUsage: ModelCallResult['contextUsage'];
           try {
@@ -3205,7 +3207,7 @@ export class ModelHandler {
             };
 
             if (autoUnloadOllama && ollamaRootForUnload) {
-              ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage } = await withOllamaLock(
+              ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage, providerMetadata } = await withOllamaLock(
                 ollamaRootForUnload,
                 async () => {
                   const prev = getLoadedModel(ollamaRootForUnload);
@@ -3224,7 +3226,7 @@ export class ModelHandler {
                 }
               ));
             } else {
-              ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage } = await issueCompletion());
+              ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage, providerMetadata } = await issueCompletion());
             }
           } finally {
             // Native terminalization remains part of the cancellable original
@@ -3366,6 +3368,7 @@ export class ModelHandler {
               transcript, // Present only for self-orchestrating adapters (Claude subscription)
               contextUsage,
               liveMessageId,
+              providerMetadata,
             }
           };
 

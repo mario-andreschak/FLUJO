@@ -1,5 +1,14 @@
 import type OpenAI from 'openai';
 
+/** Opaque signed output, replayed only by the originating Gemini model. */
+export interface ModelProviderMetadata {
+  geminiInteraction?: {
+    model: string;
+    transcriptHash: string;
+    steps: import('@google/genai').Interactions.Step[];
+  };
+}
+
 /**
  * FLUJO's execution engine supports JSON-schema function tools. OpenAI SDK 7
  * widened the public SDK types to include free-form custom tools, so keep the

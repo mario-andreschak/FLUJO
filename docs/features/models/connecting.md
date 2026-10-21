@@ -46,13 +46,19 @@ See [Codex model and runtime updates](codex-updates.md).
 
 ## Antigravity CLI
 
-Choose **Antigravity CLI** in guided setup or manual creation. FLUJO installs a pinned native executable for its model runs. Enter a Gemini API key, or confirm an existing local Google account login. Model availability and quota depend on your account or API key.
+Argon availability can differ between the CLI's Google-account and Gemini-key
+modes. In CLI 1.4.2, the Gemini-key catalog omits Argon and rejects its model
+names; Google tracks this in [CLI issue #1228](https://github.com/google-antigravity/antigravity-cli/issues/1228).
+FLUJO displays the catalog the installed CLI actually accepts. For Argon with
+a Gemini API key, choose **Gemini (Native)** and select `gemini-4-argon` instead.
 
-For account login, launch FLUJO's bundled `flujo-agy` interactively on the machine running FLUJO and complete Google sign-in in your browser. From a FLUJO source checkout, run `npx --no-install flujo-agy`. The CLI uses the operating system's credential store or its official private credential cache. Over SSH, follow the authorization URL and paste the returned code into the remote terminal. Return to FLUJO, leave the API key empty, confirm the local login, save the connection, and use **Test model**. An existing [official standalone Antigravity CLI](https://antigravity.google/docs/cli/install/) login through `agy` is also supported.
+Choose **Antigravity CLI** in guided setup or manual creation. FLUJO detects or installs Google’s official CLI automatically. Enter a Gemini API key, or confirm an existing local Google account login. Model availability and quota depend on your account or API key.
+
+With a Gemini API key, paste the key and connect: FLUJO finds or installs the official Antigravity CLI automatically. For account login, launch Google’s `agy` as the user running FLUJO and complete browser sign-in. Immediately after installing on Windows, use `& "$env:LOCALAPPDATA\agy\bin\agy.exe"`; FLUJO detects this location without a PATH refresh. Leave the API key empty for account mode.
 
 Sign-in must be available to the operating-system user running the FLUJO server or worker. A login on another computer or under another user does not authenticate a remote server or container. A background model request cannot complete interactive sign-in. FLUJO links the official platform instructions; there is no Antigravity WinGet one-click installer. For unattended hosts, a saved Gemini API key avoids the account login flow.
 
-The **Antigravity CLI Default** selection uses the CLI's default model. For a specific model, use a slug listed by `flujo-agy models` (or standalone `agy models`); an unknown headless model fails explicitly. Account and API-key model catalogs can differ. See [Google's headless CLI documentation](https://antigravity.google/docs/cli/headless/) for model selection.
+The **Antigravity CLI Default** selection uses the CLI's default model. The picker loads the official CLI catalog for the selected authentication mode; an unknown headless model fails explicitly. Account and API-key model catalogs can differ. See [Google's headless CLI documentation](https://antigravity.google/docs/cli/headless/) for model selection.
 
 FLUJO gives each invocation a private CLI home and working directory and exposes the tools configured for that FLUJO run through its approval checks. Account runs may copy only the official credential cache into that private home. Personal settings, plugins, hooks, project instructions, and CLI sessions are not imported. FLUJO conversation history supplies subsequent turns. Antigravity CLI connections currently accept text; choose the Gemini native API connection for supported media inputs. Temperature and output-token controls are not forwarded to the CLI.
 

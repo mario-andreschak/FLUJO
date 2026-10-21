@@ -10,6 +10,8 @@ const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Allow a local build to be prepared without replacing a running server's assets.
+  distDir: process.env.FLUJO_NEXT_DIST_DIR || '.next',
   // Workload capabilities bind the exact loopback origin and Host. NextURL
   // normalizes numeric loopback hosts to localhost unless Proxy sees the
   // original URL; preserve it so the existing strict guards can verify it.

@@ -112,6 +112,7 @@ export interface ModelCallInput {
 
 // Result of model call
 export interface ModelCallResult {
+  providerMetadata?: import('@/shared/types/openai').ModelProviderMetadata;
   contextUsage?: import('@/shared/types/model/contextUsage').ModelContextUsage | null;
   content?: string;
   /** Direct model media normalized by the selected adapter. */

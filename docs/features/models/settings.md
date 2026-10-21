@@ -10,4 +10,17 @@ For **Antigravity CLI**, the CLI manages its generation settings; FLUJO does not
 
 After changing an endpoint, credential, or model name, use **Test model** on the saved model card. Then open dependent agents and confirm their model binding still exists. Replacing or deleting a model can leave an existing step unable to run.
 
+**Gemini (Native)** uses Google's Interactions API with the same API key and
+model names. Model discovery still reads Google's live model-list API. FLUJO
+keeps the conversation history (`store: false`), executes tools through its
+normal controls, and preserves signed model steps for later tool turns. Text,
+media, streaming and cancellation use the native adapter. No CLI is required.
+See Google's [Interactions migration guide](https://ai.google.dev/gemini-api/docs/migrate-to-interactions).
+
+Argon offers **low**, **medium** (Google's default) and **high** thinking; its
+temperature control is hidden because Google ignores it. Numeric thinking
+budgets from older Gemini configurations are not supported by Interactions.
+Open and save an affected model to clear the old budget, optionally selecting
+a thinking level. Existing connections without that old setting need no change.
+
 See [connecting a model](connecting.md) and [running agents](../flows/running-flows.md).

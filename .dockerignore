@@ -3,6 +3,7 @@
 # mode: even without FLUJO_CONTAINER, there'd be no git clone to self-update.
 node_modules
 .next
+.next-*
 .git
 .github
 

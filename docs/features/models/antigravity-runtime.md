@@ -1,41 +1,36 @@
-# Antigravity runtime and model discovery
+# Antigravity CLI setup and catalog
 
-FLUJO bundles Antigravity CLI 1.3.3 and verifies its package-owned executable
-against the pinned SHA-512 receipt before using it. A globally installed `agy`
-does not replace this runtime. Native automatic updates remain disabled. If the
-runtime is missing or changed, run `npm rebuild @flujo-ai/antigravity-cli` in the
-FLUJO installation and restart it. The model connection diagnostic reports the
-configured version, installed state, verification state and actual version.
+FLUJO uses Google's official `agy` executable directly. An API-key connection
+requires only a Gemini API key: FLUJO detects the CLI or runs Google's official
+installer when it is missing. There is no separate `flujo-agy` installation,
+package-owned executable, or pinned model catalog. On Windows FLUJO checks
+`%LOCALAPPDATA%\agy\bin\agy.exe` before PATH, so a terminal restart is unnecessary.
 
-The model editor discovers models using the selected connection's API key or
-account login. Leave the key empty for account mode; an unresolved key is an
-error. Google sign-in must belong to the FLUJO server or worker OS user. Account
-cache contents, API keys and executable paths are absent from catalog responses.
+For account mode, launch `agy` as the operating-system user running FLUJO and
+complete Google's browser sign-in. Immediately after installing on Windows,
+run `& "$env:LOCALAPPDATA\agy\bin\agy.exe"`. An API key skips account sign-in.
+Keys stay on the backend and are passed only to the private CLI invocation.
 
-`flujo-agy models --output-format json` returns:
+The model editor and guided setup query `agy models` in the selected API-key or
+account mode. These are the models exposed by the official CLI, not a separate
+hand-maintained FLUJO list or the Gemini REST catalog. The native Gemini API
+connection separately queries Google's `models.list` API with pagination.
+Antigravity model availability can differ by authentication mode and CLI version.
+Update the official CLI with `agy update` when Google adds CLI model support;
+no FLUJO model-list edit is required. Catalog results are cached for five minutes
+per workspace, CLI version, authentication mode and private credential identity.
+The open editor reloads periodically and provides a reload action. Failed
+catalog requests show recovery guidance and preserve saved/custom model IDs;
+only the stable `default` choice remains as an offline suggestion.
 
-```json
-{"models":[{"id":"gemini-3.8-flash-medium","name":"Gemini 3.8 Flash (Medium)"}],"entitlementVerified":false}
-```
+FLUJO checks installed version and required CLI flags before use. It accepts
+1.x versions from 1.3.3 onward; incompatible executables fail visibly. This is
+compatibility verification, not a checksum claim about a user-managed install.
+Automatic CLI updates remain disabled inside active private invocations to
+avoid changing the executable during a run. All invocation isolation, native
+tool denial, FLUJO MCP grants, cancellation and bounded output protections remain.
+Authenticated restricted execution still excludes Antigravity.
 
-This is FLUJO's validated JSON projection of the native `models` table: native
-1.3.3 rejects the JSON flag. Listing a model does not prove subscription access,
-available quota or API-key entitlement. Use the connection's Test action to
-verify model and FLUJO tool access. Custom technical names remain editable.
-Discovery does not enable unverified generation or effort controls.
-
-Catalog commands use their own private invocation and never enter the active
-conversation stream. Cached catalogs are separated by verified runtime version,
-auth mode and a process-private credential fingerprint. Keyring-only account
-mode is queried again because its identity changes cannot be observed safely.
-
-Stop interrupts pending approval or local executor waits and passes an abort
-signal to cooperating local executors. A late result cannot append a successful
-tool message. Missing or incomplete native usage is unknown; FLUJO omits the
-normalized total and retains reported counters separately in
-`flujo_antigravity_usage`. An explicitly reported zero remains a valid total.
-
-Authenticated restricted execution still excludes Antigravity. Persistent
-session reuse is outside this maintenance batch. See the
-[qualification record](../../audits/antigravity-native-1094-2026-10-12.md) for
-the exact validation scope and outstanding release criteria.
+Runtime and catalog checks do not prove model entitlement, quota or inference.
+Use Test model to verify the selected model and FLUJO tool path. Full regression,
+packaged-consumer and live acceptance checks remain release pre-flight gates.

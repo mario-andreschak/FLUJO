@@ -474,7 +474,7 @@ function userContentWithMedia(
  * media back in exactly the same slot, so the picture stays anchored to the tool
  * call that produced it and the prompt-cache prefix stays stable.
  */
-export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompletionMessageParam[] {
+export function toApiMessages(messages: FlujoChatMessage[], preserveProviderMetadata = false): OpenAI.ChatCompletionMessageParam[] {
   const out: OpenAI.ChatCompletionMessageParam[] = [];
   let pendingMedia: ModelMediaPart[] = [];
 
@@ -489,7 +489,8 @@ export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompleti
   };
 
   for (const message of stripHandoffPlumbing(messages)) {
-    const { id, timestamp, disabled, processNodeId, depth, usage, contextUsage, injected, agentMessage, media, ...rest } = message;
+    const { id, timestamp, disabled, processNodeId, depth, usage, contextUsage, injected, agentMessage, media, providerMetadata, ...wire } = message;
+    const rest = preserveProviderMetadata && providerMetadata ? { ...wire, providerMetadata } : wire;
 
     if (rest.role === 'tool') {
       // Tool-produced media (captureToolResult) rides on the tool message but

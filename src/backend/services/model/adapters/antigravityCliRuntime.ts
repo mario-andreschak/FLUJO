@@ -4,9 +4,9 @@ import { promises as fs } from 'node:fs';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readStableFile } from '@/utils/readStableFile';
 
-export const ANTIGRAVITY_CLI_VERSION = '1.3.3';
+export const ANTIGRAVITY_CLI_VERSION = '1.3.3+ (1.x)';
 export const ANTIGRAVITY_CLI_TIMEOUT_MS = 5 * 60 * 1000;
-export const ANTIGRAVITY_LOGIN_INSTRUCTIONS = 'Run `flujo-agy` (or the standalone `agy`) as the FLUJO server or worker OS user and complete Google sign-in, then retry. Headless runs use that user’s native keyring or official local account cache. Alternatively, configure a Gemini API key in this connection.';
+export const ANTIGRAVITY_LOGIN_INSTRUCTIONS = 'Run the official `agy` CLI as the server or worker OS user and complete Google sign-in, then retry. Alternatively, enter a Gemini API key in this connection; no terminal login is needed with an API key.';
 export const ANTIGRAVITY_NATIVE_DENIES = ['read_file(*)', 'write_file(*)', 'command(*)', 'unsandboxed(*)', 'read_url(*)', 'execute_url(*)'];
 
 export interface AntigravityBridge {
