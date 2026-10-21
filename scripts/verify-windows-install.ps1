@@ -28,12 +28,28 @@ $result = [ordered]@{
     })
     installPassed = $false
     rerunPassed = $false
+    userDataPreserved = $false
+    unrelatedDirectoryRefused = $false
+    missingWingetRefused = $false
     launchPassed = $false
 }
 if ($env:EXPECTED_INSTALLER_SHA256 -and $result.installerSha256 -cne $env:EXPECTED_INSTALLER_SHA256) {
     throw 'Downloaded installer differs from the compiler artifact digest.'
 }
 try {
+    # Verify the missing-App-Installer path with no winget on the child's PATH.
+    # This uses the real executable and must stop before creating app files.
+    $originalPath = $env:PATH
+    try {
+        $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+        $missingWinget = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$target`"", "/LOG=`"$evidence\missing-winget-setup.log`"") -WindowStyle Hidden -Wait -PassThru
+        if ($missingWinget.ExitCode -eq 0 -or (Test-Path -LiteralPath $target) -or (Test-Path -LiteralPath (Join-Path $cli 'flujo.cmd'))) {
+            throw 'Missing WinGet did not stop setup before registration.'
+        }
+        $result.missingWingetRefused = $true
+    } finally {
+        $env:PATH = $originalPath
+    }
     $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TASKS=desktopicon', "/DIR=`"$target`"", "/LOG=`"$evidence\setup.log`"") -WindowStyle Hidden -Wait -PassThru
     $result.installerExitCode = $setup.ExitCode
     if ($setup.ExitCode -ne 0) { throw "Compiled installer exited $($setup.ExitCode)." }
@@ -54,6 +70,10 @@ try {
     $result.installedRevision = $installedRevision
     $result.installSeconds = [Math]::Round(((Get-Date) - $started).TotalSeconds, 1)
     Copy-Item -LiteralPath (Join-Path $cli 'install.log') -Destination (Join-Path $evidence 'first-install.log')
+    $userData = Join-Path $target 'userdata'
+    New-Item -ItemType Directory -Force -Path $userData | Out-Null
+    $sentinel = Join-Path $userData 'installer-acceptance.txt'
+    Set-Content -LiteralPath $sentinel -Value 'Keep existing user data' -Encoding utf8
     # A second execution must safely update the actual installed checkout.
     $rerun = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TASKS=desktopicon', "/DIR=`"$target`"", "/LOG=`"$evidence\rerun-setup.log`"") -WindowStyle Hidden -Wait -PassThru
     $result.rerunExitCode = $rerun.ExitCode
@@ -61,6 +81,21 @@ try {
         throw 'Rerunning the installed version failed or changed its source revision.'
     }
     $result.rerunPassed = $true
+    if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -cne 'Keep existing user data') {
+        throw 'Rerunning setup did not preserve existing user data.'
+    }
+    $result.userDataPreserved = $true
+    Copy-Item -LiteralPath (Join-Path $cli 'install.log') -Destination (Join-Path $evidence 'rerun-install.log')
+    # The same binary must refuse a directory containing unrelated user files.
+    $unrelated = Join-Path $env:RUNNER_TEMP 'FLUJO unrelated directory'
+    New-Item -ItemType Directory -Path $unrelated | Out-Null
+    $unrelatedFile = Join-Path $unrelated 'keep.txt'
+    Set-Content -LiteralPath $unrelatedFile -Value 'Do not change this file' -Encoding utf8
+    $refusal = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$unrelated`"", "/LOG=`"$evidence\refused-directory-setup.log`"") -WindowStyle Hidden -Wait -PassThru
+    if ($refusal.ExitCode -eq 0 -or (Get-Content -LiteralPath $unrelatedFile -Raw).Trim() -cne 'Do not change this file' -or (Test-Path -LiteralPath (Join-Path $unrelated '.git'))) {
+        throw 'Setup did not safely refuse unrelated user files.'
+    }
+    $result.unrelatedDirectoryRefused = $true
     # Starting the real generated launcher also verifies its path quoting.
     $server = Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/c', "`"$launcher`"") -WorkingDirectory $env:RUNNER_TEMP -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $evidence 'server.stdout.log') -RedirectStandardError (Join-Path $evidence 'server.stderr.log')
     $result.launcherPid = $server.Id

@@ -181,7 +181,8 @@ Describe 'Windows installer entry-point contracts' {
 
     It 'stops when a winget prerequisite installation fails' {
         $source = Get-Content -LiteralPath $script:InstallScriptPath -Raw
-        $source | Should -Match 'winget install[\s\S]+\$LASTEXITCODE -ne 0[\s\S]+throw'
+        $source | Should -Match "Invoke-InstallerCommand -Stage 'prerequisites' -Command 'winget'"
+        $source | Should -Match "'--accept-source-agreements', '--accept-package-agreements', '--silent', '--disable-interactivity'"
     }
 
     It 'requires every Inno wizard choice to reach the PowerShell environment' {
@@ -535,6 +536,14 @@ Describe 'Corporate-network installer source contracts' {
         }
         $script:InnoSource | Should -Match 'LoadStringFromFile'
         $script:InnoSource | Should -Match 'sanitized diagnostic log'
+    }
+
+    It 'reports bootstrap failures before completing setup and supports unattended failure paths' {
+        $script:InnoSource | Should -Match 'function PrepareToInstall\(var NeedsRestart: Boolean\): String'
+        $script:InnoSource | Should -Not -Match 'procedure CurStepChanged'
+        $script:InnoSource | Should -Match "Result := 'The FLUJO installer failed during stage"
+        $script:InnoSource | Should -Match 'SuppressibleMsgBox'
+        $script:InnoSource | Should -Match "WizardSilent then[\s\S]+FLUJO_SET_POLICY', '0'"
     }
 
     It 'warns about inherited TLS bypasses without forwarding them to installer commands' {

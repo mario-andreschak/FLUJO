@@ -169,6 +169,19 @@ $script:InstallerSensitiveValues = @(
 Set-Content -LiteralPath $script:InstallerLogPath -Value '' -Encoding UTF8
 Set-Content -LiteralPath $script:InstallerErrorPath -Value '' -Encoding UTF8
 
+# Include preflight/prerequisite exceptions in the same sanitized diagnostics as
+# native-command failures. Otherwise setup only sees an unexplained stage name.
+trap {
+    if ($script:InstallerLogPath -and (Get-Command Protect-InstallerDiagnostic -ErrorAction SilentlyContinue)) {
+        $safeError = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
+        Add-Content -LiteralPath $script:InstallerLogPath -Value $safeError -Encoding UTF8
+        $failedStage = Get-Content -LiteralPath $script:InstallerStagePath -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($failedStage) { Write-InstallerStage -Name $failedStage -State failed -ExitCode 1 }
+        Stop-Installer -Message $safeError
+    }
+    break
+}
+
 function Write-InstallerStage {
     param(
         [Parameter(Mandatory)] [string]$Name,
@@ -321,14 +334,11 @@ function Install-Prereq {
         Write-Ok "$DisplayName already installed ($((Get-Command $CommandName).Source))"
     } else {
         Write-Step "Installing $DisplayName via winget ($WingetId)"
-        # Pipe to Out-Host so winget's stdout goes to the console and does NOT leak
-        # into this function's return value (which the caller captures as the
-        # prerequisite record for the uninstall manifest).
-        winget install --id $WingetId -e --source winget `
-            --accept-source-agreements --accept-package-agreements | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            throw "winget could not install $DisplayName ($WingetId); exit code $LASTEXITCODE. Resolve the winget error above, then re-run the installer."
-        }
+        # Use the same native exit-code and sanitized logging boundary as Git/npm.
+        Invoke-InstallerCommand -Stage 'prerequisites' -Command 'winget' -Arguments @(
+            'install', '--id', $WingetId, '-e', '--source', 'winget',
+            '--accept-source-agreements', '--accept-package-agreements', '--silent', '--disable-interactivity'
+        )
         Update-SessionEnvironment
         if (Test-Command $CommandName) {
             Write-Ok "$DisplayName installed."
