@@ -5,7 +5,7 @@ import { ExpandMoreRounded } from '@mui/icons-material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { HarnessRun, HarnessCandidate } from '@/shared/types/harness';
-import { contrastHarnessCandidates } from '@/backend/services/harness/contrast';
+import { contrastHarnessCandidates } from '@/utils/shared/harnessContrast';
 
 function CandidateContrast({ parent, candidate }: { parent: HarnessCandidate; candidate: HarnessCandidate }) {
   const { t } = useI18n();

@@ -106,7 +106,7 @@ describe('workspace route coverage', () => {
       expect(source).toContain("from '@/app/api/_workspace'");
       for (const method of methods) {
         expect(source).toMatch(
-          new RegExp(`withWorkspaceRoute\\(\\s*${method}_handler\\s*\\)`),
+          new RegExp(`(?:export const ${method}\\s*=\\s*withWorkspaceRoute\\s*\\(|withWorkspaceRoute\\(\\s*${method}_handler\\s*\\))`),
         );
       }
     }

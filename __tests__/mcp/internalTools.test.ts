@@ -228,7 +228,8 @@ describe('internalToolDefinitions', () => {
     expect(listTools.length).toBeGreaterThan(0);
     for (const tool of listTools) {
       expect(tool.inputSchema).toEqual(expect.objectContaining({ additionalProperties: false }));
-      if (tool.name !== 'list_flow_building_blocks') {
+      // These two catalogs return named groups, rather than a flat paged list.
+      if (!['list_flow_building_blocks', 'list_harness_targets'].includes(tool.name)) {
         expect(tool.inputSchema.properties).toEqual(expect.objectContaining({
           query: expect.any(Object),
           limit: expect.objectContaining({ maximum: 200 }),

@@ -55,12 +55,12 @@ test.each([false, true])('review inventory commits every available mapped tool a
   process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = enabled ? '1' : '0';
   try {
   const mapped = [...FLUJO_AUTHORING_TOOLS, ...FLUJO_FLOW_TOOLS, ...FLUJO_SERVER_TOOLS, ...FLUJO_AUTOMATION_TOOLS, ...FLUJO_STATE_TOOLS];
-  expect(mapped).toHaveLength(43);
+  expect(mapped).toHaveLength(47);
   const definitions = await computeBundledFlujoWorkloadDefinitions();
   expect(definitions.filter(item => item.tool).map(item => item.action.action).sort()).toEqual(mapped.filter(name => enabled || name !== 'system_screenshot').sort());
   expect(definitions.filter(item => !item.tool).map(item => item.action.action).sort()).toEqual(
     ['listTools', 'listResources', 'listResourceTemplates', 'readResource', 'listSkills', 'getSkill'].sort());
-  expect(await computeBundledFlujoWorkloadInventory()).toHaveLength(enabled ? 49 : 48);
+  expect(await computeBundledFlujoWorkloadInventory()).toHaveLength(enabled ? 53 : 52);
   for (const item of definitions) {
     expect(item.schema).toEqual(expect.objectContaining({ type: 'object' }));
     expect(item.action.schemaDigest).toMatch(/^[a-f0-9]{64}$/);

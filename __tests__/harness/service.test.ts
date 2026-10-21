@@ -70,7 +70,7 @@ it('reuses a creation ID but rejects known held-out inputs in a new experiment',
 });
 
 it('does not share strategy lessons between different saved targets with the same domain and model', async () => {
-  jest.mocked(getHarnessProfile).mockResolvedValue({ policy: {} } as HarnessProfile);
+  jest.mocked(getHarnessProfile).mockResolvedValue({ policy: {}, versions: [], activeVersionId: '' } as unknown as HarnessProfile);
   jest.mocked(harnessTargetId).mockImplementation(target => target.nodeId);
   jest.mocked(harnessTargetPrompt).mockReturnValue('Original prompt');
   jest.mocked(captureHarnessTarget).mockImplementation(async target => ({ target, flow: { id: 'flow', name: 'Flow', nodes: [], edges: [] },

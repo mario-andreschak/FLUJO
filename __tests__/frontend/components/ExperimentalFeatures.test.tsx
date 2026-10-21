@@ -221,6 +221,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
     const tabs = within(moreSections).getAllByRole('tab');
     expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
+      'Harness Lab',
       'Automations',
       'Meetings',
       'Personas',
@@ -233,6 +234,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       'Settings',
     ]);
     expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
+      '/harness',
       '/automation/triggers',
       '/meetings',
       '/personas',
@@ -286,7 +288,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
   it('defaults to off (unchecked) when no experimental setting exists', () => {
     mockStorageValue = { settings: { speech: { enabled: true } }, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('checkbox', { name: /Enable Experimental Features/i });
+    const toggle = screen.getByRole('switch', { name: /Enable Experimental Features/i });
     expect(toggle).not.toBeChecked();
   });
 
@@ -312,7 +314,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
   it('calls updateSettings with a merged payload enabling experimental features', () => {
     mockStorageValue = { settings: { speech: { enabled: true } }, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('checkbox', { name: /Enable Experimental Features/i });
+    const toggle = screen.getByRole('switch', { name: /Enable Experimental Features/i });
     fireEvent.click(toggle);
     expect(mockUpdateSettings).toHaveBeenCalledWith({
       speech: { enabled: true },
@@ -330,7 +332,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
       updateSettings: mockUpdateSettings,
     };
     render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('checkbox', { name: /Flow-based Flow Generator/i });
+    const toggle = screen.getByRole('switch', { name: /Flow-based Flow Generator/i });
     expect(toggle).not.toBeChecked();
 
     fireEvent.click(toggle);
@@ -354,7 +356,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
       updateSettings: mockUpdateSettings,
     };
     render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('checkbox', {
+    const toggle = screen.getByRole('switch', {
       name: /Use Codex's cached model catalog/i,
     });
     expect(toggle).not.toBeChecked();
@@ -381,8 +383,8 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     };
     render(<ExperimentalFeaturesSettings />);
 
-    const summarization = screen.getByRole('checkbox', { name: /AI conversation summarization/i });
-    const evaluation = screen.getByRole('checkbox', { name: /Evaluate visual routing without sending images/i });
+    const summarization = screen.getByRole('switch', { name: /AI conversation summarization/i });
+    const evaluation = screen.getByRole('switch', { name: /Evaluate visual routing without sending images/i });
     expect(summarization).not.toBeChecked();
     expect(evaluation).not.toBeChecked();
     expect(evaluation).not.toBeDisabled();
@@ -410,9 +412,9 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
 
   it('has no activation switches for built-in subflow collaboration', () => {
     render(<ExperimentalFeaturesSettings />);
-    expect(screen.queryByRole('checkbox', { name: /Subflow nodes be called as tools/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /detached subflows/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /Resume subflow child/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /Subflow nodes be called as tools/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /detached subflows/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /Resume subflow child/i })).not.toBeInTheDocument();
   });
 
   it('hides explicitly tool-less provider models by default and persists the reveal toggle', () => {
@@ -425,7 +427,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
       updateSettings: mockUpdateSettings,
     };
     render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('checkbox', {
+    const toggle = screen.getByRole('switch', {
       name: /Show Models without tool capabilities/i,
     });
     expect(toggle).not.toBeChecked();
@@ -449,10 +451,10 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     };
     render(<ExperimentalFeaturesSettings />);
 
-    expect(screen.getByRole('checkbox', {
+    expect(screen.getByRole('switch', {
       name: /Require a click to open allowed MCP Apps/i,
     })).not.toBeChecked();
-    expect(screen.getByRole('checkbox', {
+    expect(screen.getByRole('switch', {
       name: /Restrict MCP filesystem access to configured roots/i,
     })).not.toBeChecked();
     expect(screen.queryByText('MCP App consent')).not.toBeInTheDocument();
@@ -536,7 +538,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     };
     render(<ExperimentalFeaturesSettings />);
 
-    fireEvent.click(screen.getByRole('checkbox', {
+    fireEvent.click(screen.getByRole('switch', {
       name: /Require a click to open allowed MCP Apps/i,
     }));
     expect(mockUpdateSettings).toHaveBeenLastCalledWith({
@@ -548,7 +550,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
       },
     });
 
-    fireEvent.click(screen.getByRole('checkbox', {
+    fireEvent.click(screen.getByRole('switch', {
       name: /Restrict MCP filesystem access to configured roots/i,
     }));
     expect(mockUpdateSettings).toHaveBeenLastCalledWith({
@@ -569,7 +571,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     };
     render(<ExperimentalFeaturesSettings />);
     expect(
-      screen.getByRole('checkbox', { name: /Enable filesystem snapshots and chat restore/i })
+      screen.getByRole('switch', { name: /Enable filesystem snapshots and chat restore/i })
     ).not.toBeChecked();
   });
 
@@ -585,7 +587,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     render(<ExperimentalFeaturesSettings />);
 
     fireEvent.click(
-      screen.getByRole('checkbox', { name: /Enable filesystem snapshots and chat restore/i })
+      screen.getByRole('switch', { name: /Enable filesystem snapshots and chat restore/i })
     );
 
     expect(mockUpdateSettings).toHaveBeenCalledWith({

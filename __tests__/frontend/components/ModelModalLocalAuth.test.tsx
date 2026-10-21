@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
 import type { Model } from '@/shared/types';
+import { modelService } from '@/frontend/services/model';
+jest.mock('@/frontend/services/model', () => ({ modelService: { fetchProviderModels: jest.fn() } }));
 
 const mockRouter = { refresh: jest.fn(), push: jest.fn() };
 const mockStorage = { globalEnvVars: {}, settings: {} };
@@ -15,6 +17,18 @@ jest.mock('@/frontend/components/shared/PromptBuilder', () => ({ __esModule: tru
 jest.mock('@/frontend/components/BugReport/BugReportButton', () => ({ __esModule: true, default: () => null }));
 
 import ModelModal from '@/frontend/components/models/modal';
+
+beforeEach(() => {
+  // Model suggestions are discovered from the account; the shipped fallback is
+  // deliberately only "default". No account or provider is contacted here.
+  jest.mocked(modelService.fetchProviderModels).mockImplementation(async (_url, _id, _search, apiKey, profile) => {
+    if (profile !== 'antigravity-cli') return [];
+    const ids = ['gemini-3.8-flash-medium', 'gemini-3.1-pro-high',
+      ...(apiKey ? [] : ['claude-opus-4-6-thinking', 'gpt-oss-120b-medium'])];
+    return ids.map(id => ({ id, name: id, supportsTools: true })) as never;
+  });
+});
+afterEach(() => { jest.restoreAllMocks(); });
 
 function showModel(provider: Model['provider'], adapter: Model['adapter'], name = '', metadata: Partial<Model> = {}) {
   const model: Model = {
@@ -64,11 +78,11 @@ it('saves an explicit Gemini API key for the Antigravity CLI advanced profile', 
   });
 });
 
-it('groups the verified account catalog and removes account-only suggestions in API-key mode', () => {
+it('groups the verified account catalog and removes account-only suggestions in API-key mode', async () => {
   showModel('antigravity-cli', 'antigravity-cli');
   const modelName = screen.getByLabelText(/Technical name/);
-  fireEvent.mouseDown(modelName);
-  expect(screen.getByRole('option', { name: /gemini-3.8-flash-medium/ })).toBeInTheDocument();
+  fireEvent.keyDown(modelName, { key: 'ArrowDown' });
+  expect(await screen.findByRole('option', { name: /gemini-3.8-flash-medium/ })).toBeInTheDocument();
   expect(screen.getByRole('option', { name: /claude-opus-4-6-thinking/ })).toBeInTheDocument();
   expect(screen.getByRole('option', { name: /gpt-oss-120b-medium/ })).toBeInTheDocument();
   expect(screen.getByText('CLI default')).toBeInTheDocument();
@@ -78,7 +92,7 @@ it('groups the verified account catalog and removes account-only suggestions in 
   fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gemini-api-key' } });
   fireEvent.keyDown(modelName, { key: 'ArrowDown' });
   expect(screen.getByRole('option', { name: /Antigravity CLI Default/ })).toBeInTheDocument();
-  expect(screen.getAllByRole('option')).toHaveLength(12);
+  await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
   expect(screen.getByRole('option', { name: /gemini-3.8-flash-medium/ })).toBeInTheDocument();
   expect(screen.getByRole('option', { name: /gemini-3.1-pro-high/ })).toBeInTheDocument();
   expect(screen.queryByRole('option', { name: /claude-/ })).not.toBeInTheDocument();
@@ -87,8 +101,8 @@ it('groups the verified account catalog and removes account-only suggestions in 
 
 it.each(['claude-opus-4-6-thinking', 'gpt-oss-120b-medium'])('saves the account catalog choice %s with its exact technical name', async name => {
   const onSave = showModel('antigravity-cli', 'antigravity-cli');
-  fireEvent.mouseDown(screen.getByLabelText(/Technical name/));
-  fireEvent.click(screen.getByRole('option', { name: new RegExp(name) }));
+  fireEvent.keyDown(screen.getByLabelText(/Technical name/), { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
   expect(screen.getByLabelText(/Technical name/)).toHaveValue(name);
   fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'My Antigravity model' } });
   fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
