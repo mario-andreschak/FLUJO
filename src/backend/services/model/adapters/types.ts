@@ -92,6 +92,8 @@ export interface ModelSteering {
 }
 
 export interface CompletionInput {
+  /** Harness Lab only: fresh, keyless Codex text inference with native capabilities disabled. */
+  harnessTextOnly?: boolean;
   /** Internal restrictive request policy: one non-streaming, tool-free text attempt.
    * Callers own the deadline controller and final response byte/schema limits. */
   readOnlyAssessment?: boolean;

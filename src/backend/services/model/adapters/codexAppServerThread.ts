@@ -90,6 +90,7 @@ export function createCodexAppServerThread(input: {
       return ['-c', `features.${name}=${enabled}`];
     });
     child = await startOwnedCodexAppServer({ executable: input.executable, args: [...startupPolicy,
+      ...(input.config.forced_login_method === 'chatgpt' ? ['-c', 'forced_login_method="chatgpt"'] : []),
       '-c', 'web_search="disabled"', '-c', 'tools.view_image=false',
       '-c', `tools.experimental_request_user_input.enabled=${Boolean(input.onQuestion || input.onAsyncQuestion)}`,
       '-c', `features.default_mode_request_user_input=${Boolean(input.onQuestion || input.onAsyncQuestion)}`, 'app-server'],

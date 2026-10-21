@@ -203,6 +203,13 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
 export class CodexAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
     assertOwnerCredentialAdapterRoute(input.model, 'codex-cli');
+    if (input.harnessTextOnly && (input.apiKey || input.model.ApiKey?.trim() || input.model.baseUrl?.trim()
+      || !input.signal || input.tools?.length || input.localToolExecutors || input.nativeToolPort
+      || input.nativeOriginalProcessHost || input.executionExtensionContext || input.conversationId
+      || input.nodeId || input.codexSession || input.sessionResume || input.steering
+      || process.env.FLUJO_CODEX_APP_SERVER === '0')) {
+      throw new Error('Harness text inference requires a fresh, tool-free Codex subscription request.');
+    }
     const invocationStartedAt = Date.now();
     const {
       model,
@@ -974,7 +981,7 @@ export class CodexAdapter implements CompletionAdapter {
             code_mode_host: true,
             default_mode_request_user_input: Boolean(ordinaryQuestion) } : {}),
         },
-        ...(executionExtensionContext || nativeToolPort ? RESTRICTED_CODEX_CONFIG : {}),
+        ...(executionExtensionContext || nativeToolPort || input.harnessTextOnly ? RESTRICTED_CODEX_CONFIG : {}),
         ...(modelCatalogPath ? { model_catalog_json: modelCatalogPath } : {}),
         ...(bridge
           ? {
