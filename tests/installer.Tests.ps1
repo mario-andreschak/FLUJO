@@ -465,7 +465,7 @@ Describe 'Corporate-network installer source contracts' {
         $script:InstallSource | Should -Not -Match "npm ci --ignore-scripts"
         $script:UnixInstallSource | Should -Not -Match "npm ci --ignore-scripts"
         $script:BrowserPackage.scripts.install | Should -Be 'node scripts/install-browser.mjs'
-        $script:BrowserPackage.dependencies.patchright | Should -Be '1.61.1'
+        $script:BrowserPackage.dependencies.patchright | Should -Be '1.64.1'
         $script:InstallSource | Should -Match "-Stage 'patchright-chromium' -Command 'node' -Arguments @\('mcp-servers/browser/scripts/install-browser\.mjs'\)"
         $script:UnixInstallSource | Should -Match 'run_stage patchright-chromium node mcp-servers/browser/scripts/install-browser\.mjs'
         $script:InstallSource | Should -Not -Match "-Stage 'patchright-chromium' -Command 'npm'"

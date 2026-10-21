@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 222.
+Route files: 229.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -46,6 +46,9 @@ Route files: 222.
 | `/api/flow/{id}/versions` | GET | [source](../../src/app/api/flow/[id]/versions/route.ts) |
 | `/api/flow/{id}/versions/{versionId}` | GET | [source](../../src/app/api/flow/[id]/versions/[versionId]/route.ts) |
 | `/api/git` | POST | [source](../../src/app/api/git/route.ts) |
+| `/api/harness` | GET, POST | [source](../../src/app/api/harness/route.ts) |
+| `/api/harness/profiles` | GET, POST | [source](../../src/app/api/harness/profiles/route.ts) |
+| `/api/harness/{id}` | GET, POST | [source](../../src/app/api/harness/[id]/route.ts) |
 | `/api/init` | GET | [source](../../src/app/api/init/route.ts) |
 | `/api/local-models/capability` | GET | [source](../../src/app/api/local-models/capability/route.ts) |
 | `/api/local-models/pull` | POST | [source](../../src/app/api/local-models/pull/route.ts) |
@@ -97,6 +100,7 @@ Route files: 222.
 | `/api/oauth/initiate` | POST | [source](../../src/app/api/oauth/initiate/route.ts) |
 | `/api/oauth/reset` | POST | [source](../../src/app/api/oauth/reset/route.ts) |
 | `/api/operations/status` | GET | [source](../../src/app/api/operations/status/route.ts) |
+| `/api/original-owner` | GET, POST | [source](../../src/app/api/original-owner/route.ts) |
 | `/api/owner/bootstrap` | GET, POST | [source](../../src/app/api/owner/bootstrap/route.ts) |
 | `/api/owner/session` | DELETE, GET, POST | [source](../../src/app/api/owner/session/route.ts) |
 | `/api/packages/build` | POST | [source](../../src/app/api/packages/build/route.ts) |
@@ -204,6 +208,7 @@ Route files: 222.
 | `/v1/personas/{personaId}/execution-preview` | GET | [source](../../src/app/v1/personas/[personaId]/execution-preview/route.ts) |
 | `/v1/personas/{personaId}/export` | POST | [source](../../src/app/v1/personas/[personaId]/export/route.ts) |
 | `/v1/personas/{personaId}/export-preview` | POST | [source](../../src/app/v1/personas/[personaId]/export-preview/route.ts) |
+| `/v1/personas/{personaId}/goal-admissions/{admissionKey}` | GET, PUT | [source](../../src/app/v1/personas/[personaId]/goal-admissions/[admissionKey]/route.ts) |
 | `/v1/personas/{personaId}/improvements` | GET | [source](../../src/app/v1/personas/[personaId]/improvements/route.ts) |
 | `/v1/personas/{personaId}/improvements/{proposalId}/apply` | POST | [source](../../src/app/v1/personas/[personaId]/improvements/[proposalId]/apply/route.ts) |
 | `/v1/personas/{personaId}/improvements/{proposalId}/promote` | POST | [source](../../src/app/v1/personas/[personaId]/improvements/[proposalId]/promote/route.ts) |
@@ -222,6 +227,8 @@ Route files: 222.
 | `/v1/personas/{personaId}/work-items/{workItemId}` | DELETE, GET, PATCH | [source](../../src/app/v1/personas/[personaId]/work-items/[workItemId]/route.ts) |
 | `/v1/personas/{personaId}/work-items/{workItemId}/assign` | POST | [source](../../src/app/v1/personas/[personaId]/work-items/[workItemId]/assign/route.ts) |
 | `/v1/personas/{personaId}/work-items/{workItemId}/control` | POST | [source](../../src/app/v1/personas/[personaId]/work-items/[workItemId]/control/route.ts) |
+| `/v1/personas/{personaId}/work-items/{workItemId}/runtime` | GET | [source](../../src/app/v1/personas/[personaId]/work-items/[workItemId]/runtime/route.ts) |
+| `/v1/personas/{personaId}/work-items/{workItemId}/source` | GET | [source](../../src/app/v1/personas/[personaId]/work-items/[workItemId]/source/route.ts) |
 | `/v1/roles` | GET, POST | [source](../../src/app/v1/roles/route.ts) |
 | `/v1/roles/{roleId}` | DELETE, GET, PATCH, PUT | [source](../../src/app/v1/roles/[roleId]/route.ts) |
 | `/v1/roles/{roleId}/duplicate` | POST | [source](../../src/app/v1/roles/[roleId]/duplicate/route.ts) |
