@@ -7,6 +7,7 @@ import { digest, Ledger } from './ledger.js';
 import { LocalEngine } from './local-engine.js';
 import { localRuntimePolicySchema, type LocalRuntimePolicy, type RuntimeIntent } from './local-runtime-policy.js';
 import { verifyLocalRuntime } from './local-runtime.js';
+import { ownerAuthority } from './authority-record.js';
 import { assertPrivateDirectory, createPrivateFile, readPrivateFile, syncPrivateDirectory } from './private-storage.js';
 
 const planSchema = z.object({ policy: localRuntimePolicySchema, issuedAt: z.number().int().nonnegative() }).strict();
@@ -50,6 +51,9 @@ function publishConfiguration(filename: string, original: string, config: Contro
  * second runtime, overwriting existing authority or deleting persistent data. */
 export async function provisionRuntime(filename: string, config: ControllerConfig, ledger: Ledger, actorId: string,
   localEngine?: Pick<LocalEngine, 'run' | 'json'>): Promise<Runtime> {
+  if (ledger.db.prepare("SELECT 1 FROM runtime_rotations WHERE phase!='complete'").get()) {
+    throw new Error('Resume pending credential rotations before provisioning another owner.');
+  }
   const original = readPrivateFile(filename).toString('utf8');
   if (JSON.stringify(configSchema.parse(JSON.parse(original))) !== JSON.stringify(config)) {
     throw new Error('Configuration changed before provisioning.');
@@ -105,9 +109,7 @@ export async function provisionRuntime(filename: string, config: ControllerConfi
       throw new Error('Local volume ownership does not match.');
     }
   }
-  const authority = { schemaVersion: 1, ownerId: runtime.actorId, credentials: [{ id: 'local-controller',
-    digest: digest(runtime.credential), scopes: ['openai:read', 'openai:execute', 'mcp:access', 'control:admin', 'secrets:read', 'avatar:voice'],
-    issuedAt: plan.issuedAt, expiresAt: policy.credentialExpiresAt, revokedAt: null }] };
+  const authority = ownerAuthority(runtime.actorId, digest(runtime.credential), plan.issuedAt, policy.credentialExpiresAt);
   if (String(stored?.phase ?? 'planned') === 'planned') {
     await engine.run(policy, ['container', 'run', '--rm', '--interactive', '--pull=never',
       '--name', `flujo-owner-init-${policy.generation}`, '--network=none', '--read-only', '--user=0:0',

@@ -10,6 +10,7 @@ import { RuntimeSupervisor } from './runtime-supervisor.js';
 import { RuntimePipes } from './runtime-pipes.js';
 import type { RuntimeIntent } from './local-runtime-policy.js';
 import { provisionRuntime } from './provision-runtime.js';
+import { rotateRuntime } from './rotate-runtime.js';
 import { setupController } from './setup.js';
 import { ensureLocalTLS } from './local-tls.js';
 import { updateLocalTrust } from './tls-trust.js';
@@ -30,8 +31,8 @@ export async function main(args: string[]): Promise<void> {
     return;
   }
   if (!filename || !['init', 'serve', 'disable', 'enable', 'status', 'password', 'reconcile', 'provision',
-    'tls-init', 'tls-renew', 'tls-trust', 'tls-untrust'].includes(action)
-      || (['disable', 'enable', 'password', 'provision'].includes(action) ? !actorId || args.length !== 3
+    'tls-init', 'tls-renew', 'tls-trust', 'tls-untrust', 'rotate', 'resume-rotation'].includes(action)
+      || (['disable', 'enable', 'password', 'provision', 'rotate', 'resume-rotation'].includes(action) ? !actorId || args.length !== 3
         : ['tls-trust', 'tls-untrust'].includes(action) ? args.length < 2 || args.length > 3 : args.length !== 2)) {
     throw new Error('Invalid local controller command. Use --help for arguments.');
   }
@@ -52,14 +53,18 @@ export async function main(args: string[]): Promise<void> {
     } finally { unlock(); }
     return;
   }
-  let release = ['serve', 'init', 'reconcile', 'provision'].includes(action) ? lockController(config.stateDirectory) : undefined;
+  let release = ['serve', 'init', 'reconcile', 'provision', 'rotate', 'resume-rotation'].includes(action) ? lockController(config.stateDirectory) : undefined;
   let ledger: Ledger | undefined;
   let supervisor: RuntimeSupervisor | undefined;
   let pipes: RuntimePipes | undefined;
   let controller: ControllerServer | undefined;
   try {
     ledger = new Ledger(config.stateDirectory);
-    if (action === 'provision') {
+    if (action === 'rotate' || action === 'resume-rotation') {
+      const result = await rotateRuntime(filename, config, ledger, actorId, action === 'resume-rotation');
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      if (!result.verified) process.exitCode = 2;
+    } else if (action === 'provision') {
       const runtime = await provisionRuntime(filename, config, ledger, actorId);
       process.stdout.write(`${JSON.stringify({ runtimeId: runtime.id, actorId: runtime.actorId, origin: runtime.origin,
         containerId: runtime.localRuntime?.containerId, next: 'Initialize the local ledger and enroll the account password before serving.' }, null, 2)}\n`);
@@ -104,7 +109,8 @@ export async function main(args: string[]): Promise<void> {
         (p.actor_id IS NOT NULL) AS passwordConfigured
         FROM actors a JOIN runtimes r ON r.actor_id=a.id LEFT JOIN passwords p ON p.actor_id=a.id ORDER BY a.id`).all();
       const provisioning = ledger.db.prepare('SELECT runtime_id AS runtimeId,phase FROM runtime_provisioning ORDER BY runtime_id').all();
-      process.stdout.write(`${JSON.stringify({ actors: rows, runtimes: ledger.intents().map(runtimeStatus), provisioning }, null, 2)}\n`);
+      const rotations = ledger.db.prepare('SELECT id AS operationId,runtime_id AS runtimeId,phase,created_at AS createdAt FROM runtime_rotations ORDER BY created_at').all();
+      process.stdout.write(`${JSON.stringify({ actors: rows, runtimes: ledger.intents().map(runtimeStatus), provisioning, rotations }, null, 2)}\n`);
     } else if (action === 'reconcile') {
       ledger.reconcile(config);
       supervisor = new RuntimeSupervisor(ledger, new LocalRuntimeDriver(new LocalEngine(config.stateDirectory)));

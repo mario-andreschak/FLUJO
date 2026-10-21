@@ -40,18 +40,33 @@ export class LocalEngine {
       const chunks: Buffer[] = [];
       let size = 0;
       let failed = false;
-      const stop = () => { failed = true; child.kill('SIGKILL'); };
+      let settled = false;
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      const stop = () => {
+        if (failed || settled) return;
+        failed = true; child.kill('SIGKILL');
+        grace = setTimeout(() => {
+          if (settled) return;
+          settled = true; clearTimeout(timer);
+          child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); child.unref();
+          // Killing the CLI does not prove that a daemon-side operation ended.
+          // The durable operation must inspect/recover its owned object on retry.
+          reject(new RuntimeControlError('local-engine-unavailable'));
+        }, 5000);
+      };
       const timer = setTimeout(stop, 15_000);
       child.stdout.on('data', (chunk: Buffer) => {
         size += chunk.length;
         if (size > 512 * 1024) stop();
-        else chunks.push(chunk);
+        else if (!failed) chunks.push(chunk);
       });
       // Consume bounded diagnostics without retaining credential-bearing output.
       child.stderr.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 512 * 1024) stop(); });
       child.on('error', stop); child.stdin.on('error', stop); child.stdin.end(input);
       child.on('close', code => {
-        clearTimeout(timer);
+        clearTimeout(timer); clearTimeout(grace);
+        if (settled) return;
+        settled = true;
         if (failed || code !== 0) reject(new RuntimeControlError('local-engine-unavailable'));
         else resolve(Buffer.concat(chunks).toString('utf8').trim());
       });

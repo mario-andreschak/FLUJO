@@ -88,8 +88,18 @@ export function verifyLocalRuntime(value: unknown, intent: RuntimeIntent): Runti
   throw new RuntimeControlError('state-unconfirmed');
 }
 
+export function verifyLocalVolumes(volumes: unknown, intent: RuntimeIntent): void {
+  const names = new Set([intent.policy.dataVolume, intent.policy.homeVolume, intent.policy.authorityVolume]);
+  if (!Array.isArray(volumes) || volumes.length !== 3 || volumes.some(volume => !volume || typeof volume !== 'object'
+      || !names.delete(volume.Name) || volume.Driver !== 'local' || !empty(volume.Options) || volume.Scope !== 'local'
+      || volume.Labels?.['io.flujo.local-owner.generation'] !== intent.policy.generation
+      || volume.Labels?.['io.flujo.local-owner.actor'] !== intent.actorId)) {
+    throw new RuntimeControlError('isolation-mismatch');
+  }
+}
+
 export class LocalRuntimeDriver {
-  constructor(readonly engine: LocalEngine) {}
+  constructor(readonly engine: Pick<LocalEngine, 'run' | 'json'>) {}
 
   private async container(intent: RuntimeIntent): Promise<unknown> {
     const value = await this.engine.json(intent.policy, ['container', 'inspect', intent.policy.containerId]);
@@ -154,13 +164,7 @@ export class LocalRuntimeDriver {
     const volumes = await this.engine.json(intent.policy, ['volume', 'inspect', intent.policy.dataVolume,
       intent.policy.homeVolume, intent.policy.authorityVolume]);
     check();
-    const names = new Set([intent.policy.dataVolume, intent.policy.homeVolume, intent.policy.authorityVolume]);
-    if (!Array.isArray(volumes) || volumes.length !== 3 || volumes.some(volume => !volume || typeof volume !== 'object'
-        || !names.delete(volume.Name) || volume.Driver !== 'local' || !empty(volume.Options) || volume.Scope !== 'local'
-        || volume.Labels?.['io.flujo.local-owner.generation'] !== intent.policy.generation
-        || volume.Labels?.['io.flujo.local-owner.actor'] !== intent.actorId)) {
-      throw new RuntimeControlError('isolation-mismatch');
-    }
+    verifyLocalVolumes(volumes, intent);
     const before = await this.inspect(intent);
     check();
     if (before !== intent.desired) {

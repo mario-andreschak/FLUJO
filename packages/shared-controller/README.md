@@ -158,8 +158,8 @@ it in shell arguments, terminal output or source control. Provisioning installs
 only its digest and the required app scopes in the read-only authority volume;
 the plaintext stays in the controller's private config. `credentialSeconds` is
 bounded to one hour through one year. Expired authority denies admission and stops
-the runtime; credential rotation/migration is still pending, so this candidate is
-not suitable for unattended production use.
+the runtime. Use the local rotation commands below to renew it. Migration and
+installed acceptance remain pending; this candidate is not ready for production.
 
 Each owner, runtime, browser hostname, credential, container generation and volume
 assignment is unique. Unprovisioned owners may share the placeholder upstream;
@@ -257,8 +257,9 @@ runtime cannot change its owner, origin or isolation identity in place.
 Schema 1 OIDC configuration/ledgers are not silently converted to local accounts.
 They are rejected and preserved. The draft has no automatic migration of existing
 user data; explicit ownership mapping, backup and recovery remain required work.
-The local account ledger upgrades from schema 2 to schema 3 for runtime intent and
-provisioning journals; config schema remains 2.
+The local account ledger upgrades from schema 2/3 to schema 4 for runtime intent,
+provisioning and credential-rotation journals; config schema remains 2. Earlier
+controller binaries reject the newer ledger rather than ignoring pending work.
 
 ## Execution revocation and recovery
 
@@ -287,6 +288,52 @@ or shutting down the controller intentionally leaves enabled owners' schedules
 running. Administrative disable is the execution-revocation action. Persistent
 effects already committed by a job are not rolled back or automatically replayed.
 
+## Local runtime credential rotation
+
+Stop the controller before rotating a managed owner's service credential. The
+command uses the same exclusive local process lock as provisioning and serving.
+Browser access for all owners is unavailable during this maintenance; other
+owners' existing runtime jobs continue:
+
+```sh
+flujo-controller rotate /absolute/private/config.json alice
+flujo-controller status /absolute/private/config.json
+# After an interrupted command or lost final reply:
+flujo-controller resume-rotation /absolute/private/config.json alice
+```
+
+Rotation revokes that owner's browser sessions and records a durable stop intent
+before contacting the engine. It observes the exact owned container stopped,
+checks its immutable image, isolation and three volume identities, then runs a
+fixed UID 1000 helper with only the authority volume mounted writable. The helper
+has no network, host binds, data/home volume access or additional capabilities.
+It uses the already installed image and an atomic private authority publication.
+The controller publishes the matching private configuration and commits the new
+digest/revision to SQLite before requesting a restart. Browser access requires a
+fresh successful runtime/authority observation. Account enablement, passwords,
+owner/container/volume identity and persistent data remain intact. A concurrent
+disable supersedes the operation and is preserved on recovery.
+
+The journal phases are `prepared`, `stopped`, `authority-updated`,
+`config-published` and `complete`. A pending rotation blocks startup, provisioning,
+another owner's rotation and account enable; local disable and status remain
+available. `rotate` resumes an existing pending operation. After completion it
+deliberately starts a new rotation; use `resume-rotation` after a lost final reply
+to retain the completed credential. Completed rotation and confirmed execution
+are separate: exit 2 reports an unconfirmed final runtime state.
+
+Preserve the private `rotation-<operationId>.json` candidate alongside the ledger
+until recovery is complete. Candidates contain credentials and must receive the
+same protection as the main configuration. The journal, helper stdin and CLI
+output contain only digests/metadata. Conflicting operator config edits are never
+overwritten: restore the exact source or target configuration to resume. Lost
+helper replies require inspection and observed exit of the exact journaled
+helper; an unknown or still-unconfirmed helper leaves access closed. If an
+interrupted candidate expires, recovery finishes it stopped and performs one fresh
+local rotation before requesting a restart. No online credential issuer, lease,
+identity service or image download is used. Native crash/power-loss and engine
+acceptance remain release gates; fixtures cannot establish those guarantees.
+
 ## Remaining boundaries and release acceptance
 
 HTTP/SSE forwarding has 64 MiB upload, 64 per-owner and 512 global request limits,
@@ -303,9 +350,9 @@ The networkless runtime currently cannot call internet providers, sibling
 containers, host-local model servers or download new tools. Local tools already
 in its image/volumes can run. A separately authorized local capability broker is
 pending for optional external integrations and host model services; it must not
-weaken owner isolation or become an online prerequisite. Persistent disk quotas,
-full process-tree/pipe exhaustion qualification and runtime credential rotation
-also remain pending. Native TLS trust and browser/offline installation qualification
+weaken owner isolation or become an online prerequisite. Persistent disk quotas and
+full process-tree/pipe exhaustion qualification remain pending.
+Native TLS trust and browser/offline installation qualification
 remain release gates.
 
 At release pre-flight, run `npm run test:controller` through flujo-bash on both
@@ -325,6 +372,10 @@ acceptance environment. Do not disconnect the user's active machine or services.
   Check native ACL/ancestor refusal, offline local setup, pipe failures with no
   network fallback, buffered response integrity and pipe exhaustion. Interrupt
   provisioning after each journal step and before/after config publish.
+  Interrupt rotation before/after authority publication, config publication and
+  ledger commit; lose the helper reply, expire the interrupted candidate, and
+  disable the account concurrently. Verify recovery retains owner/data identity,
+  never restores a disabled account and never admits mismatched credentials.
   Disable during a running tool/stream and during controller/engine failure;
   require observed process exit without touching the other owner's jobs.
 - Verify explicit team resource/dependency grants, edit conflicts, history and

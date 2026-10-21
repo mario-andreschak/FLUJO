@@ -27,7 +27,7 @@ export class Ledger {
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
     // The unreleased OIDC prototype's identities must never silently become local
     // accounts. Keep that ledger intact; deliberate migration is separate work.
-    if (version !== 0 && version !== 2 && version !== 3) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
+    if (version !== 0 && version !== 2 && version !== 3 && version !== 4) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS actors (
         id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
@@ -64,7 +64,13 @@ export class Ledger {
         runtime_id TEXT PRIMARY KEY, request_digest TEXT NOT NULL,
         plan TEXT NOT NULL, phase TEXT NOT NULL
       );
-      PRAGMA user_version=3;
+      CREATE TABLE IF NOT EXISTS runtime_rotations (
+        id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL REFERENCES runtimes(id), plan TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK(phase IN ('prepared','stopped','authority-updated','config-published','complete')),
+        created_at INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS one_pending_rotation ON runtime_rotations(runtime_id) WHERE phase!='complete';
+      PRAGMA user_version=4;
     `);
   }
 
@@ -84,6 +90,9 @@ export class Ledger {
       throw new Error('Provision every new local runtime before initializing or serving accounts.');
     }
     this.transaction(() => {
+      if (this.db.prepare("SELECT 1 FROM runtime_rotations WHERE phase!='complete' LIMIT 1").get()) {
+        throw new Error('Resume pending credential rotations before initializing or serving accounts.');
+      }
       // Absence is revocation. Reintroducing a runtime does not revive its sessions.
       const configured = new Set(config.runtimes.map(runtime => runtime.id));
       for (const row of this.db.prepare('SELECT id,actor_id FROM runtimes WHERE enabled=1').all()) {
@@ -132,6 +141,7 @@ export class Ledger {
     return Boolean(this.db.prepare(`SELECT 1 FROM runtimes r JOIN actors a ON a.id=r.actor_id
       LEFT JOIN runtime_lifecycle l ON l.runtime_id=r.id
       WHERE r.id=? AND r.revision=? AND r.enabled=1 AND a.enabled=1
+      AND NOT EXISTS(SELECT 1 FROM runtime_rotations rotation WHERE rotation.runtime_id=r.id AND rotation.phase!='complete')
       AND (l.runtime_id IS NULL OR (l.desired='running' AND l.phase='confirmed' AND l.verified_at>?
         AND json_extract(l.policy,'$.credentialExpiresAt')>?))`)
       .get(runtime.id, revision, Date.now() - 30_000, Date.now()));
@@ -209,6 +219,10 @@ export class Ledger {
   setActorEnabled(actorId: string, enabled: boolean): void {
     this.transaction(() => {
       if (!this.db.prepare('SELECT id FROM actors WHERE id=?').get(actorId)) throw new Error('Unknown actor.');
+      if (enabled && this.db.prepare(`SELECT 1 FROM runtime_rotations rotation JOIN runtimes r ON r.id=rotation.runtime_id
+          WHERE r.actor_id=? AND rotation.phase!='complete'`).get(actorId)) {
+        throw new Error('Finish pending credential rotation before enabling this account.');
+      }
       if (enabled && !this.db.prepare('SELECT id FROM runtimes WHERE actor_id=? AND enabled=1').get(actorId)) {
         throw new Error('A removed runtime cannot be enabled.');
       }

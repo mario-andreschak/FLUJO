@@ -3,12 +3,18 @@ import { test } from 'node:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { LocalEngine } from '../dist/local-engine.js';
 import { localRuntimePolicySchema } from '../dist/local-runtime-policy.js';
 import { verifyLocalRuntime, LocalRuntimeDriver } from '../dist/local-runtime.js';
 import { provisionRuntime, runtimeCreateArguments } from '../dist/provision-runtime.js';
 import { configSchema, runtimeRevision } from '../dist/config.js';
 import { digest, Ledger } from '../dist/ledger.js';
 import { privateFixture } from './private-fixture.mjs';
+import { rotateRuntime } from '../dist/rotate-runtime.js';
+import { ownerAuthority, rotatingAuthority } from '../dist/authority-record.js';
+import { rotationHelperArguments, verifyRotationHelper } from '../dist/rotation-helper.js';
 
 function fixture() {
   const generation = 'a'.repeat(32);
@@ -232,4 +238,213 @@ test('a lost create response resumes the same journaled container without creati
   assert.equal(ledger.db.prepare('SELECT phase FROM runtime_provisioning WHERE runtime_id=?').get(owner.id).phase, 'published');
   ledger.reconcile(published);
   assert.equal(ledger.available(published.runtimes[0], runtimeRevision(published, published.runtimes[0])), false);
+});
+
+function rotationFixture(t) {
+  const { directory, close } = privateFixture(t);
+  const ledger = new Ledger(directory); close.push(() => ledger.close());
+  const source = fixture(); const p = source.policy;
+  const config = configSchema.parse({ schemaVersion: 2, stateDirectory: directory, runtimes: [source.runtime],
+    localEngine: { executable: p.executable, daemon: p.daemon, imageId: p.imageId, memoryMiB: p.memoryMiB,
+      cpus: p.cpus, pidsLimit: p.pidsLimit, credentialSeconds: 3600 } });
+  const filename = join(directory, 'config.json'); writeFileSync(filename, JSON.stringify(config), { mode: 0o600 });
+  ledger.reconcile(config); ledger.observeRuntime(ledger.intents()[0]);
+  ledger.db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?)').run('session', source.runtime.actorId,
+    source.runtime.id, runtimeRevision(config, source.runtime), Date.now() + 60_000, Date.now());
+  source.container.State = { ...source.container.State, Running: true, Status: 'running' };
+  let authority = ownerAuthority(source.runtime.actorId, digest(source.runtime.credential), Date.now() - 1000, p.credentialExpiresAt);
+  let activeHelper = null;
+  const engine = engineFixture(source.container, source.intent); const originalRun = engine.run; const originalJson = engine.json;
+  const hooks = { afterAuthority: () => {}, beforeHelper: () => {}, beforeStop: () => {} };
+  let rotations = 0; let waits = 0;
+  engine.run = async (policy, args, input) => {
+    if (args[1] === 'ls' && args.some(arg => arg.includes('flujo-owner-rotate-'))) return activeHelper?.Id ?? '';
+    if (args[1] === 'wait') { waits++; activeHelper = null; return '0'; }
+    if (args[1] === 'stop') hooks.beforeStop();
+    if (args[1] !== 'run') return originalRun(policy, args, input);
+    hooks.beforeHelper(); rotations++;
+    assert.equal(source.container.State.Running, false, 'Authority may only change after observed exit');
+    assert.equal(input.includes(source.runtime.credential), false);
+    const request = JSON.parse(input);
+    if (rotatingAuthority(authority, request) === 'replace') authority = request.next;
+    hooks.afterAuthority();
+    return JSON.stringify({ actorId: authority.ownerId, ...authority.credentials[0] });
+  };
+  engine.json = async (policy, args) => {
+    if (args[1] === 'inspect' && args[2] === activeHelper?.Id) return [structuredClone(activeHelper)];
+    if (args[1] === 'exec') return { actorId: authority.ownerId, ...authority.credentials[0] };
+    return originalJson(policy, args);
+  };
+  return { ...source, config, ledger, filename, engine, hooks,
+    read: () => configSchema.parse(JSON.parse(readFileSync(filename, 'utf8'))),
+    rotate: (resume = false) => rotateRuntime(filename, configSchema.parse(JSON.parse(readFileSync(filename, 'utf8'))), ledger, 'alice', resume, engine),
+    plan: () => JSON.parse(ledger.db.prepare('SELECT plan FROM runtime_rotations ORDER BY rowid DESC LIMIT 1').get().plan),
+    authority: () => authority, rotations: () => rotations, waits: () => waits,
+    setHelper: helper => { activeHelper = helper; } };
+}
+
+function helperFixture(container, intent, operationId) {
+  const value = structuredClone(container); value.Id = 'e'.repeat(64); value.Name = `/flujo-owner-rotate-${operationId}`;
+  value.Config.Labels['io.flujo.local-owner.rotation'] = operationId;
+  value.Config.Entrypoint = ['/usr/local/bin/node'];
+  value.Config.Cmd = ['/app/packages/shared-controller/dist/runtime-authority.js', 'rotate'];
+  value.HostConfig = { ...value.HostConfig, AutoRemove: true, Memory: 268435456, MemorySwap: 268435456, PidsLimit: 64 };
+  delete value.HostConfig.Tmpfs;
+  value.Mounts = [{ Type: 'volume', Name: intent.policy.authorityVolume, Destination: '/run/flujo-owner', RW: true }];
+  return value;
+}
+
+test('rotation preserves identities and data, revokes sessions, and completed resume does not rotate again', async t => {
+  const f = rotationFixture(t); const result = await f.rotate(); const config = f.read(); const runtime = config.runtimes[0];
+  assert.equal(result.verified, true); assert.equal(result.desired, 'running'); assert.equal(f.rotations(), 1);
+  assert.notEqual(runtime.credential, f.runtime.credential);
+  assert.deepEqual({ ...runtime, credential: f.runtime.credential, localRuntime: f.policy }, f.runtime);
+  assert.equal(f.ledger.db.prepare('SELECT count(*) AS n FROM sessions').get().n, 0);
+  assert.equal(f.ledger.available(runtime, runtimeRevision(config, runtime)), true);
+  const journal = f.ledger.db.prepare('SELECT plan,phase FROM runtime_rotations').get();
+  assert.equal(journal.phase, 'complete');
+  assert.equal(journal.plan.includes(runtime.credential), false); assert.equal(journal.plan.includes(f.runtime.credential), false);
+  assert.equal(JSON.stringify(result).includes(runtime.credential), false);
+  const resumed = await f.rotate(true);
+  assert.equal(resumed.operationId, result.operationId); assert.equal(f.rotations(), 1);
+  // A power loss can preserve the SQLite commit but lose a directory rename.
+  writeFileSync(f.filename, JSON.stringify(f.config));
+  assert.equal((await f.rotate(true)).operationId, result.operationId);
+  assert.equal(f.read().runtimes[0].credential, runtime.credential); assert.equal(f.rotations(), 1);
+  const drift = structuredClone(config); drift.runtimes[0].localRuntime.memoryMiB *= 2;
+  assert.throws(() => f.ledger.reconcile(drift), /cannot change its local execution boundary/);
+});
+
+test('lost helper reply freezes admission and recovers the same credential and owned helper', async t => {
+  const f = rotationFixture(t);
+  f.hooks.afterAuthority = () => { f.hooks.afterAuthority = () => {}; throw new Error('Lost helper reply'); };
+  await assert.rejects(f.rotate(), /Lost helper reply/);
+  const first = f.plan(); const next = f.authority();
+  assert.equal(f.ledger.available(f.runtime, runtimeRevision(f.config, f.runtime)), false);
+  assert.throws(() => f.ledger.reconcile(f.config), /Resume pending/);
+  assert.throws(() => f.ledger.setActorEnabled('alice', true), /Finish pending/);
+  const helper = helperFixture(f.container, f.intent, first.operationId); f.setHelper(helper);
+  const resumed = await f.rotate(true);
+  assert.equal(resumed.operationId, first.operationId); assert.deepEqual(f.authority(), next); assert.equal(f.waits(), 1);
+  assert.equal(digest(f.read().runtimes[0].credential), first.nextDigest);
+});
+
+test('config publication followed by a ledger interruption resumes without another credential', async t => {
+  const f = rotationFixture(t); const transaction = f.ledger.transaction.bind(f.ledger); let interrupted = false;
+  t.mock.method(f.ledger, 'transaction', callback => {
+    if (!interrupted && f.read().runtimes[0].credential !== f.runtime.credential) {
+      interrupted = true; throw new Error('Ledger unavailable after publication');
+    }
+    return transaction(callback);
+  });
+  await assert.rejects(f.rotate(), /Ledger unavailable/);
+  assert.equal(f.ledger.db.prepare('SELECT phase FROM runtime_rotations').get().phase, 'config-published');
+  const credential = f.read().runtimes[0].credential;
+  assert.equal((await f.rotate(true)).verified, true);
+  assert.equal(f.read().runtimes[0].credential, credential);
+});
+
+test('disable before or during rotation survives recovery and never starts the owner', async t => {
+  for (const when of ['before', 'during']) {
+    const f = rotationFixture(t);
+    if (when === 'before') f.ledger.setActorEnabled('alice', false);
+    else {
+      f.hooks.afterAuthority = () => { f.hooks.afterAuthority = () => {}; f.ledger.setActorEnabled('alice', false); };
+      await assert.rejects(f.rotate());
+    }
+    const result = await f.rotate(when === 'during');
+    assert.equal(result.verified, true); assert.equal(result.desired, 'stopped');
+    assert.equal(f.ledger.db.prepare('SELECT enabled FROM actors WHERE id=?').get('alice').enabled, 0);
+    assert.equal(f.engine.calls.some(args => args[1] === 'start'), false);
+    assert.equal(f.container.State.Running, false);
+  }
+});
+
+test('an expired interrupted candidate completes stopped before fresh offline rotation', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = rotationFixture(t);
+  f.hooks.afterAuthority = () => { f.hooks.afterAuthority = () => {}; now += 3_600_001; throw new Error('Interrupted until expiry'); };
+  await assert.rejects(f.rotate(), /Interrupted until expiry/);
+  const expired = f.plan(); const result = await f.rotate(true);
+  assert.notEqual(result.operationId, expired.operationId);
+  assert.ok(result.expiresAt > now); assert.equal(result.verified, true);
+  const journals = f.ledger.db.prepare('SELECT phase FROM runtime_rotations').all();
+  assert.deepEqual(journals.map(row => row.phase), ['complete', 'complete']);
+  assert.equal(f.engine.calls.filter(args => args[1] === 'start').length, 1);
+});
+
+test('local clock correction cannot select an older completed rotation for recovery', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = rotationFixture(t); const first = await f.rotate();
+  now -= 60_000;
+  const second = await f.rotate(); assert.notEqual(first.operationId, second.operationId);
+  const resumed = await f.rotate(true);
+  assert.equal(resumed.operationId, second.operationId); assert.equal(resumed.verified, true);
+  assert.equal(f.rotations(), 2);
+});
+
+test('rotation refuses a missing container, unconfirmed exit or another owner before authority writes', async t => {
+  for (const failure of ['missing', 'running', 'owner']) {
+    const f = rotationFixture(t); const run = f.engine.run; const json = f.engine.json;
+    if (failure === 'owner') f.container.Config.Labels['io.flujo.local-owner.actor'] = 'bob';
+    f.engine.run = async (policy, args, input) => {
+      if (failure === 'missing' && args[1] === 'ls') return '';
+      if (failure === 'running' && args[1] === 'stop') return f.policy.containerId;
+      return run(policy, args, input);
+    };
+    f.engine.json = async (policy, args) => failure === 'missing' && args[1] === 'inspect' ? [] : json(policy, args);
+    await assert.rejects(f.rotate()); assert.equal(f.rotations(), 0);
+    assert.equal(f.read().runtimes[0].credential, f.runtime.credential);
+    assert.equal(f.ledger.available(f.runtime, runtimeRevision(f.config, f.runtime)), false);
+  }
+});
+
+test('an unknown helper and conflicting operator configuration remain pending without overwrites', async t => {
+  const f = rotationFixture(t);
+  f.hooks.afterAuthority = () => { f.hooks.afterAuthority = () => {}; throw new Error('Lost reply'); };
+  await assert.rejects(f.rotate());
+  const helper = helperFixture(f.container, f.intent, f.plan().operationId);
+  helper.Config.Labels['io.flujo.local-owner.actor'] = 'bob'; f.setHelper(helper);
+  await assert.rejects(f.rotate(true), { problem: 'identity-mismatch' });
+  assert.equal(f.waits(), 0); assert.equal(f.rotations(), 1);
+  const changed = f.read(); changed.sessionSeconds = 3600;
+  writeFileSync(f.filename, JSON.stringify(changed));
+  await assert.rejects(f.rotate(true), /Restore the source or target configuration/);
+  assert.equal(f.read().sessionSeconds, 3600); assert.equal(f.rotations(), 1);
+});
+
+test('rotation helper has only owner authority, and retries cannot change owner or generation', () => {
+  const { container, intent } = fixture(); const operationId = 'f'.repeat(32);
+  const helper = helperFixture(container, intent, operationId);
+  verifyRotationHelper(helper, helper.Id, intent, operationId);
+  for (const mutate of [c => { c.Mounts[0].Name = intent.policy.dataVolume; }, c => { c.HostConfig.NetworkMode = 'host'; },
+    c => { c.Config.Env.push('NODE_OPTIONS=--require=/run/flujo-owner/injected.js'); }, c => { c.HostConfig.CapAdd = ['SYS_ADMIN']; },
+    c => { c.Config.Labels['io.flujo.local-owner.rotation'] = '0'.repeat(32); }, c => { c.Config.User = '0:0'; }]) {
+    const changed = structuredClone(helper); mutate(changed);
+    assert.throws(() => verifyRotationHelper(changed, helper.Id, intent, operationId));
+  }
+  const args = rotationHelperArguments(intent, operationId);
+  assert.equal(args.filter(arg => arg === '--mount').length, 1);
+  assert.ok(args.includes('--network=none')); assert.ok(args.includes('--pull=never'));
+  const current = ownerAuthority('alice', 'a'.repeat(64), 1, 10);
+  const next = ownerAuthority('alice', 'b'.repeat(64), 11, 20);
+  const request = { operationId, previousDigest: current.credentials[0].digest, previousExpiresAt: 10, next };
+  assert.equal(rotatingAuthority(current, request), 'replace'); assert.equal(rotatingAuthority(next, request), 'current');
+  assert.throws(() => rotatingAuthority(ownerAuthority('bob', 'a'.repeat(64), 1, 10), request));
+  assert.throws(() => rotatingAuthority(ownerAuthority('alice', 'c'.repeat(64), 1, 10), request));
+});
+
+test('a Docker CLI that never reports exit has a bounded failure, not invented daemon completion', async t => {
+  const { directory } = privateFixture(t); const { policy } = fixture();
+  let kills = 0; let unrefs = 0;
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    kill: () => { kills++; return false; }, unref: () => { unrefs++; } });
+  const engine = new LocalEngine(directory); t.mock.method(engine, 'spawn', () => child);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const result = engine.run(policy, ['container', 'wait', policy.containerId]);
+  const rejected = assert.rejects(result, { problem: 'local-engine-unavailable' });
+  t.mock.timers.tick(15_000); assert.equal(kills, 1); assert.equal(unrefs, 0);
+  t.mock.timers.tick(5000); await rejected;
+  assert.equal(unrefs, 1); assert.equal(child.stdin.destroyed, true); assert.equal(child.stdout.destroyed, true);
+  child.emit('close', 0); // A late CLI reply cannot turn the rejection into success.
 });
