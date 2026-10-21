@@ -30,15 +30,20 @@ browser sessions in `ownerSession.ts` and revocable request witnesses in
 cross-owner runtime dispatch. The shared controller must remain separate from
 these private runtime modules and their process-wide state.
 
-The first implementation batch is the separate
+The current implementation candidate is the separate
 [private-owner controller](../../packages/shared-controller/README.md). It adds
 local password accounts, a transactional session/revocation ledger and dispatch to
-local private runtimes with distinct browser hostnames. The earlier OIDC-only
-draft is superseded because it depended on network identity discovery. Its current
-deployment profile is one unprivileged POSIX controller on a local disk. It does
-not establish the physical runtime boundary, team grants, execution revocation or
-the full protocol matrix. Candidate-artifact qualification remains pending; this
-implementation does not turn the proposal into accepted shared-deployment support.
+local private runtimes with distinct browser hostnames. Its local engine driver
+provisions preinstalled Linux container images, separate data/home/authority
+volumes and networkless runtime processes, then relays HTTP through private local
+pipes. Start/stop intent is durable; admission requires fresh observed state, and
+revocation requires observed exit rather than a cancellation acknowledgement.
+The earlier OIDC-only draft is superseded because it depended on network identity
+discovery. The controller currently requires an unprivileged POSIX account and
+local disk. Real container/kernel and Windows qualification, team grants, disk
+quotas, optional integration brokering, migration and the full protocol matrix
+remain pending. This implementation does not turn the proposal into accepted
+shared-deployment support.
 
 ## Proposed topology and alternatives
 

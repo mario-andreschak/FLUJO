@@ -4,10 +4,11 @@ import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { loadServerConfigs, saveConfig } from './config';
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
-import { getCurrentWorkspace, normalizeWorkspaceName } from '@/utils/workspace';
+import { getCurrentWorkspace, getWorkspaceDataDir, normalizeWorkspaceName } from '@/utils/workspace';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { assertOAuthCredentialsAvailable, readOAuthClientInformation, readOAuthCodeVerifier, readOAuthTokens, sealOAuthCredential } from './oauthCredentialStorage';
 import { resolveOAuthClientMetadataUrl } from './oauthClientMetadata';
+import { isValidOAuthIssuer, knownOAuthIssuer } from '@/utils/mcp/oauthIssuer';
 
 const log = createLogger('backend/services/mcp/oauth');
 
@@ -15,6 +16,26 @@ const log = createLogger('backend/services/mcp/oauth');
 export const MCP_OAUTH_STATE_TTL_MS = 20 * 60 * 1000;
 
 const OAUTH_NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+// Next route bundles and background MCP connections share the same process.
+// Serialize credential and authorization writes across those module instances.
+// Servers share one workspace config file, so the lock covers the whole file.
+const authorizationLocks = globalThis as typeof globalThis & { __flujo_oauth_authorization_locks?: Map<string, Promise<void>> };
+async function withAuthorizationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const locks = authorizationLocks.__flujo_oauth_authorization_locks ??= new Map();
+  const key = getWorkspaceDataDir();
+  const previous = locks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  const queued = previous.then(() => current);
+  locks.set(key, queued);
+  await previous;
+  try { return await operation(); }
+  finally {
+    release();
+    if (locks.get(key) === queued) locks.delete(key);
+  }
+}
 
 /** Routing hint only: the complete state still needs its persisted nonce/TTL check. */
 export function oauthStateWorkspace(state: string | null): string | undefined {
@@ -121,6 +142,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     this.config.oauthStateWorkspace = workspace;
     this.config.oauthStateCreatedAt = Date.now();
     this.config.oauthStateDiscovery = this.discovery;
+    this.config.authorizationUrl = undefined;
     return state;
   }
 
@@ -165,18 +187,12 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     // The stored secret may be encrypted ("encrypted:...") or a "${global:VAR}" binding, so
     // resolve+decrypt it here — the plaintext only ever exists in the backend, at use time.
     if (this.config.oauthClientId) {
-      // This is operator configuration, never a value taken from MCP discovery or
-      // the v2 SDK's optional credential context. Validate without normalizing it.
-      const issuer = this.config.oauthIssuer;
-      let trustedIssuer = false;
-      try {
-        const url = new URL(issuer ?? '');
-        trustedIssuer = Boolean(issuer && issuer === issuer.trim()
-          && (url.protocol === 'https:' || url.protocol === 'http:')
-          && !url.username && !url.password && !url.search && !url.hash);
-      } catch { /* Missing or malformed trusted configuration cannot release a secret. */ }
-      if (!trustedIssuer) {
-        const error = new Error('OAuth authentication required. Set oauthIssuer in this server\'s JSON configuration to the trusted authorization issuer for the pre-registered client, then authenticate again.');
+      // Existing Slack clients predate issuer binding. Use its reviewed application
+      // trust anchor when unset; never pin old credentials to arbitrary discovery.
+      // An explicit nonempty issuer still takes precedence and is not normalized.
+      const issuer = this.config.oauthIssuer || knownOAuthIssuer(this.config.serverUrl);
+      if (!isValidOAuthIssuer(issuer)) {
+        const error = new Error('OAuth authentication required. Open this connection\'s settings and enter the Authorization server URL supplied by your provider, then select Save & Authenticate.');
         error.name = 'OAuthIssuerRequired';
         throw error;
       }
@@ -214,13 +230,22 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
    * "invalid refresh_token" failure that no amount of retrying can fix.
    */
   private async persist(update: Partial<MCPStreamableConfig>): Promise<void> {
+    await withAuthorizationLock(() => this.persistWithinLock(update));
+  }
+
+  private async persistWithinLock(update: Partial<MCPStreamableConfig>): Promise<void> {
     try {
       const configs = await loadServerConfigs();
       if (!Array.isArray(configs)) throw new Error('OAuth storage unavailable');
       const configMap = new Map(configs.map(c => [c.name, c]));
       // Stage replacements instead of mutating the active credentials before
       // storage acknowledges the save. A failed refresh is not durable success.
-      configMap.set(this.config.name, { ...this.config, ...update });
+      // A reconnect may hold an older config object than the interactive route.
+      // Merge only this write into the latest record so refresh/registration
+      // cannot roll back another request's pending nonce, verifier or tokens.
+      const current = configMap.get(this.config.name);
+      if (current && current.transport !== 'streamable') throw new Error('OAuth server configuration changed');
+      configMap.set(this.config.name, { ...(current ?? this.config), ...update });
       const result = await saveConfig(configMap);
       if (!result.success) throw new Error('OAuth storage unavailable');
       Object.assign(this.config, update);
@@ -253,6 +278,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       update.oauthStateWorkspace = undefined;
       update.oauthStateCreatedAt = undefined;
       update.oauthStateDiscovery = undefined;
+      update.authorizationUrl = undefined;
     }
     if (scope === 'all' || scope === 'discovery') this.discovery = undefined;
 
@@ -326,9 +352,29 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     log.info(`Authorization required for ${this.config.name}`);
+
+    // Older Slack connections contain the generic "read" default. Reconnect with
+    // their existing grant instead of expanding to every scope advertised today.
+    // Only scope names are reused; unbound access/refresh tokens stay withheld.
+    if (knownOAuthIssuer(this.config.serverUrl)) {
+      const configured = this.config.oauthScopes?.filter(Boolean);
+      const previous = await readOAuthTokens(this.config);
+      const scope = configured?.length && !(configured.length === 1 && configured[0] === 'read')
+        ? configured.join(' ')
+        : previous?.scope?.split(/[ ,]+/).filter(Boolean).join(' ');
+      if (scope) authorizationUrl.searchParams.set('scope', scope);
+    }
     
-    // Store the authorization URL in the config for the frontend to use
-    this.config.authorizationUrl = authorizationUrl.toString();
+    // Persist the URL with its nonce/verifier, so another reconnect can reuse the
+    // pending sign-in instead of invalidating a consent page already open.
+    await withAuthorizationLock(async () => {
+      const configs = await loadServerConfigs();
+      const current = Array.isArray(configs) ? configs.find(config => config.name === this.config.name) as MCPStreamableConfig | undefined : undefined;
+      if (this.config.oauthState && current?.oauthState !== this.config.oauthState) {
+        throw new Error('Sign-in was restarted or cancelled. Select Authenticate again.');
+      }
+      await this.persistWithinLock({ authorizationUrl: authorizationUrl.toString() });
+    });
     
     // Throw a specific error that indicates OAuth authentication is required
     // This will be caught by the connection logic and handled appropriately
@@ -339,7 +385,46 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
     log.debug(`Saving code verifier for ${this.config.name}`);
-    await this.persist({ oauthCodeVerifier: await sealOAuthCredential('verifier', codeVerifier) });
+    await withAuthorizationLock(async () => {
+      const configs = await loadServerConfigs();
+      const pending = Array.isArray(configs) ? configs.find(config => config.name === this.config.name) as MCPStreamableConfig | undefined : undefined;
+      if (pending?.oauthState && pending.oauthState !== this.config.oauthState
+          && pending.serverUrl === this.config.serverUrl
+          && matchesOAuthState(pending, pending.oauthState, getCurrentWorkspace())
+          && pending.oauthStateDiscovery?.authorizationServerUrl === this.discovery?.authorizationServerUrl) {
+        let pendingUrl: URL | undefined;
+        let expectedEndpoint: URL | undefined;
+        try { pendingUrl = new URL(pending.authorizationUrl ?? ''); } catch { /* The first request may still be saving its URL. */ }
+        try { expectedEndpoint = new URL(this.discovery?.authorizationServerMetadata?.authorization_endpoint
+          ?? new URL('/authorize', this.discovery!.authorizationServerUrl).href); } catch { /* Unusable discovery cannot resume an authorization. */ }
+        if (expectedEndpoint && pendingUrl?.searchParams.get('state') === pending.oauthState
+            && pendingUrl.origin === expectedEndpoint.origin && pendingUrl.pathname === expectedEndpoint.pathname
+            && pendingUrl.searchParams.get('redirect_uri') === this.redirectUrl
+            && (!this.config.oauthClientId || pendingUrl.searchParams.get('client_id') === this.config.oauthClientId)) {
+          Object.assign(this.config, {
+            authorizationUrl: pendingUrl.toString(), oauthState: pending.oauthState,
+            oauthStateWorkspace: pending.oauthStateWorkspace, oauthStateCreatedAt: pending.oauthStateCreatedAt,
+            oauthStateDiscovery: pending.oauthStateDiscovery, oauthCodeVerifier: pending.oauthCodeVerifier,
+          });
+          const error = new Error(`OAuth authentication required for ${this.config.name}. Complete the pending sign-in.`);
+          error.name = 'OAuthAuthenticationRequired';
+          throw error;
+        }
+        if (!pending.authorizationUrl && Date.now() - pending.oauthStateCreatedAt! < 10_000) {
+          const error = new Error('OAuth authentication required. Sign-in is starting. Select Authenticate again in a moment.');
+          error.name = 'OAuthAuthorizationInProgress';
+          throw error;
+        }
+      }
+      await this.persistWithinLock({
+        oauthCodeVerifier: await sealOAuthCredential('verifier', codeVerifier),
+        oauthState: this.config.oauthState,
+        oauthStateWorkspace: this.config.oauthStateWorkspace,
+        oauthStateCreatedAt: this.config.oauthStateCreatedAt,
+        oauthStateDiscovery: this.config.oauthStateDiscovery,
+        authorizationUrl: undefined,
+      });
+    });
     log.debug(`Code verifier saved for ${this.config.name}`);
   }
 

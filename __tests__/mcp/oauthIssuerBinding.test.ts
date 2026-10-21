@@ -88,7 +88,7 @@ it.each([undefined, '', 'not-a-url', 'https://user:password@example.test', 'http
   const before = JSON.stringify(config);
   let rejected: unknown;
   try { await provider.clientInformation(); } catch (error) { rejected = error; }
-  expect(rejected).toMatchObject({ name: 'OAuthIssuerRequired', message: expect.stringContaining('Set oauthIssuer') });
+  expect(rejected).toMatchObject({ name: 'OAuthIssuerRequired', message: expect.stringContaining('Authorization server URL') });
   expect(isOAuthAuthenticationError(rejected)).toBe(true);
   expect(String(rejected)).not.toContain(config.oauthClientSecret);
   expect(mockDecrypt).not.toHaveBeenCalled();

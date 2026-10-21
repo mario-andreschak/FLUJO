@@ -84,6 +84,13 @@ async function POST_handler(request: NextRequest) {
 
       const rawMessage = error instanceof Error ? error.message : String(error);
 
+      if (error instanceof Error && error.name === 'OAuthIssuerRequired') {
+        return NextResponse.json({ error: rawMessage, needsClientCredentials: true, needsOAuthIssuer: true, serverName }, { status: 400 });
+      }
+      if (error instanceof Error && error.name === 'OAuthAuthorizationInProgress') {
+        return NextResponse.json({ error: rawMessage, serverName }, { status: 409 });
+      }
+
       // Some authorization servers (e.g. Asana's V2 MCP server) disable Dynamic Client
       // Registration, so auth() can't self-register and needs a pre-registered app. Turn the
       // SDK's terse error into an actionable instruction pointing at the new credential fields.
@@ -91,7 +98,8 @@ async function POST_handler(request: NextRequest) {
         if (!provider.clientMetadataUrl
             && provider.discoveryState()?.authorizationServerMetadata?.client_id_metadata_document_supported === true) {
           return NextResponse.json({
-            error: 'Automatic OAuth registration is unavailable at this FLUJO address. Publish a Client ID Metadata Document allowing this installation’s callback URL and set FLUJO_OAUTH_CLIENT_METADATA_URL, or enter a pre-registered OAuth Client ID and trusted issuer in the server configuration.',
+            error: 'This provider cannot register FLUJO automatically at this address. Open the connection settings, enter the Client ID and Authorization server URL supplied by your provider, then select Save & Authenticate.',
+            needsClientCredentials: true,
             needsClientMetadata: true,
             serverName,
           }, { status: 400 });
@@ -101,8 +109,8 @@ async function POST_handler(request: NextRequest) {
           {
             error:
               'This server does not advertise CIMD or support dynamic app registration. Enter the OAuth Client ID ' +
-              'and, if required, Client Secret from the provider\'s developer console. Set oauthIssuer in the server\'s ' +
-              'JSON configuration to the trusted authorization issuer, then authenticate again.',
+              'and, if required, Client Secret in the connection settings, along with the Authorization server URL ' +
+              'supplied by your provider. Then select Save & Authenticate.',
             needsClientCredentials: true,
             serverName,
           },

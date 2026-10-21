@@ -6,7 +6,8 @@ import { proxy } from './proxy.js';
 import { accountPage, browserRequestAllowed, cookie, readPasswordForm, redirect, reply,
   securityHeaders, SESSION_COOKIE, sessionCookie } from './http.js';
 
-export async function createController(config: ControllerConfig, ledger: Ledger): Promise<Server> {
+export async function createController(config: ControllerConfig, ledger: Ledger,
+  socketPath?: (runtime: Runtime) => string | undefined): Promise<Server> {
   // Identity and authority are local. Startup never discovers a remote issuer.
   ledger.reconcile(config);
   const runtimes = new Map(config.runtimes.map(runtime => [new URL(runtime.origin).host, runtime]));
@@ -99,7 +100,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger)
     inflight.set(runtime.id, count + 1);
     totalRequests++;
     try {
-      proxy(request, response, { runtime, ca: authorities.get(runtime.id),
+      proxy(request, response, { runtime, ca: authorities.get(runtime.id), socketPath: socketPath?.(runtime),
         current: () => !!ledger.session(sessionToken, runtime, revision),
         finished: () => { inflight.set(runtime.id, (inflight.get(runtime.id) ?? 1) - 1); totalRequests--; },
       });

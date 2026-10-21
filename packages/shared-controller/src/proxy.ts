@@ -15,6 +15,7 @@ function headersWithoutHopByHop(headers: IncomingMessage['headers']): OutgoingHt
 export interface ProxyOptions {
   runtime: Runtime;
   ca?: Buffer;
+  socketPath?: string;
   current: () => boolean;
   finished: () => void;
 }
@@ -22,6 +23,9 @@ export interface ProxyOptions {
 /** One owner per origin and runtime. Client identity/workspace headers never select an upstream. */
 export function proxy(request: IncomingMessage, response: ServerResponse, options: ProxyOptions): void {
   const { runtime, current, finished } = options;
+  if (runtime.localRuntime && !options.socketPath) {
+    reply(response, 503, 'Local runtime transport is unavailable.'); finished(); return;
+  }
   const headers = headersWithoutHopByHop(request.headers);
   for (const name of Object.keys(headers)) {
     if (['authorization', 'cookie', 'host', 'forwarded', 'x-real-ip', 'proxy', 'expect'].includes(name)
@@ -49,8 +53,10 @@ export function proxy(request: IncomingMessage, response: ServerResponse, option
   if (!current()) { response.setHeader('Connection', 'close'); reply(response, 401, 'Sign in again.'); finished(); return; }
 
   const upstream = send({
-    protocol: upstreamUrl.protocol, hostname: upstreamUrl.hostname.replace(/^\[|\]$/g, ''),
-    port: upstreamUrl.port, path: request.url, method: request.method, headers,
+    protocol: upstreamUrl.protocol,
+    ...(options.socketPath ? { socketPath: options.socketPath }
+      : { hostname: upstreamUrl.hostname.replace(/^\[|\]$/g, ''), port: upstreamUrl.port }),
+    path: request.url, method: request.method, headers,
     // No shared connection pool, redirects, ambient proxy or disabled TLS checks.
     agent: false, ...(options.ca ? { ca: options.ca } : {}),
   });

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { assertPrivateDirectory, assertPrivateFile } from './private-storage.js';
 import { runtimeRevision, type ControllerConfig, type Runtime } from './config.js';
 import { hashPassword, verifyPassword } from './password.js';
+import { localRuntimePolicySchema, type RuntimeIntent, type RuntimeProblem } from './local-runtime-policy.js';
 
 export const opaque = (): string => randomBytes(32).toString('base64url');
 export const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
@@ -26,7 +27,7 @@ export class Ledger {
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
     // The unreleased OIDC prototype's identities must never silently become local
     // accounts. Keep that ledger intact; deliberate migration is separate work.
-    if (version !== 0 && version !== 2) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
+    if (version !== 0 && version !== 2 && version !== 3) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS actors (
         id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
@@ -52,7 +53,18 @@ export class Ledger {
         action TEXT NOT NULL, actor_id TEXT, runtime_id TEXT
       );
       CREATE INDEX IF NOT EXISTS session_expiry ON sessions(expires_at);
-      PRAGMA user_version=2;
+      CREATE TABLE IF NOT EXISTS runtime_lifecycle (
+        runtime_id TEXT PRIMARY KEY REFERENCES runtimes(id), policy TEXT NOT NULL, credential_digest TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 1,
+        desired TEXT NOT NULL CHECK(desired IN ('running','stopped')),
+        phase TEXT NOT NULL CHECK(phase IN ('pending','confirmed','failed')),
+        verified_at INTEGER, problem TEXT
+      );
+      CREATE TABLE IF NOT EXISTS runtime_provisioning (
+        runtime_id TEXT PRIMARY KEY, request_digest TEXT NOT NULL,
+        plan TEXT NOT NULL, phase TEXT NOT NULL
+      );
+      PRAGMA user_version=3;
     `);
   }
 
@@ -68,6 +80,9 @@ export class Ledger {
   }
 
   reconcile(config: ControllerConfig): void {
+    if (config.runtimes.some(runtime => runtime.isolationId.startsWith('unprovisioned:'))) {
+      throw new Error('Provision every new local runtime before initializing or serving accounts.');
+    }
     this.transaction(() => {
       // Absence is revocation. Reintroducing a runtime does not revive its sessions.
       const configured = new Set(config.runtimes.map(runtime => runtime.id));
@@ -75,6 +90,8 @@ export class Ledger {
         if (!configured.has(String(row.id))) {
           this.db.prepare('DELETE FROM sessions WHERE runtime_id=?').run(row.id);
           this.db.prepare('UPDATE actors SET auth_revision=auth_revision+1 WHERE id=?').run(row.actor_id);
+          this.db.prepare(`UPDATE runtime_lifecycle SET desired='stopped',generation=generation+1,
+            phase='pending',verified_at=NULL,problem=NULL WHERE runtime_id=?`).run(row.id);
           this.audit('runtime.removed', String(row.actor_id), String(row.id));
         }
       }
@@ -95,6 +112,17 @@ export class Ledger {
           ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,enabled=1`)
           .run(runtime.id, runtime.actorId, runtime.origin, new URL(runtime.origin).hostname, runtime.isolationId, revision);
         if (!previous || previous.revision !== revision) this.audit('runtime.configured', runtime.actorId, runtime.id);
+        const prior = this.db.prepare('SELECT policy,credential_digest FROM runtime_lifecycle WHERE runtime_id=?').get(runtime.id);
+        if (prior && (JSON.stringify(runtime.localRuntime) !== prior.policy || digest(runtime.credential) !== prior.credential_digest)) {
+          throw new Error('A managed runtime cannot change its local execution boundary in place.');
+        }
+        if (runtime.localRuntime) {
+          const enabled = this.db.prepare('SELECT enabled FROM actors WHERE id=?').get(runtime.actorId)?.enabled === 1;
+          this.db.prepare(`INSERT INTO runtime_lifecycle(runtime_id,policy,credential_digest,desired,phase) VALUES(?,?,?,?,'pending')
+            ON CONFLICT(runtime_id) DO UPDATE SET generation=generation+1,desired=excluded.desired,
+            phase='pending',verified_at=NULL,problem=NULL`)
+            .run(runtime.id, JSON.stringify(runtime.localRuntime), digest(runtime.credential), enabled ? 'running' : 'stopped');
+        }
       }
       this.prune();
     });
@@ -102,7 +130,11 @@ export class Ledger {
 
   available(runtime: Runtime, revision: string): boolean {
     return Boolean(this.db.prepare(`SELECT 1 FROM runtimes r JOIN actors a ON a.id=r.actor_id
-      WHERE r.id=? AND r.revision=? AND r.enabled=1 AND a.enabled=1`).get(runtime.id, revision));
+      LEFT JOIN runtime_lifecycle l ON l.runtime_id=r.id
+      WHERE r.id=? AND r.revision=? AND r.enabled=1 AND a.enabled=1
+      AND (l.runtime_id IS NULL OR (l.desired='running' AND l.phase='confirmed' AND l.verified_at>?
+        AND json_extract(l.policy,'$.credentialExpiresAt')>?))`)
+      .get(runtime.id, revision, Date.now() - 30_000, Date.now()));
   }
 
   /** Local operator enrollment/recovery. No email, provider, automatic enable or
@@ -157,6 +189,7 @@ export class Ledger {
 
   session(token: string, runtime: Runtime, revision: string): Session | null {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+    if (!this.available(runtime, revision)) return null;
     const row = this.db.prepare(`SELECT s.* FROM sessions s JOIN runtimes r ON r.id=s.runtime_id
       JOIN actors a ON a.id=s.actor_id WHERE s.hash=? AND s.runtime_id=? AND s.revision=?
       AND r.revision=s.revision AND r.enabled=1 AND a.enabled=1 AND s.expires_at>?`)
@@ -176,14 +209,57 @@ export class Ledger {
   setActorEnabled(actorId: string, enabled: boolean): void {
     this.transaction(() => {
       if (!this.db.prepare('SELECT id FROM actors WHERE id=?').get(actorId)) throw new Error('Unknown actor.');
+      if (enabled && !this.db.prepare('SELECT id FROM runtimes WHERE actor_id=? AND enabled=1').get(actorId)) {
+        throw new Error('A removed runtime cannot be enabled.');
+      }
       this.db.prepare('UPDATE actors SET enabled=?,auth_revision=auth_revision+1 WHERE id=?').run(enabled ? 1 : 0, actorId);
       this.db.prepare('DELETE FROM sessions WHERE actor_id=?').run(actorId);
+      this.db.prepare(`UPDATE runtime_lifecycle SET desired=?,generation=generation+1,phase='pending',
+        verified_at=NULL,problem=NULL WHERE runtime_id IN (SELECT id FROM runtimes WHERE actor_id=?)`)
+        .run(enabled ? 'running' : 'stopped', actorId);
       this.audit(enabled ? 'actor.enabled' : 'actor.disabled', actorId, null);
     });
   }
 
   prune(): void {
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
+  }
+
+  intents(): RuntimeIntent[] {
+    return this.db.prepare(`SELECT l.*,r.actor_id,r.origin FROM runtime_lifecycle l
+      JOIN runtimes r ON r.id=l.runtime_id ORDER BY l.desired DESC,r.id`).all().map(row => ({
+      runtimeId: String(row.runtime_id), actorId: String(row.actor_id), origin: String(row.origin),
+      generation: Number(row.generation), desired: row.desired as RuntimeIntent['desired'],
+      phase: row.phase as RuntimeIntent['phase'], verifiedAt: row.verified_at === null ? null : Number(row.verified_at),
+      problem: row.problem as RuntimeProblem | null, policy: localRuntimePolicySchema.parse(JSON.parse(String(row.policy))),
+      credentialDigest: String(row.credential_digest),
+    }));
+  }
+
+  intentCurrent(intent: RuntimeIntent): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM runtime_lifecycle WHERE runtime_id=? AND generation=? AND desired=?')
+      .get(intent.runtimeId, intent.generation, intent.desired));
+  }
+
+  observeRuntime(intent: RuntimeIntent): boolean {
+    return this.transaction(() => {
+      if (!this.intentCurrent(intent)) return false;
+      const previous = this.db.prepare('SELECT phase FROM runtime_lifecycle WHERE runtime_id=?').get(intent.runtimeId);
+      this.db.prepare(`UPDATE runtime_lifecycle SET phase='confirmed',verified_at=?,problem=NULL WHERE runtime_id=?`)
+        .run(Date.now(), intent.runtimeId);
+      if (previous?.phase !== 'confirmed') this.audit(`runtime.${intent.desired}.confirmed`, intent.actorId, intent.runtimeId);
+      return true;
+    });
+  }
+
+  failRuntime(intent: RuntimeIntent, problem: RuntimeProblem): void {
+    this.transaction(() => {
+      if (!this.intentCurrent(intent)) return;
+      const previous = this.db.prepare('SELECT phase,problem FROM runtime_lifecycle WHERE runtime_id=?').get(intent.runtimeId);
+      this.db.prepare(`UPDATE runtime_lifecycle SET phase='failed',verified_at=NULL,problem=? WHERE runtime_id=?`)
+        .run(problem, intent.runtimeId);
+      if (previous?.phase !== 'failed' || previous.problem !== problem) this.audit(`runtime.${problem}`, intent.actorId, intent.runtimeId);
+    });
   }
 
   close(): void { this.db.close(); }

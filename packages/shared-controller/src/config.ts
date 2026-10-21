@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
+import { localRuntimePolicySchema } from './local-runtime-policy.js';
 
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
 const privatePath = z.string().min(1).refine(value => isAbsolute(value) && !value.includes('\0'));
@@ -26,19 +27,42 @@ const runtimeSchema = z.object({
   caFile: privatePath.optional(),
   // Operator's immutable local OS isolation identity, not proof of isolation.
   isolationId: z.string().min(1).max(255),
-}).strict();
+  localRuntime: localRuntimePolicySchema.optional(),
+}).strict().superRefine((runtime, context) => {
+  if (runtime.localRuntime && (runtime.isolationId !== `local-docker:${runtime.localRuntime.containerId}`
+      || runtime.upstream !== 'http://127.0.0.1:4200' || runtime.caFile !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'Managed runtime requires its exact local container identity and internal HTTP endpoint' });
+  }
+});
 
 export const configSchema = z.object({
   schemaVersion: z.literal(2),
   stateDirectory: privatePath,
+  localEngine: z.object({
+    executable: localRuntimePolicySchema.shape.executable,
+    daemon: localRuntimePolicySchema.shape.daemon,
+    imageId: localRuntimePolicySchema.shape.imageId,
+    memoryMiB: localRuntimePolicySchema.shape.memoryMiB,
+    cpus: localRuntimePolicySchema.shape.cpus,
+    pidsLimit: localRuntimePolicySchema.shape.pidsLimit,
+    credentialSeconds: z.number().int().min(3600).max(31_536_000).default(31_536_000),
+  }).strict().optional(),
   // TLS terminates in a separate trusted proxy; the controller binds loopback only.
   port: z.number().int().min(1024).max(65535).default(4280),
   sessionSeconds: z.number().int().min(300).max(28800).default(28800),
   runtimes: z.array(runtimeSchema).min(1).max(1000),
 }).strict().superRefine((config, ctx) => {
   for (const key of ['id', 'actorId', 'origin', 'upstream', 'credential', 'isolationId'] as const) {
-    if (new Set(config.runtimes.map(runtime => runtime[key])).size !== config.runtimes.length) {
+    const values = config.runtimes.filter(runtime => key !== 'upstream'
+      || (!runtime.localRuntime && runtime.isolationId !== `unprovisioned:${runtime.id}`)).map(runtime => runtime[key]);
+    if (new Set(values).size !== values.length) {
       ctx.addIssue({ code: 'custom', message: `Runtime ${key} values must be unique` });
+    }
+  }
+  const managed = config.runtimes.filter(runtime => runtime.localRuntime).map(runtime => runtime.localRuntime!);
+  for (const key of ['containerId', 'generation', 'dataVolume', 'homeVolume', 'authorityVolume'] as const) {
+    if (new Set(managed.map(policy => policy[key])).size !== managed.length) {
+      ctx.addIssue({ code: 'custom', message: `Local runtime ${key} values must be unique` });
     }
   }
   // Cookies are scoped to hosts, not ports. Two owners on one hostname would

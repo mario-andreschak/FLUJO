@@ -7,12 +7,12 @@ VM, online identity provider, online DNS or remote isolation lease is required o
 permitted as the security boundary. Optional online integrations cannot establish
 or maintain that boundary.
 
-This #212/#574 candidate now verifies local passwords and stores authority on the
-local machine. The earlier OIDC-only draft is superseded. **Full multi-tenant
-support is still incomplete:** actual local runtime isolation, Windows hosting,
-team sharing, execution revocation, edit leases and history require further work
-and release acceptance. Keep #212 open. No online isolation implementation is
-included.
+This #212/#574 candidate verifies local passwords, provisions owner containers
+through a local engine, and persists execution revocation on the local machine.
+The earlier OIDC-only draft is superseded. **Full multi-tenant support is still
+incomplete:** installed isolation acceptance, Windows hosting, team sharing,
+protocol integration, edit leases and history require further work. Keep #212
+open. No online isolation implementation is included.
 
 The controller is a separate Node process. It imports no FLUJO execution, MCP,
 workspace or encryption modules. Each owner has a distinct browser hostname and
@@ -23,7 +23,10 @@ never supplied to the private runtime through the browser.
 ## Current development profile
 
 Use Node 22.19+ or 24.2+, a dedicated unprivileged POSIX account, one controller
-process and SQLite on a local disk. The candidate currently rejects Windows
+process and SQLite on a local disk. The local Docker engine must run Linux
+containers and enforce seccomp, memory/swap and PID limits. The operator account
+needs access to its local engine socket; this is trusted administrative access
+and must never be granted to a runtime. The candidate currently rejects Windows
 because it has no controller-storage DACL implementation; this is an outstanding
 platform task, not an exemption from local-first multi-tenancy. Network filesystems
 are unsupported. The ordinary FLUJO launcher remains unchanged.
@@ -36,11 +39,26 @@ operator credentials or another owner's storage to a runtime. OS enforcement and
 resource limits need qualification before deployment; an `isolationId` only records
 an assignment and does not prove isolation.
 
-Runtime upstreams are restricted to literal `127.0.0.1` or `[::1]` on this host;
-HTTPS certificate verification cannot be disabled. Runtime tools must also be
-prevented from reaching sibling listeners or controller state. Each runtime uses
-its existing owner bearer, public exposure mode and exact HTTPS
-`FLUJO_OWNER_BROWSER_ORIGIN`; its actual listener remains private.
+Managed runtimes have `--network=none` and no published ports. The controller
+opens a private Unix socket and relays HTTP through a fixed `docker exec` pipe to
+that container's own `127.0.0.1:4200`. The same internal port can be used by every
+owner. No LAN bridge, host-network gateway, DNS lookup or online control service
+is needed for this channel. Only an explicit local engine socket is accepted;
+inherited Docker contexts, remote TCP/SSH engines and image pulls are excluded.
+
+Each runtime has three uniquely owned local volumes: data, home and read-only
+owner authority. It runs as UID/GID 1000 with a read-only image, private namespaces,
+all capabilities dropped, no new privileges, a bounded temporary filesystem and
+CPU/memory/PID limits. Host binds, devices, sibling volumes and automatic restart
+are refused. Image identity and actual container/volume settings are checked
+before admission. The image must already be installed locally with the fixed
+runtime helpers; provisioning never fetches or builds it. A local disk is required
+for the engine's volume storage as well as the controller ledger.
+
+The older manually assigned loopback-upstream form remains available for
+development fixtures. It provides no automatic process revocation or physical
+isolation and is not the managed multi-user profile. HTTPS upstream verification
+cannot be disabled.
 
 A local TLS proxy forwards the configured browser Host to `127.0.0.1:4280`.
 Configure locally trusted certificates and static local hostname resolution, for
@@ -69,36 +87,69 @@ the ledger or run enrollment/recovery commands.
   "stateDirectory": "/srv/flujo-controller/state",
   "port": 4280,
   "sessionSeconds": 28800,
+  "localEngine": {
+    "executable": "/usr/bin/docker",
+    "daemon": "unix:///var/run/docker.sock",
+    "imageId": "sha256:REPLACE_WITH_PREINSTALLED_IMAGE_ID",
+    "memoryMiB": 2048,
+    "cpus": 1,
+    "pidsLimit": 256,
+    "credentialSeconds": 31536000
+  },
   "runtimes": [{
     "id": "alice-runtime",
     "actorId": "alice",
     "origin": "https://alice.localhost",
-    "upstream": "http://127.0.0.1:4211",
-    "credential": "REPLACE_WITH_ISSUED_OWNER_CREDENTIAL",
-    "isolationId": "immutable-local-isolation-identity"
+    "upstream": "http://127.0.0.1:4200",
+    "credential": "REPLACE_WITH_RANDOM_OWNER_CREDENTIAL",
+    "isolationId": "unprovisioned:alice-runtime"
   }]
 }
 ```
 
-`caFile` is optional for a local HTTPS upstream. Credentials use the existing
-`flo_v1_` owner-token format and must have the owner's required app scopes. Each
-owner, runtime, browser hostname, upstream, credential and isolation identity is
-unique. Never reuse an owner's browser hostname for someone else: cookies,
-browser storage and service workers can outlive a server session.
+Replace the image placeholder with its exact local `sha256:` plus 64 hexadecimal
+digits. Generate a separate cryptographically random 32-byte base64url secret per
+owner, prefixed with `flo_v1_`, directly into the private configuration. Do not put
+it in shell arguments, terminal output or source control. Provisioning installs
+only its digest and the required app scopes in the read-only authority volume;
+the plaintext stays in the controller's private config. `credentialSeconds` is
+bounded to one hour through one year. Expired authority denies admission and stops
+the runtime; credential rotation/migration is still pending, so this candidate is
+not suitable for unattended production use.
+
+Each owner, runtime, browser hostname, credential, container generation and volume
+assignment is unique. Unprovisioned owners may share the placeholder upstream;
+they cannot be served before provisioning. Never reuse an owner's browser hostname
+for someone else: cookies, browser storage and service workers can outlive a
+server session. `provision` fills in the immutable `localRuntime` record and exact
+container identity; do not edit these fields to reassign a running owner.
 
 ```sh
 npm run build:controller
+flujo-controller provision /srv/flujo-controller/config/controller.json alice
 flujo-controller init /srv/flujo-controller/config/controller.json
 flujo-controller password /srv/flujo-controller/config/controller.json alice
 flujo-controller serve /srv/flujo-controller/config/controller.json
 flujo-controller status /srv/flujo-controller/config/controller.json
 flujo-controller disable /srv/flujo-controller/config/controller.json alice
 flujo-controller enable /srv/flujo-controller/config/controller.json alice
+# With the server stopped, explicitly reconcile all saved start/stop intents:
+flujo-controller reconcile /srv/flujo-controller/config/controller.json
 ```
 
-Use `node bin/flujo-controller.mjs` from a source checkout. `init` requires the
-controller to be stopped; it records local accounts but grants no password login
-until enrollment. `password` uses a hidden interactive terminal prompt with
+Use `node bin/flujo-controller.mjs` from a source checkout. Provision every new
+owner before `init`. `provision`, `init`, `reconcile` and `serve` hold the same
+kernel-backed local process lock; provisioning and initialization require the
+server to be stopped. Provisioning journals the generation before mutations,
+reuses deterministic volume/container names after interruptions, and publishes
+the private configuration atomically only after verifying the new container is
+stopped. Retry with the original settings; a lost create reply must not create a
+second owner. Changed settings, unexpected existing authority or mismatched
+ownership require local recovery while retaining the journal and data. Persistent
+volumes are never automatically deleted.
+
+`init` records local accounts but grants no password login until enrollment.
+`password` uses a hidden interactive terminal prompt with
 confirmation. It requires at least 15 characters, permits spaces and Unicode, and
 limits UTF-8 input to 1024 bytes. Never put passwords in command arguments or
 configuration. The same local command performs recovery without email or internet
@@ -122,17 +173,52 @@ runtime cannot change its owner, origin or isolation identity in place.
 Schema 1 OIDC configuration/ledgers are not silently converted to local accounts.
 They are rejected and preserved. The draft has no automatic migration of existing
 user data; explicit ownership mapping, backup and recovery remain required work.
+The local account ledger upgrades from schema 2 to schema 3 for runtime intent and
+provisioning journals; config schema remains 2.
+
+## Execution revocation and recovery
+
+`disable` commits account/session revocation and a new durable stop intent before
+contacting the local engine. The sole supervisor checks the exact container,
+image and owner identity, kills the owned container's processes and observes its
+terminal state. A stop acknowledgement alone does not count as confirmation.
+Removed owners retain stop intents in the ledger even after their config entry
+is removed. Re-enabling never restores old sessions and waits for fresh runtime
+verification before browser admission.
+
+The CLI prints desired state, generation, phase and last verification time.
+Exit code 2 means pending, failed, superseded or unmanaged execution; it does not
+mean a job was stopped. While the server owns the lock, the CLI waits up to 20
+seconds for that exact intent, then leaves the supervisor responsible for retries.
+With the server stopped, the command drives convergence itself. Unavailable
+engines produce an uncertain state, not invented exit evidence.
+
+Managed admission requires a confirmed running observation less than 30 seconds
+old and unexpired authority. The supervisor refreshes observations and checks
+resource enforcement, volume ownership, container settings and the private
+authority digest. Failed running checks also attempt to stop that exact owned
+container; a different identity is never a license to kill another container.
+Restart discards stale observations and preserves disabled accounts. Signing out
+or shutting down the controller intentionally leaves enabled owners' schedules
+running. Administrative disable is the execution-revocation action. Persistent
+effects already committed by a job are not rolled back or automatically replayed.
 
 ## Remaining boundaries and release acceptance
 
-Disabling an account stops its proxied browser connections. It does **not yet**
-stop admitted runtime jobs; local process ownership and durable execution
-revocation still need implementation. Signing out intentionally leaves that
-owner's schedules running. HTTP/SSE forwarding has 64 MiB upload, 64 per-owner and
-512 global request limits, and a one-hour connection limit. Native API/MCP,
+HTTP/SSE forwarding has 64 MiB upload, 64 per-owner and 512 global request limits,
+and a one-hour connection limit. Managed transport additionally caps active pipes
+at eight per owner and 64 globally. Native API/MCP,
 webhooks, WebSocket upgrades, MCP App origins and OAuth callbacks still require
 protocol integration. None of these gaps may be filled by a cloud isolation
 service.
+
+The networkless runtime currently cannot call internet providers, sibling
+containers, host-local model servers or download new tools. Local tools already
+in its image/volumes can run. A separately authorized local capability broker is
+pending for optional external integrations and host model services; it must not
+weaken owner isolation or become an online prerequisite. Persistent disk quotas,
+full process-tree/pipe exhaustion qualification, credential rotation, Windows
+private storage and local TLS installation also remain pending.
 
 At release pre-flight, run `npm run test:controller` on the current POSIX profile,
 then qualify actual installed Windows/Linux candidates in an owned offline
@@ -145,12 +231,20 @@ acceptance environment. Do not disconnect the user's active machine or services.
   duplicate cookies, malformed forms, oversized uploads and phone sign-in/out.
 - Exercise two real owners' list/read/create/edit/delete/run/approve/subscribe/
   export operations and attempts to cross file/process/credential boundaries.
+- Qualify the real engine's inspection fields, seccomp, mounts, UID, namespaces,
+  CPU/memory/PID bounds, no-network behavior and offline image availability.
+  Interrupt provisioning after each journal step and before/after config publish.
+  Disable during a running tool/stream and during controller/engine failure;
+  require observed process exit without touching the other owner's jobs.
 - Verify explicit team resource/dependency grants, edit conflicts, history and
   revocation of already running work. These features are still pending.
 - Qualify local TLS/hostname provisioning, native protocols, bounded resource
   use, migration and backup/recovery. Cached online sessions and fixture-only
   endpoint tests cannot satisfy installed-candidate offline acceptance.
 
+The runtime regression sources include policy drift, unconfirmed start/stop,
+stale intent, wrong-owner protection and lost-create-response recovery using an
+engine fixture. They do not establish actual container/kernel isolation.
 Regression and broader acceptance runs are reserved for release pre-flight under
 the repository policy. Development checks are typecheck, lint and a non-container
 application build. Controller authentication requires no model inference.

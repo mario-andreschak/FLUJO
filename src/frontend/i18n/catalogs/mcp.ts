@@ -3574,6 +3574,28 @@ export const mcpMessageRows = {
     "ID do cliente",
     "客户端 ID",
   ],
+  "mcp.local.oauth.issuer": [
+    "Authorization server URL", "URL del servidor de autorización", "URL des Autorisierungsservers",
+    "URL du serveur d’autorisation", "URL del server di autorizzazione", "URL do servidor de autorização", "授权服务器 URL",
+  ],
+  "mcp.local.oauth.issuerAutomatic": [
+    "FLUJO recognizes this provider and fills in its verified authorization server automatically.",
+    "FLUJO reconoce este proveedor y completa automáticamente su servidor de autorización verificado.",
+    "FLUJO erkennt diesen Anbieter und trägt seinen verifizierten Autorisierungsserver automatisch ein.",
+    "FLUJO reconnaît ce fournisseur et renseigne automatiquement son serveur d’autorisation vérifié.",
+    "FLUJO riconosce questo provider e inserisce automaticamente il suo server di autorizzazione verificato.",
+    "O FLUJO reconhece este provedor e preenche automaticamente seu servidor de autorização verificado.",
+    "FLUJO 已识别此提供商，并自动填入其经过验证的授权服务器。",
+  ],
+  "mcp.local.oauth.issuerHelp": [
+    "Use the authorization server URL supplied with your Client ID. This keeps your credentials bound to the right provider.",
+    "Usa la URL del servidor de autorización suministrada con tu ID de cliente. Esto vincula tus credenciales al proveedor correcto.",
+    "Verwende die mit deiner Client-ID angegebene Autorisierungsserver-URL. So bleiben deine Zugangsdaten an den richtigen Anbieter gebunden.",
+    "Utilisez l’URL du serveur d’autorisation fournie avec votre ID client. Vos identifiants restent ainsi liés au bon fournisseur.",
+    "Usa l’URL del server di autorizzazione fornito con il tuo ID client. In questo modo le credenziali restano associate al provider corretto.",
+    "Use a URL do servidor de autorização fornecida com seu ID de cliente. Isso mantém suas credenciais vinculadas ao provedor correto.",
+    "请输入客户端 ID 随附的授权服务器 URL，以确保凭据绑定到正确的提供商。",
+  ],
   "mcp.local.oauth.clientSecret": [
     "Client secret",
     "Secreto de cliente",

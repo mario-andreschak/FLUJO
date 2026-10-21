@@ -2,7 +2,7 @@
 // Kept separate from the application launcher: no runtime, dotenv or keyring imports.
 try {
   if (process.argv.length === 2 || process.argv.includes('--help')) {
-    process.stdout.write('Usage: flujo-controller <init|serve|status|disable|enable|password> /absolute/config.json [actor-id]\nLocal accounts; no online identity provider. Requires a dedicated unprivileged POSIX account, private local storage and a local TLS proxy. The password command prompts without echo.\n');
+    process.stdout.write('Usage: flujo-controller <provision|init|serve|status|disable|enable|password|reconcile> /absolute/config.json [actor-id]\nLocal accounts; no online identity provider. Requires a dedicated unprivileged POSIX account, private local storage and a local TLS proxy. The password command prompts without echo. Managed runtimes use the local container engine; exit 2 means an execution transition is unconfirmed or unmanaged.\n');
     process.exit(0);
   }
   const { main } = await import('../packages/shared-controller/dist/cli.js');
