@@ -100,7 +100,7 @@
     "@anthropic-ai/sdk": "^0.133.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
-    "@google/genai": "^2.29.1",
+    "@google/genai": "^2.30.0",
     "@mario.andreschak/mcp-bash": "3.46.3",
     "@mario.andreschak/mcp-browser": "3.46.3",
     "@mario.andreschak/mcp-filesystem": "3.46.3",
