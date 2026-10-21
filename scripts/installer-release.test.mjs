@@ -183,6 +183,11 @@ for (const job of ['installer-attest', 'installer-publish']) {
 
 for (const [name, change] of [
   ['build publication authority', (jobs) => { jobs['installer-build'].permissions = { contents: 'write' }; }],
+  ['signing without installed acceptance', (jobs) => { jobs['installer-attest'].needs.pop(); }],
+  ['optional installed acceptance', (jobs) => { jobs['installer-acceptance']['continue-on-error'] = true; }],
+  ['skipped installed acceptance', (jobs) => { jobs['installer-acceptance'].if = 'false'; }],
+  ['unbound installed acceptance bytes', (jobs) => { delete jobs['installer-acceptance'].env.EXPECTED_INSTALLER_SHA256; }],
+  ['omitted real installation', (jobs) => { jobs['installer-acceptance'].steps = jobs['installer-acceptance'].steps.filter(step => step.run !== './scripts/verify-windows-install.ps1'); }],
   ['signing on a pull request', (jobs) => { delete jobs['installer-attest'].if; }],
   ['mutable artifact selection', (jobs) => { delete jobs['installer-attest'].steps.find((s) => s.uses?.startsWith('actions/download-artifact@')).with['artifact-ids']; }],
   ['missing original digest', (jobs) => { delete jobs['installer-publish'].env.EXPECTED_INSTALLER_SHA256; }],
