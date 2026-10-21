@@ -234,7 +234,7 @@ export async function executeBehaviorToolCall(
     await completeBehaviorCallPin(durablePin, 'completed', executionAuthority, undefined, result.outputText);
     try {
       // A completed, durably pinned Behavior is real evidence despite its ephemeral child transport.
-      await (await import('@/backend/services/harness/worker')).observeHarnessConversation(result.sharedState, { completedBehaviorCall: true });
+      await (await import('@/backend/services/harness/worker')).observeHarnessConversation(result.sharedState, { completedBehaviorCall: true, source: 'subflow' });
     } catch { log.warn('Harness Behavior evidence admission failed.'); }
     return {
       success: true,

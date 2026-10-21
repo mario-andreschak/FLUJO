@@ -2,6 +2,9 @@ import type { HarnessRun, HarnessInput } from '@/shared/types/harness';
 import { createHarnessRun, advanceHarnessRun, promoteHarnessRun } from '@/backend/services/harness/service';
 import { completeHarnessOperation, getHarnessModel } from '@/backend/services/harness/model';
 import { flowService } from '@/backend/services/flow';
+import { captureHarnessTarget, harnessTargetId, harnessTargetPrompt } from '@/backend/services/harness/targets';
+import { getHarnessProfile } from '@/backend/services/harness/profiles';
+import type { HarnessProfile, HarnessRuntimeSnapshot } from '@/shared/types/harnessIntegration';
 
 const mockRecords = new Map<string, unknown>();
 const mockFlows = new Map<string, unknown>();
@@ -64,6 +67,24 @@ it('reuses a creation ID but rejects known held-out inputs in a new experiment',
   mockWorkspace = 'two';
   await expect(createHarnessRun({ id, input })).resolves.toMatchObject({ id });
   expect([...mockRecords.keys()].filter(key => key.includes('/harness-experiments/'))).toHaveLength(2);
+});
+
+it('does not share strategy lessons between different saved targets with the same domain and model', async () => {
+  jest.mocked(getHarnessProfile).mockResolvedValue({ policy: {} } as HarnessProfile);
+  jest.mocked(harnessTargetId).mockImplementation(target => target.nodeId);
+  jest.mocked(harnessTargetPrompt).mockReturnValue('Original prompt');
+  jest.mocked(captureHarnessTarget).mockImplementation(async target => ({ target, flow: { id: 'flow', name: 'Flow', nodes: [], edges: [] },
+    modelFingerprints: { luna: 'fixed' }, invocation: 'flow', baseRevision: 'revision', contextHash: 'context', maxModelCallsPerProbe: 4 } satisfies HarnessRuntimeSnapshot));
+  const target = { kind: 'flow' as const, flowId: 'first-agent', nodeId: 'agent' };
+  const first = await createHarnessRun({ id, input: { ...input, target } });
+  const summaryKey = `one/harness-run-index/${id}`;
+  mockRecords.set(summaryKey, { ...(mockRecords.get(summaryKey) as object), status: 'completed', eligible: true,
+    promotedPromptHash: 'adopted', lesson: 'A strategy for the first target' });
+  const second = await createHarnessRun({ id: 'c643594a-0d10-4c38-a1d8-32af8e9726c8', input: {
+    ...input, target: { ...target, flowId: 'second-agent' }, cases: input.cases.map(item => ({ ...item, input: `New ${item.input}` })),
+  } });
+  expect(second.lessonScope).not.toBe(first.lessonScope);
+  expect(second.lessons).toEqual([]);
 });
 
 it('never replays an uncertain persisted provider dispatch', async () => {

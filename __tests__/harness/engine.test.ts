@@ -31,6 +31,41 @@ function run(): HarnessRun {
 }
 
 describe('Harness experiment evidence boundary', () => {
+  it('uses rejected earlier-round contrasts for the next proposal and final strategy reflection without holdout leakage', () => {
+    const experiment = run();
+    experiment.input.rounds = 2;
+    const first = nextHarnessOperation(experiment)!;
+    for (const scope of ['general', 'domain', 'composed'] as const) {
+      const operation = nextHarnessOperation(experiment)!;
+      if (operation.kind !== 'propose') throw new Error('Expected proposal');
+      acceptHarnessProposal(experiment, operation, JSON.stringify({ prompt: `${scope} failed strategy`, rationale: `${scope} hypothesis` }));
+      const child = experiment.candidates.at(-1)!;
+      child.probes = candidate(child.id, child.prompt, 0).probes;
+      child.probes[0].output = 'FAILED_TRAINING_EVIDENCE';
+      child.probes.push({ ...child.probes[0], split: 'holdout', caseId: 'h1', output: 'HOLDOUT_HISTORY_SECRET' });
+    }
+    const next = nextHarnessOperation(experiment)!;
+    expect(next.kind).toBe('propose');
+    expect(next.user).not.toBe(first.user);
+    const evidence = JSON.parse(next.user);
+    expect(evidence.round).toBe(2);
+    expect(evidence.parent.id).toBe('baseline');
+    expect(evidence.improvementHistory).toHaveLength(3);
+    expect(evidence.improvementHistory[0]).toMatchObject({ id: 'general:1', trainingChoice: 'baseline', rationale: { text: 'general hypothesis' } });
+    expect(next.user).toContain('FAILED_TRAINING_EVIDENCE');
+    expect(next.user).not.toContain('HOLDOUT_');
+    const winner = { ...candidate('winner', 'Short successful strategy', 1), parentId: 'baseline', round: 2 };
+    experiment.candidates.push(winner); experiment.selectedId = winner.id;
+    for (const item of [experiment.candidates[0], winner]) {
+      item.probes.push(...['h1', 'h2'].map(caseId => ({ ...item.probes[0], caseId, split: 'holdout' as const, quality: 1, output: 'HOLDOUT_FINAL_SECRET' })));
+    }
+    const reflection = nextHarnessOperation(experiment)!;
+    expect(reflection.kind).toBe('reflect');
+    expect(JSON.parse(reflection.user).improvementHistory).toHaveLength(4);
+    expect(reflection.user).toContain('FAILED_TRAINING_EVIDENCE');
+    expect(reflection.user).not.toContain('HOLDOUT_');
+  });
+
   it('can evolve an empty saved step while standalone experiments still need instructions', () => {
     expect(HarnessInputSchema.safeParse({ ...input, basePrompt: '' }).success).toBe(false);
     expect(HarnessInputSchema.safeParse({ ...input, basePrompt: '', target: { kind: 'flow', flowId: 'flow', nodeId: 'agent' } }).success).toBe(true);

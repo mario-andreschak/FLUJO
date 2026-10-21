@@ -11,6 +11,11 @@ export async function probeHarnessRuntime(run: HarnessRun, operation: Extract<Ha
   beforeCall: () => Promise<void>, afterCall: (tokens: number | null, completedCalls?: number) => Promise<void>) {
   const invocation = run.caseInvocations?.[operation.example.id];
   const runtime = (invocation && run.runtimeVariants?.[invocation]) || run.runtime!;
+  if (run.origin === 'automatic' && !operation.example.source) {
+    throw new Error('Recorded invocation semantics are missing. Collect fresh conversation evidence.');
+  }
+  const source = operation.example.source ?? (runtime.invocation === 'flow' ? 'chat'
+    : runtime.invocation === 'persona-behavior' ? 'subflow' : 'internal');
   await assertHarnessTargetCurrent(runtime);
   const flow = harnessCandidateFlow({ ...runtime, flow: runtime.evaluationFlow ?? runtime.flow }, operation.system);
   const controller = new AbortController();
@@ -20,6 +25,7 @@ export async function probeHarnessRuntime(run: HarnessRun, operation: Extract<Ha
   const current = async () => { signal.throwIfAborted(); controller.signal.throwIfAborted(); await assertHarnessTargetCurrent(runtime); };
   const scope: HarnessExecutionScope = { runtime, calls: 0, replayed: 0, prompts: [], trace: [], beforeCall, afterCall,
     resourceSnapshots: run.resourceSnapshots ??= {},
+    personaToolPolicy: run.casePersonaToolPolicies?.[operation.example.id],
     tools: structuredClone(run.toolReplays?.[operation.example.id] ?? []), signal: controller.signal,
     authorize: async model => {
       await current();
@@ -31,7 +37,7 @@ export async function probeHarnessRuntime(run: HarnessRun, operation: Extract<Ha
     const result = await withHarnessExecution(scope, () => runFlow({ flowDefinition: flow,
       ...run.caseInputs?.[operation.example.id],
       ...(run.caseMessages?.[operation.example.id] ? { messages: run.caseMessages[operation.example.id] } : { prompt: operation.user }),
-      source: 'internal', mode: 'ephemeral', abortSignal: controller.signal,
+      source, mode: 'ephemeral', abortSignal: controller.signal,
       requireApproval: false,
       ...(runtime.personaAttribution ? {
         ...(runtime.personaContext ? { personaInstructionContext: { ...runtime.personaContext, behaviorContentHash: hashBehaviorFlow(flow) } } : {}),

@@ -18,6 +18,8 @@ export const HarnessPolicySchema = z.object({
 }).strict();
 export type HarnessPolicy = z.infer<typeof HarnessPolicySchema>;
 export interface HarnessToolReplay { name: string; arguments: Record<string, unknown>; output: string; recordingId?: string }
+/** Captured schema variation, never an execution capability. */
+export interface HarnessPersonaToolPolicy { maintenanceMemoryProposal: boolean }
 export interface HarnessRuntimeSnapshot {
   target: HarnessTarget;
   flow: Flow;
@@ -73,4 +75,7 @@ export interface HarnessObservation {
   messages?: import('@/shared/types/chat').FlujoChatMessage[];
   executionInputs?: Pick<import('@/backend/execution/flow/runFlow').FlowRunInput, 'variables' | 'mcpAppContexts'>;
   invocation?: HarnessRuntimeSnapshot['invocation'];
+  /** This turn's invocation, not the conversation's immutable creation origin. */
+  source?: import('./execution/invocation').FlowInvocationSource;
+  personaToolPolicy?: HarnessPersonaToolPolicy;
 }

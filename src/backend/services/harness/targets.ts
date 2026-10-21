@@ -98,7 +98,9 @@ export async function captureHarnessTarget(target: HarnessTarget, maxModelCallsP
       modelFingerprints[modelId] = modelFingerprint(model);
     }
   }
-  const contextHash = harnessDigest({ flow, modelFingerprints, persona: personaContext?.instruction,
+  // Invalidate pre-parity evidence on upgrade; previously completed comparisons
+  // must not activate under different routing/tool-admission semantics.
+  const contextHash = harnessDigest({ evaluationProtocol: 2, flow, modelFingerprints, persona: personaContext?.instruction,
     role: personaContext?.roleVersionId, memory: personaContext?.coreMemoryDigest, authoredFlow,
     evaluationFlow, personaCoreAppRefs, behaviorToolRegistry,
     globals: await loadItem(StorageKey.GLOBAL_ENV_VARS, {}), kvPolicy: await loadItem(StorageKey.KV_STORE_SETTINGS, {}) });

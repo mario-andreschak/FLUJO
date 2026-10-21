@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { findPromptRefs } from '@/utils/shared/promptRefs';
 import { HarnessTargetSchema, type HarnessRuntimeSnapshot, type HarnessToolReplay } from './harnessIntegration';
+import { FLOW_INVOCATION_SOURCES } from './execution/invocation';
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const checks = z.array(text(500)).max(12);
@@ -12,6 +13,7 @@ export const HarnessCaseSchema = z.object({
   input: text(6000),
   required: checks.default([]),
   forbidden: checks.default([]),
+  source: z.enum(FLOW_INVOCATION_SOURCES).optional(),
   tools: z.array(z.object({ name: text(256), arguments: z.record(z.string(), z.unknown()), output: z.string().max(32000), recordingId: text(64).optional() }).strict()).max(32).optional(),
 }).strict();
 
@@ -127,6 +129,7 @@ export interface HarnessRun {
   runtime?: HarnessRuntimeSnapshot;
   runtimeVariants?: Partial<Record<HarnessRuntimeSnapshot['invocation'], HarnessRuntimeSnapshot>>;
   caseInvocations?: Record<string, HarnessRuntimeSnapshot['invocation']>;
+  casePersonaToolPolicies?: Record<string, import('./harnessIntegration').HarnessPersonaToolPolicy>;
   toolReplays?: Record<string, HarnessToolReplay[]>;
   profileId?: string;
   activatedVersionId?: string;

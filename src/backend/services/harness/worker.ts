@@ -6,6 +6,7 @@ import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend'
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import type { HarnessObservation, HarnessProfile, HarnessToolReplay } from '@/shared/types/harnessIntegration';
 import { normalizeHarnessTask, type HarnessRun } from '@/shared/types/harness';
+import { isFlowInvocationSource, type FlowInvocationSource } from '@/shared/types/execution/invocation';
 import { listHarnessProfiles, getHarnessProfile, saveHarnessProfile, harnessProfilesForTarget } from './profiles';
 import { assertHarnessEnabled, createHarnessRun, getHarnessRun, advanceHarnessRun, promoteHarnessRun, cancelHarnessRun, listHarnessRunSummaries } from './service';
 import { hasSeenHarnessTask } from './history';
@@ -24,9 +25,12 @@ async function updateProfile(id: string, task: (profile: HarnessProfile) => void
 }
 
 /** Durable admission after an actual conversation turn. Evaluations never enqueue themselves. */
-export async function observeHarnessConversation(state: SharedState, admission: { completedBehaviorCall?: boolean; variables?: Record<string, string> } = {}) {
+export async function observeHarnessConversation(state: SharedState, admission: { completedBehaviorCall?: boolean; variables?: Record<string, string>; source?: FlowInvocationSource } = {}) {
   if (isWorkerMode() || getHarnessExecution() || (!admission.completedBehaviorCall && (state.ephemeral || (state.runDepth ?? 0) > 0))
     || !['completed', 'error', 'capped'].includes(state.status ?? '')) return;
+  // A scheduled conversation may have been resumed interactively. Its saved
+  // origin cannot tell us how this turn ran; require the trusted call-site input.
+  if (!isFlowInvocationSource(admission.source)) return;
   try { await assertHarnessEnabled(); } catch { return; }
   const messages = state.messages ?? [];
   const userIndex = messages.findLastIndex(message => message.role === 'user' && typeof message.content === 'string');
@@ -72,7 +76,11 @@ export async function observeHarnessConversation(state: SharedState, admission: 
       const output = [...messages].reverse().find(message => message.role === 'assistant' && typeof message.content === 'string')?.content;
       const observation: HarnessObservation = { id, profileId: profile.id, sourceRunId, createdAt: Date.now(), input,
         output: typeof output === 'string' ? output.slice(0, 32000) : '', tools, messages: structuredClone(history), executionInputs,
-        invocation: !state.personaAttribution ? 'flow' : state.personaInstructionContext ? 'persona-activity' : 'persona-behavior' };
+        invocation: !state.personaAttribution ? 'flow' : state.personaInstructionContext ? 'persona-activity' : 'persona-behavior',
+        source: admission.source,
+        ...(state.personaAttribution ? { personaToolPolicy: {
+          maintenanceMemoryProposal: Boolean(state.executionAuthority?.proposePersonaMemoryMaintenance),
+        } } : {}) };
       await saveCollectionItem(observations(profile.id), id, observation);
       queue.pending.push(id);
       // Leave the same post-conversation quiet period for Persona memory maintenance.
@@ -111,15 +119,17 @@ export async function drainHarnessProfile(profile: HarnessProfile) {
       const records = await Promise.all(job.observations.map(id => loadCollectionItem<HarnessObservation | null>(observations(profile.id), id, null)));
       if (records.some(item => !item)) throw new Error('The queued task evidence is incomplete.');
       const selected = records as HarnessObservation[];
+      if (selected.some(item => !isFlowInvocationSource(item.source))) throw new Error('Recorded invocation semantics are missing. Collect fresh task evidence.');
       run = await createHarnessRun({ id: job.id, input: {
         name: `${runtime.flow.name.slice(0, 72)} · automatic improvement`, domain: `target:${profile.id}`,
         target: profile.target, modelId: profile.policy.modelId, basePrompt: harnessTargetPrompt(runtime.flow, profile.target.nodeId),
         rounds: profile.policy.rounds, reuseLessons: true, rubric: profile.policy.rubric,
         cases: selected.map((item, index) => ({ id: item.id, split: index < 2 ? 'train' : 'holdout', input: item.input,
-          required: [], forbidden: [], tools: item.tools })),
+          required: [], forbidden: [], tools: item.tools, source: item.source })),
       } }, { profileId: profile.id, caseMessages: Object.fromEntries(selected.map(item => [item.id, item.messages ?? []])),
         caseInputs: Object.fromEntries(selected.map(item => [item.id, item.executionInputs ?? {}])),
-        caseInvocations: Object.fromEntries(selected.map(item => [item.id, item.invocation ?? runtime.invocation])) });
+        caseInvocations: Object.fromEntries(selected.map(item => [item.id, item.invocation ?? runtime.invocation])),
+        casePersonaToolPolicies: Object.fromEntries(selected.filter(item => item.personaToolPolicy).map(item => [item.id, item.personaToolPolicy!])) });
       for (const item of selected) await saveCollectionItem(observations(profile.id), item.id, { ...item, consumedBy: job.id });
     }
     await updateProfile(profile.id, current => { current.runningExperimentId = job.id; current.lastError = undefined; });

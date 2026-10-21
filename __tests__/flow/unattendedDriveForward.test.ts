@@ -118,6 +118,7 @@ jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
 
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { withHarnessExecution, type HarnessExecutionScope } from '@/backend/services/harness/executionScope';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -129,6 +130,16 @@ beforeEach(() => {
 });
 
 describe('unattended drive-forward (#218/#339)', () => {
+  it.each(['chat', 'api', 'schedule', 'subflow'] as const)('preserves %s routing inside isolated Harness replay', async source => {
+    const result = await withHarnessExecution({ signal: new AbortController().signal } as HarnessExecutionScope, () => runFlow({
+      flowId: FLOW_ID, prompt: 'A candidate omitted its handoff', source, mode: 'ephemeral',
+    }));
+    const interactive = source === 'chat' || source === 'api';
+    expect(result.status).toBe('completed');
+    expect(result.sharedState.currentNodeId).toBe(interactive ? PROCESS : FOLLOWUP);
+    expect(FlowExecutor.executeStep).toHaveBeenCalledTimes(interactive ? 2 : 3);
+  });
+
   it.each(['schedule', 'trigger', 'subflow', 'mcp', 'internal'] as const)(
     '%s origin auto-advances a stalled process node to its single forward successor',
     async (source) => {

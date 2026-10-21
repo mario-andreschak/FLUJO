@@ -7,6 +7,7 @@ import type { Model } from '@/shared/types/model';
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import type { FlowExecutionAuthority } from '../types';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { withWorkspaceRuntimeLock, probeRuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
@@ -302,6 +303,10 @@ type NativeOriginalHostInput = {
 export async function createProcessNativeOriginalHost(input: NativeOriginalHostInput & {
   context?: ExecutionExtensionContext;
 }) {
+  // Replay has no live Activity or native process owner. Only the server-owned
+  // evaluation scope can skip admission; serialized attribution grants nothing.
+  // The guarded adapter still denies native execution and replays tool results.
+  if (getHarnessExecution()) return undefined;
   if (input.context && executionExtensionSupportsNativeWorkerRoot(input.context)) {
     return createWorkerNativeOriginalHost({ context: input.context,
       conversationId: input.conversationId, runId: input.runId, nodeId: input.nodeId,

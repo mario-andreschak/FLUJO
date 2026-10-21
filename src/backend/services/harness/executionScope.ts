@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type { CompletionAdapter, CompletionInput } from '@/backend/services/model/adapters/types';
 import type { Model } from '@/shared/types/model';
-import type { HarnessRuntimeSnapshot, HarnessToolReplay } from '@/shared/types/harnessIntegration';
+import type { HarnessPersonaToolPolicy, HarnessRuntimeSnapshot, HarnessToolReplay } from '@/shared/types/harnessIntegration';
 
 export interface HarnessExecutionScope {
   runtime: HarnessRuntimeSnapshot;
@@ -14,6 +14,7 @@ export interface HarnessExecutionScope {
   resourceSnapshots?: Record<string, unknown>;
   resourceReads?: Map<string, Promise<unknown>>;
   kvBoards?: Record<string, import('@/shared/types/kvStore').KvEntry[]>;
+  personaToolPolicy?: HarnessPersonaToolPolicy;
   prompts: Array<{ nodeId: string; hash: string; text: string }>;
   trace: Array<{ name: string; arguments: Record<string, unknown>; matched: boolean }>;
   beforeCall: () => Promise<void>;
@@ -25,6 +26,13 @@ const root = globalThis as typeof globalThis & { __flujoHarnessExecution?: Async
 const scope = root.__flujoHarnessExecution ??= new AsyncLocalStorage<HarnessExecutionScope>();
 export const getHarnessExecution = () => scope.getStore();
 export const withHarnessExecution = <T>(value: HarnessExecutionScope, task: () => Promise<T>) => scope.run(value, task);
+/** Replay advertises authored schemas without manufacturing mutation authority. */
+export function harnessPersonaToolPolicy(personaId: string | undefined): HarnessPersonaToolPolicy | undefined {
+  const current = getHarnessExecution();
+  if (!current || !personaId) return undefined;
+  if (current.runtime.personaAttribution?.personaId !== personaId) throw new Error('Persona replay identity changed.');
+  return current.personaToolPolicy ?? { maintenanceMemoryProposal: false };
+}
 export const canonicalHarnessJson = (value: unknown): string => {
   if (Array.isArray(value)) return `[${value.map(canonicalHarnessJson).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined)

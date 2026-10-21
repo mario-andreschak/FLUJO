@@ -3385,7 +3385,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   if (terminalStatus) {
     if (finalSnapshotPersisted && !ephemeral && (sharedState.runDepth ?? 0) === 0) {
       try {
-        await (await import('@/backend/services/harness/worker')).observeHarnessConversation(sharedState, { variables: harnessInitialVariables });
+        await (await import('@/backend/services/harness/worker')).observeHarnessConversation(sharedState, { variables: harnessInitialVariables, source: input.source });
       } catch { log.warn('Harness evidence admission deferred after terminal persistence.'); }
     }
     const runOwnerScope = ownerScopeForRun({

@@ -49,7 +49,7 @@ function turn(task: string, ephemeral = false) {
     messages: [{ id: task, role: 'user', content: task }, { role: 'assistant', content: 'Result' }] } as SharedState;
 }
 async function evidence() {
-  for (const task of ['one', 'two', 'three', 'four']) await observeHarnessConversation(turn(task));
+  for (const task of ['one', 'two', 'three', 'four']) await observeHarnessConversation(turn(task), { source: 'chat' });
   const queue = mockData.get('harness-queues/profile') as { nextRunAt: number };
   queue.nextRunAt = 0;
 }
@@ -61,6 +61,7 @@ it('automatically splits fresh tasks before proposing, evaluates and activates w
   const [request, automatic] = jest.mocked(createHarnessRun).mock.calls[0];
   expect((request as { input: HarnessRun['input'] }).input.cases.map(item => item.split)).toEqual(['train', 'train', 'holdout', 'holdout']);
   expect(automatic?.profileId).toBe(mockProfile.id);
+  expect((request as { input: HarnessRun['input'] }).input.cases.map(item => item.source)).toEqual(['chat', 'chat', 'chat', 'chat']);
   expect(advanceHarnessRun).toHaveBeenCalledTimes(1);
   expect(promoteHarnessRun).toHaveBeenCalledTimes(1);
   expect(mockProfile.events.at(-1)?.action).toBe('generation_accepted');
@@ -68,14 +69,22 @@ it('automatically splits fresh tasks before proposing, evaluates and activates w
 });
 
 it('does not count repeated tasks or evaluation runs as new conversation evidence', async () => {
-  await observeHarnessConversation(turn('same'));
-  await observeHarnessConversation(turn('same'));
-  await observeHarnessConversation(turn('ephemeral', true));
-  await withHarnessExecution({} as HarnessExecutionScope, () => observeHarnessConversation(turn('evaluation')));
+  await observeHarnessConversation(turn('same'), { source: 'chat' });
+  await observeHarnessConversation(turn('same'), { source: 'chat' });
+  await observeHarnessConversation(turn('ephemeral', true), { source: 'chat' });
+  await withHarnessExecution({} as HarnessExecutionScope, () => observeHarnessConversation(turn('evaluation'), { source: 'chat' }));
   const queue = mockData.get('harness-queues/profile') as { pending: string[] };
   expect(queue.pending).toHaveLength(1);
   await drainHarnessProfile(mockProfile);
   expect(createHarnessRun).not.toHaveBeenCalled();
+});
+
+it('records this turn source instead of a scheduled conversation origin and rejects unknown legacy sources', async () => {
+  await observeHarnessConversation({ ...turn('resumed'), source: 'schedule' }, { source: 'chat' });
+  await observeHarnessConversation(turn('unknown'));
+  const observations = [...mockData.entries()].filter(([key]) => key.startsWith('harness-observations/'));
+  expect(observations).toHaveLength(1);
+  expect(observations[0][1]).toMatchObject({ source: 'chat' });
 });
 
 it('resumes a durable job identity and does not mint another experiment after a restart', async () => {

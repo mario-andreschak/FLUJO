@@ -58,7 +58,7 @@ export async function listHarnessRunSummaries() {
   return readHarnessSummaries();
 }
 
-export async function createHarnessRun(raw: unknown, automatic?: { profileId: string; caseMessages?: HarnessRun['caseMessages']; caseInputs?: HarnessRun['caseInputs']; caseInvocations?: HarnessRun['caseInvocations'] }) {
+export async function createHarnessRun(raw: unknown, automatic?: { profileId: string; caseMessages?: HarnessRun['caseMessages']; caseInputs?: HarnessRun['caseInputs']; caseInvocations?: HarnessRun['caseInvocations']; casePersonaToolPolicies?: HarnessRun['casePersonaToolPolicies'] }) {
   await assertHarnessEnabled();
   const parsed = z.object({ id: z.uuid(), input: HarnessInputSchema }).strict().safeParse(raw);
   if (!parsed.success) throw new HarnessError(parsed.error.issues.map(issue => issue.message).join(' '));
@@ -77,6 +77,7 @@ export async function createHarnessRun(raw: unknown, automatic?: { profileId: st
     let profile = profileId ? await getHarnessProfile(profileId) : null;
     if (input.target && !profile) profile = await configureHarnessProfile(input.target, { modelId: input.modelId });
     if (automatic && (!profile?.policy.automatic || profile.id !== automatic.profileId)) throw new HarnessError('Automatic improvement is disabled.', 409);
+    if (automatic && input.cases.some(item => !item.source)) throw new HarnessError('Recorded invocation semantics are missing. Collect fresh task evidence.', 409);
     if (automatic && (profile!.policy.modelId !== input.modelId || profile!.policy.rubric !== input.rubric || profile!.policy.rounds !== input.rounds)) {
       throw new HarnessError('Automatic improvement settings changed before admission.', 409);
     }
@@ -102,9 +103,13 @@ export async function createHarnessRun(raw: unknown, automatic?: { profileId: st
       throw new HarnessError('Held-out inputs must be fresh in this workspace. Previously inspected examples may be reused as training examples.');
     }
     const fingerprint = modelFingerprint(model);
-    const lessonScope = harnessDigest({ domain: normalizeHarnessTask(input.domain), fingerprint,
+    const lessonScope = harnessDigest({ target: runtime?.target, domain: normalizeHarnessTask(input.domain), fingerprint,
       models: runtime?.modelFingerprints, invocations: automatic?.caseInvocations
         ? [...new Set(Object.values(automatic.caseInvocations))].sort() : runtime ? [runtime.invocation] : undefined,
+      sources: runtime ? [...new Set(input.cases.map(item => item.source ?? (runtime.invocation === 'flow' ? 'chat'
+        : runtime.invocation === 'persona-behavior' ? 'subflow' : 'internal')))].sort() : undefined,
+      personaToolPolicies: automatic?.casePersonaToolPolicies ? [...new Set(Object.values(automatic.casePersonaToolPolicies)
+        .map(policy => policy.maintenanceMemoryProposal))].sort() : undefined,
       rubric: input.rubric });
     const lessons = input.reuseLessons ? (await readHarnessSummaries()).filter(run => run.status === 'completed'
       && run.eligible && run.promotedPromptHash && run.lesson && run.modelFingerprint === fingerprint
@@ -114,7 +119,8 @@ export async function createHarnessRun(raw: unknown, automatic?: { profileId: st
       schemaVersion: 1, id, createdAt: Date.now(), updatedAt: Date.now(), status: 'pending', input,
       model: { id: model.id, name: model.name, adapter: resolveCompletionAdapterRoute(model), authentication: route },
       modelFingerprint: fingerprint, lessonScope, lessons, frontierIds: [], callsStarted: 0, callsCompleted: 0,
-      runtime, runtimeVariants, caseInvocations: automatic?.caseInvocations, profileId, origin: automatic ? 'automatic' : 'manual',
+      runtime, runtimeVariants, caseInvocations: automatic?.caseInvocations, casePersonaToolPolicies: automatic?.casePersonaToolPolicies,
+      profileId, origin: automatic ? 'automatic' : 'manual',
       caseMessages: automatic?.caseMessages, caseInputs: automatic?.caseInputs,
       toolReplays: Object.fromEntries(input.cases.map(item => [item.id, item.tools ?? []])),
       modelCallsStarted: 0, modelCallsCompleted: 0,

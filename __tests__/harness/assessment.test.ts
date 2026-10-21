@@ -25,4 +25,8 @@ it('pairs training evidence by task identity and excludes held-out outputs from 
   expect(contrast.pairedTasks).toHaveLength(1);
   expect(contrast.pairedTasks[0].qualityDelta).toBe(0.5);
   expect(JSON.stringify(contrast)).not.toContain('PRIVATE HOLDOUT');
+  expect(contrastHarnessCandidates({ ...parent, prompt: 'A\nB' }, { ...candidate, prompt: 'B\nA' }).instructionChange)
+    .toEqual({ removed: ['A', 'B'], added: ['B', 'A'] });
+  expect(contrastHarnessCandidates({ ...parent, prompt: 'A\nA\nB' }, { ...candidate, prompt: 'A\nB' }).instructionChange)
+    .toEqual({ removed: ['A'], added: [] });
 });
