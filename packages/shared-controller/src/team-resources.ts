@@ -1,5 +1,6 @@
 import { digest, opaque, type Ledger, type Session } from './ledger.js';
 import { TeamError, Teams } from './teams.js';
+import { readSharedModel, SHARED_MODEL_FORMAT } from './shared-model.js';
 
 export const RESOURCE_KINDS = ['model', 'mcp', 'flow', 'chat', 'execution'] as const;
 export type ResourceKind = typeof RESOURCE_KINDS[number];
@@ -10,7 +11,7 @@ const TEAM_BYTES = 128 * 1024 * 1024;
 const TOTAL_BYTES = 512 * 1024 * 1024;
 
 export interface SharedResource {
-  id: string; teamId: string; kind: ResourceKind; name: string; creatorId: string; version: number; createdAt: number;
+  id: string; teamId: string; kind: ResourceKind; format: string; name: string; creatorId: string; version: number; createdAt: number;
 }
 export interface ResourceRevision {
   version: number; actorId: string; time: number; name: string; content: string; digest: string; bytes: number; restoredFrom: number | null;
@@ -20,12 +21,12 @@ interface StoredResource extends SharedResource {
   fence: number; leaseHash: string | null; leaseSession: string | null; leaseActor: string | null;
   leaseMemberGeneration: number | null; leaseExpiresAt: number | null;
 }
-const columns = `id,team_id AS teamId,kind,name,creator_id AS creatorId,version,created_at AS createdAt,fence,
+const columns = `id,team_id AS teamId,kind,format,name,creator_id AS creatorId,version,created_at AS createdAt,fence,
   lease_hash AS leaseHash,lease_session AS leaseSession,lease_actor AS leaseActor,
   lease_member_generation AS leaseMemberGeneration,lease_expires_at AS leaseExpiresAt`;
 const revisionColumns = 'version,actor_id AS actorId,time,name,content,digest,bytes,restored_from AS restoredFrom';
 const summary = (row: StoredResource): SharedResource => ({ id: row.id, teamId: row.teamId, kind: row.kind,
-  name: row.name, creatorId: row.creatorId, version: row.version, createdAt: row.createdAt });
+  format: row.format, name: row.name, creatorId: row.creatorId, version: row.version, createdAt: row.createdAt });
 
 /** Passive JSON documents with local transactional editing. Storing a document
  * grants neither execution nor access to its referenced private dependencies.
@@ -49,7 +50,7 @@ export class TeamResources {
     return name;
   }
 
-  private content(text: string): { content: string; digest: string; bytes: number } {
+  private content(text: string, kind: string, requiredFormat?: string): { content: string; digest: string; bytes: number; format: string } {
     if (Buffer.byteLength(text) > RESOURCE_BYTES) throw new TeamError(413, 'A shared resource is limited to 1 MiB.');
     let value: unknown;
     try { value = JSON.parse(text); } catch { throw new TeamError(400, 'The resource must be valid JSON. Your saved version is unchanged.'); }
@@ -68,10 +69,16 @@ export class TeamResources {
         }
       }
     }
+    let format = requiredFormat ?? 'json';
+    if (requiredFormat === SHARED_MODEL_FORMAT || (requiredFormat === undefined && (value as { format?: unknown }).format === SHARED_MODEL_FORMAT)) {
+      if (kind !== 'model') throw new TeamError(400, 'A shared model document must use the model kind.');
+      try { value = readSharedModel(value); } catch { throw new TeamError(400, 'Invalid shared model configuration. Credentials and private bindings cannot be shared.'); }
+      format = SHARED_MODEL_FORMAT;
+    } else if (requiredFormat !== undefined && requiredFormat !== 'json') throw new TeamError(409, 'Unsupported resource format.');
     const content = JSON.stringify(value, null, 2);
     const bytes = Buffer.byteLength(content);
     if (bytes > RESOURCE_BYTES) throw new TeamError(413, 'The formatted resource exceeds 1 MiB.');
-    return { content, digest: digest(content), bytes };
+    return { content, digest: digest(content), bytes, format };
   }
 
   private capacity(teamId: string, bytes: number, resourceId?: string): void {
@@ -134,15 +141,15 @@ export class TeamResources {
 
   create(session: Session, teamId: string, kind: string, nameInput: string, text: string): string {
     return this.teams.withMember(session, teamId, () => {
-      const name = this.name(nameInput); const content = this.content(text);
+      const name = this.name(nameInput); const content = this.content(text, kind);
       if (!(RESOURCE_KINDS as readonly string[]).includes(kind)) throw new TeamError(400, 'Unsupported resource kind.');
       if (Number(this.ledger.db.prepare('SELECT count(*) AS n FROM team_resources WHERE team_id=?').get(teamId)?.n) >= 1000) {
         throw new TeamError(409, 'This team has reached 1,000 shared resources.');
       }
       this.capacity(teamId, content.bytes);
       const id = opaque(); const now = Date.now();
-      this.ledger.db.prepare('INSERT INTO team_resources(id,team_id,kind,name,creator_id,version,created_at) VALUES(?,?,?,?,?,1,?)')
-        .run(id, teamId, kind, name, session.actorId, now);
+      this.ledger.db.prepare('INSERT INTO team_resources(id,team_id,kind,format,name,creator_id,version,created_at) VALUES(?,?,?,?,?,?,1,?)')
+        .run(id, teamId, kind, content.format, name, session.actorId, now);
       this.ledger.db.prepare('INSERT INTO team_resource_versions(resource_id,version,actor_id,time,name,content,digest,bytes) VALUES(?,1,?,?,?,?,?,?)')
         .run(id, session.actorId, now, name, content.content, content.digest, content.bytes);
       return id;
@@ -187,7 +194,7 @@ export class TeamResources {
     return this.teams.withMember(session, teamId, memberGeneration => {
       const row = this.row(teamId, resourceId); this.held(row, session, memberGeneration, token, fence);
       if (row.version !== version) throw new TeamError(409, 'This resource changed. Keep your draft and reload its current version.');
-      const name = this.name(nameInput); const content = this.content(text);
+      const name = this.name(nameInput); const content = this.content(text, row.kind, row.format);
       this.capacity(teamId, content.bytes, resourceId);
       const next = row.version + 1;
       this.ledger.db.prepare(`INSERT INTO team_resource_versions(resource_id,version,actor_id,time,name,content,digest,bytes)
@@ -202,7 +209,9 @@ export class TeamResources {
       const row = this.row(teamId, resourceId);
       if (row.version !== version) throw new TeamError(409, 'This resource changed. Reload before restoring a revision.');
       if (this.active(row)) throw new TeamError(423, 'An editor holds this resource. Release the lock before restoring a revision.');
-      const prior = this.revision(row.id, restoredFrom); this.capacity(teamId, prior.bytes, row.id);
+      const prior = this.revision(row.id, restoredFrom);
+      this.content(prior.content, row.kind, row.format);
+      this.capacity(teamId, prior.bytes, row.id);
       const next = row.version + 1;
       this.ledger.db.prepare(`INSERT INTO team_resource_versions(resource_id,version,actor_id,time,name,content,digest,bytes,restored_from)
         VALUES(?,?,?,?,?,?,?,?,?)`).run(row.id, next, session.actorId, Date.now(), prior.name, prior.content, prior.digest, prior.bytes, restoredFrom);

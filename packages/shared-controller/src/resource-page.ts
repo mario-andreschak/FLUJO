@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { opaque, type Session } from './ledger.js';
-import { escapeHtml as html, readLocalForm, redirect, reply, securityHeaders } from './http.js';
+import { escapeHtml as html, jsonReply as json, readLocalForm, redirect, reply, securityHeaders } from './http.js';
 import { TeamError, Teams } from './teams.js';
 import { EDIT_SECONDS, RESOURCE_KINDS, TeamResources, type EditorLease, type ResourceRevision, type SharedResource } from './team-resources.js';
 import { renderTeamPage } from './team-page.js';
@@ -88,10 +88,6 @@ function editor(resource: SharedResource, revision: ResourceRevision, lease: Edi
   return `${edit}${form('release', { teamId: resource.teamId, resourceId: resource.id, token: lease.token, fence: lease.fence }, '<button>Discard edits and release lock</button>')}`;
 }
 
-function json(response: ServerResponse, value: unknown, status = 200): void {
-  securityHeaders(response); response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(value));
-}
-
 export async function resourcePage(request: IncomingMessage, response: ServerResponse, teams: Teams, resources: TeamResources,
   session: Session, url: URL, current: () => boolean): Promise<void> {
   const ajax = request.headers.accept === 'application/json';
@@ -106,6 +102,7 @@ export async function resourcePage(request: IncomingMessage, response: ServerRes
       if (!resourceId) {
         if (url.searchParams.has('version') || url.searchParams.has('download')) throw new TeamError(400, 'Select a resource first.');
         const rows = resources.list(session, teamId);
+        if (ajax) { json(response, { team, resources: rows }); return; }
         render(response, `<h1>${html(team.name)} · Shared resources</h1><p>Shared JSON is visible and editable by every current team member. Private originals stay in their owner’s workspace. These documents do not automatically run, connect services, or grant access to referenced private resources.</p>
           <ul>${rows.map(row => `<li><a href="${link(teamId, row.id)}">${html(row.name)}</a> · ${row.kind} · revision ${row.version}</li>`).join('')}</ul>
           <h2>Share a resource</h2><p>Review the complete JSON before sharing. The resource is stored locally. Native app editors and execution are not connected to this library yet.</p>
@@ -125,7 +122,9 @@ export async function resourcePage(request: IncomingMessage, response: ServerRes
         response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(data.revision.content); return;
       }
       const versions = resources.history(session, teamId, resourceId);
+      if (ajax) { json(response, { ...data, history: versions }); return; }
       render(response, `<p><a href="${link(teamId)}">All shared resources</a></p><h1>${html(data.revision.name)}</h1>
+        ${data.resource.format === 'flujo.model.v1' ? `<p><a href="/teams/models?team=${teamId}&resource=${resourceId}">Open model editor</a></p>` : ''}
         <p>${data.resource.kind} · revision ${data.revision.version} · saved by ${html(data.revision.actorId)} at ${date(data.revision.time)}</p>
         <p><a href="${link(teamId, resourceId)}&version=${data.revision.version}&download=1">Download this revision</a></p>
         ${data.editor ? `<p>${html(data.editor.actorId)} is editing until ${date(data.editor.expiresAt)}. Reload after their lock ends.</p>`
@@ -153,6 +152,7 @@ export async function resourcePage(request: IncomingMessage, response: ServerRes
       case 'edit': {
         const lease = resources.acquire(session, data.teamId, data.resourceId, number(data.version));
         const snapshot = resources.read(session, data.teamId, data.resourceId);
+        if (ajax) { json(response, { ...snapshot, lease }); return; }
         render(response, editor(snapshot.resource, snapshot.revision, lease)); return;
       }
       case 'save': resources.save(session, data.teamId, data.resourceId, data.token, number(data.fence), number(data.version), data.name, data.content); break;

@@ -1,5 +1,6 @@
 import type { SupportedLocale } from './locales';
 import { globalMessageRows } from './catalogs/global';
+import { teamsMessageRows } from './catalogs/teams';
 import { sharedMessageRows } from './catalogs/shared';
 import { settingsMessageRows } from './catalogs/settings';
 import { wavesMessageRows } from './catalogs/waves';
@@ -196,6 +197,7 @@ const messageRows = {
   'feedback.openGitHub': ['Open on GitHub', 'Abrir en GitHub', 'Auf GitHub öffnen', 'Ouvrir sur GitHub', 'Apri su GitHub', 'Abrir no GitHub', '在 GitHub 上打开'],
   'feedback.githubFallback': ['You can send it through a pre-filled GitHub issue instead.', 'También puedes enviarlos mediante un reporte de GitHub ya preparado.', 'Du kannst es stattdessen über ein vorausgefülltes GitHub-Ticket senden.', 'Vous pouvez l’envoyer à la place via un ticket GitHub prérempli.', 'Puoi inviarlo tramite una segnalazione GitHub precompilata.', 'Você pode enviar por uma issue do GitHub já preenchida.', '你也可以改用预先填写的 GitHub Issue 发送。'],
   ...globalMessageRows,
+  ...teamsMessageRows,
   ...sharedMessageRows,
   ...settingsMessageRows,
   ...wavesMessageRows,

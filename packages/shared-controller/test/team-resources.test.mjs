@@ -4,6 +4,7 @@ import { configSchema, runtimeRevision } from '../dist/config.js';
 import { digest, Ledger } from '../dist/ledger.js';
 import { Teams, TeamError } from '../dist/teams.js';
 import { RESOURCE_BYTES, RESOURCE_KINDS, TeamResources } from '../dist/team-resources.js';
+import { modelConfigurationFields, publishableModel, readSharedModel, SHARED_MODEL_FORMAT } from '../dist/shared-model.js';
 import { privateFixture } from './private-fixture.mjs';
 
 const password = 'local resource fixture password';
@@ -50,7 +51,7 @@ test('only accepted members read submitted resources; resource IDs and kind labe
   assert.deepEqual(JSON.parse(data.revision.content), { privateDependency: 'unresolved' });
   assert.equal(data.revision.digest, digest(data.revision.content));
   assert.equal(data.revision.actorId, 'alice');
-  assert.deepEqual(Object.keys(data.resource).sort(), ['createdAt', 'creatorId', 'id', 'kind', 'name', 'teamId', 'version']);
+  assert.deepEqual(Object.keys(data.resource).sort(), ['createdAt', 'creatorId', 'format', 'id', 'kind', 'name', 'teamId', 'version']);
   assert.throws(() => resources.list({ ...alice, actorId: 'bob' }, f.teamId), status(401));
 });
 
@@ -150,10 +151,52 @@ test('schema 6 upgrade preserves membership and account sessions without publish
   const f = await fixture(t); f.joinBob();
   f.ledger.db.exec('DROP TABLE team_resource_versions; DROP TABLE team_resources; PRAGMA user_version=6;');
   const resources = f.reopen(); const teams = new Teams(f.ledger);
-  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 7);
+  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 8);
   for (const session of [f.sessions.alice, f.sessions.bob]) {
     assert.equal(f.ledger.sessionCurrent(session), true);
     assert.equal(teams.list(session).teams[0].id, f.teamId);
     assert.deepEqual(resources.list(session, f.teamId), []);
   }
+});
+
+test('native model publication projects configuration and every later edit rejects secrets or format downgrade', async t => {
+  const f = await fixture(t); f.joinBob(); const resources = new TeamResources(f.ledger); const { alice, bob } = f.sessions;
+  const source = { id: 'private-id', name: 'fixture-local', displayName: 'Team model', provider: 'ollama', adapter: 'openai',
+    ApiKey: 'private-fixture-key', folder: 'private-folder', favorite: true, unknownCredential: 'private-extension',
+    baseUrl: 'http://127.0.0.1:11434/v1', promptTemplate: 'Use the shared prompt.', maxTokens: 500 };
+  const document = publishableModel(source);
+  assert.deepEqual(Object.keys(document.model).sort(), ['adapter', 'baseUrl', 'displayName', 'maxTokens', 'name', 'promptTemplate', 'provider']);
+  assert.ok(!JSON.stringify(document).includes('private-'));
+  assert.throws(() => publishableModel({ ...source, ownerCredentialBinding: { ownerId: 'alice', credentialId: 'private' } }), /private credential binding/);
+  assert.throws(() => publishableModel({ ...source, fallbackPolicy: { candidates: ['private-model'] } }), /routing policy/);
+  for (const baseUrl of ['https://user:secret@example.invalid/v1', 'https://example.invalid/v1?key=secret', 'file:///private']) {
+    assert.throws(() => publishableModel({ ...source, baseUrl }), /Invalid shared model/);
+  }
+  assert.deepEqual(modelConfigurationFields({ ApiKey: 'secret', id: 'private', name: '', maxTokens: -1 }), { name: '', maxTokens: -1 });
+  assert.throws(() => readSharedModel({ ...document, model: { ...document.model, ApiKey: 'secret' } }), /Invalid shared model/);
+  const id = resources.create(alice, f.teamId, 'model', 'Team model', JSON.stringify(document));
+  assert.equal(resources.read(bob, f.teamId, id).resource.format, SHARED_MODEL_FORMAT);
+  const lease = resources.acquire(bob, f.teamId, id, 1);
+  for (const content of ['{}', JSON.stringify({ ...document, model: { ...document.model, ApiKey: 'injected' } }),
+    JSON.stringify({ ...document, model: { ...document.model, ownerCredentialBinding: { ownerId: 'alice', credentialId: 'private' } } })]) {
+    assert.throws(() => resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Invalid edit', content), status(400));
+  }
+  assert.equal(resources.history(alice, f.teamId, id).length, 1);
+  const revised = { ...document, model: { ...document.model, displayName: 'Edited by Bob', maxTokens: 1000 } };
+  assert.equal(resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Edited by Bob', JSON.stringify(revised)), 2);
+  assert.equal(readSharedModel(JSON.parse(resources.read(alice, f.teamId, id).revision.content)).model.maxTokens, 1000);
+  assert.equal(resources.restore(alice, f.teamId, id, 2, 1), 3);
+  assert.equal(readSharedModel(JSON.parse(resources.read(bob, f.teamId, id).revision.content)).model.maxTokens, 500);
+});
+
+test('schema 7 migration retains legacy JSON as passive documents without upgrading user-supplied format tags', async t => {
+  const f = await fixture(t); const resources = new TeamResources(f.ledger); const { alice } = f.sessions;
+  const id = resources.create(alice, f.teamId, 'model', 'Legacy JSON', '{}');
+  const legacy = JSON.stringify({ format: SHARED_MODEL_FORMAT, model: { name: 'legacy', ApiKey: 'fixture legacy content' } });
+  f.ledger.db.prepare('UPDATE team_resource_versions SET content=?,digest=?,bytes=? WHERE resource_id=?')
+    .run(legacy, digest(legacy), Buffer.byteLength(legacy), id);
+  f.ledger.db.exec('ALTER TABLE team_resources DROP COLUMN format; PRAGMA user_version=7;');
+  const reopened = f.reopen(); const saved = reopened.read(alice, f.teamId, id);
+  assert.equal(saved.resource.format, 'json'); assert.equal(saved.revision.content, legacy);
+  assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 8);
 });

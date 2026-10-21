@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Session } from './ledger.js';
-import { escapeHtml as html, readLocalForm, redirect, reply, securityHeaders } from './http.js';
+import { escapeHtml as html, jsonReply, readLocalForm, redirect, reply, securityHeaders } from './http.js';
 import { TeamError, Teams, type TeamSummary } from './teams.js';
 
 const ROOT = '/_account/teams';
@@ -44,7 +44,7 @@ function page(teams: Teams, session: Session, teamId: string | null): string {
   const { team, members, events } = teams.detail(session, teamId);
   const creator = team.creatorId === session.actorId;
   return `<h1>${html(team.name)}</h1><p>${html(team.creatorId)} manages membership. All team members will have the same access to explicitly shared resources. Joining does not expose anyone’s private workspace.</p>
-    <p><a href="/_account/resources?team=${team.id}">Shared resources and revision history</a></p>
+    <p><a href="/teams/models?team=${team.id}">Team models</a> · <a href="/_account/resources?team=${team.id}">Shared documents and revision history</a></p>
     <h2>Members and invitations</h2><ul>${members.map(member => `<li><strong>${html(member.actorId)}</strong>${member.actorId === team.creatorId ? ' · Creator' : ''} · ${member.state === 'member' ? 'Member' : 'Invited'}${member.available ? '' : ' · Account unavailable'}
       ${member.expiresAt ? `<small>Expires ${date(member.expiresAt)}</small>` : ''}
       ${creator && member.actorId !== team.creatorId ? form('remove', { ...teamFields(team), actorId: member.actorId }, `<button>${member.state === 'member' ? 'Remove member' : 'Withdraw invitation'}</button>`) : ''}</li>`).join('')}</ul>
@@ -62,7 +62,12 @@ export async function teamPage(request: IncomingMessage, response: ServerRespons
     if (!current()) throw new TeamError(401, 'Your session ended. Sign in again.');
     if (url.pathname !== ROOT || [...url.searchParams.keys()].some(key => key !== 'team')
         || url.searchParams.getAll('team').length > 1) throw new TeamError(404, 'Page unavailable.');
-    if (request.method === 'GET') { renderTeamPage(response, page(teams, session, url.searchParams.get('team')), '', 200); return; }
+    if (request.method === 'GET') {
+      const id = url.searchParams.get('team');
+      if (request.headers.accept === 'application/json') jsonReply(response, id ? teams.detail(session, id) : teams.list(session));
+      else renderTeamPage(response, page(teams, session, id), '', 200);
+      return;
+    }
     if (request.method !== 'POST') { reply(response, 405, 'Method not allowed.'); return; }
     if (url.search) throw new TeamError(400, 'Submit the form from your team page.');
     const data = await readLocalForm(request);
@@ -87,6 +92,7 @@ export async function teamPage(request: IncomingMessage, response: ServerRespons
     redirect(response, destination);
   } catch (error) {
     if (!(error instanceof TeamError)) throw error;
+    if (request.headers.accept === 'application/json') { reply(response, error.status, error.message); return; }
     renderTeamPage(response, `<h1>Your local teams</h1>${error.status === 401 ? '<p><a href="/_account">Sign in again</a></p>' : ''}`, error.message, error.status);
   }
 }

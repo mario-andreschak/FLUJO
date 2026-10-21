@@ -26,91 +26,101 @@ export class Ledger {
     }
     this.db = new DatabaseSync(filename, { enableForeignKeyConstraints: true, allowExtension: false });
     this.db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
-    const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
-    // The unreleased OIDC prototype's identities must never silently become local
-    // accounts. Keep that ledger intact; deliberate migration is separate work.
-    if (![0, 2, 3, 4, 5, 6, 7].includes(Number(version))) { this.db.close(); throw new Error('Unsupported controller ledger schema.'); }
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS actors (
-        id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
-        auth_revision INTEGER NOT NULL DEFAULT 1
-      );
-      CREATE TABLE IF NOT EXISTS runtimes (
-        id TEXT PRIMARY KEY, actor_id TEXT NOT NULL UNIQUE REFERENCES actors(id),
-        origin TEXT NOT NULL UNIQUE, hostname TEXT NOT NULL UNIQUE, isolation_id TEXT NOT NULL UNIQUE,
-        revision TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))
-      );
-      CREATE TABLE IF NOT EXISTS sessions (
-        hash TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES actors(id),
-        runtime_id TEXT NOT NULL REFERENCES runtimes(id), revision TEXT NOT NULL,
-        expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS passwords (
-        actor_id TEXT PRIMARY KEY REFERENCES actors(id), hash TEXT NOT NULL,
-        version TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-        next_attempt_at INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE IF NOT EXISTS audit (
-        sequence INTEGER PRIMARY KEY, time INTEGER NOT NULL,
-        action TEXT NOT NULL, actor_id TEXT, runtime_id TEXT
-      );
-      CREATE INDEX IF NOT EXISTS session_expiry ON sessions(expires_at);
-      CREATE TABLE IF NOT EXISTS runtime_lifecycle (
-        runtime_id TEXT PRIMARY KEY REFERENCES runtimes(id), policy TEXT NOT NULL, credential_digest TEXT NOT NULL,
-        generation INTEGER NOT NULL DEFAULT 1,
-        desired TEXT NOT NULL CHECK(desired IN ('running','stopped')),
-        phase TEXT NOT NULL CHECK(phase IN ('pending','confirmed','failed')),
-        verified_at INTEGER, problem TEXT
-      );
-      CREATE TABLE IF NOT EXISTS runtime_provisioning (
-        runtime_id TEXT PRIMARY KEY, request_digest TEXT NOT NULL,
-        plan TEXT NOT NULL, phase TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS runtime_rotations (
-        id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL REFERENCES runtimes(id), plan TEXT NOT NULL,
-        phase TEXT NOT NULL CHECK(phase IN ('prepared','stopped','authority-updated','config-published','complete')),
-        created_at INTEGER NOT NULL
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS one_pending_rotation ON runtime_rotations(runtime_id) WHERE phase!='complete';
-      CREATE TABLE IF NOT EXISTS runtime_model_grants (
-        runtime_id TEXT NOT NULL REFERENCES runtimes(id), id TEXT NOT NULL, revision TEXT NOT NULL,
-        generation INTEGER NOT NULL DEFAULT 1,
-        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
-        configured INTEGER NOT NULL DEFAULT 1 CHECK(configured IN (0,1)),
-        PRIMARY KEY(runtime_id,id)
-      );
-      CREATE TABLE IF NOT EXISTS teams (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL, creator_id TEXT NOT NULL REFERENCES actors(id),
-        generation INTEGER NOT NULL DEFAULT 1, archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS team_members (
-        team_id TEXT NOT NULL REFERENCES teams(id), actor_id TEXT NOT NULL REFERENCES actors(id),
-        state TEXT NOT NULL CHECK(state IN ('invited','member','removed')),
-        generation INTEGER NOT NULL DEFAULT 1, invitation TEXT, expires_at INTEGER,
-        PRIMARY KEY(team_id,actor_id)
-      );
-      CREATE INDEX IF NOT EXISTS team_members_actor ON team_members(actor_id,state);
-      CREATE TABLE IF NOT EXISTS team_events (
-        sequence INTEGER PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), time INTEGER NOT NULL,
-        actor_id TEXT NOT NULL REFERENCES actors(id), action TEXT NOT NULL, subject_id TEXT REFERENCES actors(id)
-      );
-      CREATE INDEX IF NOT EXISTS team_events_team ON team_events(team_id,sequence);
-      CREATE TABLE IF NOT EXISTS team_resources (
-        id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), kind TEXT NOT NULL,
-        name TEXT NOT NULL, creator_id TEXT NOT NULL REFERENCES actors(id), version INTEGER NOT NULL,
-        fence INTEGER NOT NULL DEFAULT 0, lease_hash TEXT, lease_session TEXT, lease_actor TEXT,
-        lease_member_generation INTEGER, lease_expires_at INTEGER, created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS team_resources_team ON team_resources(team_id);
-      CREATE TABLE IF NOT EXISTS team_resource_versions (
-        resource_id TEXT NOT NULL REFERENCES team_resources(id), version INTEGER NOT NULL,
-        actor_id TEXT NOT NULL REFERENCES actors(id), time INTEGER NOT NULL, name TEXT NOT NULL,
-        content TEXT NOT NULL, digest TEXT NOT NULL, bytes INTEGER NOT NULL,
-        restored_from INTEGER, PRIMARY KEY(resource_id,version)
-      );
-      PRAGMA user_version=7;
-    `);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
+      // The unreleased OIDC prototype's identities must never silently become local
+      // accounts. Keep that ledger intact; deliberate migration is separate work.
+      if (![0, 2, 3, 4, 5, 6, 7, 8].includes(Number(version))) throw new Error('Unsupported controller ledger schema.');
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS actors (
+          id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+          auth_revision INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS runtimes (
+          id TEXT PRIMARY KEY, actor_id TEXT NOT NULL UNIQUE REFERENCES actors(id),
+          origin TEXT NOT NULL UNIQUE, hostname TEXT NOT NULL UNIQUE, isolation_id TEXT NOT NULL UNIQUE,
+          revision TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+          hash TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES actors(id),
+          runtime_id TEXT NOT NULL REFERENCES runtimes(id), revision TEXT NOT NULL,
+          expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS passwords (
+          actor_id TEXT PRIMARY KEY REFERENCES actors(id), hash TEXT NOT NULL,
+          version TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS audit (
+          sequence INTEGER PRIMARY KEY, time INTEGER NOT NULL,
+          action TEXT NOT NULL, actor_id TEXT, runtime_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS session_expiry ON sessions(expires_at);
+        CREATE TABLE IF NOT EXISTS runtime_lifecycle (
+          runtime_id TEXT PRIMARY KEY REFERENCES runtimes(id), policy TEXT NOT NULL, credential_digest TEXT NOT NULL,
+          generation INTEGER NOT NULL DEFAULT 1,
+          desired TEXT NOT NULL CHECK(desired IN ('running','stopped')),
+          phase TEXT NOT NULL CHECK(phase IN ('pending','confirmed','failed')),
+          verified_at INTEGER, problem TEXT
+        );
+        CREATE TABLE IF NOT EXISTS runtime_provisioning (
+          runtime_id TEXT PRIMARY KEY, request_digest TEXT NOT NULL,
+          plan TEXT NOT NULL, phase TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS runtime_rotations (
+          id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL REFERENCES runtimes(id), plan TEXT NOT NULL,
+          phase TEXT NOT NULL CHECK(phase IN ('prepared','stopped','authority-updated','config-published','complete')),
+          created_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS one_pending_rotation ON runtime_rotations(runtime_id) WHERE phase!='complete';
+        CREATE TABLE IF NOT EXISTS runtime_model_grants (
+          runtime_id TEXT NOT NULL REFERENCES runtimes(id), id TEXT NOT NULL, revision TEXT NOT NULL,
+          generation INTEGER NOT NULL DEFAULT 1,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+          configured INTEGER NOT NULL DEFAULT 1 CHECK(configured IN (0,1)),
+          PRIMARY KEY(runtime_id,id)
+        );
+        CREATE TABLE IF NOT EXISTS teams (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, creator_id TEXT NOT NULL REFERENCES actors(id),
+          generation INTEGER NOT NULL DEFAULT 1, archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS team_members (
+          team_id TEXT NOT NULL REFERENCES teams(id), actor_id TEXT NOT NULL REFERENCES actors(id),
+          state TEXT NOT NULL CHECK(state IN ('invited','member','removed')),
+          generation INTEGER NOT NULL DEFAULT 1, invitation TEXT, expires_at INTEGER,
+          PRIMARY KEY(team_id,actor_id)
+        );
+        CREATE INDEX IF NOT EXISTS team_members_actor ON team_members(actor_id,state);
+        CREATE TABLE IF NOT EXISTS team_events (
+          sequence INTEGER PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), time INTEGER NOT NULL,
+          actor_id TEXT NOT NULL REFERENCES actors(id), action TEXT NOT NULL, subject_id TEXT REFERENCES actors(id)
+        );
+        CREATE INDEX IF NOT EXISTS team_events_team ON team_events(team_id,sequence);
+        CREATE TABLE IF NOT EXISTS team_resources (
+          id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), kind TEXT NOT NULL,
+          format TEXT NOT NULL DEFAULT 'json',
+          name TEXT NOT NULL, creator_id TEXT NOT NULL REFERENCES actors(id), version INTEGER NOT NULL,
+          fence INTEGER NOT NULL DEFAULT 0, lease_hash TEXT, lease_session TEXT, lease_actor TEXT,
+          lease_member_generation INTEGER, lease_expires_at INTEGER, created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS team_resources_team ON team_resources(team_id);
+        CREATE TABLE IF NOT EXISTS team_resource_versions (
+          resource_id TEXT NOT NULL REFERENCES team_resources(id), version INTEGER NOT NULL,
+          actor_id TEXT NOT NULL REFERENCES actors(id), time INTEGER NOT NULL, name TEXT NOT NULL,
+          content TEXT NOT NULL, digest TEXT NOT NULL, bytes INTEGER NOT NULL,
+          restored_from INTEGER, PRIMARY KEY(resource_id,version)
+        );
+      `);
+      if (!this.db.prepare('PRAGMA table_info(team_resources)').all().some(column => column.name === 'format')) {
+        this.db.exec("ALTER TABLE team_resources ADD COLUMN format TEXT NOT NULL DEFAULT 'json'");
+      }
+      this.db.exec('PRAGMA user_version=8; COMMIT;');
+    } catch (error) {
+      try { this.db.exec('ROLLBACK'); } finally { this.db.close(); }
+      throw error;
+    }
   }
 
   transaction<T>(callback: () => T): T {

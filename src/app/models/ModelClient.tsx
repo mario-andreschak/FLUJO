@@ -53,7 +53,7 @@ function errorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
 }
 
-export default function ModelClient() {
+export default function ModelClient({ controllerAccount = false }: { controllerAccount?: boolean }) {
   const { t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -479,6 +479,7 @@ export default function ModelClient() {
 
   return (
     <>
+      {controllerAccount && <Box sx={{ mb: 2 }}><Button component="a" href="/teams/models">{t('teams.models.title')}</Button></Box>}
       {/* Toolbar with search + add, matching the Flows/MCP list toolbars */}
       <StickySearchBar mode="container">
       <Paper

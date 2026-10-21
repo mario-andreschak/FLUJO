@@ -10,8 +10,8 @@ or maintain that boundary.
 This #212/#574 candidate verifies local passwords, provisions owner containers
 through a local engine, and persists execution revocation on the local machine.
 The earlier OIDC-only draft is superseded. **Full multi-tenant support is still
-incomplete:** installed Linux/Windows isolation acceptance, native team resource
-editors and execution, dependency authorization and protocol integration require further work. Keep #212
+incomplete:** installed Linux/Windows isolation acceptance, shared resource
+execution, remaining native editors, dependency authorization and protocol integration require further work. Keep #212
 open. No online isolation implementation is included.
 
 The controller is a separate Node process. It imports no FLUJO execution, MCP,
@@ -36,7 +36,7 @@ private Model, MCP server, Flow, Chat or Execution, authorize a cross-owner runt
 request, or expose credentials. The document library below uses the local
 membership authority; a client-provided team ID is never proof.
 
-Schema 7 retains teams, invitation state, monotonically increasing membership
+Schema 8 retains teams, invitation state, monotonically increasing membership
 generations and the latest 200 membership events per team in the private SQLite
 ledger. Forms carry the displayed team generation, so a stale member-management
 page cannot overwrite a newer change. Invitation identifiers rotate on reissue,
@@ -64,17 +64,18 @@ installed acceptance.
 
 ### Shared documents, edit locks and revision history
 
-**Your teams → a team → Shared resources and revision history** stores explicitly
+**Your teams → a team → Shared documents and revision history** stores explicitly
 submitted JSON documents locally. Kind labels cover Models, MCP, Flows, Chats and
-Executions. They are passive snapshots: **native FLUJO editors, dependency access
-and execution are not connected yet.** This library does not satisfy Tier 1 by
-itself. The JSON is structurally bounded, not validated against each native
-resource schema. It does not discover private resources, dereference dependency
+Executions. Generic documents are passive snapshots; typed model configurations
+also have the native editing journey below. **Shared execution, dependency access
+and the remaining native editors are not connected yet.** This library does not
+satisfy Tier 1 by itself. Generic JSON is structurally bounded, not validated
+against each native resource schema. It does not discover private resources, dereference dependency
 IDs, import keyrings, execute pasted commands, or confer runtime permissions.
-Submitted content is shared verbatim after JSON formatting, including any secret
-the submitter includes; there is no automatic credential redaction. Native
-publication must use the existing secret-safe serialization path and explicit
-dependency selection before it can be enabled in ordinary app editors.
+Generic document content is shared verbatim after JSON formatting, including any
+secret the submitter includes. The native model path uses a strict field allowlist;
+the remaining native publication paths still need secret-safe serialization and
+explicit dependency selection before being enabled in ordinary app editors.
 
 Every current team member can view, download and edit a submitted document. The
 create form requires explicit sharing consent. Each document has one current edit
@@ -120,6 +121,49 @@ write failure atomicity, consent, escaped content and draft recovery. They are
 not a substitute for native two-user offline browser acceptance or native editor
 integration. Schema 6 upgrades create an empty document library and preserve
 existing memberships/accounts; they do not publish private runtime data.
+
+### Native team model configuration
+
+In controller mode, **AI Setup → Team models** or **Your teams → a team → Team
+models** opens `/teams/models`. Select a current team, choose **Share a model**,
+select a private model, review the projected configuration in the existing model
+editor, and explicitly share it with the named team. This creates a team resource;
+the private original remains unchanged. Every current member can open the same
+configuration in the model editor under the durable edit lease, save a new
+revision and open its local revision history/download/restore page.
+
+The browser-safe `shared-model.ts` protocol defines `flujo.model.v1` and a bounded,
+strict allowlist of native configuration fields. Publication excludes `ApiKey`,
+private IDs, folders, favorites and unknown extension fields. Owner credential
+bindings and fallback routing aliases are rejected until their dependency grants
+exist. Endpoints containing user-info, query parameters, fragments or non-HTTP(S)
+schemes are rejected. Prompt/description text is deliberately shared as written;
+this is not a detector for secrets manually embedded in free text. The controller
+independently validates typed documents at creation, save and restore. Schema 8
+records their immutable format so a later JSON-form/API edit cannot remove the
+format marker to bypass credential rejection. A transactional schema 7 upgrade
+retains existing documents as generic JSON, even if their content contains a
+format-like tag. It neither promotes old JSON to executable/native configuration
+nor changes its history.
+
+The shared editor disables API-key/global-credential binding controls, provider
+discovery (including background CLI catalogue refresh), private prompt-builder
+actions, AI model-form actions/context and private workspace saves. It uses the
+same existing configuration fields with plain prompt-text editing. Team reads and
+form-encoded mutations use the controller's exact-origin JSON representation of
+the account/resource routes and retain its authorization/limits. The browser
+renews its own lease, disables saving after definitive revocation/expiry, preserves
+a failed draft and offers a local credential-excluded draft download. Closing an
+editor requires a discard decision; release on close/unmount is best effort and
+the local expiry remains authoritative. Drafts are not persisted in browser storage.
+
+This delivers native model **configuration sharing/editing**, not shared model
+execution or credential grants. No provider is contacted by this editor, and
+existing private model setup behavior is unchanged. Linking shared models into
+Flows/Chats and granting execution dependencies remain #212 work. Release-only
+HTTP/SQLite and React regression sources cover projection, forged secret fields,
+format downgrade, legacy migration, provider-discovery suppression, shared saves
+and denied-save draft recovery. Native offline browser acceptance is still pending.
 
 ## Current development profile
 
@@ -360,7 +404,7 @@ runtime cannot change its owner, origin or isolation identity in place.
 Schema 1 OIDC configuration/ledgers are not silently converted to local accounts.
 They are rejected and preserved. The draft has no automatic migration of existing
 user data; explicit ownership mapping, backup and recovery remain required work.
-The local account ledger upgrades from schema 2/3/4/5/6 to schema 7 for runtime intent,
+The local account ledger upgrades from schema 2/3/4/5/6/7 to schema 8 for runtime intent,
 provisioning, credential-rotation journals, revocable model grants, local teams and shared documents;
 config schema remains 2. Earlier
 controller binaries reject the newer ledger rather than ignoring pending work.

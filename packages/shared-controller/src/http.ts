@@ -33,6 +33,12 @@ export function redirect(response: ServerResponse, location: string): void {
   response.end();
 }
 
+export function jsonReply(response: ServerResponse, value: unknown, status = 200): void {
+  securityHeaders(response);
+  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(value));
+}
+
 export const escapeHtml = (text: string): string => text.replace(/[&<>"']/g,
   character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 

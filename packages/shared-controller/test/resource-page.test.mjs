@@ -6,6 +6,7 @@ import { Ledger } from '../dist/ledger.js';
 import { createController } from '../dist/server.js';
 import { Teams } from '../dist/teams.js';
 import { TeamResources } from '../dist/team-resources.js';
+import { publishableModel, SHARED_MODEL_FORMAT } from '../dist/shared-model.js';
 import { privateFixture } from './private-fixture.mjs';
 
 // Release-only local HTTP/SQLite coverage. Real browser/installed offline
@@ -45,6 +46,36 @@ async function fixture(t) {
   return { ledger, server, sessions, tokens, teams, resources, teamId, send, get forwarded() { return forwarded; } };
 }
 const value = (page, key) => { const found = page.match(new RegExp(`name="${key}" value="([^"]*)"`)); assert.ok(found, key); return found[1]; };
+
+test('native model JSON API uses the same session, membership, lock and immutable format checks as local forms', async t => {
+  const f = await fixture(t); const { teamId, send } = f; const headers = { accept: 'application/json' };
+  const teams = await send('bob', { path: '/_account/teams', headers });
+  assert.equal(teams.status, 200); assert.equal(JSON.parse(teams.body).teams[0].id, teamId);
+  const document = publishableModel({ id: 'private-model', name: 'local-fixture', displayName: 'Shared configuration',
+    ApiKey: 'private-test-key', provider: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1' });
+  const created = await send('alice', { method: 'POST', headers, data: { action: 'create', teamId, kind: 'model',
+    name: 'Shared configuration', content: JSON.stringify(document), consent: 'share' } });
+  assert.equal(created.status, 200); const location = JSON.parse(created.body).location;
+  const id = new URL(location, 'https://alice.localhost:4280').searchParams.get('resource');
+  const listed = await send('bob', { path: `/_account/resources?team=${teamId}`, headers });
+  assert.equal(JSON.parse(listed.body).resources[0].format, SHARED_MODEL_FORMAT);
+  const detail = await send('bob', { path: location, headers });
+  assert.equal(detail.status, 200); assert.equal(JSON.parse(detail.body).history.length, 1);
+  assert.ok(!detail.body.includes('private-test-key')); assert.ok(!detail.body.includes('private-model'));
+  const edited = await send('bob', { method: 'POST', headers, data: { action: 'edit', teamId, resourceId: id, version: '1' } });
+  assert.equal(edited.status, 200); const lease = JSON.parse(edited.body).lease;
+  const save = { action: 'save', teamId, resourceId: id, version: '1', token: lease.token, fence: String(lease.fence), name: 'Updated model' };
+  for (const content of ['{}', JSON.stringify({ ...document, model: { ...document.model, ApiKey: 'forged' } })]) {
+    assert.equal((await send('bob', { method: 'POST', headers, data: { ...save, content } })).status, 400);
+  }
+  assert.equal((await send('alice', { method: 'POST', headers, data: { action: 'edit', teamId, resourceId: id, version: '1' } })).status, 423);
+  const saved = await send('bob', { method: 'POST', headers, data: { ...save, content: JSON.stringify({ ...document, model: { ...document.model, maxTokens: 512 } }) } });
+  assert.equal(saved.status, 200); assert.equal(f.resources.read(f.sessions.alice, teamId, id).resource.version, 2);
+  f.teams.remove(f.sessions.alice, teamId, f.teams.detail(f.sessions.alice, teamId).team.generation, 'bob');
+  const denied = await send('bob', { path: location, headers });
+  assert.equal(denied.status, 404); assert.equal(typeof JSON.parse(denied.body).error, 'string');
+  assert.equal(f.forwarded, 0);
+});
 
 test('two local members share, exclusively edit, save and restore with explicit consent and no runtime forwarding', async t => {
   const f = await fixture(t); const { teamId, send } = f;
