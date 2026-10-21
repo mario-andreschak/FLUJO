@@ -81,6 +81,7 @@ test('setup writes independent private credentials without executing the CLI or 
   // Deliberately not an executable program: setup may locate it, never run it.
   const executable = join(bin, process.platform === 'win32' ? 'docker.exe' : 'docker');
   writeFileSync(executable, 'not executable content', { mode: 0o700 });
+  writeFileSync(join(bin, process.platform === 'win32' ? 'openssl.exe' : 'openssl'), 'not executable content', { mode: 0o700 });
   const oldPath = process.env.PATH;
   process.env.PATH = bin;
   t.after(() => { if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath; });
@@ -89,14 +90,15 @@ test('setup writes independent private credentials without executing the CLI or 
   const alice = setupController(aliceRoot, 'alice', imageId);
   const first = configSchema.parse(JSON.parse(readPrivateFile(alice.configFile).toString()));
   assert.equal(first.localEngine.imageId, imageId);
-  assert.equal(first.runtimes[0].origin, 'https://alice.localhost');
+  assert.equal(first.runtimes[0].origin, 'https://alice.localhost:4280');
+  assert.equal(first.tls.directory, join(aliceRoot, 'state', 'tls'));
   assert.equal(first.runtimes[0].localRuntime, undefined);
   assert.equal(JSON.stringify(alice).includes(first.runtimes[0].credential), false);
   assert.throws(() => setupController(aliceRoot, 'bob', imageId));
-  assert.deepEqual(JSON.parse(readPrivateFile(alice.configFile).toString()), first);
+  assert.equal(JSON.stringify(JSON.parse(readPrivateFile(alice.configFile).toString())) === JSON.stringify(first), true);
   const bob = setupController(join(directory, 'bob'), 'bob', imageId);
   const second = JSON.parse(readPrivateFile(bob.configFile).toString());
-  assert.notEqual(first.runtimes[0].credential, second.runtimes[0].credential);
+  assert.equal(first.runtimes[0].credential === second.runtimes[0].credential, false);
   const invalid = join(directory, 'invalid');
   assert.throws(() => setupController(invalid, 'alice.localhost', imageId));
   assert.throws(() => setupController(invalid, 'alice', 'latest'));

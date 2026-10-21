@@ -2,7 +2,7 @@ import { configSchema, runtimeRevision } from './config.js';
 import { readPrivateFile } from './private-storage.js';
 import { Ledger } from './ledger.js';
 import { ControllerBusyError, lockController } from './process-lock.js';
-import { createController } from './server.js';
+import { createController, type ControllerServer } from './server.js';
 import { promptPassword } from './password-prompt.js';
 import { LocalEngine } from './local-engine.js';
 import { LocalRuntimeDriver } from './local-runtime.js';
@@ -11,6 +11,8 @@ import { RuntimePipes } from './runtime-pipes.js';
 import type { RuntimeIntent } from './local-runtime-policy.js';
 import { provisionRuntime } from './provision-runtime.js';
 import { setupController } from './setup.js';
+import { ensureLocalTLS } from './local-tls.js';
+import { updateLocalTrust } from './tls-trust.js';
 
 const runtimeStatus = (intent: RuntimeIntent) => ({ runtimeId: intent.runtimeId, actorId: intent.actorId,
   desired: intent.desired, phase: intent.phase, generation: intent.generation,
@@ -24,20 +26,37 @@ export async function main(args: string[]): Promise<void> {
     if (args.length !== 4) throw new Error('Usage: flujo-controller setup /absolute/new-directory actor-id sha256:image-id');
     const created = setupController(filename, actorId, args[3]);
     process.stdout.write(`${JSON.stringify({ ...created,
-      next: 'Provision this owner, initialize the local ledger, enroll its password and configure local TLS before serving.' }, null, 2)}\n`);
+      next: 'Run tls-init and tls-trust, then provision this owner, initialize the ledger and enroll its password before serving.' }, null, 2)}\n`);
     return;
   }
-  if (!filename || !['init', 'serve', 'disable', 'enable', 'status', 'password', 'reconcile', 'provision'].includes(action)
-      || (['disable', 'enable', 'password', 'provision'].includes(action) ? !actorId || args.length !== 3 : args.length !== 2)) {
-    throw new Error('Usage: flujo-controller <provision|init|serve|status|disable|enable|password|reconcile> /absolute/config.json [actor-id]');
+  if (!filename || !['init', 'serve', 'disable', 'enable', 'status', 'password', 'reconcile', 'provision',
+    'tls-init', 'tls-renew', 'tls-trust', 'tls-untrust'].includes(action)
+      || (['disable', 'enable', 'password', 'provision'].includes(action) ? !actorId || args.length !== 3
+        : ['tls-trust', 'tls-untrust'].includes(action) ? args.length < 2 || args.length > 3 : args.length !== 2)) {
+    throw new Error('Invalid local controller command. Use --help for arguments.');
   }
   const parsed = configSchema.safeParse(JSON.parse(readPrivateFile(filename).toString('utf8')));
   if (!parsed.success) throw new Error('Invalid controller configuration. Check the documented schema.');
   const config = parsed.data;
+  if (action === 'tls-trust' || action === 'tls-untrust') {
+    const target = await updateLocalTrust(config, action === 'tls-untrust', actorId);
+    process.stdout.write(`${JSON.stringify({ target, trusted: action === 'tls-trust' })}\n`);
+    return;
+  }
+  if (action === 'tls-init' || action === 'tls-renew') {
+    const unlock = lockController(config.stateDirectory);
+    try {
+      const material = await ensureLocalTLS(config, { initialize: action === 'tls-init', renew: action === 'tls-renew' });
+      process.stdout.write(`${JSON.stringify({ caFile: material.caFile, rootFingerprint: material.rootFingerprint,
+        expiresAt: new Date(material.expiresAt).toISOString(), next: 'Trust this public CA locally before browser access. Private keys must remain here.' }, null, 2)}\n`);
+    } finally { unlock(); }
+    return;
+  }
   let release = ['serve', 'init', 'reconcile', 'provision'].includes(action) ? lockController(config.stateDirectory) : undefined;
   let ledger: Ledger | undefined;
   let supervisor: RuntimeSupervisor | undefined;
   let pipes: RuntimePipes | undefined;
+  let controller: ControllerServer | undefined;
   try {
     ledger = new Ledger(config.stateDirectory);
     if (action === 'provision') {
@@ -95,6 +114,7 @@ export async function main(args: string[]): Promise<void> {
       if (runtimes.some(intent => intent.phase !== 'confirmed')) process.exitCode = 2;
     } else {
       const server = await createController(config, ledger, runtime => pipes?.connect(runtime));
+      controller = server;
       if (ledger.intents().length) {
         const engine = new LocalEngine(config.stateDirectory);
         supervisor = new RuntimeSupervisor(ledger, new LocalRuntimeDriver(engine));
@@ -105,7 +125,8 @@ export async function main(args: string[]): Promise<void> {
         server.listen(config.port, '127.0.0.1', () => { server.off('error', reject); resolve(); });
       });
       supervisor?.start();
-      process.stdout.write(`FLUJO controller listening on 127.0.0.1:${config.port}. TLS proxy required.\n`);
+      process.stdout.write(`FLUJO controller listening on 127.0.0.1:${config.port}. ${config.tls ? 'Local HTTPS enabled.' : 'TLS proxy required for this legacy configuration.'}\n`);
+      for (const runtime of config.runtimes) process.stdout.write(`Open ${runtime.origin}/_account\n`);
       await new Promise<void>((resolve, reject) => {
         let stopping = false;
         const stop = () => {
@@ -123,7 +144,10 @@ export async function main(args: string[]): Promise<void> {
       });
     }
   } finally {
-    try { await supervisor?.stop(); await pipes?.close(); }
+    try {
+      try { await supervisor?.stop(); }
+      finally { try { await pipes?.close(); } finally { await controller?.stopTLS(); } }
+    }
     finally { ledger?.close(); release?.(); }
   }
 }

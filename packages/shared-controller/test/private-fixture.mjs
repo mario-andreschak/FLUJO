@@ -6,13 +6,17 @@ import { createPrivateDirectory } from '../dist/private-storage.js';
 
 // Release-only: invoke suites through flujo-bash so their fixture cleanup uses
 // the required MCP. Register database/process closers in disposal order.
-export function privateFixture(t) {
+export function privateFixture(t, { preserveOnCloseFailure = false } = {}) {
   const directory = createPrivateDirectory(join(homedir(), `.flujo-controller-test-${randomUUID()}`));
   const mask = process.umask(0o077);
   const close = [];
   t.after(async () => {
-    try { for (const dispose of close) await dispose(); }
-    finally { process.umask(mask); rmSync(directory, { recursive: true, force: true }); }
+    let completed = false;
+    try { for (const dispose of close) await dispose(); completed = true; }
+    finally {
+      process.umask(mask);
+      if (completed || !preserveOnCloseFailure) rmSync(directory, { recursive: true, force: true });
+    }
   });
   return { directory, close };
 }

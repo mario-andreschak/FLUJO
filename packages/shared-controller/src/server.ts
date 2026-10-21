@@ -1,14 +1,18 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
+import { createServer as createSecureServer, Server as SecureServer } from 'node:https';
 import type { Duplex } from 'node:stream';
 import { runtimeRevision, type ControllerConfig, type Runtime } from './config.js';
 import { Ledger } from './ledger.js';
 import { readPrivateFile } from './private-storage.js';
 import { proxy } from './proxy.js';
+import { ensureLocalTLS, LocalTLS } from './local-tls.js';
 import { accountPage, browserRequestAllowed, cookie, readPasswordForm, redirect, reply,
   securityHeaders, SESSION_COOKIE, sessionCookie } from './http.js';
 
+export type ControllerServer = (Server | SecureServer) & { stopTLS: () => Promise<void> };
+
 export async function createController(config: ControllerConfig, ledger: Ledger,
-  connect?: (runtime: Runtime) => Duplex | undefined): Promise<Server> {
+  connect?: (runtime: Runtime) => Duplex | undefined): Promise<ControllerServer> {
   // Identity and authority are local. Startup never discovers a remote issuer.
   ledger.reconcile(config);
   const runtimes = new Map(config.runtimes.map(runtime => [new URL(runtime.origin).host, runtime]));
@@ -18,6 +22,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
   const loginRate = new Map<string, { count: number; reset: number }>();
   let pendingLogins = 0;
   let totalRequests = 0;
+  const localTLS = config.tls ? new LocalTLS(config, await ensureLocalTLS(config)) : undefined;
 
   async function login(request: IncomingMessage, response: ServerResponse, runtime: Runtime): Promise<void> {
     const previous = loginRate.get(runtime.id);
@@ -30,6 +35,10 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
       if (password === null) { reply(response, 400, 'Invalid sign-in form.'); return; }
       const token = await ledger.authenticate(runtime, runtimeRevision(config, runtime), password, config.sessionSeconds);
       password = '';
+      if (localTLS && !localTLS.valid()) {
+        if (token) ledger.revokeSession(token);
+        reply(response, 503, 'Local certificate renewal is required.'); return;
+      }
       if (!token) {
         accountPage(response, false, 'Sign-in failed. Check your password and account access, then wait before retrying.', 401);
         return;
@@ -42,6 +51,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
   }
 
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (localTLS && !localTLS.valid()) { reply(response, 503, 'Local certificate renewal is required.'); return; }
     if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(request.method ?? '')) {
       reply(response, 405, 'Method not allowed.'); return;
     }
@@ -102,7 +112,7 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
     totalRequests++;
     try {
       proxy(request, response, { runtime, ca: authorities.get(runtime.id), connect: connect ? () => connect(runtime) : undefined,
-        current: () => !!ledger.session(sessionToken, runtime, revision),
+        current: () => (!localTLS || localTLS.valid()) && !!ledger.session(sessionToken, runtime, revision),
         finished: () => { inflight.set(runtime.id, (inflight.get(runtime.id) ?? 1) - 1); totalRequests--; },
       });
     } catch (error) {
@@ -111,14 +121,20 @@ export async function createController(config: ControllerConfig, ledger: Ledger,
     }
   }
 
-  const server = createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 120_000, headersTimeout: 15_000 },
-    (request, response) => { void handle(request, response).catch(() => {
+  const options = { maxHeaderSize: 16 * 1024, requestTimeout: 120_000, headersTimeout: 15_000 };
+  const dispatch = (request: IncomingMessage, response: ServerResponse) => { void handle(request, response).catch(() => {
       // Never log URLs, passwords, cookies, configuration or upstream errors.
       reply(response, 503, 'Sign-in or private runtime is temporarily unavailable. Return to /_account to retry.');
-    }); });
+    }); };
+  const server = localTLS ? createSecureServer({ ...options, key: localTLS.material.key, cert: localTLS.material.cert,
+    minVersion: 'TLSv1.2', handshakeTimeout: 10_000, sessionTimeout: 300 }, dispatch) : createServer(options, dispatch);
+  if (localTLS && server instanceof SecureServer) {
+    server.once('listening', () => localTLS.start(material => server.setSecureContext({ key: material.key, cert: material.cert, minVersion: 'TLSv1.2' })));
+    server.once('close', () => { void localTLS.stop(); });
+  }
   server.maxConnections = 1024;
   server.on('upgrade', (_request, socket) => { socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n'); });
   server.on('connect', (_request, socket) => { socket.destroy(); });
   server.on('clientError', (_error, socket) => { socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); });
-  return server;
+  return Object.assign(server, { stopTLS: () => localTLS?.stop() ?? Promise.resolve() });
 }

@@ -32,6 +32,10 @@ function directoryPath(directory: string, privateLeaf: boolean): string {
 /** Native Windows ACLs and POSIX ownership protect the same local boundary. */
 export function assertPrivateDirectory(directory: string): string { return directoryPath(directory, true); }
 
+/** Existing public certificate stores may be readable, but never replaceable by
+ * another local account. This does not relax checks on controller secrets. */
+export function assertStableDirectory(directory: string): string { return directoryPath(directory, false); }
+
 /** Bootstrap only a new directory. Never change the ACL of an existing tree. */
 export function createPrivateDirectory(directory: string): string {
   if (!isAbsolute(directory)) throw unsafe();

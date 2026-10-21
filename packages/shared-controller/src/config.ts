@@ -47,11 +47,19 @@ export const configSchema = z.object({
     pidsLimit: localRuntimePolicySchema.shape.pidsLimit,
     credentialSeconds: z.number().int().min(3600).max(31_536_000).default(31_536_000),
   }).strict().optional(),
-  // TLS terminates in a separate trusted proxy; the controller binds loopback only.
+  // New installations terminate TLS locally. Legacy proxy configurations remain
+  // explicit; enabling TLS never silently changes an enrolled owner's origin.
+  tls: z.object({ directory: privatePath, executable: privatePath }).strict().optional(),
   port: z.number().int().min(1024).max(65535).default(4280),
   sessionSeconds: z.number().int().min(300).max(28800).default(28800),
   runtimes: z.array(runtimeSchema).min(1).max(1000),
 }).strict().superRefine((config, ctx) => {
+  if (config.tls && config.runtimes.some(runtime => {
+    try {
+      const url = new URL(runtime.origin);
+      return !/^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?\.localhost$/.test(url.hostname) || Number(url.port || 443) !== config.port;
+    } catch { return true; }
+  })) ctx.addIssue({ code: 'custom', message: 'Local TLS requires distinct localhost names on the configured controller port' });
   for (const key of ['id', 'actorId', 'origin', 'upstream', 'credential', 'isolationId'] as const) {
     const values = config.runtimes.filter(runtime => key !== 'upstream'
       || (!runtime.localRuntime && runtime.isolationId !== `unprovisioned:${runtime.id}`)).map(runtime => runtime[key]);

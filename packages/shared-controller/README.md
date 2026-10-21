@@ -22,7 +22,7 @@ never supplied to the private runtime through the browser.
 
 ## Current development profile
 
-Use Node 22.19+ or 24.2+, a dedicated unprivileged account, one controller
+Use Node 22.19+ or 24.2+, preinstalled OpenSSL 3, a dedicated unprivileged account, one controller
 process and SQLite on a local disk. Windows requires an unelevated account and
 a fixed local NTFS/ReFS drive; POSIX requires a non-root account. The local Docker engine must run Linux
 containers and enforce seccomp, memory/swap and PID limits. The operator account
@@ -63,24 +63,34 @@ development fixtures. It provides no automatic process revocation or physical
 isolation and is not the managed multi-user profile. HTTPS upstream verification
 cannot be disabled.
 
-A local TLS proxy forwards the configured browser Host to `127.0.0.1:4280`.
-Configure locally trusted certificates and static local hostname resolution, for
-example `alice.localhost` and `bob.localhost` mapped to loopback. Neither resolution
-nor certificate provisioning/renewal may require an online service. Do not use a
-public DNS resolver, ACME service or certificate bypass to supply the offline
-profile. Different ports on one hostname cannot separate owners' cookies and are
-rejected. Local TLS/hostname setup is still operator-managed in this candidate.
+New installations serve HTTPS directly on `127.0.0.1:4280`, using separate names
+such as `https://alice.localhost:4280` and `https://bob.localhost:4280`. Modern
+localhost-aware browsers resolve these names to loopback without online DNS;
+qualify the supported browser's cold resolution with LAN disabled. The listener
+never binds a LAN interface. Different ports on one hostname cannot separate
+owners' cookies and are rejected. No public DNS resolver, ACME service or
+certificate-validation bypass supplies the offline profile.
 
-The proxy must not cache authenticated responses or log cookies, sign-in bodies or
-private URLs. The controller ignores forwarded identity; exact browser Origin
-checks apply to mutations. No cloud control-plane requests or identity discovery
-are made at startup or sign-in.
+`tls-init` creates and pins a private installation CA, then issues an exact-host
+server certificate locally. `tls-trust` is an explicit operator action to trust
+only its public CA in the current Windows user's Root store or a Linux browser
+NSS database. These commands never transmit a private key or request an online
+certificate. The CA has a localhost DNS name constraint and no subordinate CA
+authority; protect its private key as installation authority. Browsers and the
+controller normally run under the same local desktop account; other OS accounts
+or devices need the public CA installed in their own trust store.
+
+The older configuration without `tls` still requires a trusted local TLS proxy
+forwarding the configured browser Host. Enrolled origins are immutable: enabling
+direct TLS cannot silently change their port or hostname. The proxy must not cache
+authenticated responses or log cookies, sign-in bodies or private URLs. Exact
+browser Origin checks apply to mutations, and forwarded identity is ignored.
 
 ## Configuration and local enrollment
 
 `setup` creates a new private installation directory, its state directory and
 initial owner configuration. It locates an already installed Docker CLI using
-absolute PATH entries, writes a new random credential directly into private
+absolute PATH entries, locates OpenSSL 3, writes a new random credential directly into private
 storage, and prints only the config path and owner identifiers. It does not start
 the CLI or contact a daemon. The image ID must be an immutable `sha256:` plus 64
 lowercase hexadecimal digits; `provision` subsequently verifies that image is
@@ -116,6 +126,10 @@ configuration has this shape (paths below illustrate POSIX):
   "schemaVersion": 2,
   "stateDirectory": "/home/operator/flujo-controller/state",
   "port": 4280,
+  "tls": {
+    "directory": "/home/operator/flujo-controller/state/tls",
+    "executable": "/usr/bin/openssl"
+  },
   "sessionSeconds": 28800,
   "localEngine": {
     "executable": "/usr/bin/docker",
@@ -129,7 +143,7 @@ configuration has this shape (paths below illustrate POSIX):
   "runtimes": [{
     "id": "alice-runtime",
     "actorId": "alice",
-    "origin": "https://alice.localhost",
+    "origin": "https://alice.localhost:4280",
     "upstream": "http://127.0.0.1:4200",
     "credential": "REPLACE_WITH_RANDOM_OWNER_CREDENTIAL",
     "isolationId": "unprovisioned:alice-runtime"
@@ -156,6 +170,8 @@ container identity; do not edit these fields to reassign a running owner.
 
 ```sh
 npm run build:controller
+flujo-controller tls-init /home/operator/flujo-controller/controller.json
+flujo-controller tls-trust /home/operator/flujo-controller/controller.json
 flujo-controller provision /home/operator/flujo-controller/controller.json alice
 flujo-controller init /home/operator/flujo-controller/controller.json
 flujo-controller password /home/operator/flujo-controller/controller.json alice
@@ -177,6 +193,44 @@ stopped. Retry with the original settings; a lost create reply must not create a
 second owner. Changed settings, unexpected existing authority or mismatched
 ownership require local recovery while retaining the journal and data. Persistent
 volumes are never automatically deleted.
+
+## Local TLS trust and recovery
+
+Windows trust uses the current unelevated user's native certificate store; it
+does not add a machine-wide root. Linux trust requires preinstalled NSS
+`certutil`. It uses an existing `~/.pki/nssdb`, otherwise the Chromium M146+
+default `~/.local/share/pki/nssdb`. An optional absolute database path under the
+current user's home selects another browser profile, including an existing
+Firefox NSS database. Existing files and permissions are preserved; unsafe,
+redirected or externally writable stores are refused. macOS automatic trust
+installation is not implemented yet; its native certificate manager can import
+the public CA. Browser trust changes may require a browser restart.
+
+`tls-init` prints the public CA path, its SHA-256 fingerprint and the leaf expiry;
+it never prints a private key. Verify the installation fingerprint when moving
+the public certificate between accounts/devices. Do not copy the state directory
+or private keys to a client. `tls-untrust` removes only that exact pinned CA from
+the selected user store and verifies the result; it leaves certificates, data and
+account state available for recovery. It is not an account-revocation command.
+
+CA identity is journaled before issuance and pinned after verification. A retry
+after interrupted initialization reuses the saved key and certificate. Missing
+or inconsistent pinned authority fails closed; restore the matching private TLS
+directory and `root.json` from a protected backup instead of generating an
+unrelated replacement. Leaf renewal publishes `current.json` only after checking
+the signature, private key, exact hostnames, usage and validity. Previous leaf
+files and interrupted private candidates are retained for recovery.
+
+Leaf certificates last 90 days. The live controller checks every six hours and
+renews locally when less than 14 days remain, then updates HTTPS without changing
+account sessions. Startup also renews an expired/near-expiry leaf using the same
+CA and local tool. `tls-renew` forces renewal with the server stopped. A failed
+renewal retains the previous valid certificate; expired material blocks request
+admission and existing streams. Shutdown waits for an in-progress signing command
+before releasing the controller lock. The ten-year CA is never silently replaced;
+CA expiry, key loss or compromise requires explicit local recovery and new trust.
+Installed browser trust, name resolution and power-loss recovery still need
+release qualification; regression sources alone cannot establish those results.
 
 `init` records local accounts but grants no password login until enrollment.
 `password` uses a hidden interactive terminal prompt with
@@ -250,8 +304,9 @@ containers, host-local model servers or download new tools. Local tools already
 in its image/volumes can run. A separately authorized local capability broker is
 pending for optional external integrations and host model services; it must not
 weaken owner isolation or become an online prerequisite. Persistent disk quotas,
-full process-tree/pipe exhaustion qualification, credential rotation and local
-TLS installation also remain pending.
+full process-tree/pipe exhaustion qualification and runtime credential rotation
+also remain pending. Native TLS trust and browser/offline installation qualification
+remain release gates.
 
 At release pre-flight, run `npm run test:controller` through flujo-bash on both
 unelevated Windows and unprivileged POSIX profiles, then qualify actual installed
@@ -277,10 +332,15 @@ acceptance environment. Do not disconnect the user's active machine or services.
 - Qualify local TLS/hostname provisioning, native protocols, bounded resource
   use, migration and backup/recovery. Cached online sessions and fixture-only
   endpoint tests cannot satisfy installed-candidate offline acceptance.
+- In an owned Windows/Linux acceptance account, install and remove the exact
+  public CA, verify real browser trust and cold localhost resolution, renew while
+  streaming, interrupt certificate publication and simulate clock/expiry changes.
+  Never change the user's ordinary trust stores or disable their active network
+  adapters for a fixture run. Confirm no online DNS/ACME/issuer request occurs.
 
 The runtime regression sources include policy drift, unconfirmed start/stop,
 stale intent, wrong-owner protection and lost-create-response recovery using an
-engine fixture. Native storage, setup and real child-stdio/HTTP-parser regression
+engine fixture. Native storage, setup, real HTTPS issuance/account dispatch and child-stdio/HTTP-parser regression
 sources cover platform boundaries without claiming actual container/kernel isolation.
 Regression and broader acceptance runs are reserved for release pre-flight under
 the repository policy. Development checks are typecheck, lint and a non-container
