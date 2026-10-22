@@ -127,8 +127,8 @@
     },
     "isolated": {
       "description": "npm run test:isolated — child-process and intensive integration suites, serial, dedicated CI job.",
-      "minSuites": 9,
-      "minTests": 101,
+      "minSuites": 18,
+      "minTests": 234,
       "intentionalSkips": []
     },
     "live-codex": {
