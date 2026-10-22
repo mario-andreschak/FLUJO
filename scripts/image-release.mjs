@@ -154,7 +154,7 @@ export function validateImageEvidence({ directory, sha, version, sourceLock, exp
 
 function verifySignature(run, subject, sha, predicate) {
   run('gh', ['attestation', 'verify', subject, '--repo', REPOSITORY, '--predicate-type', predicate,
-    '--signer-workflow', WORKFLOW,
+    // Exact SAN pins the workflow and ref; gh forbids combining identity selectors.
     '--cert-identity', `https://github.com/${WORKFLOW}@refs/heads/main`,
     '--cert-oidc-issuer', 'https://token.actions.githubusercontent.com', '--source-digest', sha, '--source-ref', 'refs/heads/main', '--signer-digest', sha,
     '--deny-self-hosted-runners'], { stdio: 'inherit' });

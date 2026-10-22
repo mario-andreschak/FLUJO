@@ -67,7 +67,8 @@ export function verifyInstallerAttestations({ run, ...options }) {
   const evidence = validateInstallerEvidence(options);
   for (const file of [INSTALLER_FILE, INSTALLER_EVIDENCE_FILE]) {
     run('gh', ['attestation', 'verify', path.join(options.directory, file), '--repo', REPOSITORY,
-      '--predicate-type', 'https://slsa.dev/provenance/v1', '--signer-workflow', WORKFLOW,
+      '--predicate-type', 'https://slsa.dev/provenance/v1',
+      // Exact SAN pins the workflow and tag; gh forbids combining identity selectors.
       '--cert-identity', `https://github.com/${WORKFLOW}@refs/tags/v${options.version}`,
       '--cert-oidc-issuer', 'https://token.actions.githubusercontent.com',
       '--source-digest', options.revision, '--source-ref', `refs/tags/v${options.version}`,
