@@ -3,7 +3,8 @@
     FLUJO installer / updater for Windows.
 
 .DESCRIPTION
-    Installs the prerequisites (Git, Node.js + npm, Python, uv, ripgrep) via winget,
+    Installs Git, Python, uv and ripgrep via winget, and missing Node.js + npm
+    from a checksum-pinned official archive in the user's FLUJO-cli directory,
     refreshes the environment (PATH + vars) for the current session so the new
     tools are usable immediately, clones (or updates) FLUJO, builds it, registers
     a global 'flujo' command (start FLUJO from any folder), and optionally starts
@@ -345,6 +346,54 @@ function Install-Prereq {
         -DisplayName $DisplayName -Preexisting $preexisting
 }
 
+# WinGet can lag behind security releases. A missing Node runtime must be
+# bootstrapped from the same signed official release qualified by CI.
+# This private runtime is removed with FLUJO-cli by the existing uninstaller.
+function Get-ManagedNodeSpec {
+    param([string]$Architecture = $(if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }))
+    $arch = switch ($Architecture.ToUpperInvariant()) {
+        'AMD64' { 'x64' }
+        'ARM64' { 'arm64' }
+        default { throw "FLUJO requires 64-bit Windows; unsupported architecture: $Architecture" }
+    }
+    $hashes = @{
+        x64 = 'cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20'
+        arm64 = 'a8b8cd79cbbb3062435f449591d98dd63730bbbf30ce2d7cc3a6376c236cb111'
+    }
+    $folder = "node-v22.23.4-win-$arch"
+    return [PSCustomObject]@{ Folder = $folder; Sha256 = $hashes[$arch]; Url = "https://nodejs.org/dist/v22.23.4/$folder.zip" }
+}
+
+function Install-ManagedNode {
+    param([Parameter(Mandatory)] [string]$RuntimeRoot)
+    $spec = Get-ManagedNodeSpec
+    $destination = Join-Path $RuntimeRoot $spec.Folder
+    if (Test-Path -LiteralPath $destination) { throw "Incomplete managed Node runtime exists at $destination. Move it aside and retry setup." }
+    New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+    $staging = Join-Path $RuntimeRoot ([Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $staging | Out-Null
+    $archive = Join-Path $staging 'node.zip'
+    try {
+        Write-Step 'Downloading verified Node.js 22.23.4 (includes npm)'
+        $download = @{ Uri = $spec.Url; OutFile = $archive; UseBasicParsing = $true }
+        if ($installerEnvironment['HTTPS_PROXY']) { $download.Proxy = $installerEnvironment['HTTPS_PROXY'] }
+        Invoke-WebRequest @download
+        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $spec.Sha256) {
+            throw 'Official Node.js archive checksum mismatch. No downloaded code was executed.'
+        }
+        Expand-Archive -LiteralPath $archive -DestinationPath $staging
+        $extracted = Join-Path $staging $spec.Folder
+        if (-not (Test-Path -LiteralPath (Join-Path $extracted 'node.exe')) -or -not (Test-Path -LiteralPath (Join-Path $extracted 'npm.cmd'))) {
+            throw 'Official Node.js archive did not contain the expected runtime and npm.'
+        }
+        Move-Item -LiteralPath $extracted -Destination $destination
+    } finally {
+        # The random directory was created above beneath this task-owned root.
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    }
+    return $destination
+}
+
 # Install the Claude Code CLI (provides the `claude` command) via npm. This is
 # only needed for the "Claude Subscription" model provider, which drives a Claude
 # Pro/Max subscription through the Claude Agent SDK and authenticates with the
@@ -416,7 +465,7 @@ function Register-FlujoCommand {
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
     $launcher = Join-Path $binDir 'flujo.cmd'
-    $cmd = Get-LauncherContent -AppDir $AppDir
+    $cmd = Get-LauncherContent -AppDir $AppDir -NodeDirectory $script:ManagedNodeDirectory
     # OEM encoding matches the codepage cmd.exe reads .cmd files in (handles
     # non-ASCII characters in the install path correctly).
     Set-Content -LiteralPath $launcher -Value $cmd -Encoding Oem
@@ -658,6 +707,13 @@ Write-InstallerStage -Name 'prerequisites'
 # A second setup launched by the same desktop/parent inherits its old PATH even
 # though the first setup installed tools. Refresh before deciding what is missing.
 Update-SessionEnvironment
+$script:ManagedNodeDirectory = ''
+$managedNodeRoot = Join-Path $env:LOCALAPPDATA 'FLUJO-cli\runtime'
+$managedNodeCandidate = Join-Path $managedNodeRoot (Get-ManagedNodeSpec).Folder
+if (Test-Path -LiteralPath (Join-Path $managedNodeCandidate 'node.exe')) {
+    $script:ManagedNodeDirectory = $managedNodeCandidate
+    $env:Path = "$managedNodeCandidate;$env:Path"
+}
 Write-Step "Validating Node.js version (requires 22.23.4+ within 22.x, or 24.22.1+ within 24.x)"
 $nodeResult = Test-FlujoNodeVersion
 switch ($nodeResult.Status) {
@@ -665,7 +721,8 @@ switch ($nodeResult.Status) {
         Write-Ok "Node.js $($nodeResult.Version) meets minimum requirement (22.23.4+ within 22.x, or 24.22.1+ within 24.x)"
     }
     'Missing' {
-        Write-Warn2 "Node.js not found; will install via winget."
+        $script:ManagedNodeDirectory = Install-ManagedNode -RuntimeRoot $managedNodeRoot
+        $env:Path = "$script:ManagedNodeDirectory;$env:Path"
     }
     'Outdated' {
         throw "Node.js $($nodeResult.Version) is outside FLUJO's supported range. Install a current patched Node.js 22.x (at least 22.23.4) or 24.x (at least 24.22.1), activate it on PATH, then re-run. The installer will not switch an existing Node installation automatically."
@@ -694,7 +751,9 @@ $policyChanged = Set-PersistentExecutionPolicy
 # that is folded into the uninstall manifest below.
 $prereqResults = @(
     Install-Prereq -CommandName 'git'    -WingetId 'Git.Git'            -DisplayName 'Git'
-    Install-Prereq -CommandName 'node'   -WingetId 'OpenJS.NodeJS.LTS'      -DisplayName 'Node.js (includes npm)'
+    if (-not $script:ManagedNodeDirectory) {
+        Install-Prereq -CommandName 'node' -WingetId 'OpenJS.NodeJS.LTS' -DisplayName 'Node.js (includes npm)'
+    }
     Install-Prereq -CommandName 'python' -WingetId 'Python.Python.3.12' -DisplayName 'Python 3.12'
     Install-Prereq -CommandName 'uv'     -WingetId 'astral-sh.uv'       -DisplayName 'uv'
     Install-Prereq -CommandName 'rg'     -WingetId 'BurntSushi.ripgrep.MSVC' -DisplayName 'ripgrep'

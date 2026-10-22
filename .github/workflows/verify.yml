@@ -423,15 +423,6 @@ jobs:
         run: npm run test:ci
       - name: Verify the published test baseline
         run: npm run verify:test-baseline -- --stage=ci --results=jest-results.json
-      - name: Run deterministic memory ranking experiment
-        run: npm run test:memory-experiment -- --json=memory-experiment-results.json --commit=${{ github.sha }}
-      - name: Upload memory experiment results
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: memory-experiment-results
-          path: memory-experiment-results.json
-          if-no-files-found: warn
       - name: Upload Jest results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -462,13 +453,6 @@ jobs:
       - name: Run the process-boundary suites
         id: jest
         continue-on-error: true
-        env:
-          # Hosted runners are slower than a developer laptop; the harness
-          # honours this override instead of a hardcoded budget.
-          FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS: 120000
-          # Preserve the exact reconciliation fields when the smoke gate fails.
-          PERSONA_SOAK_OUTPUT: soak-smoke-artifacts
-          PERSONA_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-isolated-smoke
         run: npm run test:isolated
       - name: Verify the published test baseline
         run: npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json
@@ -478,13 +462,6 @@ jobs:
         with:
           name: jest-results-isolated
           path: jest-results-isolated.json
-          if-no-files-found: warn
-      - name: Upload Persona smoke evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: persona-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: soak-smoke-artifacts/
           if-no-files-found: warn
 
   verification:

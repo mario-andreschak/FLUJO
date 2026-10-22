@@ -34,7 +34,7 @@
         "win32": "dccc52de28d8df2ee22d2062424f8c563070d95d8ad70c54c4bf01d590dec14f"
       },
       "evidence": "docs/audits/evidence/node-security-2026-10-21/verified-node-binary-receipt.json",
-      "evidenceSha256": "94aee736eb92a830ee30bd2f20b27fcc656f9479dd29cab94b7e94fb02961f36"
+      "evidenceSha256": "c6e9fc89ce1094870fe91007e19d21547fdc0e3e3700a0f1e9929ea8d50e48bb"
     },
     "24.22.1": {
       "uv": "1.52.1",
@@ -49,7 +49,7 @@
         "win32": "d702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5"
       },
       "evidence": "docs/audits/evidence/node-security-2026-10-21/verified-node-binary-receipt.json",
-      "evidenceSha256": "94aee736eb92a830ee30bd2f20b27fcc656f9479dd29cab94b7e94fb02961f36"
+      "evidenceSha256": "c6e9fc89ce1094870fe91007e19d21547fdc0e3e3700a0f1e9929ea8d50e48bb"
     }
   },
   "containerBase": {

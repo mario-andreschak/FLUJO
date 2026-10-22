@@ -11,7 +11,7 @@
 [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Watch the walkthrough →**](https://flujo.com.co/film/) · [**Website →**](https://flujo.com.co/) · [**Online demo →**](https://try.flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.46.3-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.47.0-green.svg)](package.json)
 
 </div>
 

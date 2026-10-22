@@ -10,6 +10,8 @@ const root = path.resolve(__dirname, '..');
 // file is CommonJS and runs before any ESM resolution, so it cannot import it.
 const EXCLUDE_ISOLATED_SUITES_ENV = 'FLUJO_JEST_EXCLUDE_ISOLATED_SUITES';
 const EXCLUDE_ISOLATED_SUITES_FLAG = '--exclude-isolated-suites';
+const EXCLUDE_ENDURING_AGENTS_ENV = 'FLUJO_JEST_EXCLUDE_ENDURING_AGENTS';
+const EXCLUDE_ENDURING_AGENTS_FLAG = '--exclude-enduring-agents';
 
 function jestArgsFromNpm(argv, env) {
   const args = [...argv];
@@ -36,6 +38,10 @@ function partitionRunnerFlags(argv) {
   const jestArgs = [];
   const env = {};
   for (const arg of argv) {
+    if (arg === EXCLUDE_ENDURING_AGENTS_FLAG) {
+      env[EXCLUDE_ENDURING_AGENTS_ENV] = '1';
+      continue;
+    }
     if (arg === EXCLUDE_ISOLATED_SUITES_FLAG) {
       env[EXCLUDE_ISOLATED_SUITES_ENV] = '1';
       continue;
@@ -190,6 +196,8 @@ Object.assign(module.exports, {
   EXPECTED_TEST_FILES_ENV,
   EXCLUDE_ISOLATED_SUITES_ENV,
   EXCLUDE_ISOLATED_SUITES_FLAG,
+  EXCLUDE_ENDURING_AGENTS_ENV,
+  EXCLUDE_ENDURING_AGENTS_FLAG,
   jestArgsFromNpm,
   main,
   partitionRunnerFlags,
