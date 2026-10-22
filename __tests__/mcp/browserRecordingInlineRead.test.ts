@@ -91,7 +91,10 @@ it.each([['webm', 'video/webm'], ['MP4', 'video/mp4'], ['mov', 'video/quicktime'
       type: 'resource', resource: { uri: pathToFileURL(outputPath).href, mimeType, blob: Buffer.from('WEBM').toString('base64') },
     });
     expect(mockStopRecording).toHaveBeenCalledWith({ recordingId: 'inline-recording', sessionId: undefined, outputPath }, owner);
-    expect(pathnameReads).not.toHaveBeenCalled();
+    // Workspace admission reads its coordination lock independently of video
+    // transport. The recording itself must only use the bounded descriptor.
+    const recordingPaths = new Set([outputPath, pathToFileURL(outputPath).href]);
+    expect(pathnameReads.mock.calls.filter(([filename]) => recordingPaths.has(String(filename)))).toHaveLength(0);
     await observed.expectBounded(5);
     observed.expectClosed();
   },
