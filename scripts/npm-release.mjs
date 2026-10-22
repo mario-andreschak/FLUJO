@@ -16,10 +16,19 @@ const PUBLISHED_INTEGRITY_DELAY_MS = 10_000;
 const PUBLISHED_INTEGRITY_TIMEOUT_MS = 15 * 60_000;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
-const exec = (command, args, options = {}) => {
-  const output = execFileSync(command, args, { encoding: 'utf8', windowsHide: true, timeout: 60_000, ...options });
-  return typeof output === 'string' ? output.trim() : '';
+export const runReleaseCommand = (command, args, options = {}) => {
+  try {
+    // npm pack inventories and CycloneDX SBOMs exceed Node's default 1 MiB.
+    const output = execFileSync(command, args, { encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 64 * 1024 * 1024, ...options });
+    return typeof output === 'string' ? output.trim() : '';
+  } catch (error) {
+    // Keep stdout/stderr/status for registry E404 handling; prefix the phase
+    // so metadata failures such as ENOBUFS identify the affected operation.
+    error.message = `Release command ${path.basename(command)} ${args[0] ?? ''} failed: ${error.message}`;
+    throw error;
+  }
 };
+const exec = runReleaseCommand;
 
 export function assertReleaseContext({ env, run, version }) {
   if (env.GITHUB_REPOSITORY !== REPOSITORY || env.GITHUB_REF !== 'refs/heads/main'

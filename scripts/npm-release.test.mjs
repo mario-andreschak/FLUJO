@@ -15,6 +15,7 @@ import {
   prepareCandidate,
   publishCandidate,
   readPublishedIntegrity,
+  runReleaseCommand,
   validateCandidate,
 } from './npm-release.mjs';
 
@@ -54,6 +55,17 @@ function fixture(t) {
 
 const missingPackage = () => Object.assign(new Error('package version does not exist'), {
   stdout: JSON.stringify({ error: { code: 'E404', summary: 'No matching version found' } }),
+});
+
+test('the real release command boundary retains large JSON inventories and native failure details', () => {
+  const output = runReleaseCommand(process.execPath, ['-e', 'process.stdout.write(JSON.stringify({inventory:"x".repeat(2*1024*1024)}))']);
+  assert.equal(JSON.parse(output).inventory.length, 2 * 1024 * 1024);
+  assert.throws(() => runReleaseCommand(process.execPath, ['-e', 'process.stdout.write(JSON.stringify({error:{code:"E404"}}));process.exit(9)']), error => {
+    assert.match(error.message, /Release command .* -e failed/);
+    assert.equal(error.status, 9);
+    assert.equal(JSON.parse(error.stdout).error.code, 'E404');
+    return true;
+  });
 });
 
 test('the release includes all four standalone MCP packages followed by the app', () => {
