@@ -54,6 +54,27 @@ function renderWizard(overrides?: Partial<React.ComponentProps<typeof ModelConne
 }
 
 describe('ModelConnectionWizard', () => {
+  it('uses bundled Codex and discovers a real model count before creation', async () => {
+    const command = "& 'C:\\Program Files\\FLUJO\\codex.exe' login";
+    (global.fetch as jest.Mock).mockImplementation((url: string) => Promise.resolve({ ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), json: async () =>
+      url.includes('/api/setup/ai-cli') ? { platform: 'win32', installMode: 'npm', oneClickInstall: true, codex: { bundled: true, loginCommand: command } }
+        : { models: [{ id: 'gpt-6-luna', name: 'gpt-6-luna', contextWindow: 280000 }], success: true } }));
+    const { onCreateModels } = renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'ChatGPT / Codex' }).closest('button')!);
+    expect(await screen.findByText(command)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Install with WinGet' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Create my 0 models/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /completed the Codex browser sign-in/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Find my Codex models/i }));
+    expect(await screen.findByText('gpt-6-luna')).toBeInTheDocument();
+    expect(onCreateModels).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Create my model/i }));
+    await waitFor(() => expect(onCreateModels).toHaveBeenCalledTimes(1));
+    expect((onCreateModels as jest.Mock).mock.calls[0][0]).toEqual([expect.objectContaining({ name: 'gpt-6-luna', adapter: 'codex-cli', ApiKey: '' })]);
+  });
+
   it('retries a failed connection save without downloading the completed Ollama model again', async () => {
     const fetchMock = global.fetch as jest.Mock;
     fetchMock.mockImplementation((url: string) => Promise.resolve(url === '/api/local-models/pull'

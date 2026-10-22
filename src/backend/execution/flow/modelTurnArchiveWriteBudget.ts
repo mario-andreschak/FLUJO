@@ -59,10 +59,14 @@ export const MODEL_TURN_ARCHIVE_WRITE_LIMITS = Object.freeze({
 
 export class ModelTurnArchiveMemoryError extends Error {
   readonly status: 413 | 429;
-  constructor(readonly code: 'MODEL_TURN_ARCHIVE_MEMORY_LIMIT' | 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' | 'MODEL_TURN_ARCHIVE_WRITE_CLEANUP', cause?: unknown) {
+  constructor(readonly code: 'MODEL_TURN_ARCHIVE_MEMORY_LIMIT' | 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' | 'MODEL_TURN_ARCHIVE_WRITE_CLEANUP', cause?: unknown,
+    readonly diagnostic?: { reason: string; estimatedBytes?: number; limitBytes?: number }) {
     super(code === 'MODEL_TURN_ARCHIVE_MEMORY_BUSY'
       ? 'Model-turn archive allocation is busy; this dispatch boundary did not admit a provider request.'
-      : 'Model-turn archive allocation or cleanup is unavailable; canonical history was not discarded.', { cause });
+      : code === 'MODEL_TURN_ARCHIVE_WRITE_CLEANUP'
+        ? 'FLUJO could not close an archive file safely. Saved conversation history was not discarded.'
+        : `FLUJO could not archive this model turn${diagnostic ? ` (${diagnostic.reason}${diagnostic.estimatedBytes !== undefined && diagnostic.limitBytes !== undefined
+          ? `: estimated ${(diagnostic.estimatedBytes / 1048576).toFixed(1)} MiB, limit ${(diagnostic.limitBytes / 1048576).toFixed(1)} MiB` : ''})` : ''}. Saved conversation history was not discarded.`, { cause });
     this.name = 'ModelTurnArchiveMemoryError';
     this.status = code === 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' ? 429 : 413;
   }
@@ -75,28 +79,32 @@ const runtime = globalThis as typeof globalThis & {
 const ledger = runtime.__flujoArchiveWriteMemory ??= { bytes: 0, writers: 0, rejected: 0, quarantined: 0 };
 const scopes = runtime.__flujoArchiveWriteScope ??= new AsyncLocalStorage<WriteScope>();
 
-function refuse(code: ModelTurnArchiveMemoryError['code']): never {
+function refuse(code: ModelTurnArchiveMemoryError['code'], diagnostic?: ModelTurnArchiveMemoryError['diagnostic']): never {
   ledger.rejected = Math.min(Number.MAX_SAFE_INTEGER, ledger.rejected + 1);
-  throw new ModelTurnArchiveMemoryError(code);
+  throw new ModelTurnArchiveMemoryError(code, undefined, diagnostic);
 }
 
 /** Bounded descriptor walk: no stringify, getters, JSON hooks, or full clones. */
-export function estimateArchivePayload(value: unknown, archiveProjection = false, unowned?: (schema: object) => void): number {
+export function estimateArchivePayload(value: unknown, archiveProjection = false, unowned?: (schema: object) => void,
+  allocation: 'serialized' | 'clone' = 'serialized'): number {
   let bytes = 0;
   let inspected = 0;
   const seen = new WeakSet<object>();
   const add = (count: number) => {
     bytes += count;
     if (!Number.isSafeInteger(bytes) || bytes > MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) {
-      refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: 'archive payload', estimatedBytes: bytes, limitBytes: MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes });
     }
   };
   const visit = (item: unknown, depth: number, schemaData = false): void => {
     if (++inspected > MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues || depth > MODEL_TURN_ARCHIVE_WRITE_LIMITS.depth) {
-      refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: depth > MODEL_TURN_ARCHIVE_WRITE_LIMITS.depth ? 'archive nesting limit' : 'archive value count limit' });
     }
     if (typeof item === 'string') {
       add(item.length * 2 + 40); // Source UTF16 and both serialized quote pairs.
+      // structuredClone copies UTF-16; it does not also allocate escaped JSON,
+      // UTF-8 output and compression buffers. Those belong to the write scope.
+      if (allocation === 'clone') return;
       for (let index = 0; index < item.length; index++) {
         const code = item.charCodeAt(index);
         if (code === 34 || code === 92) add(6);
@@ -111,7 +119,7 @@ export function estimateArchivePayload(value: unknown, archiveProjection = false
       return;
     }
     if (!item || typeof item !== 'object') { add(32); return; }
-    if (types.isProxy(item)) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+    if (types.isProxy(item)) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: 'unsupported proxy in archive' });
     if (seen.has(item)) { add(32); return; }
     seen.add(item);
     add(128);
@@ -126,20 +134,20 @@ export function estimateArchivePayload(value: unknown, archiveProjection = false
     if (item instanceof ArrayBuffer) { add(item.byteLength); seen.delete(item); return; }
     // Map/Set and arbitrary private graphs are not an admitted archive format.
     if (!Array.isArray(item) && !isArchivePlainObject(item)) {
-      if (!archiveProjection) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      if (!archiveProjection) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: 'unsupported object in canonical archive' });
       seen.delete(item); return; // Sanitizer omits private graphs without traversal.
     }
     if (Array.isArray(item) && item.length > MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues) {
-      refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: 'archive array length limit' });
     }
     if (Array.isArray(item)) add(item.length * 8); // Holes still allocate clone slots.
     for (const key in item) {
-      if (++inspected > MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      if (++inspected > MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: 'archive value count limit' });
       const descriptor = Object.getOwnPropertyDescriptor(item, key);
       if (!descriptor) continue;
       const omitted = archiveProjection && !schemaData ? archiveOmission(key) : undefined;
       if (omitted !== undefined) { add(key.length * 2 + 128); continue; }
-      if (!('value' in descriptor)) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      if (!('value' in descriptor)) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: 'unsupported accessor in archive' });
       add(key.length * 2 + 32);
       visit(descriptor.value, depth + 1, schemaData);
     }
@@ -151,26 +159,41 @@ export function estimateArchivePayload(value: unknown, archiveProjection = false
 
 export interface ArchiveMemoryReservation {
   grow(bytes: number): void;
+  shrink(bytes: number): void;
   release(): void;
 }
 
 export function reserveArchiveSnapshot(payload: unknown): ArchiveMemoryReservation {
-  return reserve(estimateArchivePayload(payload) * 2, MODEL_TURN_ARCHIVE_WRITE_LIMITS.snapshotBytes, false);
+  return reserve(estimateArchiveSnapshotBytes(payload), MODEL_TURN_ARCHIVE_WRITE_LIMITS.snapshotBytes, false);
+}
+
+/** Covers the retained canonical clone and its per-dispatch copy. */
+export function estimateArchiveSnapshotBytes(payload: unknown): number {
+  return estimateArchivePayload(payload, false, undefined, 'clone') * 2;
 }
 
 function reserve(bytes: number, limit: number, writer: boolean): ArchiveMemoryReservation {
   let held = 0;
   let released = false;
   const grow = (extra: number) => {
-    if (released || !Number.isSafeInteger(extra) || extra < 0 || held + extra > limit) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
-    if (ledger.bytes + extra > MODEL_TURN_ARCHIVE_WRITE_LIMITS.processBytes) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
+    if (released || !Number.isSafeInteger(extra) || extra < 0) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: 'invalid archive reservation' });
+    if (held + extra > limit) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', {
+      reason: writer ? 'archive write reservation' : 'canonical snapshot reservation', estimatedBytes: held + extra, limitBytes: limit,
+    });
+    if (ledger.bytes + extra > MODEL_TURN_ARCHIVE_WRITE_LIMITS.processBytes) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY', {
+      reason: 'process archive reservation', estimatedBytes: ledger.bytes + extra, limitBytes: MODEL_TURN_ARCHIVE_WRITE_LIMITS.processBytes,
+    });
     ledger.bytes += extra;
     held += extra;
   };
   if (writer && ledger.writers >= MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
   grow(bytes);
   if (writer) ledger.writers++;
-  return { grow, release: () => {
+  return { grow, shrink: bytes => {
+    if (released || !Number.isSafeInteger(bytes) || bytes < 0 || bytes > held) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+    held -= bytes;
+    ledger.bytes -= bytes;
+  }, release: () => {
     if (released) return;
     released = true;
     ledger.bytes -= held;
@@ -349,7 +372,7 @@ export async function settleArchiveWrites<T>(tasks: Array<Promise<T>>): Promise<
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) {
     const memoryFailure = failures.find(error => error instanceof ModelTurnArchiveMemoryError);
-    if (memoryFailure) throw new ModelTurnArchiveMemoryError(memoryFailure.code, new AggregateError(failures));
+    if (memoryFailure) throw new ModelTurnArchiveMemoryError(memoryFailure.code, new AggregateError(failures), memoryFailure.diagnostic);
     throw new AggregateError(failures, 'Archive sibling writes failed');
   }
   return settled.map(result => (result as PromiseFulfilledResult<T>).value);

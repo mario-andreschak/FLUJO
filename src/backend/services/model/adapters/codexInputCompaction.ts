@@ -33,6 +33,20 @@ function codePoints(value: string): number {
   return count;
 }
 
+export class CodexInputLimitError extends Error {
+  readonly code = 'context_budget_exceeded';
+  constructor(readonly inputCharacters: number) {
+    super(`The next Codex request contains ${inputCharacters.toLocaleString('en-US')} characters after session selection, exceeding FLUJO's ${CODEX_EXEC_TARGET_INPUT_CHARS.toLocaleString('en-US')}-character transport budget. The full conversation is saved. Shorten this request or use a new chat with the relevant context; selecting a larger model window does not change this transport limit.`);
+    this.name = 'CodexInputLimitError';
+  }
+}
+
+/** Check the actual new turn, after a compatible resume/fork has selected its delta. */
+export function assertCodexTransportInput(parts: readonly string[]): void {
+  const characters = parts.reduce((sum, part) => sum + codePoints(part), 0) + parts.length;
+  if (characters > CODEX_EXEC_TARGET_INPUT_CHARS) throw new CodexInputLimitError(characters);
+}
+
 /** Estimate the exact text contribution passed to Codex SDK run/runStreamed. */
 export function estimateCodexInputCharacters(
   messages: readonly OpenAI.ChatCompletionMessageParam[],

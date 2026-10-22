@@ -516,8 +516,21 @@ export function fromResponse(
     || response.status === 'queued' || response.status === 'in_progress') {
     // HTTP 200 and streamed partial output do not confirm a usable reply. Keep
     // both completion paths from exposing tool calls or advancing checkpoints.
-    throw new Error('The AI provider did not complete the reply'
-      + (response.error?.message ? `: ${response.error.message}` : ` (${response.status})`));
+    // This can be an HTTP 200 with a failed response envelope. Preserve the
+    // upstream code and bounded metadata through ModelHandler's API-error path;
+    // do not invent an HTTP status or retain partial output/tool arguments.
+    throw new OpenAI.APIError(undefined, {
+      ...response.error,
+      message: 'The AI provider did not complete the reply'
+        + (response.error?.message ? `: ${response.error.message}` : ` (${response.status})`),
+      code: response.error?.code || 'provider_response_not_completed',
+      type: 'provider_response_error',
+      responseStatus: response.status,
+      responseId: response.id,
+      model: response.model || modelName,
+      incompleteReason: response.incomplete_details?.reason,
+    }, 'The AI provider did not complete the reply'
+      + (response.error?.message ? `: ${response.error.message}` : ` (${response.status})`), undefined);
   }
   const textParts: string[] = [];
   const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
@@ -794,10 +807,15 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
         () => observeSdkRequest(
           { onSdkRequest, onSdkRequestResult, signal },
           { adapter: 'openai-responses', operation: 'responses.create', request: body },
-          () => openai.responses.create(
+          async () => {
+            const response = await openai.responses.create(
               body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
               readOnlyAssessment ? { signal, maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
-            ),
+            );
+            // Failed envelopes must also close the dispatch archive as errors.
+            fromResponse(response, model.name);
+            return response;
+          },
         ),
         { signal, onAttempt: onProviderAttempt, ...(readOnlyAssessment ? { maxAttempts: 1 } : {}) },
       ) as Promise<OpenAI.Responses.Response>;
@@ -904,10 +922,27 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       const stream = await observeSdkRequest(
         { onSdkRequest, onSdkRequestResult, signal },
         { adapter: 'openai-responses', operation: 'responses.create(stream)', request: body },
-        () => openai.responses.create(
-          body as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
-          signal ? { signal } : undefined,
-        ),
+        async () => {
+          const stream = await openai.responses.create(
+            body as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
+            signal ? { signal } : undefined,
+          );
+          return (async function* () {
+            let terminal = false;
+            for await (const event of stream) {
+              if (event.type === 'response.completed' || event.type === 'response.failed'
+                || event.type === 'response.incomplete') {
+                terminal = true;
+                fromResponse(event.response, model.name);
+              }
+              yield event;
+            }
+            if (!terminal) throw new OpenAI.APIError(undefined, {
+              code: 'provider_stream_incomplete', type: 'provider_response_error',
+              message: 'OpenAI Responses stream ended without a terminal response',
+            }, undefined, undefined);
+          })();
+        },
       );
       let response: OpenAI.Responses.Response | undefined;
       const toolIndexes = new Map<string, number>();
@@ -954,7 +989,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
           response = event.response;
         }
       }
-      if (!response) throw new Error('OpenAI Responses stream ended without a terminal response');
+      if (!response) throw new OpenAI.APIError(undefined, {
+        code: 'provider_stream_incomplete', type: 'provider_response_error', message: 'OpenAI Responses stream ended without a terminal response',
+      }, 'OpenAI Responses stream ended without a terminal response', undefined);
       streamedMedia = audioChunks.length > 0
         ? [{
             type: 'audio',
