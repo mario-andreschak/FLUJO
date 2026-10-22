@@ -136,7 +136,7 @@
     "slate": "^0.146.0",
     "slate-dom": "^0.146.0",
     "slate-history": "^0.144.0",
-    "slate-react": "^0.145.1",
+    "slate-react": "^0.146.1",
     "smol-toml": "1.9.1",
     "undici": "^8.12.2",
     "uuid": "^14.0.3",
