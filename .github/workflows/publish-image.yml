@@ -107,11 +107,13 @@ jobs:
           echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
           mkdir -p "$IMAGE_EVIDENCE_DIR"
       - name: Inventory OS and installed packages from the tested image
+        id: sbom
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: docker:${{ steps.smoke.outputs.image_id }}
           syft-version: v1.54.0
-          format: cyclonedx-json
+          # Match the publisher's supported schema instead of Syft's moving default.
+          format: cyclonedx-json@1.6
           output-file: ${{ env.IMAGE_EVIDENCE_DIR }}/image.sbom.cdx.json
           upload-artifact: false
           upload-release-assets: false
@@ -127,6 +129,14 @@ jobs:
         with:
           name: image-evidence-${{ github.sha }}
           path: ${{ env.IMAGE_EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain inventory when publication fails
+        if: failure() && steps.sbom.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: image-inventory-failure-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.IMAGE_EVIDENCE_DIR }}/image.sbom.cdx.json
           if-no-files-found: error
           retention-days: 30
 
