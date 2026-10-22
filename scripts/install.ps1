@@ -658,17 +658,17 @@ Write-InstallerStage -Name 'prerequisites'
 # A second setup launched by the same desktop/parent inherits its old PATH even
 # though the first setup installed tools. Refresh before deciding what is missing.
 Update-SessionEnvironment
-Write-Step "Validating Node.js version (requires 22.19+ within 22.x, or 24.2+ within 24.x)"
+Write-Step "Validating Node.js version (requires 22.23.4+ within 22.x, or 24.22.1+ within 24.x)"
 $nodeResult = Test-FlujoNodeVersion
 switch ($nodeResult.Status) {
     'Supported' {
-        Write-Ok "Node.js $($nodeResult.Version) meets minimum requirement (22.19+ within 22.x, or 24.2+ within 24.x)"
+        Write-Ok "Node.js $($nodeResult.Version) meets minimum requirement (22.23.4+ within 22.x, or 24.22.1+ within 24.x)"
     }
     'Missing' {
         Write-Warn2 "Node.js not found; will install via winget."
     }
     'Outdated' {
-        throw "Node.js $($nodeResult.Version) is outside FLUJO's supported range. Install a current patched Node.js 22.x (at least 22.19) or 24.x (at least 24.2), activate it on PATH, then re-run. The installer will not switch an existing Node installation automatically."
+        throw "Node.js $($nodeResult.Version) is outside FLUJO's supported range. Install a current patched Node.js 22.x (at least 22.23.4) or 24.x (at least 24.22.1), activate it on PATH, then re-run. The installer will not switch an existing Node installation automatically."
     }
     'Malformed' {
         throw "Node.js version probe returned malformed output: $($nodeResult.Message). The 'node' command exists but produced unexpected output. Uninstall or fix the existing Node installation and re-run."
@@ -704,9 +704,9 @@ $prereqResults = @(
 Write-Step "Re-validating Node.js version after prerequisite installation"
 $nodeResult = Test-FlujoNodeVersion
 if ($nodeResult.Status -ne 'Supported') {
-    throw "Node.js validation failed after installation: $($nodeResult.Message). The installed Node.js ($($nodeResult.Version)) does not meet the minimum requirement (22.19+ within 22.x, or 24.2+ within 24.x). This may indicate a stale PATH; try reopening your terminal and re-running the installer."
+    throw "Node.js validation failed after installation: $($nodeResult.Message). The installed Node.js ($($nodeResult.Version)) does not meet the minimum requirement (22.23.4+ within 22.x, or 24.22.1+ within 24.x). This may indicate a stale PATH; try reopening your terminal and re-running the installer."
 }
-Write-Ok "Node.js $($nodeResult.Version) validated successfully (22.19+ within 22.x, or 24.2+ within 24.x)"
+Write-Ok "Node.js $($nodeResult.Version) validated successfully (22.23.4+ within 22.x, or 24.22.1+ within 24.x)"
 
 Update-SessionEnvironment
 

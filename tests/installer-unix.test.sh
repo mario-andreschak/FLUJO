@@ -75,11 +75,16 @@ EOF
 echo "Running Unix installer Node.js version validation tests..."
 echo
 
+run_test "Retired Node 22 minimum" "fail" "22.19.0" 0
+run_test "Node 22 before security patch" "fail" "22.23.3" 0
+run_test "Retired Node 24 minimum" "fail" "24.2.0" 0
+run_test "Node 24 before security patch" "fail" "24.22.0" 0
+
 # Supported versions
-run_test "Node 22.19.0 (with v prefix)" "pass" "v22.19.0" 0
-run_test "Node 22.19.0 (no prefix)" "pass" "22.19.0" 0
-run_test "Later Node 22" "pass" "22.20.0" 0
-run_test "Node 24.2.0" "pass" "24.2.0" 0
+run_test "Node 22.23.4 (with v prefix)" "pass" "v22.23.4" 0
+run_test "Node 22.23.4 (no prefix)" "pass" "22.23.4" 0
+run_test "Later Node 22" "pass" "22.24.0" 0
+run_test "Node 24.22.1" "pass" "24.22.1" 0
 run_test "Node 25" "fail" "25.0.0" 0
 run_test "Old Node 22 floor" "fail" "22.0.0" 0
 run_test "Previous Node 22 profile" "fail" "22.13.1" 0
@@ -87,8 +92,8 @@ run_test "Node 22 before fix" "fail" "22.16.0" 0
 run_test "Node 23" "fail" "23.11.0" 0
 run_test "Node 24 before fix" "fail" "24.0.0" 0
 run_test "Node 24 before fix (last minor)" "fail" "24.1.9" 0
-run_test "Leading zero major" "fail" "022.19.0" 0
-run_test "Node 24.5.1" "pass" "24.5.1" 0
+run_test "Leading zero major" "fail" "022.23.4" 0
+run_test "Node 24.23.0" "pass" "24.23.0" 0
 
 run_test "Former Node 22 minimum" "fail" "22.17.0" 0
 run_test "Node 22 below Undici minimum" "fail" "22.18.99" 0

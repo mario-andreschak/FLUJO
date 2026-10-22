@@ -24,7 +24,7 @@
     "test": "node --test"
   },
   "engines": {
-    "node": "^22.19.0 || ^24.2.0"
+    "node": "^22.23.4 || ^24.22.1"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

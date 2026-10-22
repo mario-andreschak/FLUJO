@@ -11,7 +11,7 @@
 # which is why HOME points at a writable, owned directory.
 
 # ---- Builder --------------------------------------------------------------
-FROM public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS builder
+FROM public.ecr.aws/docker/library/node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS builder
 WORKDIR /app
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
@@ -27,17 +27,17 @@ RUN npm ci --include=dev
 
 # Build the Next.js production output.
 COPY . .
-RUN node scripts/verify-ci-node.mjs 22.23.3 --binary-only
+RUN node scripts/verify-ci-node.mjs 22.23.4 --binary-only
 RUN node scripts/build-smoke-owner-issuer.mjs
 ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
 RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
-FROM public.ecr.aws/docker/library/node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
+FROM public.ecr.aws/docker/library/node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS runtime
 WORKDIR /app
 COPY --from=builder /app/bin ./bin
 COPY --from=builder /app/scripts/verify-ci-node.mjs /app/scripts/ci-node-binaries.json ./scripts/
-RUN node scripts/verify-ci-node.mjs 22.23.3 --binary-only
+RUN node scripts/verify-ci-node.mjs 22.23.4 --binary-only
 
 # CI supplies these from the checked-out source before building. Empty defaults
 # deliberately do not claim compatibility or a published revision for an
