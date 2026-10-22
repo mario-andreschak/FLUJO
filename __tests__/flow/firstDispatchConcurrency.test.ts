@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Flow } from '@/shared/types/flow';
 import type { SharedState } from '@/backend/execution/flow/types';
-import type { StorageKey } from '@/shared/types/storage';
+import { StorageKey } from '@/shared/types/storage';
 
 let mockBaseUrl = '';
 let mockArchivePeakBytes = 0;
@@ -31,7 +31,7 @@ jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: () => {}, ver
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
-import { loadItem, saveCollectionItem } from '@/utils/storage/backend';
+import { loadItem, saveItem, saveCollectionItem } from '@/utils/storage/backend';
 import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { ensureWorkspaceDirs, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import { withWorkspaceMutation, withWorkspaceRecoveryCapture } from '@/backend/services/workspace/workspaceMutationGate';
@@ -84,6 +84,8 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
   await runWithWorkspace(`dispatch-${protectedRun ? 'protected' : 'ordinary'}-${count}`, async () => {
     requests.clear();
     await ensureWorkspaceDirs();
+    await saveItem(StorageKey.MODELS, [{ id: 'dispatch-model', name: 'dispatch-fixture',
+      provider: 'openai', adapter: 'openai', ApiKey: '', baseUrl: mockBaseUrl }]);
     const flow: Flow = { id: 'dispatch-saved-flow', name: 'dispatch-fixture',
       nodes: [
         { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { label: 'start', type: 'start', properties: {} } },

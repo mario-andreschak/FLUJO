@@ -44,14 +44,18 @@ afterEach(async () => {
   }
   await fs.rm(root, { recursive: true, force: true });
 });
-test('fresh writes fail closed without a passphrase or independent operator secret, leaving no metadata', async () => {
-  const { secure } = await modules();
-  expect(await secure.initializeDefaultEncryption()).toBe(false);
-  await expect(secure.encryptWithPassword('private-token')).rejects.toBeInstanceOf(secure.EncryptionLockedError);
-  expect(await secure.isEncryptionInitialized()).toBe(false);
-  expect(await secure.isEncryptionLocked()).toBe(true);
+test('fresh local use needs no custom password and survives restart with default encryption', async () => {
+  let { secure } = await modules();
+  expect(await secure.getEncryptionStatus()).toEqual({ initialized: false, locked: false, protection: 'uninitialized' });
+  const ciphertext = (await secure.encryptWithPassword('local-token'))!;
+  expect(ciphertext).toMatch(/^v2:/);
+  expect(ciphertext).not.toContain('local-token');
+  restart(); ({ secure } = await modules());
+  expect(await secure.isEncryptionLocked()).toBe(false);
+  expect(await secure.decryptWithPassword(ciphertext)).toBe('local-token');
+  expect(await secure.isUserEncryptionEnabled()).toBe(false);
   expect(await secure.initializeEncryption('FLUJO~')).toBe(false);
-  expect(await secure.isEncryptionInitialized()).toBe(false);
+  expect(await secure.getEncryptionStatus()).toEqual({ initialized: true, locked: false, protection: 'legacy-default' });
 });
 test('fresh passphrase profile survives restart, rejects the public password and requires unlock', async () => {
   let { secure, storage, format } = await modules();
@@ -164,12 +168,13 @@ test('failed private metadata commit preserves the uninitialized state for a saf
   rename.mockRestore();
   expect(await secure.initializeDefaultEncryption()).toBe(true);
 });
-test('two fresh OS processes race initialization and a third independently recovers both ciphertexts', async () => {
-  process.env.FLUJO_ENCRYPTION_SECRET_FILE = secretFile;
+test.each(['default', 'operator-file'])('two fresh %s processes race initialization and a third recovers both ciphertexts', async protection => {
+  if (protection === 'operator-file') process.env.FLUJO_ENCRYPTION_SECRET_FILE = secretFile;
   const args = [path.join(__dirname, 'fixtures/private-profile-child.cjs'),
     path.resolve(__dirname, '../..'), require.resolve('typescript')];
   const env: NodeJS.ProcessEnv = { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
-    NODE_ENV: 'test', FLUJO_DATA_DIR: data, FLUJO_ENCRYPTION_SECRET_FILE: secretFile };
+    NODE_ENV: 'test', FLUJO_DATA_DIR: data,
+    ...(protection === 'operator-file' ? { FLUJO_ENCRYPTION_SECRET_FILE: secretFile } : {}) };
   const values = ['synthetic-first-private-token', 'synthetic-second-private-token'];
   const children = values.map(value => {
     const child = spawn(process.execPath, args, { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });

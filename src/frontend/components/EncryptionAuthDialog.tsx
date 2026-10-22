@@ -40,8 +40,6 @@ export default function EncryptionAuthDialog() {
   const verifyBusy = useRef(false);
   const [migrationPending, setMigrationPending] = useState(false);
   const [password, setPassword] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [isSetup, setIsSetup] = useState(false);
   const [operatorUnavailable, setOperatorUnavailable] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<TranslationKey | null>(null);
@@ -64,8 +62,8 @@ export default function EncryptionAuthDialog() {
         const status = await response.json();
         if (!current()) return;
         if (status.protection === 'migration-pending' && status.initialized === true && status.locked === true) {
-          setMigrationPending(true); setIsSetup(false); setOperatorUnavailable(false);
-          setPassword(''); setConfirmation(''); setError(null);
+          setMigrationPending(true); setOperatorUnavailable(false);
+          setPassword(''); setError(null);
           setIsAuthenticated(false); setIsOpen(true); setIsCheckingStatus(false); return;
         }
         if (typeof status.initialized !== 'boolean' || typeof status.locked !== 'boolean'
@@ -74,13 +72,13 @@ export default function EncryptionAuthDialog() {
         }
         setMigrationPending(false); setError(null);
         const initialized = status.initialized;
-        setIsSetup(!initialized && status.protection !== 'operator-file');
         setOperatorUnavailable(false);
         log.debug(`Encryption initialized: ${initialized}`);
         if (!initialized && status.protection !== 'operator-file') {
-          setIsSetup(true);
-          setIsAuthenticated(false);
-          setIsOpen(true);
+          // Password setup lives in Settings and never blocks first use.
+          if (status.locked) throw new Error('Encryption status unavailable');
+          setIsAuthenticated(true);
+          setIsOpen(false);
           setIsCheckingStatus(false);
           return;
         }
@@ -147,8 +145,6 @@ export default function EncryptionAuthDialog() {
       setError('encryption.unlock.required');
       return;
     }
-    if (isSetup && password.length < 12) { setError('settings.encryption.minLength'); return; }
-    if (isSetup && password !== confirmation) { setError('settings.encryption.mismatch'); return; }
     
     log.debug('Verifying encryption password');
     verifyBusy.current = true;
@@ -157,13 +153,6 @@ export default function EncryptionAuthDialog() {
     setError(null);
     
     try {
-      if (isSetup) {
-        const response = await fetch(withWorkspaceUrl('/api/encryption/secure', workspace), { method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'initialize', password }) });
-        if (!response.ok || (await response.json()).success !== true) throw new Error('Private encryption setup failed');
-        setIsSetup(false);
-      }
       const isValid = await verifyKey(password);
       if (!mounted.current || generation !== statusGeneration.current) return;
       log.debug(`Password verification result: ${isValid}`);
@@ -189,7 +178,6 @@ export default function EncryptionAuthDialog() {
       setError('encryption.unlock.error');
     } finally {
       setPassword('');
-      setConfirmation('');
       verifyBusy.current = false;
       setIsLoading(false);
     }
@@ -216,7 +204,7 @@ export default function EncryptionAuthDialog() {
       <DialogTitle component="div">
         <Box sx={{ display: "flex", alignItems: "center" }}>
           <LockOutlined sx={{ mr: 1 }} />
-          <Typography variant="h6">{t(isSetup ? 'settings.encryption.setTitle' : 'encryption.unlock.title')}</Typography>
+          <Typography variant="h6">{t('encryption.unlock.title')}</Typography>
         </Box>
       </DialogTitle>
       {migrationPending ? <DialogContent><CredentialMigrationRecovery workspace={workspace} onSettled={checkEncryptionStatus} /></DialogContent> : <>
@@ -229,14 +217,14 @@ export default function EncryptionAuthDialog() {
         
         {operatorUnavailable && <Alert severity="error">{t('encryption.operator.unavailable')}</Alert>}
         <Typography variant="body1" sx={{ marginBottom: '16px' }}>
-          {t(isSetup ? 'settings.encryption.newHelp' : 'encryption.unlock.description')}
+          {t('encryption.unlock.description')}
         </Typography>
         
         <TextField
           autoFocus
           disabled={operatorUnavailable}
           fullWidth
-          label={t(isSetup ? 'settings.encryption.newPassword' : 'encryption.unlock.password')}
+          label={t('encryption.unlock.password')}
           variant="outlined"
           type={showPassword ? 'text' : 'password'}
           value={password}
@@ -257,8 +245,6 @@ export default function EncryptionAuthDialog() {
           } }}
           sx={{ mt: 2 }}
         />
-        {isSetup && <TextField fullWidth type="password" label={t('settings.encryption.confirmPassword')}
-          value={confirmation} onChange={event => setConfirmation(event.target.value)} onKeyDown={handleKeyDown} sx={{ mt: 2 }} />}
       </DialogContent>
       <DialogActions>
         <Button
@@ -268,7 +254,7 @@ export default function EncryptionAuthDialog() {
           disabled={isLoading || operatorUnavailable}
           startIcon={isLoading ? <CircularProgress size={20} /> : null}
         >
-          {isLoading ? t('encryption.unlock.verifying') : t(isSetup ? 'settings.encryption.setAction' : 'encryption.unlock.action')}
+          {isLoading ? t('encryption.unlock.verifying') : t('encryption.unlock.action')}
         </Button>
       </DialogActions>
       </>}

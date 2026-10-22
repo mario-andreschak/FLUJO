@@ -31,7 +31,7 @@ it('shows tool failure independently of successful SDK and axios checks', () => 
   expect(screen.getByText('The model did not call the tool.')).toBeInTheDocument();
   expect(screen.getByText(/tool_test_call_failed/)).toBeInTheDocument();
   expect(screen.getByText('Endpoint: /responses')).toBeInTheDocument();
-  expect(screen.getByRole('alert')).toHaveClass('MuiAlert-standardWarning');
+  expect(screen.getByRole('alert')).toHaveClass('MuiAlert-colorWarning');
 });
 
 it('labels an unavailable tool test as skipped and explains why', () => {

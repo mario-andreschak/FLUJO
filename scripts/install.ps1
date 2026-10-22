@@ -115,6 +115,10 @@ function Stop-Installer {
         [int]$ExitCode = 1
     )
 
+    if ($script:InstallerErrorPath) {
+        $safeMessage = Protect-InstallerDiagnostic -Text $Message -SensitiveValues $script:InstallerSensitiveValues -MaximumLength 2400
+        Set-Content -LiteralPath $script:InstallerErrorPath -Value $safeMessage -Encoding UTF8
+    }
     Write-Host "`nERROR: $Message" -ForegroundColor Red
     if ($PSCommandPath) {
         exit $ExitCode
@@ -148,6 +152,7 @@ $script:InstallerStagePath = if ($env:FLUJO_INSTALL_STAGE_FILE) {
     Join-Path $installerDiagnosticRoot 'install-stage.txt'
 }
 $script:InstallerResultPath = Join-Path $installerDiagnosticRoot 'browser-install-result.json'
+$script:InstallerErrorPath = Join-Path $installerDiagnosticRoot 'install-error.txt'
 $script:InstallerSensitiveValues = @(
     $env:FLUJO_HTTP_PROXY,
     $env:FLUJO_HTTPS_PROXY,
@@ -162,6 +167,22 @@ $script:InstallerSensitiveValues = @(
     $env:npm_config_cafile
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 Set-Content -LiteralPath $script:InstallerLogPath -Value '' -Encoding UTF8
+Set-Content -LiteralPath $script:InstallerErrorPath -Value '' -Encoding UTF8
+
+# Include preflight/prerequisite exceptions in the same sanitized diagnostics as
+# native-command failures. Otherwise setup only sees an unexplained stage name.
+trap {
+    if ($script:InstallerLogPath -and (Get-Command Protect-InstallerDiagnostic -ErrorAction SilentlyContinue)) {
+        $safeError = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
+        Add-Content -LiteralPath $script:InstallerLogPath -Value $safeError -Encoding UTF8
+        $safeLocation = Protect-InstallerDiagnostic -Text ([string]$_.ScriptStackTrace) -SensitiveValues $script:InstallerSensitiveValues
+        Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLocation -Encoding UTF8
+        $failedStage = Get-Content -LiteralPath $script:InstallerStagePath -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($failedStage) { Write-InstallerStage -Name $failedStage -State failed -ExitCode 1 }
+        Stop-Installer -Message $safeError
+    }
+    break
+}
 
 function Write-InstallerStage {
     param(
@@ -201,13 +222,33 @@ function Invoke-InstallerCommand {
 
     $exitCode = 1
     $failure = $null
+    $recentOutput = New-Object 'System.Collections.Generic.Queue[string]'
+    $commandResult = @{ ExitCode = $null }
     try {
-        & $Command @Arguments 2>&1 | ForEach-Object {
+        # Resolve the native executable before relaxing stderr handling. This
+        # also selects npm.cmd instead of the execution-policy-dependent npm.ps1.
+        $application = Get-Command -Name $Command -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        & {
+            # Windows PowerShell 5.1 turns redirected native stderr (including
+            # Git's normal "Cloning into..." progress) into ErrorRecords.
+            # Only this child scope accepts that stream; logging errors still
+            # terminate, and the native exit code remains authoritative.
+            $ErrorActionPreference = 'Continue'
+            $PSNativeCommandUseErrorActionPreference = $false
+            $global:LASTEXITCODE = $null
+            & $application.Source @Arguments 2>&1
+            $commandResult.ExitCode = $global:LASTEXITCODE
+        } | ForEach-Object {
             $safeLine = Protect-InstallerDiagnostic -Text ([string]$_) -SensitiveValues $script:InstallerSensitiveValues
             Write-Host $safeLine
-            Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLine -Encoding UTF8
+            Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLine -Encoding UTF8 -ErrorAction Stop
+            if (-not [string]::IsNullOrWhiteSpace($safeLine)) {
+                $recentOutput.Enqueue($safeLine)
+                if ($recentOutput.Count -gt 8) { $null = $recentOutput.Dequeue() }
+            }
         }
-        $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+        if ($null -eq $commandResult.ExitCode) { throw "Could not obtain the exit code from $Command." }
+        $exitCode = [int]$commandResult.ExitCode
     } catch {
         $failure = $_
         $safeLine = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
@@ -230,7 +271,7 @@ function Invoke-InstallerCommand {
         $detail = if ($failure) {
             Protect-InstallerDiagnostic -Text $failure.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
         } else {
-            "exit code $exitCode"
+            "exit code $exitCode`n$($recentOutput -join "`n")"
         }
         Stop-Installer -Message "Installer stage '$Stage' failed ($detail). Sanitized log: $script:InstallerLogPath" -ExitCode $exitCode
     }
@@ -254,8 +295,6 @@ function Test-Command([string]$Name) {
 # this same session without reopening the terminal. winget writes the new PATH
 # entries to the registry during install; this re-reads them.
 function Update-SessionEnvironment {
-    $pathSep = [System.IO.Path]::PathSeparator   # ';' on Windows
-
     # Preserve PATH entries already added to the live process (e.g. by uv), so a
     # registry refresh does not drop them.
     $processPath = $env:Path
@@ -270,15 +309,10 @@ function Update-SessionEnvironment {
         }
     }
 
-    # PATH = Machine + User + existing process PATH, de-duplicated, order preserved.
+    # Keep explicitly selected tools first; append newly installed registry paths.
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $seen = @{}
-    $merged = foreach ($p in (@($machinePath, $userPath, $processPath) -join $pathSep).Split($pathSep)) {
-        $t = $p.Trim()
-        if ($t -and -not $seen.ContainsKey($t)) { $seen[$t] = $true; $t }
-    }
-    $env:Path = $merged -join $pathSep
+    $env:Path = Merge-InstallerPath -ProcessPath $processPath -MachinePath $machinePath -UserPath $userPath
 }
 
 # Install a package via winget only if the given command is missing.
@@ -295,14 +329,11 @@ function Install-Prereq {
         Write-Ok "$DisplayName already installed ($((Get-Command $CommandName).Source))"
     } else {
         Write-Step "Installing $DisplayName via winget ($WingetId)"
-        # Pipe to Out-Host so winget's stdout goes to the console and does NOT leak
-        # into this function's return value (which the caller captures as the
-        # prerequisite record for the uninstall manifest).
-        winget install --id $WingetId -e --source winget `
-            --accept-source-agreements --accept-package-agreements | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            throw "winget could not install $DisplayName ($WingetId); exit code $LASTEXITCODE. Resolve the winget error above, then re-run the installer."
-        }
+        # Use the same native exit-code and sanitized logging boundary as Git/npm.
+        Invoke-InstallerCommand -Stage 'prerequisites' -Command 'winget' -Arguments @(
+            'install', '--id', $WingetId, '-e', '--source', 'winget',
+            '--accept-source-agreements', '--accept-package-agreements', '--silent', '--disable-interactivity'
+        )
         Update-SessionEnvironment
         if (Test-Command $CommandName) {
             Write-Ok "$DisplayName installed."
@@ -478,6 +509,9 @@ function Get-FutureExecutionPolicy {
 }
 
 function Set-PersistentExecutionPolicy {
+    # Declining a persistent change needs no policy-module access. The wizard
+    # already starts this one process with Bypass, and native npm.cmd is used.
+    if ($env:FLUJO_SET_POLICY -in @('0', 'false', 'no')) { return $false }
     # Check the policy future terminals will inherit, NOT just the CurrentUser
     # scope: a machine can already allow scripts via LocalMachine (or a GPO) with
     # CurrentUser left Undefined, in which case there is nothing to do.
@@ -621,6 +655,9 @@ if ($env:FLUJO_OLLAMA -in @('1', 'true', 'yes')) {
 # 1. Validate Node.js version BEFORE any side effects (execution policy, etc.)
 # ---------------------------------------------------------------------------
 Write-InstallerStage -Name 'prerequisites'
+# A second setup launched by the same desktop/parent inherits its old PATH even
+# though the first setup installed tools. Refresh before deciding what is missing.
+Update-SessionEnvironment
 Write-Step "Validating Node.js version (requires 22.19+ within 22.x, or 24.2+ within 24.x)"
 $nodeResult = Test-FlujoNodeVersion
 switch ($nodeResult.Status) {

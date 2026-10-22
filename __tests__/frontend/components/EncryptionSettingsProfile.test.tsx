@@ -28,9 +28,9 @@ test('legacy metadata directs the owner to full migration and offers no metadata
   expect(screen.queryByLabelText('settings.encryption.newPassword')).not.toBeInTheDocument();
 });
 
-test('fresh private setup remains available without legacy migration', async () => {
+test('optional custom password setup remains available in Settings for a fresh unlocked workspace', async () => {
   global.fetch = jest.fn().mockResolvedValue({ ok: true,
-    json: async () => ({ initialized: false, locked: true, protection: 'uninitialized' }) });
+    json: async () => ({ initialized: false, locked: false, protection: 'uninitialized' }) });
   render(<EncryptionSettings />);
   expect(await screen.findByLabelText('settings.encryption.newPassword')).toBeInTheDocument();
   expect(screen.queryByText('settings.encryption.migrationRequired')).not.toBeInTheDocument();

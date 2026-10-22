@@ -71,6 +71,8 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/scheduler/staticRealBashFlow.test.ts',
   '__tests__/flow/original520OfflineWorkload.test.ts',
   '__tests__/flow/nativeOriginalHost.test.ts',
+  // Real 64-flow filesystem admission must not compete with unrelated Jest workers.
+  '__tests__/flow/firstDispatchConcurrency.test.ts',
   '__tests__/flow/archiveWriteQuarantineProcess.test.ts',
   '__tests__/model/claudeArchiveMemoryBoundary.test.ts',
   '__tests__/enduringAgents/personaProcessBoundary.test.ts',

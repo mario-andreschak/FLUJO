@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { resolveOwnerRequest } from '@/backend/services/security/ownerAccess';
 import { createOriginalOwnerAccount, enrollOriginalOwnerTask,
   listOriginalOwnerRecords, revokeOriginalOwnerRecord } from '@/backend/services/originalOwner/administration';
@@ -10,6 +11,8 @@ const response = (body: unknown, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store' },
 });
 async function admitted(request: Request, task: () => Promise<unknown>): Promise<Response> {
+  const locked = await assertUnlocked();
+  if (locked) return locked;
   const auth = resolveOwnerRequest(request, ['control:admin', 'secrets:read'], { requireBearer: true });
   if (!auth.ok) return auth.response;
   try {

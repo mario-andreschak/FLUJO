@@ -101,23 +101,28 @@ begin
   if not Exec('cmd.exe', '/c where winget >nul 2>nul', '', SW_HIDE,
               ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
   begin
-    MsgBox('winget (App Installer) was not found.' + #13#10#13#10 +
+    SuppressibleMsgBox('winget (App Installer) was not found.' + #13#10#13#10 +
            'FLUJO uses winget to install its prerequisites (Git, Node.js, Python, uv, ripgrep).' + #13#10 +
            'Install "App Installer" from the Microsoft Store, then run this setup again.',
-           mbCriticalError, MB_OK);
+           mbCriticalError, MB_OK, IDOK);
     Result := False;
   end;
 end;
 
-procedure CurStepChanged(CurStep: TSetupStep);
+function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
   LogPath: string;
   StagePath: string;
   StageName: AnsiString;
+  ErrorLines: TArrayOfString;
+  ErrorDetail: string;
+  ErrorIndex: Integer;
 begin
-  if CurStep <> ssPostInstall then
-    exit;
+  // A bootstrap failure is a setup preparation error. Returning it here gives
+  // the wizard a normal error page and a nonzero unattended exit, before any
+  // finish-page launch can run.
+  Result := '';
 
   // Hand the wizard's answers to install.ps1 via its unattended-install
   // environment variables (inherited by the Exec'd process below).
@@ -154,7 +159,10 @@ begin
   // FLUJO runs npm/npx (PowerShell shims) on every start and when building MCP
   // servers on demand, so persisting the execution policy is worthwhile here.
   // Same consent question install.ps1 would ask on a terminal.
-  if MsgBox('Windows blocks running PowerShell scripts by default, and FLUJO needs to run npm/npx (PowerShell shims) for this install and later when building MCP servers.' + #13#10#13#10 +
+  // Unattended installs never grant persistent policy consent implicitly.
+  if WizardSilent then
+    SetRequiredEnvironmentVariable('FLUJO_SET_POLICY', '0')
+  else if MsgBox('Windows blocks running PowerShell scripts by default, and FLUJO needs to run npm/npx (PowerShell shims) for this install and later when building MCP servers.' + #13#10#13#10 +
             'Set the execution policy to RemoteSigned for your user account? (recommended)',
             mbConfirmation, MB_YESNO) = IDYES then
     SetRequiredEnvironmentVariable('FLUJO_SET_POLICY', '1')
@@ -166,10 +174,17 @@ begin
   WizardForm.StatusLabel.Caption :=
     'Running the FLUJO installer - a console window shows its progress ...';
 
-  if not Exec('powershell.exe',
+  // A wizard started from PowerShell 7 inherits its incompatible module search
+  // path. Let Windows PowerShell construct its own defaults before loading the
+  // built-in Security module (Get/Set-ExecutionPolicy).
+  SetRequiredEnvironmentVariable('PSModulePath', '');
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
               '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}') + '\install.ps1"',
               '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
-    RaiseException('Could not start PowerShell to run the installer.');
+  begin
+    Result := 'Could not start PowerShell to run the installer.';
+    exit;
+  end;
 
   if ResultCode <> 0 then
   begin
@@ -177,11 +192,20 @@ begin
       StageName := 'unknown';
     WizardForm.StatusLabel.Caption :=
       'FLUJO installation failed during stage "' + Trim(StageName) + '".';
-    RaiseException('The FLUJO installer failed during stage "' + Trim(StageName) +
+    ErrorDetail := '';
+    if LoadStringsFromFile(ExpandConstant('{localappdata}\FLUJO-cli\install-error.txt'), ErrorLines) then
+      for ErrorIndex := 0 to GetArrayLength(ErrorLines) - 1 do
+        ErrorDetail := ErrorDetail + ErrorLines[ErrorIndex] + #13#10;
+    if ErrorDetail = '' then
+      ErrorDetail := 'Open the diagnostic log below for the reported cause.';
+    if Trim(StageName) = 'patchright-chromium' then
+      ErrorDetail := ErrorDetail + #13#10 +
+        'Retry managed Chromium from the FLUJO directory with:' + #13#10 +
+        'node mcp-servers/browser/scripts/install-browser.mjs';
+    Result := 'The FLUJO installer failed during stage "' + Trim(StageName) +
                    '" (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
+                   ErrorDetail + #13#10 +
                    'A sanitized diagnostic log was saved to:' + #13#10 + LogPath + #13#10#13#10 +
-                   'Correct the reported proxy, certificate, network, or build issue and run setup again. ' +
-                   'For managed Chromium only, retry from the FLUJO directory with:' + #13#10 +
-                   'node mcp-servers/browser/scripts/install-browser.mjs');
+                   'Copy this message or share that log when reporting the installation failure.';
   end;
 end;

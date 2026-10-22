@@ -13,10 +13,12 @@
  */
 import { flowService } from '@/backend/services/flow/index';
 import * as executionExtensions from '@/backend/execution/extensions';
-jest.mock('@/backend/execution/extensions', () => ({
-  ...jest.requireActual('@/backend/execution/extensions'),
-  executionExtensionSubflowCapacity: jest.fn(),
-}));
+jest.mock('@/backend/execution/extensions', () => {
+  const actual = jest.requireActual('@/backend/execution/extensions');
+  const capacity = jest.fn();
+  // Preserve live export getters across the execution modules' import cycle.
+  return new Proxy(actual, { get: (target, key) => key === 'executionExtensionSubflowCapacity' ? capacity : Reflect.get(target, key) });
+});
 
 jest.mock('@/backend/services/flow/index', () => ({
   flowService: { getFlow: jest.fn() },

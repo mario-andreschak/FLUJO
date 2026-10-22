@@ -96,17 +96,30 @@ function assertInstallerProvenance(workflow) {
   const tagOnly = "${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}";
   const build = workflow?.jobs?.['installer-build'];
   const attest = workflow?.jobs?.['installer-attest'];
+  const acceptance = workflow?.jobs?.['installer-acceptance'];
   const publish = workflow?.jobs?.['installer-publish'];
   if (!build || (build.permissions && Object.values(build.permissions).some((value) => value !== 'read' && value !== 'none'))
       || build.outputs?.artifact_id !== '${{ steps.installer-artifact.outputs.artifact-id }}'
       || build.outputs?.sha256 !== '${{ steps.installer-digest.outputs.sha256 }}'
-      || attest?.if !== tagOnly || attest.needs !== 'installer-build'
+      || attest?.if !== tagOnly || JSON.stringify(attest.needs) !== JSON.stringify(['installer-build', 'installer-acceptance'])
       || publish?.if !== tagOnly || JSON.stringify(publish.needs) !== JSON.stringify(['installer-build', 'installer-attest'])
       || attest.permissions?.['id-token'] !== 'write' || attest.permissions?.attestations !== 'write'
       || attest.permissions?.['artifact-metadata'] !== 'write' || attest.permissions?.contents !== 'read'
       || publish.permissions?.contents !== 'write' || publish.permissions?.attestations !== 'read'
       || publish.permissions?.['id-token']) {
     throw new Error('Installer build/sign/publication authority or original-artifact binding changed.');
+  }
+  const acceptanceDownload = acceptance?.steps?.find(step => step.uses?.startsWith('actions/download-artifact@'));
+  const installedCheck = acceptance?.steps?.find(step => step.run === './scripts/verify-windows-install.ps1');
+  if (acceptance?.needs !== 'installer-build' || acceptance.if || acceptance['continue-on-error']
+      || acceptance['runs-on'] !== '${{ matrix.os }}'
+      || JSON.stringify(acceptance.strategy?.matrix?.os) !== JSON.stringify(['windows-2022', 'windows-2025'])
+      || acceptanceDownload?.with?.['artifact-ids'] !== '${{ needs.installer-build.outputs.artifact_id }}'
+      || acceptanceDownload.with.path !== 'installer/Output'
+      || acceptance.env?.EXPECTED_INSTALLER_SHA256 !== '${{ needs.installer-build.outputs.sha256 }}'
+      || !installedCheck || installedCheck.if || installedCheck['continue-on-error']
+      || acceptance.steps.some(step => /ISCC\.exe|npm run build/.test(step.run ?? ''))) {
+    throw new Error('Installer acceptance must install and launch the original compiled bytes before signing.');
   }
   const compile = build.steps.findIndex((step) => step.name === 'Compile and validate the installer');
   const originalDigest = build.steps.findIndex((step) => step.id === 'installer-digest');

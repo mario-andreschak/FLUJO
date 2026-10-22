@@ -12,6 +12,28 @@
       "minTests": 6869,
       "intentionalSkips": [
         {
+          "suite": "__tests__/workspace/migrationRecovery.test.ts",
+          "name": "interrupted workspace migration recovery retains an unknown dangling Windows junction before any move",
+          "reason": "Windows junction behavior is exercised on Windows; Unix has no Windows junctions.",
+          "platforms": ["linux", "darwin"]
+        },
+        {
+          "suite": "__tests__/enduringAgents/runtimeLockOwnIdentity.test.ts",
+          "name": "Persona runtime own-process birth identity allows cold owned-child admission but rejects an invalid identity without relaxing foreign observations",
+          "reason": "Exercises the Windows process-birth probe; the test is explicitly Windows-only.",
+          "platforms": ["linux", "darwin"]
+        },
+        {
+          "suite": "__tests__/model/codexOrdinary.live.test.ts",
+          "name": "accepts real inference/MCP, durable restart resume, protocol usage and owned cancellation",
+          "reason": "Opt-in live Codex subscription acceptance requires a private authenticated profile and FLUJO_CODEX_ORDINARY_ACCEPTANCE_ROOT; ordinary hosted CI has neither. No model call is substituted."
+        },
+        {
+          "suite": "__tests__/model/codexUserInput.live.test.ts",
+          "name": "answers an actual direct app-server question through the attended flow executor",
+          "reason": "Opt-in attended Codex acceptance requires a private authenticated profile and FLUJO_CODEX_USER_INPUT_ACCEPTANCE_ROOT; ordinary hosted CI cannot perform the attended account interaction."
+        },
+        {
           "suite": "__tests__/model/codexAppServerProcess.live.test.ts",
           "name": "qualifies the Source-owned public app-server with exact Luna/medium and original turn interruption",
           "reason": "Opt-in provider qualification requires explicit private executable, home and receipt paths; normal CI has no live provider credentials."
@@ -105,8 +127,8 @@
     },
     "isolated": {
       "description": "npm run test:isolated — child-process and intensive integration suites, serial, dedicated CI job.",
-      "minSuites": 9,
-      "minTests": 101,
+      "minSuites": 18,
+      "minTests": 234,
       "intentionalSkips": []
     },
     "live-codex": {

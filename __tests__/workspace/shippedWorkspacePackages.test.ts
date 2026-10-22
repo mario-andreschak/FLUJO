@@ -210,10 +210,10 @@ describe('workspace copies of shipped application packages', () => {
     const config = runWithWorkspace('before-rename', () => createShippedServerConfig(SHIPPED_MCP_SERVERS[1]));
     await renameWorkspace('before-rename', 'after-rename');
     await runWithWorkspace('after-rename', async () => {
-      expect(() => resolveStdioLaunch(config)).toThrow('explicit owner consent');
-      expect((await saveConfig(new Map([[config.name, config]]))).success).toBe(true);
       const owner = installBundledFixtureOwner();
       try {
+        expect(() => resolveStdioLaunch(config)).toThrow('explicit owner consent');
+        expect((await saveConfig(new Map([[config.name, config]]))).success).toBe(true);
         const preview = await previewBundledHostConsent(config.name, { runtimeHome: 'host' });
         const approved = await approveBundledHostConsent(owner.request(config.name), config.name, {
           runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,

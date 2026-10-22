@@ -930,6 +930,7 @@ export class MCPService {
     return beginConnect(serverName, async () => {
       await assertBundledFlujoWorkloadEffectCurrent();
       assertMcpRuntimeAuthorityRetired(serverName);
+      const previousClient = this.getClient(serverName);
       // Keep the legacy instance-local map populated: existing tests and
       // status/diagnostic call sites still read it.
       const attempt = this.connectServerInternal(configOrName, executionExtensionContext).finally(() => {
@@ -938,7 +939,10 @@ export class MCPService {
       this.inFlightConnects.set(serverName, attempt);
       const result = await attempt;
       if (result.success) {
-        markConnected(serverName, this.configFingerprint(configOrName));
+        // Revalidation still checks current authority/configuration, but a
+        // healthy reused client must not invalidate another caller's lease.
+        const reusedClient = previousClient !== undefined && this.getClient(serverName) === previousClient;
+        markConnected(serverName, this.configFingerprint(configOrName), reusedClient);
       } else {
         // A transport that is still registered while no client landed means the
         // failure happened DURING the handshake (post-spawn), which is the case

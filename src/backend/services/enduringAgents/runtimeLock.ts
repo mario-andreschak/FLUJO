@@ -240,20 +240,27 @@ async function ensureRuntimeLockRoot(): Promise<string> {
 }
 
 async function readLockRecord(lockPath: string): Promise<Record<string, unknown> | null> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(lockPath, 'utf8')) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new PersonaRuntimeLockCorruptError(lockPath);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(lockPath, 'utf8')) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new PersonaRuntimeLockCorruptError(lockPath);
+      }
+      return parsed as Record<string, unknown>;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return null;
+      // Windows can deny a read while another owner retires the pathname.
+      // Retry the observation; never interpret inaccessible bytes as no owner.
+      if (['EACCES', 'EBUSY', 'EPERM'].includes(code ?? '') && attempt < 19) {
+        await delay(LOCK_RETRY_MS);
+        continue;
+      }
+      // Published locks have fully flushed bytes. Malformed content remains
+      // corruption, never evidence that ownership may be stolen.
+      if (error instanceof SyntaxError) throw new PersonaRuntimeLockCorruptError(lockPath);
+      throw error;
     }
-    return parsed as Record<string, unknown>;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return null;
-    // A canonical lock is installed from a fully-written candidate through an
-    // atomic hard link. Malformed content is therefore corruption, not a stale
-    // acquisition that can be stolen safely.
-    if (error instanceof SyntaxError) throw new PersonaRuntimeLockCorruptError(lockPath);
-    throw error;
   }
 }
 

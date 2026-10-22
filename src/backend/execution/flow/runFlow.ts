@@ -3,6 +3,7 @@ import { applyExecutionRunInput, applyOriginalOwnerRunInput, prepareExecutionSub
   assertExecutionStateAccess, ExecutionExtensionError, executionExtensionSharesPersonaAuthority,
   runWithExecutionConversationAccess, assertExecutionExtensionCurrent } from '@/backend/execution/extensions';
 import { createLogger } from '@/utils/logger';
+import type { FlowReplayInputs } from '@/shared/types/execution/flowInputs';
 import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
@@ -335,7 +336,7 @@ export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | '
  * OpenAI-compatible API (today), subflows (#13), planned executions (#10), and
  * (deferred) flows-as-MCP-tools (#17B).
  */
-export interface FlowRunInput {
+export interface FlowRunInput extends FlowReplayInputs {
   executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   /** Resolved flow id. Provide this OR `modelName`. */
   flowId?: string;
@@ -355,8 +356,6 @@ export interface FlowRunInput {
 
   /** Full message list (advanced; the OpenAI route passes its request messages). */
   messages?: FlowRunMessageInput[];
-  /** Latest future-turn context supplied by mounted MCP Apps. */
-  mcpAppContexts?: import('@/shared/types/chat').McpAppModelContextMap;
   /** Exact approved remote Skill identities selected for this user turn. */
   mcpSkillSelections?: import('@/shared/types/mcp').McpSkillSelection[];
   /** Convenience: a single user message. Used when `messages` is absent. */
@@ -368,10 +367,6 @@ export interface FlowRunInput {
   resumeAsNewTurn?: boolean;
   /** Edit support: reset execution to this node (mirrors the legacy processNodeId). */
   processNodeId?: string;
-  /** Named inputs seeded onto SharedState.variables (Tier 2c) at run start.
-   *  Values are coerced to string; any node can inject them via `${var:NAME}`. */
-  variables?: Record<string, unknown>;
-
   /** 'ephemeral' runs in transient state and never writes to the conversations/*
    *  store (so the run never appears in the chat sidebar). 'conversation'
    *  (default) is the legacy persisted/resumable behavior. */
