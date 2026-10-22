@@ -1,0 +1,4 @@
+gpgv: Signature made Wed Oct 21 05:33:22 2026 WSN
+gpgv:                using EDDSA key 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356
+gpgv: Good signature from "Antoine du Hamel <antoine.duhamel@platformatic.dev>"
+gpgv:                 aka "Antoine du Hamel <duhamelantoine1995@gmail.com>"

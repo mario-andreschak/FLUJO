@@ -42,10 +42,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - name: Require exact-commit main verification
         env:
           GH_TOKEN: ${{ github.token }}
@@ -147,9 +147,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.candidate.outputs.artifact_id }}
@@ -200,9 +200,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.candidate.outputs.artifact_id }}

@@ -6,6 +6,26 @@ import { getWorkspaceDataDir } from '@/utils/workspace';
 import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource,
   TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES } from '@/backend/services/security/trustedHostMcp';
 
+// The publisher installs npm globally, which adds POSIX .bin symlinks. Some
+// supported Node cpSync implementations retain those links even with
+// dereference:true. Materialize regular files so this reviewed fixture cannot
+// point back into the host's mutable global npm installation.
+function copyNpmClosure(source: string, destination: string, ancestors = new Set<string>()): void {
+  const resolved = fs.realpathSync(source);
+  const stat = fs.statSync(resolved);
+  if (ancestors.has(resolved)) throw new Error('Cyclic installed npm fixture');
+  if (stat.isDirectory()) {
+    fs.mkdirSync(destination, { recursive: true });
+    const nested = new Set([...ancestors, resolved]);
+    for (const name of fs.readdirSync(resolved)) copyNpmClosure(path.join(resolved, name), path.join(destination, name), nested);
+  } else if (stat.isFile()) {
+    fs.copyFileSync(resolved, destination);
+    fs.chmodSync(destination, stat.mode);
+  } else {
+    throw new Error('Installed npm fixture contains an unsupported file');
+  }
+}
+
 /** Materialize genuine installed npm and an offline synthetic package; no installer runs. */
 export function materializeProtectedPackageRunner(serverName: string, sourceCode: string): MCPStdioConfig {
   const sourceRoot = path.join(getWorkspaceDataDir(), 'mcp-servers', 'reviewed-runner-' + createHash('sha256').update(serverName).digest('hex').slice(0, 12));
@@ -20,7 +40,7 @@ export function materializeProtectedPackageRunner(serverName: string, sourceCode
     && fs.existsSync(path.join(candidate, 'bin', 'npx-cli.js')));
   if (!npmSource) throw new Error('A genuine installed npm closure is required for this fixture');
   fs.mkdirSync(sourceRoot, { recursive: true });
-  fs.cpSync(npmSource, path.join(sourceRoot, 'npm'), { recursive: true, dereference: true });
+  copyNpmClosure(npmSource, path.join(sourceRoot, 'npm'));
   const packageDirectory = path.join(sourceRoot, 'project');
   const packageRoot = path.join(packageDirectory, 'node_modules', 'owned-probe');
   const bins = path.join(packageDirectory, 'node_modules', '.bin');

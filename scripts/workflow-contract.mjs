@@ -23,7 +23,7 @@ function assertVerificationRunners(workflow) {
 }
 
 export function assertNodeRuntimeWorkflowContract(workflows) {
-  const profiles = Object.values(CI_NODE_PROFILES);
+  const profiles = [...new Set(Object.values(CI_NODE_PROFILES))];
   for (const [file, workflow] of Object.entries(workflows)) {
     for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
       const steps = job.steps ?? [];
@@ -110,7 +110,7 @@ function assertInstallerProvenance(workflow) {
     throw new Error('Installer build/sign/publication authority or original-artifact binding changed.');
   }
   const acceptanceDownload = acceptance?.steps?.find(step => step.uses?.startsWith('actions/download-artifact@'));
-  const installedCheck = acceptance?.steps?.find(step => step.run === './scripts/verify-windows-install.ps1');
+  const installedCheck = acceptance?.steps?.find(step => step.run === "./scripts/verify-windows-install.ps1 -BootstrapNode:('${{ matrix.os }}' -eq 'windows-2025')");
   if (acceptance?.needs !== 'installer-build' || acceptance.if || acceptance['continue-on-error']
       || acceptance['runs-on'] !== '${{ matrix.os }}'
       || JSON.stringify(acceptance.strategy?.matrix?.os) !== JSON.stringify(['windows-2022', 'windows-2025'])
@@ -303,7 +303,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
   }
   const preparation = mainTests[isolation].run;
   if (!preparation.includes("digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'")
-      || !preparation.includes('for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do')
+      || !preparation.includes('for registry in node:22.23.4-bookworm-slim public.ecr.aws/docker/library/node:22.23.4-bookworm-slim; do')
       || !preparation.includes('for attempt in 1 2; do')
       || !preparation.includes('pull "$registry@$digest"')
       || !preparation.includes('test -n "$image_ref"')

@@ -24,7 +24,7 @@ async function fixture(t) {
 function scenario(overrides = {}) {
   const output = [];
   const calls = [];
-  const runtime = { version: '22.23.3', executable: process.execPath, directory: path.dirname(process.execPath) };
+  const runtime = { version: '22.23.4', executable: process.execPath, directory: path.dirname(process.execPath) };
   const options = {
     version: '22.13.1', argv: [process.execPath, 'launch-next.mjs', 'start', '--port', '4200'],
     interactive: true, print: text => output.push(text), find: async () => null,
@@ -65,23 +65,23 @@ test('non-interactive startup never prompts or installs without explicit consent
 test('accepting installs on the same supported major and preserves restart arguments and exit status', async () => {
   const s = scenario({ confirm: async () => true });
   assert.deepEqual(await ensureSupportedAppRuntime(s.options), { exitCode: 7 });
-  assert.deepEqual(s.calls, [['install', 22], ['relaunch', '22.23.3', ['launch-next.mjs', 'start', '--port', '4200']]]);
+  assert.deepEqual(s.calls, [['install', 22], ['relaunch', '22.23.4', ['launch-next.mjs', 'start', '--port', '4200']]]);
 });
 
 test('explicit update works without a terminal and its flag is consumed before restart', async () => {
   const s = scenario({ interactive: false, version: '26.1.0', argv: [process.execPath, 'flujo.mjs', '--update-node', '--no-open'] });
   await ensureSupportedAppRuntime(s.options);
-  assert.deepEqual(s.calls, [['install', 24], ['relaunch', '22.23.3', ['flujo.mjs', '--no-open']]]);
+  assert.deepEqual(s.calls, [['install', 24], ['relaunch', '22.23.4', ['flujo.mjs', '--no-open']]]);
 });
 
 test('a previously verified installation is reused without a new prompt or download', async () => {
-  const s = scenario({ find: async () => ({ version: '24.21.0', executable: process.execPath }) });
+  const s = scenario({ find: async () => ({ version: '24.22.1', executable: process.execPath }) });
   await ensureSupportedAppRuntime(s.options);
-  assert.deepEqual(s.calls, [['relaunch', '24.21.0', ['launch-next.mjs', 'start', '--port', '4200']]]);
+  assert.deepEqual(s.calls, [['relaunch', '24.22.1', ['launch-next.mjs', 'start', '--port', '4200']]]);
 });
 
 test('supported Node starts normally and consumes the optional bootstrap flag', async () => {
-  const s = scenario({ version: '24.2.0', argv: [process.execPath, 'flujo.mjs', '--update-node', '--no-open'] });
+  const s = scenario({ version: '24.22.1', argv: [process.execPath, 'flujo.mjs', '--update-node', '--no-open'] });
   assert.deepEqual(await ensureSupportedAppRuntime(s.options), {});
   assert.deepEqual(s.calls, []);
   assert.deepEqual(s.options.argv, [process.execPath, 'flujo.mjs', '--no-open']);
@@ -109,14 +109,14 @@ test('confirmation handles yes, no, empty input, EOF and interruption', async ()
 
 test('release selection stays on supported stable LTS lines and sorts numerically', () => {
   const releases = [{ version: 'v22.9.0', lts: 'Jod' }, { version: 'v22.17.0', lts: 'Jod' },
-    { version: 'v22.23.3', lts: 'Jod' }, { version: 'v22.100.0-rc.1', lts: 'Jod' },
-    { version: 'v22.24.0', lts: false }, { version: 'v24.21.0', lts: 'Krypton' }, { version: 'v26.11.0', lts: true }];
-  assert.equal(latestSupportedRelease(releases, 22), '22.23.3');
-  assert.equal(latestSupportedRelease(releases, 24), '24.21.0');
+    { version: 'v22.23.4', lts: 'Jod' }, { version: 'v22.100.0-rc.1', lts: 'Jod' },
+    { version: 'v22.24.0', lts: false }, { version: 'v24.22.1', lts: 'Krypton' }, { version: 'v26.11.0', lts: true }];
+  assert.equal(latestSupportedRelease(releases, 22), '22.23.4');
+  assert.equal(latestSupportedRelease(releases, 24), '24.22.1');
   assert.throws(() => latestSupportedRelease(releases, 26));
   assert.throws(() => latestSupportedRelease([], 22));
-  for (const version of ['v22.17.0', 'v22.18.99', 'v22.23.3/../../escape', 'v22.23.3;node --eval bad', 'v22.023.3',
-    'v22.23.2147483648', 'v22.9007199254740992.3', 'v24.1.9', 'v22.23.3\n']) {
+  for (const version of ['v22.17.0', 'v22.18.99', 'v22.23.4/../../escape', 'v22.23.4;node --eval bad', 'v22.023.3',
+    'v22.23.2147483648', 'v22.9007199254740992.3', 'v24.1.9', 'v22.23.4\n']) {
     assert.throws(() => latestSupportedRelease([{ version, lts: true }], version.startsWith('v24') ? 24 : 22));
   }
   assert.equal(nodeDistribution('win32', 'ia32').cpu, 'x86');
@@ -132,21 +132,21 @@ async function installerFixture(t, { badChecksum = false, badVersion = false } =
     baseDirectory, major: 22, platform: process.platform, arch: process.arch,
     fetchBytes: async url => {
       assert.equal(url.origin, 'https://nodejs.org');
-      if (url.pathname.endsWith('index.json')) return Buffer.from(JSON.stringify([{ version: 'v22.23.3', lts: 'Jod' }]));
+      if (url.pathname.endsWith('index.json')) return Buffer.from(JSON.stringify([{ version: 'v22.23.4', lts: 'Jod' }]));
       if (url.pathname.endsWith('SHASUMS256.txt')) {
         const d = nodeDistribution();
-        return Buffer.from(`${badChecksum ? '0'.repeat(64) : digest(archive)}  node-v22.23.3-${d.osName}-${d.cpu}.${d.extension}\n`);
+        return Buffer.from(`${badChecksum ? '0'.repeat(64) : digest(archive)}  node-v22.23.4-${d.osName}-${d.cpu}.${d.extension}\n`);
       }
       return archive;
     },
     extract: async (_archive, extraction) => {
       extractionCalled = true;
       const d = nodeDistribution();
-      const binary = path.join(extraction, `node-v22.23.3-${d.osName}-${d.cpu}`, d.binary);
+      const binary = path.join(extraction, `node-v22.23.4-${d.osName}-${d.cpu}`, d.binary);
       await fs.mkdir(path.dirname(binary), { recursive: true });
       await fs.copyFile(process.execPath, binary);
     },
-    probe: async () => badVersion ? '26.1.0' : '22.23.3',
+    probe: async () => badVersion ? '26.1.0' : '22.23.4',
   };
   return { options, baseDirectory, extractionCalled: () => extractionCalled };
 }
@@ -201,7 +201,7 @@ test('updating an already current managed runtime reuses its verified files', as
 });
 
 test('a cached runtime that cannot execute fails with manual recovery guidance', async () => {
-  const s = scenario({ find: async () => ({ version: '22.23.3' }), relaunch: async () => { throw new Error('PRIVATE_EXEC_ERROR'); } });
+  const s = scenario({ find: async () => ({ version: '22.23.4' }), relaunch: async () => { throw new Error('PRIVATE_EXEC_ERROR'); } });
   assert.deepEqual(await ensureSupportedAppRuntime(s.options), { exitCode: 1 });
   assert.match(s.output.join('\n'), /Manual update:/);
   assert.doesNotMatch(s.output.join('\n'), /PRIVATE_EXEC_ERROR/);

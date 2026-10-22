@@ -51,10 +51,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           architecture: x64
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - name: Bind reviewed workflow, exact source, signed runtime and lock
         run: |
           $ErrorActionPreference = 'Stop'
@@ -82,7 +82,7 @@ jobs:
           $taskNode = (Get-Command node.exe).Source
           $taskSignature = Get-AuthenticodeSignature -LiteralPath $taskNode
           if ($taskSignature.Status -ne 'Valid') { throw 'Unsigned official runtime.' }
-          node scripts/verify-ci-node.mjs 22.23.3 --record
+          node scripts/verify-ci-node.mjs 22.23.4 --record
           if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
           node ../proposal-tools/scripts/worker-payload-route.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Artifact route refused.' }
@@ -95,7 +95,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          node scripts/verify-ci-node.mjs 22.23.3 --record
+          node scripts/verify-ci-node.mjs 22.23.4 --record
           if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
           node --test --test-concurrency=1 ../proposal-tools/scripts/export-worker-payload.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Export predicate fixtures failed.' }
@@ -103,7 +103,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          node scripts/verify-ci-node.mjs 22.23.3 --record
+          node scripts/verify-ci-node.mjs 22.23.4 --record
           if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
           npm ci --include=dev --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Build graph installation failed.' }
@@ -113,7 +113,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          node scripts/verify-ci-node.mjs 22.23.3 --record
+          node scripts/verify-ci-node.mjs 22.23.4 --record
           if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
           $taskExport = Join-Path $env:RUNNER_TEMP 'worker-payload-export'
           npm pack --ignore-scripts --json --pack-destination $taskExport > (Join-Path $taskExport 'npm-pack-report.json')
@@ -124,7 +124,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          node scripts/verify-ci-node.mjs 22.23.3 --record
+          node scripts/verify-ci-node.mjs 22.23.4 --record
           if ($LASTEXITCODE -ne 0) { throw 'Runtime verification failed.' }
           $taskExport = Join-Path $env:RUNNER_TEMP 'worker-payload-export'
           $taskStage = Join-Path $env:RUNNER_TEMP 'worker-payload-stage'

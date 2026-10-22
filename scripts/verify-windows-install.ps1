@@ -2,7 +2,7 @@
 # This deliberately runs the compiled wizard, its embedded PowerShell 5.1
 # installer, real Git/npm/browser downloads, production build and launcher.
 [CmdletBinding()]
-param()
+param([switch]$BootstrapNode)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or -not $env:RUNNER_TEMP) {
     throw 'Run this acceptance check only on a fresh GitHub-hosted Windows worker.'
@@ -15,6 +15,9 @@ if ((Test-Path -LiteralPath $target) -or (Test-Path -LiteralPath $cli)) {
 }
 New-Item -ItemType Directory -Path $evidence | Out-Null
 $started = Get-Date
+$savedProcessPath = $env:Path
+$savedUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$savedMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $installer = (Resolve-Path installer/Output/flujo-setup.exe).Path
 $result = [ordered]@{
     sourceRevision = $env:GITHUB_SHA
@@ -32,6 +35,8 @@ $result = [ordered]@{
     unrelatedDirectoryRefused = $false
     missingWingetRefused = $false
     launchPassed = $false
+    nodeBootstrapRequested = [bool]$BootstrapNode
+    nodeBootstrapPassed = $false
 }
 if ($env:EXPECTED_INSTALLER_SHA256 -and $result.installerSha256 -cne $env:EXPECTED_INSTALLER_SHA256) {
     throw 'Downloaded installer differs from the compiler artifact digest.'
@@ -50,6 +55,19 @@ try {
     } finally {
         $env:PATH = $originalPath
     }
+    if ($BootstrapNode) {
+        # Hosted images contain Node already. Hide every Node directory from
+        # process AND registry PATH, which the production installer refreshes.
+        # Leave those installations untouched and restore the registry below.
+        foreach ($scope in @('Process', 'User', 'Machine')) {
+            $visiblePath = [Environment]::GetEnvironmentVariable('Path', $scope)
+            $withoutNode = @($visiblePath -split ';' | Where-Object {
+                $_ -and -not (Test-Path -LiteralPath (Join-Path ([Environment]::ExpandEnvironmentVariables($_.Trim('"'))) 'node.exe'))
+            }) -join ';'
+            [Environment]::SetEnvironmentVariable('Path', $withoutNode, $scope)
+        }
+        if (Get-Command node -ErrorAction SilentlyContinue) { throw 'Fresh dependency acceptance still has Node on PATH.' }
+    }
     $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TASKS=desktopicon', "/DIR=`"$target`"", "/LOG=`"$evidence\setup.log`"") -WindowStyle Hidden -Wait -PassThru
     $result.installerExitCode = $setup.ExitCode
     if ($setup.ExitCode -ne 0) { throw "Compiled installer exited $($setup.ExitCode)." }
@@ -66,6 +84,14 @@ try {
     if (-not (Test-Path -LiteralPath $shortcut)) { throw 'Desktop shortcut was not created.' }
     $launcher = Join-Path $cli 'flujo.cmd'
     if (-not (Test-Path -LiteralPath $launcher)) { throw 'Global launcher was not created.' }
+    $browserNode = 'node'
+    if ($BootstrapNode) {
+        $browserNode = Join-Path $cli 'runtime\node-v22.23.4-win-x64\node.exe'
+        $result.bootstrappedNodeVersion = & $browserNode --version
+        if ($LASTEXITCODE -ne 0 -or $result.bootstrappedNodeVersion -cne 'v22.23.4') { throw 'Missing-Node bootstrap did not install the qualified runtime.' }
+        if ($manifest.prerequisites | Where-Object command -eq 'node') { throw 'Private Node runtime was incorrectly registered for shared WinGet removal.' }
+        $result.nodeBootstrapPassed = $true
+    }
     $result.installPassed = $true
     $result.installedRevision = $installedRevision
     $result.installSeconds = [Math]::Round(((Get-Date) - $started).TotalSeconds, 1)
@@ -109,10 +135,15 @@ try {
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $deadline)
     if (-not $response -or $response.StatusCode -ne 200) { throw 'Installed application did not become ready.' }
-    & node scripts/verify-windows-install-browser.mjs $target $evidence
+    & $browserNode scripts/verify-windows-install-browser.mjs $target $evidence
     if ($LASTEXITCODE) { throw 'Installed browser startup acceptance failed.' }
     $result.launchPassed = $true
 } finally {
+    if ($BootstrapNode) {
+        [Environment]::SetEnvironmentVariable('Path', $savedMachinePath, 'Machine')
+        [Environment]::SetEnvironmentVariable('Path', $savedUserPath, 'User')
+        $env:Path = $savedProcessPath
+    }
     foreach ($name in @('install.log', 'install-error.txt', 'install-stage.txt', 'install-manifest.json', 'browser-install-result.json')) {
         $source = Join-Path $cli $name
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $evidence }

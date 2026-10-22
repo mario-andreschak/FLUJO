@@ -1,0 +1,117 @@
+{
+  "observedAt": "2026-10-22T00:25:53.774361+00:00",
+  "executableExecution": false,
+  "keySource": {
+    "repository": "https://github.com/nodejs/release-keys",
+    "commit": "481637f813e912c4aa3622d7964ab426c97b8e8d",
+    "evidence": "docs/audits/scorecard-563/evidence/official-node-integrity-2026-10-04/verified-node-binary-receipt.json",
+    "evidenceSha256": "5b811280324775f702b981a86434c17761dad34ae5201e42228e8d6339a52341"
+  },
+  "versions": [
+    {
+      "version": "22.23.4",
+      "signatureExitCode": 0,
+      "validSignatureStatus": "[GNUPG:] VALIDSIG 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356 2026-10-21 1792578802 0 4 0 22 8 00 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "signedChecksumsSha256": "c90c3f1478fda8308b22cc1a1b0dc536169196444e67ee8b5c582fd351d02bce",
+      "windows": {
+        "sha256": "dccc52de28d8df2ee22d2062424f8c563070d95d8ad70c54c4bf01d590dec14f",
+        "zipSha256": "cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20"
+      },
+      "linux": {
+        "archive": "node-v22.23.4-linux-x64.tar.gz",
+        "archiveSha256": "b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406",
+        "member": "node-v22.23.4-linux-x64/bin/node",
+        "sha256": "94efd062ed066c1a0b332e18249859c905e920eeada5df55d24c99b919629a90"
+      },
+      "libuv": {
+        "member": "node-v22.23.4-linux-x64/include/node/uv/version.h",
+        "bytes": 1831,
+        "sha256": "aef7fb55ffcece76db9cb7f87d0632e432369747f329679779616cd0721981da",
+        "version": "1.51.0"
+      }
+    },
+    {
+      "version": "24.22.1",
+      "signatureExitCode": 0,
+      "validSignatureStatus": "[GNUPG:] VALIDSIG 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356 2026-10-21 1792578925 0 4 0 22 8 00 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "signedChecksumsSha256": "fdfbffc969c0f604beff0124d409b33a43b53f5c681d6220f80023e0d6df9dc4",
+      "windows": {
+        "sha256": "d702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5",
+        "zipSha256": "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5"
+      },
+      "linux": {
+        "archive": "node-v24.22.1-linux-x64.tar.gz",
+        "archiveSha256": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+        "member": "node-v24.22.1-linux-x64/bin/node",
+        "sha256": "e32e2d16081cf644f88392934288086e7662529d0d43277c34f7aad2207cfafb"
+      },
+      "libuv": {
+        "member": "node-v24.22.1-linux-x64/include/node/uv/version.h",
+        "bytes": 1831,
+        "sha256": "a859f2c21f7887d45b0372109ebc91759a6f8c408c7cbf2a12f9bbe579be403b",
+        "version": "1.52.1"
+      }
+    }
+  ],
+  "inventory": [
+    {
+      "file": "docker-official-node-22.23.4-bookworm-slim.json",
+      "bytes": 3026,
+      "sha256": "37c7919be2dfdc560838709849d773231d6978c41754c33dea8c7394bef7ac60"
+    },
+    {
+      "file": "v22.23.4/SHASUMS256.txt",
+      "bytes": 3981,
+      "sha256": "c90c3f1478fda8308b22cc1a1b0dc536169196444e67ee8b5c582fd351d02bce"
+    },
+    {
+      "file": "v22.23.4/SHASUMS256.txt.sig",
+      "bytes": 119,
+      "sha256": "062fe0561f4e93d54dcb2f826a50a4ff26e2563f88b254dd8a3324809abffcd9"
+    },
+    {
+      "file": "v22.23.4/signature-status.txt",
+      "bytes": 438,
+      "sha256": "3618ed8eb8a2fd9f16339adeab0d11cdbb3511bbbae1f809d58ecc9ca036329c"
+    },
+    {
+      "file": "v22.23.4/signature-stderr.txt",
+      "bytes": 284,
+      "sha256": "2f3d772de0dd28b1005491b7ce13db462cb8c0436c34cba5f01e06d62fa75dae"
+    },
+    {
+      "file": "v22.23.4/uv-version.h",
+      "bytes": 1831,
+      "sha256": "aef7fb55ffcece76db9cb7f87d0632e432369747f329679779616cd0721981da"
+    },
+    {
+      "file": "v24.22.1/SHASUMS256.txt",
+      "bytes": 3171,
+      "sha256": "fdfbffc969c0f604beff0124d409b33a43b53f5c681d6220f80023e0d6df9dc4"
+    },
+    {
+      "file": "v24.22.1/SHASUMS256.txt.sig",
+      "bytes": 119,
+      "sha256": "4e8fc0160f74781e90e3faf3f8218a72f4cee84d3ac80b9b6d448cec5b8bb7ad"
+    },
+    {
+      "file": "v24.22.1/signature-status.txt",
+      "bytes": 438,
+      "sha256": "52b540c25cb03ec20ce5a973cb7d9b1ca27c66b89e7d986110baa9043c179778"
+    },
+    {
+      "file": "v24.22.1/signature-stderr.txt",
+      "bytes": 284,
+      "sha256": "af8f851f693956c683136c8738d55638334e02df879f5a301e1e471399ab27fc"
+    },
+    {
+      "file": "v24.22.1/uv-version.h",
+      "bytes": 1831,
+      "sha256": "a859f2c21f7887d45b0372109ebc91759a6f8c408c7cbf2a12f9bbe579be403b"
+    }
+  ],
+  "archivesRetained": false,
+  "windowsDistributionsRetainedForUse": true
+}

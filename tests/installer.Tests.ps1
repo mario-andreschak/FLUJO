@@ -173,6 +173,43 @@ Describe 'Windows installer generated payloads' {
         $launcher | Should -Match 'npm start %\*'
         $launcher | Should -Match 'http://localhost:4200'
     }
+
+    It 'activates the private runtime in a new launcher without changing the global Node installation' {
+        $launcher = Get-LauncherContent -AppDir 'D:\Tools\FLUJO' -NodeDirectory 'C:\User Files\FLUJO-cli\runtime\node'
+        $launcher | Should -Match 'set "PATH=C:\\User Files\\FLUJO-cli\\runtime\\node;%PATH%"'
+        $launcher.IndexOf('set "PATH=') | Should -BeLessThan $launcher.IndexOf('npm start')
+    }
+}
+
+Describe 'Missing Node bootstrap integrity' {
+    BeforeAll {
+        $tokens = $null
+        $errors = $null
+        $installerAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '..\scripts\install.ps1'), [ref]$tokens, [ref]$errors)
+        foreach ($functionName in @('Get-ManagedNodeSpec', 'Install-ManagedNode', 'Write-Step')) {
+            $definition = $installerAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $functionName }, $true)
+            Invoke-Expression $definition.Extent.Text
+        }
+        $installerEnvironment = @{}
+    }
+
+    It 'pins both supported architectures to the signed official release checksums' {
+        $checksums = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\docs\audits\evidence\node-security-2026-10-21\v22.23.4\SHASUMS256.txt') -Raw
+        foreach ($architecture in @('AMD64', 'ARM64')) {
+            $spec = Get-ManagedNodeSpec -Architecture $architecture
+            $checksums | Should -Match ([regex]::Escape("$($spec.Sha256)  $($spec.Folder).zip"))
+            $spec.Url | Should -Be "https://nodejs.org/dist/v22.23.4/$($spec.Folder).zip"
+        }
+    }
+
+    It 'refuses altered download bytes before extraction or execution' {
+        Mock Invoke-WebRequest { param($Uri, $OutFile, $UseBasicParsing) Set-Content -LiteralPath $OutFile -Value 'tampered archive' }
+        Mock Expand-Archive { throw 'Unverified archive must never be extracted' }
+        $runtimeRoot = Join-Path $TestDrive 'private-runtime'
+        { Install-ManagedNode -RuntimeRoot $runtimeRoot } | Should -Throw '*checksum mismatch*'
+        Should -Invoke Expand-Archive -Times 0 -Exactly
+        @(Get-ChildItem -LiteralPath $runtimeRoot -Force) | Should -HaveCount 0
+    }
 }
 
 Describe 'Windows installer entry-point contracts' {

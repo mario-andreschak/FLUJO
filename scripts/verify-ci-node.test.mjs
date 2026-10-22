@@ -21,7 +21,7 @@ function fixture(t) {
   writeFileSync(executable, 'owned harmless executable-byte fixture; never executed');
   const sha256 = createHash('sha256').update(readFileSync(executable)).digest('hex');
   const binaries = { schemaVersion: 1, runtimes: Object.fromEntries(Object.values(CI_NODE_PROFILES).map((version) => [version,
-    { uv: version === '22.13.1' ? '1.49.2' : version === '24.21.0' ? '1.52.1' : '1.51.0', executables: { linux: sha256, win32: sha256 } }])) };
+    { uv: version === '22.13.1' ? '1.49.2' : version === '24.22.1' ? '1.52.1' : '1.51.0', executables: { linux: sha256, win32: sha256 } }])) };
   return { expectedVersion: CI_NODE_PROFILES.minimum22, version: CI_NODE_PROFILES.minimum22, uv: '1.51.0', platform: 'win32', arch: 'x64', executable, binaries, nodeOptions: '', execArgv: [] };
 }
 
@@ -125,7 +125,7 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
   assert.equal(sha(containerBytes), manifest.containerBase.metadataSha256);
   const metadata = JSON.parse(containerBytes.toString().replace(/^\uFEFF/, ''));
   assert.equal(manifest.containerBase.reference, `public.ecr.aws/docker/library/node:${metadata.name}@${metadata.digest}`);
-  assert.deepEqual(Object.keys(manifest.runtimes), Object.values(CI_NODE_PROFILES));
+  assert.deepEqual(Object.keys(manifest.runtimes), [...new Set(Object.values(CI_NODE_PROFILES))]);
   for (const version of Object.values(CI_NODE_PROFILES)) {
     const entry = manifest.runtimes[version];
     const { receipt, packet } = loadEvidence(entry.evidence, entry.evidenceSha256);
@@ -162,9 +162,9 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
 test('container packaging retains pinned bases, official binary checks and canonical guard files', () => {
   const source = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
   assertCiContainerContract(source);
-  assert.throws(() => assertCiContainerContract(source.replace(/node:22\.23\.3-bookworm-slim@sha256:[a-f0-9]{64}/g, 'node:22-bookworm-slim')), /exact observed/);
+  assert.throws(() => assertCiContainerContract(source.replace(/node:22\.23\.4-bookworm-slim@sha256:[a-f0-9]{64}/g, 'node:22-bookworm-slim')), /exact observed/);
   assert.throws(() => assertCiContainerContract(source.replace('COPY --from=builder /app/bin ./bin', '# omitted canonical guard')), /ship the canonical guard/);
-  assert.throws(() => assertCiContainerContract(source.replace('RUN node scripts/verify-ci-node.mjs 22.23.3 --binary-only', '# omitted binary verification')), /verify its official Node binary/);
+  assert.throws(() => assertCiContainerContract(source.replace('RUN node scripts/verify-ci-node.mjs 22.23.4 --binary-only', '# omitted binary verification')), /verify its official Node binary/);
 });
 
 test('binary-only measurement cannot turn the historical runtime into container acceptance', () => {

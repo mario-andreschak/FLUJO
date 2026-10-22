@@ -17,9 +17,15 @@ import { applyRetention, planRetention } from '@/backend/services/enduringAgents
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { getPersonaStorageStats } from '@/backend/services/enduringAgents/runtimeStorageStats';
 import { listBehaviorRevisions, listPersonaActivities } from '@/backend/services/enduringAgents/store';
+import * as personaStore from '@/backend/services/enduringAgents/store';
 import { saveCollectionItem } from '@/utils/storage/backend';
 import { getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 import { createPersonaFromRole } from './fixtures/personaFactory';
+
+jest.mock('@/backend/services/enduringAgents/store', () => {
+  const actual = jest.requireActual<typeof import('@/backend/services/enduringAgents/store')>('@/backend/services/enduringAgents/store');
+  return { ...actual, savePersonaDeletionTombstone: jest.fn(actual.savePersonaDeletionTombstone) };
+});
 
 jest.setTimeout(60_000);
 let sequence = 0;
@@ -124,16 +130,31 @@ describe('specialist call persistence and privacy', () => {
     let release!: () => void;
     const ready = new Promise<void>((resolve) => { entered = resolve; });
     const hold = new Promise<void>((resolve) => { release = resolve; });
-    const blocker = withPersonaRuntimeLock(persona.id, async () => { entered(); await hold; });
-    await ready;
+    // Workspace mutation admission is asynchronous: starting deletion first
+    // does not guarantee it owns the Persona lock before a completion. Hold
+    // the real deletion immediately after its durable intent, while it still
+    // owns that lock, then place the stale completion behind it.
+    const saveTombstone = jest.requireActual<typeof import('@/backend/services/enduringAgents/store')>('@/backend/services/enduringAgents/store').savePersonaDeletionTombstone;
+    const checkpoint = jest.mocked(personaStore.savePersonaDeletionTombstone).mockImplementation(async (value) => {
+      const saved = await saveTombstone(value);
+      if (saved.status === 'deleting') { entered(); await hold; }
+      return saved;
+    });
     const deletion = deletePersona(persona.id, {
       previewToken: preview.previewToken, confirmation: 'DELETE', archivePolicy: 'anonymize',
     });
-    const completion = completeBehaviorCallPin(pin, 'completed', authority, undefined, 'must not reappear');
-    const settled = Promise.allSettled([deletion, completion]);
-    release();
-    await blocker;
-    expect((await settled).map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+    let completion: ReturnType<typeof completeBehaviorCallPin> | undefined;
+    try {
+      await Promise.race([ready, deletion.then(() => { throw new Error('Deletion missed its durable checkpoint'); })]);
+      completion = completeBehaviorCallPin(pin, 'completed', authority, undefined, 'must not reappear');
+      const settled = Promise.allSettled([deletion, completion]);
+      release();
+      expect((await settled).map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+    } finally {
+      release();
+      await Promise.allSettled([deletion, ...(completion ? [completion] : [])]);
+      checkpoint.mockImplementation(saveTombstone);
+    }
     expect(await getBehaviorCallPin(pin.id)).toBeNull();
     await expect(createBehaviorCallPin({ ...input, callKey: 'late' }, authority)).rejects.toThrow();
     expect(await listBehaviorCallPins(persona.id)).toEqual([]);

@@ -1,0 +1,53 @@
+name: Enduring Agents verification
+
+# Explicitly separate from release prerequisites; run after the release or on demand.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enduring-agents-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  enduring-agents:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - run: npm ci --include=dev
+      - run: npm run build:mcp
+      - name: Run all Enduring Agents suites
+        id: jest
+        continue-on-error: true
+        env:
+          FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS: 120000
+          PERSONA_SOAK_OUTPUT: soak-smoke-artifacts
+          PERSONA_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-enduring-agents
+        run: npm run test:enduring-agents
+      - name: Enforce complete execution and explicit skip accounting
+        if: always() && steps.jest.outcome != 'skipped'
+        run: npm run verify:test-baseline -- --stage=enduring-agents --results=jest-results-enduring-agents.json
+      - name: Run deterministic memory ranking experiment
+        run: npm run test:memory-experiment -- --json=memory-experiment-results.json --commit=${{ github.sha }}
+      - name: Retain test and smoke evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: enduring-agents-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            jest-results-enduring-agents.json
+            memory-experiment-results.json
+            soak-smoke-artifacts/
+          if-no-files-found: error
+          retention-days: 30
