@@ -8,6 +8,7 @@ import { parseKotlinConfig } from './kotlin';
 import { createLogger } from '@/utils/logger';
 import { parseConfigFromReadme } from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/utils/configUtils';
 import { MCPServerConfig } from '@/shared/types/mcp/mcp';
+import { isPublishedPackageRunner } from '@/utils/mcp/explicitStdioConfig';
 
 const log = createLogger('utils/mcp/configparse/index');
 
@@ -29,6 +30,14 @@ export async function parseRepositoryConfig(options: ConfigParseOptions): Promis
   const readmeResult = await parseReadmeConfig(repoPath, repoName);
   if (readmeResult.detected && readmeResult.foundExplicitConfig && readmeResult.runCommand) {
     log.debug(`Explicit configuration found in README for ${repoPath}`);
+
+    if (isPublishedPackageRunner(readmeResult.runCommand, readmeResult.args)) {
+      return {
+        ...readmeResult,
+        installCommand: '', buildCommand: '',
+        config: { ...readmeResult.config, _installCommand: '', _buildCommand: '' },
+      };
+    }
 
     // Keep the README's explicit runtime command, but supplement build metadata
     // from package.json when the README parser did not recognize an install or

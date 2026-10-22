@@ -65,6 +65,30 @@ beforeEach(() => {
 });
 
 describe('specific MCP source resolution', () => {
+  it('uses the published PyPI package from a GitHub server.json before frontend package.json', async () => {
+    const fallbackFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (!url.includes('/contents/server.json')) return fallbackFetch(url);
+      return { ok: true, json: async () => ({ content: Buffer.from(JSON.stringify({
+        name: 'io.github.flujo-app/mcp-virtual-computer',
+        packages: [{ registryType: 'pypi', identifier: 'mcp-virtual-computer', version: '0.2.11', runtimeHint: 'uvx',
+          transport: { type: 'stdio' }, environmentVariables: [{ name: 'COMPUTER_ID', default: 'agent-workstation', isRequired: true }],
+        }],
+      })).toString('base64') }) };
+    });
+    const input = { source: 'https://github.com/flujo-app/mcp-virtual-computer' };
+    const resolved = await resolveDirectMcpInstall(input);
+    expect(resolved.kind).toBe('server-json');
+    expect(resolved.plan.command).toBe('uvx');
+    expect(resolved.plan.args?.join(' ')).toContain('mcp-virtual-computer');
+    expect(resolved.missingInputs).toEqual([]);
+    expect(resolved.config?.env).toEqual(expect.objectContaining({ COMPUTER_ID: 'agent-workstation' }));
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('/contents/package.json'))).toBe(false);
+    const result = await installResolvedDirectMcp(resolved, input);
+    expect(result.installed).toBe(true);
+    expect(installGithubServerMock).not.toHaveBeenCalled();
+  });
+
   it('keeps owner/name-shaped Registry ids distinct from GitHub URLs', () => {
     expect(looksLikeRegistryName('ai.keenable/web-search')).toBe(true);
     expect(looksLikeRegistryName('https://github.com/acme/mcp-server')).toBe(false);
