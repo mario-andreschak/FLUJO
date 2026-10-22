@@ -12,6 +12,15 @@ export async function verifyInstalledApplication(installed, evidence, baseUrl = 
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     const response = await page.goto(baseUrl, { waitUntil: 'networkidle', timeout: 60_000 });
+    // A quiet network can still leave the first-run migration screen visible.
+    // Wait for the real UI transition, retaining diagnostics if it never ends.
+    let readinessError;
+    try {
+      await page.getByRole('status').filter({ hasText: /Verifying and migrating workspace data/i })
+        .waitFor({ state: 'hidden', timeout: 60_000 });
+    } catch (error) {
+      readinessError = error.message;
+    }
     // First use must work without a custom encryption password. Exercise a real
     // gated API as well as the DOM so hiding a lock dialog cannot satisfy this.
     const encryption = await page.request.post(new URL('/api/encryption/secure', baseUrl).href, {
@@ -24,6 +33,7 @@ export async function verifyInstalledApplication(installed, evidence, baseUrl = 
     const text = await page.locator('body').innerText();
     const result = { url: page.url(), status: response?.status(), title: await page.title(), browserVersion: browser.version(), errors,
       optionalPassword: encryptionStatus.locked === false && dialogs === 0,
+      workspaceReady: !readinessError, ...(readinessError ? { readinessError } : {}),
       encryptionStatus, modelsStatus: models.status(), dialogs, text: text.slice(0, 6000) };
     await fs.writeFile(path.join(evidence, 'first-launch.json'), JSON.stringify(result, null, 2));
     if (!encryption.ok() || encryptionStatus.locked !== false || encryptionStatus.protection === 'passphrase') {
@@ -32,7 +42,7 @@ export async function verifyInstalledApplication(installed, evidence, baseUrl = 
     if (!models.ok() || dialogs) {
       throw new Error('First use is blocked by a modal or inaccessible Models API.');
     }
-    if (!response?.ok() || errors.length || !/FLUJO/i.test(text) || /Application error|Internal Server Error/i.test(text)) {
+    if (!response?.ok() || readinessError || errors.length || !/FLUJO/i.test(text) || /Application error|Internal Server Error/i.test(text)) {
       throw new Error('The fresh installed application did not render a healthy FLUJO screen.');
     }
   } finally {
