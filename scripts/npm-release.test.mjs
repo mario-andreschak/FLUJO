@@ -577,7 +577,7 @@ test('candidate checksum failure never reaches a registry write', async (t) => {
   assert.equal(registry.commands.length, 0);
 });
 
-function finalizationRunner(manifest, { missing = false, tag = null } = {}) {
+function finalizationRunner(manifest, { missing = false, tag = null, existingRuns = {} } = {}) {
   const commands = [];
   const dispatched = new Map();
   let nextRunId = 123;
@@ -607,7 +607,8 @@ function finalizationRunner(manifest, { missing = false, tag = null } = {}) {
     if (args[0] === 'run' && args[1] === 'list') {
       const workflow = args[args.indexOf('--workflow') + 1];
       const id = dispatched.get(workflow);
-      return JSON.stringify(id ? [{ databaseId: id, headSha: SHA, event: 'workflow_dispatch' }] : []);
+      const headBranch = workflow === 'installer.yml' ? `v${VERSION}` : 'main';
+      return JSON.stringify(id ? [{ databaseId: id, headSha: SHA, headBranch, event: 'workflow_dispatch' }] : (existingRuns[workflow] ?? []));
     }
     assert.ok(args[0] === 'run' && args[1] === 'watch' && args.includes('--exit-status'));
     return '';
@@ -664,6 +665,49 @@ test('finalization retry reuses the existing exact tag and still waits for both 
   assert.equal(github.commands.some(({ args }) => args.includes('POST')), false);
   assert.equal(github.commands.filter(({ args }) => args[0] === 'workflow' && args[1] === 'run').length, 2);
   assert.equal(github.commands.filter(({ args }) => args[0] === 'run' && args[1] === 'watch').length, 2);
+});
+
+test('resumed finalization watches the original exact-source child runs without rebuilding artifacts', async (t) => {
+  const candidate = fixture(t);
+  const existingRuns = {
+    'installer.yml': [{ databaseId: 101, headSha: SHA, headBranch: `v${VERSION}`, event: 'workflow_dispatch' }],
+    'publish-image.yml': [{ databaseId: 102, headSha: SHA, headBranch: 'main', event: 'workflow_dispatch' }],
+  };
+  const github = finalizationRunner(candidate.manifest, { tag: { type: 'commit', sha: SHA }, existingRuns });
+  await finalizeCandidate({ run: github.run, directory: candidate.directory, sha: SHA, version: VERSION });
+  assert.equal(github.commands.some(({ args }) => args.includes('POST') || args[0] === 'workflow'), false);
+  assert.deepEqual(github.commands.filter(({ args }) => args[0] === 'run' && args[1] === 'watch').map(({ args }) => args[2]), ['101', '102']);
+});
+
+test('child reuse rejects another source, ref or event', async (t) => {
+  const candidate = fixture(t);
+  const existingRuns = Object.fromEntries(['installer.yml', 'publish-image.yml'].map((workflow) => {
+    const ref = workflow === 'installer.yml' ? `v${VERSION}` : 'main';
+    return [workflow, [
+      { databaseId: 201, headSha: 'b'.repeat(40), headBranch: ref, event: 'workflow_dispatch' },
+      { databaseId: 202, headSha: SHA, headBranch: 'unrelated-ref', event: 'workflow_dispatch' },
+      { databaseId: 203, headSha: SHA, headBranch: ref, event: 'push' },
+    ]];
+  }));
+  const github = finalizationRunner(candidate.manifest, { existingRuns });
+  await finalizeCandidate({ run: github.run, directory: candidate.directory, sha: SHA, version: VERSION });
+  assert.equal(github.commands.filter(({ args }) => args[0] === 'workflow' && args[1] === 'run').length, 2);
+  assert.deepEqual(github.commands.filter(({ args }) => args[0] === 'run' && args[1] === 'watch').map(({ args }) => args[2]), ['123', '124']);
+});
+
+test('an existing failed child remains a release failure instead of triggering another artifact build', async (t) => {
+  const candidate = fixture(t);
+  const existingRuns = {
+    'installer.yml': [{ databaseId: 101, headSha: SHA, headBranch: `v${VERSION}`, event: 'workflow_dispatch' }],
+    'publish-image.yml': [{ databaseId: 102, headSha: SHA, headBranch: 'main', event: 'workflow_dispatch' }],
+  };
+  const github = finalizationRunner(candidate.manifest, { tag: { type: 'commit', sha: SHA }, existingRuns });
+  await assert.rejects(finalizeCandidate({ directory: candidate.directory, sha: SHA, version: VERSION, run: (command, args) => {
+    const result = github.run(command, args);
+    if (args[0] === 'run' && args[1] === 'watch') throw new Error('Child workflow failed');
+    return result;
+  } }), /Child workflow failed/);
+  assert.equal(github.commands.some(({ args }) => args[0] === 'workflow'), false);
 });
 
 test('the Actions graph isolates npm identity and publishes only the tested artifacts from the original run', () => {

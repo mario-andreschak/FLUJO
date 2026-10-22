@@ -124,7 +124,7 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
   const containerBytes = readFileSync(new URL(manifest.containerBase.metadataFile, root));
   assert.equal(sha(containerBytes), manifest.containerBase.metadataSha256);
   const metadata = JSON.parse(containerBytes.toString().replace(/^\uFEFF/, ''));
-  assert.equal(manifest.containerBase.reference, `public.ecr.aws/docker/library/node:${metadata.name}@${metadata.digest}`);
+  assert.equal(manifest.containerBase.reference, `mirror.gcr.io/library/node:${metadata.name}@${metadata.digest}`);
   assert.deepEqual(Object.keys(manifest.runtimes), [...new Set(Object.values(CI_NODE_PROFILES))]);
   for (const version of Object.values(CI_NODE_PROFILES)) {
     const entry = manifest.runtimes[version];

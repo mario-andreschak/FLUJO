@@ -153,13 +153,18 @@ export function assertOidcOnly(env) {
 
 async function dispatchAndFind(run, workflow, ref, sha, fields = []) {
   const listArgs = ['run', 'list', '--repo', REPOSITORY, '--workflow', workflow, '--commit', sha,
-    '--event', 'workflow_dispatch', '--limit', '20', '--json', 'databaseId,headSha,event'];
-  const previous = new Set(JSON.parse(run('gh', listArgs)).map((item) => item.databaseId));
+    '--event', 'workflow_dispatch', '--limit', '20', '--json', 'databaseId,headSha,headBranch,event'];
+  const matchingRuns = () => JSON.parse(run('gh', listArgs)).filter((item) => item.headSha === sha
+    && item.headBranch === ref && item.event === 'workflow_dispatch' && Number.isSafeInteger(item.databaseId))
+    .sort((a, b) => b.databaseId - a.databaseId);
+  // A resumed finalizer must watch the original child runs rather than compile
+  // another installer. Rerun a failed child's jobs before resuming this job;
+  // the watch below still refuses a failed or cancelled child.
+  const existing = matchingRuns()[0];
+  if (existing) return existing.databaseId;
   run('gh', ['workflow', 'run', workflow, '--repo', REPOSITORY, '--ref', ref, ...fields]);
   for (let attempt = 0; attempt < 36; attempt++) {
-    const found = JSON.parse(run('gh', listArgs)).filter((item) => item.headSha === sha
-      && item.event === 'workflow_dispatch' && !previous.has(item.databaseId))
-      .sort((a, b) => b.databaseId - a.databaseId)[0];
+    const found = matchingRuns()[0];
     if (found) {
       return found.databaseId;
     }
