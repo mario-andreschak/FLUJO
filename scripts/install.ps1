@@ -346,7 +346,7 @@ function Install-Prereq {
         -DisplayName $DisplayName -Preexisting $preexisting
 }
 
-# WinGet can lag behind security releases. A missing Node runtime must be
+# WinGet can lag behind security releases. A missing or outdated runtime must be
 # bootstrapped from the same signed official release qualified by CI.
 # This private runtime is removed with FLUJO-cli by the existing uninstaller.
 function Get-ManagedNodeSpec {
@@ -392,6 +392,37 @@ function Install-ManagedNode {
         if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
     }
     return $destination
+}
+
+function Initialize-InstallerNodeRuntime {
+    param([Parameter(Mandatory)] [string]$RuntimeRoot)
+    $script:ManagedNodeDirectory = ''
+    $managedNodeCandidate = Join-Path $RuntimeRoot (Get-ManagedNodeSpec).Folder
+    if (Test-Path -LiteralPath (Join-Path $managedNodeCandidate 'node.exe')) {
+        $script:ManagedNodeDirectory = $managedNodeCandidate
+        $env:Path = "$managedNodeCandidate;$env:Path"
+    }
+    Write-Step 'Validating Node.js version (requires 22.23.4+ within 22.x, or 24.22.1+ within 24.x)'
+    $nodeResult = Test-FlujoNodeVersion
+    switch ($nodeResult.Status) {
+        'Supported' {
+            Write-Ok "Node.js $($nodeResult.Version) meets the supported runtime requirement"
+        }
+        { $_ -in @('Missing', 'Outdated') } {
+            if ($nodeResult.Status -eq 'Outdated') {
+                Write-Step "Node.js $($nodeResult.Version) is outside FLUJO's supported range. Installing a private runtime; the existing Node installation will remain unchanged."
+            }
+            $script:ManagedNodeDirectory = Install-ManagedNode -RuntimeRoot $RuntimeRoot
+            $env:Path = "$script:ManagedNodeDirectory;$env:Path"
+        }
+        'Malformed' {
+            throw "Node.js version probe returned malformed output: $($nodeResult.Message). The 'node' command exists but produced unexpected output. Uninstall or fix the existing Node installation and re-run."
+        }
+        'ProbeFailed' {
+            throw "Node.js version probe failed: $($nodeResult.Message). The 'node' command exists but failed to execute. Uninstall or fix the existing Node installation and re-run."
+        }
+        default { throw "Unknown Node.js validation status: $($nodeResult.Status)" }
+    }
 }
 
 # Install the Claude Code CLI (provides the `claude` command) via npm. This is
@@ -707,36 +738,8 @@ Write-InstallerStage -Name 'prerequisites'
 # A second setup launched by the same desktop/parent inherits its old PATH even
 # though the first setup installed tools. Refresh before deciding what is missing.
 Update-SessionEnvironment
-$script:ManagedNodeDirectory = ''
 $managedNodeRoot = Join-Path $env:LOCALAPPDATA 'FLUJO-cli\runtime'
-$managedNodeCandidate = Join-Path $managedNodeRoot (Get-ManagedNodeSpec).Folder
-if (Test-Path -LiteralPath (Join-Path $managedNodeCandidate 'node.exe')) {
-    $script:ManagedNodeDirectory = $managedNodeCandidate
-    $env:Path = "$managedNodeCandidate;$env:Path"
-}
-Write-Step "Validating Node.js version (requires 22.23.4+ within 22.x, or 24.22.1+ within 24.x)"
-$nodeResult = Test-FlujoNodeVersion
-switch ($nodeResult.Status) {
-    'Supported' {
-        Write-Ok "Node.js $($nodeResult.Version) meets minimum requirement (22.23.4+ within 22.x, or 24.22.1+ within 24.x)"
-    }
-    'Missing' {
-        $script:ManagedNodeDirectory = Install-ManagedNode -RuntimeRoot $managedNodeRoot
-        $env:Path = "$script:ManagedNodeDirectory;$env:Path"
-    }
-    'Outdated' {
-        throw "Node.js $($nodeResult.Version) is outside FLUJO's supported range. Install a current patched Node.js 22.x (at least 22.23.4) or 24.x (at least 24.22.1), activate it on PATH, then re-run. The installer will not switch an existing Node installation automatically."
-    }
-    'Malformed' {
-        throw "Node.js version probe returned malformed output: $($nodeResult.Message). The 'node' command exists but produced unexpected output. Uninstall or fix the existing Node installation and re-run."
-    }
-    'ProbeFailed' {
-        throw "Node.js version probe failed: $($nodeResult.Message). The 'node' command exists but failed to execute. Uninstall or fix the existing Node installation and re-run."
-    }
-    default {
-        throw "Unknown Node.js validation status: $($nodeResult.Status)"
-    }
-}
+Initialize-InstallerNodeRuntime -RuntimeRoot $managedNodeRoot
 
 # Last question: persist the script-execution policy for future terminals / on-
 # demand MCP server builds (with the user's consent). Skipped automatically if

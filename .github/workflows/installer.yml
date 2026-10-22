@@ -278,7 +278,7 @@ jobs:
         run: ./scripts/prepare-windows-installer-runner.ps1
       - name: Install, rerun and launch the original executable
         shell: pwsh
-        run: ./scripts/verify-windows-install.ps1 -BootstrapNode:('${{ matrix.os }}' -eq 'windows-2025')
+        run: ./scripts/verify-windows-install.ps1 -BootstrapNode:('${{ matrix.os }}' -eq 'windows-2025') -ExistingOutdatedNode:('${{ matrix.os }}' -eq 'windows-2022')
       - name: Retain release installation evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

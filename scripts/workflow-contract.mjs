@@ -110,7 +110,7 @@ function assertInstallerProvenance(workflow) {
     throw new Error('Installer build/sign/publication authority or original-artifact binding changed.');
   }
   const acceptanceDownload = acceptance?.steps?.find(step => step.uses?.startsWith('actions/download-artifact@'));
-  const installedCheck = acceptance?.steps?.find(step => step.run === "./scripts/verify-windows-install.ps1 -BootstrapNode:('${{ matrix.os }}' -eq 'windows-2025')");
+  const installedCheck = acceptance?.steps?.find(step => step.run === "./scripts/verify-windows-install.ps1 -BootstrapNode:('${{ matrix.os }}' -eq 'windows-2025') -ExistingOutdatedNode:('${{ matrix.os }}' -eq 'windows-2022')");
   if (acceptance?.needs !== 'installer-build' || acceptance.if || acceptance['continue-on-error']
       || acceptance['runs-on'] !== '${{ matrix.os }}'
       || JSON.stringify(acceptance.strategy?.matrix?.os) !== JSON.stringify(['windows-2022', 'windows-2025'])

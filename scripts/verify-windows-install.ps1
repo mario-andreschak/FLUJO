@@ -2,8 +2,10 @@
 # This deliberately runs the compiled wizard, its embedded PowerShell 5.1
 # installer, real Git/npm/browser downloads, production build and launcher.
 [CmdletBinding()]
-param([switch]$BootstrapNode)
+param([switch]$BootstrapNode, [switch]$ExistingOutdatedNode)
 $ErrorActionPreference = 'Stop'
+if ($BootstrapNode -and $ExistingOutdatedNode) { throw 'Select one initial Node runtime scenario.' }
+$requiresPrivateNode = $BootstrapNode -or $ExistingOutdatedNode
 if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or -not $env:RUNNER_TEMP) {
     throw 'Run this acceptance check only on a fresh GitHub-hosted Windows worker.'
 }
@@ -35,8 +37,10 @@ $result = [ordered]@{
     unrelatedDirectoryRefused = $false
     missingWingetRefused = $false
     launchPassed = $false
-    nodeBootstrapRequested = [bool]$BootstrapNode
+    nodeBootstrapRequested = [bool]$requiresPrivateNode
     nodeBootstrapPassed = $false
+    existingOutdatedNodeRequested = [bool]$ExistingOutdatedNode
+    existingOutdatedNodePreserved = $false
 }
 if ($env:EXPECTED_INSTALLER_SHA256 -and $result.installerSha256 -cne $env:EXPECTED_INSTALLER_SHA256) {
     throw 'Downloaded installer differs from the compiler artifact digest.'
@@ -55,7 +59,7 @@ try {
     } finally {
         $env:PATH = $originalPath
     }
-    if ($BootstrapNode) {
+    if ($requiresPrivateNode) {
         # Hosted images contain Node already. Hide every Node directory from
         # process AND registry PATH, which the production installer refreshes.
         # Leave those installations untouched and restore the registry below.
@@ -67,6 +71,25 @@ try {
             [Environment]::SetEnvironmentVariable('Path', $withoutNode, $scope)
         }
         if (Get-Command node -ErrorAction SilentlyContinue) { throw 'Fresh dependency acceptance still has Node on PATH.' }
+    }
+    if ($ExistingOutdatedNode) {
+        # A genuine pre-security runtime reproduces an earlier setup's installed
+        # prerequisite. Execute only --version: all app builds and startup must
+        # use the new verified private runtime, never this obsolete fixture.
+        $oldNodeDirectory = Join-Path $env:RUNNER_TEMP 'existing older Node'
+        New-Item -ItemType Directory -Path $oldNodeDirectory | Out-Null
+        $oldNodeExecutable = Join-Path $oldNodeDirectory 'node.exe'
+        $oldNodeSha256 = '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e'
+        Invoke-WebRequest 'https://nodejs.org/dist/v22.23.3/win-x64/node.exe' -OutFile $oldNodeExecutable
+        if ((Get-FileHash -LiteralPath $oldNodeExecutable -Algorithm SHA256).Hash.ToLowerInvariant() -cne $oldNodeSha256) {
+            throw 'Older Node fixture differs from the signed official executable receipt.'
+        }
+        $result.previousNodeVersion = & $oldNodeExecutable --version
+        if ($LASTEXITCODE -ne 0 -or $result.previousNodeVersion -cne 'v22.23.3') { throw 'Older Node fixture version mismatch.' }
+        foreach ($scope in @('Process', 'User', 'Machine')) {
+            [Environment]::SetEnvironmentVariable('Path', "$oldNodeDirectory;$([Environment]::GetEnvironmentVariable('Path', $scope))", $scope)
+        }
+        if ((Get-Command node -CommandType Application).Source -ine $oldNodeExecutable) { throw 'Older Node was not selected before setup.' }
     }
     $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TASKS=desktopicon', "/DIR=`"$target`"", "/LOG=`"$evidence\setup.log`"") -WindowStyle Hidden -Wait -PassThru
     $result.installerExitCode = $setup.ExitCode
@@ -85,10 +108,10 @@ try {
     $launcher = Join-Path $cli 'flujo.cmd'
     if (-not (Test-Path -LiteralPath $launcher)) { throw 'Global launcher was not created.' }
     $browserNode = 'node'
-    if ($BootstrapNode) {
+    if ($requiresPrivateNode) {
         $browserNode = Join-Path $cli 'runtime\node-v22.23.4-win-x64\node.exe'
         $result.bootstrappedNodeVersion = & $browserNode --version
-        if ($LASTEXITCODE -ne 0 -or $result.bootstrappedNodeVersion -cne 'v22.23.4') { throw 'Missing-Node bootstrap did not install the qualified runtime.' }
+        if ($LASTEXITCODE -ne 0 -or $result.bootstrappedNodeVersion -cne 'v22.23.4') { throw 'Private Node bootstrap did not install the qualified runtime.' }
         if ($manifest.prerequisites | Where-Object command -eq 'node') { throw 'Private Node runtime was incorrectly registered for shared WinGet removal.' }
         $result.nodeBootstrapPassed = $true
     }
@@ -111,6 +134,14 @@ try {
         throw 'Rerunning setup did not preserve existing user data.'
     }
     $result.userDataPreserved = $true
+    if ($ExistingOutdatedNode) {
+        if ((Get-FileHash -LiteralPath $oldNodeExecutable -Algorithm SHA256).Hash.ToLowerInvariant() -cne $oldNodeSha256 -or
+            (& $oldNodeExecutable --version) -cne 'v22.23.3' -or
+            (Get-Command node -CommandType Application).Source -ine $oldNodeExecutable) {
+            throw 'Setup or rerun changed the existing global Node runtime.'
+        }
+        $result.existingOutdatedNodePreserved = $true
+    }
     Copy-Item -LiteralPath (Join-Path $cli 'install.log') -Destination (Join-Path $evidence 'rerun-install.log')
     # The same binary must refuse a directory containing unrelated user files.
     $unrelated = Join-Path $env:RUNNER_TEMP 'FLUJO unrelated directory'
@@ -139,7 +170,7 @@ try {
     if ($LASTEXITCODE) { throw 'Installed browser startup acceptance failed.' }
     $result.launchPassed = $true
 } finally {
-    if ($BootstrapNode) {
+    if ($requiresPrivateNode) {
         [Environment]::SetEnvironmentVariable('Path', $savedMachinePath, 'Machine')
         [Environment]::SetEnvironmentVariable('Path', $savedUserPath, 'User')
         $env:Path = $savedProcessPath
