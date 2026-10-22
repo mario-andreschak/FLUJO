@@ -88,6 +88,22 @@ test.each(['v1', 'beta'])('%s factory binds fixed parameters and suppresses both
   await transport.close();
 });
 
+test('another server module graph retains the launched identity and still checks revocation', async () => {
+  const transport = createStdioTransport(config);
+  const original = getManagedTrustedHost(transport);
+  let lookup!: typeof getManagedTrustedHost;
+  jest.isolateModules(() => {
+    lookup = jest.requireActual<typeof import('@/backend/services/mcp/trustedHost')>(
+      '@/backend/services/mcp/trustedHost').getManagedTrustedHost;
+  });
+  expect(lookup(transport)).toBe(original);
+  expect(lookup({})).toBeUndefined();
+  await lookup(transport)!.assertCurrent(config);
+  grant.approvals = []; persist();
+  await expect(lookup(transport)!.assertCurrent(config)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
+  await transport.close();
+});
+
 test.each(['v1', 'beta'])('%s refuses revoked consent before SDK start and retires the generation', async era => {
   const start = jest.spyOn(era === 'v1' ? StdioClientTransport.prototype : BetaStdioClientTransport.prototype, 'start').mockResolvedValue();
   const transport = era === 'v1' ? createStdioTransport(config) : createBetaTransport(config);

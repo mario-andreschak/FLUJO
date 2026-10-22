@@ -41,6 +41,8 @@ interface RunToolsProps {
   onHeadersChange?: (headers: Record<string, MCPHeaderValue>) => void;
   oauthClientId?: string;
   oauthClientSecret?: string;
+  oauthIssuer?: string;
+  onOAuthIssuerChange?: (issuer: string) => void;
   onOAuthClientIdChange?: (clientId: string) => void;
   onOAuthClientSecretChange?: (clientSecret: string) => void;
   serverName: string;
@@ -72,6 +74,8 @@ const RunTools: React.FC<RunToolsProps> = ({
   onHeadersChange,
   oauthClientId = '',
   oauthClientSecret = '',
+  oauthIssuer = '',
+  onOAuthIssuerChange,
   onOAuthClientIdChange,
   onOAuthClientSecretChange,
   serverName,
@@ -236,6 +240,9 @@ const RunTools: React.FC<RunToolsProps> = ({
           <OAuthCredentialsEditor
             clientId={oauthClientId}
             clientSecret={oauthClientSecret}
+            serverUrl={serverUrl}
+            issuer={oauthIssuer}
+            onIssuerChange={onOAuthIssuerChange}
             onClientIdChange={onOAuthClientIdChange || (() => {})}
             onClientSecretChange={onOAuthClientSecretChange || (() => {})}
           />

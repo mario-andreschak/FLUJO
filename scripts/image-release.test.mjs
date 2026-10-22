@@ -183,7 +183,7 @@ test('promotion verifies every signature before mutation and every alias retains
     assert.equal(args[args.indexOf('--source-digest') + 1], sha);
     assert.equal(args[args.indexOf('--signer-digest') + 1], sha);
     assert.equal(args[args.indexOf('--source-ref') + 1], 'refs/heads/main');
-    assert.equal(args[args.indexOf('--signer-workflow') + 1], 'mario-andreschak/FLUJO/.github/workflows/publish-image.yml');
+    assert.deepEqual(args.filter(arg => ['--cert-identity', '--cert-identity-regex', '--signer-repo', '--signer-workflow'].includes(arg)), ['--cert-identity']);
     assert.equal(args[args.indexOf('--cert-identity') + 1], 'https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-image.yml@refs/heads/main');
     assert.equal(args[args.indexOf('--cert-oidc-issuer') + 1], 'https://token.actions.githubusercontent.com');
     assert.ok(args.includes('--deny-self-hosted-runners'));
@@ -280,6 +280,12 @@ test('image workflow builds once, signs separately and promotes its original art
   assert.equal(sbom.with.image, 'docker:${{ steps.smoke.outputs.image_id }}');
   assert.equal(sbom.with['upload-release-assets'], false);
   assert.equal(sbom.with['syft-version'], 'v1.54.0');
+  assert.equal(sbom.with.format, 'cyclonedx-json@1.6', 'Syft defaults to a newer schema than the publisher accepts');
+  assert.equal(sbom.id, 'sbom');
+  const failedInventory = candidate.steps.find(({ name }) => name === 'Retain inventory when publication fails');
+  assert.equal(failedInventory.if, "failure() && steps.sbom.outcome == 'success'");
+  assert.equal(failedInventory.with.path, '${{ env.IMAGE_EVIDENCE_DIR }}/image.sbom.cdx.json');
+  assert.equal(failedInventory.with['if-no-files-found'], 'error');
   const npm = YAML.parse(readFileSync(new URL('../.github/workflows/publish-npm.yml', import.meta.url), 'utf8'));
   const imageBudget = candidate['timeout-minutes'] + attest['timeout-minutes'] + publish['timeout-minutes'];
   assert.ok(npm.jobs.finalize['timeout-minutes'] > imageBudget + 10,

@@ -14,13 +14,15 @@ import { assertSupportedNodeRuntime, isSupportedNodeRuntime, SUPPORTED_NODE_RANG
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const servers = ['bash', 'browser', 'filesystem', 'flujo'];
 const versions = [
+  ['22.19.0', false], ['22.23.3', false], ['24.2.0', false], ['24.21.0', false],
+  ['24.22.0', false], ['24.22.2', true], ['24.23.0', true],
   ['20.19.0', false], ['22.0.0', false], ['22.13.1', false], ['22.16.9', false],
   ['22.17.0', false], ['v22.17.0', false], ['22.18.0', false], ['22.18.99', false],
-  ['22.19.0', true], ['v22.19.0', true], ['22.19.1', true], ['22.99.99', true],
+  ['22.23.4', true], ['v22.23.4', true], ['22.23.5', true], ['22.99.99', true],
   ['23.0.0', false], ['23.11.0', false], ['24.0.0', false], ['24.1.9', false],
-  ['24.2.0', true], ['24.21.0', true], ['25.0.0', false], ['26.0.0', false],
-  ['100.0.0', false], ['22.19', false], ['022.19.0', false], ['22.017.0', false],
-  ['22.19.0-rc.1', false], ['22.19.0+custom', false], ['22.19.2147483648', false],
+  ['24.22.1', true], ['v24.22.1', true], ['25.0.0', false], ['26.0.0', false],
+  ['100.0.0', false], ['22.19', false], ['022.23.4', false], ['22.017.0', false],
+  ['22.23.4-rc.1', false], ['22.23.4+custom', false], ['22.19.2147483648', false],
   ['', false], [undefined, false], [22, false],
 ];
 
@@ -58,7 +60,7 @@ test('runtime errors contain bounded migration guidance without interpolating pr
 });
 
 test('all six tracked engines and corresponding lock entries declare the closed runtime range', () => {
-  assert.equal(SUPPORTED_NODE_RANGE, '^22.19.0 || ^24.2.0');
+  assert.equal(SUPPORTED_NODE_RANGE, '^22.23.4 || ^24.22.1');
   const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
   for (const directory of ['', ...[...servers, 'shared'].map((server) => `mcp-servers/${server}`)]) {
     const manifest = JSON.parse(readFileSync(path.join(root, directory, 'package.json'), 'utf8'));
@@ -134,7 +136,7 @@ test('preflight refuses unsupported versions before a fixture dependency can per
     assert.equal(existsSync(marker), false);
   }
   // A synthetic version admits only this harmless fixture; it does not qualify another native runtime.
-  const accepted = spawnSync(process.execPath, ['--input-type=module', '--eval', `Object.defineProperty(process.versions, 'node', { value: '22.19.0' }); await import(${JSON.stringify(pathToFileURL(entry).href)});`], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+  const accepted = spawnSync(process.execPath, ['--input-type=module', '--eval', `Object.defineProperty(process.versions, 'node', { value: '22.23.4' }); await import(${JSON.stringify(pathToFileURL(entry).href)});`], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
   assert.ifError(accepted.error);
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.equal(readFileSync(marker, 'utf8'), 'owned fixture');
@@ -144,7 +146,7 @@ if (process.platform === 'win32') {
   test('Windows installer uses the same version policy and retains missing/failed/malformed probe states', () => {
     const helper = path.join(root, 'scripts/installer-functions.ps1').replaceAll("'", "''");
     const cases = versions.filter(([version]) => typeof version === 'string').map(([version, supported]) => ({ version, supported }));
-    const script = `$ErrorActionPreference = 'Stop'\n. '${helper}'\n$cases = '${JSON.stringify(cases).replaceAll("'", "''")}' | ConvertFrom-Json\nforeach ($case in $cases) {\n $value = $case.version\n $result = Test-FlujoNodeVersion -CommandResolver { [PSCustomObject]@{ Source = 'owned-fixture' } } -VersionResolver { $value }\n if (($result.Status -eq 'Supported') -ne $case.supported) { throw 'Runtime policy mismatch' }\n}\nif ((Test-FlujoNodeVersion -CommandResolver { $null }).Status -ne 'Missing') { throw 'Missing state lost' }\nif ((Test-FlujoNodeVersion -CommandResolver { 'fixture' } -VersionResolver { [PSCustomObject]@{ Output = '24.2.0'; ExitCode = 1 } }).Status -ne 'ProbeFailed') { throw 'Failed state lost' }\nWrite-Output 'Windows policy fixture passed'`;
+    const script = `$ErrorActionPreference = 'Stop'\n. '${helper}'\n$cases = '${JSON.stringify(cases).replaceAll("'", "''")}' | ConvertFrom-Json\nforeach ($case in $cases) {\n $value = $case.version\n $result = Test-FlujoNodeVersion -CommandResolver { [PSCustomObject]@{ Source = 'owned-fixture' } } -VersionResolver { $value }\n if (($result.Status -eq 'Supported') -ne $case.supported) { throw 'Runtime policy mismatch' }\n}\nif ((Test-FlujoNodeVersion -CommandResolver { $null }).Status -ne 'Missing') { throw 'Missing state lost' }\nif ((Test-FlujoNodeVersion -CommandResolver { 'fixture' } -VersionResolver { [PSCustomObject]@{ Output = '24.22.1'; ExitCode = 1 } }).Status -ne 'ProbeFailed') { throw 'Failed state lost' }\nWrite-Output 'Windows policy fixture passed'`;
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 15_000 });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
@@ -164,7 +166,7 @@ $originalProbe = (Get-Command Test-FlujoNodeVersion).ScriptBlock
 function Write-Step { param($Text) }
 function Write-Ok { param($Text) }
 function Write-Warn2 { param($Text) }
-foreach ($value in @('22.13.1', '23.11.0', '24.1.9', '25.0.0', '26.0.0', '22.17.0', '22.18.99', '22.19.0', '24.2.0')) {
+foreach ($value in @('22.13.1', '23.11.0', '24.1.9', '25.0.0', '26.0.0', '22.17.0', '22.18.99', '22.23.4', '24.22.1')) {
  $script:fixtureProbe = & $originalProbe -CommandResolver { 'fixture' } -VersionResolver { $value }
  function Test-FlujoNodeVersion { return $script:fixtureProbe }
  $refused = $false
@@ -190,7 +192,7 @@ test('Unix Node-installation stage refuses unsupported existing Node after prere
   assert.ok(validator && stage.includes('node_version_ok'));
   const entry = path.join(directory, 'installer-stage.sh');
   const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
-  for (const [version, supported] of [['22.13.1', false], ['23.11.0', false], ['24.1.9', false], ['26.0.0', false], ['22.17.0', false], ['22.18.99', false], ['22.19.0', true], ['24.2.0', true]]) {
+  for (const [version, supported] of [['22.13.1', false], ['23.11.0', false], ['24.1.9', false], ['26.0.0', false], ['22.17.0', false], ['22.18.99', false], ['22.23.4', true], ['24.22.1', true]]) {
     writeFileSync(entry, `set -euo pipefail
 have() { [ "$1" = node ]; }
 node() { printf '%s\\n' '${version}'; }
@@ -262,8 +264,8 @@ curl() {
     for (const [version, exitCode, present, refused] of [
       ['22.13.1', 0, true, true], ['22.17.0', 0, true, true], ['22.18.99', 0, true, true], ['23.11.0', 0, true, true],
       ['24.1.9', 0, true, true], ['25.0.0', 0, true, true], ['26.0.0', 0, true, true],
-      ['22.19.x', 0, true, true], ['22.19.0', 1, true, true],
-      ['22.19.0', 0, true, false], ['24.2.0', 0, true, false], ['', 0, false, false],
+      ['22.19.x', 0, true, true], ['22.23.4', 1, true, true],
+      ['22.23.4', 0, true, false], ['24.22.1', 0, true, false], ['', 0, false, false],
     ]) {
       if (existsSync(marker)) rmSync(marker);
       const fixtureHome = path.join(directory, `case-${caseIndex++}`);

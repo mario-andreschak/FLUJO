@@ -8,6 +8,8 @@ import {
   nodeTestMatch,
   nodeTestPathIgnorePatterns,
   shouldExcludeIsolatedSuites,
+  enduringAgentsTestPathIgnorePatterns,
+  shouldExcludeEnduringAgents,
 } from "./jest.testMatch.mjs";
 
 // next/jest wires up the SWC transform (so .ts/.tsx need no extra toolchain),
@@ -122,6 +124,7 @@ async function buildConfig() {
   // serial job, so they neither flake under worker contention nor slow the
   // main run. Local `npm test` is unaffected unless the switch is set.
   const excludeIsolated = shouldExcludeIsolatedSuites();
+  const excludeEnduringAgents = shouldExcludeEnduringAgents();
   for (const project of [node, jsdom]) {
     project.transformIgnorePatterns = allowEsmOnlyPackages(
       project.transformIgnorePatterns,
@@ -130,6 +133,12 @@ async function buildConfig() {
       project.testPathIgnorePatterns = [
         ...(project.testPathIgnorePatterns ?? []),
         ...isolatedTestPathIgnorePatterns,
+      ];
+    }
+    if (excludeEnduringAgents) {
+      project.testPathIgnorePatterns = [
+        ...(project.testPathIgnorePatterns ?? []),
+        ...enduringAgentsTestPathIgnorePatterns,
       ];
     }
   }

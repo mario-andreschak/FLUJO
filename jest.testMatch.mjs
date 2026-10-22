@@ -47,6 +47,7 @@ export function testPatternsForRoot(root) {
     jsdomTestMatch: JSDOM_TEST_GLOBS.map((glob) => `${globRoot}/${glob}`),
     nodeTestPathIgnorePatterns: ['/node_modules/', ...NODE_IGNORE_GLOBS.map((pattern) => `${regexRoot}/${pattern}`)],
     isolatedTestPathIgnorePatterns: ISOLATED_TEST_FILES.map((file) => `${regexRoot}/${escapeForRegExp(file)}$`),
+    enduringAgentsTestPathIgnorePatterns: [`${regexRoot}/__tests__/enduringAgents/`],
   };
 }
 
@@ -71,12 +72,10 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/scheduler/staticRealBashFlow.test.ts',
   '__tests__/flow/original520OfflineWorkload.test.ts',
   '__tests__/flow/nativeOriginalHost.test.ts',
+  // Real 64-flow filesystem admission must not compete with unrelated Jest workers.
+  '__tests__/flow/firstDispatchConcurrency.test.ts',
   '__tests__/flow/archiveWriteQuarantineProcess.test.ts',
   '__tests__/model/claudeArchiveMemoryBoundary.test.ts',
-  '__tests__/enduringAgents/personaProcessBoundary.test.ts',
-  '__tests__/enduringAgents/activityRuntime.test.ts',
-  '__tests__/enduringAgents/memoryLifecycle.test.ts',
-  '__tests__/enduringAgents/soak/personaSoak.test.ts',
   '__tests__/mcp/processBoundary.test.ts',
   '__tests__/mcp/stdioServers.test.ts',
   '__tests__/mcp/browserCaptureRecording.test.ts',
@@ -88,10 +87,16 @@ export const ISOLATED_TEST_FILES = [
 // sets it when invoked with --exclude-isolated-suites (cross-platform: npm
 // scripts cannot portably prefix `VAR=value`).
 export const EXCLUDE_ISOLATED_SUITES_ENV = 'FLUJO_JEST_EXCLUDE_ISOLATED_SUITES';
+// Enduring Agents has its own manual workflow and is not a release prerequisite.
+export const EXCLUDE_ENDURING_AGENTS_ENV = 'FLUJO_JEST_EXCLUDE_ENDURING_AGENTS';
 
-export const { nodeTestMatch, jsdomTestMatch, nodeTestPathIgnorePatterns, isolatedTestPathIgnorePatterns } =
+export const { nodeTestMatch, jsdomTestMatch, nodeTestPathIgnorePatterns, isolatedTestPathIgnorePatterns, enduringAgentsTestPathIgnorePatterns } =
   testPatternsForRoot(fileURLToPath(new URL('.', import.meta.url)));
 
 export function shouldExcludeIsolatedSuites(env = process.env) {
   return /^(?:1|true|yes|on)$/i.test(env[EXCLUDE_ISOLATED_SUITES_ENV] ?? '');
+}
+
+export function shouldExcludeEnduringAgents(env = process.env) {
+  return /^(?:1|true|yes|on)$/i.test(env[EXCLUDE_ENDURING_AGENTS_ENV] ?? '');
 }

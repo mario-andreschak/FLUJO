@@ -142,7 +142,7 @@ if (process.argv[2] === '--worker') {
   }
   evidence.buildId = (await fs.readFile(path.join(repo, '.next/BUILD_ID'), 'utf8')).trim();
   evidence.sdkVersion = JSON.parse(await fs.readFile(path.join(repo, 'node_modules/@openai/codex-sdk/package.json'), 'utf8')).version;
-  assert.equal(evidence.sdkVersion, '0.162.1');
+  assert.equal(evidence.sdkVersion, '0.163.0');
   const workerTurn = async (phase, messages, priorSession) => {
     const fixture = `phase=${phase}; receipt=${randomBytes(18).toString('hex')}`;
     await fs.writeFile(fixturePath, fixture, { mode: 0o600 });

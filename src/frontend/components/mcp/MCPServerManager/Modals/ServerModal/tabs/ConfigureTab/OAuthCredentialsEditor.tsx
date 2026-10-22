@@ -10,6 +10,7 @@ import { MASKED_API_KEY } from '@/shared/types/constants';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { knownOAuthIssuer, isValidOAuthIssuer } from '@/utils/mcp/oauthIssuer';
 
 interface OAuthCredentialsEditorProps {
   clientId: string;
@@ -18,6 +19,9 @@ interface OAuthCredentialsEditorProps {
   // when bound to a global variable, or '' when unset. Sent back verbatim on save unless the
   // user edits it (MASKED_API_KEY tells the backend to keep the stored secret).
   clientSecret: string;
+  serverUrl?: string;
+  issuer?: string;
+  onIssuerChange?: (issuer: string) => void;
   onClientIdChange: (clientId: string) => void;
   onClientSecretChange: (clientSecret: string) => void;
 }
@@ -38,12 +42,17 @@ const GLOBAL_BINDING_RE = /^\$\{global:([^}]+)\}$/;
 const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
   clientId,
   clientSecret,
+  serverUrl = '',
+  issuer = '',
+  onIssuerChange,
   onClientIdChange,
   onClientSecretChange,
 }) => {
   const { globalEnvVars } = useStorage();
   const { t } = useI18n();
   const [showBindModal, setShowBindModal] = useState(false);
+  const automaticIssuer = knownOAuthIssuer(serverUrl);
+  const effectiveIssuer = issuer || automaticIssuer || '';
 
   const bindingMatch = clientSecret.match(GLOBAL_BINDING_RE);
   const isBound = !!bindingMatch;
@@ -125,6 +134,22 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
         }
       />
 
+      {clientId && (
+        <TextField
+          fullWidth
+          size="small"
+          label={t('mcp.local.oauth.issuer')}
+          value={effectiveIssuer}
+          onChange={e => onIssuerChange?.(e.target.value)}
+          placeholder="https://auth.example.com"
+          error={Boolean(effectiveIssuer && !isValidOAuthIssuer(effectiveIssuer))}
+          helperText={automaticIssuer && !issuer
+            ? t('mcp.local.oauth.issuerAutomatic')
+            : t('mcp.local.oauth.issuerHelp')}
+          sx={{ mt: 1.5 }}
+        />
+      )}
+
       {/* The callback URL the user must register in the provider's OAuth app. */}
       <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
         <Typography variant="caption" color="text.secondary">
@@ -145,7 +170,7 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
             top: '50%',
             left: '50%',
             transform: 'translate(-50%, -50%)',
-            width: 400,
+            width: 'min(400px, 100%)',
             bgcolor: 'background.paper',
             boxShadow: 24,
             p: 3,

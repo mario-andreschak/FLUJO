@@ -144,11 +144,13 @@ describe('existing DEFAULT encryption compatibility', () => {
     expect(dec).toBe('hello world');
   });
 
-  it('refuses to initialize default encryption when no metadata exists', async () => {
+  it('initializes default encryption without a custom password when no metadata exists', async () => {
     const { secure } = await loadModules();
-    expect(await secure.initializeDefaultEncryption()).toBe(false);
-    await expect(secure.encryptWithPassword('lazy-default')).rejects.toBeInstanceOf(secure.EncryptionLockedError);
-    expect(await secure.isEncryptionInitialized()).toBe(false);
+    expect(await secure.initializeDefaultEncryption()).toBe(true);
+    const encrypted = await secure.encryptWithPassword('lazy-default');
+    expect(await secure.decryptWithPassword(encrypted!)).toBe('lazy-default');
+    expect(await secure.isEncryptionInitialized()).toBe(true);
+    expect(await secure.isEncryptionLocked()).toBe(false);
   });
 });
 

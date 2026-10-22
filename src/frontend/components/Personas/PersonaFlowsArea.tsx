@@ -340,6 +340,7 @@ export default function PersonaFlowsArea({
     <Stack spacing={2}>
       {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
       <Alert severity="info">{t('personas.behaviors.futureActivity')}</Alert>
+      <Button component={Link} href={withWorkspaceUrl(`/harness?personaId=${encodeURIComponent(detail.persona.id)}`)}>{t('harness.versions')}</Button>
       <FlowSection
         title={t('personas.behaviors.core')}
         description={t('personas.behaviors.coreContext')}
@@ -423,6 +424,7 @@ export default function PersonaFlowsArea({
                     )}
                   </CardContent>
                   <CardActions sx={{ flexWrap: 'wrap', gap: 0.5, px: 2, pb: 2 }}>
+                    <Button component={Link} href={withWorkspaceUrl(`/harness?personaId=${encodeURIComponent(detail.persona.id)}&behaviorId=${encodeURIComponent(card.ref)}`)}>{t('harness.versions')}</Button>
                     <Button disabled={busy} onClick={() => setPicker({ kind: 'behavior', ref: card.ref })}>{card.flow ? t('personas.behaviors.change') : t('personas.behaviors.replace')}</Button>
                     <FlowLinks card={card} personaId={detail.persona.id} />
                     <Button disabled={busy} startIcon={<EditRounded />} onClick={() => { setRename(card); setRenameValue(card.name); }}>{t('personas.behaviors.rename')}</Button>

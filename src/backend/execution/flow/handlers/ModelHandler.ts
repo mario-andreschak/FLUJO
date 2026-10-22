@@ -1,6 +1,7 @@
 import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
+import { getHarnessExecution, replayHarnessTool } from '@/backend/services/harness/executionScope';
 import { createHash, randomUUID } from 'node:crypto';
 import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, issueExecutionModelStepContext, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
@@ -3498,7 +3499,7 @@ export class ModelHandler {
           attemptProducedOutput = false;
           const attemptResult = await attempt(attemptMessages, attemptTools, attemptTemperature);
           if (attemptResult.success) return attemptResult;
-          if (singlePhysicalAttempt) return attemptResult;
+          if (singlePhysicalAttempt || getHarnessExecution()) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
           if (opts?.nativeBrokerAuthority) return attemptResult;
@@ -3935,6 +3936,12 @@ export class ModelHandler {
           // Parse the arguments
           let args = JSON.parse(argsString) as Record<string, unknown>;
           log.info("trying to call tool", name)
+          if (getHarnessExecution() && !name.startsWith('handoff_to_') && name !== 'handoff') {
+            const resultContent = replayHarnessTool(name, args);
+            toolCallMessages.push({ id: uuidv4(), role: 'tool', tool_call_id: id, content: resultContent, timestamp: Date.now() });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
           // Check if it's a handoff tool
           if (name.startsWith('handoff_to_') || name === 'handoff') {
             // Process handoff tool directly

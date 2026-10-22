@@ -5,6 +5,7 @@ const { createRequire } = require('node:module');
 const { performance } = require('node:perf_hooks');
 const source = process.cwd();
 const evidence = process.argv[2];
+const bulkControl = process.argv.includes('--bulk-control');
 process.env.FLUJO_DATA_DIR = evidence + '/probe-data';
 const installed = createRequire(path.join(source, 'package.json'));
 const ts = installed('typescript');
@@ -31,6 +32,11 @@ const options={keepTokens:20,conversationId:'anchor-case',projection:{conversati
 const sections=['## Objective','## Important Details','## Work State','## Next Move','## Relevant Files'];
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 (async()=>{
+  // Account for lazy workspace/storage initialization before measuring payload
+  // allocation. Otherwise cold application loading and its uncollected garbage
+  // can dominate this bounded-writer measurement on a busy CI worker.
+  await store.writeRunResource({conversationId:'anchor-case',kind:'text',mimeType:'application/json',name:'warmup',
+    data:{json:{ready:true}},producedBy:{source:'compaction-artifact',artifactId:'warmup'}});
   const samples=[];
   for(let round=0;round<3;round++){
     const payload='x'.repeat(24*1024*1024)+' 🧭\ud800\\\n保留 flujo://run/exact/tail';
@@ -42,9 +48,12 @@ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
     const result=await api.compactHistory([input,{id:'recent',role:'user',timestamp:1,content:'recent '.repeat(100)}],options,{
       summarize:async()=>sections.map(s=>s+'\n- None.').join('\n\n'),now:()=>1,uuid:()=>`artifact-${round}`,
       writeAnchor:async(sourceValue,metadata)=>{
+        // A negative control verifies that the unchanged envelope rejects the
+        // former whole-transcript serialization instead of merely passing noise.
+        const anchorSource=bulkControl?JSON.stringify(sourceValue):sourceValue;
         atWriter=process.memoryUsage();
         written=await store.writeRunResource({conversationId:'anchor-case',kind:'text',mimeType:'application/json',name:'anchor-'+round,
-          data:typeof sourceValue==='string'?{text:sourceValue}:{json:sourceValue},producedBy:{source:'compaction-artifact',...metadata}});
+          data:typeof anchorSource==='string'?{text:anchorSource}:{json:anchorSource},producedBy:{source:'compaction-artifact',...metadata}});
         afterWriter=process.memoryUsage();
         if('skipped' in written)throw new Error('Anchor unexpectedly refused');
         return written.uri;
@@ -64,6 +73,6 @@ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
     samples,withinEnvelope:samples.every(s=>s.writerEntryHeapGrowth<16*1024*1024&&s.writerExitHeapGrowth<16*1024*1024&&s.writerExitExternalGrowth<8*1024*1024),
     providerCalls:0,summaryDependency:'Injected deterministic summary; actual resource store and files, no provider or fidelity claim',forcedGc:'Before/after diagnostic samples only'};
   fs.writeFileSync(process.argv[3],JSON.stringify(report,null,2));
-  console.log(JSON.stringify({complete:true,withinEnvelope:report.withinEnvelope,samples:samples.map(s=>({round:s.round,writerEntryHeapGrowth:s.writerEntryHeapGrowth,writerExitExternalGrowth:s.writerExitExternalGrowth,elapsedMs:s.elapsedMs,size:s.size}))}));
+  console.log(JSON.stringify({complete:true,withinEnvelope:report.withinEnvelope,samples:samples.map(s=>({round:s.round,writerEntryHeapGrowth:s.writerEntryHeapGrowth,writerExitHeapGrowth:s.writerExitHeapGrowth,writerExitExternalGrowth:s.writerExitExternalGrowth,elapsedMs:s.elapsedMs,size:s.size}))}));
   if(!report.withinEnvelope)process.exitCode=1;
 })().catch(error=>{console.error(error);process.exitCode=1;});

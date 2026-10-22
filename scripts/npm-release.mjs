@@ -16,10 +16,19 @@ const PUBLISHED_INTEGRITY_DELAY_MS = 10_000;
 const PUBLISHED_INTEGRITY_TIMEOUT_MS = 15 * 60_000;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
-const exec = (command, args, options = {}) => {
-  const output = execFileSync(command, args, { encoding: 'utf8', windowsHide: true, timeout: 60_000, ...options });
-  return typeof output === 'string' ? output.trim() : '';
+export const runReleaseCommand = (command, args, options = {}) => {
+  try {
+    // npm pack inventories and CycloneDX SBOMs exceed Node's default 1 MiB.
+    const output = execFileSync(command, args, { encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 64 * 1024 * 1024, ...options });
+    return typeof output === 'string' ? output.trim() : '';
+  } catch (error) {
+    // Keep stdout/stderr/status for registry E404 handling; prefix the phase
+    // so metadata failures such as ENOBUFS identify the affected operation.
+    error.message = `Release command ${path.basename(command)} ${args[0] ?? ''} failed: ${error.message}`;
+    throw error;
+  }
 };
+const exec = runReleaseCommand;
 
 export function assertReleaseContext({ env, run, version }) {
   if (env.GITHUB_REPOSITORY !== REPOSITORY || env.GITHUB_REF !== 'refs/heads/main'
@@ -144,13 +153,18 @@ export function assertOidcOnly(env) {
 
 async function dispatchAndFind(run, workflow, ref, sha, fields = []) {
   const listArgs = ['run', 'list', '--repo', REPOSITORY, '--workflow', workflow, '--commit', sha,
-    '--event', 'workflow_dispatch', '--limit', '20', '--json', 'databaseId,headSha,event'];
-  const previous = new Set(JSON.parse(run('gh', listArgs)).map((item) => item.databaseId));
+    '--event', 'workflow_dispatch', '--limit', '20', '--json', 'databaseId,headSha,headBranch,event'];
+  const matchingRuns = () => JSON.parse(run('gh', listArgs)).filter((item) => item.headSha === sha
+    && item.headBranch === ref && item.event === 'workflow_dispatch' && Number.isSafeInteger(item.databaseId))
+    .sort((a, b) => b.databaseId - a.databaseId);
+  // A resumed finalizer must watch the original child runs rather than compile
+  // another installer. Rerun a failed child's jobs before resuming this job;
+  // the watch below still refuses a failed or cancelled child.
+  const existing = matchingRuns()[0];
+  if (existing) return existing.databaseId;
   run('gh', ['workflow', 'run', workflow, '--repo', REPOSITORY, '--ref', ref, ...fields]);
   for (let attempt = 0; attempt < 36; attempt++) {
-    const found = JSON.parse(run('gh', listArgs)).filter((item) => item.headSha === sha
-      && item.event === 'workflow_dispatch' && !previous.has(item.databaseId))
-      .sort((a, b) => b.databaseId - a.databaseId)[0];
+    const found = matchingRuns()[0];
     if (found) {
       return found.databaseId;
     }

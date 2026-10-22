@@ -415,6 +415,13 @@ export default function ExperimentalFeaturesSettings() {
           title={t('settings.experimental.group.modelBehavior')}
         >
           <ExperimentalToggle
+            checked={experimental.harnessLabEnabled === true}
+            description={t('harness.description')}
+            label={t('harness.enable')}
+            name="harnessLabEnabled"
+            onChange={(event) => { void updateSettings({ ...settings, experimental: { ...experimental, harnessLabEnabled: event.target.checked } }); }}
+          />
+          <ExperimentalToggle
             checked={experimental.showModelsWithoutToolCapabilities ?? false}
             description={t('settings.experimental.modelsWithoutToolsDescription')}
             label={t('settings.experimental.modelsWithoutTools')}

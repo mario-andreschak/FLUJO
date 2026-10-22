@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { createHash } from 'node:crypto';
 import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
@@ -323,7 +324,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     readOnlyAssessment,
     } = input;
     const brandedSinglePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
-    const singlePhysicalAttempt = Boolean(readOnlyAssessment || brandedSinglePhysicalAttempt);
+    const singlePhysicalAttempt = Boolean(readOnlyAssessment || brandedSinglePhysicalAttempt || getHarnessExecution());
     const signal = modelAbortSignal(executionExtensionContext, inputSignal);
     // A subclass may override createClient. Protected sends construct their
     // canonical SDK client only after the final body is detached below.

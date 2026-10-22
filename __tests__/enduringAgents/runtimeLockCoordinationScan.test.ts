@@ -74,6 +74,42 @@ afterEach(async () => {
 });
 
 describe('Persona lock acquisition directory observations', () => {
+  it.each(['EPERM', 'EACCES', 'EBUSY'])('retries a transient %s while reading a retiring lock', async code => {
+    const readFile = fs.readFile.bind(fs);
+    let denied = false;
+    jest.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      if (String(args[0]) === lockPath && !denied) {
+        denied = true;
+        throw Object.assign(new Error('Lock is pending deletion'), { code });
+      }
+      return readFile(...args);
+    });
+    const protectedWork = jest.fn(async (lock: PersonaRuntimeLock) => { await lock.assertOwned(); });
+    await withPersonaRuntimeLock(personaId, protectedWork);
+    expect(denied).toBe(true);
+    expect(protectedWork).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalled();
+  });
+
+  it('keeps persistent lock read denial closed after bounded retries', async () => {
+    await fs.mkdir(lockRoot, { recursive: true });
+    const existingOwner = JSON.stringify(foreignOwner(foreignOwnerId));
+    await fs.writeFile(lockPath, existingOwner, { flag: 'wx' });
+    const readFile = fs.readFile.bind(fs);
+    const denied = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
+    jest.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      if (String(args[0]) === lockPath) throw denied;
+      return readFile(...args);
+    });
+    const protectedWork = jest.fn();
+    await expect(withPersonaRuntimeLock(personaId, protectedWork)).rejects.toBe(denied);
+    expect(protectedWork).not.toHaveBeenCalled();
+    // The unreadable foreign owner must remain untouched; no local owner was
+    // admitted, so this test cannot race its teardown with deferred retirement.
+    expect(await readFile(lockPath, 'utf8')).toBe(existingOwner);
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
   it('does not publish or enter protected work until candidate bytes are flushed', async () => {
     const originalOpen = fs.open.bind(fs);
     let signalSync!: () => void;

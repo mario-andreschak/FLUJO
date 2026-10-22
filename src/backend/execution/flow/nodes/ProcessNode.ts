@@ -24,6 +24,7 @@ import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX }
 import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
 import { buildPersonaTools } from '../handlers/personaTools';
+import { harnessPersonaToolPolicy } from '@/backend/services/harness/executionScope';
 import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
 import { buildSubflowCommunicationTools } from '../subflowCommunication';
 import { flowService } from '@/backend/services/flow/index';
@@ -659,11 +660,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Persona-native abilities are authored into the immutable Process snapshot.
     // Definitions stay in canonical order and are denied before advertisement;
     // ModelHandler remains the fenced execution boundary.
+    const replayPersonaPolicy = harnessPersonaToolPolicy(sharedState.personaAttribution?.personaId);
     const personaTools = sharedState.personaAttribution
-      && sharedState.executionAuthority?.commitPersonaMutation
+      && (replayPersonaPolicy || sharedState.executionAuthority?.commitPersonaMutation)
       ? buildPersonaTools(node_params?.properties?.personaTools, {
-          maintenanceMemoryProposal: Boolean(
-            sharedState.executionAuthority.proposePersonaMemoryMaintenance,
+          maintenanceMemoryProposal: replayPersonaPolicy?.maintenanceMemoryProposal ?? Boolean(
+            sharedState.executionAuthority?.proposePersonaMemoryMaintenance,
           ),
         }).filter(
           (tool) => !(sharedState.behaviorRules ?? []).some((rule) => (

@@ -35,8 +35,8 @@ set -euo pipefail
 
 REPO_URL='https://github.com/mario-andreschak/FLUJO/'
 BRANCH="${FLUJO_BRANCH:-main}"
-# Match all five public package engines; Node 23 and early 24 lack the required libuv fix.
-SUPPORTED_NODE_DESCRIPTION="22.19+ within 22.x, or 24.2+ within 24.x"
+# Match all six package engines and the October 2026 security patch floor.
+SUPPORTED_NODE_DESCRIPTION="22.23.4+ within 22.x, or 24.22.1+ within 24.x"
 BIN_DIR="$HOME/.local/bin"
 MANIFEST_DIR="$HOME/.local/share/flujo-cli"
 
@@ -215,8 +215,8 @@ EOF
   for component in "$major" "$minor" "$patch"; do
     [ "$component" -le 2147483647 ] 2>/dev/null || return 1
   done
-  [ "$major" -eq 22 ] 2>/dev/null && [ "$minor" -ge 19 ] 2>/dev/null && return 0
-  [ "$major" -eq 24 ] 2>/dev/null && [ "$minor" -ge 2 ] 2>/dev/null && return 0
+  [ "$major" -eq 22 ] && { [ "$minor" -gt 23 ] || { [ "$minor" -eq 23 ] && [ "$patch" -ge 4 ]; }; } && return 0
+  [ "$major" -eq 24 ] && { [ "$minor" -gt 22 ] || { [ "$minor" -eq 22 ] && [ "$patch" -ge 1 ]; }; } && return 0
   return 1
 }
 

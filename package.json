@@ -1,6 +1,6 @@
 {
   "name": "flujo-ai",
-  "version": "3.46.3",
+  "version": "3.48.0",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://flujo.com.co/",
   "repository": {
@@ -11,7 +11,7 @@
     "url": "https://github.com/mario-andreschak/FLUJO/issues"
   },
   "engines": {
-    "node": "^22.19.0 || ^24.2.0"
+    "node": "^22.23.4 || ^24.22.1"
   },
   "workspaces": [
     "mcp-servers/bash",
@@ -80,8 +80,8 @@
     "test:memory-experiment": "node scripts/run-memory-experiment.cjs",
     "test:memory-recall-benchmark": "node scripts/run-memory-semantic-benchmark.cjs",
     "benchmark:memory-semantic": "node scripts/run-memory-semantic-benchmark.cjs",
-    "test:ci": "node scripts/run-local-jest.cjs --ci --exclude-isolated-suites --json --outputFile=jest-results.json",
-    "test:isolated": "node scripts/run-local-jest.cjs --testSequencer=./scripts/isolated-test-sequencer.cjs --ci --selectProjects node --runInBand --json --outputFile=jest-results-isolated.json __tests__/mcp/internalServer.test.ts __tests__/mcp/protectedPackageRunner.test.ts __tests__/mcp/serverTasks.test.ts __tests__/scheduler/staticRealBashFlow.test.ts __tests__/flow/original520OfflineWorkload.test.ts __tests__/flow/nativeOriginalHost.test.ts __tests__/flow/archiveWriteQuarantineProcess.test.ts __tests__/model/claudeArchiveMemoryBoundary.test.ts __tests__/enduringAgents/personaProcessBoundary.test.ts __tests__/enduringAgents/activityRuntime.test.ts __tests__/enduringAgents/memoryLifecycle.test.ts __tests__/enduringAgents/soak/personaSoak.test.ts __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts __tests__/mcp/browserCaptureRecording.test.ts __tests__/packages/workspaceMcpTransfer.test.ts __tests__/snapshot/ShadowRepoService.test.ts",
+    "test:ci": "node scripts/run-local-jest.cjs --ci --exclude-isolated-suites --exclude-enduring-agents --json --outputFile=jest-results.json",
+    "test:isolated": "node scripts/run-local-jest.cjs --testSequencer=./scripts/isolated-test-sequencer.cjs --ci --selectProjects node --runInBand --json --outputFile=jest-results-isolated.json __tests__/mcp/internalServer.test.ts __tests__/mcp/protectedPackageRunner.test.ts __tests__/mcp/serverTasks.test.ts __tests__/scheduler/staticRealBashFlow.test.ts __tests__/flow/original520OfflineWorkload.test.ts __tests__/flow/nativeOriginalHost.test.ts __tests__/flow/firstDispatchConcurrency.test.ts __tests__/flow/archiveWriteQuarantineProcess.test.ts __tests__/model/claudeArchiveMemoryBoundary.test.ts __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts __tests__/mcp/browserCaptureRecording.test.ts __tests__/packages/workspaceMcpTransfer.test.ts __tests__/snapshot/ShadowRepoService.test.ts",
     "verify:test-baseline": "node scripts/verify-test-baseline.cjs",
     "qualify:live-codex": "node scripts/qualify-live-codex.mjs",
     "test:watch": "node scripts/run-local-jest.cjs --watch",
@@ -92,19 +92,20 @@
     "release": "node scripts/release.mjs",
     "endurance:personas": "node scripts/run-persona-goal-endurance.mjs --mode=live --profile=structured-tools --duration-seconds=3600 --active-seconds=3540 --budget-usd=25 --confirm=controlled-effects",
     "soak:personas": "node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 --with-learning",
-    "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5 --with-learning"
+    "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5 --with-learning",
+    "test:enduring-agents": "node scripts/run-local-jest.cjs --testSequencer=./scripts/isolated-test-sequencer.cjs --ci --selectProjects node --runInBand --json --outputFile=jest-results-enduring-agents.json __tests__/enduringAgents/"
   },
   "dependencies": {
     "@flujo-ai/avatar-sdk": "file:packages/avatar-sdk",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
-    "@anthropic-ai/sdk": "^0.133.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.302",
+    "@anthropic-ai/sdk": "^0.135.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
-    "@google/genai": "^2.29.1",
-    "@mario.andreschak/mcp-bash": "3.46.3",
-    "@mario.andreschak/mcp-browser": "3.46.3",
-    "@mario.andreschak/mcp-filesystem": "3.46.3",
-    "@mario.andreschak/mcp-flujo": "3.46.3",
+    "@google/genai": "^2.30.0",
+    "@mario.andreschak/mcp-bash": "3.48.0",
+    "@mario.andreschak/mcp-browser": "3.48.0",
+    "@mario.andreschak/mcp-filesystem": "3.48.0",
+    "@mario.andreschak/mcp-flujo": "3.48.0",
     "@modelcontextprotocol/client": "^2.3.1",
     "@modelcontextprotocol/core": "^2.3.1",
     "@modelcontextprotocol/ext-apps": "^2.0.3",
@@ -113,7 +114,7 @@
     "@modelcontextprotocol/server": "2.3.1",
     "@mui/icons-material": "^9.5.0",
     "@mui/material": "^9.5.0",
-    "@openai/codex-sdk": "0.162.1",
+    "@openai/codex-sdk": "0.163.0",
     "@xyflow/react": "^12.12.0",
     "axios": "^1.20.0",
     "chokidar": "^5.0.0",
@@ -121,21 +122,21 @@
     "crypto-js": "^4.2.0",
     "jszip": "3.10.2",
     "lodash": "^4.18.1",
-    "mcp-remote": "^0.14.3",
+    "mcp-remote": "^0.15.1",
     "mcp-stdio-oauth": "^0.1.0",
-    "next": "16.4.1",
+    "next": "16.4.2",
     "node-fetch": "^3.3.2",
-    "openai": "7.32.0",
+    "openai": "7.38.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
-    "react-window": "^2.3.4",
+    "react-window": "^2.4.0",
     "remark-gfm": "^4.0.1",
     "simple-git": "^4.0.2",
-    "slate": "^0.133.7",
-    "slate-dom": "^0.133.6",
-    "slate-history": "^0.128.1",
-    "slate-react": "^0.133.8",
+    "slate": "^0.146.0",
+    "slate-dom": "^0.146.0",
+    "slate-history": "^0.144.0",
+    "slate-react": "^0.145.1",
     "smol-toml": "1.9.1",
     "undici": "^8.12.2",
     "uuid": "^14.0.3",
@@ -152,7 +153,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "3.3.7",
-    "@playwright/test": "1.64.0",
+    "@playwright/test": "1.64.1",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "^16.3.3",
@@ -166,7 +167,7 @@
     "@typescript-eslint/parser": "8.71.2",
     "buffer": "^6.0.3",
     "eslint": "^9.39.5",
-    "eslint-config-next": "16.4.1",
+    "eslint-config-next": "16.4.2",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import": "^2.32.0",
     "fast-glob": "file:tooling/next-lint-glob",
@@ -182,6 +183,6 @@
     "tinyglobby": "0.2.17",
     "typescript": "^6.0.3",
     "wait-on": "9.5.1",
-    "webpack": "5.111.1"
+    "webpack": "5.112.0"
   }
 }

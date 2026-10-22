@@ -538,6 +538,7 @@ function startSecretDependentServices(): Promise<void> {
         ));
         await startPersonaFlowDispatcher();
         await startPersonaGoalRuntime();
+        (await import('@/backend/services/harness/worker')).startHarnessWorker();
       } catch (error) {
         log.error('Failed to start Persona Flow dispatcher:', error);
       }

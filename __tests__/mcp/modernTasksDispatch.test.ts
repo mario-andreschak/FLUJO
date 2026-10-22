@@ -130,10 +130,11 @@ describe('real tools.ts modern Tasks dispatch', () => {
       expect(result).toMatchObject({ success: true, data: { content: [{ text: 'task result' }] } });
       const calls = peer.wire.filter(frame => frame.method === 'tools/call');
       expect(calls).toHaveLength(1);
-      expect(calls[0].params).toMatchObject({ arguments: { message: 'resolved value', itemCount: 0, isReady: false, tags: [] },
+      expect(calls[0].params).toMatchObject({ arguments: { message: 'resolved value', itemCount: null, tags: null },
         _meta: { flujo: { callerNodeId: 'node-owner', ownerScope: 'owner-scope' },
           'io.modelcontextprotocol/clientCapabilities': { extensions: { [extension]: {} } } } });
       expect(calls[0].params).not.toHaveProperty('task');
+      expect(calls[0].params?.arguments).not.toHaveProperty('isReady');
       expect(peer.wire.some(frame => frame.method === 'tasks/get')).toBe(true);
       expect(peer.wire.some(frame => frame.method === 'tasks/result')).toBe(false);
       expect(jest.mocked(createRemoteTaskRecord).mock.calls[0][0]).toMatchObject({

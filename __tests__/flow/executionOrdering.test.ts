@@ -10,7 +10,7 @@ import type { Flow, FlowNode } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 import type { SharedState } from '@/backend/execution/flow/types';
-import type { StorageKey } from '@/shared/types/storage';
+import { StorageKey } from '@/shared/types/storage';
 import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -76,7 +76,7 @@ import { runFlow, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import * as conversationLog from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import { loadItem } from '@/utils/storage/backend';
+import { loadItem, saveItem } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { saveConfig } from '@/backend/services/mcp/config';
 import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
@@ -269,6 +269,8 @@ beforeEach(async () => {
   if (profile.includes('holds a real stdio tool behind approval') || profile.includes('answers capped calls synthetically')) {
     await stageToolConfig();
   }
+  await saveItem(StorageKey.MODELS, [{ id: 'ordering-model', name: 'ordering-fixture',
+    provider: 'openai', adapter: 'openai', ApiKey: '', baseUrl: mockBaseUrl }]);
 });
 
 afterEach(async () => {

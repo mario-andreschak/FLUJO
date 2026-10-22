@@ -3,33 +3,38 @@
     "Execution baseline reviewed on 2026-09-16 from complete remediation main results, passing focused corrections, and the passing isolated stage. Historical reference: verify run 34763333121 at commit 26cd39856fd8a5580c77025ee0ec95732572045d.",
     "Only assertions with passed/failed status and suites with completed assertions count. Pending/todo tests require an exact, reasoned intentionalSkips entry; a quarantine never excuses a suite failing to execute.",
     "Reviewed Windows main scope is 763 suites and 6874 tests; portable minima subtract one suite and five Windows-only tests, which have explicit Unix intentionalSkips below. Isolated executed 9 suites and 101 tests. Browser capture, snapshot Git integration and memory lifecycle run in the isolated stage. All nine quarantines are retired; see docs/audits/quarantine-status.md for evidence.",
-    "Update minima only after a reviewed passing gate. Do not approve a new skip solely to silence a regression."
+    "Update minima only after a reviewed passing gate. Do not approve a new skip solely to silence a regression.",
+    "2026-10-21: Moe explicitly separated Enduring Agents from release gates. Minima redistributed from passing exact-main CI39697783988 (b9591085), retaining every completed assertion and exact conditional skip in its owning stage."
   ],
   "stages": {
     "ci": {
-      "description": "npm run test:ci — both Jest projects, isolated process-boundary and intensive integration suites excluded.",
-      "minSuites": 762,
-      "minTests": 6869,
+      "description": "npm run test:ci — both Jest projects, release-isolated suites and the separate Enduring Agents workflow excluded.",
+      "minSuites": 1080,
+      "minTests": 12185,
       "intentionalSkips": [
+        {
+          "suite": "__tests__/workspace/migrationRecovery.test.ts",
+          "name": "interrupted workspace migration recovery retains an unknown dangling Windows junction before any move",
+          "reason": "Windows junction behavior is exercised on Windows; Unix has no Windows junctions.",
+          "platforms": [
+            "linux",
+            "darwin"
+          ]
+        },
+        {
+          "suite": "__tests__/model/codexOrdinary.live.test.ts",
+          "name": "accepts real inference/MCP, durable restart resume, protocol usage and owned cancellation",
+          "reason": "Opt-in live Codex subscription acceptance requires a private authenticated profile and FLUJO_CODEX_ORDINARY_ACCEPTANCE_ROOT; ordinary hosted CI has neither. No model call is substituted."
+        },
+        {
+          "suite": "__tests__/model/codexUserInput.live.test.ts",
+          "name": "answers an actual direct app-server question through the attended flow executor",
+          "reason": "Opt-in attended Codex acceptance requires a private authenticated profile and FLUJO_CODEX_USER_INPUT_ACCEPTANCE_ROOT; ordinary hosted CI cannot perform the attended account interaction."
+        },
         {
           "suite": "__tests__/model/codexAppServerProcess.live.test.ts",
           "name": "qualifies the Source-owned public app-server with exact Luna/medium and original turn interruption",
           "reason": "Opt-in provider qualification requires explicit private executable, home and receipt paths; normal CI has no live provider credentials."
-        },
-        {
-          "suite": "__tests__/enduringAgents/goalEnduranceAcceptance.test.ts",
-          "name": "Persona goal endurance across OS process epochs continues the same ordinary ongoing goal through graceful and forced restarts",
-          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
-        },
-        {
-          "suite": "__tests__/enduringAgents/goalAcceptance.test.ts",
-          "name": "one-goal Persona product acceptance loads the native SDK without substituting its implementation",
-          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
-        },
-        {
-          "suite": "__tests__/enduringAgents/goalAcceptance.test.ts",
-          "name": "one-goal Persona product acceptance continues through durable rounds, a controller restart and a recoverable external outage",
-          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
         },
         {
           "suite": "__tests__/workspace/mcpRuntimeHomeIsolation.test.ts",
@@ -48,11 +53,6 @@
             "linux",
             "darwin"
           ]
-        },
-        {
-          "suite": "__tests__/enduringAgents/memorySemanticRecallPerf.test.ts",
-          "name": "semantic memory recall 50k performance (opt-in) keeps production hybrid recall below 150ms p95 with a proven warm query cache",
-          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
         },
         {
           "suite": "__tests__/mcp/bashNpmRunEnv.test.ts",
@@ -82,16 +82,6 @@
           ]
         },
         {
-          "suite": "__tests__/enduringAgents/memoryScanPerf.test.ts",
-          "name": "Persona record index performance (opt-in) keeps 50k-memory warm Persona reads below the reference p95",
-          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
-        },
-        {
-          "suite": "__tests__/enduringAgents/memoryScanPerf.test.ts",
-          "name": "Persona record index performance (opt-in) keeps 20k-mailbox warm reads scale-invariant with foreign records",
-          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
-        },
-        {
           "suite": "__tests__/model/codexNativeQualification.live.test.ts",
           "name": "qualifies exact Luna/medium through the restrictive Source catalogue and thread-bound MCP bridge",
           "reason": "Requires an authorized private profile; npm run qualify:live-codex executes it in the separate live-codex stage, rejects skips and retains actual provider/MCP receipts. Ordinary CI has no account."
@@ -105,8 +95,8 @@
     },
     "isolated": {
       "description": "npm run test:isolated — child-process and intensive integration suites, serial, dedicated CI job.",
-      "minSuites": 9,
-      "minTests": 101,
+      "minSuites": 14,
+      "minTests": 165,
       "intentionalSkips": []
     },
     "live-codex": {
@@ -114,6 +104,52 @@
       "minSuites": 3,
       "minTests": 3,
       "intentionalSkips": []
+    },
+    "enduring-agents": {
+      "description": "npm run test:enduring-agents — all Enduring Agents suites, serial, dedicated non-release workflow.",
+      "minSuites": 95,
+      "minTests": 923,
+      "intentionalSkips": [
+        {
+          "suite": "__tests__/enduringAgents/runtimeLockOwnIdentity.test.ts",
+          "name": "Persona runtime own-process birth identity allows cold owned-child admission but rejects an invalid identity without relaxing foreign observations",
+          "reason": "Exercises the Windows process-birth probe; the test is explicitly Windows-only.",
+          "platforms": [
+            "linux",
+            "darwin"
+          ]
+        },
+        {
+          "suite": "__tests__/enduringAgents/goalEnduranceAcceptance.test.ts",
+          "name": "Persona goal endurance across OS process epochs continues the same ordinary ongoing goal through graceful and forced restarts",
+          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
+        },
+        {
+          "suite": "__tests__/enduringAgents/goalAcceptance.test.ts",
+          "name": "one-goal Persona product acceptance loads the native SDK without substituting its implementation",
+          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
+        },
+        {
+          "suite": "__tests__/enduringAgents/goalAcceptance.test.ts",
+          "name": "one-goal Persona product acceptance continues through durable rounds, a controller restart and a recoverable external outage",
+          "reason": "Opt-in controlled Persona acceptance is exercised by its dedicated workflow."
+        },
+        {
+          "suite": "__tests__/enduringAgents/memorySemanticRecallPerf.test.ts",
+          "name": "semantic memory recall 50k performance (opt-in) keeps production hybrid recall below 150ms p95 with a proven warm query cache",
+          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
+        },
+        {
+          "suite": "__tests__/enduringAgents/memoryScanPerf.test.ts",
+          "name": "Persona record index performance (opt-in) keeps 50k-memory warm Persona reads below the reference p95",
+          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
+        },
+        {
+          "suite": "__tests__/enduringAgents/memoryScanPerf.test.ts",
+          "name": "Persona record index performance (opt-in) keeps 20k-mailbox warm reads scale-invariant with foreign records",
+          "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
+        }
+      ]
     }
   },
   "quarantined": []

@@ -1,3 +1,14 @@
+# Current security runtime policy — October 21, 2026
+
+The supported floor is now `^22.23.4 || ^24.22.1`. Minimum and current profiles
+coincide on each line, so release qualification runs once per distinct runtime.
+All active build/release/installer selections use these signed patched binaries.
+See [the security audit](../audits/2026-10-21-security.md) and its signed receipt.
+The immutable 8fe exporter remains inert under its existing event/ancestry guards;
+its patched setup also refuses the old source verifier. It needs separate
+requalification before any future activation. Historical receipts below describe
+their original inputs and do not qualify old runtimes for a new release.
+
 # CI runtime identity and qualification
 
 The canonical application/MCP policy is exported by `bin/node-runtime.mjs`:

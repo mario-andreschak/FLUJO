@@ -130,6 +130,7 @@ export async function resolvePersonaCoreRevision(
     }
     const flowSnapshot = await snapshotBehaviorFlowDependencies(authoredFlow);
     const contentHash = hashBehaviorFlow(flowSnapshot);
+    if (await (await import('../harness/profiles')).isHarnessBehaviorSelection(persona.id, binding.id, active.id, coreFlowRef, contentHash)) return active;
     if (
       active.contentHash === contentHash
       && canonicalJson(active.flowSnapshot) === canonicalJson(flowSnapshot)

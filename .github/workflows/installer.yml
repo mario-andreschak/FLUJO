@@ -1,18 +1,23 @@
 # Validates the side-effect-free Windows installer decisions and builds the
-# graphical bootstrapper on pull requests, main, version tags, and manual runs.
+# graphical bootstrapper for release preflight and explicit manual runs.
 name: Validate Windows installer
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      clean_windows:
+        description: Run the compiled installer and first launch on a fresh Windows worker
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   artifact-smoke:
+    if: ${{ !inputs.clean_windows }}
     name: MCP artifact validation (Windows)
     runs-on: windows-latest
     steps:
@@ -22,10 +27,10 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - name: Install production build dependencies
         run: npm ci --include=dev
 
@@ -55,6 +60,7 @@ jobs:
           npm run smoke:mcp-artifacts
 
   powershell-tests:
+    if: ${{ !inputs.clean_windows }}
     name: Installer decisions (Pester)
     runs-on: windows-latest
     steps:
@@ -73,6 +79,10 @@ jobs:
           Import-Module Pester -RequiredVersion 5.7.1
           Invoke-Pester -Path tests\installer.Tests.ps1 -CI
 
+      - name: Exercise native diagnostics with the wizard PowerShell runtime
+        shell: pwsh
+        run: ./tests/installer-native.test.ps1
+
   installer-build:
     name: Compile flujo-setup.exe
     needs: [powershell-tests, artifact-smoke, unix-installer-tests]
@@ -87,9 +97,9 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - name: Install pinned Inno Setup
         shell: powershell
         run: |
@@ -116,8 +126,8 @@ jobs:
             $sourceRevision = $env:GITHUB_SHA
           } else {
             $version = '0.0.0'
-            $sourceRef = 'main'
-            $sourceRevision = ''
+            $sourceRef = $env:GITHUB_REF_NAME
+            $sourceRevision = $env:GITHUB_SHA
           }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & $iscc "/DMyAppVersion=$version" "/DMyBranch=$sourceRef" "/DMyRevision=$sourceRevision" installer\flujo-setup.iss
@@ -155,7 +165,7 @@ jobs:
 
   installer-attest:
     if: ${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}
-    needs: installer-build
+    needs: [installer-build, installer-acceptance]
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -173,9 +183,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.installer-build.outputs.artifact_id }}
@@ -210,9 +220,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.installer-build.outputs.artifact_id }}
@@ -237,7 +247,49 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
+  installer-acceptance:
+    name: Install and launch original installer bytes (${{ matrix.os }})
+    needs: installer-build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      EXPECTED_INSTALLER_SHA256: ${{ needs.installer-build.outputs.sha256 }}
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.installer-build.outputs.artifact_id }}
+          path: installer/Output
+          merge-multiple: true
+      - name: Prepare real App Installer
+        shell: pwsh
+        run: ./scripts/prepare-windows-installer-runner.ps1
+      - name: Install, rerun and launch the original executable
+        shell: pwsh
+        run: ./scripts/verify-windows-install.ps1 -BootstrapNode:('${{ matrix.os }}' -eq 'windows-2025') -ExistingOutdatedNode:('${{ matrix.os }}' -eq 'windows-2022')
+      - name: Retain release installation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-release-installation-${{ matrix.os }}
+          path: ${{ runner.temp }}/flujo-install-evidence/**
+          if-no-files-found: error
+          retention-days: 30
+
   unix-installer-tests:
+    if: ${{ !inputs.clean_windows }}
     name: Unix installer validation (Ubuntu)
     runs-on: ubuntu-latest
     steps:
@@ -247,10 +299,10 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - name: Run Unix installer Node.js version tests
         run: |
           chmod +x scripts/install.sh
@@ -267,3 +319,63 @@ jobs:
             }
             console.log('All six engine declarations match the canonical runtime policy.');
           "
+
+  clean-windows:
+    if: ${{ inputs.clean_windows }}
+    name: Fresh Windows installer and first launch (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - name: Provision App Installer on the hosted Windows Server image
+        shell: pwsh
+        run: ./scripts/prepare-windows-installer-runner.ps1
+      - name: Reproduce the released failure and verify native command handling
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .tmp | Out-Null
+          Invoke-WebRequest 'https://raw.githubusercontent.com/mario-andreschak/FLUJO/320347356891aa1c24e0f2f9ce12719317e58bde/scripts/install.ps1' -OutFile .tmp/released-install.ps1
+          ./tests/installer-native.test.ps1 -InstallScript .tmp/released-install.ps1 -WorkDirectory .tmp/native-released -ExpectLegacyFailure
+          ./tests/installer-native.test.ps1 -WorkDirectory .tmp/native-fixed
+      - name: Run installer decision regressions under Windows PowerShell
+        shell: powershell
+        run: |
+          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+          Import-Module Pester -RequiredVersion 5.7.1
+          Invoke-Pester -Path tests/installer.Tests.ps1 -CI
+      - name: Compile the exact candidate installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) { throw 'Inno Setup is missing from the runner.' }
+          & $iscc "/DMyAppVersion=0.0.0" "/DMyBranch=$env:GITHUB_REF_NAME" "/DMyRevision=$env:GITHUB_SHA" installer/flujo-setup.iss
+          if ($LASTEXITCODE) { throw 'Installer compilation failed.' }
+      - name: Install into an empty folder and launch the installed application
+        shell: pwsh
+        run: ./scripts/verify-windows-install.ps1
+      - name: Retain installer, diagnostics and first-launch evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-first-install-${{ matrix.os }}
+          include-hidden-files: true
+          path: |
+            installer/Output/flujo-setup.exe
+            ${{ runner.temp }}/flujo-install-evidence/**
+            .tmp/native-*/*.log
+            .tmp/native-*/*.error
+          if-no-files-found: error
+          retention-days: 14

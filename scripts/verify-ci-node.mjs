@@ -7,8 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { assertSupportedNodeRuntime } from '../bin/node-runtime.mjs';
 
 export const CI_NODE_PROFILES = Object.freeze({
-  historicalBuild: '22.13.1', minimum22: '22.19.0', current22: '22.23.3',
-  minimum24: '24.2.0', current24: '24.21.0',
+  historicalBuild: '22.13.1', minimum22: '22.23.4', current22: '22.23.4',
+  minimum24: '24.22.1', current24: '24.22.1',
 });
 const manifestPath = new URL('./ci-node-binaries.json', import.meta.url);
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));

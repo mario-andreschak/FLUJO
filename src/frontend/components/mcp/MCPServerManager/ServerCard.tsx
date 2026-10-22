@@ -539,6 +539,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
       });
       if (!response.ok) {
         const errorData = await response.json();
+        if (errorData.needsClientCredentials) onEdit();
         throw new Error(errorData.error || t("mcp.card.oauthInitiateFailed"));
       }
 

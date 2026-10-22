@@ -3,6 +3,8 @@ import { applyExecutionRunInput, applyOriginalOwnerRunInput, prepareExecutionSub
   assertExecutionStateAccess, ExecutionExtensionError, executionExtensionSharesPersonaAuthority,
   runWithExecutionConversationAccess, assertExecutionExtensionCurrent } from '@/backend/execution/extensions';
 import { createLogger } from '@/utils/logger';
+import type { FlowReplayInputs } from '@/shared/types/execution/flowInputs';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
@@ -334,7 +336,7 @@ export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | '
  * OpenAI-compatible API (today), subflows (#13), planned executions (#10), and
  * (deferred) flows-as-MCP-tools (#17B).
  */
-export interface FlowRunInput {
+export interface FlowRunInput extends FlowReplayInputs {
   executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   /** Resolved flow id. Provide this OR `modelName`. */
   flowId?: string;
@@ -354,8 +356,6 @@ export interface FlowRunInput {
 
   /** Full message list (advanced; the OpenAI route passes its request messages). */
   messages?: FlowRunMessageInput[];
-  /** Latest future-turn context supplied by mounted MCP Apps. */
-  mcpAppContexts?: import('@/shared/types/chat').McpAppModelContextMap;
   /** Exact approved remote Skill identities selected for this user turn. */
   mcpSkillSelections?: import('@/shared/types/mcp').McpSkillSelection[];
   /** Convenience: a single user message. Used when `messages` is absent. */
@@ -367,10 +367,6 @@ export interface FlowRunInput {
   resumeAsNewTurn?: boolean;
   /** Edit support: reset execution to this node (mirrors the legacy processNodeId). */
   processNodeId?: string;
-  /** Named inputs seeded onto SharedState.variables (Tier 2c) at run start.
-   *  Values are coerced to string; any node can inject them via `${var:NAME}`. */
-  variables?: Record<string, unknown>;
-
   /** 'ephemeral' runs in transient state and never writes to the conversations/*
    *  store (so the run never appears in the chat sidebar). 'conversation'
    *  (default) is the legacy persisted/resumable behavior. */
@@ -508,6 +504,8 @@ export interface FlowRunResult {
  * scheduler) can run flows without the HTTP/OpenAI coupling.
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
+  if (getHarnessExecution()) input = { ...input, mode: 'ephemeral', conversationId: undefined, runId: undefined,
+    abortSignal: getHarnessExecution()!.signal };
   const delegated=await prepareExecutionSubflowInput(input);
   if(delegated)return runWithExecutionInput(delegated,()=>runFlow(delegated));
   input = await applyOriginalOwnerRunInput(applyExecutionRunInput(input));
@@ -1057,6 +1055,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       sharedState.variables[key] = typeof value === 'string' ? value : String(value);
     }
   }
+  const harnessInitialVariables = structuredClone(sharedState.variables ?? {});
 
   // MCP Apps: each ui/update-model-context request overwrites that app's
   // previous value in the frontend-owned map. When the map accompanies a
@@ -3316,7 +3315,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     // announced by SchedulerService.fire() instead (de-dup), and subflow stages
     // (runDepth > 0) must NOT emit or a composed flow sprays one event per stage.
     if (
-      sharedState.source !== 'schedule' &&
+      !getHarnessExecution() && sharedState.source !== 'schedule' &&
       sharedState.source !== 'trigger' &&
       sharedState.source !== 'meeting' &&
       (sharedState.runDepth ?? 0) === 0
@@ -3379,11 +3378,16 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     sharedState.status === 'error' ||
     sharedState.status === 'capped';
   if (terminalStatus) {
+    if (finalSnapshotPersisted && !ephemeral && (sharedState.runDepth ?? 0) === 0) {
+      try {
+        await (await import('@/backend/services/harness/worker')).observeHarnessConversation(sharedState, { variables: harnessInitialVariables, source: input.source });
+      } catch { log.warn('Harness evidence admission deferred after terminal persistence.'); }
+    }
     const runOwnerScope = ownerScopeForRun({
       runId: sharedState.logicalRunId,
       conversationId: sharedState.conversationId || effectiveConvId,
     });
-    void releaseRunOwnedBashSessions(runOwnerScope);
+    if (!getHarnessExecution()) void releaseRunOwnedBashSessions(runOwnerScope);
     if (!isConversationDeleted(effectiveConvId) && !ephemeral) {
       void markConversationTerminal(effectiveConvId, sharedState, async () => {
         // The snapshot above already succeeded in the normal case; only retry it

@@ -116,7 +116,7 @@ export async function activatePersonaBehaviorRevision(
   value: unknown,
 ): Promise<ActivatedPersonaBehavior> {
   const input = ActivateBehaviorRevisionInputSchema.parse(value) as ActivateBehaviorRevisionInput;
-  return withPersonaDomainMutation(personaId, {}, async () => {
+  const result = await withPersonaDomainMutation(personaId, {}, async () => {
     const revision = await getBehaviorRevision(input.revisionId);
     if (!revision) throw new PersonaDomainNotFoundError('BehaviorRevision', input.revisionId);
     try {
@@ -137,4 +137,7 @@ export async function activatePersonaBehaviorRevision(
       throw error;
     }
   });
+  // Outside the Persona lock: Harness activation acquires profile then source locks.
+  await (await import('@/backend/services/harness/profiles')).noteHarnessPersonaSelection(personaId, behaviorId, result.revision.id);
+  return result;
 }

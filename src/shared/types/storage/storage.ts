@@ -247,6 +247,8 @@ export interface NetworkSettings {
  * Experimental-features settings interface (issue #184)
  */
 export interface ExperimentalSettings {
+  /** Opt-in bounded text-instruction evolution; missing values disable model dispatch and promotion. */
+  harnessLabEnabled?: boolean;
   /** When true, experimental UI (e.g. the Waves nav entry) is revealed. */
   enabled: boolean;
   /**

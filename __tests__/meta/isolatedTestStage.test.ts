@@ -14,6 +14,8 @@ import {
   isolatedTestPathIgnorePatterns,
   shouldExcludeIsolatedSuites,
   testPatternsForRoot,
+  EXCLUDE_ENDURING_AGENTS_ENV,
+  shouldExcludeEnduringAgents,
 } from '../../jest.testMatch.mjs';
 
 const {
@@ -33,6 +35,27 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 
 const verifyWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'verify-full.yml'), 'utf8');
 
 describe('isolated test stage', () => {
+  it('retains all Enduring Agents suites in an independent workflow outside release gates', () => {
+    const script = packageJson.scripts['test:enduring-agents'];
+    expect(script).toContain('--runInBand');
+    expect(script).toContain('__tests__/enduringAgents/');
+    expect(script).not.toContain('--exclude-');
+    expect(packageJson.scripts['test:ci']).toContain('--exclude-enduring-agents');
+    expect(packageJson.scripts['test:isolated']).not.toContain('__tests__/enduringAgents/');
+    const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/verify-enduring-agents.yml'), 'utf8');
+    expect(workflow).toContain('run: npm run test:enduring-agents');
+    expect(workflow).toContain('--stage=enduring-agents --results=jest-results-enduring-agents.json');
+    const { env, jestArgs } = partitionRunnerFlags(['--ci', '--exclude-enduring-agents']);
+    expect(jestArgs).toEqual(['--ci']);
+    expect(env[EXCLUDE_ENDURING_AGENTS_ENV]).toBe('1');
+    expect(shouldExcludeEnduringAgents(env as NodeJS.ProcessEnv)).toBe(true);
+    expect(shouldExcludeEnduringAgents({} as NodeJS.ProcessEnv)).toBe(false);
+    for (const root of ['/repo', fs.realpathSync.native(ROOT).replaceAll('\\', '/')]) {
+      const [pattern] = testPatternsForRoot(root).enduringAgentsTestPathIgnorePatterns;
+      expect(new RegExp(pattern).test(`${root}/__tests__/enduringAgents/behaviorCallPins.test.ts`)).toBe(true);
+      expect(new RegExp(pattern).test(`${root}/__tests__/flow/nativeOriginalHost.test.ts`)).toBe(false);
+    }
+  });
   it('lists only files that exist', () => {
     expect(ISOLATED_TEST_FILES.length).toBeGreaterThan(0);
     for (const file of ISOLATED_TEST_FILES) {

@@ -63,6 +63,7 @@ import { NodePalette } from './NodePalette';
 import { getNodeTypes } from './nodeTypeCatalog';
 import { FlowValidationButton } from './FlowValidationButton';
 import InspectorPanel from './InspectorPanel';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { InspectorMcpServerOption } from './InspectorMcpServers';
 import GuidedFlowComposer from './GuidedFlowComposer';
 import type { GuidedAgentConnection } from './GuidedAgentConnections';
@@ -2260,6 +2261,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   {authoringMode === 'guided' ? t('flows.builder.previousVersions') : t('flows.builder.history')}
                 </MenuItem>
               )}
+              {initialFlow && !isDraft && <MenuItem component="a" href={withWorkspaceUrl(`/harness?flowId=${encodeURIComponent(initialFlow.id)}`)}>{t('harness.versions')}</MenuItem>}
               {initialFlow && !isDraft && (
                 <MenuItem
                   onClick={() => {

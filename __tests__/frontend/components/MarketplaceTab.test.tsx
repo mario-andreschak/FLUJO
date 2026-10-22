@@ -1,4 +1,5 @@
 import React from 'react';
+import { alertClasses } from '@mui/material/Alert';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import MarketplaceTab from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/MarketplaceTab';
 import { mcpMessageRows } from '@/frontend/i18n/catalogs/mcp';
@@ -87,7 +88,7 @@ describe('MarketplaceTab search controls', () => {
     await screen.findByText('Local tools');
     expect(screen.queryAllByText(boundedLabel)).toHaveLength(bounded ? 1 : 0);
     expect(screen.queryAllByText(partialLabel)).toHaveLength(partial ? 1 : 0);
-    expect(document.querySelector('.MuiAlert-standardError')).toBeNull();
+    expect(document.querySelector(`.${alertClasses.colorError}`)).toBeNull();
   });
 
   it('preserves coverage through pagination and tab hide, then clears it for a new committed search', async () => {
@@ -128,6 +129,6 @@ describe('MarketplaceTab search controls', () => {
     await screen.findByText(/Registry temporarily unavailable/);
     expect(screen.getByText(boundedLabel)).toBeVisible();
     expect(screen.getByText('Local tools')).toBeInTheDocument();
-    expect(document.querySelector('.MuiAlert-standardError')).toBeInTheDocument();
+    expect(document.querySelector(`.${alertClasses.colorError}`)).toBeInTheDocument();
   });
 });

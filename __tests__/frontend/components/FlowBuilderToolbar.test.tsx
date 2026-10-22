@@ -141,8 +141,8 @@ describe('FlowBuilder toolbar', () => {
 
     expect(screen.getByLabelText('Flow name')).toBeInTheDocument();
     expect(screen.getByLabelText('Description')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Advanced' })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Expert view' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Advanced' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Expert view' })).toBeChecked();
     expect(screen.getByRole('button', { name: 'Save flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check Flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add node' })).toBeInTheDocument();
@@ -171,7 +171,7 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
-    const modeToggle = screen.getByRole('checkbox', { name: 'Expert view' });
+    const modeToggle = screen.getByRole('switch', { name: 'Expert view' });
     expect(modeToggle).not.toBeChecked();
     expect(screen.getByLabelText('Guided agent builder')).toBeInTheDocument();
 
@@ -211,7 +211,7 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
-    expect(screen.getByRole('checkbox', { name: 'Expert view' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Expert view' })).toBeChecked();
     expect(screen.getByTestId('canvas')).toBeInTheDocument();
   });
 
@@ -243,7 +243,7 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
-    expect(screen.getByRole('checkbox', { name: 'Expert view' })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Expert view' })).not.toBeChecked();
     expect(screen.getByLabelText('Guided agent builder')).toBeInTheDocument();
     expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
       .toBe(JSON.stringify('guided'));

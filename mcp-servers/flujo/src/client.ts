@@ -69,6 +69,10 @@ const FLOW_TOOLS = new Set([
   'list_flow_versions',
   'read_flow_version',
   'revert_flow',
+  'list_harness_targets',
+  'configure_harness',
+  'read_harness_history',
+  'activate_harness_version',
   'delete_flow',
 ]);
 const SERVER_TOOLS = new Set([

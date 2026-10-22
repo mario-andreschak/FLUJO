@@ -3,7 +3,8 @@
     FLUJO installer / updater for Windows.
 
 .DESCRIPTION
-    Installs the prerequisites (Git, Node.js + npm, Python, uv, ripgrep) via winget,
+    Installs Git, Python, uv and ripgrep via winget, and missing Node.js + npm
+    from a checksum-pinned official archive in the user's FLUJO-cli directory,
     refreshes the environment (PATH + vars) for the current session so the new
     tools are usable immediately, clones (or updates) FLUJO, builds it, registers
     a global 'flujo' command (start FLUJO from any folder), and optionally starts
@@ -115,6 +116,10 @@ function Stop-Installer {
         [int]$ExitCode = 1
     )
 
+    if ($script:InstallerErrorPath) {
+        $safeMessage = Protect-InstallerDiagnostic -Text $Message -SensitiveValues $script:InstallerSensitiveValues -MaximumLength 2400
+        Set-Content -LiteralPath $script:InstallerErrorPath -Value $safeMessage -Encoding UTF8
+    }
     Write-Host "`nERROR: $Message" -ForegroundColor Red
     if ($PSCommandPath) {
         exit $ExitCode
@@ -148,6 +153,7 @@ $script:InstallerStagePath = if ($env:FLUJO_INSTALL_STAGE_FILE) {
     Join-Path $installerDiagnosticRoot 'install-stage.txt'
 }
 $script:InstallerResultPath = Join-Path $installerDiagnosticRoot 'browser-install-result.json'
+$script:InstallerErrorPath = Join-Path $installerDiagnosticRoot 'install-error.txt'
 $script:InstallerSensitiveValues = @(
     $env:FLUJO_HTTP_PROXY,
     $env:FLUJO_HTTPS_PROXY,
@@ -162,6 +168,22 @@ $script:InstallerSensitiveValues = @(
     $env:npm_config_cafile
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 Set-Content -LiteralPath $script:InstallerLogPath -Value '' -Encoding UTF8
+Set-Content -LiteralPath $script:InstallerErrorPath -Value '' -Encoding UTF8
+
+# Include preflight/prerequisite exceptions in the same sanitized diagnostics as
+# native-command failures. Otherwise setup only sees an unexplained stage name.
+trap {
+    if ($script:InstallerLogPath -and (Get-Command Protect-InstallerDiagnostic -ErrorAction SilentlyContinue)) {
+        $safeError = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
+        Add-Content -LiteralPath $script:InstallerLogPath -Value $safeError -Encoding UTF8
+        $safeLocation = Protect-InstallerDiagnostic -Text ([string]$_.ScriptStackTrace) -SensitiveValues $script:InstallerSensitiveValues
+        Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLocation -Encoding UTF8
+        $failedStage = Get-Content -LiteralPath $script:InstallerStagePath -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($failedStage) { Write-InstallerStage -Name $failedStage -State failed -ExitCode 1 }
+        Stop-Installer -Message $safeError
+    }
+    break
+}
 
 function Write-InstallerStage {
     param(
@@ -201,13 +223,33 @@ function Invoke-InstallerCommand {
 
     $exitCode = 1
     $failure = $null
+    $recentOutput = New-Object 'System.Collections.Generic.Queue[string]'
+    $commandResult = @{ ExitCode = $null }
     try {
-        & $Command @Arguments 2>&1 | ForEach-Object {
+        # Resolve the native executable before relaxing stderr handling. This
+        # also selects npm.cmd instead of the execution-policy-dependent npm.ps1.
+        $application = Get-Command -Name $Command -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        & {
+            # Windows PowerShell 5.1 turns redirected native stderr (including
+            # Git's normal "Cloning into..." progress) into ErrorRecords.
+            # Only this child scope accepts that stream; logging errors still
+            # terminate, and the native exit code remains authoritative.
+            $ErrorActionPreference = 'Continue'
+            $PSNativeCommandUseErrorActionPreference = $false
+            $global:LASTEXITCODE = $null
+            & $application.Source @Arguments 2>&1
+            $commandResult.ExitCode = $global:LASTEXITCODE
+        } | ForEach-Object {
             $safeLine = Protect-InstallerDiagnostic -Text ([string]$_) -SensitiveValues $script:InstallerSensitiveValues
             Write-Host $safeLine
-            Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLine -Encoding UTF8
+            Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLine -Encoding UTF8 -ErrorAction Stop
+            if (-not [string]::IsNullOrWhiteSpace($safeLine)) {
+                $recentOutput.Enqueue($safeLine)
+                if ($recentOutput.Count -gt 8) { $null = $recentOutput.Dequeue() }
+            }
         }
-        $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+        if ($null -eq $commandResult.ExitCode) { throw "Could not obtain the exit code from $Command." }
+        $exitCode = [int]$commandResult.ExitCode
     } catch {
         $failure = $_
         $safeLine = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
@@ -230,7 +272,7 @@ function Invoke-InstallerCommand {
         $detail = if ($failure) {
             Protect-InstallerDiagnostic -Text $failure.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
         } else {
-            "exit code $exitCode"
+            "exit code $exitCode`n$($recentOutput -join "`n")"
         }
         Stop-Installer -Message "Installer stage '$Stage' failed ($detail). Sanitized log: $script:InstallerLogPath" -ExitCode $exitCode
     }
@@ -254,8 +296,6 @@ function Test-Command([string]$Name) {
 # this same session without reopening the terminal. winget writes the new PATH
 # entries to the registry during install; this re-reads them.
 function Update-SessionEnvironment {
-    $pathSep = [System.IO.Path]::PathSeparator   # ';' on Windows
-
     # Preserve PATH entries already added to the live process (e.g. by uv), so a
     # registry refresh does not drop them.
     $processPath = $env:Path
@@ -270,15 +310,10 @@ function Update-SessionEnvironment {
         }
     }
 
-    # PATH = Machine + User + existing process PATH, de-duplicated, order preserved.
+    # Keep explicitly selected tools first; append newly installed registry paths.
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $userPath    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $seen = @{}
-    $merged = foreach ($p in (@($machinePath, $userPath, $processPath) -join $pathSep).Split($pathSep)) {
-        $t = $p.Trim()
-        if ($t -and -not $seen.ContainsKey($t)) { $seen[$t] = $true; $t }
-    }
-    $env:Path = $merged -join $pathSep
+    $env:Path = Merge-InstallerPath -ProcessPath $processPath -MachinePath $machinePath -UserPath $userPath
 }
 
 # Install a package via winget only if the given command is missing.
@@ -295,14 +330,11 @@ function Install-Prereq {
         Write-Ok "$DisplayName already installed ($((Get-Command $CommandName).Source))"
     } else {
         Write-Step "Installing $DisplayName via winget ($WingetId)"
-        # Pipe to Out-Host so winget's stdout goes to the console and does NOT leak
-        # into this function's return value (which the caller captures as the
-        # prerequisite record for the uninstall manifest).
-        winget install --id $WingetId -e --source winget `
-            --accept-source-agreements --accept-package-agreements | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            throw "winget could not install $DisplayName ($WingetId); exit code $LASTEXITCODE. Resolve the winget error above, then re-run the installer."
-        }
+        # Use the same native exit-code and sanitized logging boundary as Git/npm.
+        Invoke-InstallerCommand -Stage 'prerequisites' -Command 'winget' -Arguments @(
+            'install', '--id', $WingetId, '-e', '--source', 'winget',
+            '--accept-source-agreements', '--accept-package-agreements', '--silent', '--disable-interactivity'
+        )
         Update-SessionEnvironment
         if (Test-Command $CommandName) {
             Write-Ok "$DisplayName installed."
@@ -312,6 +344,85 @@ function Install-Prereq {
     }
     return New-PrerequisiteRecord -CommandName $CommandName -WingetId $WingetId `
         -DisplayName $DisplayName -Preexisting $preexisting
+}
+
+# WinGet can lag behind security releases. A missing or outdated runtime must be
+# bootstrapped from the same signed official release qualified by CI.
+# This private runtime is removed with FLUJO-cli by the existing uninstaller.
+function Get-ManagedNodeSpec {
+    param([string]$Architecture = $(if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }))
+    $arch = switch ($Architecture.ToUpperInvariant()) {
+        'AMD64' { 'x64' }
+        'ARM64' { 'arm64' }
+        default { throw "FLUJO requires 64-bit Windows; unsupported architecture: $Architecture" }
+    }
+    $hashes = @{
+        x64 = 'cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20'
+        arm64 = 'a8b8cd79cbbb3062435f449591d98dd63730bbbf30ce2d7cc3a6376c236cb111'
+    }
+    $folder = "node-v22.23.4-win-$arch"
+    return [PSCustomObject]@{ Folder = $folder; Sha256 = $hashes[$arch]; Url = "https://nodejs.org/dist/v22.23.4/$folder.zip" }
+}
+
+function Install-ManagedNode {
+    param([Parameter(Mandatory)] [string]$RuntimeRoot)
+    $spec = Get-ManagedNodeSpec
+    $destination = Join-Path $RuntimeRoot $spec.Folder
+    if (Test-Path -LiteralPath $destination) { throw "Incomplete managed Node runtime exists at $destination. Move it aside and retry setup." }
+    New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+    $staging = Join-Path $RuntimeRoot ([Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $staging | Out-Null
+    $archive = Join-Path $staging 'node.zip'
+    try {
+        Write-Step 'Downloading verified Node.js 22.23.4 (includes npm)'
+        $download = @{ Uri = $spec.Url; OutFile = $archive; UseBasicParsing = $true }
+        if ($installerEnvironment['HTTPS_PROXY']) { $download.Proxy = $installerEnvironment['HTTPS_PROXY'] }
+        Invoke-WebRequest @download
+        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $spec.Sha256) {
+            throw 'Official Node.js archive checksum mismatch. No downloaded code was executed.'
+        }
+        Expand-Archive -LiteralPath $archive -DestinationPath $staging
+        $extracted = Join-Path $staging $spec.Folder
+        if (-not (Test-Path -LiteralPath (Join-Path $extracted 'node.exe')) -or -not (Test-Path -LiteralPath (Join-Path $extracted 'npm.cmd'))) {
+            throw 'Official Node.js archive did not contain the expected runtime and npm.'
+        }
+        Move-Item -LiteralPath $extracted -Destination $destination
+    } finally {
+        # The random directory was created above beneath this task-owned root.
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    }
+    return $destination
+}
+
+function Initialize-InstallerNodeRuntime {
+    param([Parameter(Mandatory)] [string]$RuntimeRoot)
+    $script:ManagedNodeDirectory = ''
+    $managedNodeCandidate = Join-Path $RuntimeRoot (Get-ManagedNodeSpec).Folder
+    if (Test-Path -LiteralPath (Join-Path $managedNodeCandidate 'node.exe')) {
+        $script:ManagedNodeDirectory = $managedNodeCandidate
+        $env:Path = "$managedNodeCandidate;$env:Path"
+    }
+    Write-Step 'Validating Node.js version (requires 22.23.4+ within 22.x, or 24.22.1+ within 24.x)'
+    $nodeResult = Test-FlujoNodeVersion
+    switch ($nodeResult.Status) {
+        'Supported' {
+            Write-Ok "Node.js $($nodeResult.Version) meets the supported runtime requirement"
+        }
+        { $_ -in @('Missing', 'Outdated') } {
+            if ($nodeResult.Status -eq 'Outdated') {
+                Write-Step "Node.js $($nodeResult.Version) is outside FLUJO's supported range. Installing a private runtime; the existing Node installation will remain unchanged."
+            }
+            $script:ManagedNodeDirectory = Install-ManagedNode -RuntimeRoot $RuntimeRoot
+            $env:Path = "$script:ManagedNodeDirectory;$env:Path"
+        }
+        'Malformed' {
+            throw "Node.js version probe returned malformed output: $($nodeResult.Message). The 'node' command exists but produced unexpected output. Uninstall or fix the existing Node installation and re-run."
+        }
+        'ProbeFailed' {
+            throw "Node.js version probe failed: $($nodeResult.Message). The 'node' command exists but failed to execute. Uninstall or fix the existing Node installation and re-run."
+        }
+        default { throw "Unknown Node.js validation status: $($nodeResult.Status)" }
+    }
 }
 
 # Install the Claude Code CLI (provides the `claude` command) via npm. This is
@@ -385,7 +496,7 @@ function Register-FlujoCommand {
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
     $launcher = Join-Path $binDir 'flujo.cmd'
-    $cmd = Get-LauncherContent -AppDir $AppDir
+    $cmd = Get-LauncherContent -AppDir $AppDir -NodeDirectory $script:ManagedNodeDirectory
     # OEM encoding matches the codepage cmd.exe reads .cmd files in (handles
     # non-ASCII characters in the install path correctly).
     Set-Content -LiteralPath $launcher -Value $cmd -Encoding Oem
@@ -478,6 +589,9 @@ function Get-FutureExecutionPolicy {
 }
 
 function Set-PersistentExecutionPolicy {
+    # Declining a persistent change needs no policy-module access. The wizard
+    # already starts this one process with Bypass, and native npm.cmd is used.
+    if ($env:FLUJO_SET_POLICY -in @('0', 'false', 'no')) { return $false }
     # Check the policy future terminals will inherit, NOT just the CurrentUser
     # scope: a machine can already allow scripts via LocalMachine (or a GPO) with
     # CurrentUser left Undefined, in which case there is nothing to do.
@@ -621,28 +735,11 @@ if ($env:FLUJO_OLLAMA -in @('1', 'true', 'yes')) {
 # 1. Validate Node.js version BEFORE any side effects (execution policy, etc.)
 # ---------------------------------------------------------------------------
 Write-InstallerStage -Name 'prerequisites'
-Write-Step "Validating Node.js version (requires 22.19+ within 22.x, or 24.2+ within 24.x)"
-$nodeResult = Test-FlujoNodeVersion
-switch ($nodeResult.Status) {
-    'Supported' {
-        Write-Ok "Node.js $($nodeResult.Version) meets minimum requirement (22.19+ within 22.x, or 24.2+ within 24.x)"
-    }
-    'Missing' {
-        Write-Warn2 "Node.js not found; will install via winget."
-    }
-    'Outdated' {
-        throw "Node.js $($nodeResult.Version) is outside FLUJO's supported range. Install a current patched Node.js 22.x (at least 22.19) or 24.x (at least 24.2), activate it on PATH, then re-run. The installer will not switch an existing Node installation automatically."
-    }
-    'Malformed' {
-        throw "Node.js version probe returned malformed output: $($nodeResult.Message). The 'node' command exists but produced unexpected output. Uninstall or fix the existing Node installation and re-run."
-    }
-    'ProbeFailed' {
-        throw "Node.js version probe failed: $($nodeResult.Message). The 'node' command exists but failed to execute. Uninstall or fix the existing Node installation and re-run."
-    }
-    default {
-        throw "Unknown Node.js validation status: $($nodeResult.Status)"
-    }
-}
+# A second setup launched by the same desktop/parent inherits its old PATH even
+# though the first setup installed tools. Refresh before deciding what is missing.
+Update-SessionEnvironment
+$managedNodeRoot = Join-Path $env:LOCALAPPDATA 'FLUJO-cli\runtime'
+Initialize-InstallerNodeRuntime -RuntimeRoot $managedNodeRoot
 
 # Last question: persist the script-execution policy for future terminals / on-
 # demand MCP server builds (with the user's consent). Skipped automatically if
@@ -657,7 +754,9 @@ $policyChanged = Set-PersistentExecutionPolicy
 # that is folded into the uninstall manifest below.
 $prereqResults = @(
     Install-Prereq -CommandName 'git'    -WingetId 'Git.Git'            -DisplayName 'Git'
-    Install-Prereq -CommandName 'node'   -WingetId 'OpenJS.NodeJS.LTS'      -DisplayName 'Node.js (includes npm)'
+    if (-not $script:ManagedNodeDirectory) {
+        Install-Prereq -CommandName 'node' -WingetId 'OpenJS.NodeJS.LTS' -DisplayName 'Node.js (includes npm)'
+    }
     Install-Prereq -CommandName 'python' -WingetId 'Python.Python.3.12' -DisplayName 'Python 3.12'
     Install-Prereq -CommandName 'uv'     -WingetId 'astral-sh.uv'       -DisplayName 'uv'
     Install-Prereq -CommandName 'rg'     -WingetId 'BurntSushi.ripgrep.MSVC' -DisplayName 'ripgrep'
@@ -667,9 +766,9 @@ $prereqResults = @(
 Write-Step "Re-validating Node.js version after prerequisite installation"
 $nodeResult = Test-FlujoNodeVersion
 if ($nodeResult.Status -ne 'Supported') {
-    throw "Node.js validation failed after installation: $($nodeResult.Message). The installed Node.js ($($nodeResult.Version)) does not meet the minimum requirement (22.19+ within 22.x, or 24.2+ within 24.x). This may indicate a stale PATH; try reopening your terminal and re-running the installer."
+    throw "Node.js validation failed after installation: $($nodeResult.Message). The installed Node.js ($($nodeResult.Version)) does not meet the minimum requirement (22.23.4+ within 22.x, or 24.22.1+ within 24.x). This may indicate a stale PATH; try reopening your terminal and re-running the installer."
 }
-Write-Ok "Node.js $($nodeResult.Version) validated successfully (22.19+ within 22.x, or 24.2+ within 24.x)"
+Write-Ok "Node.js $($nodeResult.Version) validated successfully (22.23.4+ within 22.x, or 24.22.1+ within 24.x)"
 
 Update-SessionEnvironment
 

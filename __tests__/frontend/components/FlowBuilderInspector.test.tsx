@@ -232,7 +232,7 @@ describe('FlowBuilder InspectorPanel', () => {
     render(<InspectorPanel {...baseProps} selectedNode={null} />);
 
     fireEvent.change(screen.getByLabelText('Flow name'), { target: { value: 'renamed_flow' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Guided' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Guided' }));
 
     expect(baseProps.onFlowNameChange).toHaveBeenCalledWith('renamed_flow');
     expect(baseProps.onAuthoringModeChange).toHaveBeenCalledWith('advanced');
@@ -249,7 +249,7 @@ describe('FlowBuilder InspectorPanel', () => {
     expect(screen.getByRole('button', { name: 'More options' })).toBeInTheDocument();
     expect(screen.queryByText('process-1')).not.toBeInTheDocument();
     expect(screen.queryByText('model-1')).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   });
 
   it('shows connected apps with a simple picker in beginner mode', async () => {
