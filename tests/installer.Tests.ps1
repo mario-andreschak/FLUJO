@@ -181,16 +181,55 @@ Describe 'Windows installer generated payloads' {
     }
 }
 
-Describe 'Missing Node bootstrap integrity' {
+Describe 'Private Node runtime selection and bootstrap integrity' {
     BeforeAll {
         $tokens = $null
         $errors = $null
         $installerAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '..\scripts\install.ps1'), [ref]$tokens, [ref]$errors)
-        foreach ($functionName in @('Get-ManagedNodeSpec', 'Install-ManagedNode', 'Write-Step')) {
+        foreach ($functionName in @('Get-ManagedNodeSpec', 'Install-ManagedNode', 'Initialize-InstallerNodeRuntime', 'Write-Step', 'Write-Ok')) {
             $definition = $installerAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $functionName }, $true)
             Invoke-Expression $definition.Extent.Text
         }
         $installerEnvironment = @{}
+    }
+
+    BeforeEach { $script:OriginalNodeTestPath = $env:Path }
+    AfterEach { $env:Path = $script:OriginalNodeTestPath }
+
+    It 'uses a private patched runtime when Node is <Status>' -ForEach @(
+        @{ Status = 'Missing'; Version = $null },
+        @{ Status = 'Outdated'; Version = 'v20.19.0' },
+        @{ Status = 'Outdated'; Version = 'v22.23.3' },
+        @{ Status = 'Outdated'; Version = 'v24.20.0' }
+    ) {
+        Mock Test-FlujoNodeVersion { [PSCustomObject]@{ Status = $Status; Version = $Version } }
+        Mock Install-ManagedNode { Join-Path $TestDrive 'private node' }
+        Initialize-InstallerNodeRuntime -RuntimeRoot (Join-Path $TestDrive 'runtime')
+        Should -Invoke Install-ManagedNode -Times 1 -Exactly
+        $script:ManagedNodeDirectory | Should -Be (Join-Path $TestDrive 'private node')
+        $env:Path | Should -Be "$script:ManagedNodeDirectory;$script:OriginalNodeTestPath"
+    }
+
+    It 'keeps a supported global runtime without installing or changing PATH' {
+        Mock Test-FlujoNodeVersion { [PSCustomObject]@{ Status = 'Supported'; Version = 'v24.22.1' } }
+        Mock Install-ManagedNode { throw 'A supported runtime must remain selected' }
+        Initialize-InstallerNodeRuntime -RuntimeRoot (Join-Path $TestDrive 'runtime')
+        Should -Invoke Install-ManagedNode -Times 0 -Exactly
+        $script:ManagedNodeDirectory | Should -Be ''
+        $env:Path | Should -Be $script:OriginalNodeTestPath
+    }
+
+    It 'reuses the managed runtime on subsequent setup runs' {
+        $runtimeRoot = Join-Path $TestDrive 'runtime'
+        $managed = Join-Path $runtimeRoot (Get-ManagedNodeSpec).Folder
+        New-Item -ItemType Directory -Path $managed -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $managed 'node.exe') -Value 'fixture only'
+        Mock Test-FlujoNodeVersion { [PSCustomObject]@{ Status = 'Supported'; Version = 'v22.23.4' } }
+        Mock Install-ManagedNode { throw 'The managed runtime must be reused' }
+        Initialize-InstallerNodeRuntime -RuntimeRoot $runtimeRoot
+        Should -Invoke Install-ManagedNode -Times 0 -Exactly
+        $script:ManagedNodeDirectory | Should -Be $managed
+        $env:Path | Should -Be "$managed;$script:OriginalNodeTestPath"
     }
 
     It 'pins both supported architectures to the signed official release checksums' {
