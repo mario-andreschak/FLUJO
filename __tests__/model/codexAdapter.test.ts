@@ -1684,14 +1684,15 @@ describe('CodexAdapter — SDK thread reuse', () => {
     }
   });
 
-  it('resumes from durable metadata after the process-local cache is cleared', async () => {
+  it.each([false, true])('checks the appended turn after durable resume (oversized history: %s)', async oversized => {
+    const firstAnswer = oversized ? 'saved answer '.repeat(100_000) : 'first answer';
     let persisted: CompletionInput['codexSession'];
     const onCodexSessionChange = (session: CompletionInput['codexSession']) => { persisted = session; };
     runStreamedMock
       .mockImplementationOnce(async () => ({
         events: eventStream([
           threadStarted('thread-durable'),
-          agentMessage('first answer'),
+          agentMessage(firstAnswer),
           turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
         ])(),
       }))
@@ -1714,7 +1715,7 @@ describe('CodexAdapter — SDK thread reuse', () => {
       onCodexSessionChange,
       messages: [
         { role: 'user', content: 'hi' },
-        { role: 'assistant', content: 'first answer' },
+        { role: 'assistant', content: firstAnswer },
         { role: 'user', content: 'next' },
       ] as OpenAI.ChatCompletionMessageParam[],
     }));

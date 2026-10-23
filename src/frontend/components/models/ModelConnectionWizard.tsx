@@ -45,6 +45,7 @@ import WorkspacePremiumRoundedIcon from '@mui/icons-material/WorkspacePremiumRou
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import { Model } from '@/shared/types';
+import type { NormalizedModel } from '@/shared/types/model/response';
 import { modelService } from '@/frontend/services/model';
 import { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
@@ -73,6 +74,7 @@ interface SetupHost {
   platform: string;
   installMode: 'git' | 'container' | 'npm';
   oneClickInstall: boolean;
+  codex?: { bundled: boolean; loginCommand?: string };
 }
 
 interface OllamaCapability {
@@ -288,7 +290,7 @@ function CommandRow({ command, copied, onCopy }: { command: string; copied: bool
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1, borderRadius: 2, bgcolor: alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.26 : 0.055) }}>
       <TerminalRoundedIcon fontSize="small" color="action" />
-      <Typography component="code" variant="body2" sx={{ flex: 1, overflowWrap: 'anywhere', fontFamily: 'var(--font-geist-mono), ui-monospace, monospace' }}>
+      <Typography component="code" variant="body2" sx={{ flex: 1, minWidth: 0, color: 'text.primary', bgcolor: 'transparent', overflowWrap: 'anywhere', fontFamily: 'var(--font-geist-mono), ui-monospace, monospace' }}>
         {command}
       </Typography>
       <Tooltip title={copied ? t('models.wizard.copied') : t('models.wizard.copyCommand')}>
@@ -318,6 +320,7 @@ export default function ModelConnectionWizard({
   const [azureDeployment, setAzureDeployment] = useState('');
   const [azureApiVersion, setAzureApiVersion] = useState(AZURE_OPENAI_DEFAULT_API_VERSION);
   const [confirmedLogin, setConfirmedLogin] = useState(false);
+  const [codexModels, setCodexModels] = useState<NormalizedModel[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<Model[]>([]);
@@ -360,6 +363,7 @@ export default function ModelConnectionWizard({
     setAzureDeployment('');
     setAzureApiVersion(AZURE_OPENAI_DEFAULT_API_VERSION);
     setConfirmedLogin(false);
+    setCodexModels([]);
     setBusy(false);
     setError(null);
     setCreated([]);
@@ -409,6 +413,7 @@ export default function ModelConnectionWizard({
     }
     setKind(nextKind);
     setConfirmedLogin(false);
+    setCodexModels([]);
     // A masked credential from the previous setup must not be saved for a
     // different provider. Back to the same keyed setup keeps the user's input.
     if (nextKind !== kind || nextKind === 'antigravity-cli' || nextKind === 'codex-subscription') setApiKey('');
@@ -555,6 +560,10 @@ export default function ModelConnectionWizard({
       }
     }
     if (kind === 'codex-subscription' || kind === 'antigravity-cli') {
+      if (kind === 'codex-subscription' && codexModels.length) {
+        await finish(buildGuidedModels({ kind, codexModels }));
+        return;
+      }
       const session = sessionRef.current;
       operationRef.current = true;
       setBusy(true);
@@ -562,12 +571,17 @@ export default function ModelConnectionWizard({
       try {
         const models = await modelService.fetchProviderModels('', '', undefined,
           kind === 'antigravity-cli' ? apiKey.trim() : undefined,
-          kind === 'antigravity-cli' ? 'antigravity-cli' : 'codex');
+          kind === 'antigravity-cli' ? 'antigravity-cli' : 'codex', true);
         if (session !== sessionRef.current) return;
-        if (!models.length) throw new Error(t('models.wizard.createFailed'));
+        if (!models.length) throw new Error(t(kind === 'codex-subscription' ? 'models.wizard.codex.noModels' : 'models.wizard.createFailed'));
+        if (kind === 'codex-subscription') {
+          setCodexModels(models);
+          return;
+        }
         await finish(buildGuidedModels({ kind, apiKey, codexModels: models, antigravityModels: models }), session);
-      } catch {
-        if (session === sessionRef.current) setError(t(kind === 'antigravity-cli' ? 'models.modal.antigravityCli.unavailable' : 'models.wizard.createFailed'));
+      } catch (discoveryError) {
+        if (session === sessionRef.current) setError(discoveryError instanceof Error ? discoveryError.message
+          : t(kind === 'antigravity-cli' ? 'models.modal.antigravityCli.unavailable' : 'models.wizard.createFailed'));
       } finally {
         if (session === sessionRef.current) { operationRef.current = false; setBusy(false); }
       }
@@ -648,8 +662,9 @@ export default function ModelConnectionWizard({
   const bundleNames = useMemo(
     () => kind === 'azure'
       ? [`Azure ${azureDeployment.trim() || 'OpenAI deployment'}`]
+      : kind === 'codex-subscription' ? codexModels.map(model => model.name)
       : kind ? guidedBundleNames(kind, apiKey) : [],
-    [azureDeployment, kind, apiKey],
+    [azureDeployment, kind, apiKey, codexModels],
   );
   const ollamaModel = ollama?.suggestedModel || 'llama3.2:3b';
   const ollamaInstalled = Boolean(ollama?.installedModels?.includes(ollamaModel));
@@ -900,11 +915,17 @@ export default function ModelConnectionWizard({
           ) : null}
           {isCodex ? (
             <Box sx={{ mb: 2 }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.installCodex')}</Typography>
-              {installerPanel('codex', 'winget install --id OpenAI.Codex -e --source winget', 'codex login')}
+              {setupHost?.codex?.bundled && setupHost.codex.loginCommand ? <Stack spacing={1.1}>
+                <Alert severity="info">{t('models.wizard.codex.bundled')}</Alert>
+                <CommandRow command={setupHost.codex.loginCommand} copied={copiedCommand === setupHost.codex.loginCommand}
+                  onCopy={() => void copyCommand(setupHost.codex!.loginCommand!)} />
+              </Stack> : <>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.installCodex')}</Typography>
+                {installerPanel('codex', 'winget install --id OpenAI.Codex -e --source winget', 'codex login')}
+              </>}
               <FormControlLabel
                 sx={{ mt: 1 }}
-                control={<Checkbox checked={confirmedLogin} onChange={(event) => setConfirmedLogin(event.target.checked)} />}
+                control={<Checkbox checked={confirmedLogin} onChange={(event) => { setConfirmedLogin(event.target.checked); setCodexModels([]); }} />}
                 label={t('models.wizard.codexLoginComplete')}
               />
             </Box>
@@ -973,7 +994,7 @@ export default function ModelConnectionWizard({
           ) : null}
 
           <Alert severity="info" sx={{ mb: 2 }}>{t(setup.note)}</Alert>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.willAdd')}</Typography>
+          {(!isCodex || codexModels.length > 0) && <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.willAdd')}</Typography>}
           {!isCodex && (!isAntigravityCli || apiKey.trim()) && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('models.wizard.existingCredentialUpdate')}</Typography>}
           <Stack direction="row" sx={{ gap: 0.8, flexWrap: "wrap",  mb: 2.5 }}>
             {bundleNames.map((name) => <Chip key={name} label={name} variant="outlined" />)}
@@ -986,7 +1007,8 @@ export default function ModelConnectionWizard({
             onClick={() => void finishStandardSetup()}
             disabled={busy || Boolean(installTool)}
           >
-            {isAntigravityCli ? t('models.wizard.antigravityCli.connect') : tp('models.wizard.createModels', bundleNames.length)}
+            {isAntigravityCli ? t('models.wizard.antigravityCli.connect')
+              : isCodex && !codexModels.length ? t('models.wizard.codex.discover') : tp('models.wizard.createModels', bundleNames.length)}
           </Button>
         </>
       );

@@ -9,6 +9,7 @@ import type { Model } from '@/shared/types/model';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
+import { OpenAiResponsesAdapter } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import { createOpenAIClient } from '@/backend/services/model/openaiClient';
 import { cancelAllToolCalls, listInFlightToolCalls } from '@/backend/execution/flow/toolCancelRegistry';
 
@@ -28,7 +29,9 @@ jest.mock('@/backend/services/model', () => ({ modelService: {
   resolveAndDecryptApiKey: async () => 'offline-not-a-secret',
 } }));
 jest.mock('@/backend/services/model/adapters', () => ({
-  getCompletionAdapter: () => ({ createCompletion: (input: CompletionInput) => new LocalAdapter().createCompletion(input) }),
+  getCompletionAdapter: () => ({ createCompletion: (input: CompletionInput) => responsesMode
+    ? new OpenAiResponsesAdapter().createCompletion(input) : new LocalAdapter().createCompletion(input),
+    createStreamCompletion: (input: CompletionInput) => new OpenAiResponsesAdapter().createStreamCompletion(input) }),
 }));
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
@@ -39,8 +42,13 @@ import { getArchiveWritePressure, MODEL_TURN_ARCHIVE_WRITE_LIMITS, withArchiveWr
 // This does not qualify the ordinary SDK's internal retry profile.
 let archiveMetadata: Record<string, unknown> | undefined;
 let sdkRequestObserved: (() => void) | undefined;
+let responsesMode: 'recover' | 'refuse' | 'partial' | 'unavailable' | undefined;
+let transcriptRevisions = 0;
 class LocalAdapter extends OpenAiAdapter {
   async createCompletion(input: CompletionInput) {
+    for (let revision = 0; revision < transcriptRevisions; revision++) {
+      input.onTranscriptMessage?.({ id: 'same-streamed-message', timestamp: revision, role: 'assistant', content: 'x'.repeat(250_000) });
+    }
     return super.createCompletion({ ...input, onSdkRequest: snapshot => {
       sdkRequestObserved?.();
       return input.onSdkRequest?.({
@@ -99,11 +107,27 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     writeOpenControl = undefined;
     archiveMetadata = undefined;
     sdkRequestObserved = undefined;
+    responsesMode = undefined;
+    transcriptRevisions = 0;
     server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       requests.push(JSON.parse(Buffer.concat(chunks).toString()));
       response.setHeader('Content-Type', 'application/json');
+      if (responsesMode) {
+        const failed = responsesMode === 'refuse' || responsesMode === 'unavailable' || requests.length === 1;
+        const envelope = { id: 'response-' + requests.length, object: 'response',
+          status: failed ? 'failed' : 'completed', model: 'offline-model',
+          error: failed ? { code: responsesMode === 'refuse' ? 'invalid_prompt' : 'server_error', message: 'Provider did not complete the response' } : null,
+          output: failed ? [] : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'continued', annotations: [] }] }],
+        };
+        if ((requests.at(-1) as { stream?: boolean }).stream) {
+          response.setHeader('Content-Type', 'text/event-stream');
+          if (responsesMode === 'partial') response.write('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'visible partial reply' }) + '\n\n');
+          response.end('data: ' + JSON.stringify({ type: failed ? 'response.failed' : 'response.completed', response: envelope }) + '\n\ndata: [DONE]\n\n');
+        } else response.end(JSON.stringify(envelope));
+        return;
+      }
       if (bad400) {
         response.statusCode = 400;
         response.end(JSON.stringify({ error: { message: 'Provider returned error (upstream: AtlasCloud: {"code":400,"msg":"bad request"})' } }));
@@ -126,6 +150,77 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     expect(result.success).toBe(false);
     expect(result.error?.message).toContain('leaves no room for input');
     expect(requests).toHaveLength(0);
+  });
+
+  it.each([false, true])('continues after an HTTP 200 failed response (stream=%s), archiving error then success', async stream => {
+    responsesMode = 'recover';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    const onRecoveryRetry = jest.fn();
+    expect((await invoke([message], [message], { onRecoveryRetry, ...(stream ? { onModelDelta: jest.fn() } : {}) })).success).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(onRecoveryRetry).toHaveBeenCalledWith(expect.objectContaining({
+      attempt: 2, failure: expect.objectContaining({ category: 'provider_failure', retryable: true }),
+    }));
+    const directory = path.join(root, 'archives', 'memory-conversation');
+    const outcomes = await Promise.all((await fs.readdir(directory)).filter(name => name.endsWith('.outcome.json'))
+      .map(async name => JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')).outcome));
+    expect(outcomes.sort()).toEqual(['completed', 'error']);
+  });
+
+  it('does not replay a failed stream after visible output', async () => {
+    responsesMode = 'partial';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    const onModelDelta = jest.fn(), onRecoveryRetry = jest.fn();
+    expect((await invoke([message], [message], { onModelDelta, onRecoveryRetry })).success).toBe(false);
+    expect(requests).toHaveLength(1);
+    expect(onModelDelta).toHaveBeenCalled();
+    expect(onRecoveryRetry).not.toHaveBeenCalled();
+  });
+
+  it('stops an interruption retry immediately when the user cancels its wait', async () => {
+    responsesMode = 'recover';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    const result = await invoke([message], [message], {
+      onRecoveryRetry: () => cancelAllToolCalls('memory-conversation'),
+    });
+    expect(result).toMatchObject({ success: false, error: { code: 'cancelled' } });
+    expect(requests).toHaveLength(1);
+  });
+
+  it('bounds persistent provider interruptions to the initial attempt and three retries', async () => {
+    responsesMode = 'unavailable';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    expect((await invoke([message])).success).toBe(false);
+    expect(requests).toHaveLength(4);
+  });
+
+  it('does not retry a provider refusal disguised as HTTP 200', async () => {
+    responsesMode = 'refuse';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    expect((await invoke([message])).success).toBe(false);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('archives a large canonical history and continues with a small wire without charging JSON buffers to its clone', async () => {
+    const canonical = [{ ...message, content: 'x'.repeat(8 * 1024 * 1024) }];
+    expect((await invoke([message], canonical)).success).toBe(true);
+    expect(requests).toHaveLength(1);
+    const names = await fs.readdir(path.join(root, 'archives', 'memory-conversation'));
+    const id = names.find(name => name.endsWith('.v2.json.gz'))?.replace('.v2.json.gz', '');
+    expect(id).toBeDefined();
+    expect((await readModelTurnSnapshot('memory-conversation', id!))?.canonicalMessages).toEqual(canonical);
+  });
+
+  it('counts replacement transcript messages once instead of exhausting memory across stream revisions', async () => {
+    transcriptRevisions = 100;
+    expect((await invoke([message])).success).toBe(true);
+    expect(requests).toHaveLength(1);
+    const names = await fs.readdir(path.join(root, 'archives', 'memory-conversation'));
+    const id = names.find(name => name.endsWith('.v2.json.gz'))!.replace('.v2.json.gz', '');
+    const snapshot = await readModelTurnSnapshot('memory-conversation', id);
+    expect(snapshot?.canonicalMessages.filter(message => message.id === 'same-streamed-message')).toHaveLength(1);
+    expect(snapshot?.canonicalMessages.at(-1)?.timestamp).toBe(99);
   });
 
   it('directly cancels an admitted provider call and releases its registered controller', async () => {

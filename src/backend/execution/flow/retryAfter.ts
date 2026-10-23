@@ -177,7 +177,7 @@ export interface AutomaticRetryPlan {
   /** Absolute deadline (server clock) for UI countdowns. */
   retryAt: number;
   /** Sanitized, non-sensitive reason surfaced to the UI. */
-  reason: 'session_limit';
+  reason: 'session_limit' | 'provider_interruption';
   /** HTTP status of the failure, when the provider reported one. */
   status?: number;
   /** Provider code/type, when present. */
@@ -193,10 +193,21 @@ export interface AutomaticRetryPlan {
  */
 export function planAutomaticRetry(
   error: unknown,
-  options: { now?: number; maxDelayMs?: number } = {},
+  options: { now?: number; maxDelayMs?: number; retriesUsed?: number } = {},
 ): AutomaticRetryPlan | undefined {
   const now = options.now ?? Date.now();
   const facts = extractRetryErrorFacts(error);
+  // Responses endpoints can fail inside an HTTP 200 envelope. These codes
+  // describe interrupted inference, not invalid credentials/input or an
+  // exhausted allowance. Callers must still enforce the no-output/no-effects
+  // replay boundary. Never select a different model or provider here.
+  if ((facts.status === undefined || facts.status >= 500) && [
+    'provider_response_not_completed', 'provider_stream_incomplete',
+    'server_error', 'internal_server_error', 'temporarily_unavailable',
+  ].includes(facts.code ?? '')) {
+    const delayMs = Math.min(8_000, 1_000 * 2 ** (options.retriesUsed ?? 0));
+    return { delayMs, retryAt: now + delayMs, reason: 'provider_interruption', status: facts.status, code: facts.code };
+  }
   if (!isSessionLimitFailure(error)) return undefined;
 
   const delayMs =

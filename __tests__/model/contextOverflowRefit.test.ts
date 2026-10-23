@@ -530,6 +530,27 @@ describe('runtime compaction policy settings', () => {
 });
 
 describe('context-length overflow refit', () => {
+  it('captures a recent tool result before Codex transport preflight and arms its exact resource', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-codex', provider: 'codex', adapter: 'codex-cli' });
+    const body = 'x'.repeat(1_100_000) + 'EXACT_TAIL';
+    const messages = [
+      { id: 'u1', timestamp: 1, role: 'user' as const, content: 'Read the exact tail; do not guess.' },
+      { id: 'a1', timestamp: 2, role: 'assistant' as const, content: '',
+        tool_calls: [{ id: 'call-1', type: 'function' as const, function: { name: 'read', arguments: '{}' } }] },
+      { id: 't1', timestamp: 3, role: 'tool' as const, tool_call_id: 'call-1', content: body },
+    ];
+    const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages,
+      iteration: 1, maxIterations: 1, nodeName: 'Node', nodeId: 'node-1', conversationId: 'codex-large-tool' });
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({ data: { text: body } }));
+    expect(createCompletionMock.mock.calls[0][0]).toEqual(expect.objectContaining({
+      tools: expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: 'read_resource' }) })]),
+    }));
+    expect(JSON.stringify(calls[0])).toContain('flujo://run/');
+    expect(messages[2].content).toBe(body);
+  });
+
   it('provides a scoped in-loop executor for a reader armed after native call preparation', async () => {
     getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-codex', provider: 'codex',
       adapter: 'codex-cli', contextWindow: 10_000, maxTokens: 100 });

@@ -1,4 +1,4 @@
-import { reserveArchiveSnapshot, estimateArchivePayload,
+import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
 import { getHarnessExecution, replayHarnessTool } from '@/backend/services/harness/executionScope';
@@ -70,6 +70,7 @@ import { isOwnerCredentialBoundModel, normalizeMaxTokens, validateOwnerCredentia
 import { isSelfOrchestratingAdapter, normalizeModelTemperature, resolveModelAdapter, supportsLocalModelAuth, type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
+  CodexInputLimitError,
   refitCodexMessagesForInputLimit,
 } from '@/backend/services/model/adapters/codexInputCompaction';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
@@ -953,6 +954,7 @@ export class ModelHandler {
       `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`.toLowerCase();
     return (
       haystack.includes('context_length_exceeded') ||
+      haystack.includes('character transport budget') ||
       haystack.includes('maximum context length') ||
       haystack.includes('context length is') ||
       haystack.includes('maximum context') ||
@@ -1089,7 +1091,11 @@ export class ModelHandler {
 
     if (error instanceof ModelTurnArchiveMemoryError) {
       return { success: false, error: createModelError(error.code, error.message, modelId,
-        undefined, { status: error.status }) };
+        undefined, { status: error.status, providerError: error.diagnostic }) };
+    }
+    if (error instanceof CodexInputLimitError) {
+      return { success: false, error: createModelError(error.code, error.message, modelId,
+        undefined, { inputCharacters: error.inputCharacters }) };
     }
 
     // Error diagnostics are deliberately metadata-only. Provider bodies,
@@ -2307,7 +2313,8 @@ export class ModelHandler {
       // runs for every adapter; self-orchestrating adapters flatten this safer
       // generic wire afterward and still benefit from the bounded content.
       const keepRecentMessages = await ModelHandler.historyKeepRecentMessages();
-      if (!opts?.executionExtensionContext && couldCompact(apiMessages, { keepRecentMessages })) {
+      const codexMayResume = model.adapter === 'codex-cli' && opts?.sessionResume && opts.codexSession;
+      if (!codexMayResume && !opts?.executionExtensionContext && couldCompact(apiMessages, { keepRecentMessages })) {
         const beforeLosslessRefit = apiMessages;
         const compactedMessages = compactForWire(apiMessages, {
           keepRecentMessages,
@@ -2349,17 +2356,37 @@ export class ModelHandler {
       // advertised token window. Enforce it on the final generic wire so the
       // CLI never receives an oversized turn. This is an adapter-specific cap
       // layered on the provider-neutral context policy below.
-      if (model.adapter === 'codex-cli') {
-        const codexRefit = refitCodexMessagesForInputLimit(apiMessages, {
+      if (model.adapter === 'codex-cli' && !codexMayResume) {
+        let codexRefit = refitCodexMessagesForInputLimit(apiMessages, {
           resourceMarkers: opts?.runResourceMarkers,
           keepRecentMessages,
         });
+        if (codexRefit.capacityExceeded && opts?.conversationId && !opts.executionExtensionContext) {
+          // A recent, uncaptured tool result is recoverable once its exact bytes
+          // are persisted. The old transport guard ran before this recovery path.
+          const markers = await ModelHandler.captureOversizedToolResultsForRefit(
+            opts.conversationId, apiMessages, opts.runResourceMarkers, opts.nodeId, opts.durableContext,
+          );
+          opts.runResourceMarkers = markers;
+          // Materialize the URI on the wire too: merely teaching Codex's
+          // normalizer about a marker would leave read_resource unarmed.
+          const capturedMessages = compactForWire(apiMessages, {
+            resourceMarkers: markers, canUseTools: true, compactRecentToolResults: true,
+            allowLossyTruncation: false, toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
+          });
+          markModelInputMessages(modelInputForArchive, capturedMessages.flatMap((message, index) =>
+            message === apiMessages[index] ? [] : [apiSourceIds[index]]), 'content-truncated',
+          'Oversized tool content was stored exactly and replaced with a resource-backed excerpt before Codex dispatch.');
+          apiMessages = capturedMessages;
+          effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+          codexRefit = refitCodexMessagesForInputLimit(apiMessages, { resourceMarkers: markers, keepRecentMessages });
+        }
         if (codexRefit.capacityExceeded) {
           return { success: false, error: createModelError('context_budget_exceeded',
-            'Your instructions and unrecoverable tool state exceed the Codex input limit. Choose a larger supported input window or shorten the instructions explicitly.',
+            new CodexInputLimitError(codexRefit.finalCharacters).message,
             modelId, undefined, { inputCharacters: codexRefit.finalCharacters }) };
         }
-        if (codexRefit.compacted) {
+        if (codexRefit.compacted && !codexRefit.capacityExceeded) {
           const priorSourceIds = apiSourceIds;
           markModelInputMessages(
             modelInputForArchive,
@@ -2447,7 +2474,10 @@ export class ModelHandler {
         model.contextWindow,
         opts?.maxTokens
       );
-      if (inputBudget !== undefined) {
+      // A persisted Codex thread owns its accumulated context and native
+      // compaction. Its adapter validates the compatible delta (or full fresh
+      // fallback); measuring the entire transcript here rejects valid resumes.
+      if (inputBudget !== undefined && !codexMayResume) {
         if (inputBudget === 0) return {
           success: false,
           error: createModelError('context_budget_exceeded',
@@ -2672,6 +2702,7 @@ export class ModelHandler {
       const archiveCanonicalMessages = opts?.archiveModelTurns
         ? structuredClone(opts.canonicalMessages ?? messages)
         : undefined;
+      const archivedMessageBytes = new Map(archiveCanonicalMessages?.map(message => [message.id, estimateArchiveSnapshotBytes(message)]));
       const usageFromProviderResult = (value: unknown) => {
         if (!value || typeof value !== 'object') return undefined;
         const raw = (value as { usage?: Record<string, unknown> }).usage;
@@ -2802,8 +2833,12 @@ export class ModelHandler {
           attemptProducedOutput = true;
           if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
           if (archiveCanonicalMessages) {
-            archiveSnapshotReservation?.grow(estimateArchivePayload(message) * 2);
+            const nextBytes = estimateArchiveSnapshotBytes(message);
+            const difference = nextBytes - (archivedMessageBytes.get(message.id) ?? 0);
+            if (difference > 0) archiveSnapshotReservation?.grow(difference);
             upsertMessageById(archiveCanonicalMessages, structuredClone(message));
+            if (difference < 0) archiveSnapshotReservation?.shrink(-difference);
+            archivedMessageBytes.set(message.id, nextBytes);
           }
           opts?.onTranscriptMessage?.(message);
         };
@@ -3464,7 +3499,7 @@ export class ModelHandler {
           attemptProducedOutput = false;
           const attemptResult = await attempt(attemptMessages, attemptTools, attemptTemperature);
           if (attemptResult.success) return attemptResult;
-          if (singlePhysicalAttempt) return attemptResult;
+          if (singlePhysicalAttempt || getHarnessExecution()) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
           if (opts?.nativeBrokerAuthority) return attemptResult;
@@ -3482,12 +3517,12 @@ export class ModelHandler {
             return attemptResult;
           }
 
-          const plan = planAutomaticRetry(attemptResult.error);
+          const plan = planAutomaticRetry(attemptResult.error, { retriesUsed: automaticRetriesUsed });
           if (!plan) return attemptResult;
 
           automaticRetriesUsed += 1;
           const nextAttempt = automaticRetriesUsed + 1;
-          log.warn('Provider reported a bounded session/rate limit; waiting before an automatic retry', {
+          log.warn('Provider call can recover; waiting before an automatic retry', {
             modelId,
             attempt: nextAttempt,
             delayMs: plan.delayMs,
@@ -3501,7 +3536,7 @@ export class ModelHandler {
               retryAt: plan.retryAt,
               maxAttempts: MAX_AUTOMATIC_MODEL_RETRIES + 1,
               failure: {
-                category: 'rate_limit',
+                category: plan.reason === 'session_limit' ? 'rate_limit' : 'provider_failure',
                 message: attemptResult.error.message,
                 code: plan.code,
                 status: plan.status,
@@ -3595,6 +3630,7 @@ export class ModelHandler {
       if (
         !opts?.executionExtensionContext &&
         !opts?.nativeBrokerAuthority &&
+        !attemptProducedOutput && !abortController.signal.aborted &&
         !result.success &&
         ModelHandler.isContextOverflowError(result.error)
       ) {

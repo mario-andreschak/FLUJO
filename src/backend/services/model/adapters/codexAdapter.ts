@@ -25,6 +25,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult, type SteeringDelivery } from './types';
 import { steeringSource, watchSteering, UncertainSteeringSubmissionError } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
+import { assertCodexTransportInput } from './codexInputCompaction';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { assertNativeToolPort, assertNativeToolPortModelTools } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext } from '@/backend/execution/flow/handlers/nativeOriginalHost';
@@ -949,6 +950,11 @@ export class CodexAdapter implements CompletionAdapter {
       }
 
       capturedThreadId = resumeThreadId;
+      assertCodexTransportInput([
+        ...inputItems.map(item => item.type === 'text' ? item.text : item.path),
+        // App-server instructions are supplied separately from the turn items.
+        ...(ordinaryThreadPath ? [configuration.developerInstructions, systemPrompt ?? ''] : []),
+      ]);
       if (resumeThreadId) {
         if (ordinaryThreadPath) protocolBaseline = codexSession?.totalUsage
           ?? findReusableCodexSession(sessionTracking!.key, sessionTracking!.prefixHash, messages)?.totalUsage;
