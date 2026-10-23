@@ -46,7 +46,7 @@ live('accepts real inference/MCP, durable restart resume, protocol usage and own
     const phrase = 'CODEX_ACCEPTANCE_' + randomUUID().replaceAll('-', '');
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: 'Use FLUJO tools for their operations. Remember the user code phrase for follow-up turns.' },
-      { role: 'user', content: `Remember this code phrase: ${phrase}. Call filesystem__get_allowed_directories exactly once, then reply exactly READY.` },
+      { role: 'user', content: `Remember this code phrase: ${phrase}. First use list_mcp_resources to discover available MCP resources. Then call filesystem__get_allowed_directories exactly once and reply exactly READY.` },
     ];
     const shared = {
       model: { id: 'acceptance', name: 'gpt-6-luna', adapter: 'codex-cli' as const, provider: 'openai' as const, ApiKey: '', reasoningEffort: 'medium' as const },

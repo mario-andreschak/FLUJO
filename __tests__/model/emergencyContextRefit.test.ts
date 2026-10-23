@@ -8,6 +8,16 @@ import {
 const measure = (messages: readonly OpenAI.ChatCompletionMessageParam[]) => JSON.stringify(messages).length;
 
 describe('provider-neutral emergency context refit', () => {
+  it('bounds full-history measurements for 200,000 messages while retaining every user turn', () => {
+    const source: OpenAI.ChatCompletionMessageParam[] = Array.from({ length: 200_000 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user', content: 'Original turn ' + index,
+    }));
+    const measureBounded = jest.fn(measure);
+    const result = emergencyRefitMessages(source, { target: 1024, measure: measureBounded });
+    expect(result.capacityExceeded).toBe(true);
+    expect(measureBounded.mock.calls.length).toBeLessThan(25);
+    expect(result.messages.filter(message => message.role === 'user')).toEqual(source.filter(message => message.role === 'user'));
+  });
   it('removes old tool calls and results as complete structural groups', () => {
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: 'system' },

@@ -553,12 +553,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
       }, messageId);
     };
-    const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
+    const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'> & { media?: import('@/shared/types/model/media').ModelMediaPart[] }): void => {
       unansweredTools.delete(ti.id);
       recordMessage({
         role: 'tool',
         tool_call_id: ti.id,
         content: ti.resultContent,
+        ...(ti.media?.length ? { media: ti.media } : {}),
         ...(ti.ui ? { ui: ti.ui } : {}),
       });
     };
@@ -687,12 +688,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const callId = takeToolCall(fnName, args);
             const toolStartedAt = Date.now();
             let resultContent: string;
+            let localMedia: CallToolResult['content'] = [];
             let isError = false;
             try {
               abortController.signal.throwIfAborted();
               await beforeToolDispatch?.();
               abortController.signal.throwIfAborted();
-              resultContent = JSON.stringify(await localExec(args ?? {}));
+              const split = splitToolResultMedia(await localExec(args ?? {}) as CallToolResult);
+              localMedia = split.mediaItems;
+              resultContent = JSON.stringify(split.textResult);
               await afterToolDispatch?.();
               abortController.signal.throwIfAborted();
               if (toolScopeClosed) throw new Error('Claude tool scope has ended.');
@@ -706,6 +710,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             recordToolResult({
               id: callId,
               resultContent,
+              media: extractNativeMediaParts(localMedia),
             });
             if (runId) {
               recordStatisticsEvent(createStatisticsEvent({
@@ -720,7 +725,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             }
             return isError
               ? { content: [{ type: 'text', text: resultContent }], isError: true }
-              : { content: [{ type: 'text', text: resultContent }] };
+              : { content: [{ type: 'text', text: resultContent }, ...localMedia] };
           });
         }
 

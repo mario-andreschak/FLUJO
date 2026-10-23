@@ -337,8 +337,13 @@ export class OpenAiAdapter implements CompletionAdapter {
       model: model.name,
       messages: providerMessages,
       temperature,
+      ...(input.outputSchema ? { response_format: { type: 'json_schema' as const,
+        json_schema: { name: 'flujo_output', strict: true, schema: input.outputSchema } },
+        ...(model.provider === 'openrouter' ? { provider: { require_parameters: true } } : {}) } : {}),
     };
-    if (model.reasoningEffort) {
+    if (input.disableReasoningForRecovery && model.provider === 'openrouter') {
+      Object.assign(requestParams, { reasoning: { enabled: false } });
+    } else if (model.reasoningEffort) {
       requestParams.reasoning_effort =
         model.reasoningEffort as 'low' | 'medium' | 'high';
     }
@@ -476,6 +481,8 @@ export class OpenAiAdapter implements CompletionAdapter {
     tools,
     temperature,
     maxTokens,
+    outputSchema,
+    disableReasoningForRecovery,
     signal: inputSignal,
     promptCacheKey,
     promptCacheMode,
@@ -498,7 +505,12 @@ export class OpenAiAdapter implements CompletionAdapter {
       messages: providerMessages,
       temperature,
       stream: true,
-      ...(model.reasoningEffort
+      ...(outputSchema ? { response_format: { type: 'json_schema' as const,
+        json_schema: { name: 'flujo_output', strict: true, schema: outputSchema } },
+        ...(model.provider === 'openrouter' ? { provider: { require_parameters: true } } : {}) } : {}),
+      ...(disableReasoningForRecovery && model.provider === 'openrouter'
+        ? { reasoning: { enabled: false } }
+        : model.reasoningEffort
         ? { reasoning_effort: model.reasoningEffort as 'low' | 'medium' | 'high' }
         : {}),
       ...(typeof maxTokens === 'number' ? { max_tokens: maxTokens } : {}),

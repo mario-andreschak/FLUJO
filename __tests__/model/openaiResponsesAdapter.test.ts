@@ -97,6 +97,19 @@ const call = (m: Model, messages: OpenAI.ChatCompletionMessageParam[], extra = {
 
 const bodyOf = (n = 0) => mockResponsesCreate.mock.calls[n][0] as Record<string, unknown>;
 
+it.each([false, true])('sends the required output schema without changing the Free route (streaming: %s)', async streaming => {
+  const schema = { type: 'object', additionalProperties: false, required: ['summary'], properties: { summary: { type: 'string' } } };
+  const route = { ...model('openrouter/free'), provider: 'openrouter' as const, baseUrl: 'https://openrouter.ai/api/v1' };
+  if (streaming) mockResponsesCreate.mockResolvedValueOnce((async function* () {
+    yield { type: 'response.completed', response: responseWithToolCall({ output: [] }) };
+  })());
+  const input = { model: route, apiKey: 'sk-test', messages: [{ role: 'user' as const, content: 'Return JSON.' }], outputSchema: schema };
+  const adapter = new OpenAiResponsesAdapter();
+  await (streaming ? adapter.createStreamCompletion(input) : adapter.createCompletion(input));
+  expect(bodyOf()).toMatchObject({ model: 'openrouter/free', provider: { require_parameters: true },
+    text: { format: { type: 'json_schema', name: 'flujo_output', strict: true, schema } } });
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   __resetReasoningStore();
@@ -105,6 +118,21 @@ beforeEach(() => {
 });
 
 describe('toResponsesInput', () => {
+  it.each([false, true])('disables OpenRouter reasoning on recovery while keeping the same model and output budget (streaming: %s)', async streaming => {
+    if (streaming) mockResponsesCreate.mockResolvedValueOnce((async function* () {
+      yield { type: 'response.completed', response: responseWithToolCall({ output: [] }) };
+    })());
+    const input = { model: { ...model('openrouter/free'), provider: 'openrouter' as const,
+      baseUrl: 'https://openrouter.ai/api/v1', reasoningEffort: 'high' as const },
+      apiKey: 'sk-test', messages: [{ role: 'user' as const, content: 'Read the code.' }],
+      maxTokens: 256, disableReasoningForRecovery: true };
+    const adapter = new OpenAiResponsesAdapter();
+    await (streaming ? adapter.createStreamCompletion(input) : adapter.createCompletion(input));
+    expect(bodyOf()).toMatchObject({ model: 'openrouter/free', max_output_tokens: 256, reasoning: { enabled: false } });
+    expect(bodyOf().reasoning).not.toHaveProperty('effort');
+    expect(input.model.reasoningEffort).toBe('high');
+  });
+
   it('marks Responses history without marking late instructions or changing encrypted reasoning', () => {
     const reasoning = { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque', summary: [] };
     const input = [
@@ -481,6 +509,17 @@ describe('reasoning ownership and projection invalidation (#1091)', () => {
   it('does not replay another credential scope', async () => {
     await call(model(), await seed(), { ...session, apiKey: 'another-fixture-key' });
     noReasoning();
+  });
+
+  it('does not carry encrypted reasoning into a reasoning-disabled recovery', async () => {
+    const route = { ...model('openrouter/free'), provider: 'openrouter' as const, baseUrl: 'https://openrouter.ai/api/v1' };
+    const messages = history();
+    const first = await call(route, messages, session);
+    messages.push(first.completion.choices[0].message,
+      { role: 'tool', tool_call_id: 'call_abc', content: 'Sunny' });
+    await call(route, messages, { ...session, disableReasoningForRecovery: true });
+    noReasoning();
+    expect(bodyOf(1).reasoning).toEqual({ enabled: false });
   });
 
   it('does not replay state after changing tool authority', async () => {

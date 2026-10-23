@@ -13,6 +13,7 @@ import {
   COMPACTION_SUMMARY_MARKER,
   COMPACTION_SUMMARY_SECTIONS,
   estimateTokens,
+  splitSummaryInput,
   validateCompactionSummary,
   type CompactHistoryOptions,
 } from '@/backend/execution/flow/handlers/summarizingCompaction';
@@ -39,6 +40,58 @@ const anchored = (detail: string) => COMPACTION_SUMMARY_SECTIONS
 
 beforeEach(() => {
   seq = 0;
+});
+
+describe('bounded long-history compaction', () => {
+  const options = (source: FlujoChatMessage[], overrides: Partial<CompactHistoryOptions> = {}): CompactHistoryOptions => ({
+    keepTokens: 1000, inputBudgetTokens: 190_000, conversationId: 'scale', nodeId: 'node',
+    projection: { conversationId: 'scale', nodeId: 'node', view: 'full-history', handoffPolicy: 'strip-v1', version: 1 },
+    sourceDigest: 'source', projectionDigest: 'projection', policyVersion: 'bounded', modelId: 'free', ...overrides,
+  });
+  it('compacts 80,000 mixed messages using bounded calls and exact source instruction selections', async () => {
+    const source = Array.from({ length: 80_000 }, (_, index) => msg({ id: 'history-' + index,
+      role: index % 2 ? 'assistant' : 'user', content: index % 2 ? 'That check is complete.' : 'Check record ' + index + '.' }));
+    source[0].content = 'Never publish or send messages.';
+    source[40_000].content = 'Correction: the destination is Bogotá. Keep this for the current task.';
+    source.at(-2)!.content = 'Current task: report the latest destination, and do not send anything.';
+    const original = JSON.stringify(source);
+    const summarize = jest.fn(async (chunk: FlujoChatMessage[], prompt: { selectUserInstructions?: boolean }) => {
+      expect(estimateTokens(chunk)).toBeLessThan(125_000);
+      expect(prompt.selectUserInstructions).toBe(true);
+      return JSON.stringify({ summary: anchored('Destination Bogotá; sending prohibited.'),
+        protectedUserIds: chunk.filter(message => message.id === 'history-0' || message.id === 'history-40000').map(message => message.id) });
+    });
+    const writeAnchor = jest.fn(async (messages: readonly FlujoChatMessage[]) => {
+      expect(messages[0]).toBe(source[0]);
+      expect(messages).toContain(source[40_000]);
+      return 'flujo://run/scale/source';
+    });
+    const result = await compactHistory(source, options(source), { summarize, writeAnchor });
+    expect(result).not.toBeNull();
+    expect(summarize.mock.calls.length).toBeGreaterThan(5);
+    expect(estimateTokens(result!.wireMessages)).toBeLessThan(190_000);
+    expect(result!.wireMessages).toContain(source[0]);
+    expect(result!.wireMessages).toContain(source[40_000]);
+    expect(result!.wireMessages).toContain(source.at(-2));
+    expect(result!.artifact.protectedUserIds).toEqual(['history-0', 'history-40000']);
+    expect(JSON.stringify(source)).toBe(original);
+    expect(writeAnchor).toHaveBeenCalledTimes(1);
+  }, 30_000);
+  it('keeps tool groups paired across summary chunks', () => {
+    const messages = [assistant('old '.repeat(300)), asstCall('', 'c'), toolResult('c', 'result '.repeat(300)), user('now')];
+    const chunks = splitSummaryInput(messages, 1000)!;
+    expect(chunks.flat()).toEqual(messages);
+    expect(chunks.find(chunk => chunk.some(message => message.role === 'tool')))
+      .toEqual(expect.arrayContaining([messages[1], messages[2]]));
+  });
+  it('rejects invented instruction identities without writing an artifact', async () => {
+    const source = Array.from({ length: 100 }, (_, index) => msg({ role: index % 2 ? 'assistant' : 'user', content: 'history '.repeat(50) }));
+    const writeAnchor = jest.fn();
+    expect(await compactHistory(source, options(source, { keepTokens: 100, inputBudgetTokens: 4000 }), {
+      summarize: async () => JSON.stringify({ summary: anchored('State'), protectedUserIds: ['invented'] }), writeAnchor,
+    })).toBeNull();
+    expect(writeAnchor).not.toHaveBeenCalled();
+  });
 });
 
 describe('buildCompactionPrompt (issue #248)', () => {

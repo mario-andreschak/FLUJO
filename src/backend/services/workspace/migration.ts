@@ -668,7 +668,21 @@ async function applicationSharesDataRoot(): Promise<boolean> {
   const [canonicalApp, canonicalData] = await Promise.all([
     canonicalRoot(appRoot), canonicalRoot(dataRoot),
   ]);
-  return canonicalApp === canonicalData;
+  if (canonicalApp === canonicalData) return true;
+  // A new installation/worktree may deliberately reuse an older checkout's
+  // data directory. Its bundled packages are still application source, even
+  // though they do not belong to the process currently performing migration.
+  try {
+    const manifestPath = path.join(canonicalData, 'package.json');
+    const stat = await fs.stat(manifestPath);
+    if (!stat.isFile() || stat.size > 1024 * 1024) return false;
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    return manifest.name === 'flujo-ai' && Array.isArray(manifest.workspaces)
+      && manifest.workspaces.some((workspace: unknown) => typeof workspace === 'string' && workspace.startsWith('mcp-servers/'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) return false;
+    throw error;
+  }
 }
 
 async function candidates(

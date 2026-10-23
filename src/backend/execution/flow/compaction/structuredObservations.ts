@@ -138,6 +138,7 @@ export function buildStructuredObservationBlock(
   messages: readonly FlujoChatMessage[],
   isSummary: (message: FlujoChatMessage) => boolean,
   onIncomplete?: () => void,
+  maxBlockChars = MAX_BLOCK_CHARS,
 ): string {
   const records: string[] = [];
   let characters = 0;
@@ -150,7 +151,7 @@ export function buildStructuredObservationBlock(
     if (duplicate >= 0) { records.splice(duplicate, 1); characters -= record.length + 1; }
     records.push(record);
     characters += record.length + 1;
-    while (records.length > MAX_RECORDS || characters > MAX_BLOCK_CHARS) {
+    while (records.length > MAX_RECORDS || characters > Math.min(MAX_BLOCK_CHARS, maxBlockChars)) {
       characters -= records.shift()!.length + 1;
       omitted();
     }

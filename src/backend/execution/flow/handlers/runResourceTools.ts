@@ -14,6 +14,11 @@ import { ToolDefinition, ResourceNodeReference, MCPNodeReference } from '../type
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { executeNativeReadResource } from './mcpResourceTools';
+import sharp from 'sharp';
+import path from 'node:path';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import { prepareImageInput } from './prepareImageInput';
+import { searchCompactionResource } from '@/backend/services/runResources/searchCompactionResource';
 
 /**
  * Run-resource tools (Tier 3, issue #161).
@@ -64,28 +69,44 @@ export function buildReadResourceTool(): ToolDefinition {
   return {
     name: READ_RESOURCE_TOOL_NAME,
     description:
-      'Read resource content by URI or file path. Supports stored flujo://run/... resources, native MCP URIs, and paths readable by a bound filesystem MCP. Use list_mcp_resources to find native URIs. Large or binary resources may return a flujo://run/... URI.',
+      'Read flujo://run/... resources, native MCP URIs or bound files. search_text finds exact original messages beneath archived summaries. Images return pixels; use image_region to inspect fine details.',
     inputSchema: {
       type: 'object',
       properties: {
         uri: {
           type: 'string',
-          description: 'A flujo://run/... URI, native MCP URI, file:// URI, or filesystem path.',
+          description: 'Resource URI or bound file path.',
         },
         max_chars: {
           type: 'integer',
           minimum: 1,
           maximum: 200000,
-          description: 'Text range size, at most 200,000 UTF-16 characters. Default: 50,000.',
+          description: 'UTF-16 text limit; default 50000.',
         },
         start_char: {
           type: 'integer',
           minimum: 0,
-          description: 'Zero-based UTF-16 offset for a stored flujo://run/... resource. Use range.nextChar to continue.',
+          description: 'Stored-text offset; continue with range.nextChar.',
         },
         expected_sha256: {
           type: 'string',
-          description: 'Optional SHA-256 to verify against the immutable stored payload.',
+          description: 'Verify the immutable payload digest.',
+        },
+        search_text: {
+          type: 'string', minLength: 1, maxLength: 512,
+          description: 'Case-sensitive literal text search or exact source message ID lookup in archived originals.',
+        },
+        start_message: {
+          type: 'integer', minimum: 0,
+          description: 'Continue an incomplete search using next_message.',
+        },
+        image_region: {
+          type: 'object', additionalProperties: false,
+          description: 'Crop in auto-oriented original pixels; omit for overview.',
+          properties: {
+            left: { type: 'integer', minimum: 0 }, top: { type: 'integer', minimum: 0 },
+            width: { type: 'integer', minimum: 1 }, height: { type: 'integer', minimum: 1 },
+          }, required: ['left', 'top', 'width', 'height'],
         },
       },
       required: ['uri'],
@@ -136,6 +157,8 @@ export function buildRunResourceTools(
 }
 
 export interface RunResourceToolContext extends FlowDurableMutationContext {
+  /** Bound image views for native SDK loops as well as ordinary model calls. */
+  maxImageTokens?: number;
   /** Owning conversation — run resources are scoped to it. Absent ⇒ refused. */
   conversationId?: string;
   /** Whether this is an ephemeral (subflow-child) run — those never persist resources. */
@@ -152,6 +175,15 @@ export interface RunResourceToolOutcome {
   success: boolean;
   data?: unknown;
   error?: string;
+  media?: ModelMediaPart[];
+}
+
+/** Native adapters receive actual MCP image blocks, never base64 in JSON text. */
+export function nativeRunResourceResult(outcome: RunResourceToolOutcome): unknown {
+  if (!outcome.media?.length) return outcome.data;
+  return { content: [{ type: 'text', text: JSON.stringify(outcome.data) },
+    ...outcome.media.filter(part => part.type === 'image' && part.data)
+      .map(part => ({ type: 'image', mimeType: part.mimeType ?? 'image/png', data: part.data! }))] };
 }
 
 /**
@@ -229,9 +261,22 @@ async function executeReadResource(
   args: Record<string, unknown>,
   ctx: RunResourceToolContext,
 ): Promise<RunResourceToolOutcome> {
-  const uri = typeof args?.uri === 'string' ? args.uri.trim() : '';
+  let uri = typeof args?.uri === 'string' ? args.uri.trim() : '';
   if (!uri) {
     return { success: false, error: 'read_resource requires a non-empty "uri".' };
+  }
+  // Recover a mistyped scheme only when the complete, unchanged locator names
+  // this conversation. Never fuzzy-match resource IDs or cross a run boundary.
+  // A bound native server may own a similar scheme, so leave its URIs alone.
+  if (ctx.conversationId && !ctx.mcpNodes?.length && !uri.startsWith(RUN_RESOURCE_SCHEME)) {
+    const match = /^([a-z]+):\/\/run\/(.+)$/i.exec(uri);
+    if (match && isSingleSchemeTypo(match[1].toLowerCase(), 'flujo')) {
+      const candidate = RUN_RESOURCE_SCHEME + match[2];
+      if (parseRunResourceUri(candidate)?.conversationId === ctx.conversationId) {
+        log.info('Recovered run-resource scheme transcription', { originalUri: uri, uri: candidate });
+        uri = candidate;
+      }
+    }
   }
   const parsed = parseRunResourceUri(uri);
   if (!parsed) {
@@ -291,16 +336,60 @@ async function executeReadResource(
         size: entry.size,
         source: 'tool-read',
       });
+      if (args.search_text !== undefined) {
+        if (!ctx.conversationId || typeof args.search_text !== 'string' || args.image_region !== undefined) {
+          return { success: false, error: 'Search requires conversation ownership and text, without image_region.' };
+        }
+        return { success: true, data: await searchCompactionResource({ uri, conversationId: ctx.conversationId,
+          text: args.search_text, startMessage: (args.start_message ?? 0) as number, maxChars: maxChars ?? 12_000 }) };
+      }
       // Prefer text content; for binary/link kinds return a compact note rather
       // than re-inlining base64 (which would defeat the point of the marker).
       const content = bounded.content;
       const localPath = entry.kind !== 'text' && entry.kind !== 'link'
         ? await getRunResourceLocalPath(entry.uri)
         : null;
+      let media: ModelMediaPart[] | undefined;
+      let imageView: { originalWidth: number; originalHeight: number; region: { left: number; top: number; width: number; height: number } } | undefined;
+      if (localPath && entry.mimeType?.startsWith('image/')) {
+        // libvips' Windows file loader needs the extended pathname form beyond
+        // MAX_PATH, even though Node successfully found the same stored file.
+        const decoder = sharp(path.toNamespacedPath(localPath), { limitInputPixels: 268_402_689, sequentialRead: true }).autoOrient();
+        const metadata = await decoder.metadata();
+        const width = metadata.autoOrient?.width ?? metadata.width;
+        const height = metadata.autoOrient?.height ?? metadata.height;
+        if (!width || !height) return { success: false, error: 'Image dimensions are unavailable.' };
+        const region = (args.image_region ?? { left: 0, top: 0, width, height }) as Record<string, unknown>;
+        if (!region || typeof region !== 'object' || ['left', 'top', 'width', 'height'].some(key =>
+          typeof region[key] !== 'number' || !Number.isSafeInteger(region[key]) || Number(region[key]) < (key === 'width' || key === 'height' ? 1 : 0))
+          || Number(region.left) + Number(region.width) > width || Number(region.top) + Number(region.height) > height) {
+          return { success: false, error: `image_region must be inside the original ${width} by ${height} pixels.` };
+        }
+        const crop = region as { left: number; top: number; width: number; height: number };
+        const pixels = await decoder.extract(crop).resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+        const prepared = await prepareImageInput([{ role: 'user', content: [{ type: 'image_url', image_url: {
+          url: 'data:image/png;base64,' + pixels.toString('base64'),
+        } }] }], { maxImageTokens: ctx.maxImageTokens ?? 8192 });
+        const part = prepared[0].content;
+        const url = Array.isArray(part) && part.find(item => item.type === 'image_url');
+        if (url && url.type === 'image_url') {
+          const [prefix, data] = url.image_url.url.split(',', 2);
+          media = [{ type: 'image', mimeType: prefix.slice(5).split(';')[0], data }];
+        }
+        imageView = { originalWidth: width, originalHeight: height, region: crop };
+      }
       log.info('read_resource served run resource', { uri: entry.uri, size: entry.size });
       return {
         success: true,
-        data: {
+        ...(media ? { media } : {}),
+        // A cropped image already carries native pixels. Keep its exact source
+        // identity and coordinates, without duplicating the binary placeholder,
+        // generated storage name and original host path in a small model window.
+        data: imageView && args.image_region ? {
+          uri: entry.uri,
+          sha256: entry.sha256,
+          imageView,
+        } : {
           uri: entry.uri,
           name: entry.name,
           mimeType: entry.mimeType,
@@ -310,6 +399,7 @@ async function executeReadResource(
           verification: bounded.verification,
           range: bounded.range,
           ...(localPath ? { localPath } : {}),
+          ...(imageView ? { imageView } : {}),
         },
       };
     });
@@ -318,4 +408,17 @@ async function executeReadResource(
     log.error('read_resource failed', error);
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** One insertion, deletion, substitution or adjacent transposition. Restrict
+ * this to the fixed scheme; identifiers and paths always remain exact. */
+function isSingleSchemeTypo(value: string, expected: string): boolean {
+  if (Math.abs(value.length - expected.length) > 1 || value === expected) return false;
+  let first = 0;
+  while (first < Math.min(value.length, expected.length) && value[first] === expected[first]) first++;
+  if (value.length > expected.length) return value.slice(first + 1) === expected.slice(first);
+  if (value.length < expected.length) return value.slice(first) === expected.slice(first + 1);
+  return value.slice(first + 1) === expected.slice(first + 1)
+    || (value[first] === expected[first + 1] && value[first + 1] === expected[first]
+      && value.slice(first + 2) === expected.slice(first + 2));
 }

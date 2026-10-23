@@ -2,7 +2,8 @@ import { Buffer } from 'node:buffer';
 import { createLogger } from '@/utils/logger';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import type { FlujoChatMessage } from '@/shared/types/chat';
-import type { CompactionProjectionIdentity, WireSummaryArtifact } from '../compaction/types';
+import type { CompactionProjectionIdentity, WireSummaryArtifact, SummaryRange } from '../compaction/types';
+import { appendSummaryRanges, type SummaryRangePayload } from '../compaction/summaryHierarchy';
 import { inspectJson } from '../compaction/jsonInspection';
 import { digestProjectedMessages } from '../compaction/digest';
 import { buildStructuredObservationBlock, STRUCTURED_OBSERVATIONS_HEADING,
@@ -17,15 +18,15 @@ const log = createLogger('backend/execution/flow/handlers/summarizingCompaction'
  * oversized tool results (behind `flujo://run/...` URIs) and drops old
  * assistant prose on the outgoing request, but never mutates the persisted
  * `SharedState.messages`. When a long agentic run finally exceeds the context
- * window there is no "summarize and continue" path — only a single emergency
- * lossy refit of the wire.
+ * window, this module creates a bounded summary projection backed by immutable
+ * source ranges. The canonical transcript remains the source of truth.
  *
  * This module implements wire-only summarizing compaction modelled on
  * opencode's `compaction.ts`:
  *   - an anchored-summary template (Objective / Important Details / Work State /
  *     Next Move / Relevant Files) the model fills in;
- *   - UPDATE-the-previous-summary semantics so repeated compactions don't
- *     degrade into a summary-of-a-summary;
+ *   - persistent leaf summaries and bounded parent merges, reusing verified
+ *     prefixes and retaining exact-source links across summaries of summaries;
  *   - the summary becomes the head of a copied provider-facing projection;
  *   - `flujo://run/...` URIs referenced by the summarized slice are preserved so
  *     they stay dereferenceable via `read_resource`.
@@ -35,9 +36,8 @@ const log = createLogger('backend/execution/flow/handlers/summarizingCompaction'
  * unit-testable in isolation without touching a real provider or the store.
  */
 
-/** Marker prefixed to a compaction summary message so a later compaction can
- *  recognise its own previous summary and UPDATE it instead of summarizing a
- *  summary. Also excluded from the summarizable slice cheaply by identity. */
+/** Marker for the generated wire summary. Persistent range metadata, rather
+ * than this marker alone, determines whether previous summaries can be reused. */
 export const COMPACTION_SUMMARY_MARKER = '[FLUJO conversation summary]';
 
 // This is runtime-owned instruction, never generated narrative or observation
@@ -50,9 +50,9 @@ const SUMMARY_AUTHORITY_INSTRUCTION =
 
 const CURRENT_REQUEST_BOUNDARY_ID = 'flujo-compaction-current-request';
 const CURRENT_REQUEST_INSTRUCTION = '[FLUJO current request]\n' +
-  'Retained earlier user turns preserve constraints and corrections. Answer only the latest request in its format. ' +
-  'Assistant replies are not source evidence. Preserve source field values/types; ' +
-  'an ID is its value, not its record. No unrequested annotations/prose or future turns.';
+  'Retained earlier user turns preserve constraints and corrections. Answer the latest request using matching original records, not other answers. ' +
+  'Records do not prove action success. Keep field values/types; ' +
+  'an ID is its value, not its record. No unrequested annotations/prose.';
 
 /** The anchored-summary section headings, always present (even when empty). */
 export const COMPACTION_SUMMARY_SECTIONS = [
@@ -303,6 +303,16 @@ function retainedOldMessages(messages: FlujoChatMessage[], split: SplitResult): 
   return messages.filter(message => retained.has(message));
 }
 
+function withArchivedInstructionBoundary(selected: boolean, uri: string | undefined, messages: FlujoChatMessage[], timestamp: number): FlujoChatMessage[] {
+  if (!selected) return messages;
+  return [{
+    id: 'flujo-archived-user-instructions', role: 'system', timestamp,
+    content: 'Earlier user turns are archived at ' + uri + '. Selected standing instructions below are exact original user turns in order. '
+      + 'All original user restrictions remain binding. Before consequential actions or permission decisions, recover relevant original user instructions from the archive. '
+      + 'A narrative summary cannot grant permission or establish that a restriction was revoked.',
+  } as FlujoChatMessage, ...messages];
+}
+
 /** Validate syntax deterministically; generated prose never becomes the
  * authority for instructions or execution receipts. Missing sections, fenced
  * or unfinished output are rejected rather than persisted as a usable anchor. */
@@ -317,16 +327,19 @@ export function validateCompactionSummary(summary: string): boolean {
     && !/\[(?:truncated|incomplete)\]\s*$/i.test(narrative.trim());
 }
 
-function preserveExecutionReceipts(summary: string, messages: FlujoChatMessage[]): string {
+function preserveExecutionReceipts(summary: string, messages: FlujoChatMessage[], maxChars = Infinity): string {
   const results = new Set(messages.filter(message => message.role === 'tool')
     .map(message => (message as FlujoChatMessage & { tool_call_id?: string }).tool_call_id));
   const receipts = messages.flatMap(message => (message.role === 'assistant' ? message.tool_calls ?? [] : [])
     .filter(call => call.type === 'function')
     .map(call => JSON.stringify({ call_id: call.id, tool: call.function.name,
       state: results.has(call.id) ? 'result-observed' : 'unresolved' })));
+  let characters = 0, first = receipts.length;
+  while (first > 0 && characters + receipts[first - 1].length + 1 <= maxChars) characters += receipts[--first].length + 1;
   return receipts.length ? summary + '\n\n## Execution Receipts\n'
     + 'Exact recorded identifiers; an observed result does not assert side-effect success. Consult the source artifact before recovery; do not repeat a call because detail was summarized.\n'
-    + receipts.join('\n') : summary;
+    + (first ? first + ' earlier receipts are in the full source archive. Read it before recovering an earlier action.\n' : '')
+    + receipts.slice(first).join('\n') : summary;
 }
 
 /**
@@ -338,6 +351,7 @@ function preserveExecutionReceipts(summary: string, messages: FlujoChatMessage[]
 export function preserveResourceUris(
   summaryText: string,
   summarizedMessages: FlujoChatMessage[],
+  maxChars = Infinity,
 ): string {
   const isUriChar = (code: number) => (code >= 48 && code <= 57)
     || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
@@ -381,15 +395,20 @@ export function preserveResourceUris(
   const missing = [...found].filter((u) => !summaryText.includes(u));
   if (missing.length === 0) return summaryText;
 
+  let characters = 0, first = missing.length;
+  while (first > 0 && characters + missing[first - 1].length + 80 <= maxChars) characters += missing[--first].length + 80;
   const block =
     '\n\n## Preserved Resources\n' +
-    missing.map((u) => `- ${u} (call read_resource with this uri to read the full content)`).join('\n');
+    (first ? first + ' earlier resource locators are retained in the full source archive.\n' : '') +
+    missing.slice(first).map((u) => `- ${u} (call read_resource with this uri to read the full content)`).join('\n');
   return summaryText + block;
 }
 
 export interface CompactHistoryOptions {
   /** Recent-tail budget kept verbatim (tokens). */
   keepTokens: number;
+  /** Provider/transport budget, including the summarizer's controls and output. */
+  inputBudgetTokens?: number;
   /** Owning process node id, stamped onto the summary wire message. */
   nodeId?: string;
   conversationId: string;
@@ -406,15 +425,34 @@ export interface CompactHistoryDeps {
   /** Calls the summarization model. Returns the summary body (no marker). */
   summarize: (
     messages: FlujoChatMessage[],
-    prompt: { system: string; user: string; previousSummary?: string },
+    prompt: { system: string; user: string; previousSummary?: string; selectUserInstructions?: boolean; mergingRanges?: boolean },
   ) => Promise<string>;
   /** Persist an immutable, complete projected-source artifact. */
   writeAnchor?: (
     messages: readonly FlujoChatMessage[],
     metadata: { artifactId: string; sourceDigest: string; projectionDigest: string },
   ) => Promise<string | undefined>;
+  /** Immutable, content-addressed leaf/parent; parents link to exact sources. */
+  writeSummaryRange?: (payload: SummaryRangePayload) => Promise<string | undefined>;
   now?: () => number;
   uuid?: () => string;
+}
+
+/** Keep complete tool groups together and bound every summarizer request.
+ * Oversized indivisible groups retain the existing resource-refit fallback. */
+export function splitSummaryInput(messages: FlujoChatMessage[], budget: number): FlujoChatMessage[][] | null {
+  const chunks: FlujoChatMessage[][] = [];
+  let chunk: FlujoChatMessage[] = [], size = 0;
+  for (let index = 0; index < messages.length;) {
+    const group = [messages[index++]];
+    while (index < messages.length && messages[index].role === 'tool') group.push(messages[index++]);
+    const cost = estimateTokens(group);
+    if (cost > budget) return null;
+    if (chunk.length && size + cost > budget) { chunks.push(chunk); chunk = []; size = 0; }
+    chunk.push(...group); size += cost;
+  }
+  if (chunk.length) chunks.push(chunk);
+  return chunks;
 }
 
 export interface CompactHistoryResult {
@@ -439,7 +477,7 @@ export async function compactHistory(
   const uuid = deps.uuid ?? (() => crypto.randomUUID());
 
   const candidate = opts.reusableArtifact;
-  const compatibleArtifact = candidate?.conversationId === opts.conversationId
+  const compatibleArtifact = candidate?.schemaVersion === 1 && candidate.conversationId === opts.conversationId
     && candidate.nodeId === opts.nodeId && candidate.projectionDigest === opts.projectionDigest
     && candidate.policyVersion === opts.policyVersion && candidate.modelId === opts.modelId
     ? candidate : undefined;
@@ -455,9 +493,11 @@ export async function compactHistory(
     .map(message => (message as FlujoChatMessage & { tool_call_id?: string }).tool_call_id));
   if (split.toSummarize.some(message => message.role === 'assistant'
     && message.tool_calls?.some(call => !completed.has(call.id)))) return null;
-  const summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user')
+  let summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user')
     .map(message => message.id).filter((id): id is string => Boolean(id));
-  const retainedOld = retainedOldMessages(messages, split);
+  let retainedOld = retainedOldMessages(messages, split);
+  const selectUserInstructions = opts.inputBudgetTokens !== undefined
+    && estimateTokens(retainedOld) > opts.inputBudgetTokens * 0.35;
   const leadingSystem = split.leadingSystem.some(message => message.content === SUMMARY_AUTHORITY_INSTRUCTION)
     ? split.leadingSystem
     : [...split.leadingSystem, {
@@ -466,12 +506,15 @@ export async function compactHistory(
     } as FlujoChatMessage];
   let incompleteObservations = false;
   const observations = buildStructuredObservationBlock(split.toSummarize, isCompactionSummary,
-    () => { incompleteObservations = true; });
-  const requiresArchive = incompleteObservations || split.toSummarize.some(message => message.role === 'tool');
+    () => { incompleteObservations = true; },
+    opts.inputBudgetTokens ? Math.floor(opts.inputBudgetTokens * 0.4) : undefined);
+  const requiresArchive = selectUserInstructions || incompleteObservations || split.toSummarize.some(message => message.role === 'tool');
 
   const reusable = opts.reusableArtifact;
+  const protectedSourceIds = new Set(split.protectedMessages.map(message => message.id));
   if (
-    reusable &&
+    reusable && (!selectUserInstructions || (Array.isArray(reusable.protectedUserIds)
+      && reusable.protectedUserIds.every(id => protectedSourceIds.has(id)))) &&
     reusable.schemaVersion === 1 &&
     reusable.conversationId === opts.conversationId &&
     reusable.nodeId === opts.nodeId &&
@@ -488,6 +531,12 @@ export async function compactHistory(
       && reusable.summaryResourceUri.startsWith(RUN_RESOURCE_SCHEME)
       && reusable.summaryText.includes(reusable.summaryResourceUri)))
   ) {
+    if (selectUserInstructions) {
+      const retained = new Set(reusable.protectedUserIds);
+      retainedOld = retainedOld.filter(message => message.role !== 'user' || retained.has(message.id));
+      summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user' || !retained.has(message.id))
+        .map(message => message.id);
+    }
     const summaryMessage: FlujoChatMessage = {
       id: reusable.artifactId,
       role: 'assistant',
@@ -496,27 +545,108 @@ export async function compactHistory(
       ...(opts.nodeId !== undefined ? { processNodeId: opts.nodeId } : {}),
     } as FlujoChatMessage;
     return {
-      wireMessages: withCurrentRequestBoundary(messages, [
+      wireMessages: withArchivedInstructionBoundary(selectUserInstructions, reusable.summaryResourceUri, withCurrentRequestBoundary(messages, [
         ...leadingSystem,
         summaryMessage,
         ...retainedOld,
         ...split.toKeep,
-      ], opts.nodeId, now()),
+      ], opts.nodeId, now()), now()),
       artifact: reusable.requestDigest === requestDigest ? reusable : { ...reusable, requestDigest },
       summarizedMessageIds,
     };
   }
 
-  if (requiresArchive && !deps.writeAnchor) return null;
-
-  const prompt = buildCompactionPrompt({ previousSummary: split.previousSummary });
+  if (requiresArchive && !deps.writeAnchor && !deps.writeSummaryRange) return null;
 
   let summaryBody: string;
+  let summaryRanges: SummaryRange[] | undefined;
+  let hierarchyUri: string | undefined;
+  const protectedIds = new Set<string>();
   try {
-    summaryBody = (await deps.summarize(split.toSummarize, prompt))?.trim() ?? '';
+    let unsummarized = split.toSummarize;
+    let previousSummary = split.previousSummary;
+    const priorEnd = compatibleArtifact?.sourceEndId
+      ? split.toSummarize.findIndex(message => message.id === compatibleArtifact.sourceEndId) : -1;
+    if (compatibleArtifact && priorEnd >= 0
+      && (!selectUserInstructions || Array.isArray(compatibleArtifact.protectedUserIds))
+      && (!deps.writeSummaryRange || Array.isArray(compatibleArtifact.summaryRanges))
+      && digestProjectedMessages([...split.leadingSystem, ...split.toSummarize.slice(0, priorEnd + 1)]) === compatibleArtifact.sourceDigest
+      && validateCompactionSummary(compatibleArtifact.summaryText)) {
+      unsummarized = split.toSummarize.slice(priorEnd + 1);
+      previousSummary = compatibleArtifact.summaryText.slice(COMPACTION_SUMMARY_MARKER.length).trim();
+      summaryRanges = compatibleArtifact.summaryRanges;
+      const sourceUserIds = new Set(split.protectedMessages.map(message => message.id));
+      for (const id of compatibleArtifact.protectedUserIds ?? []) {
+        if (!sourceUserIds.has(id)) return null;
+        protectedIds.add(id);
+      }
+    }
+    const chunks = opts.inputBudgetTokens
+      ? splitSummaryInput(unsummarized, Math.max(1, Math.floor(opts.inputBudgetTokens * 0.65)
+        - Math.min(4096, Math.floor(opts.inputBudgetTokens * 0.1))))
+      : [unsummarized];
+    if (!chunks) return null;
+    // Only narrative is passed forward. Exact observations/receipts are rebuilt
+    // from the full immutable source below, avoiding duplicate growing footers.
+    summaryBody = (previousSummary ?? '').split('\n\n## Recorded Source Observations')[0]
+      .split('\n\n## Preserved Resources')[0].split('\n\n## Execution Receipts')[0]
+      .split('\n\n_(Earlier turns compacted;')[0];
+    const summarizeChunk = async (chunk: FlujoChatMessage[], leaf: boolean, previous?: string): Promise<string> => {
+      const prompt = buildCompactionPrompt({ previousSummary: previous });
+      const maxCharacters = opts.inputBudgetTokens ? Math.max(512, Math.min(6000, opts.inputBudgetTokens / 8)) : 12000;
+      let failure: unknown;
+      // These are read-only internal calls. Retry a malformed/incomplete answer
+      // locally, before it can abandon an otherwise valid large-history tree.
+      // No failed answer or partially selected identities enters durable state.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          let body = (await deps.summarize(chunk, { ...prompt,
+            system: prompt.system + `\nThe narrative must be at most ${Math.floor(maxCharacters)} characters.`
+              + (attempt ? '\nThe preceding attempt failed validation. Produce a fresh complete answer. Use exactly the requested headings and valid JSON when requested. Do not enumerate completed one-off requests.' : ''),
+            selectUserInstructions: leaf && selectUserInstructions, mergingRanges: !leaf }))?.trim() ?? '';
+          let selectedIds: string[] = [];
+          if (leaf && selectUserInstructions) {
+            // Only exact source user turns can become retained instructions. The
+            // model selects identities; it cannot synthesize user/system authority.
+            const selected = JSON.parse(body) as { summary?: unknown; protectedUserIds?: unknown };
+            if (typeof selected.summary !== 'string' || !Array.isArray(selected.protectedUserIds)) throw new Error('Invalid instruction selection');
+            const sourceUsers = new Set(chunk.filter(message => message.role === 'user').map(message => message.id));
+            if (selected.protectedUserIds.some(id => typeof id !== 'string' || !sourceUsers.has(id))) throw new Error('Unknown instruction identity');
+            selectedIds = selected.protectedUserIds as string[];
+            body = selected.summary;
+          }
+          if (!body || body.length > maxCharacters || !validateCompactionSummary(body)
+            || body.includes(STRUCTURED_OBSERVATIONS_HEADING)) throw new Error('Invalid range summary');
+          for (const id of selectedIds) protectedIds.add(id);
+          return body;
+        } catch (error) {
+          // Lost execution authority/cancellation is not a summarizer formatting
+          // failure and must never start another provider request.
+          if ((error as { code?: string })?.code === 'flow_execution_authority_lost'
+            || (error as { name?: string })?.name === 'AbortError') throw error;
+          failure = error;
+        }
+      }
+      throw failure;
+    };
+    if (deps.writeSummaryRange && opts.inputBudgetTokens) {
+      const hierarchy = await appendSummaryRanges({ previous: summaryRanges ?? [], chunks,
+        inputBudget: Math.floor(opts.inputBudgetTokens * 0.65), summarize: summarizeChunk, persist: deps.writeSummaryRange });
+      summaryBody = hierarchy.summaryText;
+      summaryRanges = hierarchy.ranges;
+      hierarchyUri = hierarchy.resourceUri;
+    } else {
+      for (const chunk of chunks) summaryBody = await summarizeChunk(chunk, true, summaryBody);
+    }
   } catch (error) {
     log.warn('compactHistory: summarization model call failed; falling back (no mutation)', error);
     return null;
+  }
+  if (selectUserInstructions) {
+    retainedOld = retainedOld.filter(message => message.role !== 'user' || protectedIds.has(message.id));
+    summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user' || !protectedIds.has(message.id))
+      .map(message => message.id);
+    if (estimateTokens(retainedOld) > opts.inputBudgetTokens! * 0.35) return null;
   }
   if (!summaryBody || !validateCompactionSummary(summaryBody)
     || summaryBody.includes(STRUCTURED_OBSERVATIONS_HEADING)) {
@@ -525,9 +655,10 @@ export async function compactHistory(
   }
 
   // Preserve dereferenceable resource URIs from the summarized slice.
-  summaryBody = preserveResourceUris(summaryBody, split.toSummarize);
+  const recoveryBlockChars = opts.inputBudgetTokens ? Math.min(8192, Math.floor(opts.inputBudgetTokens * 0.2)) : Infinity;
+  summaryBody = preserveResourceUris(summaryBody, split.toSummarize, recoveryBlockChars);
   summaryBody += observations;
-  summaryBody = preserveExecutionReceipts(summaryBody, split.toSummarize);
+  summaryBody = preserveExecutionReceipts(summaryBody, split.toSummarize, recoveryBlockChars);
   // Validate achieved reduction after exact instruction/receipt restoration,
   // before writing an artifact. Refuse a cosmetic summary that makes the wire
   // larger and amplifies memory/transport pressure.
@@ -543,8 +674,8 @@ export async function compactHistory(
   // The artifact payload is the complete projected source, including canonical
   // identity and metadata. It is diagnostic/reusable wire state, never a backup
   // that is allowed to replace canonical history.
-  let anchorUri: string | undefined;
-  if (deps.writeAnchor) {
+  let anchorUri: string | undefined = hierarchyUri;
+  if (!anchorUri && deps.writeAnchor) {
     try {
       anchorUri = await deps.writeAnchor(split.toSummarize, {
         artifactId,
@@ -574,12 +705,12 @@ export async function compactHistory(
     ...(opts.nodeId !== undefined ? { processNodeId: opts.nodeId } : {}),
   } as FlujoChatMessage;
 
-  const wireMessages = withCurrentRequestBoundary(messages, [
+  const wireMessages = withArchivedInstructionBoundary(selectUserInstructions, anchorUri, withCurrentRequestBoundary(messages, [
     ...leadingSystem,
     summaryMessage,
     ...retainedOld,
     ...split.toKeep,
-  ], opts.nodeId, now());
+  ], opts.nodeId, now()), now());
   if (estimateTokens(wireMessages) >= estimateTokens(messages)) return null;
   const artifact: WireSummaryArtifact = {
     artifactId,
@@ -593,6 +724,8 @@ export async function compactHistory(
     projectionDigest: opts.projectionDigest,
     summaryText: String(summaryMessage.content ?? ''),
     summaryResourceUri: anchorUri,
+    ...(selectUserInstructions ? { protectedUserIds: [...protectedIds] } : {}),
+    ...(summaryRanges ? { summaryRanges } : {}),
     policyVersion: opts.policyVersion,
     modelId: opts.modelId,
     schemaVersion: 1,

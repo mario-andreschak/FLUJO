@@ -71,7 +71,9 @@ export async function writeCodexRuntimeFile(home: string, file: string, content:
   await guard();
   await assertLinkFreeFileParent(home, file);
   await assertPlainTarget(file);
-  await atomicWriteWithoutLinks(home, file, Buffer.isBuffer(content) ? content : Buffer.from(content), { mode: 0o600 });
+  await atomicWriteWithoutLinks(home, file, Buffer.isBuffer(content) ? content : Buffer.from(content), {
+    mode: 0o600, assertOwned: async () => { await guard(); await assertPlainTarget(file); },
+  });
   await guard();
   await assertPlainTarget(file);
 }

@@ -46,6 +46,7 @@ export interface CompactionNodeSettings {
 export interface CompactionModelSettings {
   compactionThreshold?: number;
   compactionThresholdPercent?: number;
+  contextWindow?: number;
 }
 
 export interface VisualCompactionGlobalSettings {
@@ -97,12 +98,19 @@ export function resolveEffectiveCompaction(
   const nodeOptedOut = node?.compactionMode === 'off';
   const enabled = globalEnabled && !nodeOptedOut;
 
-  const keepTokens =
+  const window = posInt(model?.contextWindow);
+  const requestedKeepTokens =
     posInt(node?.compactionKeepTokens) ??
     posInt(global?.compactionKeepTokens) ??
     DEFAULT_COMPACTION_KEEP_TOKENS;
 
-  const bufferTokens = posInt(global?.compactionBufferTokens) ?? DEFAULT_COMPACTION_BUFFER_TOKENS;
+  const requestedBufferTokens = posInt(global?.compactionBufferTokens)
+    ?? DEFAULT_COMPACTION_BUFFER_TOKENS;
+  // Preserve the configured/default absolute reserve on large models.
+  // Bound persisted absolute settings when moving to a smaller
+  // model so neither the trigger nor its retained tail can disable compaction.
+  const bufferTokens = window ? Math.min(requestedBufferTokens, Math.floor(window * 0.4)) : requestedBufferTokens;
+  const keepTokens = window ? Math.min(requestedKeepTokens, Math.max(1, Math.floor(window * 0.15))) : requestedKeepTokens;
 
   // Support both absolute threshold and percentage-based threshold
   const threshold = posInt(model?.compactionThreshold);

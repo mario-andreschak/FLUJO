@@ -101,6 +101,22 @@ export function estimateArchivePayload(value: unknown, archiveProjection = false
       refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT', { reason: depth > MODEL_TURN_ARCHIVE_WRITE_LIMITS.depth ? 'archive nesting limit' : 'archive value count limit' });
     }
     if (typeof item === 'string') {
+      const mediaHeader = archiveProjection && allocation === 'serialized'
+        ? /^data:[^;,]{1,128};base64,/.exec(item.slice(0, 160)) : null;
+      let mediaData = Boolean(mediaHeader);
+      if (mediaHeader) for (let i = mediaHeader[0].length; i < item.length; i++) {
+        const code = item.charCodeAt(i);
+        if (!(code >= 65 && code <= 90 || code >= 97 && code <= 122 || code >= 48 && code <= 57
+          || code === 43 || code === 47 || code === 61 || code === 13 || code === 10)) { mediaData = false; break; }
+      }
+      if (mediaData) {
+        // The archive writes binary media once by digest and small descriptors
+        // in JSON. Do not reserve escaped JSON, UTF8 and gzip copies of base64
+        // that the sanitizer will never serialize. The outer x4 covers decode
+        // buffers and parallel occurrences; snapshot cloning is reserved apart.
+        add(item.length + Math.ceil(item.length * 3 / 4) + 4096);
+        return;
+      }
       add(item.length * 2 + 40); // Source UTF16 and both serialized quote pairs.
       // structuredClone copies UTF-16; it does not also allocate escaped JSON,
       // UTF-8 output and compression buffers. Those belong to the write scope.
