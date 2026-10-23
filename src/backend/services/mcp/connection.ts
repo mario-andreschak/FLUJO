@@ -460,7 +460,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   if (isProtectedExecutionServer(config.name)) {
     assertExecutionServerConfig(config);
     // The configured private integration accepts only synchronous tool calls.
-    const client = new CompleteToolDiscoveryClient({ name: `flujo-${config.name}-client`, version: '3.48.0' }, { capabilities: {} });
+    const client = new CompleteToolDiscoveryClient({ name: `flujo-${config.name}-client`, version: '3.48.1' }, { capabilities: {} });
     (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
     Object.defineProperty(client, '__flujoProtectedConfigFingerprint', {
       value: protectedConfigFingerprint(config), enumerable: false,
@@ -491,7 +491,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   const client = new CompleteToolDiscoveryClient(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.48.0",
+      version: "3.48.1",
     },
     {
       capabilities: {
