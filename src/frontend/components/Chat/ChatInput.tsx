@@ -50,9 +50,15 @@ import {
   encodeDynamicReference,
 } from '@/utils/shared/promptRefs';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { PointerDragShield, usePointerDrag } from './floatingPanel';
+
+const COMPOSER_HEIGHT_KEY = 'flujo-chat-composer-height';
+const MIN_EDITOR_HEIGHT = 24;
 
 interface ChatInputProps {
   onSendMessage: (content: string, attachments: Attachment[]) => void;
+  resizable?: boolean;
+  resizeContainerRef?: React.RefObject<HTMLElement | null>;
   disabled?: boolean;
   placeholder?: string;
   // Add callback and state for the approval toggle
@@ -91,6 +97,8 @@ interface ChatInputProps {
 
 const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
+  resizable = false,
+  resizeContainerRef,
   disabled = false,
   placeholder,
   requireApproval = false,
@@ -121,6 +129,62 @@ const ChatInput: React.FC<ChatInputProps> = ({
   );
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const [preferredEditorHeight, setPreferredEditorHeight] = useState<number | null>(null);
+  const [editorMetrics, setEditorMetrics] = useState({ height: MIN_EDITOR_HEIGHT, maxHeight: 240 });
+  const { activeCursor, startPointerDrag } = usePointerDrag();
+  const editorHeight = resizable && preferredEditorHeight !== null
+    ? Math.min(editorMetrics.maxHeight, Math.max(MIN_EDITOR_HEIGHT, preferredEditorHeight))
+    : undefined;
+
+  useEffect(() => {
+    if (!resizable) return;
+    try {
+      const saved = Number(window.localStorage.getItem(COMPOSER_HEIGHT_KEY));
+      if (Number.isFinite(saved) && saved >= MIN_EDITOR_HEIGHT) setPreferredEditorHeight(saved);
+    } catch { /* Resizing still works when browser storage is unavailable. */ }
+  }, [resizable]);
+
+  useEffect(() => {
+    if (!resizable) return;
+    const composer = composerRef.current;
+    const editor = composer?.querySelector<HTMLElement>('.global-reference-editable');
+    if (!composer || !editor) return;
+    const container = resizeContainerRef?.current;
+    const measure = () => {
+      const height = editor.getBoundingClientRect().height;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const availableHeight = Math.min(container?.clientHeight ?? viewportHeight, viewportHeight);
+      const chromeHeight = composer.getBoundingClientRect().height - height;
+      // Leave room for the conversation, including when the phone keyboard opens.
+      const maxHeight = Math.max(MIN_EDITOR_HEIGHT, Math.floor(availableHeight * 0.6 - chromeHeight));
+      setEditorMetrics(current => current.height === height && current.maxHeight === maxHeight
+        ? current
+        : { height, maxHeight });
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(composer);
+    if (container) observer?.observe(container);
+    window.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('resize', measure);
+    };
+  }, [resizable, resizeContainerRef]);
+
+  const resizeEditor = (height: number) => {
+    const next = Math.round(Math.min(editorMetrics.maxHeight, Math.max(MIN_EDITOR_HEIGHT, height)));
+    setPreferredEditorHeight(next);
+    try { window.localStorage.setItem(COMPOSER_HEIGHT_KEY, String(next)); } catch { /* Optional preference. */ }
+  };
+
+  const resetEditorHeight = () => {
+    setPreferredEditorHeight(null);
+    try { window.localStorage.removeItem(COMPOSER_HEIGHT_KEY); } catch { /* Optional preference. */ }
+  };
 
   // Agent tickets (#379): "Ask FLUJO" on a dashboard ticket card routes here and
   // hands over a one-shot composer draft through sessionStorage. The draft is
@@ -929,7 +993,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
   
   return (
     <>
+      <PointerDragShield cursor={activeCursor} />
       <Paper 
+        ref={composerRef}
         elevation={0}
         data-testid="chat-input-dropzone"
         onDragEnter={handleDragEnter}
@@ -958,6 +1024,42 @@ const ChatInput: React.FC<ChatInputProps> = ({
           }),
         }}
       >
+        {resizable && (
+          <Box
+            role="separator"
+            tabIndex={0}
+            aria-label={t('chat.input.resize')}
+            aria-orientation="horizontal"
+            aria-valuemin={MIN_EDITOR_HEIGHT}
+            aria-valuemax={editorMetrics.maxHeight}
+            aria-valuenow={Math.round(editorHeight ?? editorMetrics.height)}
+            onPointerDown={(event: React.PointerEvent<HTMLDivElement>) => {
+              if (event.button !== 0) return;
+              const startY = event.clientY;
+              const startHeight = composerRef.current?.querySelector('.global-reference-editable')
+                ?.getBoundingClientRect().height ?? editorMetrics.height;
+              startPointerDrag(event, 'row-resize', move => resizeEditor(startHeight + startY - move.clientY));
+            }}
+            onDoubleClick={resetEditorHeight}
+            onKeyDown={(event) => {
+              if (!['ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter'].includes(event.key)) return;
+              event.preventDefault();
+              if (event.key === 'Enter') resetEditorHeight();
+              else if (event.key === 'Home') resizeEditor(MIN_EDITOR_HEIGHT);
+              else if (event.key === 'End') resizeEditor(editorMetrics.maxHeight);
+              else resizeEditor((editorHeight ?? editorMetrics.height) + (event.key === 'ArrowUp' ? 16 : -16));
+            }}
+            sx={{
+              position: 'absolute', top: -4, left: 0, right: 0, height: 8, zIndex: 3,
+              cursor: 'row-resize', touchAction: 'none',
+              '&::after': {
+                content: '""', position: 'absolute', top: '50%', left: 0, right: 0,
+                height: 1, bgcolor: 'divider', transition: 'height 120ms, background-color 120ms',
+              },
+              '&:hover::after, &:focus-visible::after': { height: 3, bgcolor: 'primary.main' },
+            }}
+          />
+        )}
         {isDraggingFiles && (
           <Box
             sx={{
@@ -1048,6 +1150,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             multiline
             minRows={1}
             maxRows={isEditing ? 12 : 4}
+            height={editorHeight}
             dataTour="chat-input"
             ariaLabel={isEditing ? t('chat.input.editMessage') : t('chat.input.message')}
             placeholder={isEditing ? t('chat.input.editPlaceholder') : (placeholder || t('chat.input.placeholder'))}

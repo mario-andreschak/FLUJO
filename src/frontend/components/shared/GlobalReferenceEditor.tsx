@@ -61,6 +61,8 @@ export interface GlobalReferenceEditorProps {
   multiline?: boolean;
   minRows?: number;
   maxRows?: number;
+  /** Fixed content height for manually resized editors, in pixels. */
+  height?: number;
   autoFocus?: boolean;
   bare?: boolean;
   ariaLabel?: string;
@@ -502,6 +504,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   multiline = true,
   minRows = 1,
   maxRows,
+  height,
   autoFocus = false,
   bare = false,
   ariaLabel,
@@ -888,9 +891,10 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             style={{
-              minHeight: editorMinHeight,
-              maxHeight: editorMaxHeight,
-              overflowY: editorMaxHeight ? 'auto' : undefined,
+              height,
+              minHeight: height === undefined ? editorMinHeight : height,
+              maxHeight: height === undefined ? editorMaxHeight : height,
+              overflowY: height !== undefined || editorMaxHeight ? 'auto' : undefined,
               whiteSpace: multiline ? 'pre-wrap' : 'nowrap',
             }}
           />
