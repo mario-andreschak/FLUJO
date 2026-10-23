@@ -69,7 +69,7 @@ export function buildReadResourceTool(): ToolDefinition {
   return {
     name: READ_RESOURCE_TOOL_NAME,
     description:
-      'Read flujo://run/... resources, native MCP URIs or bound files. search_text finds exact original messages beneath archived summaries. Images return pixels; use image_region to inspect fine details.',
+      'Read flujo://run/... resources, native MCP URIs or bound files. search_text finds exact original messages beneath archived summaries. Images return pixels; use image_region to inspect fine details. Quote recovered identifiers verbatim, including their prefixes and punctuation.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -106,6 +106,9 @@ export interface RunResourceEntry {
   kind: RunResourceKind;
   /** How the payload file is encoded on disk. */
   encoding: 'utf8' | 'base64';
+  /** Store-owned classification: generated text summaries are durable memory;
+   * captured JSON and image originals still consume their configured quotas. */
+  spillQuotaExempt?: boolean;
   createdAt: number;
   producedBy: RunResourceProducer;
   /** Visual archive lineage shared by its exact-source sidecar and PNG pages. */

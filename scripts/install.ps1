@@ -741,6 +741,19 @@ Update-SessionEnvironment
 $managedNodeRoot = Join-Path $env:LOCALAPPDATA 'FLUJO-cli\runtime'
 Initialize-InstallerNodeRuntime -RuntimeRoot $managedNodeRoot
 
+# Verify the active command after selecting a private runtime, before asking
+# about policy or running any prerequisite installer. A stale PATH must fail
+# here even when private runtime acquisition itself reported success.
+Write-Step "Validating Node.js version selected for FLUJO"
+$nodeResult = Test-FlujoNodeVersion
+if ($nodeResult.Status -eq 'Outdated') {
+    throw "The installer will not switch to an unsupported Node.js runtime ($($nodeResult.Version)). $($nodeResult.Message)"
+}
+if ($nodeResult.Status -ne 'Supported') {
+    throw "Selected Node.js runtime validation failed: $($nodeResult.Message)"
+}
+Write-Ok "Node.js $($nodeResult.Version) is ready for FLUJO prerequisites"
+
 # Last question: persist the script-execution policy for future terminals / on-
 # demand MCP server builds (with the user's consent). Skipped automatically if
 # scripts are already allowed. After this, the install runs without interruption.

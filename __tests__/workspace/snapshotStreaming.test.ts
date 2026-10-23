@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
-import { openSnapshotInput } from '@/backend/services/workspace/snapshotInput';
+import { openSnapshotInput, SnapshotInput } from '@/backend/services/workspace/snapshotInput';
 import { openSnapshotDownload, writeSnapshotStream } from '@/backend/services/workspace/snapshotStreaming';
 import { inspectSnapshotZip, snapshotMemberChunks } from '@/backend/services/workspace/snapshotZip';
 
@@ -14,6 +14,20 @@ describe('bounded authenticated snapshot transport', () => {
   let root: string;
   beforeEach(async () => { root = await fs.mkdtemp(path.join(tmpdir(), 'flujo-streaming-test-')); });
   afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+  it('keeps concurrent block reads and retained plaintext independent of reusable ciphertext storage', async () => {
+    const bytes = randomBytes(3 * 64 * 1024 + 73);
+    const input = await SnapshotInput.create();
+    try {
+      await input.append(bytes); await input.finish();
+      const positions = [2 * 64 * 1024, 0, 64 * 1024, bytes.length - 73];
+      const reads = await Promise.all(positions.map(position => input.read(position, Math.min(64 * 1024, bytes.length - position))));
+      for (let index = 0; index < positions.length; index++) {
+        expect(reads[index]).toEqual(bytes.subarray(positions[index], positions[index] + reads[index].length));
+      }
+      await expect(input.read(1, bytes.length - 2)).resolves.toEqual(bytes.subarray(1, -1));
+      expect(reads[0]).toEqual(bytes.subarray(positions[0], positions[0] + reads[0].length));
+    } finally { await input.close(); }
+  });
   const legacy = (bytes: Buffer, key: Buffer) => {
     const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, iv);
     const data = Buffer.concat([cipher.update(bytes), cipher.final()]);

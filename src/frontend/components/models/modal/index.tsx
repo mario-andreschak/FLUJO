@@ -810,7 +810,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     setFormState(prev => {
                       if (prev.name === newValue) return prev;
                       const selected = openRouterModels.find(candidate => candidate.id === newValue);
-                      return { ...prev, name: newValue, contextWindow: undefined, maxTokens: undefined,
+                      // Catalogue selection replaces its limits, including
+                      // unknown ceilings. Manual IDs retain explicit overrides.
+                      return { ...prev, name: newValue,
                         ...(selected ? discoveredModelMetadata(selected, true) : {}) };
                     });
                     setErrors(prev => ({ ...prev, name: '' }));
