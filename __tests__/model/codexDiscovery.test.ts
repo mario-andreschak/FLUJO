@@ -70,3 +70,11 @@ it('accepts future IDs and advertised capabilities, drops hidden/invalid models 
     { id: 'legacy', name: 'legacy' },
   ]);
 });
+
+it('uses the CLI runtime window and effective percentage, with direct catalogue metadata taking precedence', () => {
+  const rows = normalizeCodexModels([{ model: 'gpt-6-luna' }, { model: 'future', contextWindow: 2_000_000 }], [
+    { slug: 'gpt-6-luna', context_window: 272_000, effective_context_window_percent: 95 },
+    { slug: 'future', context_window: 500_000, effective_context_window_percent: 95 },
+  ]);
+  expect(rows.map(row => row.contextWindow)).toEqual([258_400, 2_000_000]);
+});

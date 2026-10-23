@@ -1,0 +1,1218 @@
+{
+  "generatedUtc": "2026-10-23T05:17:00.927Z",
+  "status": "partial-qualification",
+  "scope": "Real compiled ModelHandler with synthetic history/images; no paid model fallback. Two endurance runs failed semantic recall; no two-hour pass.",
+  "results": [
+    {
+      "receipt": "live-long-recovery-receipt.json",
+      "receiptSha256": "0c5975a80b63763bbfbc265e78482477ba50ed4b3ec94c707e0cb48b9415d1ce",
+      "status": "passed",
+      "mode": "recover",
+      "startedUtc": "2026-10-23T03:02:25.665Z",
+      "finishedUtc": "2026-10-23T03:03:56.596Z",
+      "buildId": "a5nqB2cAPMKXguVqSbTWS",
+      "persistedCanonicalMessages": 200013,
+      "peakMemory": {
+        "rssBytes": 425680896,
+        "heapUsedBytes": 339134624,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Restart with persisted hierarchy and a new user request",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 200010,
+          "wireMessages": 546,
+          "wireCharacters": 49283,
+          "elapsedMs": 85548.9435,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 10,
+          "response": "{\"destination\":\"Bogotá-25b57fab\",\"receiptId\":\"receipt-0555846d\",\"permitted\":false}",
+          "usage": {
+            "prompt_tokens": 54809,
+            "completion_tokens": 191,
+            "total_tokens": 55000,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 42112,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 5
+    },
+    {
+      "receipt": "live-free-long-receipt.json",
+      "receiptSha256": "9abac7dcbd786e528c28b71f8b1a24529ac29415098e7816dd4b5f42c13cb5b8",
+      "status": "passed",
+      "mode": "free-long",
+      "startedUtc": "2026-10-23T03:02:26.016Z",
+      "finishedUtc": "2026-10-23T03:11:23.018Z",
+      "buildId": "a5nqB2cAPMKXguVqSbTWS",
+      "persistedCanonicalMessages": 80000,
+      "peakMemory": {
+        "rssBytes": 190472192,
+        "heapUsedBytes": 109922672,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "79999-message actual compaction and continuation",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 200000,
+          "canonicalMessages": 79999,
+          "wireMessages": 672,
+          "wireCharacters": 54729,
+          "elapsedMs": 530315.5018,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 5,
+          "response": "{\n  \"destination\": \"Bogotá-80595c1a\",\n  \"receiptId\": \"receipt-d30c740d\",\n  \"permitted\": false\n}",
+          "usage": {
+            "prompt_tokens": 13777,
+            "completion_tokens": 250,
+            "total_tokens": 14027,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 201
+            }
+          },
+          "providerModel": "nvidia/nemotron-3-ultra-550b-a55b:free"
+        }
+      ],
+      "logicalCompletionCalls": 26
+    },
+    {
+      "receipt": "live-free-resume-receipt.json",
+      "receiptSha256": "f04f9ac4310fda0df2a39c97681107c0fa3c64287e9839cd093d2f05c05e4b9b",
+      "status": "passed",
+      "mode": "free-resume",
+      "startedUtc": "2026-10-23T04:27:46.417Z",
+      "finishedUtc": "2026-10-23T04:30:25.345Z",
+      "buildId": "h9BYcPoEgSDBN8tkEgNxD",
+      "persistedCanonicalMessages": 82006,
+      "peakMemory": {
+        "rssBytes": 200302592,
+        "heapUsedBytes": 128353192,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Restart with persisted hierarchy and a new user request",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 200000,
+          "canonicalMessages": 82005,
+          "wireMessages": 534,
+          "wireCharacters": 48002,
+          "elapsedMs": 155816.0814,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 7,
+          "response": "{\"destination\":\"Bogotá-80595c1a\",\"receiptId\":\"receipt-d30c740d\",\"permitted\":false,\"checkpointId\":\"nonce-e5e13a91-42f2-4c0e-a00b-d91b294341ff\"}",
+          "usage": {
+            "prompt_tokens": 7961,
+            "completion_tokens": 487,
+            "total_tokens": 8448,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 392
+            }
+          },
+          "providerModel": "cohere/north-mini-code:free"
+        }
+      ],
+      "logicalCompletionCalls": 5
+    },
+    {
+      "receipt": "live-endurance-first-run.json",
+      "receiptSha256": "c44e43304ae58cc4a3977157ca9bdd161a0fa1a14adb1164578ec827df90b812",
+      "status": "failed",
+      "startedUtc": "2026-10-23T03:04:55.526Z",
+      "finishedUtc": "2026-10-23T03:48:50.928Z",
+      "elapsedMs": 2635398.5218,
+      "initialMessages": 200013,
+      "durationTargetMs": 7200000,
+      "authentication": "codex-cli ChatGPT subscription; verified by each child process",
+      "limitations": [
+        "Synthetic status histories, fresh random checkpoint recall and exact source recall; does not prove all-task correctness or every provider"
+      ],
+      "successfulRestarts": 33,
+      "lastSuccessfulMessages": 233174
+    },
+    {
+      "receipt": "live-endurance-checkpoint-failure.json",
+      "receiptSha256": "5a80602cb96bea98ef1023ded7678887e356303349450d738c1153364c416846",
+      "status": "failed",
+      "mode": "resume",
+      "startedUtc": "2026-10-23T03:47:31.210Z",
+      "finishedUtc": "2026-10-23T03:48:50.877Z",
+      "buildId": "a5nqB2cAPMKXguVqSbTWS",
+      "peakMemory": {
+        "rssBytes": 449896448,
+        "heapUsedBytes": 370986096,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Restart with persisted hierarchy and a new user request",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 234179,
+          "wireMessages": 587,
+          "wireCharacters": 83099,
+          "elapsedMs": 77781.317,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 9,
+          "response": "{\"destination\":\"Bogotá-25b57fab\",\"receiptId\":\"receipt-0555846d\",\"permitted\":false,\"checkpointId\":\"nonce-04c42452-9f3e-4d61-9719-ee18638ab928\"}",
+          "usage": {
+            "prompt_tokens": 28363,
+            "completion_tokens": 57,
+            "total_tokens": 28420,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 2944,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 4
+    },
+    {
+      "receipt": "live-endurance-second-run.json",
+      "receiptSha256": "1f922f340d591e067d650443aa0a4e050369ee88dc8b03b11ee2d33e3e62f175",
+      "status": "failed",
+      "startedUtc": "2026-10-23T04:09:10.318Z",
+      "finishedUtc": "2026-10-23T04:38:33.793Z",
+      "elapsedMs": 1763473.7303,
+      "initialMessages": 234182,
+      "durationTargetMs": 7200000,
+      "authentication": "codex-cli ChatGPT subscription; verified by each child process",
+      "limitations": [
+        "Synthetic status histories, fresh random checkpoint recall and exact source recall; does not prove all-task correctness or every provider"
+      ],
+      "successfulRestarts": 23,
+      "lastSuccessfulMessages": 257279
+    },
+    {
+      "receipt": "live-endurance-second-failure.json",
+      "receiptSha256": "c937646264ba929381dd3b03a27e9d78645c590c689c4e59169340aed25a956b",
+      "status": "failed",
+      "mode": "resume",
+      "startedUtc": "2026-10-23T04:37:03.391Z",
+      "finishedUtc": "2026-10-23T04:38:33.761Z",
+      "buildId": "1tHOqFF6PkggeVHcawgSB",
+      "peakMemory": {
+        "rssBytes": 497786880,
+        "heapUsedBytes": 415806488,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Restart with persisted hierarchy and a new user request",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 258282,
+          "wireMessages": 613,
+          "wireCharacters": 96022,
+          "elapsedMs": 88488.4866,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 12,
+          "response": "{\"destination\":\"Bogotá-25b57fab\",\"receiptId\":\"receipt-0555846d\",\"permitted\":false,\"checkpointId\":\"nonce-ef5164e3-ba07-44ff-9ca2-715c792375f9\"}",
+          "usage": {
+            "prompt_tokens": 97104,
+            "completion_tokens": 282,
+            "total_tokens": 97386,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 69888,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 5
+    },
+    {
+      "receipt": "live-recall-first-replay-receipt.json",
+      "receiptSha256": "2f9e7c19d6cfeb9ed547e086c7d6f670bacd699d287e915f8b5fd2881531164b",
+      "status": "passed",
+      "mode": "recall-replay",
+      "startedUtc": "2026-10-23T04:06:39.997Z",
+      "finishedUtc": "2026-10-23T04:07:46.083Z",
+      "buildId": "1tHOqFF6PkggeVHcawgSB",
+      "persistedCanonicalMessages": 234182,
+      "peakMemory": {
+        "rssBytes": 623722496,
+        "heapUsedBytes": 529848824,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Exact failed checkpoint request replay",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 234179,
+          "wireMessages": 588,
+          "wireCharacters": 83964,
+          "elapsedMs": 61364.6984,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 9,
+          "response": "{\"destination\":\"Bogotá-25b57fab\",\"receiptId\":\"receipt-0555846d\",\"permitted\":false,\"checkpointId\":\"nonce-12a3c470-0c8b-47e0-b44d-032c738e095a\"}",
+          "usage": {
+            "prompt_tokens": 87150,
+            "completion_tokens": 218,
+            "total_tokens": 87368,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 63616,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 1
+    },
+    {
+      "receipt": "live-recall-replay-receipt.json",
+      "receiptSha256": "f4c21e41046d11977bc7b5f923ec8e69acaad9306fac7b02a265b76cc09a1bcf",
+      "status": "passed",
+      "mode": "recall-replay",
+      "startedUtc": "2026-10-23T05:05:09.471Z",
+      "finishedUtc": "2026-10-23T05:06:18.515Z",
+      "buildId": "ESvit1AoODl2Y6qiMZu3y",
+      "persistedCanonicalMessages": 258286,
+      "peakMemory": {
+        "rssBytes": 523177984,
+        "heapUsedBytes": 436169960,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Exact failed checkpoint request replay",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 258282,
+          "wireMessages": 613,
+          "wireCharacters": 96021,
+          "elapsedMs": 65605.1199,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 12,
+          "response": "{\"destination\":\"Bogotá-25b57fab\",\"receiptId\":\"receipt-0555846d\",\"permitted\":false,\"checkpointId\":\"nonce-636ef99b-3f8d-48ce-a144-6ef2a5acf422\"}",
+          "usage": {
+            "prompt_tokens": 99197,
+            "completion_tokens": 268,
+            "total_tokens": 99465,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 69888,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 1
+    },
+    {
+      "receipt": "live-recall-holdout-receipt.json",
+      "receiptSha256": "a63a15b908ce4bf86bdb8994487afafbc91ae59c9b59ca84f5532d771f7900b3",
+      "status": "failed",
+      "mode": "recall-holdout",
+      "startedUtc": "2026-10-23T04:21:31.311Z",
+      "finishedUtc": "2026-10-23T04:26:43.768Z",
+      "buildId": "1tHOqFF6PkggeVHcawgSB",
+      "peakMemory": {
+        "rssBytes": 719552512,
+        "heapUsedBytes": 559364832,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Held-out question: temporal",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 244231,
+          "wireMessages": 586,
+          "wireCharacters": 89777,
+          "elapsedMs": 62086.8005,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 6,
+          "response": "{\"oldDestination\":\"Quito\",\"currentDestination\":\"Bogotá-25b57fab\"}",
+          "usage": {
+            "prompt_tokens": 30875,
+            "completion_tokens": 22,
+            "total_tokens": 30897,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 6400,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        },
+        {
+          "name": "Held-out question: receipt",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 244233,
+          "wireMessages": 582,
+          "wireCharacters": 89699,
+          "elapsedMs": 55829.7105,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 6,
+          "response": "{\"receiptId\":\"receipt-0555846d\",\"committed\":true}",
+          "usage": {
+            "prompt_tokens": 30796,
+            "completion_tokens": 20,
+            "total_tokens": 30816,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        },
+        {
+          "name": "Held-out question: restriction",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 244235,
+          "wireMessages": 579,
+          "wireCharacters": 89741,
+          "elapsedMs": 54621.32890000001,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 6,
+          "response": "{\"sendingPermitted\":false,\"repeatCompletedOperationsPermitted\":false}",
+          "usage": {
+            "prompt_tokens": 30886,
+            "completion_tokens": 19,
+            "total_tokens": 30905,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        },
+        {
+          "name": "Held-out question: abstention",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 244237,
+          "wireMessages": 575,
+          "wireCharacters": 89307,
+          "elapsedMs": 63884.68299999999,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 6,
+          "response": "{\"trackingNumber\":null}",
+          "usage": {
+            "prompt_tokens": 93216,
+            "completion_tokens": 151,
+            "total_tokens": 93367,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 36864,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        },
+        {
+          "name": "Held-out question: verbatim",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 244241,
+          "wireMessages": 567,
+          "wireCharacters": 94128,
+          "elapsedMs": 69483.88050000003,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 6,
+          "response": "{\"originalMessage\":null}",
+          "usage": {
+            "prompt_tokens": 137473,
+            "completion_tokens": 259,
+            "total_tokens": 137732,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 105344,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 15
+    },
+    {
+      "receipt": "live-recall-id-replay-receipt.json",
+      "receiptSha256": "e055d40de80fda06760472a16238f0fc59275d45bc3f6b55eea40d499c2822b8",
+      "status": "passed",
+      "mode": "recall-id-replay",
+      "startedUtc": "2026-10-23T04:47:45.838Z",
+      "finishedUtc": "2026-10-23T04:48:38.426Z",
+      "buildId": "JBmlEnycwDPMuYwc3EfLy",
+      "peakMemory": {
+        "rssBytes": 492949504,
+        "heapUsedBytes": 405258856,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Exact failed message-ID request replay",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 244241,
+          "wireMessages": 567,
+          "wireCharacters": 92275,
+          "elapsedMs": 48245.759000000005,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 6,
+          "response": "{\"originalMessage\":\"We are auditing a long history. Standing rule: never send messages, publish, delete, or repeat completed operations. Destination is initially Quito. Keep these constraints throughout.\"}",
+          "usage": {
+            "prompt_tokens": 31677,
+            "completion_tokens": 42,
+            "total_tokens": 31719,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 6400,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 1
+    },
+    {
+      "receipt": "live-regions-final-overbudget.json",
+      "receiptSha256": "d9abd444692d6dceb6bc0f1e599d5cda2239d4bfeca4943b83249de93c0780f9",
+      "status": "passed",
+      "mode": "regions",
+      "startedUtc": "2026-10-23T04:06:40.263Z",
+      "finishedUtc": "2026-10-23T04:07:43.822Z",
+      "buildId": "1tHOqFF6PkggeVHcawgSB",
+      "peakMemory": {
+        "rssBytes": 297824256,
+        "heapUsedBytes": 66838192,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 1,
+          "wireMessages": 1,
+          "wireCharacters": 265750,
+          "elapsedMs": 12287.859100000001,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-948737",
+          "usage": {
+            "prompt_tokens": 36498,
+            "completion_tokens": 197,
+            "total_tokens": 36695,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 29568,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna",
+          "correctVisualCode": true
+        },
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 200000,
+          "canonicalMessages": 1,
+          "wireMessages": 4,
+          "wireCharacters": 281168,
+          "elapsedMs": 18287.508500000004,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-948737",
+          "usage": {
+            "prompt_tokens": 5616,
+            "completion_tokens": 338,
+            "total_tokens": 5954,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 315
+            }
+          },
+          "providerModel": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+          "correctVisualCode": true
+        },
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 2048,
+          "canonicalMessages": 1,
+          "wireMessages": 4,
+          "wireCharacters": 14153,
+          "elapsedMs": 26670.427600000003,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-948737",
+          "usage": {
+            "prompt_tokens": 2494,
+            "completion_tokens": 129,
+            "total_tokens": 2623,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 117
+            }
+          },
+          "providerModel": "nvidia/nemotron-3.5-super-vl:free",
+          "correctVisualCode": true
+        }
+      ],
+      "logicalCompletionCalls": 5
+    },
+    {
+      "receipt": "live-regions-paging-overbudget.json",
+      "receiptSha256": "c8814c042de2e15b56336bbc8b6a6321a2facd9c8f4e523c5c57985898b0b132",
+      "status": "failed",
+      "mode": "regions",
+      "startedUtc": "2026-10-23T04:33:17.786Z",
+      "finishedUtc": "2026-10-23T04:33:50.166Z",
+      "buildId": "h9BYcPoEgSDBN8tkEgNxD",
+      "peakMemory": {
+        "rssBytes": 294813696,
+        "heapUsedBytes": 60620096,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 1,
+          "wireMessages": 1,
+          "wireCharacters": 265670,
+          "elapsedMs": 9057.7108,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-626026",
+          "usage": {
+            "prompt_tokens": 36527,
+            "completion_tokens": 215,
+            "total_tokens": 36742,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 20736,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna",
+          "correctVisualCode": true,
+          "maxReportedTotalTokens": 36742,
+          "withinAdvertisedWindow": true
+        },
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 200000,
+          "canonicalMessages": 1,
+          "wireMessages": 4,
+          "wireCharacters": 281612,
+          "elapsedMs": 11854.2907,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-626026",
+          "usage": {
+            "prompt_tokens": 5613,
+            "completion_tokens": 143,
+            "total_tokens": 5756,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 119
+            }
+          },
+          "providerModel": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+          "correctVisualCode": true,
+          "maxReportedTotalTokens": 5756,
+          "withinAdvertisedWindow": true
+        },
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 2048,
+          "canonicalMessages": 1,
+          "wireMessages": 4,
+          "wireCharacters": 15166,
+          "elapsedMs": 7905.4923999999955,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-626026",
+          "usage": {
+            "prompt_tokens": 2156,
+            "completion_tokens": 219,
+            "total_tokens": 2375,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 207
+            }
+          },
+          "providerModel": "nvidia/nemotron-3.5-super-vl:free",
+          "correctVisualCode": true,
+          "maxReportedTotalTokens": 2375,
+          "withinAdvertisedWindow": false
+        }
+      ],
+      "logicalCompletionCalls": 5
+    },
+    {
+      "receipt": "live-regions-crop-skipped.json",
+      "receiptSha256": "aab73924ddb4f34c3ce162ba50fe8f49a92a97966c4e3a6032406e42a45d023c",
+      "status": "failed",
+      "mode": "regions",
+      "startedUtc": "2026-10-23T04:47:46.056Z",
+      "finishedUtc": "2026-10-23T04:48:25.176Z",
+      "buildId": "JBmlEnycwDPMuYwc3EfLy",
+      "peakMemory": {
+        "rssBytes": 297766912,
+        "heapUsedBytes": 64371944,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 1,
+          "wireMessages": 1,
+          "wireCharacters": 265966,
+          "elapsedMs": 7949.501799999999,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-742345",
+          "usage": {
+            "prompt_tokens": 36230,
+            "completion_tokens": 194,
+            "total_tokens": 36424,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 29056,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna",
+          "correctVisualCode": true,
+          "maxReportedTotalTokens": 36424,
+          "withinAdvertisedWindow": true
+        },
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 200000,
+          "canonicalMessages": 1,
+          "wireMessages": 4,
+          "wireCharacters": 280290,
+          "elapsedMs": 14412.740800000001,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-742345",
+          "usage": {
+            "prompt_tokens": 5251,
+            "completion_tokens": 66,
+            "total_tokens": 5317,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 54
+            }
+          },
+          "providerModel": "nvidia/nemotron-3.5-super-vl:free",
+          "correctVisualCode": true,
+          "maxReportedTotalTokens": 5317,
+          "withinAdvertisedWindow": true
+        },
+        {
+          "name": "8K fine print with actual image-region recovery",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 2048,
+          "canonicalMessages": 1,
+          "wireMessages": 1,
+          "wireCharacters": 12886,
+          "elapsedMs": 12112.449499999999,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-742345",
+          "usage": {
+            "prompt_tokens": 1080,
+            "completion_tokens": 9,
+            "total_tokens": 1089,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "providerModel": "dots-studio/dots-3-note-preview:free",
+          "correctVisualCode": true,
+          "maxReportedTotalTokens": 1089,
+          "withinAdvertisedWindow": true
+        }
+      ],
+      "logicalCompletionCalls": 4
+    },
+    {
+      "receipt": "live-crop-replay-receipt.json",
+      "receiptSha256": "bef546870f59292bd686da572d40273b1cf0def36f4a8a41813fac08cf3f2f91",
+      "status": "passed",
+      "mode": "crop-replay",
+      "startedUtc": "2026-10-23T04:51:32.336Z",
+      "finishedUtc": "2026-10-23T04:51:42.100Z",
+      "buildId": "JBmlEnycwDPMuYwc3EfLy",
+      "peakMemory": {
+        "rssBytes": 137371648,
+        "heapUsedBytes": 63991112,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Exact production crop continuation under 2048-token advertised budget",
+          "model": "openrouter/free",
+          "adapter": "openai",
+          "contextWindow": 2048,
+          "canonicalMessages": 3,
+          "wireMessages": 4,
+          "wireCharacters": 15552,
+          "elapsedMs": 7060.5432,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 0,
+          "response": "CHECK-626026",
+          "usage": {
+            "prompt_tokens": 1587,
+            "completion_tokens": 9,
+            "total_tokens": 1596,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "providerModel": "dots-studio/dots-3-note-preview:free",
+          "correctVisualCode": true,
+          "maxReportedTotalTokens": 1596,
+          "withinAdvertisedWindow": true
+        }
+      ],
+      "logicalCompletionCalls": 1
+    },
+    {
+      "receipt": "ui-large-history-receipt.json",
+      "receiptSha256": "7abc8b9b94480725e75882827554fe912cc3aea6bb3211a4c6bd9e4383d16596",
+      "status": "passed",
+      "buildId": "a5nqB2cAPMKXguVqSbTWS"
+    },
+    {
+      "receipt": "live-postfix-call-count-failure.json",
+      "receiptSha256": "8c028ff8fc714dbfe2e7a5b2578bc8cba4461ddb1b157c1e2a644859edb279d8",
+      "status": "failed",
+      "startedUtc": "2026-10-23T05:07:02.758Z",
+      "finishedUtc": "2026-10-23T05:08:44.606Z",
+      "elapsedMs": 101845.9657,
+      "initialMessages": 258286,
+      "authentication": "codex-cli ChatGPT subscription; verified in each child",
+      "limitations": [
+        "Ten-round regression after boundary repair, not a two-hour soak or universal memory guarantee"
+      ],
+      "plannedRounds": 10,
+      "appendedStatusMessagesPerRound": 5000,
+      "successfulRestarts": 0
+    },
+    {
+      "receipt": "live-postfix-call-count-round.json",
+      "receiptSha256": "03d7ab960169af3de8d33f9e425d1c9208971ba88c54c0c04f0b59bc0bdefea1",
+      "status": "failed",
+      "mode": "resume",
+      "startedUtc": "2026-10-23T05:07:03.728Z",
+      "finishedUtc": "2026-10-23T05:08:44.576Z",
+      "buildId": "ESvit1AoODl2Y6qiMZu3y",
+      "peakMemory": {
+        "rssBytes": 527667200,
+        "heapUsedBytes": 435633920,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "cases": [
+        {
+          "name": "Restart with persisted hierarchy and a new user request",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 263288,
+          "wireMessages": 608,
+          "wireCharacters": 97253,
+          "elapsedMs": 98837.0453,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 7,
+          "response": "{\"destination\":\"Bogotá-25b57fab\",\"receiptId\":\"receipt-0555846d\",\"permitted\":false,\"checkpointId\":\"nonce-636ef99b-3f8d-48ce-a144-6ef2a5acf422\"}",
+          "usage": {
+            "prompt_tokens": 101929,
+            "completion_tokens": 229,
+            "total_tokens": 102158,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 71168,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 5
+    },
+    {
+      "receipt": "live-postfix-checkpoints-receipt.json",
+      "receiptSha256": "eab07594744b65cf07c97fa14f7f2a08f4dc2c5e093c77268a909c48893be8cb",
+      "status": "failed",
+      "startedUtc": "2026-10-23T05:10:29.625Z",
+      "finishedUtc": "2026-10-23T05:13:30.657Z",
+      "elapsedMs": 181030.00759999998,
+      "initialMessages": 258286,
+      "authentication": "codex-cli ChatGPT subscription; verified in each child",
+      "limitations": [
+        "Ten-round regression after boundary repair, not a two-hour soak or universal memory guarantee"
+      ],
+      "plannedRounds": 10,
+      "appendedStatusMessagesPerRound": 5000,
+      "successfulRestarts": 1,
+      "lastSuccessfulMessages": 268293
+    },
+    {
+      "receipt": "live-postfix-semantic-failure.json",
+      "receiptSha256": "1771e6e377b650d8196c04163d525f1255a331270918f92f85085e1d794cebd7",
+      "status": "failed",
+      "mode": "resume",
+      "startedUtc": "2026-10-23T05:11:55.699Z",
+      "finishedUtc": "2026-10-23T05:13:30.598Z",
+      "buildId": "ESvit1AoODl2Y6qiMZu3y",
+      "peakMemory": {
+        "rssBytes": 539234304,
+        "heapUsedBytes": 454353528,
+        "samplingMs": 1000
+      },
+      "authentication": {
+        "model": "gpt-6-luna",
+        "route": "codex-cli",
+        "apiKeyEmpty": true,
+        "verifiedAccountType": "chatgpt",
+        "verification": "production fetchCodexModels checks account/read before model/list",
+        "contextWindow": 258400
+      },
+      "limitations": [
+        "Synthetic test content; actual built ModelHandler and real approved models",
+        "Does not alone qualify browser paste, every provider, side-effect recovery or hours of endurance"
+      ],
+      "previouslyArchivedSourceMessages": 267774,
+      "cases": [
+        {
+          "name": "Restart with persisted hierarchy and a new user request",
+          "model": "gpt-6-luna",
+          "adapter": "codex-cli",
+          "contextWindow": 258400,
+          "canonicalMessages": 273296,
+          "wireMessages": 610,
+          "wireCharacters": 94925,
+          "elapsedMs": 92490.70999999999,
+          "success": true,
+          "canonicalUnchanged": true,
+          "summaryRanges": 11,
+          "response": "{\"destination\":\"Bogotá-25b57fab\",\"receiptId\":\"receipt-0555846d\",\"permitted\":false,\"checkpointId\":\"nonce-636ef99b-3f8d-48ce-a144-6ef2a5acf422\"}",
+          "usage": {
+            "prompt_tokens": 99936,
+            "completion_tokens": 233,
+            "total_tokens": 100169,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 69120,
+              "cache_write_tokens": 0
+            }
+          },
+          "providerModel": "gpt-6-luna"
+        }
+      ],
+      "logicalCompletionCalls": 6
+    }
+  ]
+}

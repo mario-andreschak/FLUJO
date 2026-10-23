@@ -20,6 +20,7 @@ import {
   getRunResourceLocalPath,
   findRunResourceByName,
   deleteRunResources,
+  sweepOldRunResources,
   buildRunResourceUri,
   parseRunResourceUri,
   _setRunResourcesDirForTests,
@@ -65,6 +66,33 @@ beforeEach(() => {
 });
 
 const producedBy = { source: 'capture' as const, nodeId: 'node-1' };
+
+it('keeps durable memory outside optional spill quotas without weakening ordinary capture limits', async () => {
+  const memory = await writeRunResource({ conversationId: 'memory-quota', kind: 'text',
+    data: { text: 'x'.repeat(4096) }, producedBy: { source: 'compaction-artifact' } });
+  expect(memory).not.toHaveProperty('skipped');
+  const capture = await writeRunResource({ conversationId: 'memory-quota', kind: 'text',
+    data: { text: 'x'.repeat(1024) }, producedBy });
+  expect(capture).not.toHaveProperty('skipped');
+  const oversized = await writeRunResource({ conversationId: 'memory-quota', kind: 'text',
+    data: { text: 'x'.repeat(1025) }, producedBy });
+  expect(oversized).toEqual({ skipped: 'size-cap' });
+});
+
+it('retains a durable summary and its older captured payloads across the age sweep', async () => {
+  const raw = await writeRunResource({ conversationId: 'durable-memory', kind: 'text',
+    data: { text: 'Exact old observation' }, producedBy: { source: 'tool-result' } }) as RunResourceEntry;
+  const summary = await writeRunResource({ conversationId: 'durable-memory', kind: 'text',
+    data: { text: 'Original: ' + raw.uri }, producedBy: { source: 'compaction-artifact' } }) as RunResourceEntry;
+  const disposable = await writeRunResource({ conversationId: 'disposable-spill', kind: 'text',
+    data: { text: 'Old unreferenced spill' }, producedBy: { source: 'tool-result' } }) as RunResourceEntry;
+  await sweepOldRunResources(Date.now() + 30 * 86_400_000);
+  expect(await readRunResource(raw.uri)).not.toBeNull();
+  expect(await readRunResource(summary.uri)).not.toBeNull();
+  expect(await readRunResource(disposable.uri)).toBeNull();
+  await deleteRunResources('durable-memory');
+  expect(await listRunResources('durable-memory')).toEqual([]);
+});
 
 describe('URI build/parse', () => {
   it('round-trips', () => {

@@ -72,7 +72,34 @@ beforeEach(() => {
   mockCreate.mockResolvedValue(OK);
 });
 
+it.each([false, true])('passes the output schema to the same Free model (streaming: %s)', async streaming => {
+  const schema = { type: 'object', additionalProperties: false, required: ['summary'], properties: { summary: { type: 'string' } } };
+  const route = { ...model('openrouter'), name: 'openrouter/free' };
+  if (streaming) mockCreate.mockResolvedValueOnce((async function* () {
+    yield { choices: [{ index: 0, delta: { role: 'assistant', content: '{}' }, finish_reason: 'stop' }] };
+  })());
+  const input = { model: route, apiKey: 'sk-test', messages: [{ role: 'user' as const, content: 'Return JSON.' }], outputSchema: schema };
+  const adapter = new OpenAiAdapter();
+  await (streaming ? adapter.createStreamCompletion(input) : adapter.createCompletion(input));
+  expect(bodyOf()).toMatchObject({ model: 'openrouter/free', provider: { require_parameters: true },
+    response_format: { type: 'json_schema', json_schema: { name: 'flujo_output', strict: true, schema } } });
+});
+
 describe('prompt_cache_key send policy', () => {
+  it.each([false, true])('disables OpenRouter reasoning only for the bounded recovery request (streaming: %s)', async streaming => {
+    if (streaming) mockCreate.mockResolvedValueOnce((async function* () {
+      yield { choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] };
+    })());
+    const input = { model: { ...model('openrouter'), name: 'openrouter/free', reasoningEffort: 'high' as const },
+      apiKey: 'sk-test', messages: [{ role: 'user' as const, content: 'Read the code.' }],
+      maxTokens: 256, disableReasoningForRecovery: true };
+    const adapter = new OpenAiAdapter();
+    await (streaming ? adapter.createStreamCompletion(input) : adapter.createCompletion(input));
+    expect(bodyOf()).toMatchObject({ model: 'openrouter/free', max_tokens: 256, reasoning: { enabled: false } });
+    expect(bodyOf()).not.toHaveProperty('reasoning_effort');
+    expect(input.model.reasoningEffort).toBe('high');
+  });
+
   it('sends the key for openai', async () => {
     await call(model('openai'), 'flujo-tabc123');
     expect(bodyOf().prompt_cache_key).toBe('flujo-tabc123');

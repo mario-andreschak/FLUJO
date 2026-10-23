@@ -20,6 +20,16 @@ import { normalizeMaxTokens } from '@/shared/types/model/model';
 export function resolveEffectiveMaxTokens(
   nodeOverride?: number,
   modelSetting?: number,
+  contextWindow?: number,
 ): number | undefined {
-  return normalizeMaxTokens(nodeOverride) ?? normalizeMaxTokens(modelSetting);
+  const explicit = normalizeMaxTokens(nodeOverride);
+  if (explicit !== undefined) return explicit;
+  const configured = normalizeMaxTokens(modelSetting);
+  // Older discovery could carry a different model's output ceiling into a
+  // router whose catalogue has no output limit. Recover that impossible
+  // model-level default while respecting deliberate per-node overrides.
+  if (configured !== undefined && Number.isFinite(contextWindow) && contextWindow! > 0 && configured >= contextWindow!) {
+    return Math.max(1, Math.floor(contextWindow! / 4));
+  }
+  return configured;
 }

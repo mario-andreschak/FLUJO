@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import type { NormalizedModel } from '@/shared/types/model/response';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
 import { readCodexAuthForTransfer } from './codexAuth';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration } from './codexAppServerProcess';
 import { acquireOrdinaryCodexExecutable } from './codexRuntimeUpdate';
+import { admitCodexDirectory, readCodexRuntimeFile } from './codexRuntimeFiles';
 
 const MAX_MODELS = 1000;
 const caches = new Map<string, { expires: number; models: NormalizedModel[] }>();
@@ -12,7 +14,8 @@ const pending = new Map<string, Promise<NormalizedModel[]>>();
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
-export function normalizeCodexModels(rows: unknown[]): NormalizedModel[] {
+export function normalizeCodexModels(rows: unknown[], runtimeRows: unknown[] = []): NormalizedModel[] {
+  const metadata = new Map(runtimeRows.map(value => record(value)).filter(Boolean).map(row => [row!.slug, row!]));
   const found = new Map<string, NormalizedModel>();
   for (const value of rows) {
     const row = record(value);
@@ -22,10 +25,16 @@ export function normalizeCodexModels(rows: unknown[]): NormalizedModel[] {
       return typeof effort === 'string' && ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort) ? [effort] : [];
     }) : [];
     const modalities = Array.isArray(row.inputModalities) ? row.inputModalities.filter((item): item is string => typeof item === 'string') : undefined;
+    const runtime = metadata.get(row.model);
+    const window = row.contextWindow ?? runtime?.context_window;
+    const percent = row.contextWindow !== undefined ? 100 : runtime?.effective_context_window_percent;
+    const contextWindow = typeof window === 'number' && Number.isFinite(window) && window > 0
+      ? Math.floor(window * (typeof percent === 'number' && percent > 0 && percent <= 100 ? percent / 100 : 1)) : undefined;
     found.set(row.model, {
       id: row.model, name: typeof row.displayName === 'string' ? row.displayName.slice(0, 256) : row.model,
       ...(typeof row.description === 'string' ? { description: row.description.slice(0, 4096) } : {}),
       ...(efforts.length ? { reasoningEfforts: [...new Set(efforts)] } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
       ...(modalities ? { inputModalities: modalities, visionInputCapability: modalities.includes('image') ? 'supported' : 'unsupported' } : {}),
     });
   }
@@ -77,7 +86,16 @@ export async function fetchCodexModels(): Promise<NormalizedModel[]> {
           if (cursor) cursors.add(cursor);
         } while (cursor);
         if (await identity() !== before) throw new Error('Codex account changed during discovery');
-        const models = normalizeCodexModels(rows);
+        // The CLI catalogue omits windows on some versions. Its own freshly
+        // initialized metadata describes the active runtime, unlike API specs.
+        let runtimeRows: unknown[] = [];
+        try {
+          const guard = await admitCodexDirectory(runtime.home, false);
+          const cached = JSON.parse((await readCodexRuntimeFile(runtime.home,
+            path.join(runtime.home, 'models_cache.json'), 8 * 1024 * 1024, guard)).toString('utf8'));
+          if (Array.isArray(cached.models)) runtimeRows = cached.models;
+        } catch { /* Older CLIs have no metadata cache; leave the window unknown. */ }
+        const models = normalizeCodexModels(rows, runtimeRows);
         if (models.length) {
           // Short-lived account/version-scoped cache; removed models and new releases refresh automatically.
           if (caches.size >= 64) caches.clear();

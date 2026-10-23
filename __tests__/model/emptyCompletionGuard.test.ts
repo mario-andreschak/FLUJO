@@ -4,6 +4,7 @@
  */
 import type { SharedState } from '@/backend/execution/flow/types';
 import OpenAI from 'openai';
+import type { CompletionInput } from '@/backend/services/model/adapters/types';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map() },
@@ -29,6 +30,10 @@ import { registerExecutionExtension, type ExecutionExtensionContext } from '@/ba
 import { fixtureAdapter, fixtureRun, mintFixture } from '../executionExtensions/fixtureAdapter';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
+const emitMock = jest.fn();
+jest.mock('@/backend/execution/flow/engine/ExecutionEventBus', () => ({
+  executionEventBus: { emitterFor: () => emitMock },
+}));
 
 const completion = (
   content: string | null,
@@ -82,6 +87,7 @@ const callModel = (conversationId: string, executionExtensionContext?: Execution
   } as Parameters<typeof ModelHandler.callModel>[0]);
 
 beforeEach(() => {
+  emitMock.mockReset();
   conversationStates.clear();
   createCompletionMock.mockReset();
   getModelMock.mockReset().mockResolvedValue({
@@ -102,6 +108,78 @@ it('retains the ordinary eligible session-limit retry path', async () => {
   seedState('ordinary-session-limit');
   expect((await callModel('ordinary-session-limit')).success).toBe(true);
   expect(createCompletionMock).toHaveBeenCalledTimes(2);
+});
+it('recovers an empty length-limited response instead of completing the chat with nothing', async () => {
+  const empty = completion('');
+  empty.completion.choices[0].finish_reason = 'length';
+  createCompletionMock.mockResolvedValueOnce(empty).mockResolvedValueOnce(completion('Recovered exact code'));
+  seedState('empty-length');
+  const result = await callModel('empty-length');
+  expect(result.success).toBe(true);
+  expect(result.success && result.value.content).toBe('Recovered exact code');
+  expect(createCompletionMock).toHaveBeenCalledTimes(2);
+});
+
+it.each(['openai', 'openai-responses'])('recovers an exhausted Free reasoning budget on %s without raising the cap or changing model', async adapter => {
+  const model = { id: 'model-1', name: 'openrouter/free', provider: 'openrouter', adapter,
+    reasoningEffort: 'high', contextWindow: 2048, maxTokens: 256 };
+  getModelMock.mockResolvedValue(model);
+  const empty = completion(''); empty.completion.choices[0].finish_reason = 'length';
+  createCompletionMock.mockResolvedValueOnce(empty).mockResolvedValueOnce(completion('Visible answer'));
+  seedState('reasoning-recovery');
+  expect((await callModel('reasoning-recovery')).success).toBe(true);
+  const first = createCompletionMock.mock.calls[0][0], retry = createCompletionMock.mock.calls[1][0];
+  expect(first.disableReasoningForRecovery).toBeUndefined();
+  expect(retry).toMatchObject({ disableReasoningForRecovery: true, maxTokens: 256,
+    model: { name: 'openrouter/free', provider: 'openrouter', reasoningEffort: 'high' } });
+  expect(retry.messages).toEqual(first.messages);
+  expect(model.reasoningEffort).toBe('high');
+});
+
+it('retries a whitespace-only stream without emitting a blank draft', async () => {
+  getModelMock.mockResolvedValue({ id: 'model-1', name: 'openrouter/free', provider: 'openrouter',
+    contextWindow: 2048, maxTokens: 256 });
+  const emit = emitMock;
+  createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+    input.onModelDelta?.({ messageId: 'empty-attempt', contentDelta: '\n\n' });
+    input.onModelDelta?.({ messageId: 'empty-attempt', contentDelta: '\n' });
+    const empty = completion('\n\n\n'); empty.completion.choices[0].finish_reason = 'length';
+    return empty;
+  }).mockImplementationOnce(async (input: CompletionInput) => {
+    input.onModelDelta?.({ messageId: 'answer', contentDelta: 'Recovered' });
+    return completion('Recovered');
+  });
+  seedState('blank-stream');
+  expect((await callModel('blank-stream')).success).toBe(true);
+  expect(createCompletionMock).toHaveBeenCalledTimes(2);
+  expect(createCompletionMock.mock.calls[1][0].disableReasoningForRecovery).toBe(true);
+  expect(emit.mock.calls.map(([event]) => event).filter(event => event.type === 'model:delta'))
+    .toEqual([expect.objectContaining({ messageId: 'answer', delta: 'Recovered' })]);
+});
+
+it('preserves indentation once visible text arrives and does not replay a partial answer', async () => {
+  const emit = emitMock;
+  createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+    input.onModelDelta?.({ messageId: 'partial', contentDelta: '\n  ' });
+    input.onModelDelta?.({ messageId: 'partial', contentDelta: 'Visible' });
+    throw rateLimited();
+  });
+  seedState('partial-stream');
+  expect((await callModel('partial-stream')).success).toBe(false);
+  expect(createCompletionMock).toHaveBeenCalledTimes(1);
+  expect(emit.mock.calls.map(([event]) => event).filter(event => event.type === 'model:delta')
+    .map(event => event.delta).join('')).toBe('\n  Visible');
+});
+
+it('does not replay a tool stream following leading whitespace', async () => {
+  createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+    input.onModelDelta?.({ messageId: 'tool', contentDelta: '\n' });
+    input.onModelDelta?.({ messageId: 'tool', toolCallDelta: { index: 0, nameDelta: 'write_file' } });
+    throw rateLimited();
+  });
+  seedState('tool-stream');
+  expect((await callModel('tool-stream')).success).toBe(false);
+  expect(createCompletionMock).toHaveBeenCalledTimes(1);
 });
 
 it.each(['empty', 'rate-limit'] as const)('does not restart an authenticated single-attempt call after %s', async mode => {

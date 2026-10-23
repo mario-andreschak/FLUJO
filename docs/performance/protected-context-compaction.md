@@ -6,8 +6,8 @@ disposable summary-cache portion of
 [#569](https://github.com/mario-andreschak/FLUJO/issues/569).
 
 Canonical conversations remain authoritative. Summaries and emergency refits
-only change provider projections. Old user corrections remain verbatim in their
-original order. System and developer instructions are retained. When protected
+only change provider projections. Retained user instructions and corrections
+keep their original wording, roles and order. System and developer instructions are retained. When protected
 instructions, unresolved calls or unrecoverable observations cannot fit, the
 request fails with `context_budget_exceeded`; it does not shorten the contract.
 
@@ -23,6 +23,19 @@ absolute-model override taking precedence. The trigger estimates the current
 provider projection and tool schemas, rather than a previous prompt count.
 These remain conservative estimates, not measured provider token counts.
 Settings-read failure disables optional summarization and visual compaction.
+
+At large history sizes, summaries form a persistent hierarchy of bounded original
+message ranges. Parent nodes summarize child summaries and retain their exact
+source links. The persisted frontier extends with new ranges after restart;
+an unchanged verified prefix is reused. Summarizer calls retry malformed or empty
+results up to three times. No failed partial tree replaces canonical history.
+
+When retaining every old user turn would exceed 35% of the input budget, the
+summarizer selects exact original user message IDs for standing instructions,
+restrictions, corrections and unfinished requests. The runtime validates those
+IDs against the source and retains the selected originals verbatim. Other old
+user turns remain in the immutable archive. Selection quality is model-dependent;
+this is not a proof that every applicable instruction was selected.
 
 Summaries must contain the five anchored sections and reduce the restored wire.
 Provider length/content-filter/tool termination is rejected. Tool observations
@@ -54,12 +67,29 @@ Reuse reconstructs this block from the actual projected source and compares
 its complete text, values, provenance and ordering, in addition to the existing
 digest/configuration checks. Missing or changed evidence regenerates the
 summary. Generated narrative cannot supply its own recorded-source block.
-`summary-v5-source-observations` rejects older cached policies. The complete
+`summary-v8-bounded-source` rejects older cached policies. The complete
 restored projection must still shrink, with the existing persistence,
 source-change and context-budget refusal paths intact. This conservative
 lexical selection is not a general semantic field extractor: arbitrary unquoted
 words, cross-line relationships and correctness of narrative prose remain open
 acceptance criteria. It does not establish universal provider fidelity.
+
+`read_resource.search_text` traverses the immutable summary tree, matching
+case-sensitive original text or an exact source message ID. It verifies payload
+hashes and conversation ownership, returns original roles and offsets, and
+paginates bounded results. A current request containing a literal ID, path or
+quoted phrase also receives bounded automatic excerpts from the admitted archived
+prefix. This reduces reliance on a model deciding to search; it does not implement
+general semantic retrieval or make lossy summaries sufficient for exact recall.
+
+Native image preparation is independent of optional visual compaction. Large
+attachments become budgeted image overviews with durable originals and a crop
+reader. Older views can be paged out after preservation when multiple image
+encoders cannot fit; the newest requested view remains. Crop responses retain
+the original URI, hash and coordinates without repeating storage metadata. Image
+and text estimates remain approximate across providers, so acceptance compares
+reported usage as well as visual answers. A simulated small advertised window
+does not establish support for an actual model with that native window.
 
 Stored-resource `read_resource` calls default to at most 50,000 UTF-16 code units
 and accept `start_char` and `max_chars` (maximum 200,000). `range.nextChar` is the

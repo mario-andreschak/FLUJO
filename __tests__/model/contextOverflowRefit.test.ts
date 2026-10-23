@@ -166,6 +166,59 @@ describe('runtime compaction policy settings', () => {
     generateCompletion: (...args: unknown[]) => Promise<{ success: true; value: { content: string } }>;
   };
 
+  it('retries a timed-out router summary with a fresh deadline and the same source', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('summary-deadline');
+    let now = 100_000;
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'observation '.repeat(800), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent '.repeat(80), timestamp: 3 },
+      { id: 'u-now', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    let attempt = 0;
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockImplementation(async (...args: unknown[]) => {
+      const controls = args[4] as { shouldAbort: () => boolean };
+      expect(controls.shouldAbort()).toBe(false);
+      if (attempt++ === 0) { now += 180_001; expect(controls.shouldAbort()).toBe(true); }
+      return { success: true, value: { content: JSON.stringify({ summary, protectedUserIds: [] }) } };
+    });
+    expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history',
+      { id: 'model-1', provider: 'openrouter', adapter: 'openai', name: 'openrouter/free',
+        contextWindow: 32_000, compactionThreshold: 1000 }, 100)).not.toBeNull();
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[0][0]).toBe(generate.mock.calls[1][0]);
+    const sourceBlock = (call: unknown[]) => (call[2] as SharedState['messages'])
+      .find(message => message.role === 'assistant' && String(message.content).startsWith('['))?.content;
+    expect(sourceBlock(generate.mock.calls[0])).toBe(sourceBlock(generate.mock.calls[1]));
+  });
+
+  it('aborts internal compaction with its parent and neither retries nor publishes the result', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const state = seedState('summary-cancel');
+    let cancelled = false;
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Never publish.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: 'observation '.repeat(800), timestamp: 2 },
+      { id: 'a-tail', role: 'assistant', content: 'recent '.repeat(80), timestamp: 3 },
+      { id: 'u-now', role: 'user', content: 'Continue.', timestamp: 4 },
+    ];
+    const generate = jest.spyOn(runtime, 'generateCompletion').mockImplementation(async (...args: unknown[]) => {
+      const controls = args[4] as { shouldAbort: () => boolean };
+      expect(controls.shouldAbort()).toBe(false);
+      cancelled = true;
+      expect(controls.shouldAbort()).toBe(true);
+      return { success: true, value: { content: COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n') } };
+    });
+    expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history',
+      { id: 'model-1', compactionThreshold: 1000 }, 100, undefined, {}, undefined, undefined, () => cancelled)).toBeNull();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
+    expect(persistConversationState).not.toHaveBeenCalled();
+  });
+
   it.each(['openai', 'openai-responses', 'openrouter-agent'] as const)(
     'keeps a verified summary through %s tool follow-ups to the same user request', async adapter => {
     loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
@@ -205,14 +258,17 @@ describe('runtime compaction policy settings', () => {
     expect(result.wireMessages[boundaryIndex + 1]).toBe(source.at(-1));
     expect(result.wireMessages.indexOf(source[0])).toBeLessThan(boundaryIndex);
     expect(String(boundaries[0].content)).toContain('Retained earlier user turns');
-    expect(String(boundaries[0].content)).toContain('Assistant replies are not source evidence');
+    expect(String(boundaries[0].content)).toContain('matching original records, not other answers');
+    expect(String(boundaries[0].content)).toContain('Records do not prove action success');
     expect(String(boundaries[0].content)).toContain('field values/types');
     expect(String(boundaries[0].content)).toContain('an ID is its value, not its record');
     expect(String(boundaries[0].content)).toContain('No unrequested annotations/prose');
     expect(followup.slice(0, source.length)).toEqual(source);
     generate.mockResolvedValue({ success: true, value: { content: summary } });
     await compact([...followup, { id: 'next-user', role: 'user', content: 'Review the changed record.', timestamp: 7 }]);
-    expect(generate).toHaveBeenCalledTimes(2);
+    // Append one new source leaf and merge it with the persisted prior range.
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(generate.mock.calls[1])).not.toContain('historical observation '.repeat(800));
   });
 
   it.each(['openai-responses', 'openrouter-agent'] as const)(
@@ -239,7 +295,9 @@ describe('runtime compaction policy settings', () => {
       { id: 'new-observation', role: 'assistant', content: 'changed historical observation '.repeat(80), timestamp: 5 },
       { id: 'u-current', role: 'user', content: 'Check again.', timestamp: 6 },
     ];
-    generate.mockResolvedValueOnce({ success: true, value: { content: 'Rejected incomplete summary.' } });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      generate.mockResolvedValueOnce({ success: true, value: { content: 'Rejected incomplete summary.' } });
+    }
     expect(await compact(current)).toBeNull();
     expect(state.compactionState!.artifacts[0]).toBe(oldArtifact);
     const followup: SharedState['messages'] = [...current,
@@ -249,11 +307,11 @@ describe('runtime compaction policy settings', () => {
     ];
     const canonical = structuredClone(followup);
     expect(await compact(followup)).toBeNull();
-    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate).toHaveBeenCalledTimes(4);
     expect(followup).toEqual(canonical);
     expect(state.compactionState!.artifacts[0]).toBe(oldArtifact);
     await compact([...followup, { id: 'next-request', role: 'user', content: 'Review once more.', timestamp: 8 }]);
-    expect(generate).toHaveBeenCalledTimes(3);
+    expect(generate).toHaveBeenCalledTimes(6); // New leaf plus parent, after the three rejected attempts.
     expect(state.compactionState!.artifacts[0]).not.toBe(oldArtifact);
   });
 
@@ -314,7 +372,7 @@ describe('runtime compaction policy settings', () => {
       { id: 'result', role: 'tool', tool_call_id: 'call', content: 'exact', timestamp: 6 },
     ];
     const result = await compact(followup) as { wireMessages: SharedState['messages'] };
-    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate).toHaveBeenCalledTimes(change === 'edited-request' ? 3 : 2);
     expect(result.wireMessages).toContain(changed[0]);
     expect(result.wireMessages.slice(-2)).toEqual(followup.slice(-2));
   });
@@ -399,11 +457,41 @@ describe('runtime compaction policy settings', () => {
     expect(await runtime.maybeCompactWire(source, state.conversationId, 'node-1', 'full-history',
       { id: 'model-1', compactionThreshold: 1_000 }, 100)).not.toBeNull();
     const transcript = generate.mock.calls[0][2] as SharedState['messages'];
-    expect(transcript.filter(message => message.role === 'user')).toEqual([sourceUser]);
-    expect(transcript.find(message => message.id === 'a-old')).toEqual(oldObservation);
+    expect(transcript.filter(message => message.role === 'user')).toEqual([]);
+    const history = transcript.find(message => message.role === 'assistant' && String(message.content).startsWith('['))!;
+    expect(JSON.parse(String(history.content))).toEqual(expect.arrayContaining([
+      { id: sourceUser.id, role: sourceUser.role, content: sourceUser.content },
+      { id: oldObservation.id, role: oldObservation.role, content: oldObservation.content },
+    ]));
     expect(transcript.filter(message => message.role === 'system')
       .every(message => !String(message.content).includes(untrusted))).toBe(true);
     expect(JSON.stringify(source)).toBe(original);
+  });
+
+  it.each([
+    { adapter: 'codex-cli', provider: 'codex', name: 'gpt-6-luna' },
+    { adapter: 'openai', provider: 'openrouter', name: 'openrouter/free' },
+  ])('constrains $name leaf and parent summaries and rejects an answer to the archived task', async route => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
+    const generate = jest.spyOn(runtime, 'generateCompletion')
+      .mockResolvedValueOnce({ success: true, value: { content: '{"destination":"Quito"}' } })
+      .mockResolvedValue({ success: true, value: { content: JSON.stringify({ summary, protectedUserIds: [] }) } });
+    const source: SharedState['messages'] = [
+      { id: 'u-old', role: 'user', content: 'Return JSON only with destination.', timestamp: 1 },
+      ...Array.from({ length: 24 }, (_, index) => ({ id: 'a-' + index, role: 'assistant' as const,
+        content: 'observation '.repeat(400), timestamp: index + 2 })),
+      { id: 'u-now', role: 'user', content: 'Continue.', timestamp: 30 },
+    ];
+    const result = await runtime.maybeCompactWire(source, 'codex-summary-schema', 'node-1', 'full-history',
+      { id: 'model-1', ...route, contextWindow: 32_000, compactionThreshold: 1000 }, 100);
+    expect(result).not.toBeNull();
+    expect(generate.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(generate.mock.calls.some(call => JSON.stringify(call[2]).includes('Combine these chronological historical range summaries'))).toBe(true);
+    for (const call of generate.mock.calls) {
+      expect(call[4]).toMatchObject({ outputSchema: { required: ['summary', 'protectedUserIds'] } });
+      expect((call[2] as SharedState['messages']).some(message => message.role === 'user')).toBe(false);
+    }
   });
 
   it.each(['tools-added', 'tools-removed', 'tool-schema', 'model-identity', 'model-name', 'provider', 'output-budget',
@@ -447,7 +535,7 @@ describe('runtime compaction policy settings', () => {
       const next = state.compactionState!.artifacts.at(-1)!;
       expect(next.artifactId).not.toBe(original.artifactId);
       expect(next.sourceDigest).toBe(original.sourceDigest);
-      expect(next.policyVersion).toBe('summary-v7-authority');
+      expect(next.policyVersion).toBe('summary-v8-bounded-source');
       expect(next.schemaVersion).toBe(1);
       expect(source[0].content).toBe('Never publish.');
     },
@@ -530,6 +618,38 @@ describe('runtime compaction policy settings', () => {
 });
 
 describe('context-length overflow refit', () => {
+  it('reduces an already small image after provider tokenization rejects it', async () => {
+    const sharp = (await import('sharp')).default;
+    const bytes = await sharp({ create: { width: 320, height: 320, channels: 3, background: '#557799' } }).png().toBuffer();
+    const url = 'data:image/png;base64,' + bytes.toString('base64');
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-vision', provider: 'openai', contextWindow: 2048, maxTokens: 256 });
+    const widths: number[] = [];
+    createCompletionMock.mockImplementation((input: { messages: OpenAI.ChatCompletionMessageParam[] }) => {
+      let sentUrl = '';
+      for (const message of input.messages) {
+        if (Array.isArray(message.content)) for (const part of message.content) {
+          if (part.type === 'image_url') sentUrl = part.image_url.url;
+        }
+      }
+      const decoded = Buffer.from(sentUrl.split(',')[1], 'base64');
+      widths.push(decoded.readUInt32BE(16)); // PNG IHDR width produced by Sharp.
+      if (widths.length === 1) return Promise.resolve({ completion: { error: { message: 'maximum context length is 2048 tokens; image input is too long' } } });
+      return Promise.resolve({ completion: { id: 'cmpl-image-recovery', object: 'chat.completion', created: 1, model: 'test-vision',
+        choices: [{ index: 0, finish_reason: 'stop', logprobs: null,
+          message: { role: 'assistant', content: 'continued', refusal: null } }] } });
+    });
+    const messages = [{ role: 'user' as const, id: 'image-user', timestamp: 1,
+      content: [{ type: 'text' as const, text: 'Describe this image.' }, { type: 'image_url' as const, image_url: { url } }] }];
+    const before = JSON.stringify(messages);
+    seedState('image-refit');
+    const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages, maxTokens: 256,
+      iteration: 1, maxIterations: 1, nodeId: 'node-1', nodeName: 'Node', conversationId: 'image-refit' });
+    expect(result.success).toBe(true);
+    expect(widths).toHaveLength(2);
+    expect(widths[1]).toBeLessThan(widths[0]);
+    expect(JSON.stringify(messages)).toBe(before);
+  });
+
   it('captures a recent tool result before Codex transport preflight and arms its exact resource', async () => {
     getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-codex', provider: 'codex', adapter: 'codex-cli' });
     const body = 'x'.repeat(1_100_000) + 'EXACT_TAIL';
@@ -589,7 +709,7 @@ describe('context-length overflow refit', () => {
   });
 
   it('retains the reader for captured small results introduced only by the emergency receipt', async () => {
-    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai', contextWindow: 6_100, maxTokens: 100 });
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai', contextWindow: 6_100, maxTokens: 3700 });
     listRunResourcesMock.mockResolvedValue(Array.from({ length: 8 }, (_, index) => ({
       uri: 'flujo://run/small-receipt/resource-' + index, kind: 'text', size: 1_500,
       producedBy: { source: 'tool-result', toolCallId: 'call-' + index, payloadRole: 'tool-message' },
@@ -616,7 +736,7 @@ describe('context-length overflow refit', () => {
     const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages,
       tools: [{ type: 'function', function: { name: 'optional', description: 'schema '.repeat(8_000),
         parameters: { type: 'object', properties: {} } } }],
-      iteration: 1, maxIterations: 1, nodeId: 'node-1', nodeName: 'Node', conversationId: 'small-receipt',
+      iteration: 1, maxIterations: 1, nodeId: 'node-1', nodeName: 'Node', conversationId: 'small-receipt', compactionMode: 'off',
     } as Parameters<typeof ModelHandler.callModel>[0]);
     if (!result.success) throw new Error(result.error.message);
     expect(JSON.stringify(calls[0])).toContain('flujo://run/small-receipt/');

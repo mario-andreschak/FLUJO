@@ -880,6 +880,22 @@ describe('CodexAdapter — cooperative terminal controls', () => {
 });
 
 describe('CodexAdapter — tool bridging', () => {
+  it('delivers local resource images as native pixels and retains transcript media', async () => {
+    let sdkResult: unknown;
+    const pixels = { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' };
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      sdkResult = await capturedBridgeTools[0].handler({ uri: 'flujo://run/test/image' });
+      yield agentMessage('read');
+      yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+    })() }));
+    const { transcript } = await new CodexAdapter().createCompletion(baseInput({
+      tools: [{ type: 'function', function: { name: 'read_resource', parameters: { type: 'object' } } }],
+      localToolExecutors: { read_resource: async () => ({ content: [{ type: 'text', text: 'original crop' }, pixels] }) },
+    }));
+    expect(sdkResult).toMatchObject({ content: [expect.objectContaining({ type: 'text' }), pixels] });
+    expect(transcript?.find(message => message.role === 'tool')).toMatchObject({ media: [pixels] });
+    expect(transcript?.find(message => message.role === 'tool')?.content).not.toContain(pixels.data);
+  });
   it('rejects an MCP client replaced while bridge approval was pending', async () => {
     const approve = jest.fn(async () => {
       getClientGenerationMock.mockReturnValue(2);

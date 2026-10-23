@@ -139,6 +139,19 @@ describe('direct workspace layout migration', () => {
     await expect(exists(path.join(dataRoot, 'mcp-servers', 'custom-metadata.json'))).resolves.toBe(false);
   });
 
+  it('preserves another FLUJO checkout used as the data directory by a new installation', async () => {
+    await Promise.all([
+      write('package.json', JSON.stringify({ name: 'flujo-ai', workspaces: ['mcp-servers/bash'] })),
+      write('mcp-servers/bash/src/index.ts', 'original-checkout-source'),
+      write('mcp-servers/custom-server/config.json', 'custom-data'),
+    ]);
+    await migrateWorkspaceLayout();
+    await expect(fs.readFile(path.join(dataRoot, 'mcp-servers/bash/src/index.ts'), 'utf8'))
+      .resolves.toBe('original-checkout-source');
+    await expect(fs.readFile(path.join(workspaceRoot(), 'mcp-servers/custom-server/config.json'), 'utf8'))
+      .resolves.toBe('custom-data');
+  });
+
   it('preserves bundled sources when the application root is a filesystem alias of the data root', async () => {
     const appAlias = path.join(fixtureRoot, 'application-alias');
     await fs.symlink(dataRoot, appAlias, process.platform === 'win32' ? 'junction' : 'dir');

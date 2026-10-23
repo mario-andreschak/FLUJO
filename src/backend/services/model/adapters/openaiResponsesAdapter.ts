@@ -102,7 +102,8 @@ const sessionKey = (conversationId?: string, nodeId?: string): string | undefine
   conversationId ? JSON.stringify([conversationId, nodeId ?? null]) : undefined;
 
 type ReasoningInput = Pick<CompletionInput, 'model' | 'apiKey' | 'messages' | 'tools'
-  | 'conversationId' | 'nodeId' | 'toolNameMap' | 'responsesSession' | 'onResponsesSessionChange' | 'signal'>;
+  | 'conversationId' | 'nodeId' | 'toolNameMap' | 'responsesSession' | 'onResponsesSessionChange' | 'signal'
+  | 'disableReasoningForRecovery'>;
 
 /** Capture ownership before dispatch so a late response cannot overwrite a
  * replacement route or a forgotten session. Only unchanged provider-visible
@@ -123,6 +124,7 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
     connection: input.model.id, model: input.model.name, provider: input.model.provider,
     baseUrl: input.model.baseUrl, credential: input.apiKey,
     reasoningEffort: input.model.reasoningEffort, outputModalities: input.model.outputModalities,
+    ...(input.disableReasoningForRecovery && input.model.provider === 'openrouter' ? { reasoningDisabled: true } : {}),
     tools: input.tools ?? [], toolNameMap: input.toolNameMap ?? {} });
   let session = sessions.get(key);
   // A conversation checkpoint is authoritative over the disposable cache. A
@@ -737,6 +739,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     tools,
     temperature,
     maxTokens,
+    outputSchema,
     signal,
     onProviderAttempt,
     onSdkRequest,
@@ -759,7 +762,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     });
 
     const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
-      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal }, 'openai-responses');
+      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal,
+      disableReasoningForRecovery: assessmentInput.disableReasoningForRecovery }, 'openai-responses');
 
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const input = reasoningState.replay(toResponsesInput(translateMessagesForProvider(messages, toolNames)));
@@ -781,12 +785,16 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       // Stateless by design — FLUJO owns the history and rewrites it every turn,
       // which an append-only server-side thread cannot represent.
       store: false,
+      ...(outputSchema ? { text: { format: { type: 'json_schema', name: 'flujo_output', strict: true, schema: outputSchema } },
+        ...(model.provider === 'openrouter' ? { provider: { require_parameters: true } } : {}) } : {}),
       ...(explicitCache && !omit.has('prompt_cache_options')
         ? { prompt_cache_options: { mode: 'explicit' } } : {}),
       ...(allTools.length ? { tools: allTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
       ...(omit.has('temperature') ? {} : { temperature }),
-      ...(model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
+      ...(assessmentInput.disableReasoningForRecovery && model.provider === 'openrouter'
+        ? { reasoning: { enabled: false } }
+        : model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
       // The point of this adapter: get the reasoning trace back so the next turn
       // of the loop doesn't re-derive it.
       ...(omit.has('include') ? {} : { include: ['reasoning.encrypted_content'] }),
@@ -864,6 +872,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     tools,
     temperature,
     maxTokens,
+    outputSchema,
+    disableReasoningForRecovery,
     signal,
     conversationId,
     nodeId,
@@ -886,7 +896,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       defaultHeaders: getProviderDefaultHeaders(model.provider),
     });
     const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
-      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal }, 'openai-responses');
+      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal,
+      disableReasoningForRecovery }, 'openai-responses');
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const input = reasoningState.replay(toResponsesInput(translateMessagesForProvider(messages, toolNames)));
     const responsesTools = toResponsesTools(translateToolsForProvider(tools, toolNames));
@@ -910,10 +921,14 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       ...(explicitCache && !omit.has('prompt_cache_options')
         ? { prompt_cache_options: { mode: 'explicit' } } : {}),
       stream: true,
+      ...(outputSchema ? { text: { format: { type: 'json_schema', name: 'flujo_output', strict: true, schema: outputSchema } },
+        ...(model.provider === 'openrouter' ? { provider: { require_parameters: true } } : {}) } : {}),
       ...(allTools.length ? { tools: allTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
       ...(omit.has('temperature') ? {} : { temperature }),
-      ...(model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
+      ...(disableReasoningForRecovery && model.provider === 'openrouter'
+        ? { reasoning: { enabled: false } }
+        : model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
       ...(omit.has('include') ? {} : { include: ['reasoning.encrypted_content'] }),
       ...(omit.has('prompt_cache_key') || !promptCacheKey ? {} : { prompt_cache_key: promptCacheKey }),
     });

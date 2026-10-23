@@ -42,7 +42,8 @@ export type RunResourceSource =
   | 'model-output'
   | 'user-input'
   | 'visual-archive'
-  | 'compaction-artifact';
+  | 'compaction-artifact'
+  | 'image-input';
 
 export interface RunResourceProducer {
   source: RunResourceSource;
@@ -127,9 +128,9 @@ export interface RunResourceSettings {
    * resources; shorter ones ("file exists", small listings) stay inline only.
    */
   textThresholdChars: number;
-  /** Per-resource payload cap; larger writes are skipped (kept inline). */
+  /** Optional capture/spill cap; durable conversation memory and original images are excluded. */
   maxResourceBytes: number;
-  /** Total payload budget per conversation; writes beyond it are skipped. */
+  /** Optional capture/spill budget per conversation, excluding durable memory and original images. */
   maxConversationBytes: number;
   /**
    * When true, LARGE TEXT tool results are also replaced in the tool message

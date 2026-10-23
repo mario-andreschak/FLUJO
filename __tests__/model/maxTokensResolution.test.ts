@@ -6,6 +6,11 @@ import { resolveEffectiveMaxTokens } from '@/backend/execution/flow/handlers/max
 // there is NO numeric system default: everything unset yields `undefined` so
 // the adapter's own default stays authoritative.
 describe('resolveEffectiveMaxTokens (issue #189)', () => {
+  it('recovers a stale discovered output ceiling larger than the selected router window', () => {
+    expect(resolveEffectiveMaxTokens(undefined, 235_929, 200_000)).toBe(50_000);
+    expect(resolveEffectiveMaxTokens(16_384, 235_929, 200_000)).toBe(16_384);
+    expect(resolveEffectiveMaxTokens(undefined, 128_000, 1_050_000)).toBe(128_000);
+  });
   it('returns undefined when nothing is set (adapter default applies)', () => {
     expect(resolveEffectiveMaxTokens(undefined, undefined)).toBeUndefined();
   });
