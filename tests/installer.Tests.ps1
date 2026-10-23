@@ -233,7 +233,12 @@ Describe 'Private Node runtime selection and bootstrap integrity' {
     }
 
     It 'pins both supported architectures to the signed official release checksums' {
-        $checksums = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\docs\audits\evidence\node-security-2026-10-21\v22.23.4\SHASUMS256.txt') -Raw
+        # Audit packets were removed from the shipped tree; retain the exact
+        # signed regression input from the immutable pre-cleanup revision.
+        $fixture = '03e6639812191f018e485f090761a0a6c3421fe8:docs/audits/evidence/node-security-2026-10-21/v22.23.4/SHASUMS256.txt'
+        $checksumLines = & git --no-replace-objects -C (Join-Path $PSScriptRoot '..') show $fixture
+        if ($LASTEXITCODE -ne 0) { throw 'The pinned signed Node checksum fixture is unavailable; fetch full Git history.' }
+        $checksums = $checksumLines -join "`n"
         foreach ($architecture in @('AMD64', 'ARM64')) {
             $spec = Get-ManagedNodeSpec -Architecture $architecture
             $checksums | Should -Match ([regex]::Escape("$($spec.Sha256)  $($spec.Folder).zip"))

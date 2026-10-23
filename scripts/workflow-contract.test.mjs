@@ -26,6 +26,13 @@ test('the main bridge runs genuine required jobs and the broad workflow remains 
 });
 
 for (const [label, change] of [
+  ['shallow installer decision checkout', files => { files['installer.yml'].jobs['powershell-tests'].steps[0].with['fetch-depth'] = 1; }],
+  ['shallow clean Windows decision checkout', files => { files['installer.yml'].jobs['clean-windows'].steps[0].with['fetch-depth'] = 1; }],
+  ['shallow pre-publication installer checkout', files => { files['verify.yml'].jobs['release-safety'].steps[0].with['fetch-depth'] = 1; }],
+  ['missing pre-publication installer decisions', files => { files['verify.yml'].jobs['release-safety'].steps = files['verify.yml'].jobs['release-safety'].steps.filter(step => step.name !== 'Verify Windows installer decisions before publication'); }],
+  ['skipped pre-publication installer decisions', files => { files['verify.yml'].jobs['release-safety'].steps.find(step => step.name === 'Verify Windows installer decisions before publication').if = 'false'; }],
+  ['tolerated pre-publication installer decisions', files => { files['verify.yml'].jobs['release-safety'].steps.find(step => step.name === 'Verify Windows installer decisions before publication')['continue-on-error'] = true; }],
+  ['unpinned pre-publication Pester', files => { const step = files['verify.yml'].jobs['release-safety'].steps.find(step => step.name === 'Verify Windows installer decisions before publication'); step.run = step.run.replaceAll('5.7.1', 'latest'); }],
   ['mutable action', (files) => { files['verify.yml'].jobs.typecheck.steps[0].uses = 'actions/checkout@main'; }],
   ['unconditional Codex merge', files => { delete files['codex-sdk-auto-merge.yml'].jobs.enable.steps.find(step => step.run?.includes('gh pr merge')).if; }],
   ['unmatched Codex merge head', files => { const step = files['codex-sdk-auto-merge.yml'].jobs.enable.steps.find(step => step.run?.includes('gh pr merge')); step.run = step.run.replace(' --match-head-commit "$HEAD_SHA"', ''); }],

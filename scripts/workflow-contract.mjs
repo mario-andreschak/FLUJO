@@ -97,6 +97,12 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
 
 function assertInstallerProvenance(workflow) {
   if (!Object.hasOwn(workflow?.on ?? {}, 'workflow_dispatch') || Object.hasOwn(workflow.on, 'pull_request')) throw new Error('Installer validation must remain manual/release-only.');
+  for (const id of ['powershell-tests', 'clean-windows']) {
+    const checkout = workflow.jobs?.[id]?.steps?.find(step => step.uses?.startsWith('actions/checkout@'));
+    if (checkout?.with?.['fetch-depth'] !== 0) {
+      throw new Error('Installer decision checks require full history for the pinned signed checksum fixture.');
+    }
+  }
   const tagOnly = "${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}";
   const build = workflow?.jobs?.['installer-build'];
   const attest = workflow?.jobs?.['installer-attest'];
@@ -185,6 +191,14 @@ function assertCodexUpdateSelection(workflow) {
 
 export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
+  const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
+  const installerDecisions = releaseSteps.find(step => step.name === 'Verify Windows installer decisions before publication');
+  if (releaseSteps.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth'] !== 0
+      || installerDecisions?.if !== "runner.os == 'Windows'" || installerDecisions.shell !== 'powershell'
+      || installerDecisions['continue-on-error']
+      || installerDecisions.run !== 'Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck\nImport-Module Pester -RequiredVersion 5.7.1\nInvoke-Pester -Path tests/installer.Tests.ps1 -CI\n') {
+    throw new Error('Release safety must enforce the full Windows installer decisions with pinned Pester and historical fixtures before publication.');
+  }
   assertCodexUpdateSelection(workflows['codex-sdk-auto-merge.yml']);
   assertNodeRuntimeWorkflowContract(workflows);
   assertScannerWorkflowContract(workflows['verify.yml']);
@@ -250,7 +264,8 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
     if (!job || job.if !== undefined || job['continue-on-error']) throw new Error(`Required job ${id} cannot be conditional or optional.`);
     for (const step of job.steps ?? []) {
       if (!step.run) continue;
-      if (step.if !== undefined && !isApplicationSelection('verify.yml', id, step.if)) throw new Error(`Required command in ${id} cannot be conditional.`);
+      if (step.if !== undefined && !isApplicationSelection('verify.yml', id, step.if)
+          && !(id === 'release-safety' && step === installerDecisions)) throw new Error(`Required command in ${id} cannot be conditional.`);
       if (step['continue-on-error'] && !['npm run test:ci', 'npm run test:isolated'].includes(step.run)) {
         throw new Error(`Unapproved optional command in ${id}.`);
       }
