@@ -357,6 +357,7 @@ function chatApiErrorMessage(error: ChatApiError): string {
 }
 
 const Chat: React.FC = () => {
+  const chatAreaRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const theme = useTheme();
   const { t, tp } = useI18n();
@@ -5224,7 +5225,7 @@ const Chat: React.FC = () => {
           debugger panel has a user-resizable pixel width (drag the divider). */}
       <Box sx={{ flex: 1, height: '100%', display: 'flex', minWidth: 0, minHeight: 0 }}>
         {/* Chat Area */}
-        <Box sx={{
+        <Box ref={chatAreaRef} sx={{
           flex: 1,
           minWidth: 0,
           display: 'flex',
@@ -6058,6 +6059,7 @@ const Chat: React.FC = () => {
         {(!isPhoneLayout || !!currentConversationId) && <Box
           sx={{
             p: 0,
+            flexShrink: 0,
             borderTop: 1,
             borderColor: 'divider',
             background: 'linear-gradient(to top, var(--background) 35%, transparent)',
@@ -6096,6 +6098,8 @@ const Chat: React.FC = () => {
           )}
 
           <ChatInput
+            resizable
+            resizeContainerRef={chatAreaRef}
             onSendMessage={handleSendMessage}
             // Keep the input enabled while a run is in flight so the user can type and
             // QUEUE follow-up messages (issue #177); still disabled for load, missing
