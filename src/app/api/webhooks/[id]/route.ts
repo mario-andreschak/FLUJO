@@ -145,6 +145,14 @@ async function POST_handler(
         void admitted.completion.catch((error) => {
           log.error(`Persona webhook continuation failed for ${execution.id}:`, error);
         });
+        if (admitted.record) {
+          return json({
+            accepted: false,
+            runId: admitted.runId,
+            status: admitted.record.status,
+            reason: admitted.record.error,
+          }, admitted.record.conditionRejected ? 200 : 503);
+        }
         return json({ accepted: true, runId: admitted.runId }, 202);
       } catch (error) {
         log.warn(`Persona webhook admission failed for ${execution.id}:`, error);

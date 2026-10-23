@@ -41,6 +41,11 @@ jest.mock('@/utils/encryption/secure', () => ({
 }));
 
 const mockRunFlow = jest.fn();
+const mockCheckCondition = jest.fn();
+jest.mock('@/backend/services/scheduler/triggers/llmGate', () => ({
+  DEFAULT_MAX_CALLS_PER_DAY: 500,
+  evaluateTriggerAiGate: (...args: unknown[]) => mockCheckCondition(...args),
+}));
 jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: (...args: unknown[]) => mockRunFlow(...args),
 }));
@@ -178,6 +183,7 @@ describe('SchedulerService Persona dispatch adapter', () => {
     }));
     mockGetPersonaFlowDispatch.mockResolvedValue(null);
     scheduler = new SchedulerService();
+    mockCheckCondition.mockReset().mockResolvedValue({ fire: true, reason: 'ready' });
   });
 
   afterAll(() => {
@@ -253,6 +259,41 @@ describe('SchedulerService Persona dispatch adapter', () => {
     expect(cleared.execution).not.toHaveProperty('personaId');
     expect(cleared.execution).not.toHaveProperty('behaviorSlotKey');
     expect(await scheduler.get('clear_persona_target')).not.toHaveProperty('personaId');
+  });
+
+  it('finishes a rejected condition before durable mailbox admission and deduplicates a replay', async () => {
+    const { execution } = await scheduler.create(scheduleInput({
+      personaId: PERSONA_ID,
+      aiGate: { mode: 'llm-gate', modelId: 'checker', condition: 'urgent only' },
+    }));
+    mockCheckCondition.mockResolvedValue({ fire: false, reason: 'not urgent' });
+    const payload: TriggerFirePayload = { kind: 'webhook', summary: 'Webhook', deliveryId: 'conditional-delivery' };
+    const admitted = await scheduler.admitPersonaFire(execution!, payload);
+    expect(admitted.dispatchId).toBeUndefined();
+    expect(admitted.record).toMatchObject({ status: 'skipped', conditionRejected: true });
+    await admitted.completion;
+    const replay = await scheduler.admitPersonaFire(execution!, payload);
+    await replay.completion;
+    expect(replay.runId).toBe(admitted.runId);
+    expect(mockCheckCondition).toHaveBeenCalledTimes(1);
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+    expect(mockRunFlow).not.toHaveBeenCalled();
+  });
+
+  it('keeps a checker failure retryable until a stable delivery can be admitted', async () => {
+    const { execution } = await scheduler.create(scheduleInput({
+      personaId: PERSONA_ID,
+      aiGate: { mode: 'llm-gate', modelId: 'checker', condition: 'ready' },
+    }));
+    const payload: TriggerFirePayload = { kind: 'webhook', summary: 'Webhook', deliveryId: 'checker-retry' };
+    mockCheckCondition.mockRejectedValueOnce(new Error('temporary checker failure'));
+    await expect(scheduler.admitPersonaFire(execution!, payload)).rejects.toThrow('temporary checker failure');
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+    const retried = await scheduler.admitPersonaFire(execution!, payload);
+    expect(retried.dispatchId).toBeTruthy();
+    expect((await retried.completion).status).toBe('completed');
+    expect(mockCheckCondition).toHaveBeenCalledTimes(2);
+    expect(mockSubmitPersonaFlowDispatch).toHaveBeenCalledTimes(1);
   });
 
   it('revalidates Persona deletion after waiting for the config mutation lock', async () => {

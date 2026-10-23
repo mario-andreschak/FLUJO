@@ -5,7 +5,7 @@
  * garbage), and error handling. The model service, completion adapter, and
  * runFlow are mocked at the module boundaries the evaluator lazy-imports.
  */
-import { evaluateAiGate, parseVerdict } from '@/backend/services/scheduler/triggers/llmGate';
+import { evaluateAiGate, evaluateTriggerAiGate, parseVerdict } from '@/backend/services/scheduler/triggers/llmGate';
 import { hashResult } from '@/backend/services/scheduler/triggers/pollEvaluators';
 import type { PlannedExecutionState } from '@/shared/types/plannedExecution';
 
@@ -48,6 +48,40 @@ beforeEach(() => {
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'small', ApiKey: 'enc' });
   resolveKeyMock.mockReset().mockResolvedValue('test-key');
   createCompletionMock.mockReset().mockResolvedValue(modelAnswer('{"fire": true, "reason": "invoice found"}'));
+});
+
+describe('shared trigger condition', () => {
+  it.each(['schedule', 'schedule-catchup', 'webhook', 'file', 'mcp-poll', 'url-watch', 'flow-event'])(
+    'checks the first %s event immediately, including repeated identical payloads',
+    async kind => {
+      const event = { kind, context: { invoice: true } };
+      expect(await evaluateTriggerAiGate(event, gateConfig())).toEqual({ fire: true, reason: 'invoice found' });
+      await evaluateTriggerAiGate(event, gateConfig());
+      expect(createCompletionMock).toHaveBeenCalledTimes(2);
+      const request = createCompletionMock.mock.calls[0][0];
+      expect(request.messages[1].content).toContain(kind);
+      expect(request.messages[1].content).toContain('invoice');
+    },
+  );
+
+  it('preserves a negative verdict and rejects malformed answers', async () => {
+    createCompletionMock.mockResolvedValueOnce(modelAnswer('{"fire":false,"reason":"not relevant"}'));
+    expect(await evaluateTriggerAiGate({}, gateConfig())).toEqual({ fire: false, reason: 'not relevant' });
+    createCompletionMock.mockResolvedValueOnce(modelAnswer('probably yes'));
+    await expect(evaluateTriggerAiGate({}, gateConfig())).rejects.toThrow(/unreadable/);
+  });
+
+  it('passes event context and increasing chain depth to a checker flow', async () => {
+    runFlowMock.mockResolvedValueOnce({ status: 'completed', outputText: '{"fire":true,"reason":"verified"}' });
+    const verdict = await evaluateTriggerAiGate({ kind: 'webhook', context: { priority: 'high' } }, {
+      mode: 'flow-gate', flowId: 'checker', condition: 'priority is high',
+    }, 4);
+    expect(verdict.fire).toBe(true);
+    expect(runFlowMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      flowId: 'checker', mode: 'ephemeral', source: 'trigger', chainDepth: 5,
+      prompt: expect.stringContaining('priority'),
+    }));
+  });
 });
 
 describe('parseVerdict', () => {
