@@ -130,7 +130,7 @@ export function createNewBetaClient(config: MCPServerConfig, onResourcesChanged?
   const serverHasStdioOAuth = config.transport === "stdio" && config.isolation === undefined;
   const clientInfo = {
       name: `flujo-${config.name}-client`,
-      version: "3.48.1",
+      version: "3.48.2",
   };
   const clientCapabilities = {
         roots: { listChanged: true },

@@ -10,6 +10,8 @@ The command synchronizes package versions, commits and pushes `main` without a r
 
 If publication or finalization fails, run `npm run release -- --resume RUN_ID`, using the run ID printed by the command. This verifies the workflow, repository, main revision, package version and local checkout, then reruns **failed jobs only**. Successful preparation retains the original tested artifact for 30 days. Published versions are skipped only when their integrity matches those exact bytes. Do not rerun the entire workflow or create a fresh version to repair a partial publication. If main moves, the artifact expires, or immutable published bytes differ, the release stops for inspection. Before a run exists, repeating the command reuses its pending version record in Git's worktree metadata.
 
+The required Windows release-safety check runs the complete pinned Pester installer suite before npm publication. Its signed checksum fixture is read from the immutable historical Git revision, so both verification and installer decision jobs require full history. If an already published release requires a source fix, preserve its packages and tag and release the corrected source as a new patch; rerunning the old revision cannot apply that fix.
+
 ## One-time npm settings
 
 In each package's npm **Settings → Trusted publishing**, add a GitHub Actions publisher for `flujo-ai`, `@mario.andreschak/mcp-flujo`, `@mario.andreschak/mcp-filesystem`, `@mario.andreschak/mcp-bash`, and `@mario.andreschak/mcp-browser`:
