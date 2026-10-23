@@ -1810,7 +1810,7 @@ export class MCPService {
       });
       try {
         await assertBundledFlujoWorkloadEffectCurrent();
-        await Promise.race([client.connect(transport), timeoutPromise]);
+        await Promise.race([client.connect(transport, { timeout: timeoutMs }), timeoutPromise]);
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
       }
