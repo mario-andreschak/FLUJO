@@ -2,6 +2,7 @@ import { parseServerConfig, parseServerConfigFromClipboard } from '@/utils/mcp';
 import { MessageState } from '../types';
 import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig } from '@/shared/types/mcp';
 import { translate, type Translator } from '@/frontend/i18n';
+import { explicitStdioConfig, isPublishedPackageRunner } from '@/utils/mcp/explicitStdioConfig';
 
 const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
@@ -36,6 +37,18 @@ export const parseConfigFromReadme = async (
     // Set parseEnvVars to false to only parse server config (not env variables)
     // Pass the server name for path processing
     const serverNameToUse = serverName || defaultConfig.name;
+    const explicit = explicitStdioConfig(readmeContent, serverNameToUse);
+    if (explicit?.command && isPublishedPackageRunner(explicit.command, explicit.args)) {
+      return {
+        config: {
+          ...defaultConfig, ...explicit, name: defaultConfig.name,
+          env: { ...defaultConfig.env, ...explicit.env },
+          _installCommand: '', _buildCommand: '',
+        } as MCPStdioConfig,
+        foundExplicitConfig: true,
+        message: { type: 'success', text: t('mcp.local.messages.readmeExtracted') },
+      };
+    }
     const parseResult = parseServerConfig(readmeContent, false, serverNameToUse);
     
     if (parseResult.config && Object.keys(parseResult.config).length > 0) {
@@ -47,7 +60,7 @@ export const parseConfigFromReadme = async (
         // Always use the repository name from defaultConfig instead of the parsed name
         name: defaultConfig.name,
         // Merge env variables
-        env: { ...defaultConfig.env, ...parseResult.config.env },
+        env: { ...defaultConfig.env, ...parseResult.config.env, ...explicit?.env },
       };
       
       // Add command property only if it's a stdio transport or if command exists in parsed config
@@ -108,7 +121,12 @@ export const parseConfigFromClipboard = async (
     // Pass the server name for path processing
     const serverNameToUse = serverName || defaultConfig.name;
     const result = await window.navigator.clipboard.readText()
-      .then(text => parseServerConfig(text, false, serverNameToUse));
+      .then(text => {
+        const explicit = explicitStdioConfig(text, serverNameToUse);
+        return explicit
+          ? { config: { ...explicit, _installCommand: '', _buildCommand: '' } }
+          : parseServerConfig(text, false, serverNameToUse);
+      });
     
     if (result.config && Object.keys(result.config).length > 0) {
       // Use the parsed config to pre-fill the form

@@ -66,7 +66,7 @@ function armClient(opts: { fail?: boolean; toolCount?: number } = {}) {
   const client = {
     // On connect, the server writes a diagnostic line to stderr, then the handshake
     // resolves (or rejects to exercise the failure path).
-    connect: jest.fn(async (transport: { stderr: EventEmitter }) => {
+    connect: jest.fn(async (transport: { stderr: EventEmitter }, _options?: { timeout?: number }) => {
       transport.stderr.emit('data', Buffer.from('server: listening on stdio\n'));
       if (opts.fail) throw new Error('handshake refused');
     }),
@@ -120,5 +120,28 @@ describe('MCPService.testConnection streaming (onOutput)', () => {
     armClient({ toolCount: 1 });
     const result = await new MCPService().testConnection(stdioConfig);
     expect(result).toEqual({ success: true, data: { toolCount: 1 } });
+  });
+
+  it('lets a cold package handshake finish after the SDK default minute', async () => {
+    jest.useFakeTimers();
+    try {
+      const client = armClient({ toolCount: 1 });
+      let started!: () => void;
+      const handshakeStarted = new Promise<void>((resolve) => { started = resolve; });
+      client.connect.mockImplementation(async (_transport, options) => {
+        const handshake = new Promise<void>((resolve, reject) => {
+          const deadline = setTimeout(() => reject(new Error('SDK initialize timed out')), options?.timeout ?? 60000);
+          setTimeout(() => { clearTimeout(deadline); resolve(); }, 61000);
+        });
+        started();
+        return handshake;
+      });
+      const pending = new MCPService().testConnection({ ...stdioConfig, transport: 'stdio', command: 'uvx', args: ['mcp-virtual-computer'] });
+      await handshakeStarted;
+      await jest.advanceTimersByTimeAsync(61000);
+      expect(await pending).toEqual({ success: true, data: { toolCount: 1 } });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
