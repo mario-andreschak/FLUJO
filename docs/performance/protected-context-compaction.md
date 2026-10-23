@@ -103,8 +103,7 @@ whole-flow memory or latency. The old source fails the focused allocation
 envelope; the corrected source passes. This negative control is an allocation
 assertion failure, not an observed OOM. Three repeated child batches, 128 mixed
 JSON comparisons and the existing compaction checks preserve saved hashes,
-source content and metadata invalidation. The [frozen source evidence](
-compaction-digest-2026-10-15.json) records inputs and validation scope.
+source content and metadata invalidation.
 The emitted production digest factory also passes the same hash and allocation
 envelope with its actual emitted Node crypto external.
 
