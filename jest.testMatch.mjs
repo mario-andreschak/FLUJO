@@ -75,6 +75,10 @@ export const ISOLATED_TEST_FILES = [
   // Real 64-flow filesystem admission must not compete with unrelated Jest workers.
   '__tests__/flow/firstDispatchConcurrency.test.ts',
   '__tests__/flow/archiveWriteQuarantineProcess.test.ts',
+  // Full-resolution image/archive and 420 MiB transfer probes need dedicated
+  // serial resources; keep their original deadlines and memory assertions.
+  '__tests__/flow/modelHandlerArchiveMemory.test.ts',
+  '__tests__/workspace/snapshotLargeFlow.test.ts',
   '__tests__/model/claudeArchiveMemoryBoundary.test.ts',
   '__tests__/mcp/processBoundary.test.ts',
   '__tests__/mcp/stdioServers.test.ts',

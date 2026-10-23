@@ -265,6 +265,14 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
   });
 }
 
+function isDurableTextSummary(entry: RunResourceEntry): boolean {
+  if (typeof entry.spillQuotaExempt === 'boolean') return entry.spillQuotaExempt;
+  // Older summaries predate the explicit classification. Structured payloads
+  // written now always record false, regardless of their supplied MIME label.
+  return entry.producedBy.source === 'compaction-artifact' && entry.kind === 'text'
+    && entry.encoding === 'utf8' && (!entry.mimeType || /^text\/(plain|markdown)(?:;|$)/i.test(entry.mimeType));
+}
+
 /** The same quota/overwrite transaction serves ordinary writes and streamed copies. */
 async function storePreparedRunResource(
   input: WriteRunResourceInput,
@@ -272,11 +280,9 @@ async function storePreparedRunResource(
   payload: { size: number; encoding: 'utf8' | 'base64'; persist?: (filename: string) => Promise<string> },
 ): Promise<WriteRunResourceResult> {
   const { size, encoding } = payload;
-  // Canonical memory and original attachments are durable conversation data,
-  // like the conversation file itself. Optional spill-cache quotas must not
-  // make an otherwise healthy long-running chat unable to compact or zoom.
-  const durableMemory = input.producedBy.source === 'compaction-artifact' || input.producedBy.source === 'image-input';
-
+  const durableMemory = input.producedBy.source === 'compaction-artifact' && input.kind === 'text'
+    && encoding === 'utf8' && input.data !== undefined && 'text' in input.data
+    && (!input.mimeType || /^text\/(plain|markdown)(?:;|$)/i.test(input.mimeType));
   if (!durableMemory && size > settings.maxResourceBytes) {
     log.warn(`Run-resource write skipped (size ${size} > cap ${settings.maxResourceBytes})`, {
       conversationId: input.conversationId, name: input.name, kind: input.kind,
@@ -297,8 +303,7 @@ async function storePreparedRunResource(
     // captureVariable last-write-wins semantics.
     const replaced = input.name ? entries.find(e => e.name === input.name) : undefined;
 
-    const usedBytes = entries.reduce((sum, e) => sum + (e === replaced
-      || e.producedBy.source === 'compaction-artifact' || e.producedBy.source === 'image-input' ? 0 : e.size), 0);
+    const usedBytes = entries.reduce((sum, e) => sum + (e === replaced || isDurableTextSummary(e) ? 0 : e.size), 0);
     if (!durableMemory && usedBytes + size > settings.maxConversationBytes) {
       log.warn(`Run-resource write skipped (conversation budget ${usedBytes}+${size} > ${settings.maxConversationBytes})`, {
         conversationId: input.conversationId, name: input.name, kind: input.kind,
@@ -321,6 +326,7 @@ async function storePreparedRunResource(
       sha256,
       kind: input.kind,
       encoding,
+      spillQuotaExempt: durableMemory,
       createdAt: Date.now(),
       producedBy: input.producedBy,
       origin: input.origin,

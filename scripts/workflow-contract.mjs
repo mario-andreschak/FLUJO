@@ -49,9 +49,13 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
       }
     }
   }
-  const contractTests = ['verification-contract', 'workflow-contract', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity', 'selector-parser-security']
+  const contractTests = ['verification-contract', 'workflow-contract', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity', 'selector-parser-security', 'qualify-conversation-recovery']
     .map((name) => `scripts/${name}.test.mjs`);
   const contractSteps = workflows['verify.yml']?.jobs?.['workflow-contract']?.steps ?? [];
+  const contractCheckout = contractSteps.find(step => step.uses?.startsWith('actions/checkout@'));
+  if (contractCheckout?.with?.['fetch-depth'] !== 0) {
+    throw new Error('Workflow integrity checks require full history for the pinned historical fixtures.');
+  }
   if (!contractSteps.some((step) => {
     const words = step.run?.trim().split(/\s+/) ?? [];
     return words[0] === 'node' && words[1] === '--test'

@@ -17,8 +17,9 @@ async function writeAll(file: FileHandle, bytes: Buffer) {
     offset += bytesWritten;
   }
 }
-async function readExact(file: FileHandle, position: number, length: number): Promise<Buffer> {
-  const bytes = Buffer.alloc(length);
+async function readExact(file: FileHandle, position: number, length: number, storage?: Buffer): Promise<Buffer> {
+  const bytes = storage ? storage.subarray(0, length) : Buffer.alloc(length);
+  if (bytes.length !== length) throw invalid();
   for (let offset = 0; offset < length;) {
     const { bytesRead } = await file.read(bytes, offset, length - offset, position + offset);
     if (!bytesRead) throw invalid();
@@ -35,6 +36,10 @@ export class SnapshotInput {
   private readonly blocks: Array<{ offset: number; length: number }> = [];
   private diskSize = 0;
   private cache?: { index: number; bytes: Buffer };
+  // These buffers never leave the reader. Reusing ciphertext storage avoids
+  // allocator growth proportional to the number of streamed archive blocks.
+  private readonly sealed = Buffer.alloc(BLOCK + 28);
+  private readTail: Promise<void> = Promise.resolve();
   private constructor(private readonly root: string, private readonly file: FileHandle) {}
   static async create() {
     const root = await fs.mkdtemp(path.join(tmpdir(), 'flujo-snapshot-input-'));
@@ -56,8 +61,13 @@ export class SnapshotInput {
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key, iv);
     cipher.setAAD(Buffer.from(`${this.blocks.length}:${bytes.length}`));
-    const encrypted = Buffer.concat([cipher.update(bytes), cipher.final()]);
-    await writeAll(this.file, Buffer.concat([iv, cipher.getAuthTag(), encrypted]));
+    const encrypted = cipher.update(bytes);
+    const final = cipher.final();
+    iv.copy(this.sealed);
+    cipher.getAuthTag().copy(this.sealed, 12);
+    encrypted.copy(this.sealed, 28);
+    final.copy(this.sealed, 28 + encrypted.length);
+    await writeAll(this.file, this.sealed.subarray(0, bytes.length + 28));
     this.blocks.push({ offset: this.diskSize, length: bytes.length });
     this.diskSize += bytes.length + 28;
   }
@@ -67,6 +77,13 @@ export class SnapshotInput {
     await this.file.sync();
   }
   async read(position: number, length: number): Promise<Buffer> {
+    const previous = this.readTail;
+    let release!: () => void;
+    this.readTail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try { return await this.readOwned(position, length); } finally { release(); }
+  }
+  private async readOwned(position: number, length: number): Promise<Buffer> {
     if (!Number.isSafeInteger(position) || !Number.isSafeInteger(length) || position < 0 || length < 0
         || position + length > this.size || length > 8 * 1024 * 1024) throw invalid();
     const result = Buffer.alloc(length);
@@ -76,11 +93,13 @@ export class SnapshotInput {
       if (!block) throw invalid();
       if (this.cache?.index !== index) {
         this.cache?.bytes.fill(0);
-        const sealed = await readExact(this.file, block.offset, block.length + 28);
+        const sealed = await readExact(this.file, block.offset, block.length + 28, this.sealed);
         const decipher = createDecipheriv('aes-256-gcm', this.key, sealed.subarray(0, 12));
         decipher.setAAD(Buffer.from(`${index}:${block.length}`));
         decipher.setAuthTag(sealed.subarray(12, 28));
-        this.cache = { index, bytes: Buffer.concat([decipher.update(sealed.subarray(28)), decipher.final()]) };
+        const plaintext = decipher.update(sealed.subarray(28));
+        const final = decipher.final();
+        this.cache = { index, bytes: final.length ? Buffer.concat([plaintext, final]) : plaintext };
       }
       const within = (position + offset) % BLOCK;
       const amount = Math.min(length - offset, block.length - within);
@@ -93,7 +112,7 @@ export class SnapshotInput {
     for (let offset = 0; offset < length; offset += BLOCK) yield await this.read(position + offset, Math.min(BLOCK, length - offset));
   }
   async close() {
-    this.key.fill(0); this.pending.fill(0); this.cache?.bytes.fill(0);
+    this.key.fill(0); this.pending.fill(0); this.cache?.bytes.fill(0); this.sealed.fill(0);
     const closed = await Promise.allSettled([this.file.close()]);
     const removed = await Promise.allSettled([fs.rm(this.root, { recursive: true, force: true })]);
     for (const result of [...closed, ...removed]) if (result.status === 'rejected') throw result.reason;
@@ -101,6 +120,7 @@ export class SnapshotInput {
 }
 
 class Cursor {
+  private readonly storage = Buffer.alloc(BLOCK);
   private buffer: Buffer = Buffer.alloc(0);
   private offset = 0;
   private position = 0;
@@ -108,7 +128,7 @@ class Cursor {
   private async fill() {
     if (this.offset < this.buffer.length) return true;
     if (this.position === this.size) return false;
-    this.buffer = await readExact(this.file, this.position, Math.min(BLOCK, this.size - this.position));
+    this.buffer = await readExact(this.file, this.position, Math.min(BLOCK, this.size - this.position), this.storage);
     this.position += this.buffer.length; this.offset = 0;
     return true;
   }
@@ -196,7 +216,8 @@ export async function openSnapshotInput(filename: string, keyValue: string | und
   try {
     const reader = ownedReader = await SnapshotInput.create();
     if (!same(expected, await source.stat({ bigint: true })) || !same(expected, await fs.lstat(filename, { bigint: true }))) throw invalid();
-    for (let position = 0; position < Number(expected.size); position += BLOCK) wireHash.update(await readExact(source, position, Math.min(BLOCK, Number(expected.size) - position)));
+    const inputBuffer = Buffer.alloc(BLOCK);
+    for (let position = 0; position < Number(expected.size); position += BLOCK) wireHash.update(await readExact(source, position, Math.min(BLOCK, Number(expected.size) - position), inputBuffer));
     const hash = createHash('sha256');
     const accept = async (bytes: Buffer) => {
       if (reader.size + bytes.length > maxBytes) throw invalid();
@@ -227,11 +248,11 @@ export async function openSnapshotInput(filename: string, keyValue: string | und
       const decipher = createDecipheriv('aes-256-gcm', key, decodeSmall(values.get('iv'), 12));
       if (envelopeVersion === 2) decipher.setAAD(Buffer.from(SNAPSHOT_ENCRYPTION.v2Aad));
       decipher.setAuthTag(decodeSmall(values.get('tag'), 16));
-      for (let position = 0; position < dataLength; position += BLOCK) await accept(decipher.update(await readExact(ciphertext, position, Math.min(BLOCK, dataLength - position))));
+      for (let position = 0; position < dataLength; position += BLOCK) await accept(decipher.update(await readExact(ciphertext, position, Math.min(BLOCK, dataLength - position), inputBuffer)));
       await accept(decipher.final());
       } catch { throw new Error('Worker snapshot decryption failed. Check the encrypted archive and its key.'); }
     } else {
-      for (let position = 0; position < Number(expected.size); position += BLOCK) await accept(await readExact(source, position, Math.min(BLOCK, Number(expected.size) - position)));
+      for (let position = 0; position < Number(expected.size); position += BLOCK) await accept(await readExact(source, position, Math.min(BLOCK, Number(expected.size) - position), inputBuffer));
     }
     const plaintextDigest = hash.digest('hex');
     if ((envelopeVersion === 2 ? wireHash.digest('hex') : plaintextDigest) !== expectedDigest) throw new Error('Worker snapshot SHA-256 mismatch.');

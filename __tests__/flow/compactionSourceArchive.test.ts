@@ -197,6 +197,17 @@ it.each(['resource', 'conversation'] as const)('refuses the %s quota before open
   expect(await listRunResources(options.conversationId)).toEqual([]);
 });
 
+it('counts a structured source toward the conversation quota even with a plain-text MIME label', async () => {
+  jest.mocked(loadItem).mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
+    maxResourceBytes: 1000, maxConversationBytes: 1000 });
+  _clearRunResourceSettingsCache();
+  const written = await writeRunResource({ conversationId: options.conversationId, kind: 'text',
+    mimeType: 'text/plain', data: { json: { source: 'x'.repeat(600) } }, producedBy: producer });
+  expect(written).not.toHaveProperty('skipped');
+  expect(await writeRunResource({ conversationId: options.conversationId, kind: 'text',
+    data: { text: 'x'.repeat(500) }, producedBy: { source: 'capture' } })).toEqual({ skipped: 'conversation-cap' });
+});
+
 it('preserves short writes without queuing buffers or changing JSON bytes', async () => {
   const counts = instrument({ shortWrites: true });
   const json = { exact: 'é🧭保留"\\\n'.repeat(30) };

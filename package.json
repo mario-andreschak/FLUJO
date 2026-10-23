@@ -81,7 +81,7 @@
     "test:memory-recall-benchmark": "node scripts/run-memory-semantic-benchmark.cjs",
     "benchmark:memory-semantic": "node scripts/run-memory-semantic-benchmark.cjs",
     "test:ci": "node scripts/run-local-jest.cjs --ci --exclude-isolated-suites --exclude-enduring-agents --json --outputFile=jest-results.json",
-    "test:isolated": "node scripts/run-local-jest.cjs --testSequencer=./scripts/isolated-test-sequencer.cjs --ci --selectProjects node --runInBand --json --outputFile=jest-results-isolated.json __tests__/mcp/internalServer.test.ts __tests__/mcp/protectedPackageRunner.test.ts __tests__/mcp/serverTasks.test.ts __tests__/scheduler/staticRealBashFlow.test.ts __tests__/flow/original520OfflineWorkload.test.ts __tests__/flow/nativeOriginalHost.test.ts __tests__/flow/firstDispatchConcurrency.test.ts __tests__/flow/archiveWriteQuarantineProcess.test.ts __tests__/model/claudeArchiveMemoryBoundary.test.ts __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts __tests__/mcp/browserCaptureRecording.test.ts __tests__/packages/workspaceMcpTransfer.test.ts __tests__/snapshot/ShadowRepoService.test.ts",
+    "test:isolated": "node scripts/run-local-jest.cjs --testSequencer=./scripts/isolated-test-sequencer.cjs --ci --selectProjects node --runInBand --json --outputFile=jest-results-isolated.json __tests__/mcp/internalServer.test.ts __tests__/mcp/protectedPackageRunner.test.ts __tests__/mcp/serverTasks.test.ts __tests__/scheduler/staticRealBashFlow.test.ts __tests__/flow/original520OfflineWorkload.test.ts __tests__/flow/nativeOriginalHost.test.ts __tests__/flow/firstDispatchConcurrency.test.ts __tests__/flow/archiveWriteQuarantineProcess.test.ts __tests__/model/claudeArchiveMemoryBoundary.test.ts __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts __tests__/mcp/browserCaptureRecording.test.ts __tests__/packages/workspaceMcpTransfer.test.ts __tests__/snapshot/ShadowRepoService.test.ts __tests__/flow/modelHandlerArchiveMemory.test.ts __tests__/workspace/snapshotLargeFlow.test.ts",
     "verify:test-baseline": "node scripts/verify-test-baseline.cjs",
     "qualify:live-codex": "node scripts/qualify-live-codex.mjs",
     "test:watch": "node scripts/run-local-jest.cjs --watch",
@@ -93,7 +93,8 @@
     "endurance:personas": "node scripts/run-persona-goal-endurance.mjs --mode=live --profile=structured-tools --duration-seconds=3600 --active-seconds=3540 --budget-usd=25 --confirm=controlled-effects",
     "soak:personas": "node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 --with-learning",
     "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5 --with-learning",
-    "test:enduring-agents": "node scripts/run-local-jest.cjs --testSequencer=./scripts/isolated-test-sequencer.cjs --ci --selectProjects node --runInBand --json --outputFile=jest-results-enduring-agents.json __tests__/enduringAgents/"
+    "test:enduring-agents": "node scripts/run-local-jest.cjs --testSequencer=./scripts/isolated-test-sequencer.cjs --ci --selectProjects node --runInBand --json --outputFile=jest-results-enduring-agents.json __tests__/enduringAgents/",
+    "qualify:conversation-recovery": "node scripts/qualify-conversation-recovery.mjs"
   },
   "dependencies": {
     "@flujo-ai/avatar-sdk": "file:packages/avatar-sdk",

@@ -2567,7 +2567,9 @@ export class ModelHandler {
         ], sanitizedTools);
       }
       const prepareImages = async (wire: OpenAI.ChatCompletionMessageParam[], maxImageTokens?: number) => {
-        if (!hasImages) return wire;
+        // The CLI owns its text-only attachment rejection. Do not decode an
+        // unsupported image before that authoritative preflight can run.
+        if (!hasImages || resolveModelAdapter(model.provider, model.adapter) === 'antigravity-cli') return wire;
         const hydrated = await hydrateRunResourceMedia(wire, opts?.nodeId, {
           strictOpenAiAudioFormats: model.adapter === 'openai' || model.adapter === 'openai-responses',
           commitDurableMutation: task => commitFlowDurableMutation(opts?.durableContext ?? {}, task),

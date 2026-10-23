@@ -90,13 +90,23 @@
           "suite": "__tests__/flow/nativeOriginalHost.live.test.ts",
           "name": "completes actual Luna/medium under a genuine Persona lease and saved Original without SDK or provider mocks",
           "reason": "Requires an authorized private profile; npm run qualify:live-codex executes it in the separate live-codex stage, rejects skips and retains the genuine saved Original receipt. Ordinary CI has no account."
+        },
+        {
+          "suite": "__tests__/model/conversationRecovery.live.test.ts",
+          "name": "continues through an oversized tool result on codex",
+          "reason": "Requires a private authenticated Codex subscription and OpenRouter Free configuration. npm run qualify:conversation-recovery executes both original live cases in the dedicated conversation-recovery-live stage, requires exact recovery receipts, and rejects every skip; hosted CI has neither private profile."
+        },
+        {
+          "suite": "__tests__/model/conversationRecovery.live.test.ts",
+          "name": "continues through an oversized tool result on openrouter",
+          "reason": "Requires a private authenticated Codex subscription and OpenRouter Free configuration. npm run qualify:conversation-recovery executes both original live cases in the dedicated conversation-recovery-live stage, requires exact recovery receipts, and rejects every skip; hosted CI has neither private profile."
         }
       ]
     },
     "isolated": {
       "description": "npm run test:isolated — child-process and intensive integration suites, serial, dedicated CI job.",
-      "minSuites": 14,
-      "minTests": 165,
+      "minSuites": 16,
+      "minTests": 186,
       "intentionalSkips": []
     },
     "live-codex": {
@@ -150,6 +160,12 @@
           "reason": "Opt-in performance benchmark runs in its dedicated controlled job."
         }
       ]
+    },
+    "conversation-recovery-live": {
+      "description": "npm run qualify:conversation-recovery — real subscription Luna and OpenRouter Free, exact tail recovery and canonical preservation, no provider mocks or skipped assertions.",
+      "minSuites": 1,
+      "minTests": 2,
+      "intentionalSkips": []
     }
   },
   "quarantined": []

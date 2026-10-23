@@ -307,8 +307,10 @@ describe('checked-in test-baseline.json', () => {
       fs.readFileSync(path.join(ROOT, 'test-baseline.json'), 'utf8'),
     ) as Baseline;
 
-    expect(Object.keys(parsed.stages).sort()).toEqual(['ci', 'enduring-agents', 'isolated', 'live-codex']);
+    expect(Object.keys(parsed.stages).sort()).toEqual(['ci', 'conversation-recovery-live', 'enduring-agents', 'isolated', 'live-codex']);
     expect(parsed.stages['live-codex']).toMatchObject({minSuites:3,minTests:3,intentionalSkips:[]});
+    expect(parsed.stages['conversation-recovery-live']).toMatchObject({minSuites:1,minTests:2,intentionalSkips:[]});
+    expect(parsed.stages.isolated).toMatchObject({minSuites:16,minTests:186,intentionalSkips:[]});
     expect(parsed.stages.ci.minSuites).toBeGreaterThan(0);
     expect(parsed.stages.isolated.minSuites).toBeGreaterThan(0);
     expect(parsed.stages['enduring-agents'].minSuites).toBeGreaterThan(0);
