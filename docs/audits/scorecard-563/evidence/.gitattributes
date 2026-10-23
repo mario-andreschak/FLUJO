@@ -1,3 +1,0 @@
-# Retained payload hashes identify bytes on Windows and Unix.
-*.json -text whitespace=cr-at-eol
-*.log -text whitespace=cr-at-eol

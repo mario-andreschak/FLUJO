@@ -70,4 +70,4 @@ Weighted routing, latency optimization, nested policies and package-registry exp
 
 FLUJO implements this at its existing `getCompletionAdapter` seam rather than adding a gateway dependency. The deliberately narrower retry boundary preserves the execution engine's no-output/no-side-effect replay contract. Policies share model storage and pickers, keeping credentials, API usage and workspace snapshots within established FLUJO behavior.
 
-See [UI screenshots and HTTP acceptance evidence](../evidence/model-fallback-policies/README.md).
+See UI screenshots and HTTP acceptance evidence.

@@ -94,7 +94,7 @@ Import a repository, install and build its server, configure its run command, th
 
 The tool inspector lets you browse and call a connected server's capabilities directly:
 
-![MCP tool inspector with a server's available tools and inputs](docs/images/readme/mcp-tool-tester.png)
+![MCP tool inspector with a server's available tools and inputs](githubpages/img/mcp-tool-tester.png)
 
 </details>
 
@@ -140,7 +140,7 @@ Connect one node to several successors, then describe when its handoff tools sho
 
 Drop in a **Subflow** node to call another flow. Choose what context it receives and how its output appears in the parent run.
 
-![Subflow configuration](docs/images/readme/flow-subflow-config.png)
+![Subflow configuration](githubpages/img/flow-subflow-config.png)
 
 [Node reference](docs/features/flows/README.md) · [Context and output modes](docs/features/README.md#process-node-vs-subflow-node-inputoutput-modes)
 
@@ -154,7 +154,7 @@ Drop in a **Subflow** node to call another flow. Choose what context it receives
 
 ![Talk with agent handoffs](docs/images/readme/chat-handoff.png)
 
-![Visual debugger with step-by-step execution](docs/images/readme/chat-debugger.png)
+![Visual debugger with step-by-step execution](githubpages/img/chat-debugger.png)
 
 [Run and debug agents](docs/features/flows/running-flows.md) · [Chat commands and dynamic references](docs/features/dynamic-references.md)
 
@@ -178,11 +178,11 @@ Run a saved agent on a schedule or when something happens. **The FLUJO server mu
 <details>
 <summary>Run history and the WhatsApp example</summary>
 
-![Automation trigger run details](docs/images/readme/planned-execution-detail.png)
+![Automation trigger run details](githubpages/img/planned-execution-detail.png)
 
 Combine a **Watch a tool** trigger with a WhatsApp MCP server to build an auto-responder. Its operation depends on the connected server, account access and agent configuration.
 
-![WhatsApp auto-reply example](docs/images/readme/whatsapp-demo.png)
+![WhatsApp auto-reply example](githubpages/img/whatsapp-demo.png)
 
 </details>
 

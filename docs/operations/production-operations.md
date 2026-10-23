@@ -232,7 +232,7 @@ Do not describe them as a signed or tamper-proof audit trail.
 
 ## Acceptance record for #570
 
-The [source operations recovery drill](../audits/2026-10-14-operations-recovery-source-570.md)
+The source operations recovery drill
 provides integrated built-app evidence for provider-reported 408/429/400 errors,
 explicit retry, expired owner access, retained approval, graceful restart and
 generation-bound Bash teardown. Restart can invalidate a pending tool binding:
@@ -241,7 +241,7 @@ an explicit decision on that proposal. The stale call must not execute. This
 source drill records actual counted effects and keeps the broader acceptance
 below open.
 
-The [complete installation source restore drill](../audits/2026-10-14-installation-restore-source-570.md)
+The complete installation source restore drill
 verifies a stopped encrypted full-root capture with separate owner/key/session
 material, original-path publication, missing/mismatched protection refusal,
 retained session decisions and one explicit retry using the restored credential.
@@ -250,7 +250,7 @@ policy with an active credential before restarting. Changing network exposure
 does not repair configured owner authority. This regular-file source fixture
 does not qualify an installed artifact or an upgrade/rollback.
 
-The [independent automated source operator drill](../audits/2026-10-14-independent-operator-upgrade-source-570.md)
+The independent automated source operator drill
 consumes exact 3.46.2 and 3.46.3 source builds through their normal Windows
 launcher. It verifies USER-encrypted profile startup, failed-job diagnosis,
 stopped complete backup, same-root upgrade, candidate restore and compatible

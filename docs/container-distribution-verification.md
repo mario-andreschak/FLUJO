@@ -113,7 +113,7 @@ The init probe
 overrides the image command with a synthetic listener; it qualifies init
 behavior and does not substitute for actual FLUJO startup, worker-launch,
 provider shutdown or snapshot recovery acceptance above. The direct-Node row
-is the expected-zombie negative control. See the [local lifecycle evidence](audits/2026-10-09-container-init-lifecycle.md).
+is the expected-zombie negative control. See the local lifecycle evidence.
 
 ## Default application image acceptance
 
@@ -182,6 +182,6 @@ source SHA and image ID with the review evidence.
 Host-probe SHA-256 is recorded separately from the image's application source
 revision: a host-only probe correction can qualify the same frozen application
 image without another build. Never report its image revision as a later commit.
-See the [local official-image acceptance record](audits/2026-10-09-official-container-acceptance.md)
+See the local official-image acceptance record
 for observed application and synthetic rows, exact image/source identities and
 remaining worker, provider and publication limits.

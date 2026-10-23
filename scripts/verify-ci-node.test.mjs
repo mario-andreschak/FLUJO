@@ -6,6 +6,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { archivedFixtureRevision, readArchivedFixture } from './read-archived-fixture.mjs';
+
+function readHistoricalInput(url, encoding) {
+  const root = new URL('../', import.meta.url);
+  const path = decodeURIComponent(url.href.slice(root.href.length));
+  if (!url.href.startsWith(root.href)) throw new Error('Historical input escapes repository');
+  const bytes = readArchivedFixture(path);
+  return encoding ? bytes.toString(encoding) : bytes;
+}
 import { CI_NODE_PROFILES, assertCiContainerContract, verifyCiNode } from './verify-ci-node.mjs';
 
 function fixture(t) {
@@ -74,12 +83,13 @@ for (const [label, change, expected] of [
 test('pinned binary manifest retains actual signed checksums, signatures, key source and binary derivation', () => {
   const root = new URL('../', import.meta.url);
   const manifest = JSON.parse(readFileSync(new URL('scripts/ci-node-binaries.json', root), 'utf8'));
+  assert.equal(manifest.archivedSourceRevision, archivedFixtureRevision);
   const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
   const packets = new Map();
   function loadEvidence(evidence, evidenceSha256) {
     assert.equal(typeof evidence, 'string');
     assert.match(evidenceSha256, /^[a-f0-9]{64}$/);
-    const receiptBytes = readFileSync(new URL(evidence, root));
+    const receiptBytes = readHistoricalInput(new URL(evidence, root));
     assert.equal(sha(receiptBytes), evidenceSha256, evidence);
     if (packets.has(evidence)) return packets.get(evidence);
     const receipt = JSON.parse(receiptBytes);
@@ -88,24 +98,24 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
     assert.equal(receipt.keySource.repository, 'https://github.com/nodejs/release-keys');
     assert.equal(receipt.executableExecution, false);
     for (const item of receipt.inventory.filter((item) => !item.file.endsWith('.tar.gz') && item.retained !== false)) {
-      const bytes = readFileSync(new URL(item.file, packet));
+      const bytes = readHistoricalInput(new URL(item.file, packet));
       assert.equal(bytes.length, item.bytes, item.file);
       assert.equal(sha(bytes), item.sha256, item.file);
     }
     for (const record of receipt.versions) {
-      const checksums = readFileSync(new URL(`v${record.version}/SHASUMS256.txt`, packet));
+      const checksums = readHistoricalInput(new URL(`v${record.version}/SHASUMS256.txt`, packet));
       assert.equal(record.signatureExitCode, 0);
       assert.equal(sha(checksums), record.signedChecksumsSha256);
       assert.match(record.validSignatureStatus, new RegExp(`^\\[GNUPG:\\] VALIDSIG ${record.signingFingerprint} `));
-      const status = readFileSync(new URL(`v${record.version}/signature-status.txt`, packet), 'utf8');
+      const status = readHistoricalInput(new URL(`v${record.version}/signature-status.txt`, packet), 'utf8');
       assert.ok(status.split(/\r?\n/).includes(record.validSignatureStatus));
       assert.match(status, /\[GNUPG:\] GOODSIG /);
-      assert.ok(readFileSync(new URL(`v${record.version}/SHASUMS256.txt.sig`, packet)).length > 0);
+      assert.ok(readHistoricalInput(new URL(`v${record.version}/SHASUMS256.txt.sig`, packet)).length > 0);
       assert.ok(checksums.toString().split(/\r?\n/).includes(`${record.windows.sha256}  win-x64/node.exe`));
       assert.ok(checksums.toString().split(/\r?\n/).includes(`${record.linux.archiveSha256}  ${record.linux.archive}`));
       assert.equal(record.linux.member, `node-v${record.version}-linux-x64/bin/node`);
       if (record.libuv) {
-        const header = readFileSync(new URL(`v${record.version}/uv-version.h`, packet));
+        const header = readHistoricalInput(new URL(`v${record.version}/uv-version.h`, packet));
         assert.equal(header.length, record.libuv.bytes);
         assert.equal(sha(header), record.libuv.sha256);
         assert.equal(record.libuv.member, `node-v${record.version}-linux-x64/include/node/uv/version.h`);
@@ -121,7 +131,7 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
     return result;
   }
   const original = loadEvidence(manifest.evidence, manifest.evidenceSha256);
-  const containerBytes = readFileSync(new URL(manifest.containerBase.metadataFile, root));
+  const containerBytes = readHistoricalInput(new URL(manifest.containerBase.metadataFile, root));
   assert.equal(sha(containerBytes), manifest.containerBase.metadataSha256);
   const metadata = JSON.parse(containerBytes.toString().replace(/^\uFEFF/, ''));
   assert.equal(manifest.containerBase.reference, `mirror.gcr.io/library/node:${metadata.name}@${metadata.digest}`);
@@ -136,7 +146,7 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
     const records = receipt.versions.filter((record) => record.version === version);
     assert.equal(records.length, 1, `${version} must have exactly one signed binary derivation`);
     const [record] = records;
-    const checksums = readFileSync(new URL(`v${record.version}/SHASUMS256.txt`, packet));
+    const checksums = readHistoricalInput(new URL(`v${record.version}/SHASUMS256.txt`, packet));
     assert.equal(sha(checksums), entry.signedChecksumsSha256);
     assert.equal(entry.signingFingerprint, record.signingFingerprint);
     assert.ok(checksums.toString().includes(`${entry.executables.win32}  win-x64/node.exe`));
@@ -148,15 +158,15 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
     if (record.libuv) assert.equal(entry.uv, record.libuv.version);
   }
   const { packet } = original;
-  const control = JSON.parse(readFileSync(new URL('controls/receipt.json', packet)));
+  const control = JSON.parse(readHistoricalInput(new URL('controls/receipt.json', packet)));
   assert.equal(control.exitCode, 1);
   assert.equal(control.actualBadSignature, true);
   for (const item of control.inventory) {
-    const bytes = readFileSync(new URL(`controls/${item.file}`, packet));
+    const bytes = readHistoricalInput(new URL(`controls/${item.file}`, packet));
     assert.equal(bytes.length, item.bytes);
     assert.equal(sha(bytes), item.sha256);
   }
-  assert.match(readFileSync(new URL('controls/signature-status.txt', packet), 'utf8'), /\[GNUPG:\] BADSIG /);
+  assert.match(readHistoricalInput(new URL('controls/signature-status.txt', packet), 'utf8'), /\[GNUPG:\] BADSIG /);
 });
 
 test('container packaging retains pinned bases, official binary checks and canonical guard files', () => {

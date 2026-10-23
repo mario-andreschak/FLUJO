@@ -1,81 +1,66 @@
 import { SHOTS } from './timeline.js';
 
-// Capture lane owns media/walkthrough. Add only reviewed, hash-manifested files.
+// Media required by the published player. Keep unused production captures offline.
 export const SOURCES = Object.freeze({
   "opening": {
     "kind": "video",
-    "src": "media/walkthrough/act1-open-ai-setup.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-opening-clip.json"
+    "src": "media/walkthrough/act1-open-ai-setup.mp4"
   },
   "model-setup": {
     "kind": "video",
-    "src": "media/walkthrough/act1-model-setup.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-model-setup-clip.json"
+    "src": "media/walkthrough/act1-model-setup.mp4"
   },
   "model-test": {
     "kind": "video",
-    "src": "media/walkthrough/act1-model-test.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-model-test-clip.json"
+    "src": "media/walkthrough/act1-model-test.mp4"
   },
   "tool-import": {
     "kind": "video",
-    "src": "media/walkthrough/act2-github-import.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-tool-clip.json"
+    "src": "media/walkthrough/act2-github-import.mp4"
   },
   "tool-install": {
     "kind": "video",
-    "src": "media/walkthrough/act2-install-build-test.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-tool-clip.json"
+    "src": "media/walkthrough/act2-install-build-test.mp4"
   },
   "tool-connected": {
     "kind": "video",
-    "src": "media/walkthrough/act2-tool-connected.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-tool-clip.json"
+    "src": "media/walkthrough/act2-tool-connected.mp4"
   },
   "agent-create": {
     "kind": "video",
-    "src": "media/walkthrough/act3-agent-create.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-agent-clip.json"
+    "src": "media/walkthrough/act3-agent-create.mp4"
   },
   "agent-bindings": {
     "kind": "video",
-    "src": "media/walkthrough/act3-agent-bindings.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-agent-clip.json"
+    "src": "media/walkthrough/act3-agent-bindings.mp4"
   },
   "agent-save": {
     "kind": "video",
-    "src": "media/walkthrough/act3-agent-save-and-chat.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-agent-clip.json"
+    "src": "media/walkthrough/act3-agent-save-and-chat.mp4"
   },
   "website-first-hero": {
     "kind": "image",
-    "src": "media/walkthrough/act4-site-desktop-hero.png",
-    "provenance": "../../docs/journeys/evidence/walkthrough-act4-manifest.json"
+    "src": "media/walkthrough/act4-site-desktop-hero.png"
   },
   "website-first-signup": {
     "kind": "image",
-    "src": "media/walkthrough/act4-site-desktop-signup.png",
-    "provenance": "../../docs/journeys/evidence/walkthrough-act4-manifest.json"
+    "src": "media/walkthrough/act4-site-desktop-signup.png"
   },
   "feature-tour": {
     "kind": "video",
-    "src": "media/walkthrough/act5-feature-tour.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-tour-clip.json"
+    "src": "media/walkthrough/act5-feature-tour.mp4"
   },
   "website-build": {
     "kind": "video",
-    "src": "media/walkthrough/act4-build.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-build-clip.json"
+    "src": "media/walkthrough/act4-build.mp4"
   },
   "website-revision": {
     "kind": "video",
-    "src": "media/walkthrough/act4-revision-and-preview.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-build-clip.json"
+    "src": "media/walkthrough/act4-revision-and-preview.mp4"
   },
   "site-acceptance": {
     "kind": "video",
-    "src": "media/walkthrough/act4-site-acceptance.mp4",
-    "provenance": "../../docs/journeys/evidence/walkthrough-site-clip.json"
+    "src": "media/walkthrough/act4-site-acceptance.mp4"
   }
 });
 export const CAPTURES = Object.fromEntries(Object.entries(SOURCES).filter(([, source]) => source.kind === 'image'));

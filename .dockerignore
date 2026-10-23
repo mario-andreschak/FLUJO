@@ -33,6 +33,9 @@ githubpages/oauth/*
 !githubpages/oauth/client-metadata.json
 
 # Local/scratch artifacts.
+**/evidence
+docs/audits
+docs/plans
 .tmp
 *.tsbuildinfo
 *.log

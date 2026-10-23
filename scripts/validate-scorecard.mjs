@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { archivedFixtureRoot, readArchivedFixture } from './read-archived-fixture.mjs';
 import { readScorecardEvidence } from './read-scorecard-evidence.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const defaultLedger = resolve(repositoryRoot, 'docs/audits/scorecard-563/scorecard.json');
-const defaultSchema = resolve(repositoryRoot, 'docs/audits/scorecard-563/scorecard.schema.json');
+const historicalLedger = 'docs/audits/scorecard-563/scorecard.json';
+const defaultSchema = resolve(repositoryRoot, 'scripts/scorecard.schema.json');
 const dimensions = new Map([
   ['product-fit', ['Idea / product fit', 'A-']],
   ['feature-surface', ['Feature surface', 'A-']],
@@ -299,7 +300,12 @@ export function validateScorecard(ledger, options = {}) {
       if (!inside(path)) { fail(evidence.id + ': evidence path escapes repository'); continue; }
       if (verifyFiles) {
         try {
-          const bytes = readScorecardEvidence(path, root);
+          let bytes;
+          try { bytes = readScorecardEvidence(path, root); }
+          catch (error) {
+            if (!options.archivedFixture || resolve(root) !== archivedFixtureRoot || error.code !== 'ENOENT') throw error;
+            bytes = readArchivedFixture(raw.location);
+          }
           const actual = createHash('sha256').update(bytes).digest('hex');
           if (actual !== raw.sha256) fail(evidence.id + ': checksum mismatch for ' + raw.location);
           else verifiedPayloads.set(raw.location + ':' + raw.sha256, bytes);
@@ -532,8 +538,10 @@ export function runCli(args) {
     return 1;
   }
   try {
-    const ledger = JSON.parse(readFileSync(positional[0] ? resolve(positional[0]) : defaultLedger, 'utf8'));
-    const { errors, blockers, validationClock } = validateScorecard(ledger);
+    const archivedFixture = !positional[0];
+    const ledger = JSON.parse(archivedFixture ? readArchivedFixture(historicalLedger).toString('utf8') : readFileSync(resolve(positional[0]), 'utf8'));
+    if (archivedFixture) console.log('Historical regression baseline from Git; this does not qualify the current release.');
+    const { errors, blockers, validationClock } = validateScorecard(ledger, { archivedFixture });
     console.log('Validation clock: ' + validationClock.epochMilliseconds + ' (' + validationClock.source + ')');
     if (errors.length) { console.error(errors.join('\n')); return 1; }
     console.log('Scorecard structure, references and retained checksums valid. This is not grade acceptance.');
