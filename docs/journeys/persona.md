@@ -6,7 +6,7 @@ Maya is a **Persona**, FLUJO's experimental way to give an AI continuing instruc
 
 **Day 1, Day 2 and Day 3 below are compressed demonstration sessions.** They are not elapsed days, and they do not show unattended work between sessions or establish long-term reliability.
 
-This recording uses published **FLUJO 3.46.2**, with **Workshop AI** connected to OpenRouter's `google/gemini-3-flash-preview`. It reached a completed goal and four completed tasks after operator review and corrections. [Read the resulting workshop pack](evidence/workshop-pack.md).
+This recording uses published **FLUJO 3.46.2**, with **Workshop AI** connected to OpenRouter's `google/gemini-3-flash-preview`. It reached a completed goal and four completed tasks after operator review and corrections. Read the resulting workshop pack.
 
 ## Set Maya up
 
@@ -106,7 +106,7 @@ One further check found the shopping task still had older quantities. The operat
 
 The saved goal and all four child tasks are completed. Its old **Next step** still asks for approval, its original description still mentions six adults, and the earlier six-person plan remains in memory. The final pack and corrected task agree with the Important memory, but older context was not all removed. The operator checked the saved task states and materials instead of relying on the completion label alone.
 
-**[Open the workshop pack →](evidence/workshop-pack.md)** It contains the plan, invitation marked DRAFT, shopping quantities and 90-minute run sheet. This readable edition reconciles the generated response with the accepted corrections and removes the unsupported archiving claim; the original response remains in the [runtime evidence](evidence/journey-runtime-evidence.json). No invitation was sent and no purchase was made.
+**Open the workshop pack →** It contains the plan, invitation marked DRAFT, shopping quantities and 90-minute run sheet. This readable edition reconciles the generated response with the accepted corrections and removes the unsupported archiving claim; the original response remains in the runtime evidence. No invitation was sent and no purchase was made.
 
 ## What this example teaches
 
@@ -116,6 +116,6 @@ Personas, Roles and persistent goals are experimental. Schedules require the FLU
 
 ## About the recorded example
 
-The [runtime evidence](evidence/journey-runtime-evidence.json) contains the exact prompts, dates, saved tasks, memories and outputs. The sample prompts here are readable guide versions, not a verbatim transcript. The [capture manifest](evidence/capture-manifest.json) and [provenance notes](evidence/capture-provenance.md) identify each image and later retake. All three demonstration sessions took place on October 11, 2026. The software was operated by an agent, including the review and approval steps; this was not an independent human usability study.
+The runtime evidence contains the exact prompts, dates, saved tasks, memories and outputs. The sample prompts here are readable guide versions, not a verbatim transcript. The capture manifest and provenance notes identify each image and later retake. All three demonstration sessions took place on October 11, 2026. The software was operated by an agent, including the review and approval steps; this was not an independent human usability study.
 
 [Website Builder](website-builder.md) · [Coffee-reading helper](first-agent.md) · [Start here](../start-here/README.md) · [Privacy and costs](../start-here/privacy.md)

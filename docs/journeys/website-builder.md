@@ -33,8 +33,6 @@ Choose **Save**, then **Test model** (the flask icon). Continue when the provide
 
 If a test fails, check the saved credential, provider access and model selection, then save and test again. Our first recorded test returned **HTTP 401, “User not found”**, and skipped the tool check. Re-entering the credential privately, saving and retrying produced the successful result above. The exact cause of the first credential failure was not established.
 
-Recorded on **October 11, 2026**, in published **FLUJO 3.46.2**. The existing workspace already contained agents and another model connection. These are real application captures operated by an agent; the public images keep credentials masked. The [setup manifest](evidence/walkthrough-act1-manifest.json), [opening clip record](evidence/walkthrough-opening-clip.json), [model-setup clip record](evidence/walkthrough-model-setup-clip.json) and [model-test clip record](evidence/walkthrough-model-test-clip.json) identify the completed actions and their evidence.
-
 </details>
 
 ## 2. Connect file and terminal tools
@@ -74,7 +72,7 @@ The first connection test passed, but the operator missed **Update server** and 
 
 During that entry, `mcpservers` was typed instead of `mcp-servers`, causing a transport error. Pasting the correct folder, testing again and choosing **Add server** produced the connected card. [Inspect the successful test and Add server control](../../githubpages/film/media/walkthrough/act2-recovery-test-passed.png). Manual re-entry is the path recorded here, not a requirement for every installation.
 
-The original GitHub configuration showed **Update server**; the later manual configuration showed **Add server**. Check the actual saved card as well as the test result. The build reported Desktop Commander **0.2.52**. The [tool-setup manifest](evidence/walkthrough-act2-manifest.json) and [approved tool-footage record](evidence/walkthrough-tool-clip.json) preserve the recovery and successful connection.
+The original GitHub configuration showed **Update server**; the later manual configuration showed **Add server**. Check the actual saved card as well as the test result. The recording used Desktop Commander **0.2.52**.
 
 </details>
 
@@ -102,8 +100,6 @@ Optionally, switch to **Expert** to see the same saved agent as a diagram: Start
 <summary>Agent setup and recording notes</summary>
 
 This agent uses one AI step and one connected app. Attaching DesktopCommanderMCP enabled all 26 discovered tools, including its configuration tools. The project-folder instruction guides the agent; it does not enforce file or terminal access limits.
-
-The [agent-setup manifest](evidence/walkthrough-act3-manifest.json) and [approved agent-footage record](evidence/walkthrough-agent-clip.json) record the exact goal, model and app selections, explicit save, both views and entry into an empty chat. These setup screenshots establish that the agent was ready to use; its website output is a separate check.
 
 </details>
 
@@ -144,7 +140,7 @@ The initial run completed `create_directory`, `write_file` and `start_process`, 
 
 The first label/footer revision had overlapping file edits: the footer change was lost and extra text appeared after the page. The operator asked the same agent to repair it in one write and read it back. The repaired source was 6,793 bytes; source comparison found the intended labels, styling and footer changes, with the signup script unchanged. The site was repaired through the agent's tools, without a separate hand edit.
 
-The capture operator performed the browser checks. The narrow view used browser emulation, not a physical phone. Empty-field validation was tested on the original draft; final checks repeated submission and reload on desktop and at the narrow width. Source inspection found no network or storage calls in the unchanged signup script; visible confirmation and reload checks alone would not establish that. The [build evidence](evidence/walkthrough-act4-manifest.json) and [approved final-site footage](evidence/walkthrough-site-clip.json) distinguish the original draft from the revised source and its checks.
+The capture operator performed the browser checks. The narrow view used browser emulation, not a physical phone. Empty-field validation was tested on the original draft; final checks repeated submission and reload on desktop and at the narrow width. Source inspection found no network or storage calls in the unchanged signup script; visible confirmation and reload checks alone would not establish that.
 
 </details>
 

@@ -76,8 +76,8 @@ method/name/encoded parameter headers, explicit null, array schema validation an
 missing/mismatched header rejection with no additional effects. These localhost
 reference results are source runtime proof, not installed/provider/browser certification.
 
-Sanitized [built-app receipt](../audits/evidence/mcp-conformance-1093-2026-10-12/built-app.json)
-and [HTTP wire receipt](../audits/evidence/mcp-conformance-1093-2026-10-12/http-wire.json)
+Sanitized built-app receipt
+and HTTP wire receipt
 retain the checked assertions without credentials or fixture paths.
 
 ## Built-app Tasks recovery — October 14, 2026
@@ -101,7 +101,7 @@ process restart, `TASK_INTERRUPTED` without replay, duplicate confirmation input
 decline without generation, cancellation, workspace/credential isolation, and
 legacy/disabled-feature behavior. Its sanitized machine receipt is emitted only
 after application closure and verified deletion of the owned runtime/authority
-directories. See the [exact-tree qualification and sanitized protocol statuses](../audits/evidence/mcp-tasks-recovery-1093-2026-10-14.json).
+directories. See the exact-tree qualification and sanitized protocol statuses.
 
 This advances the local Tasks portion of #1093 using a private loopback model
 fixture and zero external provider calls. Genuine provider/OAuth behavior, deployed
@@ -139,7 +139,7 @@ refused them before any external call; all four have zero acceptance credit and
 verified private-profile cleanup. The corrected equipment uses the actual
 Responses route. No production behavior was changed to satisfy the smoke.
 
-The [sanitized exact-tree receipt](../audits/evidence/mcp-sampling-1093-2026-10-14.json)
+The sanitized exact-tree receipt
 records all caps, statuses, provider usage, retry counts, local checks and the
 failed equipment attempts. The non-container application build took 329.275s;
 the final script lint plus live runtime took 89.521s, measured separately. Prior
@@ -173,7 +173,7 @@ closure and private profile removal precede the success receipt. The reusable
 command is `node scripts/smoke-mcp-subscriptions.mjs --production`, after the normal
 non-container application build, executed through flujo-bash MCP for cleanup.
 
-The [exact-tree receipt and sanitized protocol traces](../audits/evidence/mcp-subscriptions-1093-2026-10-14.json)
+The exact-tree receipt and sanitized protocol traces
 record SDK/runtime versions, filters, acknowledgments, cache assertions and local
 validation. This qualifies the source production localhost profile, using reference
 servers, for the existing subscription requirement. Hosted/multi-process deployments
@@ -190,7 +190,7 @@ The browser exposed a real safe-link defect: the destination opened with a null 
 
 Declared connections work; undeclared-host connection/frame attempts are blocked before their healthy listener receives a request. The existing loopback policy deliberately normalizes declared ports to a hostname-wide grant. The acceptance probe uses localhost as the undeclared hostname while only 127.0.0.1 is granted; exact-port isolation is not claimed. Reserved readiness injection cannot replace the live bridge. Revocation blocks calls before effects, gracefully retires the View, and re-enabling/remounting creates a fresh bridge. Closing with real pending tool work aborts it in both SDK generations; no wait remains. The host fits the recorded phone viewport. No permissive sandbox setting was enabled.
 
-[Exact-tree receipt and sanitized browser/protocol observations](../audits/evidence/mcp-apps-browser-1093-2026-10-15.json) bind tested tree 8016eaa3da344b9c230f6f994b9cdf28bd5e2fd6, local typecheck/lint/non-container build, 37 focused frame checks, original failing safe-link proof and successful browser/profile cleanup. Zero external provider calls were made. Earlier equipment failures are retained without acceptance credit.
+Exact-tree receipt and sanitized browser/protocol observations bind tested tree 8016eaa3da344b9c230f6f994b9cdf28bd5e2fd6, local typecheck/lint/non-container build, 37 focused frame checks, original failing safe-link proof and successful browser/profile cleanup. Zero external provider calls were made. Earlier equipment failures are retained without acceptance credit.
 
 This advances APP-1 for the measured profile, not full conformance or #1093 closure. The stable specification defines CSP entries as origins and forbids loosening. Automatic fixed-port-to-wildcard expansion remains unfinished implementation work under #1093; its repair must preserve the existing ephemeral-port restart regression. Genuine OAuth, hosted/installed Windows/Linux identities and release-level combined qualification also remain open. Chat/canvas-specific embedding, optional per-resource click policy, permissive settings and independent human accessibility are not inferred. No full/remote CI, packed/installed suite, container/image build or release workflow ran.
 
@@ -210,7 +210,7 @@ reruns the opening tool. Loading disables duplicate reloads; a failed read retir
 the old View, shows an error, and permits retry. The localized control has a 44px
 minimum height; the inline header wraps on narrow screens.
 
-[Exact-tree evidence](../audits/evidence/mcp-apps-exact-ports-1093-2026-10-15.json) binds the
+Exact-tree evidence binds the
 source and equipment tree, application/dependency hashes and build ID. Nine new
 port assertions failed on base 9c1e8d22; the repaired focused batch passes all
 117 checks in five suites. Local typecheck/lint and the inspected non-container
@@ -259,7 +259,7 @@ the current computer-use policy requires action-time user confirmation. The exac
 screen and concise permission question are in the current chat. This is the
 concrete remaining action, not a claim that routine authentication cannot work.
 
-The [sanitized receipt](../audits/evidence/mcp-oauth-preparation-1093-2026-10-15.json)
+The sanitized receipt
 binds application and equipment hashes, source build ID, protocol statuses and
 limits. Both final preparation runs stop deliberately before consent and report
 `realProviderAcceptancePassed: false`; their apps and private profiles close

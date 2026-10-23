@@ -58,5 +58,6 @@
     "metadataFile": "docs/audits/evidence/node-security-2026-10-21/docker-official-node-22.23.4-bookworm-slim.json",
     "metadataSha256": "37c7919be2dfdc560838709849d773231d6978c41754c33dea8c7394bef7ac60",
     "qualification": "registry digest observed; contained Node executable must independently match the signed official binary before build and runtime packaging"
-  }
+  },
+  "archivedSourceRevision": "03e6639812191f018e485f090761a0a6c3421fe8"
 }

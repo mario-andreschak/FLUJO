@@ -1,9 +1,0 @@
-# Framework security patch — October 15, 2026
-
-The daily review found Next 16.4.0 inside the affected range of the [October 14 security release](https://nextjs.org/blog/nextjs-security-update-october-14-2026). The [upstream advisory](https://github.com/vercel/next.js/security/advisories/GHSA-673q-mjm6-r5xr) names 16.4.1 as patched. This delivery updates Next and its environment/SWC/lint packages to 16.4.1, and the compatible React/React DOM pair to 19.3.1 ([React release](https://github.com/react/react/releases/tag/v19.3.1)). The existing sharp 0.35.5 already satisfies the image-library mitigation and is unchanged. Fourteen package records plus the root manifest change; no unrelated lock drift.
-
-Local typecheck, source lint and the inspected non-container five-MCP/Next application build pass on tested tree 9b050e3aba2bc10218dc096444a3a240abc2e39d. Build time 319.840s; typecheck 60.696s; lint 94.378s. Publication adds this audit and the [exact-input receipt](evidence/framework-security-2026-10-15.json). The Next 16.4.1 security and route guides were read. Zero external model/provider calls were made. Existing unchanged focused evidence is retained; no full/remote CI, container/image build, installed package or release suite was dispatched.
-
-The root npm audit reports 19 moderate entries, all cascading from the same existing unpatched sprintf-js advisory through test tooling. Alert 42 and its hold remain; the offered Jest 25 downgrade is not a safe remediation and was not applied. The global GitHub advisory API returned 404 for the new IDs; the actual upstream repository advisory pages and npm manifests were verified separately. No alert dismissal, exploit reproduction or production deployment is claimed.
-
-This is urgent dependency maintenance under existing #565, separate from #1093 Apps browser qualification. Both broader issues retain their documented unfinished release/acceptance requirements.

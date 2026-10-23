@@ -100,7 +100,7 @@ skipped on Windows. The unchanged built Original path also passed a genuine
 archive and Chat result, including restart durability. These results qualify
 that integration and Original path; they do not supply Native producer or
 connected Worker acceptance for that checkpoint. See the
-[qualification receipt](evidence/native-source-main-integration-2026-10-14.json).
+qualification receipt.
 
 The October 17 integration preserves the current ordinary Codex endpoint and
 compaction behavior alongside Native ownership, qualification and keyless tool
@@ -111,7 +111,7 @@ the child before registration or wire input. Native reader checks observe the
 session only after the Original host accepts it, while session subscriptions
 remain installed before completion events. Current validation and its explicit
 acceptance limits are recorded in the
-[October 17 receipt](evidence/native-source-main-integration-2026-10-17.json).
+October 17 receipt.
 
 ## Original owner producer
 
@@ -217,7 +217,7 @@ child each completed a Worker read with a durable Parent receipt. The child
 returned the file marker and joined once; the Activity, Goal and Native admission
 completed. All application epochs closed and protected user files were unchanged.
 The measured journey took 843.100 seconds. See the
-[producer qualification receipt](evidence/native-parent-producer-2026-10-17.json)
+producer qualification receipt
 for the qualified tree, earlier negative controls and integration validation.
 This result does not establish installed-package, deployed-image, live UI swarm
 or longer unattended-work acceptance.

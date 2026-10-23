@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check the current GitHub Pages experience without network calls or dependencies.
 
-The preserved /short/ film and its studio are excluded from page quality checks;
-links into them must still resolve. Browser QA remains necessary for readability,
+The preserved /short/ film is excluded from page quality checks; its links and
+narration assets must still resolve. Browser QA remains necessary for readability,
 layout, interactions, and the guided walkthrough.
 """
 from html.parser import HTMLParser
@@ -100,18 +100,23 @@ for path in current:
     for href, line, fragment in doc.links:
         check_reference(path, href, line, fragment)
 
+for path in SITE.rglob("*.html"):
+    if path not in current:
+        for href, line, fragment in page(path).links:
+            check_reference(path, href, line, fragment)
+
 for path in SITE.rglob("*.css"):
-    if "short" in path.relative_to(SITE).parts:
-        continue
     css = path.read_text(encoding="utf-8-sig")
+    # Embedded SVG data URLs can contain their own url(#fragment) expressions.
+    css = re.sub(r"url\(\s*([\"'])data:.*?\1\s*\)", "", css, flags=re.S)
     for match in re.finditer(r"url\(\s*[\"']?([^\"')]+)[\"']?\s*\)", css):
         check_reference(path, match.group(1).strip())
 
-# These images are loaded by the film player rather than HTML img elements.
-capture_map = SITE / "film" / "captures.js"
-if capture_map.is_file():
-    for match in re.finditer(r"\b(?:src|mobileSrc)\s*:\s*['\"]([^'\"]+)['\"]", capture_map.read_text(encoding="utf-8-sig")):
-        check_reference(capture_map, match.group(1))
+# Film clips and narration are loaded by scripts rather than HTML elements.
+for capture_map in (SITE / "film/captures.js", SITE / "short/film-content.js", SITE / "short/app.js"):
+    if capture_map.is_file():
+        for match in re.finditer(r"\b(?:src|mobileSrc|source)['\"]?\s*:\s*['\"]([^'\"]+)['\"]", capture_map.read_text(encoding="utf-8-sig")):
+            check_reference(capture_map, match.group(1))
 
 version = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
 readme = (ROOT / "README.md").read_text(encoding="utf-8-sig")

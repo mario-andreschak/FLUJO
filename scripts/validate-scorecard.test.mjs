@@ -6,11 +6,15 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { validateScorecard, validateShape } from './validate-scorecard.mjs';
+import { readArchivedFixture } from './read-archived-fixture.mjs';
+import { validateScorecard as validateCurrentScorecard, validateShape } from './validate-scorecard.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const baseline = JSON.parse(readFileSync(join(root, 'docs/audits/scorecard-563/scorecard.json'), 'utf8'));
-const baselineSchema = JSON.parse(readFileSync(join(root, 'docs/audits/scorecard-563/scorecard.schema.json'), 'utf8'));
+const baseline = JSON.parse(readArchivedFixture('docs/audits/scorecard-563/scorecard.json'));
+function validateScorecard(ledger, options = {}) {
+  return validateCurrentScorecard(ledger, { ...options, archivedFixture: true });
+}
+const baselineSchema = JSON.parse(readFileSync(join(root, 'scripts/scorecard.schema.json'), 'utf8'));
 // Synthetic observations in this file are assessed under a controlled test clock,
 // not offered as elapsed human/live evidence at the actual CLI wall clock.
 const fixtureNow = Date.parse('2027-01-01T00:00:00Z');
@@ -328,7 +332,7 @@ function artifactReportFixture(edit = () => {}) {
       for (const raw of evidence.raw.filter(raw => raw.verification === 'local')) {
         const target = join(fixture, raw.location);
         mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, readFileSync(join(root, raw.location)));
+        writeFileSync(target, readArchivedFixture(raw.location));
       }
     }
     const payloadSha256 = createHash('sha256').update('synthetic package bytes, not an installed app').digest('hex');

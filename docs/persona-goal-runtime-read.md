@@ -36,7 +36,7 @@ Run applicable suites and operational transport acceptance at release preflight;
 development validation is local lint/typecheck plus the application build.
 
 Scoped maintenance qualification is recorded in
-[the bound evidence](audits/evidence/goal-runtime-read-2026-10-16.json). The
+the bound evidence. The
 focused regression uses the actual storage reader for foreign legacy/sharded
 records and malformed JSON. To repeat the built HTTP check when authorized,
 stage the candidate source, build it, then run
