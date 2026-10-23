@@ -46,6 +46,27 @@ export interface FileWatchTriggerConfig {
   debounceMs?: number;
 }
 
+/** Optional condition checked after a trigger fires, before admitting any work. */
+export type AutomationAiGate =
+  | { mode: 'llm-gate'; condition: string; modelId: string; maxCallsPerDay?: number }
+  | { mode: 'flow-gate'; condition: string; flowId: string; maxCallsPerDay?: number };
+
+/** Validate untrusted API/imported conditions without relying on TS types. */
+export function validateAutomationAiGate(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return 'Invalid AI condition';
+  const gate = value as Record<string, unknown>;
+  if (gate.mode !== 'llm-gate' && gate.mode !== 'flow-gate') return 'Invalid AI checker type';
+  if (typeof gate.condition !== 'string' || !gate.condition.trim()) return 'A condition is required for the AI to check';
+  const id = gate.mode === 'llm-gate' ? gate.modelId : gate.flowId;
+  if (typeof id !== 'string' || !id.trim()) return 'A model or flow is required to check the condition';
+  if (gate.maxCallsPerDay !== undefined
+    && (typeof gate.maxCallsPerDay !== 'number' || !Number.isSafeInteger(gate.maxCallsPerDay) || gate.maxCallsPerDay < 1)) {
+    return 'Maximum AI checks per day must be a positive whole number';
+  }
+  return null;
+}
+
 /** How an MCP poll result is evaluated to decide whether to fire (v2). */
 export type McpPollEvaluate =
   /** Fire whenever the (normalized) tool result differs from the last poll. */
@@ -59,13 +80,13 @@ export type McpPollEvaluate =
    * Ask a pinned model whether the result satisfies a natural-language
    * condition. Costs one completion per (changed) poll — budget-capped.
    */
-  | { mode: 'llm-gate'; condition: string; modelId: string; maxCallsPerDay?: number }
+  | Extract<AutomationAiGate, { mode: 'llm-gate' }>
   /**
    * Let one of the user's FLOWS decide (ephemeral run): the flow gets the
    * condition + tool result and must answer with the same {"fire": …} JSON.
    * Strictly more powerful than llm-gate — the flow can use tools to verify.
    */
-  | { mode: 'flow-gate'; condition: string; flowId: string; maxCallsPerDay?: number };
+  | Extract<AutomationAiGate, { mode: 'flow-gate' }>;
 
 export interface McpPollTriggerConfig {
   type: 'mcp-poll';
@@ -142,6 +163,22 @@ export type TriggerConfig =
   | FlowEventTriggerConfig;
 
 export type TriggerType = TriggerConfig['type'];
+
+/** Read old tool-only conditions in the shared editor without losing them. */
+export function automationAiGate(execution: Pick<PlannedExecution, 'trigger' | 'aiGate'>): AutomationAiGate | null {
+  if (execution.aiGate !== undefined) return execution.aiGate;
+  const trigger = execution.trigger;
+  return trigger.type === 'mcp-poll'
+    && (trigger.evaluate.mode === 'llm-gate' || trigger.evaluate.mode === 'flow-gate')
+    ? trigger.evaluate : null;
+}
+
+/** The shared condition replaces the legacy watcher evaluator, never both. */
+export function withoutLegacyAiGate(trigger: TriggerConfig): TriggerConfig {
+  return trigger.type === 'mcp-poll'
+    && (trigger.evaluate.mode === 'llm-gate' || trigger.evaluate.mode === 'flow-gate')
+    ? { ...trigger, evaluate: { mode: 'on-change' } } : trigger;
+}
 
 /**
  * What to do when a trigger fires while a previous run for THIS execution is
@@ -286,6 +323,8 @@ export interface PlannedExecution {
    * reservation is active.
    */
   nonExclusiveBehavior?: 'queue' | 'skip' | 'error';
+  /** Shared by all trigger types. null explicitly disables the condition. */
+  aiGate?: AutomationAiGate | null;
   trigger: TriggerConfig;
   createdAt: string;
   updatedAt: string;
@@ -329,6 +368,8 @@ export interface RunRecord {
   firedAt: string;
   finishedAt?: string;
   status: RunRecordStatus;
+  /** A valid negative verdict consumes a watched change without running work. */
+  conditionRejected?: boolean;
   /** Short human-readable description of what fired ("Schedule", "Webhook", ...). */
   triggerSummary: string;
   /** Final assistant output, truncated for storage. Surfaced in run history and

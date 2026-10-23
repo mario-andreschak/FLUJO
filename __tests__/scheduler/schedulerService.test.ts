@@ -42,6 +42,11 @@ jest.mock('@/utils/storage/backend', () => ({
 // --- runFlow mock ---------------------------------------------------------
 
 const runFlowMock = jest.fn();
+const checkConditionMock = jest.fn();
+jest.mock('@/backend/services/scheduler/triggers/llmGate', () => ({
+  DEFAULT_MAX_CALLS_PER_DAY: 500,
+  evaluateTriggerAiGate: (...args: unknown[]) => checkConditionMock(...args),
+}));
 jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: (...args: unknown[]) => runFlowMock(...args),
 }));
@@ -77,6 +82,7 @@ describe('SchedulerService', () => {
     store.clear();
     runFlowMock.mockReset();
     runFlowMock.mockResolvedValue(completedResult);
+    checkConditionMock.mockReset().mockResolvedValue({ fire: true, reason: 'condition met' });
     scheduler = new SchedulerService();
     privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
 });
@@ -97,6 +103,91 @@ describe('SchedulerService', () => {
     // A fresh schedule primes the catch-up baseline without firing.
     expect(readState(execution!.id)?.lastScheduledFireAt).toBeTruthy();
     expect(runFlowMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['schedule', 'schedule-catchup', 'webhook', 'file', 'mcp-poll', 'url-watch', 'flow-event'] as const)(
+    'rejects a %s event before starting the automation',
+    async kind => {
+      const { execution } = await scheduler.create(scheduleInput({
+        aiGate: { mode: 'llm-gate', modelId: 'checker', condition: 'urgent only' },
+        emergency: true,
+      }));
+      checkConditionMock.mockResolvedValue({ fire: false, reason: 'not urgent' });
+      const record = await scheduler.fire(execution!, { kind, summary: 'An event', context: { priority: 'low' } });
+      expect(record).toMatchObject({ status: 'skipped', conditionRejected: true });
+      expect(record.error).toContain('not urgent');
+      expect(runFlowMock).not.toHaveBeenCalled();
+      expect(checkConditionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ kind, context: { priority: 'low' } }),
+        execution!.aiGate, undefined,
+      );
+      expect(readRuns(execution!.id)).toHaveLength(1);
+    },
+  );
+
+  it('starts work only after a yes, and preserves Run now as an explicit override', async () => {
+    const { execution } = await scheduler.create(scheduleInput({
+      aiGate: { mode: 'flow-gate', flowId: 'checker', condition: 'ready' },
+    }));
+    expect((await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' })).status).toBe('completed');
+    checkConditionMock.mockRejectedValue(new Error('checker unavailable'));
+    expect((await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' })).status).toBe('error');
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+    const manual = await scheduler.runNow(execution!.id);
+    expect(manual.record?.status).toBe('completed');
+    expect(checkConditionMock).toHaveBeenCalledTimes(2);
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('persists the daily allowance and permits clearing the condition with null', async () => {
+    const { execution } = await scheduler.create(scheduleInput({
+      aiGate: { mode: 'llm-gate', modelId: 'checker', condition: 'ready', maxCallsPerDay: 1 },
+    }));
+    await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+    const limited = await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+    expect(limited.error).toMatch(/budget reached/);
+    expect(checkConditionMock).toHaveBeenCalledTimes(1);
+    expect(readState(execution!.id)?.llmCallsCount).toBe(1);
+    const updated = await scheduler.update(execution!.id, { aiGate: null });
+    expect(updated.execution?.aiGate).toBeNull();
+    expect((await scheduler.fire(updated.execution!, { kind: 'schedule', summary: 'Schedule' })).status).toBe('completed');
+    expect(checkConditionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('revokes a positive verdict if the automation is disabled during the check', async () => {
+    const { execution } = await scheduler.create(scheduleInput({
+      aiGate: { mode: 'flow-gate', flowId: 'checker', condition: 'ready' },
+    }));
+    checkConditionMock.mockImplementationOnce(async () => {
+      await scheduler.update(execution!.id, { enabled: false });
+      return { fire: true, reason: 'ready' };
+    });
+    const record = await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+    expect(record.status).toBe('error');
+    expect(runFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('reuses the verdict when a queued event is admitted after the current run', async () => {
+    const { execution } = await scheduler.create(scheduleInput({
+      overlapStrategy: 'queue',
+      aiGate: { mode: 'llm-gate', modelId: 'checker', condition: 'ready' },
+    }));
+    let release!: () => void;
+    let started!: () => void;
+    const firstStarted = new Promise<void>(resolve => { started = resolve; });
+    runFlowMock.mockImplementationOnce(() => new Promise(resolve => {
+      release = () => resolve(completedResult);
+      started();
+    }));
+    const first = scheduler.fire(execution!, { kind: 'schedule', summary: 'First' });
+    await firstStarted;
+    const second = scheduler.fire(execution!, { kind: 'schedule', summary: 'Second' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+    release();
+    const records = await Promise.all([first, second]);
+    expect(records.map(record => record.status)).toEqual(['completed', 'completed']);
+    expect(checkConditionMock).toHaveBeenCalledTimes(2);
   });
 
   it('normalizes legacy restrictions and lets canonical patches take precedence', async () => {

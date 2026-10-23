@@ -36,6 +36,24 @@ export async function saveExecutionState(
   await saveItem(stateKey(executionId), state, assertCurrent);
 }
 
+/** Serialize read/merge/write updates with schedule cursor advances. */
+export async function updateExecutionState(
+  executionId: string,
+  update: (current: PlannedExecutionState) => PlannedExecutionState,
+  assertCurrent?: () => Promise<void>,
+): Promise<PlannedExecutionState> {
+  const lockId = `scheduler_state_${createHash('sha256').update(executionId).digest('hex').slice(0, 40)}`;
+  return withPersonaRuntimeLock(lockId, async (lock) => {
+    await assertCurrent?.();
+    const updated = update(await loadExecutionState(executionId));
+    await saveExecutionState(executionId, updated, async () => {
+      await lock.assertOwned();
+      await assertCurrent?.();
+    });
+    return updated;
+  });
+}
+
 /**
  * Cross-process monotonic schedule cursor advance. Overlapping occurrences may
  * finish admission out of order; an older callback can never move the durable

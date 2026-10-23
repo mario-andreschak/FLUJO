@@ -36,6 +36,10 @@ import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import type { Persona, PersonaComposition } from '@/shared/types/enduringAgent';
 import {
+  AutomationAiGate,
+  automationAiGate,
+  withoutLegacyAiGate,
+  validateAutomationAiGate,
   FileWatchTriggerConfig,
   FlowEventTriggerConfig,
   McpPollTriggerConfig,
@@ -60,6 +64,7 @@ import SchedulePanel from './SchedulePanel';
 import WebhookPanel from './WebhookPanel';
 import FileWatchPanel from './FileWatchPanel';
 import WatchToolPanel from './WatchToolPanel';
+import AiGatePanel from './AiGatePanel';
 import UrlWatchPanel from './UrlWatchPanel';
 import FlowEventPanel from './FlowEventPanel';
 import FlowSelector from '@/frontend/components/Chat/FlowSelector';
@@ -123,6 +128,7 @@ interface ExecutionModalProps {
 const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalProps) => {
   const { t } = useI18n();
   const [name, setName] = useState('');
+  const [aiGate, setAiGate] = useState<AutomationAiGate | null>(null);
   const [targetKind, setTargetKind] = useState<ExecutionTargetKind>('flow');
   const [flowId, setFlowId] = useState('');
   const [personaId, setPersonaId] = useState('');
@@ -178,7 +184,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     setSuperExclusive(restrictions.superExclusive);
     setEmergency(restrictions.emergency);
     setNonExclusiveBehavior(execution?.nonExclusiveBehavior ?? 'queue');
-    setTrigger(execution?.trigger ?? DEFAULT_SCHEDULE);
+    setTrigger(withoutLegacyAiGate(execution?.trigger ?? DEFAULT_SCHEDULE));
+    setAiGate(execution ? automationAiGate(execution) : null);
     setDraftId(execution ? '' : crypto.randomUUID());
     setPersonaComposition(null);
     setPersonaCompositionError(false);
@@ -387,6 +394,15 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const handleSave = async () => {
     setSaveError(null);
     if (focusFirstInvalidControl()) return;
+    const conditionError = validateAutomationAiGate(aiGate);
+    if (conditionError) {
+      setSaveError(conditionError);
+      handleSectionClick('when');
+      window.setTimeout(() => {
+        scrollContainer?.querySelector<HTMLElement>('#automation-ai-condition textarea, #automation-ai-condition input')?.focus();
+      }, 0);
+      return;
+    }
     setSaving(true);
     const input: PlannedExecutionInput = {
       name,
@@ -399,6 +415,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       emergency,
       nonExclusiveBehavior,
       trigger,
+      aiGate,
       enabled: execution?.enabled ?? true,
       ...(targetKind === 'persona'
         ? {
@@ -564,7 +581,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             onClick={() => {
               if (trigger.type !== 'mcp-poll') {
                 setTrigger(
-                  execution?.trigger.type === 'mcp-poll' ? execution.trigger : DEFAULT_MCP_POLL
+                  execution?.trigger.type === 'mcp-poll' ? withoutLegacyAiGate(execution.trigger) : DEFAULT_MCP_POLL
                 );
               }
             }}
@@ -634,6 +651,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             currentExecutionId={execution?.id ?? draftId}
           />
         )}
+
+            <AiGatePanel config={aiGate} onChange={setAiGate} flows={flows} loadingFlows={loadingFlows} />
 
           </Box>
           <Box
