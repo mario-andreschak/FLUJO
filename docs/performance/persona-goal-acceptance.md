@@ -206,3 +206,16 @@ bounded error receipt without approval or execution, allowing the model to
 reduce the request and issue a new callback. Reusing the old callback with
 different arguments remains forbidden. Unconsumed Codex diagnostic/delta frames
 are discarded before the bounded Native output queue.
+
+Terminal reconciliation reads tool receipts with a separate 2 MiB limit, covering
+the broker's permitted 1 MiB response and 64 KiB transcript plus JSON encoding and
+receipt identity. Invocation, scope and hold metadata retain their 64 KiB limit.
+File identity, directory, hard-link and terminal-effect checks remain unchanged.
+A permitted response must not become an unsafe-file error merely because its
+durable receipt includes both the result and its transcript.
+
+The terminal-only fixture's private MCP grant explicitly supplies the selected
+Node installation, standard OS tool directories and a fixture-local home. It
+does not inherit the operator's ambient PATH or unrelated environment variables.
+The copied server package includes its browser observer; Windows shell and tree
+termination use absolute system paths, and bash does not load login profiles.

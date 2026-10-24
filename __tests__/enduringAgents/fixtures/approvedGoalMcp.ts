@@ -16,7 +16,7 @@ export function installApprovedGoalMcp(fixtureDirectory: string, terminalOnly: b
   const sourceRoot = path.join(getWorkspaceDataDir(), 'mcp-servers', 'goal-acceptance-owned');
   fs.mkdirSync(sourceRoot, { recursive: true });
   const dependency = createRequire(path.resolve('package.json'));
-  for (const filename of ['fixture.cjs', 'terminal-fixture.cjs', 'server.mjs', 'terminal-server.mjs']) {
+  for (const filename of ['fixture.cjs', 'terminal-fixture.cjs', 'browser-observer.cjs', 'server.mjs', 'terminal-server.mjs']) {
     let bytes = fs.readFileSync(path.resolve('scripts', 'persona-goal-acceptance', filename), 'utf8');
     // The disposable package uses the exact physically installed SDK. Import-closure
     // enforcement remains a separate production requirement; no loader is bypassed.
@@ -26,6 +26,27 @@ export function installApprovedGoalMcp(fixtureDirectory: string, terminalOnly: b
   }
   const entryPoint = path.join(sourceRoot, terminalOnly ? 'terminal-server.mjs' : 'server.mjs');
   const environment: Record<string, string> = process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' } : {};
+  if (terminalOnly) {
+    // The private host intentionally does not inherit PATH. Grant only the
+    // selected Node installation and standard OS tools needed by this fixture.
+    const systemRoot = environment.SystemRoot;
+    const fixtureHome = path.join(fixtureDirectory, '.home');
+    fs.mkdirSync(fixtureHome, { recursive: true });
+    environment.HOME = fixtureHome;
+    environment.PATH = [path.dirname(process.execPath), ...(process.platform === 'win32'
+      ? [path.join(systemRoot, 'System32'), path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0')]
+      : ['/usr/bin', '/bin'])].join(path.delimiter);
+    if (process.platform === 'win32') {
+      environment.ComSpec = path.join(systemRoot, 'System32', 'cmd.exe');
+      environment.PATHEXT = '.COM;.EXE;.BAT;.CMD';
+      environment.windir = systemRoot;
+      environment.USERPROFILE = fixtureHome;
+      environment.APPDATA = path.join(fixtureHome, 'AppData', 'Roaming');
+      environment.LOCALAPPDATA = path.join(fixtureHome, 'AppData', 'Local');
+      fs.mkdirSync(environment.APPDATA, { recursive: true });
+      fs.mkdirSync(environment.LOCALAPPDATA, { recursive: true });
+    }
+  }
   const config: MCPStdioConfig = { name: 'goal-acceptance', transport: 'stdio', command: process.execPath,
     args: [entryPoint, fixtureDirectory], cwd: sourceRoot, env: environment, disabled: false, rootPath: sourceRoot,
     _buildCommand: '', _installCommand: '', source: { type: 'local' },

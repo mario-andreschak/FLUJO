@@ -74,9 +74,13 @@ async function readJson<T>(file: string): Promise<T | undefined> {
   }
 }
 
-async function readTerminalJson<T>(file: string): Promise<T | undefined> {
+// Broker responses allow 1 MiB plus a 64 KiB transcript. JSON escaping and
+// receipt identity need headroom; invocation/hold metadata keeps its 64 KiB cap.
+const MAX_TERMINAL_TOOL_RECEIPT_BYTES = 2 * 1024 * 1024;
+
+async function readTerminalJson<T>(file: string, maximum = 64 * 1024): Promise<T | undefined> {
   let bytes;
-  try { bytes = await readNativeHeldFile(file, 64 * 1024); }
+  try { bytes = await readNativeHeldFile(file, maximum); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
@@ -210,7 +214,7 @@ export async function readNativeInvocationTerminalEvidence(
     }
     let effectsResolved = true;
     for (const name of names) {
-      const tool = await readTerminalJson<ToolReceipt>(path.join(directory, name));
+      const tool = await readTerminalJson<ToolReceipt>(path.join(directory, name), MAX_TERMINAL_TOOL_RECEIPT_BYTES);
       if (!tool || tool.invocationId !== id || tool.conversationId !== owner.conversationId
         || tool.state !== 'terminal') effectsResolved = false;
     }

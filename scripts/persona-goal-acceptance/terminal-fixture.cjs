@@ -72,8 +72,10 @@ async function executeTerminal(directory, args) {
   if (typeof command !== 'string' || !command.trim()) throw new Error('A non-empty command is required.');
   const timeoutMs = Math.max(1_000, Math.min(300_000, Number(args.timeoutMs) || 120_000));
   const startedAt = Date.now();
-  const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
-  const shellArgs = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', command] : ['-lc', command];
+  const windowsSystemDirectory = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+  const shell = process.platform === 'win32'
+    ? path.join(windowsSystemDirectory, 'WindowsPowerShell', 'v1.0', 'powershell.exe') : '/bin/bash';
+  const shellArgs = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', command] : ['-c', command];
   const fixtureRoot = await fs.realpath(directory);
   const temporaryDirectory = path.join(fixtureRoot, '.tmp');
   const npmCache = path.join(fixtureRoot, '.npm-cache');
@@ -99,7 +101,7 @@ async function executeTerminal(directory, args) {
     const timer = setTimeout(() => {
       timedOut = true;
       if (process.platform === 'win32' && child.pid) {
-        spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+        spawn(path.join(windowsSystemDirectory, 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
       } else child.kill();
     }, timeoutMs);
     child.once('error', error => { clearTimeout(timer); resolve({ exitCode: 1, stdout, stderr: error.message, timedOut }); });
