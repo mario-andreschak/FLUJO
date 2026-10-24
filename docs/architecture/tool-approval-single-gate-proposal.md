@@ -4,6 +4,8 @@ Status: Design accepted for implementation planning under user-delegated judgmen
 
 Design issue: [#469](https://github.com/mario-andreschak/FLUJO/issues/469)
 
+Implementation issue: [#1284](https://github.com/mario-andreschak/FLUJO/issues/1284)
+
 Removal history: [#438](https://github.com/mario-andreschak/FLUJO/issues/438)
 
 Reviewed code baseline: `adfd3ea80d0e7c4a604992e1450bad414a271896` on `main` (October 24, 2026)
