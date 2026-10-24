@@ -93,6 +93,7 @@ const PERSONA_OUTCOME_KEYS = {
   queued: 'personas.outcome.queued',
   working: 'personas.outcome.working',
   waiting: 'personas.outcome.waiting',
+  progress: 'personas.outcome.progress',
   completed: 'personas.outcome.completed',
   cancelled: 'personas.outcome.cancelled',
   needs_attention: 'personas.outcome.needs_attention',
@@ -126,7 +127,7 @@ function statusColor(status: string): 'default' | 'success' | 'warning' | 'error
   if (status === 'completed' || status === 'active' || status === 'ready') return 'success';
   if (status === 'error' || status === 'forgotten' || status === 'cancelled' || status === 'overdue' || status === 'needs_attention') return 'error';
   if (status === 'candidate' || status === 'waiting' || status === 'blocked' || status === 'queued') return 'warning';
-  if (status === 'running' || status === 'in_progress' || status === 'working') return 'info';
+  if (status === 'running' || status === 'in_progress' || status === 'working' || status === 'progress') return 'info';
   if (status === 'superseded') return 'default';
   return 'primary';
 }
@@ -1421,6 +1422,11 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
                   {activity.outcome === 'needs_attention' && activity.advanced.status === 'completed' && (
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
                       {t('personas.history.completionUnconfirmed')}
+                    </Typography>
+                  )}
+                  {activity.outcome === 'progress' && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                      {t('personas.history.goalProgress')}
                     </Typography>
                   )}
                   {activity.resultSummary && (
