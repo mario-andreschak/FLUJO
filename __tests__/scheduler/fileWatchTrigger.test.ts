@@ -130,6 +130,44 @@ describe('armFileWatch', () => {
     expect(fires).toHaveLength(0);
   });
 
+  it('ignores the initial file and detects consecutive saves to a watched file', async () => {
+    const file = path.join(dir, 'report.txt');
+    await fs.writeFile(file, 'initial');
+    const fires: FileWatchFire[] = [];
+    arm({ path: file, events: ['add', 'change'], glob: '*.txt' }, payload => {
+      fires.push(payload);
+    });
+    await new Promise(r => setTimeout(r, 1200));
+    expect(fires).toHaveLength(0);
+
+    for (const content of ['first save', 'second longer save']) {
+      const previousCount = fires.length;
+      await fs.writeFile(file, content);
+      await waitFor(() => fires.length > previousCount);
+      expect(fires.at(-1)?.events).toEqual([{ event: 'change', path: file }]);
+    }
+  });
+
+  it('watches newly created nested folders while filtering their files by glob', async () => {
+    const fires: FileWatchFire[] = [];
+    arm({ events: ['add', 'unlink'], glob: 'reports/**/*.csv' }, payload => {
+      fires.push(payload);
+    });
+    await new Promise(r => setTimeout(r, 300));
+    const nested = path.join(dir, 'reports', '2026');
+    await fs.mkdir(nested, { recursive: true });
+    const file = path.join(nested, 'data.csv');
+    await fs.writeFile(file, 'one,two');
+    await fs.writeFile(path.join(nested, 'ignored.txt'), 'ignored');
+    await waitFor(() => fires.length > 0);
+    expect(fires.flatMap(fire => fire.events)).toEqual([{ event: 'add', path: file }]);
+
+    fires.length = 0;
+    await fs.unlink(file);
+    await waitFor(() => fires.length > 0);
+    expect(fires.flatMap(fire => fire.events)).toEqual([{ event: 'unlink', path: file }]);
+  });
+
   it('retains the exact batch until its durable handoff succeeds', async () => {
     const attempts: FileWatchFire[] = [];
     const errors: string[] = [];
