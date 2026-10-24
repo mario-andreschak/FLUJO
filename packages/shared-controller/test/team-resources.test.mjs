@@ -6,10 +6,14 @@ import { Teams, TeamError } from '../dist/teams.js';
 import { RESOURCE_BYTES, RESOURCE_KINDS, TeamResources } from '../dist/team-resources.js';
 import { modelConfigurationFields, publishableModel, readSharedModel, SHARED_MODEL_FORMAT } from '../dist/shared-model.js';
 import { TeamModelAccess } from '../dist/team-model-access.js';
+import { flowDependencies, projectSharedFlow, readSharedFlow, setFlowDependency, sharedFlowDraftSchema, SHARED_FLOW_FORMAT, teamDependencyId } from '../dist/shared-flow.js';
 import { privateFixture } from './private-fixture.mjs';
 
 const password = 'local resource fixture password';
 const status = code => error => error instanceof TeamError && error.status === code;
+const flowDocument = (properties = {}) => ({ format: SHARED_FLOW_FORMAT, flow: { name: 'Team graph', nodes: [
+  { id: 'process', type: 'process', position: { x: 100, y: 200 }, data: { type: 'process', label: 'Answer', properties } },
+], edges: [] } });
 async function fixture(t) {
   const { directory, close } = privateFixture(t);
   const config = configSchema.parse({ schemaVersion: 2, stateDirectory: directory,
@@ -212,4 +216,78 @@ test('schema 8 upgrade preserves model configuration and grants no execution aut
   assert.deepEqual(reopened.read(f.sessions.alice, f.teamId, id), previous);
   assert.equal(f.ledger.db.prepare('PRAGMA user_version').get().user_version, 9);
   assert.equal(new TeamModelAccess(f.config, f.ledger).describe(f.sessions.alice, f.teamId, id).enabled, false);
+});
+
+test('Flow publication projects authored graph fields, clears private bindings and rejects embedded authority', () => {
+  const source = flowDocument({ boundModel: 'private-model', promptTemplate: 'Reviewed prompt', ApiKey: 'private-key',
+    captureVariable: '${global:private-token}', maxTurns: 4 }).flow;
+  source.nodes.push({ id: 'sub', type: 'subflow', position: { x: 300, y: 200 }, data: { type: 'subflow', label: 'Delegate',
+    properties: { subflowId: 'private-flow', parallelSubflowIds: ['private-one', 'private-two'], parallelSubflowIdsVar: 'private-var' } } });
+  source.edges.push({ id: 'edge', source: 'process', target: 'sub', type: 'custom', sourceHandle: 'right', targetHandle: 'left',
+    data: { edgeType: 'standard', condition: { expression: 'result.ok' } }, selected: true });
+  const result = projectSharedFlow(source);
+  assert.equal(result.document.flow.nodes[0].data.properties.promptTemplate, 'Reviewed prompt');
+  assert.equal(result.document.flow.nodes[0].data.properties.maxTurns, 4);
+  assert.deepEqual(result.omitted, ['Step 1: ApiKey', 'Step 1: captureVariable', 'Step 2: parallelSubflowIdsVar']);
+  assert.ok(!JSON.stringify(result.document).includes('private-'));
+  assert.ok(flowDependencies(result.document).every(slot => slot.value === ''));
+  assert.equal(flowDependencies(result.document).length, 4);
+  assert.equal(result.document.flow.edges[0].source, 'process');
+  assert.ok(!Object.hasOwn(result.document.flow.edges[0], 'selected'));
+  for (const field of ['executionDependencies', 'personaOwnership', 'behaviorRules', 'permissionRules']) {
+    assert.throws(() => projectSharedFlow({ ...source, [field]: {} }), /private execution or Persona authority/);
+  }
+  const draft = { format: 'flujo.flow.draft.v1', document: result.document, pendingFields: { 'process:maxTurns': 'unfinished[' } };
+  assert.deepEqual(sharedFlowDraftSchema.parse(draft), draft);
+  assert.throws(() => sharedFlowDraftSchema.parse({ ...draft, pendingFields: { 'removed:maxTurns': 'unfinished[' } }));
+});
+
+test('typed Flow dependencies must exist in the same team with the expected kind and format', async t => {
+  const f = await fixture(t); const resources = new TeamResources(f.ledger); const { alice } = f.sessions;
+  const model = JSON.stringify(publishableModel({ name: 'fixture', provider: 'ollama', adapter: 'openai' }));
+  const modelId = resources.create(alice, f.teamId, 'model', 'Local model', model);
+  const legacyId = resources.create(alice, f.teamId, 'model', 'Passive document', '{}');
+  const otherTeam = f.teams.create(alice, 'Other team');
+  const foreignId = resources.create(alice, otherTeam, 'model', 'Other model', model);
+  const create = document => resources.create(alice, f.teamId, 'flow', 'Shared graph', JSON.stringify(document));
+  for (const reference of ['private-model', '', teamDependencyId('model', f.teamId, 'x'.repeat(43)),
+    teamDependencyId('model', otherTeam, foreignId), teamDependencyId('model', f.teamId, foreignId),
+    teamDependencyId('model', f.teamId, legacyId), teamDependencyId('flow', f.teamId, modelId)]) {
+    assert.throws(() => create(flowDocument({ boundModel: reference })), status(400));
+  }
+  const document = flowDocument({ boundModel: teamDependencyId('model', f.teamId, modelId) });
+  const id = create(document); assert.equal(resources.read(alice, f.teamId, id).resource.format, SHARED_FLOW_FORMAT);
+  assert.throws(() => resources.create(alice, f.teamId, 'chat', 'Wrong kind', JSON.stringify(document)), status(400));
+  assert.equal(new TeamModelAccess(f.config, f.ledger).describe(alice, f.teamId, modelId).enabled, false);
+  const badGraph = structuredClone(document); badGraph.flow.edges.push({ id: 'bad', source: 'process', target: 'missing' });
+  assert.throws(() => create(badGraph), status(400));
+  assert.throws(() => create(flowDocument({ boundModel: document.flow.nodes[0].data.properties.boundModel, mcpNodes: [] })), status(400));
+});
+
+test('Flow editing keeps immutable format and history, rejects stale editors and revalidates restored dependencies', async t => {
+  const f = await fixture(t); f.joinBob(); const resources = new TeamResources(f.ledger); const { alice, bob } = f.sessions;
+  const modelId = resources.create(alice, f.teamId, 'model', 'Model', JSON.stringify(publishableModel({ name: 'fixture', provider: 'ollama', adapter: 'openai' })));
+  const document = flowDocument({ boundModel: teamDependencyId('model', f.teamId, modelId), promptTemplate: 'First prompt' });
+  const id = resources.create(alice, f.teamId, 'flow', 'Original', JSON.stringify(document));
+  const lease = resources.acquire(bob, f.teamId, id, 1);
+  assert.throws(() => resources.acquire(alice, f.teamId, id, 1), status(423));
+  for (const payload of ['{}', JSON.stringify({ ...document, format: 'json' })]) {
+    assert.throws(() => resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Downgrade', payload), status(400));
+  }
+  const invalid = setFlowDependency(document, flowDependencies(document)[0], 'private-model');
+  assert.throws(() => resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Private reference', JSON.stringify(invalid)), status(400));
+  assert.equal(resources.read(bob, f.teamId, id).editor.actorId, 'bob');
+  const revised = flowDocument({ promptTemplate: 'Edited by Bob' });
+  assert.equal(resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Revised', JSON.stringify(revised)), 2);
+  assert.throws(() => resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Stale', JSON.stringify(document)), status(409));
+  assert.equal(resources.restore(alice, f.teamId, id, 2, 1), 3);
+  assert.deepEqual(readSharedFlow(JSON.parse(resources.read(alice, f.teamId, id).revision.content), f.teamId), document);
+  // A corrupt/missing dependency cannot be revived by restoring an old Flow revision.
+  f.ledger.db.prepare("UPDATE team_resources SET format='json' WHERE id=?").run(modelId);
+  assert.throws(() => resources.restore(alice, f.teamId, id, 3, 1), status(400));
+  assert.equal(resources.read(alice, f.teamId, id).resource.version, 3);
+  const legacyId = resources.create(alice, f.teamId, 'flow', 'Passive', '{}');
+  const legacyLease = resources.acquire(alice, f.teamId, legacyId, 1);
+  resources.save(alice, f.teamId, legacyId, legacyLease.token, legacyLease.fence, 1, 'Tagged JSON', JSON.stringify(revised));
+  assert.equal(resources.read(alice, f.teamId, legacyId).resource.format, 'json');
 });

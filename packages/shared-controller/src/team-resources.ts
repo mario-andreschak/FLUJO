@@ -1,6 +1,7 @@
 import { digest, opaque, type Ledger, type Session } from './ledger.js';
 import { TeamError, Teams } from './teams.js';
 import { readSharedModel, SHARED_MODEL_FORMAT } from './shared-model.js';
+import { flowDependencies, readSharedFlow, SHARED_FLOW_FORMAT } from './shared-flow.js';
 
 export const RESOURCE_KINDS = ['model', 'mcp', 'flow', 'chat', 'execution'] as const;
 export type ResourceKind = typeof RESOURCE_KINDS[number];
@@ -50,7 +51,7 @@ export class TeamResources {
     return name;
   }
 
-  private content(text: string, kind: string, requiredFormat?: string): { content: string; digest: string; bytes: number; format: string } {
+  private content(text: string, kind: string, teamId: string, requiredFormat?: string): { content: string; digest: string; bytes: number; format: string } {
     if (Buffer.byteLength(text) > RESOURCE_BYTES) throw new TeamError(413, 'A shared resource is limited to 1 MiB.');
     let value: unknown;
     try { value = JSON.parse(text); } catch { throw new TeamError(400, 'The resource must be valid JSON. Your saved version is unchanged.'); }
@@ -74,6 +75,20 @@ export class TeamResources {
       if (kind !== 'model') throw new TeamError(400, 'A shared model document must use the model kind.');
       try { value = readSharedModel(value); } catch { throw new TeamError(400, 'Invalid shared model configuration. Credentials and private bindings cannot be shared.'); }
       format = SHARED_MODEL_FORMAT;
+    } else if (requiredFormat === SHARED_FLOW_FORMAT || (requiredFormat === undefined && (value as { format?: unknown }).format === SHARED_FLOW_FORMAT)) {
+      if (kind !== 'flow') throw new TeamError(400, 'A shared Flow document must use the flow kind.');
+      try {
+        const document = readSharedFlow(value, teamId);
+        for (const dependency of flowDependencies(document)) {
+          const resourceId = dependency.value.split(':')[2];
+          if (!this.ledger.db.prepare('SELECT 1 FROM team_resources WHERE id=? AND team_id=? AND kind=? AND format=?')
+            .get(resourceId, teamId, dependency.kind, `flujo.${dependency.kind}.v1`)) {
+            throw new Error('Dependency unavailable.');
+          }
+        }
+        value = document;
+      } catch { throw new TeamError(400, 'Invalid shared Flow. Choose existing typed dependencies from this team and remove private bindings or credentials.'); }
+      format = SHARED_FLOW_FORMAT;
     } else if (requiredFormat !== undefined && requiredFormat !== 'json') throw new TeamError(409, 'Unsupported resource format.');
     const content = JSON.stringify(value, null, 2);
     const bytes = Buffer.byteLength(content);
@@ -141,7 +156,7 @@ export class TeamResources {
 
   create(session: Session, teamId: string, kind: string, nameInput: string, text: string): string {
     return this.teams.withMember(session, teamId, () => {
-      const name = this.name(nameInput); const content = this.content(text, kind);
+      const name = this.name(nameInput); const content = this.content(text, kind, teamId);
       if (!(RESOURCE_KINDS as readonly string[]).includes(kind)) throw new TeamError(400, 'Unsupported resource kind.');
       if (Number(this.ledger.db.prepare('SELECT count(*) AS n FROM team_resources WHERE team_id=?').get(teamId)?.n) >= 1000) {
         throw new TeamError(409, 'This team has reached 1,000 shared resources.');
@@ -194,7 +209,7 @@ export class TeamResources {
     return this.teams.withMember(session, teamId, memberGeneration => {
       const row = this.row(teamId, resourceId); this.held(row, session, memberGeneration, token, fence);
       if (row.version !== version) throw new TeamError(409, 'This resource changed. Keep your draft and reload its current version.');
-      const name = this.name(nameInput); const content = this.content(text, row.kind, row.format);
+      const name = this.name(nameInput); const content = this.content(text, row.kind, teamId, row.format);
       this.capacity(teamId, content.bytes, resourceId);
       const next = row.version + 1;
       this.ledger.db.prepare(`INSERT INTO team_resource_versions(resource_id,version,actor_id,time,name,content,digest,bytes)
@@ -210,7 +225,7 @@ export class TeamResources {
       if (row.version !== version) throw new TeamError(409, 'This resource changed. Reload before restoring a revision.');
       if (this.active(row)) throw new TeamError(423, 'An editor holds this resource. Release the lock before restoring a revision.');
       const prior = this.revision(row.id, restoredFrom);
-      this.content(prior.content, row.kind, row.format);
+      this.content(prior.content, row.kind, teamId, row.format);
       this.capacity(teamId, prior.bytes, row.id);
       const next = row.version + 1;
       this.ledger.db.prepare(`INSERT INTO team_resource_versions(resource_id,version,actor_id,time,name,content,digest,bytes,restored_from)

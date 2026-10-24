@@ -67,13 +67,14 @@ installed acceptance.
 **Your teams → a team → Shared documents and revision history** stores explicitly
 submitted JSON documents locally. Kind labels cover Models, MCP, Flows, Chats and
 Executions. Generic documents are passive snapshots; typed model configurations
-also have the native editing and local execution journeys below. **Shared MCP,
-Flow, Chat and Execution editors and dependency access remain incomplete.** This library does not
+also have the native editing and local execution journeys below. Typed Flows have
+the configuration editor described below. **Shared Flow execution, MCP, Chat and
+Execution editors and dependency access remain incomplete.** This library does not
 satisfy Tier 1 by itself. Generic JSON is structurally bounded, not validated
 against each native resource schema. It does not discover private resources, dereference dependency
 IDs, import keyrings, execute pasted commands, or confer runtime permissions.
 Generic document content is shared verbatim after JSON formatting, including any
-secret the submitter includes. The native model path uses a strict field allowlist;
+secret the submitter includes. The native model and Flow paths use field allowlists;
 the remaining native publication paths still need secret-safe serialization and
 explicit dependency selection before being enabled in ordinary app editors.
 
@@ -208,6 +209,33 @@ apply. Runtime model channels are capped at 64, requests at four per channel and
 any grant exists; an empty catalogue confers no execution authority. At capacity,
 execution-granted channels take priority over catalogue-only channels. Retired
 channels keep their slot until the child process is observed to exit.
+
+### Native team Flow configuration editor
+
+**Your teams → a team → Team Flows** opens `/teams/flows` in the private app.
+Members can create a graph or explicitly select one of their private Flows for
+review. The editor uses the native graph nodes, connections and connection rules.
+Only authored graph fields enter the `flujo.flow.v1` document. Import clears all
+model, MCP and subflow bindings and lists omitted fields before sharing; it does
+not mutate the private source. Flows carrying embedded execution or Persona
+authority are refused. Prompts and static content are shared literally, so the
+publisher reviews that text and confirms the destination team before publication.
+
+Dependency selectors contain only typed resources from the selected team.
+Creation, save and history restore all revalidate the dependency kind, team and
+stored format in the same transaction as the write. Private IDs, foreign team
+IDs, missing resources and generic JSON documents cannot satisfy these bindings.
+Typed format is immutable; saving a format tag into legacy JSON never promotes it.
+Publication does not grant permission to execute any dependency.
+
+Editing acquires and renews the same session-bound fenced lease as the document
+library. Revocation and conflicts preserve the in-memory graph. Draft download
+includes unfinished JSON field text; reopen the current revision and use **Load
+draft** to recover it under a fresh lease. Invalid fields block saving until
+corrected or removed. History and restore remain available in the local library.
+The graph editor does not contact providers or invoke private workspace actions.
+**Execution of shared Flows is not implemented yet.** This configuration journey
+does not complete Tier 1 or establish installed offline acceptance.
 
 ### Shared models in native model selection and execution
 

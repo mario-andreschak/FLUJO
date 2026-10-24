@@ -44,7 +44,7 @@ function page(teams: Teams, session: Session, teamId: string | null): string {
   const { team, members, events } = teams.detail(session, teamId);
   const creator = team.creatorId === session.actorId;
   return `<h1>${html(team.name)}</h1><p>${html(team.creatorId)} manages membership. All team members will have the same access to explicitly shared resources. Joining does not expose anyone’s private workspace.</p>
-    <p><a href="/teams/models?team=${team.id}">Team models</a> · <a href="/_account/resources?team=${team.id}">Shared documents and revision history</a></p>
+    <p><a href="/teams/models?team=${team.id}">Team models</a> · <a href="/teams/flows?team=${team.id}">Team Flows</a> · <a href="/_account/resources?team=${team.id}">Shared documents and revision history</a></p>
     <h2>Members and invitations</h2><ul>${members.map(member => `<li><strong>${html(member.actorId)}</strong>${member.actorId === team.creatorId ? ' · Creator' : ''} · ${member.state === 'member' ? 'Member' : 'Invited'}${member.available ? '' : ' · Account unavailable'}
       ${member.expiresAt ? `<small>Expires ${date(member.expiresAt)}</small>` : ''}
       ${creator && member.actorId !== team.creatorId ? form('remove', { ...teamFields(team), actorId: member.actorId }, `<button>${member.state === 'member' ? 'Remove member' : 'Withdraw invitation'}</button>`) : ''}</li>`).join('')}</ul>

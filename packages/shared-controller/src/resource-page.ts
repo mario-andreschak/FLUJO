@@ -143,6 +143,7 @@ export async function resourcePage(request: IncomingMessage, response: ServerRes
       if (ajax) { json(response, { ...data, history: versions }); return; }
       render(response, `<p><a href="${link(teamId)}">All shared resources</a></p><h1>${html(data.revision.name)}</h1>
         ${data.resource.format === 'flujo.model.v1' ? `<p><a href="/teams/models?team=${teamId}&resource=${resourceId}">Open model editor</a> · <a href="${link(teamId, resourceId)}&access=1">Execution permission</a></p>` : ''}
+        ${data.resource.format === 'flujo.flow.v1' ? `<p><a href="/teams/flows?team=${teamId}&resource=${resourceId}">Open Flow editor</a></p>` : ''}
         <p>${data.resource.kind} · revision ${data.revision.version} · saved by ${html(data.revision.actorId)} at ${date(data.revision.time)}</p>
         <p><a href="${link(teamId, resourceId)}&version=${data.revision.version}&download=1">Download this revision</a></p>
         ${data.editor ? `<p>${html(data.editor.actorId)} is editing until ${date(data.editor.expiresAt)}. Reload after their lock ends.</p>`

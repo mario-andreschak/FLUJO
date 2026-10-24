@@ -2,6 +2,9 @@ import type { TeamSummary } from '../../../../packages/shared-controller/src/tea
 import type { SharedResource, ResourceRevision, EditorLease } from '../../../../packages/shared-controller/src/team-resources';
 export { modelConfigurationFields, publishableModel, readSharedModel, SHARED_MODEL_FORMAT } from '../../../../packages/shared-controller/src/shared-model';
 export type { SharedModelDocument } from '../../../../packages/shared-controller/src/shared-model';
+export { flowDependencies, projectSharedFlow, readSharedFlow, setFlowDependency, sharedFlowDocumentSchema, sharedFlowDraftSchema,
+  sharedFlowNodeTypes, sharedFlowProperties, teamDependencyId, SHARED_FLOW_FORMAT } from '../../../../packages/shared-controller/src/shared-flow';
+export type { SharedFlowDocument, FlowDependency } from '../../../../packages/shared-controller/src/shared-flow';
 export type { TeamSummary, SharedResource, ResourceRevision, EditorLease };
 
 export interface TeamResourceDetail {
@@ -39,6 +42,8 @@ export const teamService = {
   acquire: (teamId: string, id: string, version: number) => request<TeamResourceEdit>(root, { action: 'edit', teamId, resourceId: id, version }),
   create: (teamId: string, name: string, content: string) => request<{ location: string }>(root,
     { action: 'create', teamId, kind: 'model', name, content, consent: 'share' }),
+  createFlow: (teamId: string, name: string, content: string) => request<{ location: string }>(root,
+    { action: 'create', teamId, kind: 'flow', name, content, consent: 'share' }),
   save: (teamId: string, id: string, lease: EditorLease, name: string, content: string) => request<{ location: string }>(root,
     { action: 'save', ...leaseFields(teamId, id, lease), version: lease.version, name, content }),
   renew: (teamId: string, id: string, lease: EditorLease) => request<{ expiresAt: number }>(root,
