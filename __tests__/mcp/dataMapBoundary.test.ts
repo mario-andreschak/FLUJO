@@ -28,12 +28,19 @@ test('own prototype-like tool parameters survive normalization and JSON serializ
   expect(Object.prototype).not.toHaveProperty('fixture');
 });
 
-test('inherited tool parameters do not cross normalization while own null/default values retain existing behavior', async () => {
+test('rejects inherited tool parameters before dispatch', async () => {
   const args = Object.create({ inheritedArgument: 'do-not-send' });
   Object.assign(args, { itemCount: null, isEnabled: undefined, records: null, plain: undefined });
   const transmitted = jest.fn(async (_params: { arguments: Record<string, unknown> }) => ({ content: [] }));
+  expect((await callTool({ callTool: transmitted } as unknown as Client, 'ordinary-fixture', 'demo', args)).success).toBe(false);
+  expect(transmitted).not.toHaveBeenCalled();
+});
+
+test('preserves own null values and omits undefined values without inventing defaults', async () => {
+  const transmitted = jest.fn(async (_params: { arguments: Record<string, unknown> }) => ({ content: [] }));
+  const args = { itemCount: null, isEnabled: undefined, records: null, plain: undefined };
   expect((await callTool({ callTool: transmitted } as unknown as Client, 'ordinary-fixture', 'demo', args)).success).toBe(true);
-  expect(transmitted.mock.calls[0][0].arguments).toEqual({ itemCount: 0, isEnabled: false, records: [], plain: '' });
+  expect(transmitted.mock.calls[0][0].arguments).toEqual({ itemCount: null, records: null });
 });
 
 test('resolved connection env and headers preserve own special names as data', async () => {

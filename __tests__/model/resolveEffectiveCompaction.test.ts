@@ -6,6 +6,17 @@ import {
 } from '@/backend/execution/flow/handlers/resolveEffectiveCompaction';
 
 describe('resolveEffectiveCompaction (issue #248)', () => {
+  it.each([2048, 32_768, 200_000, 1_050_000, 2_000_000])('fits reserve and retained context for a %i-token model', contextWindow => {
+    const settings = resolveEffectiveCompaction(undefined, { contextWindow });
+    expect(settings.bufferTokens).toBe(Math.min(50_000, Math.floor(contextWindow * 0.4)));
+    expect(settings.keepTokens).toBe(Math.min(19_000, Math.floor(contextWindow * 0.15)));
+    expect(contextWindow - settings.bufferTokens).toBeGreaterThan(settings.keepTokens);
+  });
+  it('fits persisted absolute budgets when switching to a smaller model', () => {
+    const settings = resolveEffectiveCompaction(undefined, { contextWindow: 200_000 },
+      { compactionBufferTokens: 400_000, compactionKeepTokens: 150_000 });
+    expect(settings).toMatchObject({ bufferTokens: 80_000, keepTokens: 30_000 });
+  });
   it('is enabled by default (no global flag)', () => {
     const r = resolveEffectiveCompaction();
     expect(r.enabled).toBe(true);

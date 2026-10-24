@@ -123,7 +123,10 @@ const unsubscribe = executionEventBus.subscribeGlobal(({ event }) => {
   else record(`event:${event.type}`);
 });
 const { runFlow } = fromSource('backend/execution/flow/runFlow.ts');
-const { loadItem } = fromSource('utils/storage/backend.ts');
+const { loadItem, saveItem } = fromSource('utils/storage/backend.ts');
+const { StorageKey } = fromSource('shared/types/storage/index.ts');
+if (phase === 'pause') await saveItem(StorageKey.MODELS, [{ id: 'restart-model', name: 'restart-fixture',
+  provider: 'openai', adapter: 'openai', ApiKey: '', baseUrl }]);
 const { mcpService } = fromSource('backend/services/mcp/index.ts');
 const input = { conversationId, flowDefinition: definition, source: 'api', mode: 'conversation',
   executionAuthority: { signal: new AbortController().signal, assertCurrent: async () => record('authority:current') } };

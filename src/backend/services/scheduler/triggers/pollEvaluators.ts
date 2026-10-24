@@ -90,12 +90,14 @@ export function hashResult(value: unknown): string {
  */
 export async function commitPendingAfterOutcome(params: {
   status: RunRecordStatus;
+  /** A valid negative AI verdict consumed this change without running work. */
+  conditionRejected?: boolean;
   pendingState: Partial<PlannedExecutionState>;
   priorFailures: number;
   saveState: (patch: Partial<PlannedExecutionState>) => Promise<void>;
 }): Promise<{ giveUpError: string | null }> {
   const { status, pendingState, priorFailures, saveState } = params;
-  if (status === 'completed') {
+  if (status === 'completed' || params.conditionRejected === true) {
     await saveState({ ...pendingState, ...(priorFailures > 0 ? { pendingFailures: 0 } : {}) });
     return { giveUpError: null };
   }

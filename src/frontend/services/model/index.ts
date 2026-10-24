@@ -414,6 +414,7 @@ class ModelService {
     searchTerm?: string,
     apiKey?: string,
     profileId?: string,
+    throwOnError = false,
   ): Promise<NormalizedModel[]> {
     try {
       log.debug('Fetching provider models', {
@@ -449,6 +450,7 @@ class ModelService {
       return response.models || [];
     } catch (error) {
       log.error('Failed to fetch provider models', { baseUrl, searchTerm, error });
+        if (throwOnError) throw error;
       return [];
     }
   }

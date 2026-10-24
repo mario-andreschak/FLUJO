@@ -226,3 +226,17 @@ next-env.d.ts
 /scripts/generated-smoke-owner-issuer.cjs
 /scripts/generated-smoke-owner-issuer.json
 /packages/shared-controller/dist/
+
+# Generated run records belong outside the public source checkout.
+**/evidence/
+/docs/audits/
+/docs/plans/
+/docs/operations/*handover*.md
+/docs/start-here/editorial-evidence.md
+/docs/performance/*.json
+/docs/performance/*.json.gz
+/githubpages/film/validation.json
+/githubpages/film/tools/
+/githubpages/short/studio/
+/githubpages/short/tools/
+/githubpages/short/voiceover/

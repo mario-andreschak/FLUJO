@@ -32,7 +32,7 @@ export interface HarnessRuntimeSnapshot {
   invocation: 'flow' | 'persona-activity' | 'persona-behavior';
   evaluationFlow?: Flow;
   personaCoreAppRefs?: string[];
-  behaviorToolRegistry?: import('@/backend/execution/flow/handlers/behaviorToolInvocation').BehaviorToolRegistry;
+  behaviorToolRegistry?: import('./execution/behaviorTools').BehaviorToolRegistry;
   authoredFlow?: { flowRef: string; contentHash: string; updatedAt?: number };
   maxModelCallsPerProbe: number;
   policyHash?: string;
@@ -73,7 +73,7 @@ export interface HarnessObservation {
   tools: HarnessToolReplay[];
   consumedBy?: string;
   messages?: import('@/shared/types/chat').FlujoChatMessage[];
-  executionInputs?: Pick<import('@/backend/execution/flow/runFlow').FlowRunInput, 'variables' | 'mcpAppContexts'>;
+  executionInputs?: import('./execution/flowInputs').FlowReplayInputs;
   invocation?: HarnessRuntimeSnapshot['invocation'];
   /** This turn's invocation, not the conversation's immutable creation origin. */
   source?: import('./execution/invocation').FlowInvocationSource;

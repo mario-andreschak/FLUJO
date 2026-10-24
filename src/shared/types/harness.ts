@@ -137,7 +137,7 @@ export interface HarnessRun {
   modelCallsStarted?: number;
   modelCallsCompleted?: number;
   caseMessages?: Record<string, import('@/shared/types/chat').FlujoChatMessage[]>;
-  caseInputs?: Record<string, Pick<import('@/backend/execution/flow/runFlow').FlowRunInput, 'variables' | 'mcpAppContexts'>>;
+  caseInputs?: Record<string, import('./execution/flowInputs').FlowReplayInputs>;
   /** Read-only resource responses frozen by the first probe and reused by every candidate. */
   resourceSnapshots?: Record<string, unknown>;
 }

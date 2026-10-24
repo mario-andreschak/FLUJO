@@ -229,7 +229,7 @@ agent, external reuse, human/linguistic/screen-reader review, upgrade or A-.
 The restored inspector and public-form equipment below retain the distinct
 #617/#625 scopes and #654 startup isolation. The #680 real-FIFO control retains
 its own source and execution scope. Historical #693 counts and failures are
-kept separately in the [audit record](../../docs/audits/scorecard-563/connection-input-labels.md).
+kept separately in the audit record.
 
 ## Inspector, App, locale and public-form checks
 

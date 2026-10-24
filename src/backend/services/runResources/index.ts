@@ -265,6 +265,14 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
   });
 }
 
+function isDurableTextSummary(entry: RunResourceEntry): boolean {
+  if (typeof entry.spillQuotaExempt === 'boolean') return entry.spillQuotaExempt;
+  // Older summaries predate the explicit classification. Structured payloads
+  // written now always record false, regardless of their supplied MIME label.
+  return entry.producedBy.source === 'compaction-artifact' && entry.kind === 'text'
+    && entry.encoding === 'utf8' && (!entry.mimeType || /^text\/(plain|markdown)(?:;|$)/i.test(entry.mimeType));
+}
+
 /** The same quota/overwrite transaction serves ordinary writes and streamed copies. */
 async function storePreparedRunResource(
   input: WriteRunResourceInput,
@@ -272,8 +280,10 @@ async function storePreparedRunResource(
   payload: { size: number; encoding: 'utf8' | 'base64'; persist?: (filename: string) => Promise<string> },
 ): Promise<WriteRunResourceResult> {
   const { size, encoding } = payload;
-
-  if (size > settings.maxResourceBytes) {
+  const durableMemory = input.producedBy.source === 'compaction-artifact' && input.kind === 'text'
+    && encoding === 'utf8' && input.data !== undefined && 'text' in input.data
+    && (!input.mimeType || /^text\/(plain|markdown)(?:;|$)/i.test(input.mimeType));
+  if (!durableMemory && size > settings.maxResourceBytes) {
     log.warn(`Run-resource write skipped (size ${size} > cap ${settings.maxResourceBytes})`, {
       conversationId: input.conversationId, name: input.name, kind: input.kind,
     });
@@ -293,8 +303,8 @@ async function storePreparedRunResource(
     // captureVariable last-write-wins semantics.
     const replaced = input.name ? entries.find(e => e.name === input.name) : undefined;
 
-    const usedBytes = entries.reduce((sum, e) => sum + (e === replaced ? 0 : e.size), 0);
-    if (usedBytes + size > settings.maxConversationBytes) {
+    const usedBytes = entries.reduce((sum, e) => sum + (e === replaced || isDurableTextSummary(e) ? 0 : e.size), 0);
+    if (!durableMemory && usedBytes + size > settings.maxConversationBytes) {
       log.warn(`Run-resource write skipped (conversation budget ${usedBytes}+${size} > ${settings.maxConversationBytes})`, {
         conversationId: input.conversationId, name: input.name, kind: input.kind,
       });
@@ -316,6 +326,7 @@ async function storePreparedRunResource(
       sha256,
       kind: input.kind,
       encoding,
+      spillQuotaExempt: durableMemory,
       createdAt: Date.now(),
       producedBy: input.producedBy,
       origin: input.origin,
@@ -736,8 +747,18 @@ export async function sweepOldRunResources(now: number = Date.now()): Promise<{ 
   for (const conversationId of conversationIds) {
     const toUnlink: RunResourceEntry[] = [];
     await mutateIndex<void>(conversationId, async (entries) => {
+      // A range may reference older captured tool payloads as well as child
+      // ranges. Keep the conversation's resource graph until its conversation
+      // is explicitly deleted; time alone cannot invalidate durable memory.
+      if (entries.some(entry => entry.producedBy.source === 'compaction-artifact')) {
+        return { next: entries, result: undefined };
+      }
       const keep = entries.filter((e) => {
-        const expired = e.createdAt < cutoff;
+        // These are durable conversation memory, not disposable tool spills.
+        // Removing a leaf would leave a valid persisted summary pointing at a
+        // missing original after restart. Conversation deletion owns cleanup.
+        const durableMemory = e.producedBy.source === 'compaction-artifact' || e.producedBy.source === 'image-input';
+        const expired = !durableMemory && e.createdAt < cutoff;
         if (expired) toUnlink.push(e);
         return !expired;
       });

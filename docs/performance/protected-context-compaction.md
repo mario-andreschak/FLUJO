@@ -6,8 +6,8 @@ disposable summary-cache portion of
 [#569](https://github.com/mario-andreschak/FLUJO/issues/569).
 
 Canonical conversations remain authoritative. Summaries and emergency refits
-only change provider projections. Old user corrections remain verbatim in their
-original order. System and developer instructions are retained. When protected
+only change provider projections. Retained user instructions and corrections
+keep their original wording, roles and order. System and developer instructions are retained. When protected
 instructions, unresolved calls or unrecoverable observations cannot fit, the
 request fails with `context_budget_exceeded`; it does not shorten the contract.
 
@@ -23,6 +23,19 @@ absolute-model override taking precedence. The trigger estimates the current
 provider projection and tool schemas, rather than a previous prompt count.
 These remain conservative estimates, not measured provider token counts.
 Settings-read failure disables optional summarization and visual compaction.
+
+At large history sizes, summaries form a persistent hierarchy of bounded original
+message ranges. Parent nodes summarize child summaries and retain their exact
+source links. The persisted frontier extends with new ranges after restart;
+an unchanged verified prefix is reused. Summarizer calls retry malformed or empty
+results up to three times. No failed partial tree replaces canonical history.
+
+When retaining every old user turn would exceed 35% of the input budget, the
+summarizer selects exact original user message IDs for standing instructions,
+restrictions, corrections and unfinished requests. The runtime validates those
+IDs against the source and retains the selected originals verbatim. Other old
+user turns remain in the immutable archive. Selection quality is model-dependent;
+this is not a proof that every applicable instruction was selected.
 
 Summaries must contain the five anchored sections and reduce the restored wire.
 Provider length/content-filter/tool termination is rejected. Tool observations
@@ -54,12 +67,29 @@ Reuse reconstructs this block from the actual projected source and compares
 its complete text, values, provenance and ordering, in addition to the existing
 digest/configuration checks. Missing or changed evidence regenerates the
 summary. Generated narrative cannot supply its own recorded-source block.
-`summary-v5-source-observations` rejects older cached policies. The complete
+`summary-v8-bounded-source` rejects older cached policies. The complete
 restored projection must still shrink, with the existing persistence,
 source-change and context-budget refusal paths intact. This conservative
 lexical selection is not a general semantic field extractor: arbitrary unquoted
 words, cross-line relationships and correctness of narrative prose remain open
 acceptance criteria. It does not establish universal provider fidelity.
+
+`read_resource.search_text` traverses the immutable summary tree, matching
+case-sensitive original text or an exact source message ID. It verifies payload
+hashes and conversation ownership, returns original roles and offsets, and
+paginates bounded results. A current request containing a literal ID, path or
+quoted phrase also receives bounded automatic excerpts from the admitted archived
+prefix. This reduces reliance on a model deciding to search; it does not implement
+general semantic retrieval or make lossy summaries sufficient for exact recall.
+
+Native image preparation is independent of optional visual compaction. Large
+attachments become budgeted image overviews with durable originals and a crop
+reader. Older views can be paged out after preservation when multiple image
+encoders cannot fit; the newest requested view remains. Crop responses retain
+the original URI, hash and coordinates without repeating storage metadata. Image
+and text estimates remain approximate across providers, so acceptance compares
+reported usage as well as visual answers. A simulated small advertised window
+does not establish support for an actual model with that native window.
 
 Stored-resource `read_resource` calls default to at most 50,000 UTF-16 code units
 and accept `start_char` and `max_chars` (maximum 200,000). `range.nextChar` is the
@@ -103,8 +133,7 @@ whole-flow memory or latency. The old source fails the focused allocation
 envelope; the corrected source passes. This negative control is an allocation
 assertion failure, not an observed OOM. Three repeated child batches, 128 mixed
 JSON comparisons and the existing compaction checks preserve saved hashes,
-source content and metadata invalidation. The [frozen source evidence](
-compaction-digest-2026-10-15.json) records inputs and validation scope.
+source content and metadata invalidation.
 The emitted production digest factory also passes the same hash and allocation
 envelope with its actual emitted Node crypto external.
 
@@ -127,7 +156,7 @@ serialization keep their existing complete-payload behavior.
 
 The controlled Windows/Node 22.23.3 preparation check uses one flattened tool
 message with about 25.2 million UTF-16 code units (the exact size and fingerprint
-are in the [preparation evidence](compaction-preparation-2026-10-15.json)). Under the
+are in the preparation evidence). Under the
 same 192 MiB old-space budget, the previous token/URI paths each allocate about
 48 MiB of extra heap; the corrected paths each remain below 0.7 MiB across three
 rounds. The previous URI path retains about 48 MiB after collection; corrected
@@ -162,7 +191,7 @@ JSON string values, with an example distinguishing a Windows path from its JSON
 escape spelling. It also asks to retain JSON value types. These are model
 instructions; deterministic exact-field validation remains unfinished in #1091.
 
-The [frozen results](compaction-fidelity-2026-10-15.json) compare the actual built
+The frozen results compare the actual built
 Windows application on main `ae263f4c` with this prompt change. Both runs use the
 production OpenRouter Responses route, the explicit
 `nvidia/nemotron-3-super-120b-a12b:free` model and identical source after the first
@@ -202,7 +231,7 @@ cost. No full suite, remote workflow, container or release check is dispatched.
 Native sessions/signatures, visual benefit, real side-effect replay, original
 #520 workload confirmation and the remaining exact-state criteria stay open.
 
-The [bounded JSON observation results](compaction-structured-observations-2026-10-15.json)
+The bounded JSON observation results
 retain the prompt-only candidate above as the existing main `f52c8f08` baseline.
 The complete first summary request, including its instructions and fixed Free
 model, is identical. Retaining the original JSON literals alongside the narrative
@@ -225,7 +254,7 @@ in #1091.
 
 ## Focused tool-action recovery — October 15, 2026
 
-The [frozen result](compaction-actions-2026-10-15.json) qualifies this controlled
+The frozen result qualifies this controlled
 local-write scenario on the unchanged `f02f18d8` application source. Ten reviews
 retain both exact generated receipts, with two physical writes, two commit
 invocations, two reconciliation reads and zero duplicates. The agent stops after
@@ -239,7 +268,7 @@ report $0, with no missing reported costs. The live journey takes 682.105 second
 the inspected non-container application build takes 327.312 seconds, measured
 separately. Local types, source lint, harness syntax/lint and the independent
 ledger check pass. The existing 50 unchanged runtime regressions are reused.
-The [complete provider trace](compaction-actions-provider-trace-2026-10-15.json.gz)
+The complete provider trace
 is gzip-compressed UTF-8 JSON; its compressed/uncompressed SHA-256 values and
 per-call request/response digests are in the result. It contains the actual
 requests and replies, without provider authorization headers.
@@ -309,7 +338,7 @@ changing canonical history. These tests use an injected narrative and establish
 local projection behavior; live interruption with unresolved tools, arbitrary
 concurrency and crash-midcommit recovery remain open acceptance work.
 
-The [frozen parallel result](compaction-parallel-actions-2026-10-15.json) passes
+The frozen parallel result passes
 ten exact-receipt reviews with two commit invocations, two physical writes and
 zero duplicate writes. Both five/ten checkpoints pass, all three application
 processes close, canonical history and tool pairing remain intact, and every
@@ -319,7 +348,7 @@ and finish in reverse authored order.
 The live journey takes 536.757 seconds, measured separately from the
 333.584-second application build. All 24 approved Free requests (11 summaries
 and 13 continuations) report $0 with no missing costs. The
-[complete parallel provider trace](compaction-parallel-actions-provider-trace-2026-10-15.json.gz)
+complete parallel provider trace
 contains actual requests/replies; compressed and uncompressed hashes are in the
 result. Local typecheck, source/touched lint, 29 focused cases and independent
 MCP concurrency/duplicate instrumentation pass. This scoped result extends the
@@ -357,7 +386,7 @@ canonical history and complete hash-verified source archives. The private
 ledger is checked independently for exactly two commit invocations and rows
 per scenario. A further app restart follows checkpoint five.
 
-The [frozen recovery result](compaction-interruption-recovery-2026-10-15.json)
+The frozen recovery result
 passes 10/10 exact receipt reviews across both scenarios, with four
 physical writes, four commit invocations and zero duplicates. All 6 application
 processes close. The actual built OpenRouter Responses route makes
@@ -366,7 +395,7 @@ reporting USD 0 with no missing costs. The live journeys take
 866.559 seconds, measured separately from the
 329.088-second non-container build.
 
-The [complete recovery trace](compaction-interruption-provider-trace-2026-10-15.json.gz)
+The complete recovery trace
 includes actual provider requests/replies, durable pre-interruption events,
 canonical snapshots and recovery receipts. Both compressed and uncompressed
 hashes are recorded. Two real-SDK regressions verify held fsynced writes
@@ -393,7 +422,7 @@ build and accepted runtime; the harness and complete trace are byte-identical.
 
 ### Concurrent edits and persistence-failure recovery
 
-The [frozen persistence result](compaction-persistence-recovery-2026-10-15.json)
+The frozen persistence result
 extends the existing #1091 acceptance through the built application's normal
 conversation and debugger routes. An edit attempted while a real summary is
 in flight returns 409 without changing history. Attaching the debugger reaches
@@ -428,7 +457,7 @@ the owner removes the disposable profile and credentials through flujo-bash.
 The accepted journey takes 251.206 seconds, separately from the 331.392-second
 application build. Its 16 requests (eight summaries and eight continuations)
 report USD 0 with no missing costs. The
-[complete provider trace](compaction-persistence-provider-trace-2026-10-15.json.gz)
+complete provider trace
 also retains the first setup attempt: its observation stayed in the recent tail,
 so compaction did not run and the pause assertion failed. Adding a bulky recent
 observation moves the original observation into the summarizable prefix while
@@ -475,7 +504,7 @@ exact-field validation. Native sessions/signatures, every-transform guarantees,
 experimental visual benefit and release acceptance retain their existing scope
 in #1091.
 
-The [frozen reference result](compaction-reference-fidelity-2026-10-15.json)
+The frozen reference result
 retains the original wrong-description reply and the wording-only candidate's
 round-four stale receipt and task-state contamination. After separating controls
 from source turns and naming current values explicitly, ten review rounds on the explicit
@@ -501,11 +530,11 @@ application process closes. The accepted run has 9 persisted summaries and
 1 complete-canonical fallbacks; the earlier captured fenced-summary
 fallback independently preserves all 20 source messages and the previous durable cache. Separate failed-candidate timings and complete
 requests/replies, source payloads and canonical snapshots are retained in the
-[compressed trace](compaction-reference-provider-trace-2026-10-15.json.gz).
+compressed trace.
 No full suite, remote CI, container or release check was dispatched. This remains
 a stochastic controlled result; #1091's broader criteria remain open.
 
-The subsequent [v5 source-observation result](compaction-source-observations-2026-10-15.json)
+The subsequent v5 source-observation result
 retests the original unhinted receipt question on the same explicit Super Free
 model as that retained failure. Ten successive review rounds pass with ten
 persisted summaries, nine value changes, ten verified exact defining lines and
@@ -521,7 +550,7 @@ Twelve unchanged journey-guard cases are reused with matching file hashes.
 The inspected non-container build takes 336.423 seconds and the journey takes
 464.257 seconds, measured separately. All 20 new approved OpenRouter Free calls
 report USD 0 with no missing cost fields; every owned app epoch closes. The
-[compressed trace](compaction-source-observations-provider-trace-2026-10-15.json.gz)
+compressed trace
 retains requests, replies, original source payloads and canonical snapshots.
 Arbitrary unquoted fields, cross-line relationships, narrative correctness,
 every-transform/native/session/signature/visual and release acceptance remain
@@ -547,7 +576,7 @@ to the original values, checks original no-send authority and source positions,
 and verifies archive hashes, canonical history and an application restart.
 Run through flujo-bash using the documented qualified-build, private-profile and
 explicit approved Free-provider configuration. The
-[frozen selected-field result](compaction-source-spans-2026-10-15.json) retains
+frozen selected-field result retains
 the tested configuration, timings, costs and complete compressed trace.
 
 This is still lexical source selection. It does not establish a general semantic
@@ -593,7 +622,7 @@ checks canonical preservation and a built-application restart. Introducing the
 reader may change the tool fingerprint and safely regenerate the summary; this
 does not require a cache hit or invalidate the earlier immutable source archive.
 
-The [frozen result](compaction-prose-recovery-2026-10-15.json) and its complete
+The frozen result and its complete
 compressed trace identify all requests, retries, source payloads and snapshots.
 This qualifies recovery using a supplied locator. Autonomous locator discovery,
 arbitrary narrative validation, exhaustive transform/provider coverage and the
@@ -619,7 +648,7 @@ check was dispatched.
 
 ## Ten-round generic text-transform authority acceptance
 
-The October 15 [frozen result](compaction-protected-state-2026-10-15.json) and
+The October 15 frozen result and
 complete compressed provider trace qualify ten successive rounds each of
 summaries, resource-backed result shortening and emergency omission in the
 actual built application. Each route preserves the original no-send user
@@ -678,7 +707,7 @@ The existing streamed canonical JSON digest avoids a whole-history serialized
 copy when fingerprinting the prefix. Canonical history remains available when
 this optional process-local cache is empty, including after application restart.
 
-[The frozen evidence](responses-reasoning-ownership-2026-10-15.json) records the
+The frozen evidence records the
 source tree, local typecheck/lint/non-container build, 88 focused checks and 40
 controlled HTTP cases through the production Chat route's emitted adapter
 registry and real SDKs. The 80 loopback requests cover both adapters, ordinary
@@ -733,7 +762,7 @@ conversation-owned checkpoint use a process-local cache and canonical fallback
 on restart. Ordinary Process execution now checkpoints bounded output as
 described below. This does not introduce a provider compaction endpoint.
 
-The [frozen full-output evidence](responses-output-replay-2026-10-16.json)
+The frozen full-output evidence
 records 100 focused checks, local typecheck/lint and the non-container build on
 source tree `5eee4cbf2caa95a1c2124664a5b44f3999bf7ad2`. Fifty-six emitted HTTP
 cases / 116 loopback requests verify exact windows through both SDKs and
@@ -767,7 +796,7 @@ metadata. The current conversation checkpoint takes precedence over disposable
 process-local state. Stop and superseding invocations fence late publications;
 chat rewind, graph reset and meeting exit clear the corresponding checkpoints.
 
-The [frozen persistence evidence](responses-durable-state-2026-10-16.json)
+The frozen persistence evidence
 records application source tree `b2c9f244b88ef960a0344e173a6685fda31a2c3b`,
 264 focused checks across ten suites, typecheck/lint and the inspected
 non-container build. Two restart regressions fail before repair. Twelve actual
@@ -792,7 +821,7 @@ acceptance remain open in #1091.
 
 A later deterministic edge must not answer an already completed handoff or reuse its old caller brief/session key. The runtime now captures and answers pending calls only. With none pending, it skips caller-input capture entirely, including the Signal caller-body marker. Partially completed batches still handle their pending calls.
 
-The [frozen handoff and fidelity evidence](responses-restart-fidelity-2026-10-16.json) records 80 focused runtime checks across five suites, 32 harness guards, fresh typecheck/lint and the inspected non-container build. Two initial regressions and the adjacent Signal regression fail before repair.
+The frozen handoff and fidelity evidence records 80 focused runtime checks across five suites, 32 harness guards, fresh typecheck/lint and the inspected non-container build. Two initial regressions and the adjacent Signal regression fail before repair.
 
 The six actual built-app cases use approved Claude Haiku 5.5 through OpenRouter. Each ledger fsyncs every invocation and has no deduplication. Both sequential cases replay the actual native provider output after process restart. Stop/crash cases reconcile the real committed writes after their acknowledgement is lost; the source/corrections rotate through early, middle and late positions.
 
@@ -833,7 +862,7 @@ returned output as `UNKNOWN` with its original payload in `raw`. The adapter
 restores only a recognized compaction item with an ID and nonempty opaque
 content. Malformed or unrelated unknown output remains ineligible for replay.
 
-The [frozen compatibility evidence](responses-returned-compaction-2026-10-16.json)
+The frozen compatibility evidence
 binds source, harnesses, before/after failures and local qualification. Five new
 regressions fail on the prior main. All 137 focused checks across four affected
 suites, typecheck and lint pass on the repaired application inputs.
@@ -855,7 +884,7 @@ visual benefit, installed/endurance or release acceptance. #1091 remains open.
 
 ## Genuine encrypted Responses checkpoints — October 16, 2026
 
-The [frozen live evidence](responses-genuine-encrypted-state-2026-10-16.json)
+The frozen live evidence
 adds genuine provider-encrypted reasoning to the existing checkpoint acceptance.
 The prior approved Free runs returned no encrypted items. Explicit GPT Luna
 through OpenRouter supplies nonempty opaque output; the strict relay forwards
@@ -905,7 +934,7 @@ container build, release or automation change is introduced.
 
 ## OpenRouter native compaction availability — October 16, 2026
 
-The [capability evidence](responses-compaction-capability-2026-10-16.json)
+The capability evidence
 checks the remaining genuine provider-compaction requirement before a runtime
 change. Both explicit `openrouter/free` and `openai/gpt-6-luna` requests use the
 existing OpenRouter credential in memory, without fallback, tools or an
@@ -937,9 +966,9 @@ changes; do not repeatedly infer availability from a successful ordinary reply.
 Backlog reconciliation also corrects a stale next-action note: the 15 Responses
 Stop/crash reply failures in the historical #1188 matrix were addressed by
 merged #1189/#1190/#1191. The final
-[receipt-selection evidence](recovery-receipt-selection-2026-10-16.json)
+receipt-selection evidence
 scores 40/40 exact Haiku/Luna replies. The later
-[native fallback evidence](native-fallback-replay-2026-10-16.json) records
+native fallback evidence records
 20/20 exact replies and 20/20 ordinary signed-output replay windows; forced
 canonical-fallback transitions remain regression-only. Historical failures
 stay in their original evidence and do not become current defects merely
@@ -958,7 +987,7 @@ Terra subscription reply, then FLUJO refused the compaction locally before
 dispatch. The new process-boundary regression reproduces that refusal. The
 repair admits this specific method through the existing owned transport.
 
-The [bound source, full traces, failures and limits](codex-native-compaction-2026-10-16.json)
+The bound source, full traces, failures and limits
 record ten successive genuine native compactions and eleven exact production
 adapter replies on **GPT-5.6 Terra low**, with Codex CLI/SDK **0.162.1**.
 Twenty-one fresh workers verify native `account/read = chatgpt`, cleared API-key
@@ -1012,7 +1041,7 @@ deployment or automation change is introduced.
 
 Repeated summarization could copy the runtime's source-observation and execution-receipt sections into generated narrative. Validation correctly rejected that output and retained complete history. The prompt now explicitly leaves those sections, records and archive footers to FLUJO. Existing rejection and exact-source restoration stay active.
 
-The [frozen evidence](compaction-semantic-2026-10-16.json) and [provider/source corpus](compaction-semantic-provider-trace-2026-10-16.json.gz) contain five paired ten-round matrices. Each round shares its original update and question across four treatments. Early/middle/late observations, temporal reversals, Spanish names and relationships, an original user prohibition, unsupported-date null and bounded source recovery are tested. Every inference uses a fresh emitted adapter worker. Earlier generated answers are discarded from subsequent rewrite sources. Narrative ablation is a diagnostic projection; production applies protected source restoration.
+The frozen evidence and provider/source corpus contain five paired ten-round matrices. Each round shares its original update and question across four treatments. Early/middle/late observations, temporal reversals, Spanish names and relationships, an original user prohibition, unsupported-date null and bounded source recovery are tested. Every inference uses a fresh emitted adapter worker. Earlier generated answers are discarded from subsequent rewrite sources. Narrative ablation is a diagnostic projection; production applies protected source restoration.
 
 Cells show exact task answers; parentheses count genuine model summaries, excluding canonical fallback. Masking performs ten mechanical transforms per matrix.
 
@@ -1046,8 +1075,8 @@ recovery preserves active borrowers and pinned Apps, reuses replacement clients,
 rejects stale catalogs and permits retry after busy work finishes. Explicit owner
 reconnect and existing security gates retain their behavior.
 
-The [receipt](external-tool-compaction-2026-10-17.json) and
-[complete provider/canonical/source corpus](external-tool-compaction-2026-10-17-trace.json.gz)
+The receipt and
+complete provider/canonical/source corpus
 bind each attempt to actual source trees, frozen equipment, requests, responses,
 summary artifacts, immutable archives and every ledger invocation. Three cold
 HTTP SDK repetitions through the actual emitted MCP service complete six fsynced

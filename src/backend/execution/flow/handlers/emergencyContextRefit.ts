@@ -120,14 +120,20 @@ function omittedReceipts(
   resourceMarkers?: Map<string, ToolResourceMarker>,
 ): string[] {
   const receipts: string[] = [];
+  const resultsByCall = new Map<string, OpenAI.ChatCompletionToolMessageParam[]>();
+  for (const index of omitted) {
+    const result = messages[index];
+    if (result.role !== 'tool') continue;
+    const results = resultsByCall.get(result.tool_call_id) ?? [];
+    results.push(result); resultsByCall.set(result.tool_call_id, results);
+  }
   for (const index of omitted) {
     const message = messages[index];
     if (message.role !== 'assistant') continue;
     for (const call of message.tool_calls ?? []) {
       const tool = call.type === 'function' ? call.function.name : call.custom.name;
       const args = call.type === 'function' ? call.function.arguments : call.custom.input;
-      const results = messages.filter((result, resultIndex) => omitted.has(resultIndex)
-        && result.role === 'tool' && result.tool_call_id === call.id);
+      const results = resultsByCall.get(call.id) ?? [];
       const argsEntry = resourceMarkers?.get(call.id)?.args;
       const argsResource = argsEntry?.producedBy?.toolCallId === call.id ? argsEntry.uri : undefined;
       receipts.push(JSON.stringify({ call_id: call.id, tool, state: 'result-observed',
@@ -230,8 +236,12 @@ export function emergencyRefitMessages(
   const chunks = candidatesFor(messages, Math.max(2, Math.floor(options.keepRecentMessages ?? 6)), options.resourceMarkers);
   const omitted = new Set<number>();
   let fitted = messages.slice();
-  for (const chunk of chunks) {
-    chunk.indexes.forEach(index => omitted.add(index));
+  // Re-measuring the entire history after EACH removed message was quadratic
+  // and could freeze a 200,000-message run for minutes. Exponential batches
+  // bound full-wire measurements logarithmically; all protected units stay.
+  for (let offset = 0, batch = 1; offset < chunks.length; batch *= 2) {
+    const end = Math.min(chunks.length, offset + batch);
+    for (; offset < end; offset++) chunks[offset].indexes.forEach(index => omitted.add(index));
     fitted = materialize(messages, omitted, options.resourceMarkers);
     if (options.measure(fitted) <= target) break;
   }

@@ -56,7 +56,7 @@ describe('ThemeSettings', () => {
       </ThemeProvider>,
     );
 
-    const landscape = screen.getByRole('checkbox', { name: 'Animated landscape' });
+    const landscape = screen.getByRole('switch', { name: 'Animated landscape' });
     expect(landscape).toBeChecked();
 
     fireEvent.click(landscape);

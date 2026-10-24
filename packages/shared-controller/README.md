@@ -229,6 +229,12 @@ discards partial shared results while retaining private choices and returning an
 explicit shared-unavailable flag. Guided selection preserves existing bindings
 on failure and can refresh without discarding the unsaved flow. Validation treats
 an incomplete catalogue as unavailable rather than calling those bindings deleted.
+Quick Chat construction, server-side Flow validation and Flow/MCP authoring
+discovery use this same catalogue. An explicit private-model selection remains
+usable during a team-catalogue outage; alias-based selection waits for complete
+discovery to avoid silently selecting a same-named private model. The public
+`/v1/models` endpoint lists shared models as `model-team-model:<team>:<resource>`
+and exposes only identifiers, with a header indicating unavailable team discovery.
 
 Before executing a Process/Chat model, catalogue admission resolves its shared
 reference and captures the detached configuration and permission generation. It

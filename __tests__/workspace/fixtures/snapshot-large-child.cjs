@@ -46,12 +46,14 @@ const { tmpdir } = require('node:os');
     await fsp.mkdir(source, { recursive: true });
     const expected = [];
     let state = 0x12345678;
+    // Fixture generation must not add 420 MiB of disposable buffer churn to
+    // the snapshot memory measurement. Each awaited write consumes this chunk.
+    const chunk = Buffer.alloc(64 * 1024);
     for (let member = 0; member < 3; member++) {
       const handle = await fsp.open(path.join(source, `${member}.bin`), 'wx', 0o600);
       const hash = createHash('sha256');
       try {
         for (let size = 0; size < 140 * 1024 * 1024; size += 64 * 1024) {
-          const chunk = Buffer.alloc(64 * 1024);
           for (let offset = 0; offset < chunk.length; offset += 4) {
             state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
             chunk.writeUInt32LE(state >>> 0, offset);

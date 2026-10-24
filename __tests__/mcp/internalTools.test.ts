@@ -14,11 +14,12 @@ jest.mock('@/backend/services/flow', () => ({
     revertFlow: jest.fn(),
   },
 }));
-jest.mock('@/backend/services/model', () => ({
-  modelService: {
-    loadModels: jest.fn(),
-  },
-}));
+jest.mock('@/backend/services/model', () => {
+  const loadModels = jest.fn();
+  return { modelService: { loadModels,
+    listModels: async () => ({ success: true, models: await loadModels() }),
+  } };
+});
 // create_ticket_for_human writes through the ticket service (#379); stub it so
 // the dispatch contract is pinned without touching the tickets collection.
 jest.mock('@/backend/services/ticket', () => ({
@@ -228,7 +229,8 @@ describe('internalToolDefinitions', () => {
     expect(listTools.length).toBeGreaterThan(0);
     for (const tool of listTools) {
       expect(tool.inputSchema).toEqual(expect.objectContaining({ additionalProperties: false }));
-      if (tool.name !== 'list_flow_building_blocks') {
+      // These two catalogs return named groups, rather than a flat paged list.
+      if (!['list_flow_building_blocks', 'list_harness_targets'].includes(tool.name)) {
         expect(tool.inputSchema.properties).toEqual(expect.objectContaining({
           query: expect.any(Object),
           limit: expect.objectContaining({ maximum: 200 }),

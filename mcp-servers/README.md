@@ -2,7 +2,7 @@
 
 This workspace contains the stdio MCP processes managed by FLUJO:
 
-All four public packages require Node.js `^22.19.0 || ^24.2.0`, matching the
+All four public packages require Node.js `^22.23.4 || ^24.22.1`, matching the
 app's [runtime compatibility policy](../docs/operations/windows-native-runtime-profile.md).
 Use a current patched 22.x or 24.x release. The binary checks its runtime before
 dependency initialization; standalone builds embed the same preflight files.

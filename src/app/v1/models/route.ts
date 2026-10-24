@@ -3,6 +3,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextResponse } from 'next/server';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
+import { isTeamModel } from '@/shared/types/model/team';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/v1/models/route');
@@ -38,11 +39,15 @@ async function GET_handler(_request: Request) {
     // configured models. See ModelService.generateChatCompletion for the
     // matching resolution logic on /v1/chat/completions.
     let modelEntries: { id: string; object: string }[] = [];
+    let sharedModelsUnavailable = false;
     try {
-      const models = await modelService.loadModels();
+      const catalogue = await modelService.listModels();
+      if (!catalogue.success || !catalogue.models) throw new Error('Model catalogue unavailable.');
+      const models = catalogue.models;
+      sharedModelsUnavailable = Boolean(catalogue.sharedModelsUnavailable);
       const seen = new Set<string>();
       for (const m of models) {
-        const identifier = (m.fallbackPolicy ? m.name : m.displayName?.trim() || m.name || '').trim();
+        const identifier = (isTeamModel(m) ? m.id : m.fallbackPolicy ? m.name : m.displayName?.trim() || m.name || '').trim();
         if (!identifier) continue;
         const id = m.fallbackPolicy ? identifier : `model-${identifier}`;
         // Dedupe (possible when displayName-less models share a technical name).
@@ -55,6 +60,7 @@ async function GET_handler(_request: Request) {
       // Model storage failure must not break flow listing — degrade gracefully.
       log.error('Failed to load configured models for models endpoint; returning flows only', modelError);
       modelEntries = [];
+      sharedModelsUnavailable = true;
     }
 
     // Return the models in the OpenAI format
@@ -65,7 +71,7 @@ async function GET_handler(_request: Request) {
     return NextResponse.json({
       object: 'list',
       data: [...flowEntries, ...modelEntries]
-    });
+    }, { headers: { 'Cache-Control': 'no-store', 'X-Flujo-Shared-Models': sharedModelsUnavailable ? 'unavailable' : 'available' } });
   } catch (error) {
     log.error('Error fetching models', error);
     return NextResponse.json(

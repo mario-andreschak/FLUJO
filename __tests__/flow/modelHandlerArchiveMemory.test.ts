@@ -4,11 +4,13 @@ import type { FileHandle } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import sharp from 'sharp';
 import type OpenAI from 'openai';
 import type { Model } from '@/shared/types/model';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
+import { OpenAiResponsesAdapter } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import { createOpenAIClient } from '@/backend/services/model/openaiClient';
 import { cancelAllToolCalls, listInFlightToolCalls } from '@/backend/execution/flow/toolCancelRegistry';
 
@@ -28,19 +30,28 @@ jest.mock('@/backend/services/model', () => ({ modelService: {
   resolveAndDecryptApiKey: async () => 'offline-not-a-secret',
 } }));
 jest.mock('@/backend/services/model/adapters', () => ({
-  getCompletionAdapter: () => ({ createCompletion: (input: CompletionInput) => new LocalAdapter().createCompletion(input) }),
+  getCompletionAdapter: () => ({ createCompletion: (input: CompletionInput) => responsesMode
+    ? new OpenAiResponsesAdapter().createCompletion(input) : new LocalAdapter().createCompletion(input),
+    createStreamCompletion: (input: CompletionInput) => responsesMode
+      ? new OpenAiResponsesAdapter().createStreamCompletion(input) : new LocalAdapter().createStreamCompletion(input) }),
 }));
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
-import { _setModelTurnArchiveDirForTests, archiveModelDispatch, readModelTurnSnapshot, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
+import { COMPACTION_SUMMARY_SECTIONS } from '@/backend/execution/flow/handlers/summarizingCompaction';
+import { _setModelTurnArchiveDirForTests, archiveModelDispatch, readModelTurnSnapshot, readModelTurnSnapshotResponse, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
 import { getArchiveWritePressure, MODEL_TURN_ARCHIVE_WRITE_LIMITS, withArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 
 // One application observation is one actual HTTP request in this offline fixture.
 // This does not qualify the ordinary SDK's internal retry profile.
 let archiveMetadata: Record<string, unknown> | undefined;
 let sdkRequestObserved: (() => void) | undefined;
+let responsesMode: 'recover' | 'refuse' | 'partial' | 'unavailable' | undefined;
+let transcriptRevisions = 0;
 class LocalAdapter extends OpenAiAdapter {
   async createCompletion(input: CompletionInput) {
+    for (let revision = 0; revision < transcriptRevisions; revision++) {
+      input.onTranscriptMessage?.({ id: 'same-streamed-message', timestamp: revision, role: 'assistant', content: 'x'.repeat(250_000) });
+    }
     return super.createCompletion({ ...input, onSdkRequest: snapshot => {
       sdkRequestObserved?.();
       return input.onSdkRequest?.({
@@ -81,6 +92,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
   let requests: unknown[];
   let bad400: boolean;
   let fixtureUncertain: boolean;
+  let summarizeHistory: boolean;
   const message: FlujoChatMessage = { id: 'original', role: 'user', timestamp: 1, content: 'retained history' };
 
   beforeEach(async () => {
@@ -96,20 +108,51 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     requests = [];
     bad400 = false;
     fixtureUncertain = false;
+    summarizeHistory = false;
     writeOpenControl = undefined;
     archiveMetadata = undefined;
     sdkRequestObserved = undefined;
+    responsesMode = undefined;
+    transcriptRevisions = 0;
     server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       requests.push(JSON.parse(Buffer.concat(chunks).toString()));
       response.setHeader('Content-Type', 'application/json');
+      if (responsesMode) {
+        const failed = responsesMode === 'refuse' || responsesMode === 'unavailable' || requests.length === 1;
+        const envelope = { id: 'response-' + requests.length, object: 'response',
+          status: failed ? 'failed' : 'completed', model: 'offline-model',
+          error: failed ? { code: responsesMode === 'refuse' ? 'invalid_prompt' : 'server_error', message: 'Provider did not complete the response' } : null,
+          output: failed ? [] : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'continued', annotations: [] }] }],
+        };
+        if ((requests.at(-1) as { stream?: boolean }).stream) {
+          response.setHeader('Content-Type', 'text/event-stream');
+          if (responsesMode === 'partial') response.write('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'visible partial reply' }) + '\n\n');
+          response.end('data: ' + JSON.stringify({ type: failed ? 'response.failed' : 'response.completed', response: envelope }) + '\n\ndata: [DONE]\n\n');
+        } else response.end(JSON.stringify(envelope));
+        return;
+      }
       if (bad400) {
         response.statusCode = 400;
         response.end(JSON.stringify({ error: { message: 'Provider returned error (upstream: AtlasCloud: {"code":400,"msg":"bad request"})' } }));
       } else {
-        response.end(JSON.stringify({ id: 'offline', object: 'chat.completion', created: 1, model: 'offline-model',
-          choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'continued' } }] }));
+        let content = 'continued';
+        const body = requests.at(-1) as { messages?: Array<{ role: string; content: string }> };
+        if (summarizeHistory && body.messages?.[0]?.content?.startsWith('You are compacting')) {
+          const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- Sending prohibited; destination Bogotá.').join('\n\n');
+          content = body.messages[0].content.includes('protectedUserIds') ? JSON.stringify({ summary,
+            protectedUserIds: body.messages.some(message => message.content?.includes('"id":"history-0"')) ? ['history-0'] : [],
+          }) : summary;
+        }
+        if ((requests.at(-1) as { stream?: boolean }).stream) {
+          response.setHeader('Content-Type', 'text/event-stream');
+          response.end('data: ' + JSON.stringify({ id: 'offline', object: 'chat.completion.chunk', created: 1, model: 'offline-model',
+            choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })
+            + '\n\ndata: ' + JSON.stringify({ id: 'offline', object: 'chat.completion.chunk', created: 1, model: 'offline-model',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\ndata: [DONE]\n\n');
+        } else response.end(JSON.stringify({ id: 'offline', object: 'chat.completion', created: 1, model: 'offline-model',
+          choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }] }));
       }
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -126,6 +169,152 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     expect(result.success).toBe(false);
     expect(result.error?.message).toContain('leaves no room for input');
     expect(requests).toHaveLength(0);
+  });
+
+  it.each([false, true])('continues after an HTTP 200 failed response (stream=%s), archiving error then success', async stream => {
+    responsesMode = 'recover';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    const onRecoveryRetry = jest.fn();
+    expect((await invoke([message], [message], { onRecoveryRetry, ...(stream ? { onModelDelta: jest.fn() } : {}) })).success).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(onRecoveryRetry).toHaveBeenCalledWith(expect.objectContaining({
+      attempt: 2, failure: expect.objectContaining({ category: 'provider_failure', retryable: true }),
+    }));
+    const directory = path.join(root, 'archives', 'memory-conversation');
+    const outcomes = await Promise.all((await fs.readdir(directory)).filter(name => name.endsWith('.outcome.json'))
+      .map(async name => JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')).outcome));
+    expect(outcomes.sort()).toEqual(['completed', 'error']);
+  });
+
+  it('does not replay a failed stream after visible output', async () => {
+    responsesMode = 'partial';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    const onModelDelta = jest.fn(), onRecoveryRetry = jest.fn();
+    expect((await invoke([message], [message], { onModelDelta, onRecoveryRetry })).success).toBe(false);
+    expect(requests).toHaveLength(1);
+    expect(onModelDelta).toHaveBeenCalled();
+    expect(onRecoveryRetry).not.toHaveBeenCalled();
+  });
+
+  it('stops an interruption retry immediately when the user cancels its wait', async () => {
+    responsesMode = 'recover';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    const result = await invoke([message], [message], {
+      onRecoveryRetry: () => cancelAllToolCalls('memory-conversation'),
+    });
+    expect(result).toMatchObject({ success: false, error: { code: 'cancelled' } });
+    expect(requests).toHaveLength(1);
+  });
+
+  it('bounds persistent provider interruptions to the initial attempt and three retries', async () => {
+    responsesMode = 'unavailable';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    expect((await invoke([message])).success).toBe(false);
+    expect(requests).toHaveLength(4);
+  });
+
+  it('does not retry a provider refusal disguised as HTTP 200', async () => {
+    responsesMode = 'refuse';
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });
+    expect((await invoke([message])).success).toBe(false);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('archives a large canonical history and continues with a small wire without charging JSON buffers to its clone', async () => {
+    const canonical = [{ ...message, content: 'x'.repeat(8 * 1024 * 1024) }];
+    expect((await invoke([message], canonical)).success).toBe(true);
+    expect(requests).toHaveLength(1);
+    const names = await fs.readdir(path.join(root, 'archives', 'memory-conversation'));
+    const id = names.find(name => name.endsWith('.v2.json.gz'))?.replace('.v2.json.gz', '');
+    expect(id).toBeDefined();
+    expect((await readModelTurnSnapshot('memory-conversation', id!))?.canonicalMessages).toEqual(canonical);
+  });
+
+  it('fits an actual 8K PNG for the SDK and preserves the full original', async () => {
+    let seed = 1792700001;
+    const noise = Buffer.alloc(512 * 512 * 3);
+    for (let i = 0; i < noise.length; i++) {
+      seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; noise[i] = seed & 255;
+    }
+    const tile = await sharp(noise, { raw: { width: 512, height: 512, channels: 3 } }).png().toBuffer();
+    const png = await sharp({ create: { width: 7680, height: 4320, channels: 3, background: 'white' } })
+      .composite([{ input: tile, tile: true }]).png().toBuffer();
+    expect(png.length).toBeGreaterThan(2_000_000);
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), contextWindow: 200_000, inputModalities: ['text', 'image'] });
+    const url = 'data:image/png;base64,' + png.toString('base64');
+    const imageMessage: FlujoChatMessage = { ...message, content: [
+      { type: 'text', text: 'Describe this screenshot.' }, { type: 'image_url', image_url: { url } },
+    ] };
+    const result = await invoke([imageMessage]);
+    expect(result).toMatchObject({ success: true });
+    expect(requests).toHaveLength(1);
+    const request = requests[0] as { messages: OpenAI.ChatCompletionMessageParam[] };
+    const sent = request.messages.flatMap(m => Array.isArray(m.content) ? m.content as OpenAI.ChatCompletionContentPart[] : [])
+      .find(part => part.type === 'image_url') as OpenAI.ChatCompletionContentPartImage;
+    expect(sent.image_url.url).not.toBe(url);
+    const size = await sharp(Buffer.from(sent.image_url.url.split(',')[1], 'base64')).metadata();
+    expect(Math.max(size.width!, size.height!)).toBeLessThanOrEqual(4096);
+    expect(JSON.stringify(request)).toContain('Full-resolution original: flujo://run/');
+    expect(imageMessage.content).toEqual([{ type: 'text', text: 'Describe this screenshot.' }, { type: 'image_url', image_url: { url } }]);
+  }, 60_000);
+
+  it('continues with 80000 canonical messages and a bounded provider projection', async () => {
+    const canonical: FlujoChatMessage[] = Array.from({ length: 80_000 }, (_, index) => ({
+      id: `history-${index}`, role: index % 2 ? 'assistant' : 'user', timestamp: index,
+      content: `Message ${index}: retained exact history, including Unicode \u00e9\u6f22\ud83d\ude42.`,
+    }));
+    const result = await invoke([message], canonical);
+    expect(result).toMatchObject({ success: true });
+    expect(requests).toHaveLength(1);
+    const names = await fs.readdir(path.join(root, 'archives', 'memory-conversation'));
+    const id = names.find(name => name.endsWith('.v2.json.gz'))!.replace('.v2.json.gz', '');
+    // Exercise the bounded streaming API used by the actual archive route;
+    // the separate all-at-once inspection API deliberately caps JSON heap.
+    const stream = await readModelTurnSnapshotResponse('memory-conversation', id);
+    const snapshot = await new Response(stream).json();
+    expect(snapshot.canonicalMessages).toEqual(canonical);
+    expect(snapshot.entry).toMatchObject({ canonicalMessageCount: 80_000, outcome: 'completed' });
+    expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0 });
+  }, 60_000);
+
+  it('automatically compacts all 80000 mixed messages before SDK dispatch, including full debugger provenance', async () => {
+    summarizeHistory = true;
+    getModelMock.mockResolvedValue({ ...(await getModelMock()), contextWindow: 200_000, maxTokens: 4000 });
+    const canonical: FlujoChatMessage[] = Array.from({ length: 80_000 }, (_, index) => ({
+      id: 'history-' + index, role: index % 2 ? 'assistant' : 'user', timestamp: index,
+      content: index === 0 ? 'Never send messages or publish anything.'
+        : index % 2 ? 'Record checked; no outstanding action.' : 'Check historical record ' + index + '.',
+    }));
+    const result = await ModelHandler.callModel({
+      modelId: 'memory-model', prompt: '', messages: canonical,
+      iteration: 1, maxIterations: 1, nodeId: 'memory-node', nodeName: 'Memory', conversationId: 'memory-conversation',
+      archiveModelTurns: true,
+      modelInputForArchive: { systemMessage: null, wireMessages: canonical,
+        provenance: canonical.map(message => ({ id: message.id, role: message.role, status: 'sent' })),
+        counts: { threaded: 80_000, sent: 80_000, folded: 0, scopedOut: 0, handoffStripped: 0 } },
+    });
+    expect(result).toMatchObject({ success: true });
+    expect(requests.length).toBeGreaterThan(5);
+    for (const request of requests) expect(JSON.stringify(request).length / 4).toBeLessThan(196_000);
+    expect(JSON.stringify(requests.at(-1))).toContain('Never send messages or publish anything.');
+    const names = await fs.readdir(path.join(root, 'archives', 'memory-conversation'));
+    const id = names.find(name => name.endsWith('.v2.json.gz'))!.replace('.v2.json.gz', '');
+    const snapshot = await new Response(await readModelTurnSnapshotResponse('memory-conversation', id)).json();
+    expect(snapshot.canonicalMessages).toEqual(canonical);
+    expect(snapshot.provenance).toHaveLength(80_000);
+    expect(snapshot.counts.threaded).toBe(80_000);
+  }, 120_000);
+
+  it('counts replacement transcript messages once instead of exhausting memory across stream revisions', async () => {
+    transcriptRevisions = 100;
+    expect((await invoke([message])).success).toBe(true);
+    expect(requests).toHaveLength(1);
+    const names = await fs.readdir(path.join(root, 'archives', 'memory-conversation'));
+    const id = names.find(name => name.endsWith('.v2.json.gz'))!.replace('.v2.json.gz', '');
+    const snapshot = await readModelTurnSnapshot('memory-conversation', id);
+    expect(snapshot?.canonicalMessages.filter(message => message.id === 'same-streamed-message')).toHaveLength(1);
+    expect(snapshot?.canonicalMessages.at(-1)?.timestamp).toBe(99);
   });
 
   it('directly cancels an admitted provider call and releases its registered controller', async () => {

@@ -197,6 +197,17 @@ it.each(['resource', 'conversation'] as const)('refuses the %s quota before open
   expect(await listRunResources(options.conversationId)).toEqual([]);
 });
 
+it('counts a structured source toward the conversation quota even with a plain-text MIME label', async () => {
+  jest.mocked(loadItem).mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
+    maxResourceBytes: 1000, maxConversationBytes: 1000 });
+  _clearRunResourceSettingsCache();
+  const written = await writeRunResource({ conversationId: options.conversationId, kind: 'text',
+    mimeType: 'text/plain', data: { json: { source: 'x'.repeat(600) } }, producedBy: producer });
+  expect(written).not.toHaveProperty('skipped');
+  expect(await writeRunResource({ conversationId: options.conversationId, kind: 'text',
+    data: { text: 'x'.repeat(500) }, producedBy: { source: 'capture' } })).toEqual({ skipped: 'conversation-cap' });
+});
+
 it('preserves short writes without queuing buffers or changing JSON bytes', async () => {
   const counts = instrument({ shortWrites: true });
   const json = { exact: 'é🧭保留"\\\n'.repeat(30) };
@@ -248,8 +259,19 @@ it('keeps repeated exact-source persistence inside its capped-process allocation
   const result = spawnSync(process.execPath, ['--expose-gc', '--max-old-space-size=192', '--max-semi-space-size=1',
     path.resolve('__tests__/flow/fixtures/compactionSourceAllocation.cjs'), root, path.join(root, 'measurement.json')],
   { encoding: 'utf8', timeout: 30_000, maxBuffer: 128 * 1024, windowsHide: true, env: { ...process.env, NODE_OPTIONS: '' } });
-  expect({ error: result.error?.message, status: result.status, stderr: result.status ? result.stderr : '' })
-    .toEqual({ error: undefined, status: 0, stderr: '' });
+  expect({ error: result.error?.message, status: result.status, stderr: result.status ? result.stderr : '',
+    measurement: result.status ? result.stdout : '' })
+    .toEqual({ error: undefined, status: 0, stderr: '', measurement: '' });
   expect(JSON.parse(await fs.readFile(path.join(root, 'measurement.json'), 'utf8')))
     .toMatchObject({ complete: true, withinEnvelope: true, samples: [expect.any(Object), expect.any(Object), expect.any(Object)] });
-}, 35_000);
+  const controlRoot = path.join(root, 'bulk-control');
+  await fs.mkdir(controlRoot);
+  const control = spawnSync(process.execPath, ['--expose-gc', '--max-old-space-size=192', '--max-semi-space-size=1',
+    path.resolve('__tests__/flow/fixtures/compactionSourceAllocation.cjs'), controlRoot, path.join(controlRoot, 'measurement.json'), '--bulk-control'],
+  { encoding: 'utf8', timeout: 30_000, maxBuffer: 128 * 1024, windowsHide: true, env: { ...process.env, NODE_OPTIONS: '' } });
+  expect({ error: control.error?.message, status: control.status, stderr: control.stderr })
+    .toEqual({ error: undefined, status: 1, stderr: '' });
+  const rejected = JSON.parse(await fs.readFile(path.join(controlRoot, 'measurement.json'), 'utf8'));
+  expect(rejected).toMatchObject({ complete: true, withinEnvelope: false });
+  expect(rejected.samples.every((sample: { writerEntryHeapGrowth: number }) => sample.writerEntryHeapGrowth > 16 * 1024 * 1024)).toBe(true);
+}, 65_000);

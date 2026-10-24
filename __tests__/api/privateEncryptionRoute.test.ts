@@ -48,14 +48,16 @@ async function call(body: Record<string, unknown>, bearer: string | null = token
     ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
   }, body: JSON.stringify(body) }));
 }
-test('status and missing-password writes do not silently initialize public-default metadata', async () => {
+test('fresh local status and credential writes work without choosing a custom password', async () => {
   const status = await call({ action: 'status' });
   expect(status.status).toBe(200);
-  expect(await status.json()).toEqual({ initialized: false, locked: true, protection: 'uninitialized' });
+  expect(await status.json()).toEqual({ initialized: false, locked: false, protection: 'uninitialized' });
   const write = await call({ action: 'encrypt', data: 'synthetic-private-token' });
-  expect(write.status).toBe(423);
-  const { isEncryptionInitialized } = await import('@/utils/encryption/secure');
-  expect(await isEncryptionInitialized()).toBe(false);
+  expect(write.status).toBe(200);
+  const ciphertext = (await write.json()).result;
+  const { isEncryptionInitialized, decryptWithPassword } = await import('@/utils/encryption/secure');
+  expect(await isEncryptionInitialized()).toBe(true);
+  expect(await decryptWithPassword(ciphertext)).toBe('synthetic-private-token');
 });
 test('owner admission precedes encryption actions and remains distinct from encryption unlock tokens', async () => {
   expect((await call({ action: 'initialize', password: 'private-owner-passphrase' }, null)).status).toBe(401);

@@ -82,6 +82,28 @@ afterEach(() => {
 });
 
 describe('parseRepositoryConfig: README explicit config wins over language heuristics', () => {
+  it('preserves the uvx env object and ignores dashboard npm build tools', async () => {
+    mockRepoFiles({
+      'README.md': '```json\n' + JSON.stringify({ mcpServers: { 'virtual-computer': {
+        command: 'uvx', args: ['mcp-virtual-computer'],
+        env: { COMPUTER_ID: 'agent-workstation', NETWORK_ACCESS: 'true', ENDPOINT: 'https://example.com/path' },
+      } } }) + '\n```\n\nDevelopment only:\n```sh\nnpm install\nnpm run build\n```',
+      'package.json': JSON.stringify({ private: true, scripts: { build: 'esbuild' } }),
+      'pyproject.toml': '[project]\nname = "mcp-virtual-computer"',
+    });
+    const result = await parseRepositoryConfig({ repoPath: 'repo', repoName: 'mcp-virtual-computer' });
+    expect(result.runCommand).toBe('uvx');
+    expect(result.args).toEqual(['mcp-virtual-computer']);
+    expect(result.config?.env).toEqual({ COMPUTER_ID: 'agent-workstation', NETWORK_ACCESS: 'true', ENDPOINT: 'https://example.com/path' });
+    expect(result.installCommand).toBe('');
+    expect(result.buildCommand).toBe('');
+    expect(result.config?._installCommand).toBe('');
+    expect(result.config?._buildCommand).toBe('');
+    expect(fetch).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      body: expect.stringContaining('package.json'),
+    }));
+  });
+
   it('uses the mcpServers block from the README even when pyproject.toml exists', async () => {
     mockRepoFiles({
       'README.md': README_WITH_CONFIG,

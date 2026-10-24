@@ -44,7 +44,7 @@ export interface McpPollDeps {
     context: unknown;
     /** Stable identity of the normalized observed result/change. */
     deliveryId: string;
-  }) => Promise<{ status: RunRecordStatus }>;
+  }) => Promise<{ status: RunRecordStatus; conditionRejected?: boolean }>;
   onError: (message: string) => void;
   /**
    * Called after every successful poll+evaluation (fired or not), so a stale
@@ -127,7 +127,7 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
             ? (evaluation.context as Record<string, unknown>)
             : { result: evaluation.context }),
         };
-        const { status } = await deps.onFire({
+        const { status, conditionRejected } = await deps.onFire({
           summary: `Watched tool: ${evaluation.summary ?? 'condition met'}`,
           context: fireContext,
           deliveryId: `mcp-poll-${hashResult({
@@ -150,6 +150,7 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
         if (evaluation.pendingState) {
           const { giveUpError } = await commitPendingAfterOutcome({
             status,
+            conditionRejected,
             pendingState: evaluation.pendingState,
             priorFailures: state.pendingFailures ?? 0,
             saveState: deps.saveState,

@@ -2,12 +2,14 @@ import { createHash, randomUUID } from 'crypto';
 import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import { gzip, gunzip } from 'zlib';
+import { gzip, gunzip, createGzip } from 'zlib';
+import { Readable } from 'node:stream';
 import { projectArchiveSchema, isOwnedArchiveDescriptor, type ArchiveSchemaProjectionPolicy } from '@/backend/services/model/adapters/ownedArchiveSchema';
 import { types as utilTypes } from 'node:util';
 import { withArchiveWriteMemory, recheckArchiveWriteMemory, closeArchiveWriteHandle, readArchiveLocalMedia,
   settleArchiveWrites, ModelTurnArchiveMemoryError, archiveOmission, isArchiveSchema, isArchivePlainObject,
   getArchiveSchemaProjectionPolicy, type ArchiveWriteAdmissionOptions } from './modelTurnArchiveWriteBudget';
+import { estimateArchiveSnapshotBytes } from './modelTurnArchiveWriteBudget';
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot } from './types';
@@ -37,6 +39,7 @@ import { closeModelTurnResponseDescriptor, prepareModelTurnSnapshotResponse } fr
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+const CANONICAL_PAGE_MAX_BYTES = 16 * 1024 * 1024;
 
 let archiveDirOverride: string | undefined;
 
@@ -326,7 +329,7 @@ async function sanitizeValue(
   }
 }
 
-async function writeAtomic(file: string, data: Buffer, durable = false): Promise<void> {
+async function writeAtomic(file: string, data: Buffer | AsyncIterable<Uint8Array>, durable = false): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
@@ -372,10 +375,106 @@ export interface ArchiveModelDispatchInput {
   operation: string;
   attempt: number;
   canonicalMessages: FlujoChatMessage[];
+  canonicalArchive?: PagedCanonicalArchive;
   genericWire: OpenAI.ChatCompletionMessageParam[];
   sdkRequest: unknown;
   modelInput?: ModelInputSnapshot;
   visualCompaction?: VisualCompactionDiagnostic;
+}
+
+/** Immutable, content-addressed pages avoid cloning the entire conversation at
+ * every provider dispatch. The ordinary snapshot still contains the complete
+ * canonical array, assembled through gzip with bounded backpressure. */
+export class PagedCanonicalArchive {
+  private readonly updates = new Map<string, FlujoChatMessage>();
+  constructor(
+    readonly conversationId: string,
+    readonly pages: ReadonlyArray<{ sha256: string; count: number }>,
+    readonly initialCount: number,
+    readonly media: readonly ModelTurnMediaDescriptor[],
+    private readonly ids: Set<string>,
+  ) {}
+  private addedCount = 0;
+  get count(): number { return this.initialCount + this.addedCount; }
+  upsert(message: FlujoChatMessage): void {
+    // Updates are small live transcript deltas, validated by the caller's
+    // snapshot reservation before any copy.
+    this.updates.set(message.id, structuredClone(message));
+    if (!this.ids.has(message.id)) { this.ids.add(message.id); this.addedCount++; }
+  }
+  async prepareUpdates(ctx: SanitizeContext): Promise<Map<string, unknown>> {
+    const updates = new Map<string, unknown>();
+    for (const [id, message] of this.updates) updates.set(id, await sanitizeValue(message, 'canonicalMessages', ctx));
+    return updates;
+  }
+  async *messages(updates: ReadonlyMap<string, unknown>): AsyncGenerator<string> {
+    const remaining = new Map(updates);
+    let first = true;
+    for (const page of this.pages) {
+      const bytes = await readBoundedModelTurnFile(canonicalPagePath(this.conversationId, page.sha256), CANONICAL_PAGE_MAX_BYTES);
+      const decoded = await gunzipAsync(bytes, { maxOutputLength: CANONICAL_PAGE_MAX_BYTES });
+      if (createHash('sha256').update(decoded).digest('hex') !== page.sha256) throw new Error('Canonical archive page digest mismatch');
+      const messages = JSON.parse(decoded.toString('utf8')) as FlujoChatMessage[];
+      if (!Array.isArray(messages) || messages.length !== page.count) throw new Error('Invalid canonical archive page');
+      const output: string[] = [];
+      for (const original of messages) {
+        const replacement = remaining.get(original.id);
+        if (replacement) remaining.delete(original.id);
+        const message = replacement ?? original;
+        output.push((first ? '' : ',') + JSON.stringify(message));
+        first = false;
+      }
+      yield output.join('');
+    }
+    for (const message of remaining.values()) {
+      yield (first ? '' : ',') + JSON.stringify(message);
+      first = false;
+    }
+  }
+}
+
+function canonicalPagePath(conversationId: string, sha256: string): string {
+  assertSafeId(conversationId, 'conversation id');
+  if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('Invalid canonical archive page digest');
+  return path.join(path.dirname(snapshotPath(conversationId, 'page')), 'canonical', sha256 + '.json.gz');
+}
+
+export async function preparePagedCanonicalArchive(
+  conversationId: string, messages: readonly FlujoChatMessage[], durableContext: FlowDurableMutationContext = {},
+): Promise<PagedCanonicalArchive> {
+  const pages: Array<{ sha256: string; count: number }> = [];
+  const media: ModelTurnMediaDescriptor[] = [];
+  if (!Array.isArray(messages) || utilTypes.isProxy(messages)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+  for (let offset = 0; offset < messages.length;) {
+    const page: FlujoChatMessage[] = [];
+    let estimatedBytes = 0;
+    while (offset < messages.length && page.length < 128) {
+      const descriptor = Object.getOwnPropertyDescriptor(messages, offset);
+      if (!descriptor || !('value' in descriptor) || !descriptor.value || typeof descriptor.value !== 'object') {
+        throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      }
+      const cost = estimateArchiveSnapshotBytes(descriptor.value);
+      if (page.length && estimatedBytes + cost > 8 * 1024 * 1024) break;
+      page.push(descriptor.value); estimatedBytes += cost; offset++;
+    }
+    // Pages hold source references, not a retained structuredClone. The writer
+    // separately admits sanitization/media buffers; reserving a full clone here
+    // wrongly rejected a handful of large images before extracting their bytes.
+    await withArchiveWriteMemory(page, () => withWorkspaceMutation(() => commitFlowDurableMutation(durableContext, async () => {
+      const ctx: SanitizeContext = { conversationId, media: [], writes: new Map() };
+      const sanitized = await sanitizeValue(page, 'canonicalMessages', ctx);
+      const bytes = Buffer.from(JSON.stringify(sanitized), 'utf8');
+      if (bytes.length > CANONICAL_PAGE_MAX_BYTES) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      for (const [digest, data] of ctx.writes) await writeAtomic(mediaPath(conversationId, digest), data);
+      const target = canonicalPagePath(conversationId, sha256);
+      // Identical prefixes are reused by later turns. Publication is atomic.
+      try { await fs.access(target); } catch { await writeAtomic(target, await gzipAsync(bytes)); }
+      pages.push({ sha256, count: page.length });
+      media.push(...ctx.media);
+    })));
+  }
+  return new PagedCanonicalArchive(conversationId, pages, messages.length, media, new Set(messages.map(message => message.id)));
 }
 
 export function archiveModelDispatch(
@@ -384,8 +483,13 @@ export function archiveModelDispatch(
   const protectedDispatch = Boolean(input.id || input.durableContext?.executionAuthority
     || input.durableContext?.executionExtensionContext || input.durableContext?.personaAttribution);
   const writeAdmission = protectedDispatch ? undefined : input.writeAdmission;
+  const pagedProvenance = (input.modelInput?.provenance.length ?? 0) > 1000;
+  const modelInput = input.modelInput ? { inputMode: input.modelInput.inputMode, counts: input.modelInput.counts,
+    contextCompaction: input.modelInput.contextCompaction,
+    provenance: pagedProvenance ? [] : input.modelInput.provenance } : undefined;
   const payload = { canonicalMessages: input.canonicalMessages, genericWire: input.genericWire,
-    sdkRequest: input.sdkRequest, modelInput: input.modelInput, visualCompaction: input.visualCompaction };
+    ...(input.canonicalArchive || pagedProvenance ? { streamingWindow: ' '.repeat(4 * 1024 * 1024), media: input.canonicalArchive?.media } : {}),
+    sdkRequest: input.sdkRequest, modelInput, visualCompaction: input.visualCompaction };
   return withArchiveWriteMemory(payload, () => withWorkspaceMutation(() => commitFlowDurableMutation(
     input.durableContext ?? {}, () => {
       writeAdmission?.signal?.throwIfAborted();
@@ -410,7 +514,7 @@ async function archiveModelDispatchWithinMutation(
   }
   const ctx: SanitizeContext = {
     conversationId: input.conversationId,
-    media: [],
+    media: [...(input.canonicalArchive?.media ?? [])],
     writes: new Map(),
   };
   const [canonicalMessages, genericWire, sdkRequest] = await settleArchiveWrites([
@@ -418,6 +522,7 @@ async function archiveModelDispatchWithinMutation(
     sanitizeValue(input.genericWire, 'genericWire', ctx),
     sanitizeValue(input.sdkRequest, 'sdkRequest', ctx),
   ]);
+  const canonicalUpdates = await input.canonicalArchive?.prepareUpdates(ctx);
 
   const entry: ModelTurnIndexEntry = {
     id,
@@ -432,11 +537,12 @@ async function archiveModelDispatchWithinMutation(
     outcome: 'running',
     attempt: input.attempt,
     inputMode: input.modelInput?.inputMode,
-    canonicalMessageCount: input.canonicalMessages.length,
+    canonicalMessageCount: input.canonicalArchive?.count ?? input.canonicalMessages.length,
     wireMessageCount: input.genericWire.length,
     mediaCount: ctx.media.length,
     archiveVersion: 2,
   };
+  const pagedProvenance = (input.modelInput?.provenance.length ?? 0) > 1000;
   const snapshot: ModelTurnSnapshot = {
     version: 2,
     entry,
@@ -444,7 +550,7 @@ async function archiveModelDispatchWithinMutation(
     genericWire: genericWire as OpenAI.ChatCompletionMessageParam[],
     sdkRequest,
     media: ctx.media,
-    provenance: input.modelInput?.provenance,
+    provenance: pagedProvenance ? undefined : input.modelInput?.provenance,
     counts: input.modelInput?.counts,
     visualCompaction: input.visualCompaction,
     contextCompaction: input.modelInput?.contextCompaction,
@@ -459,7 +565,32 @@ async function archiveModelDispatchWithinMutation(
       await writeAtomic(target, bytes, Boolean(input.id));
     }
   }));
-  const compressed = await gzipAsync(Buffer.from(JSON.stringify(snapshot), 'utf8'));
+  const compressed = input.canonicalArchive || pagedProvenance
+    ? Readable.from((async function* () {
+        const { canonicalMessages: _canonical, ...metadata } = snapshot;
+        yield JSON.stringify(metadata).slice(0, -1) + ',"canonicalMessages":[';
+        if (input.canonicalArchive) yield* input.canonicalArchive.messages(canonicalUpdates!);
+        else yield JSON.stringify(canonicalMessages).slice(1, -1);
+        yield ']';
+        if (pagedProvenance) {
+          yield ',"provenance":[';
+          const entries = input.modelInput!.provenance;
+          if (!Array.isArray(entries) || utilTypes.isProxy(entries)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+          for (let offset = 0; offset < entries.length; offset += 128) {
+            const page = [];
+            for (let index = offset; index < Math.min(offset + 128, entries.length); index++) {
+              const descriptor = Object.getOwnPropertyDescriptor(entries, index);
+              if (!descriptor || !('value' in descriptor)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
+              page.push(descriptor.value);
+            }
+            recheckArchiveWriteMemory(page, true);
+            yield (offset ? ',' : '') + JSON.stringify(page).slice(1, -1);
+          }
+          yield ']';
+        }
+        yield '}';
+      })()).compose(createGzip())
+    : await gzipAsync(Buffer.from(JSON.stringify(snapshot), 'utf8'));
   await writeAtomic(snapshotPath(input.conversationId, id), compressed, Boolean(input.id));
   return entry;
 }

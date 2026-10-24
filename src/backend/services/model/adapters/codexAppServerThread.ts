@@ -336,7 +336,17 @@ export function createCodexAppServerThread(input: {
                   } };
                   if (type === 'item.completed') messageText.delete(itemId);
                 } else if (item.type === 'mcpToolCall') {
-                  if (item.server !== 'flujo' || typeof item.tool !== 'string' || !['inProgress', 'completed', 'failed'].includes(String(item.status))) throw new Error('Unexpected Codex tool execution.');
+                  // Codex's built-in cross-server discovery uses the synthetic
+                  // server name "codex". It only lists the MCP servers in this
+                  // isolated runtime; it is not an invocation of another tool
+                  // server. In particular this exception must not admit reads,
+                  // arbitrary tools, or discovery targeting an unbound server.
+                  const discovery = item.server === 'codex'
+                    && ['list_mcp_resources', 'list_mcp_resource_templates'].includes(String(item.tool))
+                    && (item.arguments == null || (typeof item.arguments === 'object'
+                      && !Array.isArray(item.arguments) && record(item.arguments).server == null));
+                  if ((!discovery && item.server !== 'flujo') || typeof item.tool !== 'string'
+                    || !['inProgress', 'completed', 'failed'].includes(String(item.status))) throw new Error('Unexpected Codex tool execution.');
                   if (pendingQuestion) throw new Error('Codex continued tool execution while awaiting user input.');
                   if (item.status === 'inProgress') activeTools.add(itemId); else activeTools.delete(itemId);
                   yield { type, item: { ...item, id: itemId, type: 'mcp_tool_call', status: item.status === 'inProgress' ? 'in_progress' : item.status } } as ThreadEvent;

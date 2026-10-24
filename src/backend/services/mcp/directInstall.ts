@@ -191,7 +191,7 @@ function githubCoordinates(repositoryUrl: string): { owner: string; repo: string
   return { owner: parts[0], repo: parts[1] };
 }
 
-async function githubApiJson(url: string): Promise<unknown> {
+async function githubApiJson(url: string, optional = false): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), GITHUB_API_TIMEOUT_MS);
   timeout.unref?.();
@@ -201,6 +201,7 @@ async function githubApiJson(url: string): Promise<unknown> {
       headers: { accept: 'application/vnd.github+json', 'user-agent': 'FLUJO-MCP-installer' },
       cache: 'no-store',
     });
+    if (optional && response.status === 404) return null;
     if (!response.ok) throw new Error(`GitHub returned ${response.status}.`);
     return await response.json();
   } finally {
@@ -224,7 +225,7 @@ async function previewGithubExecution(
   subdirectory: string | undefined,
   installOverride: string | undefined,
   buildOverride: string | undefined,
-): Promise<GithubExecutionPreview> {
+): Promise<GithubExecutionPreview | { commit: string; server: RegistryServer }> {
   const { owner, repo } = githubCoordinates(repositoryUrl);
   const base = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const commitBody = objectRecord(await githubApiJson(`${base}/commits/${encodeURIComponent(ref || 'HEAD')}`));
@@ -232,6 +233,19 @@ async function previewGithubExecution(
   if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error('GitHub did not return an immutable commit for this repository.');
   const directory = (subdirectory ?? '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   if (directory.split('/').some((part) => part === '..')) throw new Error('GitHub subdirectory must stay inside the repository.');
+  // A published package is the author's install contract. package.json may only
+  // contain dashboard build tools, even when the actual MCP runtime is Python.
+  if (installOverride === undefined && buildOverride === undefined) {
+    const manifestPath = [...directory.split('/').filter(Boolean), 'server.json'].map(encodeURIComponent).join('/');
+    const body = objectRecord(await githubApiJson(`${base}/contents/${manifestPath}?ref=${encodeURIComponent(commit)}`, true));
+    if (typeof body?.content === 'string') {
+      const manifest = JSON.parse(Buffer.from(body.content.replace(/\s/g, ''), 'base64').toString('utf8'));
+      const server = registryServerFrom(objectRecord(manifest) ?? {});
+      if (server && getInstallOptions(server).some(option => option.kind === 'package' && isAutoInstallable(option))) {
+        return { commit, server };
+      }
+    }
+  }
   const packagePath = [directory, 'package.json'].filter(Boolean).map(encodeURIComponent).join('/');
   const packageBody = objectRecord(await githubApiJson(`${base}/contents/${packagePath}?ref=${encodeURIComponent(commit)}`));
   const encoded = typeof packageBody?.content === 'string' ? packageBody.content.replace(/\s/g, '') : '';
@@ -429,6 +443,18 @@ export async function resolveDirectMcpInstall(input: DirectInstallInput): Promis
       input.installCommand,
       input.buildCommand,
     );
+    if ('server' in execution) {
+      const resolved = await resolveDirectMcpInstall({ ...input, source: execution.server, serverName, transport: 'stdio' });
+      // Keep package provenance for restore and show the real uvx/npx command in
+      // the consent plan. No clone, npm install, or source build is performed.
+      resolved.plan = {
+        ...resolved.plan,
+        registryName: `github:${parsed.repositoryUrl}@${execution.commit}`,
+        resolvedName: parsed.repositoryUrl,
+        verificationStatus: 'unverified-github-server-json',
+      };
+      return resolved;
+    }
     const repositoryPath = githubInstallRepositoryPath(parsed.repositoryUrl, execution.commit);
     const workingDirectory = input.subdirectory
       ? path.join(repositoryPath, input.subdirectory.replace(/\\/g, '/'))

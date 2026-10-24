@@ -8,6 +8,25 @@ BeforeAll {
 }
 
 Describe 'Windows installer prerequisite planning' {
+    It 'finds newly installed tools without replacing the explicitly selected Node runtime' {
+        $selectedNode = 'C:\selected node'
+        $wingetLinks = 'C:\Users\tester\AppData\Local\Microsoft\WinGet\Links'
+        $merged = Merge-InstallerPath -ProcessPath "$selectedNode;C:\Windows\System32" `
+            -MachinePath 'C:\Program Files\nodejs;C:\WINDOWS\system32' -UserPath " ;$wingetLinks;"
+        $merged.Split(';') | Should -HaveCount 4
+        $merged.Split(';')[0] | Should -Be $selectedNode
+        $merged.Split(';')[-1] | Should -Be $wingetLinks
+    }
+
+    It 'refreshes inherited PATH before the first prerequisite probe on rerun' {
+        $source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\scripts\install.ps1') -Raw
+        $start = $source.IndexOf("Write-InstallerStage -Name 'prerequisites'")
+        $refresh = $source.IndexOf('Update-SessionEnvironment', $start)
+        $probe = $source.IndexOf('$nodeResult = Test-FlujoNodeVersion', $start)
+        $refresh | Should -BeGreaterThan $start
+        $refresh | Should -BeLessThan $probe
+    }
+
     It 'includes the ripgrep search accelerator in the managed prerequisite catalog' {
         $ripgrep = Get-KnownInstallerPrerequisites | Where-Object Command -eq 'rg'
         $ripgrep | Should -Not -BeNullOrEmpty
@@ -154,6 +173,87 @@ Describe 'Windows installer generated payloads' {
         $launcher | Should -Match 'npm start %\*'
         $launcher | Should -Match 'http://localhost:4200'
     }
+
+    It 'activates the private runtime in a new launcher without changing the global Node installation' {
+        $launcher = Get-LauncherContent -AppDir 'D:\Tools\FLUJO' -NodeDirectory 'C:\User Files\FLUJO-cli\runtime\node'
+        $launcher | Should -Match 'set "PATH=C:\\User Files\\FLUJO-cli\\runtime\\node;%PATH%"'
+        $launcher.IndexOf('set "PATH=') | Should -BeLessThan $launcher.IndexOf('npm start')
+    }
+}
+
+Describe 'Private Node runtime selection and bootstrap integrity' {
+    BeforeAll {
+        $tokens = $null
+        $errors = $null
+        $installerAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '..\scripts\install.ps1'), [ref]$tokens, [ref]$errors)
+        foreach ($functionName in @('Get-ManagedNodeSpec', 'Install-ManagedNode', 'Initialize-InstallerNodeRuntime', 'Write-Step', 'Write-Ok')) {
+            $definition = $installerAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $functionName }, $true)
+            Invoke-Expression $definition.Extent.Text
+        }
+        $installerEnvironment = @{}
+    }
+
+    BeforeEach { $script:OriginalNodeTestPath = $env:Path }
+    AfterEach { $env:Path = $script:OriginalNodeTestPath }
+
+    It 'uses a private patched runtime when Node is <Status>' -ForEach @(
+        @{ Status = 'Missing'; Version = $null },
+        @{ Status = 'Outdated'; Version = 'v20.19.0' },
+        @{ Status = 'Outdated'; Version = 'v22.23.3' },
+        @{ Status = 'Outdated'; Version = 'v24.20.0' }
+    ) {
+        Mock Test-FlujoNodeVersion { [PSCustomObject]@{ Status = $Status; Version = $Version } }
+        Mock Install-ManagedNode { Join-Path $TestDrive 'private node' }
+        Initialize-InstallerNodeRuntime -RuntimeRoot (Join-Path $TestDrive 'runtime')
+        Should -Invoke Install-ManagedNode -Times 1 -Exactly
+        $script:ManagedNodeDirectory | Should -Be (Join-Path $TestDrive 'private node')
+        $env:Path | Should -Be "$script:ManagedNodeDirectory;$script:OriginalNodeTestPath"
+    }
+
+    It 'keeps a supported global runtime without installing or changing PATH' {
+        Mock Test-FlujoNodeVersion { [PSCustomObject]@{ Status = 'Supported'; Version = 'v24.22.1' } }
+        Mock Install-ManagedNode { throw 'A supported runtime must remain selected' }
+        Initialize-InstallerNodeRuntime -RuntimeRoot (Join-Path $TestDrive 'runtime')
+        Should -Invoke Install-ManagedNode -Times 0 -Exactly
+        $script:ManagedNodeDirectory | Should -Be ''
+        $env:Path | Should -Be $script:OriginalNodeTestPath
+    }
+
+    It 'reuses the managed runtime on subsequent setup runs' {
+        $runtimeRoot = Join-Path $TestDrive 'runtime'
+        $managed = Join-Path $runtimeRoot (Get-ManagedNodeSpec).Folder
+        New-Item -ItemType Directory -Path $managed -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $managed 'node.exe') -Value 'fixture only'
+        Mock Test-FlujoNodeVersion { [PSCustomObject]@{ Status = 'Supported'; Version = 'v22.23.4' } }
+        Mock Install-ManagedNode { throw 'The managed runtime must be reused' }
+        Initialize-InstallerNodeRuntime -RuntimeRoot $runtimeRoot
+        Should -Invoke Install-ManagedNode -Times 0 -Exactly
+        $script:ManagedNodeDirectory | Should -Be $managed
+        $env:Path | Should -Be "$managed;$script:OriginalNodeTestPath"
+    }
+
+    It 'pins both supported architectures to the signed official release checksums' {
+        # Audit packets were removed from the shipped tree; retain the exact
+        # signed regression input from the immutable pre-cleanup revision.
+        $fixture = '03e6639812191f018e485f090761a0a6c3421fe8:docs/audits/evidence/node-security-2026-10-21/v22.23.4/SHASUMS256.txt'
+        $checksumLines = & git --no-replace-objects -C (Join-Path $PSScriptRoot '..') show $fixture
+        if ($LASTEXITCODE -ne 0) { throw 'The pinned signed Node checksum fixture is unavailable; fetch full Git history.' }
+        $checksums = $checksumLines -join "`n"
+        foreach ($architecture in @('AMD64', 'ARM64')) {
+            $spec = Get-ManagedNodeSpec -Architecture $architecture
+            $checksums | Should -Match ([regex]::Escape("$($spec.Sha256)  $($spec.Folder).zip"))
+            $spec.Url | Should -Be "https://nodejs.org/dist/v22.23.4/$($spec.Folder).zip"
+        }
+    }
+
+    It 'refuses altered download bytes before extraction or execution' {
+        Mock Invoke-WebRequest { param($Uri, $OutFile, $UseBasicParsing) Set-Content -LiteralPath $OutFile -Value 'tampered archive' }
+        Mock Expand-Archive { throw 'Unverified archive must never be extracted' }
+        $runtimeRoot = Join-Path $TestDrive 'private-runtime'
+        { Install-ManagedNode -RuntimeRoot $runtimeRoot } | Should -Throw '*checksum mismatch*'
+        Should -Invoke Expand-Archive -Times 0 -Exactly
+        @(Get-ChildItem -LiteralPath $runtimeRoot -Force) | Should -HaveCount 0
+    }
 }
 
 Describe 'Windows installer entry-point contracts' {
@@ -181,7 +281,8 @@ Describe 'Windows installer entry-point contracts' {
 
     It 'stops when a winget prerequisite installation fails' {
         $source = Get-Content -LiteralPath $script:InstallScriptPath -Raw
-        $source | Should -Match 'winget install[\s\S]+\$LASTEXITCODE -ne 0[\s\S]+throw'
+        $source | Should -Match "Invoke-InstallerCommand -Stage 'prerequisites' -Command 'winget'"
+        $source | Should -Match "'--accept-source-agreements', '--accept-package-agreements', '--silent', '--disable-interactivity'"
     }
 
     It 'requires every Inno wizard choice to reach the PowerShell environment' {
@@ -465,7 +566,7 @@ Describe 'Corporate-network installer source contracts' {
         $script:InstallSource | Should -Not -Match "npm ci --ignore-scripts"
         $script:UnixInstallSource | Should -Not -Match "npm ci --ignore-scripts"
         $script:BrowserPackage.scripts.install | Should -Be 'node scripts/install-browser.mjs'
-        $script:BrowserPackage.dependencies.patchright | Should -Be '1.61.1'
+        $script:BrowserPackage.dependencies.patchright | Should -Be '1.64.1'
         $script:InstallSource | Should -Match "-Stage 'patchright-chromium' -Command 'node' -Arguments @\('mcp-servers/browser/scripts/install-browser\.mjs'\)"
         $script:UnixInstallSource | Should -Match 'run_stage patchright-chromium node mcp-servers/browser/scripts/install-browser\.mjs'
         $script:InstallSource | Should -Not -Match "-Stage 'patchright-chromium' -Command 'npm'"
@@ -535,6 +636,34 @@ Describe 'Corporate-network installer source contracts' {
         }
         $script:InnoSource | Should -Match 'LoadStringFromFile'
         $script:InnoSource | Should -Match 'sanitized diagnostic log'
+    }
+
+    It 'reports bootstrap failures before completing setup and supports unattended failure paths' {
+        $script:InnoSource | Should -Match 'function PrepareToInstall\(var NeedsRestart: Boolean\): String'
+        $script:InnoSource | Should -Not -Match 'procedure CurStepChanged'
+        $script:InnoSource | Should -Match "Result := 'The FLUJO installer failed during stage"
+        $script:InnoSource | Should -Match 'SuppressibleMsgBox'
+        $script:InnoSource | Should -Match "WizardSilent then[\s\S]+FLUJO_SET_POLICY', '0'"
+        $script:InnoSource | Should -Match "SetRequiredEnvironmentVariable\('PSModulePath', ''\)"
+        $script:InnoSource | Should -Match ([regex]::Escape('{sys}\WindowsPowerShell\v1.0\powershell.exe'))
+    }
+
+    It 'honors a declined persistent policy change without probing or loading the policy module' {
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($script:InstallSource, [ref]$tokens, [ref]$errors)
+        $definition = $ast.Find({ param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-PersistentExecutionPolicy'
+        }, $true)
+        . ([scriptblock]::Create($definition.Extent.Text))
+        function Get-FutureExecutionPolicy { throw 'Declined policy must not be inspected' }
+        $savedPolicy = $env:FLUJO_SET_POLICY
+        try {
+            foreach ($choice in @('0', 'false', 'no')) {
+                $env:FLUJO_SET_POLICY = $choice
+                Set-PersistentExecutionPolicy | Should -BeFalse
+            }
+        } finally { $env:FLUJO_SET_POLICY = $savedPolicy }
     }
 
     It 'warns about inherited TLS bypasses without forwarding them to installer commands' {

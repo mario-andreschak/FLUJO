@@ -1,6 +1,6 @@
 # Project status and release channels
 
-This page describes capability maturity. The [dated audit](audits/2026-09-16-project-audit.md) records the September 16 baseline; the [remediation record](audits/2026-09-16-remediation.md) tracks subsequent changes and validation. Neither is an automatically updated health badge.
+This page describes capability maturity and release limits. A package version or a passing source check does not establish acceptance of a published artifact.
 
 | Capability | Status | Evidence and limits |
 | --- | --- | --- |
@@ -20,22 +20,26 @@ The package version identifies a published release only when installed from that
 
 The npm package uses versioned releases. Windows bootstrappers built from the current source pin the release tag and commit; earlier published installers can still follow moving `main`. Shell/source installs use the development branch unless explicitly configured otherwise. Stable detached installs upgrade through a newer versioned installer, while clean development checkouts support fast-forward updates. Read the release notes before upgrading and back up workspace data before changing versions.
 
-## Acceptance evidence
+## Validation and acceptance
 
-The [CI workflow](https://github.com/mario-andreschak/FLUJO/actions/workflows/verify.yml) checks types, lint, ordinary tests, and isolated process-boundary tests. The current source counts completed assertions and has no active test quarantines. Six opt-in acceptance/performance assertions remain outside the ordinary Windows run; Unix additionally skips five Windows-specific assertions. Read the raw results and the [quarantine retirement record](audits/quarantine-status.md) alongside the overall status, especially when assessing older releases.
+During development, use local typecheck and lint, plus a non-container application
+build before committing. Full CI, security scanners, broader regression suites
+and installed-artifact acceptance run immediately before a release. Automatic CI
+on merge is paused.
 
-Persona readiness has separate [goal acceptance](performance/persona-goal-acceptance.md), [endurance acceptance](performance/persona-goal-endurance-acceptance.md), and [runtime soak](performance/persona-runtime-soak-acceptance.md) criteria. Full endurance claims require a successful run for the assessed implementation revision. A memory benchmark or short smoke test proves only its measured scope.
+Release acceptance must bind results to an exact source revision and distributed
+artifact. It must cover the declared operating systems and installation methods,
+security boundaries, recovery and rollback, human operation and any required
+elapsed live-provider checks. Source fixtures and short simulations do not
+establish unattended reliability or shared/public deployment support.
 
-The September 16 remediation's full offline 28-day simulation completed all 560 activities and passed recovery, retention and learning checks, but failed the event-append latency criterion: one daily p95 was 169.6893 ms against a 150 ms limit. Twelve of thirteen criteria passed; overall acceptance did not. The remediation record preserves the exact snapshot, evidence and unresolved profiling work. This is neither 28 elapsed days nor proof of live-provider unattended operation.
+Keep run records and operator ledgers outside the public repository. Historical
+regression checks read their fixed inputs from Git history; the default
+`scripts/validate-scorecard.mjs` command checks that historical baseline and
+cannot qualify a current release. Its schema and all acceptance assertions remain
+maintained under `scripts/`. Pass a current external ledger when assessing a new
+candidate.
 
-The [scorecard acceptance contract and evidence ledger](audits/scorecard-563/README.md) captures the October 3, 2026 source/release baseline and later reported automated Persona passes without replacing that historical failure. It separates current-source checks, unintegrated local patches, published-artifact observations, simulations, live runs and human acceptance. Its nine-row rubric and new budgets are proposals awaiting maintainer and independent-reviewer agreement; successful ledger validation does not award grades or establish release readiness.
-
-The [publication reconciliation](audits/scorecard-563/publication-reconciliation.md) records exact source-document identities and eleven publication claims, including default-password, ingress, workspace, worker and host-MCP limits. Its source inventory is separate from an integrated release review; every mapped publication claim remains pending candidate acceptance.
-
-A [fresh October 3 lockfile audit](audits/scorecard-563/evidence/npm-audit-2026-10-03.json), using the same lockfile as planning main `3511ba49514fe8cf525f5a22c16c3806bf3886ba`, failed with 8 high, 1 critical and 1 moderate affected packages. These package counts are separate from independent threat-model findings and installed-release acceptance. The [PR #600 candidate observation](audits/scorecard-563/evidence/dependency-remediation-59b65de8.json) retains checksummed producer-reported clean audits; its separate concurrent replay remains rejected because its source binding failed.
-
-The remediation is present in the unmerged 3.46.3 candidate at `b8cf905ff263559d8591f7dd839c2c75cf29f79f`. The [hosted candidate observation](audits/scorecard-563/evidence/hosted-ci-b8cf905f.json) verifies the executed merge/source tree correspondence and downloaded artifact digest. Its Ubuntu development-inclusive audit reports zero findings across 1,420 dependencies. This is hosted producer evidence, not a Docs audit replay or qualification of other installed graphs/profiles. Windows production/installed startup and final verification failed on that same candidate. The assessed-release audit, accepted full CI/build and installed-profile security remain pending; the September clean audit, planning failure and unbound replay stay visible.
-
-The subsequent [bce52c3e hosted observation](audits/scorecard-563/evidence/hosted-ci-bce52c3e.json) retains terminal success for all thirteen named verify-workflow checks and all four supported Node build/type/payload/packed-process profiles on Ubuntu and Windows. Its ordinary Jest result passed 893 suites and 8,385 assertions, retaining five and eleven skips respectively. The canonical runtime suite was omitted at that predecessor; later source corrections supply their own separate execution evidence. This pull-request source result does not qualify the new combined candidate, protected main or a distributed release, and does not establish security findings disposition, human operation or elapsed live acceptance. The earlier failed run remains retained.
-
-Open issues are tracked in [GitHub](https://github.com/mario-andreschak/FLUJO/issues). Release notes belong in [CHANGELOG.md](../CHANGELOG.md), including migration requirements, known regressions, and experimental limits.
+Open issues are tracked in [GitHub](https://github.com/mario-andreschak/FLUJO/issues).
+Release notes belong in [CHANGELOG.md](../CHANGELOG.md), including migration
+requirements, known regressions and experimental limits.

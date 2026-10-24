@@ -29,7 +29,7 @@ export function verifyReleaseRevision({ run, show, removeResults = (file) => rmS
   show('node scripts/generate-api-inventory.mjs --check');
   show('npm run test:dependency-glob');
   show('npm run lint:all');
-  show('node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs');
+  show('node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs scripts/qualify-conversation-recovery.test.mjs');
   show('node --test tests/installer-repository.test.mjs');
   show('node --test scripts/run-local-jest.test.mjs');
   show('node --test scripts/release-evidence.test.mjs');

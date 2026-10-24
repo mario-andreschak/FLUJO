@@ -194,6 +194,30 @@ it('retains the protocol final-answer phase separately from commentary', async (
   expect((await events.next()).value).toMatchObject({ item: { phase: 'final_answer', text: 'READY' } });
   await events.return(undefined); await thread.close();
 });
+it.each(['list_mcp_resources', 'list_mcp_resource_templates'])('continues after Codex built-in %s discovery', async tool => {
+  const thread = make(), events = await begin(thread);
+  const item = { id: 'discovery', type: 'mcpToolCall', server: 'codex', tool, arguments: {} };
+  send('item/started', { item: { ...item, status: 'inProgress' } });
+  send('item/completed', { item: { ...item, status: 'completed', result: { content: [] } } });
+  send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  expect((await events.next()).value).toMatchObject({ item: { tool, status: 'in_progress' } });
+  expect((await events.next()).value).toMatchObject({ item: { tool, status: 'completed' } });
+  expect((await events.next()).value?.type).toBe('turn.completed');
+  await events.return(undefined); await thread.close();
+  expect(thread.completedTurnId()).toBe('turn-1');
+});
+it.each([
+  { server: 'codex', tool: 'read_mcp_resource', arguments: {} },
+  { server: 'codex', tool: 'exec', arguments: {} },
+  { server: 'codex', tool: 'list_mcp_resources', arguments: { server: 'other' } },
+  { server: 'other', tool: 'list_mcp_resources', arguments: {} },
+])('does not broaden discovery into other tool authority (%j)', async item => {
+  const thread = make(), events = await begin(thread);
+  send('item/started', { item: { id: 'denied', type: 'mcpToolCall', status: 'inProgress', ...item } });
+  await expect(events.next()).rejects.toThrow('Unexpected Codex tool execution');
+  expect(thread.completedTurnId()).toBeUndefined();
+  expect(stop).toHaveBeenCalledTimes(1);
+});
 it('cancels owned startup before admission and drains it before reporting closure', async () => {
   let entered!: () => void;
   const admission = new Promise<void>(resolve => { entered = resolve; });

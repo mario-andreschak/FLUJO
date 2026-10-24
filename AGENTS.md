@@ -10,6 +10,16 @@ for these boundaries. Optional online integrations cannot confer or maintain
 local isolation. Qualify the actual local OS/process/filesystem boundaries on
 each supported platform before claiming complete multi-tenant support.
 
+# Repository hygiene
+
+Keep generated run records, provider traces, screenshots used only as proof,
+agent handovers and media production projects outside this repository. Commit
+media only when a published page or maintained product guide uses it. Reuse
+existing screenshots rather than committing identical copies.
+
+Perform cleanup and file deletions through the flujo-bash MCP. Keep the primary
+development checkout on `main`; remove temporary branches after delivery.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 ## This is NOT the Next.js you know

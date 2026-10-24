@@ -6,19 +6,12 @@ import { createLogger } from '@/utils/logger';
 import { isExecutionProtectedState } from '@/backend/execution/extensions';
 
 import type { ToolDefinition } from '../types';
+import type { BehaviorToolRegistry } from '@/shared/types/execution/behaviorTools';
+export type { BehaviorToolTarget, BehaviorToolRegistry } from '@/shared/types/execution/behaviorTools';
 
 const log = createLogger('backend/flow/execution/handlers/behaviorToolInvocation');
 
 export const BEHAVIOR_TOOL_PREFIX = 'call_behavior_';
-
-export interface BehaviorToolTarget {
-  personaId: string;
-  behaviorId: string;
-  name: string;
-  description: string;
-}
-
-export type BehaviorToolRegistry = Record<string, BehaviorToolTarget>;
 
 export function isBehaviorToolName(name: string): boolean {
   return name.startsWith(BEHAVIOR_TOOL_PREFIX);

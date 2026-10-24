@@ -5,6 +5,7 @@ import type { Persona, PersonaComposition } from '@/shared/types/enduringAgent';
 import type { PlannedExecution } from '@/shared/types/plannedExecution';
 
 const loadFlowsMock = jest.fn();
+const loadModelsMock = jest.fn();
 const listPersonasMock = jest.fn();
 const getCompositionMock = jest.fn();
 const createMock = jest.fn();
@@ -70,6 +71,23 @@ function activeIntersectionObserver(): MockIntersectionObserver {
 
 jest.mock('@/frontend/services/flow', () => ({
   flowService: { loadFlows: (...args: unknown[]) => loadFlowsMock(...args) },
+}));
+
+jest.mock('@/frontend/services/model', () => ({
+  modelService: { tryLoadModels: (...args: unknown[]) => loadModelsMock(...args) },
+}));
+
+jest.mock('@/frontend/components/PlannedExecutions/WatchToolPanel', () => ({
+  __esModule: true, default: () => <div data-testid="watch-tool-panel" />,
+}));
+jest.mock('@/frontend/components/PlannedExecutions/FileWatchPanel', () => ({
+  __esModule: true, default: () => <div data-testid="file-watch-panel" />,
+}));
+jest.mock('@/frontend/components/PlannedExecutions/UrlWatchPanel', () => ({
+  __esModule: true, default: () => <div data-testid="url-watch-panel" />,
+}));
+jest.mock('@/frontend/components/PlannedExecutions/FlowEventPanel', () => ({
+  __esModule: true, default: () => <div data-testid="flow-event-panel" />,
 }));
 
 jest.mock('@/frontend/services/personas', () => ({
@@ -216,6 +234,7 @@ describe('ExecutionModal Persona targets', () => {
     loadFlowsMock.mockResolvedValue([
       { id: 'flow-manual', name: 'Manual flow', nodes: [], edges: [] },
     ]);
+    loadModelsMock.mockResolvedValue([{ id: 'checker', name: 'Checker model' }]);
     listPersonasMock.mockResolvedValue([persona]);
     getCompositionMock.mockResolvedValue(composition);
     createMock.mockResolvedValue({ success: true });
@@ -268,6 +287,47 @@ describe('ExecutionModal Persona targets', () => {
       superExclusive: false,
       emergency: false,
     })));
+  });
+
+  it('offers one shared AI condition across all trigger types and saves a chosen model', async () => {
+    render(<ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />);
+    fireEvent.change(screen.getByLabelText('automations.modal.name'), { target: { value: 'Conditional automation' } });
+    fireEvent.click(screen.getByRole('button', { name: 'choose-flow' }));
+    fireEvent.click(screen.getByText('automations.tool.aiDecides'));
+    fireEvent.change(screen.getByLabelText(/automations.gate.condition/), { target: { value: 'Only urgent events' } });
+    await waitFor(() => expect(loadModelsMock).toHaveBeenCalled());
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: /automations.tool.modelChecker/ }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Checker model' }));
+    for (const key of ['webhook', 'file', 'tool', 'url', 'flowEvent', 'schedule']) {
+      fireEvent.click(screen.getByText(`automations.modal.${key}Title`));
+      expect(screen.getAllByText('automations.tool.aiDecides')).toHaveLength(1);
+      expect(screen.getByLabelText(/automations.gate.condition/)).toHaveValue('Only urgent events');
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'automations.modal.saveTrigger' }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
+      trigger: expect.objectContaining({ type: 'schedule' }),
+      aiGate: { mode: 'llm-gate', modelId: 'checker', condition: 'Only urgent events' },
+    })));
+  });
+
+  it('migrates a legacy flow checker and can explicitly turn it off', async () => {
+    const execution: PlannedExecution = {
+      ...legacyExclusiveExecution,
+      trigger: {
+        type: 'mcp-poll', serverName: 'mail', toolName: 'inbox', args: {},
+        evaluate: { mode: 'flow-gate', flowId: 'flow-manual', condition: 'Invoices only', maxCallsPerDay: 12 },
+      },
+    };
+    render(<ExecutionModal open execution={execution} onClose={jest.fn()} onSaved={jest.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText(/automations.gate.condition/)).toHaveValue('Invoices only'));
+    fireEvent.click(screen.getByRole('button', { name: 'automations.modal.saveTrigger' }));
+    await waitFor(() => expect(updateMock).toHaveBeenCalledWith(execution.id, expect.objectContaining({
+      trigger: expect.objectContaining({ evaluate: { mode: 'on-change' } }),
+      aiGate: { mode: 'flow-gate', flowId: 'flow-manual', condition: 'Invoices only', maxCallsPerDay: 12 },
+    })));
+    fireEvent.click(screen.getByText('automations.gate.always'));
+    fireEvent.click(screen.getByRole('button', { name: 'automations.modal.saveTrigger' }));
+    await waitFor(() => expect(updateMock).toHaveBeenLastCalledWith(execution.id, expect.objectContaining({ aiGate: null })));
   });
 
   it('renders three linked sections and persists canonical restriction controls', async () => {

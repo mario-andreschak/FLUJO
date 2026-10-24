@@ -17,6 +17,27 @@ const model: Model = { id: 'subscription', provider: 'codex', adapter: 'codex-cl
 
 beforeEach(() => { mockDiscover.mockReset(); });
 
+it('clears another model output ceiling when selecting Free whose catalogue ceiling is unknown', async () => {
+  mockDiscover.mockResolvedValue([
+    { id: 'recursive/flint-v1.0:free', name: 'Flint', contextWindow: 262_144, maxTokens: 235_929 },
+    { id: 'openrouter/free', name: 'Free', contextWindow: 200_000 },
+  ]);
+  const save = jest.fn(async (_model: Model) => ({ success: true }));
+  render(<ThemeProvider theme={createTheme()}><ModelModal open
+    model={{ ...model, provider: 'openrouter', adapter: 'openai-responses', name: 'recursive/flint-v1.0:free',
+      baseUrl: 'https://openrouter.ai/api/v1', ApiKey: 'offline-fixture', contextWindow: 262_144, maxTokens: 235_929 }}
+    onSave={save} onClose={jest.fn()} /></ThemeProvider>);
+  await waitFor(() => expect(mockDiscover).toHaveBeenCalled());
+  const name = screen.getByRole('combobox', { name: 'Technical name' });
+  fireEvent.change(name, { target: { value: 'openrouter/free' } });
+  fireEvent.keyDown(name, { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('option', { name: 'openrouter/free' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0][0]).toMatchObject({ name: 'openrouter/free', contextWindow: 200_000 });
+  expect(save.mock.calls[0][0].maxTokens).toBeUndefined();
+});
+
 it('shows a newly returned model and its reasoning options without a static suggestion or UI release', async () => {
   mockDiscover.mockResolvedValue([{ id: 'future-7.9', name: 'Future', reasoningEfforts: ['ultra'] }]);
   const save = jest.fn(async (_model: Model) => ({ success: true }));

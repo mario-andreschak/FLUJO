@@ -62,11 +62,11 @@ describe.each(['en', 'es'] as const)('schedule recovery in %s', (locale) => {
     const pending = deferred<typeof saved>();
     mockList.mockReturnValueOnce(pending.promise);
     mount();
-    expect(screen.getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByRole('switch')).toBeDisabled();
     expect(screen.queryByText(t('automations.list.active'))).not.toBeInTheDocument();
     await act(async () => pending.resolve({ paused: true, executions: [] }));
     expect(await screen.findByText(t('automations.list.noTriggers'))).toBeInTheDocument();
-    expect(screen.getByRole('checkbox')).toBeEnabled();
+    expect(screen.getByRole('switch')).toBeEnabled();
     mockList.mockRejectedValueOnce(new Error('offline'));
     fireEvent.click(screen.getByRole('button', { name: t('automations.list.refreshAria') }));
     expect(await screen.findByRole('alert')).toHaveTextContent(t('automations.list.stale'));
@@ -83,7 +83,7 @@ describe.each(['en', 'es'] as const)('schedule recovery in %s', (locale) => {
     expect(await screen.findByRole('alert')).toHaveTextContent(t('automations.list.loadFailed'));
     expect(screen.queryByText(t('automations.list.noTriggers'))).not.toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
-    expect(screen.getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByRole('switch')).toBeDisabled();
     mockList.mockResolvedValue(saved);
     fireEvent.click(screen.getByRole('button', { name: t('common.tryAgain') }));
     expect(await screen.findByRole('article')).toBeInTheDocument();
@@ -97,7 +97,7 @@ describe.each(['en', 'es'] as const)('schedule recovery in %s', (locale) => {
     mockList.mockRejectedValueOnce(new Error('offline'));
     await act(async () => { jest.advanceTimersByTime(10_000); });
     expect(screen.getByRole('article')).toHaveTextContent('Morning report');
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(screen.getByRole('switch')).not.toBeChecked();
     expect(screen.getByPlaceholderText(t('automations.list.search'))).toHaveValue('Morning');
     expect(screen.getByText(t('automations.list.stale'))).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: t('common.tryAgain') }));
@@ -110,17 +110,17 @@ describe.each(['en', 'es'] as const)('schedule recovery in %s', (locale) => {
     mockPause.mockReturnValueOnce(pending.promise).mockResolvedValue({ success: true });
     mount();
     await screen.findByRole('article');
-    fireEvent.click(screen.getByRole('checkbox'));
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
-    expect(screen.getByRole('checkbox')).toBeDisabled();
-    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('switch'));
+    expect(screen.getByRole('switch')).not.toBeChecked();
+    expect(screen.getByRole('switch')).toBeDisabled();
+    fireEvent.click(screen.getByRole('switch'));
     expect(mockPause).toHaveBeenCalledTimes(1);
     await act(async () => pending.resolve({ success: false }));
     expect(screen.getByText(t('automations.list.pauseFailed'))).toBeInTheDocument();
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(screen.getByRole('switch')).not.toBeChecked();
     mockList.mockResolvedValue({ ...saved, paused: false });
     fireEvent.click(screen.getByRole('button', { name: t('common.tryAgain') }));
-    await waitFor(() => expect(screen.getByRole('checkbox')).toBeChecked());
+    await waitFor(() => expect(screen.getByRole('switch')).toBeChecked());
     expect(mockPause).toHaveBeenLastCalledWith(false);
     expect(screen.queryByText(t('automations.list.pauseFailed'))).not.toBeInTheDocument();
   });
@@ -157,21 +157,21 @@ describe.each(['en', 'es'] as const)('schedule recovery in %s', (locale) => {
     const newRead = deferred<typeof saved>();
     mockList.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(newRead.promise);
     fireEvent.click(screen.getByRole('button', { name: t('automations.list.refreshAria') }));
-    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('switch'));
     expect(mockPause).toHaveBeenCalledTimes(1);
     expect(mockPause).toHaveBeenCalledWith(false);
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
-    expect(screen.getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByRole('switch')).not.toBeChecked();
+    expect(screen.getByRole('switch')).toBeDisabled();
     await act(async () => pauseWrite.resolve({ success: true }));
     await waitFor(() => {
-      expect(screen.getByRole('checkbox')).toBeChecked();
-      expect(screen.getByRole('checkbox')).toBeEnabled();
+      expect(screen.getByRole('switch')).toBeChecked();
+      expect(screen.getByRole('switch')).toBeEnabled();
     });
     expect(mockList).toHaveBeenCalledTimes(3);
     await act(async () => oldRead.resolve(saved));
-    expect(screen.getByRole('checkbox')).toBeChecked();
+    expect(screen.getByRole('switch')).toBeChecked();
     await act(async () => newRead.resolve({ ...saved, paused: false }));
-    expect(screen.getByRole('checkbox')).toBeChecked();
+    expect(screen.getByRole('switch')).toBeChecked();
   });
 
   it.each([true, false])('clears a lost pause response only when a fresh read confirms paused=%s', async (nextPaused) => {
@@ -185,22 +185,22 @@ describe.each(['en', 'es'] as const)('schedule recovery in %s', (locale) => {
     const confirmation = deferred<typeof saved>();
     mockList.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(confirmation.promise);
     fireEvent.click(screen.getByRole('button', { name: t('automations.list.refreshAria') }));
-    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('switch'));
     expect(await screen.findByText(t('automations.list.pauseFailed'))).toBeInTheDocument();
     // Even an old response matching the requested state cannot confirm the write.
     await act(async () => oldRead.resolve({ ...saved, paused: nextPaused }));
     expect(screen.getByText(t('automations.list.pauseFailed'))).toBeInTheDocument();
-    expect(screen.getByRole('checkbox')).toHaveProperty('checked', nextPaused);
+    expect(screen.getByRole('switch')).toHaveProperty('checked', nextPaused);
     // A fresh read of the original state still leaves the retry available.
     await act(async () => confirmation.resolve(initial));
     expect(screen.getByText(t('automations.list.pauseFailed'))).toBeInTheDocument();
-    expect(screen.getByRole('checkbox')).toHaveProperty('checked', nextPaused);
+    expect(screen.getByRole('switch')).toHaveProperty('checked', nextPaused);
     mockList.mockResolvedValue({ ...saved, paused: nextPaused });
     fireEvent.click(screen.getByRole('button', { name: t('automations.list.refreshAria') }));
     await waitFor(() => expect(screen.queryByText(t('automations.list.pauseFailed'))).not.toBeInTheDocument());
     expect(screen.queryByRole('button', { name: t('common.tryAgain') })).not.toBeInTheDocument();
-    expect(screen.getByRole('checkbox')).toHaveProperty('checked', !nextPaused);
-    expect(screen.getByRole('checkbox')).toBeEnabled();
+    expect(screen.getByRole('switch')).toHaveProperty('checked', !nextPaused);
+    expect(screen.getByRole('switch')).toBeEnabled();
     expect(screen.getByRole('article')).toHaveTextContent('Morning report');
     expect(screen.getByPlaceholderText(t('automations.list.search'))).toHaveValue('Morning');
     expect(mockPause).toHaveBeenCalledTimes(1);

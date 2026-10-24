@@ -31,7 +31,7 @@
 - Complete Persona translations in seven languages and improve narrow layouts, contrast, loading messages and dialog focus. Replace browser confirmations, retain failed-save drafts, localize generated History and default Role Behavior labels, correct Role page landmarks, and prevent translated navigation from overlapping workspace controls.
 - Add a separate Persona recovery ZIP with integrity validation, private-data disclosure and restoration into a new disabled workspace. Model/App connections require reconnection; saved work does not resume automatically.
 - Erase Persona-owned Flow copies/history, specialist-call payloads and private model archives during deletion; prevent stale writers from restoring erased data and protect Role versions referenced by historical work.
-- Bound detailed specialist-call retention, improve complete 50k Memory recall, share conversation log counters across server bundles and strengthen runtime/recovery evidence. Run endurance with the production Role factory and verify its saved setup independently; preserve earlier generic-Core results with their limits. Personas remain experimental; see the [audit and verification record](docs/audits/2026-09-19-persona-audit.md) for measured results and outstanding release gates.
+- Bound detailed specialist-call retention, improve complete 50k Memory recall, share conversation log counters across server bundles and strengthen runtime/recovery evidence. Run endurance with the production Role factory and verify its saved setup independently; preserve earlier generic-Core results with their limits. Personas remain experimental; see the audit and verification record for measured results and outstanding release gates.
 
 ### Subflow collaboration
 
@@ -82,7 +82,7 @@ Encryption migration: new writes use authenticated AES-256-GCM and a 32-byte ran
 - Preserve workspace isolation through MCP migration, process startup and portable-worker transfer.
 - Preserve cancelled Codex resume sessions without silently starting a fresh conversation.
 
-Known limitation: Personas remain experimental. The full offline 28-day simulation completed all 560 activities and passed recovery, retention and learning checks, but one daily event-append p95 was 169.69 ms against a 150 ms limit. Twelve of thirteen criteria passed; overall endurance acceptance did not. This release does not claim indefinite unattended reliability. See the [September 16 remediation record](docs/audits/2026-09-16-remediation.md) for validation scope and the [original audit](docs/audits/2026-09-16-project-audit.md) for the pre-fix findings.
+Known limitation: Personas remain experimental. The full offline 28-day simulation completed all 560 activities and passed recovery, retention and learning checks, but one daily event-append p95 was 169.69 ms against a 150 ms limit. Twelve of thirteen criteria passed; overall endurance acceptance did not. This release does not claim indefinite unattended reliability. See the September 16 remediation record for validation scope and the original audit for the pre-fix findings.
 
 ## [3.45.2] — 2026-09-06
 

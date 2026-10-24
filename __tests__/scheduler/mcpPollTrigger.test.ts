@@ -391,6 +391,21 @@ describe('armMcpPoll', () => {
     trigger.dispose();
   });
 
+  it('consumes a change rejected by the shared AI condition without checking it again', async () => {
+    const { deps, getState } = makeDeps();
+    (deps.onFire as jest.Mock).mockResolvedValue({ status: 'skipped', conditionRejected: true });
+    const trigger = armMcpPoll(config(), deps);
+    await flush();
+    (deps.callTool as jest.Mock).mockResolvedValue({ success: true, data: { v: 2 } });
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    expect(getState().lastHash).toBe(hashResult({ v: 2 }));
+    jest.advanceTimersByTime(TICK_MS);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    trigger.dispose();
+  });
+
   it('gives up after 3 consecutive failed deliveries and drops the change (#75)', async () => {
     const { deps, getState } = makeDeps();
     (deps.onFire as jest.Mock).mockResolvedValue({ status: 'error' });

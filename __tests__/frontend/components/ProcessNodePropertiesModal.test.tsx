@@ -275,7 +275,7 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
   it('places Persona abilities in their own section instead of Task', async () => {
     renderModal();
 
-    const ability = await screen.findByRole('checkbox', { name: 'Use existing memories' });
+    const ability = await screen.findByRole('switch', { name: 'Use existing memories' });
     expect(ability.closest('[data-section]')).toHaveAttribute('data-section', 'persona');
     expect(screen.getByTestId('process-task-split-container').closest('[data-section]')).toHaveAttribute('data-section', 'task');
     expect(screen.getByRole('tab', { name: 'Persona' })).toBeInTheDocument();
@@ -309,18 +309,18 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
       'Suggest reusable improvements',
     ];
     for (const label of friendlyAbilityLabels) {
-      expect(await screen.findByRole('checkbox', { name: label })).toBeInTheDocument();
+      expect(await screen.findByRole('switch', { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole('checkbox', { name: 'Use existing memories' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'Create ongoing tasks' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'Read goal execution status' })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Use existing memories' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Create ongoing tasks' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Read goal execution status' })).not.toBeChecked();
     expect(screen.queryByText('work_item_create')).not.toBeInTheDocument();
     expect(screen.queryByText('recall')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Learn & organize' }));
-    expect(screen.getByRole('checkbox', { name: 'Read goal execution status' })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Read goal execution status' })).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: 'All abilities' }));
-    expect(screen.getByRole('checkbox', { name: 'Forget memories' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Forget memories' })).toBeChecked();
     expect(screen.getByText('Forgetting takes effect immediately.')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));

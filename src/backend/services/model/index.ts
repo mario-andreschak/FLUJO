@@ -796,7 +796,16 @@ class ModelService {
 
     try {
       // --- Resolve the identifier to a configured model (displayName first) ---
-      const models = [...await this.loadModels(), ...(await listTeamModels()).models];
+      const shared = await listTeamModels();
+      if (shared.unavailable && !modelIdentifier.startsWith('team-model:')) {
+        // A missing shared page could hide a matching alias. Never let a
+        // transient team outage silently choose a same-named private model.
+        return { success: false, statusCode: 503, error: {
+          message: 'The shared model catalogue is unavailable. Retry or use the explicit team model identifier.',
+          type: 'service_unavailable', code: 'model_catalogue_unavailable', param: 'model',
+        } };
+      }
+      const models = [...await this.loadModels(), ...shared.models];
       const needle = modelIdentifier.trim().toLowerCase();
 
       // Public identifiers are aliases, not model IDs. A display name can

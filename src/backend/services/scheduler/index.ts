@@ -7,6 +7,8 @@ import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
   isPersonaControlledPlannedExecution,
+  validateAutomationAiGate,
+  withoutLegacyAiGate,
   normalizeStartRestrictions,
   OverlapStrategy,
   PlannedExecution,
@@ -70,6 +72,7 @@ import {
   deleteExecutionState,
   loadExecutionState,
   saveExecutionState,
+  updateExecutionState,
 } from './state';
 import {
   listDurableFileWatchIntents,
@@ -80,6 +83,7 @@ import {
   type DurableFileWatchIntent,
 } from './fileWatchOutbox';
 import type { FlowRunResult } from '@/backend/execution/flow/runFlow';
+import type { AiGateVerdict } from './triggers/llmGate';
 import {
   BehaviorSlotKeySchema,
   EnduringAgentIdSchema,
@@ -196,7 +200,9 @@ export interface AdmittedPersonaFire {
   /** Stable scheduler run id derived from the trusted delivery identity. */
   runId: string;
   /** Durable dispatcher envelope id returned after mailbox routing settles. */
-  dispatchId: string;
+  dispatchId?: string;
+  /** A condition can finish the event before any mailbox work is admitted. */
+  record?: RunRecord;
   /** Continuation/history work; callers may deliberately leave it in background. */
   completion: Promise<RunRecord>;
 }
@@ -232,7 +238,7 @@ export interface ApprovedPersonaTerminalInput {
 }
 
 interface PersonaAdmissionObserver {
-  resolve(value: { runId: string; dispatchId: string }): void;
+  resolve(value: { runId: string; dispatchId?: string; record?: RunRecord }): void;
   reject(error: unknown): void;
 }
 
@@ -526,7 +532,7 @@ export class SchedulerService {
 
   private async armExecution(execution: PlannedExecution): Promise<void> {
     if (!await this.isCurrentSchedule(execution)) return;
-    const trigger = execution.trigger;
+    const trigger = execution.aiGate !== undefined ? withoutLegacyAiGate(execution.trigger) : execution.trigger;
     switch (trigger.type) {
       case 'schedule': {
         const armedAt = Date.now();
@@ -669,9 +675,8 @@ export class SchedulerService {
             }),
             loadState: this.bindToWorkspace(() => loadExecutionState(execution.id)),
             saveState: this.bindToWorkspace(async patch => {
-              const current = await loadExecutionState(execution.id);
-              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before state commit');
-              await saveExecutionState(execution.id, { ...current, ...patch }, () => this.assertCurrentSchedule(execution));
+              await updateExecutionState(execution.id, current => ({ ...current, ...patch }),
+                () => this.assertCurrentSchedule(execution));
             }),
             // Await the run and report its outcome so the poll can advance its
             // change baseline only after a successful run (commit-after-success,
@@ -686,7 +691,7 @@ export class SchedulerService {
                 context,
                 ...(execution.personaId ? { deliveryId } : {}),
               });
-              return { status: record.status };
+              return { status: record.status, conditionRejected: record.conditionRejected };
             }),
             onError: this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message)),
             onSuccess: this.bindToWorkspace(() => this.lastTriggerErrors.delete(execution.id)),
@@ -709,9 +714,8 @@ export class SchedulerService {
             }),
             loadState: this.bindToWorkspace(() => loadExecutionState(execution.id)),
             saveState: this.bindToWorkspace(async patch => {
-              const current = await loadExecutionState(execution.id);
-              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before state commit');
-              await saveExecutionState(execution.id, { ...current, ...patch }, () => this.assertCurrentSchedule(execution));
+              await updateExecutionState(execution.id, current => ({ ...current, ...patch }),
+                () => this.assertCurrentSchedule(execution));
             }),
             // Await + report outcome so the baseline hash advances only after a
             // successful run (commit-after-success, issue #75).
@@ -724,7 +728,7 @@ export class SchedulerService {
                 context,
                 ...(execution.personaId ? { deliveryId } : {}),
               });
-              return { status: record.status };
+              return { status: record.status, conditionRejected: record.conditionRejected };
             }),
             onError: this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message)),
             onSuccess: this.bindToWorkspace(() => this.lastTriggerErrors.delete(execution.id)),
@@ -1284,6 +1288,8 @@ export class SchedulerService {
   private validateInput(
     input: Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>
   ): string | null {
+    const gateError = validateAutomationAiGate(input.aiGate);
+    if (gateError) return gateError;
     if (
       (input as PlannedExecution).personaArchived !== undefined
       || (input as PlannedExecution).personaRetired !== undefined
@@ -2153,7 +2159,59 @@ export class SchedulerService {
     const effectiveRunId = this.effectiveRunId(execution, payload, runId);
     return this.inWorkspace(() =>
       this.fireInternal(execution, payload, effectiveRunId, bypassOverlap)
-    );
+    ).finally(() => this.conditionChecks.delete(effectiveRunId));
+  }
+
+  /** Reuse a verdict while the same fire waits in an overlap/exclusive queue.
+   * Never accept a client-supplied verdict from the event payload. */
+  private readonly conditionChecks = new Map<string, Promise<AiGateVerdict>>();
+
+  private checkAutomationCondition(
+    execution: PlannedExecution,
+    payload: TriggerFirePayload,
+    runId: string,
+  ): Promise<AiGateVerdict> {
+    const existing = this.conditionChecks.get(runId);
+    if (existing) return existing;
+    const check = (async () => {
+      const config = execution.aiGate!;
+      const invalid = validateAutomationAiGate(config);
+      if (invalid) throw new Error(invalid);
+      await this.assertCurrentSchedule(execution);
+      if (this.stablePersonaDeliveryId(execution, payload)) {
+        const prior = (await loadRunRecords(execution.id)).find(record => record.runId === runId);
+        if (prior?.conditionRejected) return { fire: false, reason: 'Previously checked delivery' };
+        // Already admitted mailbox work owns its outcome; a delivery retry must
+        // not replace it with a newly evaluated condition.
+        if (prior?.status === 'completed' || prior?.status === 'needs_approval') {
+          return { fire: true, reason: 'Previously admitted delivery' };
+        }
+      }
+      if (await isEncryptionLocked()) throw new Error('encryption locked');
+      const { evaluateTriggerAiGate, DEFAULT_MAX_CALLS_PER_DAY } = await import('./triggers/llmGate');
+      const day = new Date().toISOString().slice(0, 10);
+      const cap = config.maxCallsPerDay ?? DEFAULT_MAX_CALLS_PER_DAY;
+      // Reserve before the model call, under the same cross-process state lock
+      // as schedule cursor advances. Concurrent events cannot overspend the cap.
+      await updateExecutionState(execution.id, state => {
+        const count = state.llmCallsDay === day ? state.llmCallsCount ?? 0 : 0;
+        if (count >= cap) throw new Error(`Daily AI-check budget reached (${cap}/day) — checks resume tomorrow`);
+        return { ...state, llmCallsDay: day, llmCallsCount: count + 1 };
+      }, () => this.assertCurrentSchedule(execution));
+      const verdict = await evaluateTriggerAiGate({
+        kind: payload.kind,
+        occurredAt: new Date().toISOString(),
+        automationName: execution.name,
+        ...('timezone' in execution.trigger ? { timezone: execution.trigger.timezone } : {}),
+        summary: payload.summary,
+        context: payload.context,
+      }, config, payload.chainDepth);
+      // Editing, pausing or deleting during the check revokes this fire.
+      await this.assertCurrentSchedule(execution);
+      return verdict;
+    })();
+    this.conditionChecks.set(runId, check);
+    return check;
   }
 
   /**
@@ -2169,9 +2227,9 @@ export class SchedulerService {
       throw new TypeError('Durable Persona admission requires a Persona target.');
     }
     const effectiveRunId = this.effectiveRunId(execution, payload, runId);
-    let resolveAdmission!: (value: { runId: string; dispatchId: string }) => void;
+    let resolveAdmission!: PersonaAdmissionObserver['resolve'];
     let rejectAdmission!: (error: unknown) => void;
-    const admission = new Promise<{ runId: string; dispatchId: string }>((resolve, reject) => {
+    const admission = new Promise<{ runId: string; dispatchId?: string; record?: RunRecord }>((resolve, reject) => {
       resolveAdmission = resolve;
       rejectAdmission = reject;
     });
@@ -2181,7 +2239,7 @@ export class SchedulerService {
       effectiveRunId,
       false,
       { resolve: resolveAdmission, reject: rejectAdmission },
-    ));
+    )).finally(() => this.conditionChecks.delete(effectiveRunId));
     void completion.catch(rejectAdmission);
     const admitted = await admission;
     return { ...admitted, completion };
@@ -2573,6 +2631,42 @@ export class SchedulerService {
         triggerSummary: payload.summary,
         error: error.message,
       };
+    }
+
+    // Manual "Run now" is an explicit override. All automatic sources, including
+    // catch-up and flow events, check BEFORE mailbox admission or emergency work.
+    if (execution.aiGate !== undefined && execution.aiGate !== null && payload.kind !== 'manual') {
+      let verdict: AiGateVerdict | undefined;
+      let gateError: string | undefined;
+      try {
+        verdict = await this.checkAutomationCondition(execution, payload, runId);
+        await this.assertCurrentSchedule(execution);
+      } catch (error) {
+        gateError = error instanceof Error ? error.message.replace(/^config:\s*/, '') : String(error);
+      }
+      if (!verdict?.fire) {
+        const record: RunRecord = {
+          runId,
+          executionGenerationId: this.executionGenerationId(execution),
+          conversationId: '',
+          firedAt,
+          finishedAt: new Date().toISOString(),
+          // A stable Persona delivery has not reached mailbox admission yet.
+          // Keep provider/lock failures retryable; a terminal error here would
+          // permanently mask the result of a later successful admission.
+          status: gateError && !stablePersonaDelivery ? 'error' : 'skipped',
+          triggerSummary: payload.summary,
+          ...(gateError ? {} : { conditionRejected: true }),
+          error: gateError ?? `AI condition not met${verdict?.reason ? `: ${verdict.reason}` : ''}`,
+        };
+        if (gateError) this.lastTriggerErrors.set(execution.id, gateError);
+        else this.lastTriggerErrors.delete(execution.id);
+        const persisted = await this.persistFireRecord(execution, payload, record);
+        if (gateError) admissionObserver?.reject(new Error(gateError));
+        else admissionObserver?.resolve({ runId, record: persisted.record });
+        return persisted.record;
+      }
+      this.lastTriggerErrors.delete(execution.id);
     }
 
     const restrictions = normalizeStartRestrictions(execution);

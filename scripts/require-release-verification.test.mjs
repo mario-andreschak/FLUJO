@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requireSuccessfulVerification, selectVerificationRun, validatePublicationContext } from './require-release-verification.mjs';
+import { requireSuccessfulVerification, selectVerificationRun, validatePublicationContext, validateVerificationWorkflow } from './require-release-verification.mjs';
 import { REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
 
 const revision = 'a'.repeat(40);
@@ -11,6 +11,24 @@ const evidence = () => ({
   jobs: REQUIRED_CHECK_NAMES.map((name) => ({ name, status: 'completed', conclusion: 'success' })),
 });
 const context = { repository: 'mario-andreschak/FLUJO', revision, checkout: revision, ref: 'refs/heads/main', publication: 'image', version: '3.45.2' };
+
+test('manual CI pause preserves workflow identity without accepting unknown workflows', () => {
+  const workflow = { id: workflowId, path: '.github/workflows/verify.yml', state: 'active' };
+  assert.equal(validateVerificationWorkflow(workflow), workflowId);
+  assert.equal(validateVerificationWorkflow({ ...workflow, state: 'disabled_manually' }), workflowId);
+  for (const change of [{ path: '.github/workflows/other.yml' }, { id: 0 }, { id: '42' }, { state: 'deleted' }]) {
+    assert.throws(() => validateVerificationWorkflow({ ...workflow, ...change }), /authoritative verification/);
+  }
+});
+
+test('paused CI still refuses a green release run with a missing required job', async () => {
+  validateVerificationWorkflow({ id: workflowId, path: '.github/workflows/verify.yml', state: 'disabled_manually' });
+  const incomplete = evidence();
+  incomplete.jobs.pop();
+  await assert.rejects(requireSuccessfulVerification({ revision, workflowId,
+    listRuns: () => [valid], readRunEvidence: () => incomplete,
+  }), /publication refused/);
+});
 
 test('only official exact-SHA main images or matching version installers can publish', () => {
   validatePublicationContext(context);

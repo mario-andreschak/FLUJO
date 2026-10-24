@@ -320,19 +320,27 @@ export async function atomicWriteWithoutLinks(
       await handle.close();
     }
 
-    // Revalidate immediately before the atomic rename. rename replaces a final
-    // symlink itself; it never writes through that link to its target.
-    await ensureLinkFreeDirectory(boundaryPath, parent, false);
-    const temporaryNow = await fs.lstat(temporary, { bigint: true });
-    if (!owned || temporaryNow.isSymbolicLink() || !temporaryNow.isFile() || !sameFileIdentity(owned, temporaryNow)) {
-      throw new Error('Restore temporary file changed before publication.');
+    // Windows readers/virus scanners can briefly prevent replacement. Retry
+    // the same owned temporary file, revalidating all authority and pathname
+    // witnesses before EVERY publication attempt. Never delete the target to
+    // make a rename succeed or retry validation failures as sharing conflicts.
+    for (let attempt = 0; ; attempt++) {
+      await ensureLinkFreeDirectory(boundaryPath, parent, false);
+      const temporaryNow = await fs.lstat(temporary, { bigint: true });
+      if (!owned || temporaryNow.isSymbolicLink() || !temporaryNow.isFile() || !sameFileIdentity(owned, temporaryNow)) {
+        throw new Error('Restore temporary file changed before publication.');
+      }
+      const currentTarget = await lstatOptional(destination);
+      if (currentTarget?.isSymbolicLink() || (currentTarget && !currentTarget.isFile())) {
+        throw new Error(`Restore target became unsafe: ${destination}`);
+      }
+      await assertOwned?.();
+      try { await fs.rename(temporary, destination); break; }
+      catch (error) {
+        if (attempt >= 14 || !['EPERM', 'EBUSY', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(100, 5 * 2 ** attempt)));
+      }
     }
-    const currentTarget = await lstatOptional(destination);
-    if (currentTarget?.isSymbolicLink() || (currentTarget && !currentTarget.isFile())) {
-      throw new Error(`Restore target became unsafe: ${destination}`);
-    }
-    await assertOwned?.();
-    await fs.rename(temporary, destination);
     created = false;
     await assertOwned?.();
   } finally {

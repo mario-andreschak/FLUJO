@@ -7,6 +7,16 @@ import { assertVerificationAttempt, assertVerificationJobs } from './verificatio
 const REPOSITORY = 'mario-andreschak/FLUJO';
 const WORKFLOW_PATH = '.github/workflows/verify.yml';
 
+export function validateVerificationWorkflow(workflow) {
+  // Administrative pause stops future triggers; it does not invalidate the
+  // exact release run, whose current attempt and required jobs are checked below.
+  if (workflow?.path !== WORKFLOW_PATH || !Number.isSafeInteger(workflow.id) || workflow.id <= 0
+      || !['active', 'disabled_manually'].includes(workflow.state)) {
+    throw new Error('The authoritative verification workflow could not be identified.');
+  }
+  return workflow.id;
+}
+
 export function validatePublicationContext({ repository, revision, checkout, ref, publication, version, expectedRevision, expectedVersion }) {
   if (repository?.toLowerCase() !== REPOSITORY.toLowerCase()) throw new Error('Publication is restricted to the official FLUJO repository.');
   if (!/^[a-f0-9]{40}$/.test(revision || '') || checkout !== revision) throw new Error('Publication checkout must match the exact GitHub commit.');
@@ -70,9 +80,7 @@ async function main() {
     expectedRevision: process.env.RELEASE_SHA, expectedVersion: process.env.RELEASE_VERSION,
   });
   const workflow = JSON.parse(exec('gh', ['api', `repos/${REPOSITORY}/actions/workflows/verify.yml`]));
-  if (workflow.path !== WORKFLOW_PATH || !Number.isSafeInteger(workflow.id) || workflow.state !== 'active') {
-    throw new Error('The authoritative verification workflow could not be identified.');
-  }
+  validateVerificationWorkflow(workflow);
   const deadline = Date.now() + 120 * 60 * 1000;
   const runId = await requireSuccessfulVerification({
     revision, workflowId: workflow.id,

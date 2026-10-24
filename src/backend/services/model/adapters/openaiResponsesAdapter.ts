@@ -102,7 +102,8 @@ const sessionKey = (conversationId?: string, nodeId?: string): string | undefine
   conversationId ? JSON.stringify([conversationId, nodeId ?? null]) : undefined;
 
 type ReasoningInput = Pick<CompletionInput, 'model' | 'apiKey' | 'messages' | 'tools'
-  | 'conversationId' | 'nodeId' | 'toolNameMap' | 'responsesSession' | 'onResponsesSessionChange' | 'signal'>;
+  | 'conversationId' | 'nodeId' | 'toolNameMap' | 'responsesSession' | 'onResponsesSessionChange' | 'signal'
+  | 'disableReasoningForRecovery'>;
 
 /** Capture ownership before dispatch so a late response cannot overwrite a
  * replacement route or a forgotten session. Only unchanged provider-visible
@@ -123,6 +124,7 @@ export function prepareResponsesReasoning(input: ReasoningInput, adapter: string
     connection: input.model.id, model: input.model.name, provider: input.model.provider,
     baseUrl: input.model.baseUrl, credential: input.apiKey,
     reasoningEffort: input.model.reasoningEffort, outputModalities: input.model.outputModalities,
+    ...(input.disableReasoningForRecovery && input.model.provider === 'openrouter' ? { reasoningDisabled: true } : {}),
     tools: input.tools ?? [], toolNameMap: input.toolNameMap ?? {} });
   let session = sessions.get(key);
   // A conversation checkpoint is authoritative over the disposable cache. A
@@ -517,8 +519,21 @@ export function fromResponse(
     || response.status === 'queued' || response.status === 'in_progress') {
     // HTTP 200 and streamed partial output do not confirm a usable reply. Keep
     // both completion paths from exposing tool calls or advancing checkpoints.
-    throw new Error('The AI provider did not complete the reply'
-      + (response.error?.message ? `: ${response.error.message}` : ` (${response.status})`));
+    // This can be an HTTP 200 with a failed response envelope. Preserve the
+    // upstream code and bounded metadata through ModelHandler's API-error path;
+    // do not invent an HTTP status or retain partial output/tool arguments.
+    throw new OpenAI.APIError(undefined, {
+      ...response.error,
+      message: 'The AI provider did not complete the reply'
+        + (response.error?.message ? `: ${response.error.message}` : ` (${response.status})`),
+      code: response.error?.code || 'provider_response_not_completed',
+      type: 'provider_response_error',
+      responseStatus: response.status,
+      responseId: response.id,
+      model: response.model || modelName,
+      incompleteReason: response.incomplete_details?.reason,
+    }, 'The AI provider did not complete the reply'
+      + (response.error?.message ? `: ${response.error.message}` : ` (${response.status})`), undefined);
   }
   const textParts: string[] = [];
   const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
@@ -724,6 +739,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     tools,
     temperature,
     maxTokens,
+    outputSchema,
     signal,
     onProviderAttempt,
     onSdkRequest,
@@ -746,7 +762,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     });
 
     const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
-      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal }, 'openai-responses');
+      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal,
+      disableReasoningForRecovery: assessmentInput.disableReasoningForRecovery }, 'openai-responses');
 
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const input = reasoningState.replay(toResponsesInput(translateMessagesForProvider(messages, toolNames)));
@@ -768,12 +785,16 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       // Stateless by design — FLUJO owns the history and rewrites it every turn,
       // which an append-only server-side thread cannot represent.
       store: false,
+      ...(outputSchema ? { text: { format: { type: 'json_schema', name: 'flujo_output', strict: true, schema: outputSchema } },
+        ...(model.provider === 'openrouter' ? { provider: { require_parameters: true } } : {}) } : {}),
       ...(explicitCache && !omit.has('prompt_cache_options')
         ? { prompt_cache_options: { mode: 'explicit' } } : {}),
       ...(allTools.length ? { tools: allTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
       ...(omit.has('temperature') ? {} : { temperature }),
-      ...(model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
+      ...(assessmentInput.disableReasoningForRecovery && model.provider === 'openrouter'
+        ? { reasoning: { enabled: false } }
+        : model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
       // The point of this adapter: get the reasoning trace back so the next turn
       // of the loop doesn't re-derive it.
       ...(omit.has('include') ? {} : { include: ['reasoning.encrypted_content'] }),
@@ -795,10 +816,15 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
         () => observeSdkRequest(
           { onSdkRequest, onSdkRequestResult, signal },
           { adapter: 'openai-responses', operation: 'responses.create', request: body },
-          () => openai.responses.create(
+          async () => {
+            const response = await openai.responses.create(
               body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
               readOnlyAssessment || getHarnessExecution() ? { signal, maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
-            ),
+            );
+            // Failed envelopes must also close the dispatch archive as errors.
+            fromResponse(response, model.name);
+            return response;
+          },
         ),
         { signal, onAttempt: onProviderAttempt, ...(readOnlyAssessment || getHarnessExecution() ? { maxAttempts: 1 } : {}) },
       ) as Promise<OpenAI.Responses.Response>;
@@ -846,6 +872,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     tools,
     temperature,
     maxTokens,
+    outputSchema,
+    disableReasoningForRecovery,
     signal,
     conversationId,
     nodeId,
@@ -868,7 +896,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       defaultHeaders: getProviderDefaultHeaders(model.provider),
     });
     const reasoningState = prepareResponsesReasoning({ model, apiKey, messages, tools,
-      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal }, 'openai-responses');
+      conversationId, nodeId, toolNameMap, responsesSession, onResponsesSessionChange, signal,
+      disableReasoningForRecovery }, 'openai-responses');
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const input = reasoningState.replay(toResponsesInput(translateMessagesForProvider(messages, toolNames)));
     const responsesTools = toResponsesTools(translateToolsForProvider(tools, toolNames));
@@ -892,10 +921,14 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       ...(explicitCache && !omit.has('prompt_cache_options')
         ? { prompt_cache_options: { mode: 'explicit' } } : {}),
       stream: true,
+      ...(outputSchema ? { text: { format: { type: 'json_schema', name: 'flujo_output', strict: true, schema: outputSchema } },
+        ...(model.provider === 'openrouter' ? { provider: { require_parameters: true } } : {}) } : {}),
       ...(allTools.length ? { tools: allTools } : {}),
       ...(typeof maxTokens === 'number' ? { max_output_tokens: maxTokens } : {}),
       ...(omit.has('temperature') ? {} : { temperature }),
-      ...(model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
+      ...(disableReasoningForRecovery && model.provider === 'openrouter'
+        ? { reasoning: { enabled: false } }
+        : model.reasoningEffort ? { reasoning: { effort: model.reasoningEffort } } : {}),
       ...(omit.has('include') ? {} : { include: ['reasoning.encrypted_content'] }),
       ...(omit.has('prompt_cache_key') || !promptCacheKey ? {} : { prompt_cache_key: promptCacheKey }),
     });
@@ -905,10 +938,27 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       const stream = await observeSdkRequest(
         { onSdkRequest, onSdkRequestResult, signal },
         { adapter: 'openai-responses', operation: 'responses.create(stream)', request: body },
-        () => openai.responses.create(
-          body as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
-          signal ? { signal } : undefined,
-        ),
+        async () => {
+          const stream = await openai.responses.create(
+            body as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
+            signal ? { signal } : undefined,
+          );
+          return (async function* () {
+            let terminal = false;
+            for await (const event of stream) {
+              if (event.type === 'response.completed' || event.type === 'response.failed'
+                || event.type === 'response.incomplete') {
+                terminal = true;
+                fromResponse(event.response, model.name);
+              }
+              yield event;
+            }
+            if (!terminal) throw new OpenAI.APIError(undefined, {
+              code: 'provider_stream_incomplete', type: 'provider_response_error',
+              message: 'OpenAI Responses stream ended without a terminal response',
+            }, undefined, undefined);
+          })();
+        },
       );
       let response: OpenAI.Responses.Response | undefined;
       const toolIndexes = new Map<string, number>();
@@ -955,7 +1005,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
           response = event.response;
         }
       }
-      if (!response) throw new Error('OpenAI Responses stream ended without a terminal response');
+      if (!response) throw new OpenAI.APIError(undefined, {
+        code: 'provider_stream_incomplete', type: 'provider_response_error', message: 'OpenAI Responses stream ended without a terminal response',
+      }, 'OpenAI Responses stream ended without a terminal response', undefined);
       streamedMedia = audioChunks.length > 0
         ? [{
             type: 'audio',

@@ -13,6 +13,10 @@
 const writeRunResourceMock = jest.fn();
 const readRunResourceMock = jest.fn();
 const getRunResourceLocalPathMock = jest.fn();
+const nativeReadResourceMock = jest.fn();
+jest.mock('@/backend/execution/flow/handlers/mcpResourceTools', () => ({
+  executeNativeReadResource: (...args: unknown[]) => nativeReadResourceMock(...args),
+}));
 jest.mock('@/backend/services/runResources', () => ({
   writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
   readRunResourceBounded: (...args: unknown[]) => readRunResourceMock(...args),
@@ -59,6 +63,7 @@ beforeEach(() => {
   writeRunResourceMock.mockResolvedValue(written);
   getRunResourceLocalPathMock.mockReset();
   getRunResourceLocalPathMock.mockResolvedValue(null);
+  nativeReadResourceMock.mockReset();
 });
 
 describe('buildRunResourceTools', () => {
@@ -150,6 +155,45 @@ describe('read_resource execution (#168)', () => {
   it('rejects a non-run URI', async () => {
     const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri: 'http://example.com' }, { conversationId: 'conv-1' });
     expect(outcome.success).toBe(false);
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['fluo', 'fluijo', 'flujoa', 'flujx', 'fljuo'])('recovers the %s scheme without changing the exact resource identity', async scheme => {
+    const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME,
+      { uri: `${scheme}://run/conv-1/res-9`, expected_sha256: 'original-digest' }, { conversationId: 'conv-1' });
+    expect(outcome).toMatchObject({ success: true, data: { uri, content: 'FULL CONTENT' } });
+    expect(readRunResourceMock).toHaveBeenCalledWith(uri,
+      expect.objectContaining({ expectedSha256: 'original-digest' }));
+  });
+
+  it.each([
+    ['fluo://run/other-conv/res-9', { conversationId: 'conv-1' }],
+    ['fluo://run/conv-1/../res-9', { conversationId: 'conv-1' }],
+    ['flo://run/conv-1/res-9', { conversationId: 'conv-1' }],
+    ['https://run/conv-1/res-9', { conversationId: 'conv-1' }],
+    ['fluo://run/conv-1/res-9', {}],
+  ])('does not repair ambiguous or out-of-scope locator %s', async (locator, context) => {
+    const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri: locator }, context);
+    expect(outcome.success).toBe(false);
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('never guesses a resource ID when repairing the scheme', async () => {
+    readRunResourceMock.mockResolvedValue(null);
+    const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME,
+      { uri: 'fluo://run/conv-1/res-missing' }, { conversationId: 'conv-1' });
+    expect(outcome).toMatchObject({ success: false, error: 'Run resource not found: flujo://run/conv-1/res-missing' });
+    expect(readRunResourceMock).toHaveBeenCalledTimes(1);
+    expect(readRunResourceMock.mock.calls[0][0]).toBe('flujo://run/conv-1/res-missing');
+  });
+
+  it('preserves a similarly named native MCP scheme when a server is bound', async () => {
+    nativeReadResourceMock.mockResolvedValue({ success: true, data: 'native resource' });
+    const locator = 'fluo://run/conv-1/res-9';
+    const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri: locator },
+      { conversationId: 'conv-1', mcpNodes: [{ id: 'bound', properties: {} }] });
+    expect(outcome).toEqual({ success: true, data: 'native resource' });
+    expect(nativeReadResourceMock.mock.calls[0][0]).toBe(locator);
     expect(readRunResourceMock).not.toHaveBeenCalled();
   });
 

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { readArchivedFixture } from './read-archived-fixture.mjs';
 import { test } from 'node:test';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { TRIAGE_FLOWS, READ_FLOW_TOOLS, repairDefinition, repairRuntime, definitionHash } from './repair-production-issue-triage.mjs';
 
-const originals = await Promise.all(TRIAGE_FLOWS.map(target => readFile(new URL(`../docs/audits/evidence/production-issue-triage-515-2026-10-12/canonical-before/${target.name}.json`, import.meta.url), 'utf8').then(JSON.parse)));
+const originals = TRIAGE_FLOWS.map(target => JSON.parse(readArchivedFixture(`docs/audits/evidence/production-issue-triage-515-2026-10-12/canonical-before/${target.name}.json`)));
 const expected = Object.fromEntries(originals.map(flow => [flow.id, definitionHash(flow)]));
 
 test('canonical repair is idempotent and preserves model bindings, legacy tools, ids and unrelated graph nodes', () => {

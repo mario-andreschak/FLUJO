@@ -52,9 +52,9 @@ const log = createLogger('frontend/components/models/modal');
 
 import { ModelResult } from '@/frontend/services/model';
 
-const discoveredModelMetadata = (model: NormalizedModel): Partial<Model> => ({
-  ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
-  ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+const discoveredModelMetadata = (model: NormalizedModel, changed = false): Partial<Model> => ({
+  ...(changed || model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+  ...(changed || model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
   ...(model.supportsTools !== undefined ? { supportsTools: model.supportsTools } : {}),
   ...(model.supportedParameters !== undefined ? { supportedParameters: model.supportedParameters } : {}),
   ...(model.inputModalities !== undefined ? { inputModalities: model.inputModalities } : {}),
@@ -811,7 +811,7 @@ export const ModelModal = ({ open, model, onSave, onClose, configurationOnly = f
                       name: newValue || '',
                       ...(selected ? {
                         description: selected.description ?? prev.description,
-                        ...discoveredModelMetadata(selected),
+                        ...discoveredModelMetadata(selected, true),
                       } : {}),
                     }));
                     setErrors(prev => ({ ...prev, name: '' }));
@@ -819,7 +819,17 @@ export const ModelModal = ({ open, model, onSave, onClose, configurationOnly = f
                   onInputChange={(_, newValue) => {
                     // Provider results are fetched once and filtered locally.
                     // freeSolo deliberately preserves arbitrary manual model IDs.
-                    handleChange('name', newValue);
+                    // MUI does not emit onChange when a typed value already
+                    // equals the chosen option. Apply its limits here too.
+                    setFormState(prev => {
+                      if (prev.name === newValue) return prev;
+                      const selected = openRouterModels.find(candidate => candidate.id === newValue);
+                      // Catalogue selection replaces its limits, including
+                      // unknown ceilings. Manual IDs retain explicit overrides.
+                      return { ...prev, name: newValue,
+                        ...(selected ? discoveredModelMetadata(selected, true) : {}) };
+                    });
+                    setErrors(prev => ({ ...prev, name: '' }));
                   }}
                   filterOptions={(options, state) => {
                     const inputValue = state.inputValue.toLowerCase();

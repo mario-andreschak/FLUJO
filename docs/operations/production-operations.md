@@ -21,7 +21,7 @@ does not identify the exact bytes that were installed.
 
 | Profile | Launch and persistent storage | Qualification still needed |
 | --- | --- | --- |
-| npm, Windows or Linux | Use an explicitly pinned `flujo-ai` version with a Node runtime admitted by that package's `engines` (`^22.19.0` or `^24.2.0` in this source). The installed `flujo` command accepts `--no-open --port 4200`; set `FLUJO_DATA_DIR` to a dedicated protected directory. Retain npm's SRI and the source/release mapping. | Exact package startup, owner authentication, diagnosis, upgrade and restored-data checks on both OS profiles. |
+| npm, Windows or Linux | Use an explicitly pinned `flujo-ai` version with a Node runtime admitted by that package's `engines` (`^22.23.4` or `^24.22.1` in this source). The installed `flujo` command accepts `--no-open --port 4200`; set `FLUJO_DATA_DIR` to a dedicated protected directory. Retain npm's SRI and the source/release mapping. | Exact package startup, owner authentication, diagnosis, upgrade and restored-data checks on both OS profiles. |
 | Windows stable installer | Use the exact versioned release asset and verify its digest. Retain its installation manifest and revision/channel. Keep application checkout and `FLUJO_DATA_DIR` separate; run as the installation's dedicated user. | Networked bootstrapper plus runtime upgrade/rollback on a non-author machine. A script fetched from `main` is a development-channel install. |
 | Linux source installation | Check out the pinned commit in a dedicated application directory, use its lockfile with `npm ci --include=dev`, build once, and supervise `npm start -- --hostname 127.0.0.1 --port 4200` under the installation account. Keep the complete data root outside the source checkout. | Exact source/build mapping, service stop/restart, descendants, browser/MCP dependencies and distribution-specific service integration. |
 | Container, Windows/Linux Docker host | Pull an independently recorded immutable image digest. Run its non-root application user and mount the complete `/app/data` root. Bind both application and MCP Apps listeners to host loopback unless the authenticated ingress profile has been qualified. | Exact image, platform, mounts, OS enforcement, resource limits, MCP grant/removal, reboot and recovery. Image labels and self-reported revision alone are insufficient. |
@@ -232,7 +232,7 @@ Do not describe them as a signed or tamper-proof audit trail.
 
 ## Acceptance record for #570
 
-The [source operations recovery drill](../audits/2026-10-14-operations-recovery-source-570.md)
+The source operations recovery drill
 provides integrated built-app evidence for provider-reported 408/429/400 errors,
 explicit retry, expired owner access, retained approval, graceful restart and
 generation-bound Bash teardown. Restart can invalidate a pending tool binding:
@@ -241,7 +241,7 @@ an explicit decision on that proposal. The stale call must not execute. This
 source drill records actual counted effects and keeps the broader acceptance
 below open.
 
-The [complete installation source restore drill](../audits/2026-10-14-installation-restore-source-570.md)
+The complete installation source restore drill
 verifies a stopped encrypted full-root capture with separate owner/key/session
 material, original-path publication, missing/mismatched protection refusal,
 retained session decisions and one explicit retry using the restored credential.
@@ -250,7 +250,7 @@ policy with an active credential before restarting. Changing network exposure
 does not repair configured owner authority. This regular-file source fixture
 does not qualify an installed artifact or an upgrade/rollback.
 
-The [independent automated source operator drill](../audits/2026-10-14-independent-operator-upgrade-source-570.md)
+The independent automated source operator drill
 consumes exact 3.46.2 and 3.46.3 source builds through their normal Windows
 launcher. It verifies USER-encrypted profile startup, failed-job diagnosis,
 stopped complete backup, same-root upgrade, candidate restore and compatible

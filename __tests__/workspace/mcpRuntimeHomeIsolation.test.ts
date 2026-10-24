@@ -20,10 +20,13 @@ import { materializeProtectedPackageRunner } from '../mcp/fixtures/protectedPack
 const priorDataDir = process.env.FLUJO_DATA_DIR;
 const priorParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
 const priorPlaywrightBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+const priorOwnerPolicy = process.env.FLUJO_OWNER_AUTH_FILE;
 let dataRoot: string;
 
 beforeAll(async () => {
   dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-runtime-isolation-'));
+  // Exercise private-policy installations, not the native localhost opt-out.
+  process.env.FLUJO_OWNER_AUTH_FILE = path.join(dataRoot, 'unconfigured-owner.json');
   process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
   process.env.FLUJO_DATA_DIR = dataRoot;
   await ensureWorkspaceDirs();
@@ -32,6 +35,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (priorOwnerPolicy === undefined) delete process.env.FLUJO_OWNER_AUTH_FILE;
+  else process.env.FLUJO_OWNER_AUTH_FILE = priorOwnerPolicy;
   if (priorParentDataDir === undefined) delete process.env.FLUJO_PARENT_DATA_DIR;
   else process.env.FLUJO_PARENT_DATA_DIR = priorParentDataDir;
   if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;

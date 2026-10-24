@@ -25,11 +25,18 @@ test-outputs
 **/node_modules
 **/.cache
 
-# Docs / site assets not needed at runtime.
+# Site assets are excluded except the public OAuth metadata imported by the app.
 docs/images
-githubpages
+githubpages/*
+!githubpages/oauth
+githubpages/oauth/*
+!githubpages/oauth/client-metadata.json
 
 # Local/scratch artifacts.
+**/evidence
+docs/audits
+docs/plans
+.tmp
 *.tsbuildinfo
 *.log
 npm-debug.log*

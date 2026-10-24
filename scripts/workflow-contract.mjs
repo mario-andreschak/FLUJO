@@ -23,7 +23,7 @@ function assertVerificationRunners(workflow) {
 }
 
 export function assertNodeRuntimeWorkflowContract(workflows) {
-  const profiles = Object.values(CI_NODE_PROFILES);
+  const profiles = [...new Set(Object.values(CI_NODE_PROFILES))];
   for (const [file, workflow] of Object.entries(workflows)) {
     for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
       const steps = job.steps ?? [];
@@ -49,9 +49,13 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
       }
     }
   }
-  const contractTests = ['verification-contract', 'workflow-contract', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity', 'selector-parser-security']
+  const contractTests = ['verification-contract', 'workflow-contract', 'verify-repository-rules', 'verify-ci-node', 'node-runtime', 'scanner-workflow-contract', 'probe-filesystem-identity', 'selector-parser-security', 'qualify-conversation-recovery']
     .map((name) => `scripts/${name}.test.mjs`);
   const contractSteps = workflows['verify.yml']?.jobs?.['workflow-contract']?.steps ?? [];
+  const contractCheckout = contractSteps.find(step => step.uses?.startsWith('actions/checkout@'));
+  if (contractCheckout?.with?.['fetch-depth'] !== 0) {
+    throw new Error('Workflow integrity checks require full history for the pinned historical fixtures.');
+  }
   if (!contractSteps.some((step) => {
     const words = step.run?.trim().split(/\s+/) ?? [];
     return words[0] === 'node' && words[1] === '--test'
@@ -93,20 +97,39 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
 
 function assertInstallerProvenance(workflow) {
   if (!Object.hasOwn(workflow?.on ?? {}, 'workflow_dispatch') || Object.hasOwn(workflow.on, 'pull_request')) throw new Error('Installer validation must remain manual/release-only.');
+  for (const id of ['powershell-tests', 'clean-windows']) {
+    const checkout = workflow.jobs?.[id]?.steps?.find(step => step.uses?.startsWith('actions/checkout@'));
+    if (checkout?.with?.['fetch-depth'] !== 0) {
+      throw new Error('Installer decision checks require full history for the pinned signed checksum fixture.');
+    }
+  }
   const tagOnly = "${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}";
   const build = workflow?.jobs?.['installer-build'];
   const attest = workflow?.jobs?.['installer-attest'];
+  const acceptance = workflow?.jobs?.['installer-acceptance'];
   const publish = workflow?.jobs?.['installer-publish'];
   if (!build || (build.permissions && Object.values(build.permissions).some((value) => value !== 'read' && value !== 'none'))
       || build.outputs?.artifact_id !== '${{ steps.installer-artifact.outputs.artifact-id }}'
       || build.outputs?.sha256 !== '${{ steps.installer-digest.outputs.sha256 }}'
-      || attest?.if !== tagOnly || attest.needs !== 'installer-build'
+      || attest?.if !== tagOnly || JSON.stringify(attest.needs) !== JSON.stringify(['installer-build', 'installer-acceptance'])
       || publish?.if !== tagOnly || JSON.stringify(publish.needs) !== JSON.stringify(['installer-build', 'installer-attest'])
       || attest.permissions?.['id-token'] !== 'write' || attest.permissions?.attestations !== 'write'
       || attest.permissions?.['artifact-metadata'] !== 'write' || attest.permissions?.contents !== 'read'
       || publish.permissions?.contents !== 'write' || publish.permissions?.attestations !== 'read'
       || publish.permissions?.['id-token']) {
     throw new Error('Installer build/sign/publication authority or original-artifact binding changed.');
+  }
+  const acceptanceDownload = acceptance?.steps?.find(step => step.uses?.startsWith('actions/download-artifact@'));
+  const installedCheck = acceptance?.steps?.find(step => step.run === "./scripts/verify-windows-install.ps1 -BootstrapNode:('${{ matrix.os }}' -eq 'windows-2025') -ExistingOutdatedNode:('${{ matrix.os }}' -eq 'windows-2022')");
+  if (acceptance?.needs !== 'installer-build' || acceptance.if || acceptance['continue-on-error']
+      || acceptance['runs-on'] !== '${{ matrix.os }}'
+      || JSON.stringify(acceptance.strategy?.matrix?.os) !== JSON.stringify(['windows-2022', 'windows-2025'])
+      || acceptanceDownload?.with?.['artifact-ids'] !== '${{ needs.installer-build.outputs.artifact_id }}'
+      || acceptanceDownload.with.path !== 'installer/Output'
+      || acceptance.env?.EXPECTED_INSTALLER_SHA256 !== '${{ needs.installer-build.outputs.sha256 }}'
+      || !installedCheck || installedCheck.if || installedCheck['continue-on-error']
+      || acceptance.steps.some(step => /ISCC\.exe|npm run build/.test(step.run ?? ''))) {
+    throw new Error('Installer acceptance must install and launch the original compiled bytes before signing.');
   }
   const compile = build.steps.findIndex((step) => step.name === 'Compile and validate the installer');
   const originalDigest = build.steps.findIndex((step) => step.id === 'installer-digest');
@@ -168,6 +191,14 @@ function assertCodexUpdateSelection(workflow) {
 
 export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
+  const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
+  const installerDecisions = releaseSteps.find(step => step.name === 'Verify Windows installer decisions before publication');
+  if (releaseSteps.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth'] !== 0
+      || installerDecisions?.if !== "runner.os == 'Windows'" || installerDecisions.shell !== 'powershell'
+      || installerDecisions['continue-on-error']
+      || installerDecisions.run !== 'Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck\nImport-Module Pester -RequiredVersion 5.7.1\nInvoke-Pester -Path tests/installer.Tests.ps1 -CI\n') {
+    throw new Error('Release safety must enforce the full Windows installer decisions with pinned Pester and historical fixtures before publication.');
+  }
   assertCodexUpdateSelection(workflows['codex-sdk-auto-merge.yml']);
   assertNodeRuntimeWorkflowContract(workflows);
   assertScannerWorkflowContract(workflows['verify.yml']);
@@ -233,7 +264,8 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
     if (!job || job.if !== undefined || job['continue-on-error']) throw new Error(`Required job ${id} cannot be conditional or optional.`);
     for (const step of job.steps ?? []) {
       if (!step.run) continue;
-      if (step.if !== undefined && !isApplicationSelection('verify.yml', id, step.if)) throw new Error(`Required command in ${id} cannot be conditional.`);
+      if (step.if !== undefined && !isApplicationSelection('verify.yml', id, step.if)
+          && !(id === 'release-safety' && step === installerDecisions)) throw new Error(`Required command in ${id} cannot be conditional.`);
       if (step['continue-on-error'] && !['npm run test:ci', 'npm run test:isolated'].includes(step.run)) {
         throw new Error(`Unapproved optional command in ${id}.`);
       }
@@ -290,7 +322,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
   }
   const preparation = mainTests[isolation].run;
   if (!preparation.includes("digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'")
-      || !preparation.includes('for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do')
+      || !preparation.includes('for registry in node:22.23.4-bookworm-slim public.ecr.aws/docker/library/node:22.23.4-bookworm-slim; do')
       || !preparation.includes('for attempt in 1 2; do')
       || !preparation.includes('pull "$registry@$digest"')
       || !preparation.includes('test -n "$image_ref"')

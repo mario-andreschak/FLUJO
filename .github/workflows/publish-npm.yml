@@ -42,10 +42,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           package-manager-cache: false
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+        run: node scripts/verify-ci-node.mjs 24.22.1 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,10 +70,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           package-manager-cache: false
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+        run: node scripts/verify-ci-node.mjs 24.22.1 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,7 +90,7 @@ jobs:
           # Both registries must provide the same pinned upstream manifest.
           digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'
           image_ref=''
-          for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do
+          for registry in node:22.23.4-bookworm-slim public.ecr.aws/docker/library/node:22.23.4-bookworm-slim; do
             for attempt in 1 2; do
               if "$docker_path" --host "$daemon" pull "$registry@$digest"; then
                 image_ref="$registry@$digest"
@@ -131,10 +131,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           package-manager-cache: false
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+        run: node scripts/verify-ci-node.mjs 24.22.1 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -160,10 +160,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           package-manager-cache: false
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+        run: node scripts/verify-ci-node.mjs 24.22.1 --record
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
@@ -204,10 +204,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           package-manager-cache: false
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+        run: node scripts/verify-ci-node.mjs 24.22.1 --record
       - run: npm install --global npm@11.21.0 --ignore-scripts
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -240,10 +240,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           package-manager-cache: false
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+        run: node scripts/verify-ci-node.mjs 24.22.1 --record
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.prepare.outputs.artifact_id }}

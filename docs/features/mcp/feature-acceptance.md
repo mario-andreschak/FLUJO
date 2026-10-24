@@ -86,7 +86,7 @@ combined release qualification remain open. Current
 Windows packaged listing passed on #1056; #1050's original intermittent cause remains
 unidentified. A later pass cannot establish its historical cause.
 
-October 15 [Tool Tester browser evidence](../../audits/evidence/mcp-apps-browser-1093-2026-10-15.json)
+October 15 Tool Tester browser evidence
 covers source-production SDK1 HTTP at 1440px and SDK2 modern HTTP at 390px. It
 proves initialization/input/result ordering, same-server visibility, safe-link
 success reporting, downloads, undeclared-host/frame refusal, revocation/remount
@@ -94,7 +94,7 @@ and cancellation of real pending tool work. It fixes a safe link opening with no
 opener while incorrectly returning an error. No provider call is required by this
 tool-only journey.
 
-The later [exact-port and restart evidence](../../audits/evidence/mcp-apps-exact-ports-1093-2026-10-15.json)
+The later exact-port and restart evidence
 supersedes the earlier loopback widening exception. [PR #1161](https://github.com/mario-andreschak/FLUJO/pull/1161)
 preserves declared fixed ports and supports ephemeral-port changes through
 **Reload app**, including failed-read retry and pending-call cancellation. Both
@@ -102,7 +102,7 @@ SDK generations pass two actual listener restarts each. Genuine OAuth and separa
 hosted/installed release qualification remain open. Browser local-network permission was granted
 only for each owned sandbox origin; no App CSP/permission setting was relaxed.
 
-October 15 [live OAuth preparation](../../audits/evidence/mcp-oauth-preparation-1093-2026-10-15.json)
+October 15 live OAuth preparation
 adds genuine BankingMCP registration and real Slack consent-screen preparation,
 with encrypted PKCE/client persistence and 16 constructed callback rejection/
 replay checks on the production routes. No authorization-code exchange or real

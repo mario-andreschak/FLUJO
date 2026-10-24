@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const page = readFileSync(path.resolve(__dirname, '../../../githubpages/index.html'), 'utf8');
+const packageVersion = JSON.parse(readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf8')).version as string;
 const script = new DOMParser().parseFromString(page, 'text/html')
   .querySelector('script:not([src]):not([type])')?.textContent;
 if (!script) throw new Error('Landing page script is missing');
@@ -55,7 +56,7 @@ test('every gallery screenshot opens with its original caption and closes with E
     expect(element('#lightbox').classList.contains('open')).toBe(false);
     expect(document.body.style.overflow).toBe('');
   }
-  expect(element('#app-version').textContent).toBe('v3.46.3');
+  expect(element('#app-version').textContent).toBe(`v${packageVersion}`);
 });
 
 test('all feature screenshots, keyboard selection and connected feature buttons still work', () => {

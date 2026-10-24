@@ -21,7 +21,8 @@ function boundSummaryArtifacts(candidates: readonly WireSummaryArtifact[]): Wire
     const identity = JSON.stringify([artifact.nodeId, artifact.modelId]);
     if (identities.has(identity)) continue;
     identities.add(identity);
-    const size = artifact.summaryText.length;
+    const size = artifact.summaryText.length + JSON.stringify(artifact.summaryRanges ?? []).length
+      + JSON.stringify(artifact.protectedUserIds ?? []).length;
     if (retained.length >= 64 || characters + size > 1_048_576) continue;
     characters += size;
     retained.push(artifact);
@@ -40,7 +41,15 @@ function isArtifact(value: unknown): value is WireSummaryArtifact {
     typeof artifact.summaryText === 'string' &&
     typeof artifact.policyVersion === 'string' &&
     typeof artifact.sourceMessageCount === 'number' &&
-    typeof artifact.createdAt === 'number';
+    typeof artifact.createdAt === 'number' &&
+    (artifact.protectedUserIds === undefined || (Array.isArray(artifact.protectedUserIds)
+      && artifact.protectedUserIds.every(id => typeof id === 'string'))) &&
+    (artifact.summaryRanges === undefined || (Array.isArray(artifact.summaryRanges) && artifact.summaryRanges.length <= 256
+      && artifact.summaryRanges.every(range => range && Number.isSafeInteger(range.level) && range.level >= 0
+        && Number.isSafeInteger(range.sourceMessageCount) && range.sourceMessageCount > 0
+        && typeof range.sourceStartId === 'string' && typeof range.sourceEndId === 'string'
+        && typeof range.sourceDigest === 'string' && typeof range.summaryText === 'string'
+        && typeof range.resourceUri === 'string' && range.resourceUri.startsWith('flujo://run/' + artifact.conversationId + '/'))));
 }
 
 /**

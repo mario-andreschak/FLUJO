@@ -42,7 +42,8 @@ export type RunResourceSource =
   | 'model-output'
   | 'user-input'
   | 'visual-archive'
-  | 'compaction-artifact';
+  | 'compaction-artifact'
+  | 'image-input';
 
 export interface RunResourceProducer {
   source: RunResourceSource;
@@ -105,6 +106,9 @@ export interface RunResourceEntry {
   kind: RunResourceKind;
   /** How the payload file is encoded on disk. */
   encoding: 'utf8' | 'base64';
+  /** Store-owned classification: generated text summaries are durable memory;
+   * captured JSON and image originals still consume their configured quotas. */
+  spillQuotaExempt?: boolean;
   createdAt: number;
   producedBy: RunResourceProducer;
   /** Visual archive lineage shared by its exact-source sidecar and PNG pages. */
@@ -127,9 +131,9 @@ export interface RunResourceSettings {
    * resources; shorter ones ("file exists", small listings) stay inline only.
    */
   textThresholdChars: number;
-  /** Per-resource payload cap; larger writes are skipped (kept inline). */
+  /** Optional capture/spill cap; durable conversation memory and original images are excluded. */
   maxResourceBytes: number;
-  /** Total payload budget per conversation; writes beyond it are skipped. */
+  /** Optional capture/spill budget per conversation, excluding durable memory and original images. */
   maxConversationBytes: number;
   /**
    * When true, LARGE TEXT tool results are also replaced in the tool message

@@ -47,10 +47,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           # Build once on a supported runtime, then qualify the same artifacts below.
-          node-version: '24.21.0'
+          node-version: '24.22.1'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+        run: node scripts/verify-ci-node.mjs 24.22.1 --record
       - name: Determine whether application qualification inputs changed
         id: application-change
         shell: bash
@@ -110,12 +110,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         if: steps.application-change.outputs.changed == 'true'
         with:
-          node-version: '22.19.0'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
         if: steps.application-change.outputs.changed == 'true'
-        run: node scripts/verify-ci-node.mjs 22.19.0 --record
-      - name: Qualify installed app and packed MCP packages on Node 22.19.0
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - name: Qualify installed app and packed MCP packages on Node 22.23.4
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
@@ -124,40 +124,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         if: steps.application-change.outputs.changed == 'true'
         with:
-          node-version: '22.23.3'
+          node-version: '24.22.1'
           cache: npm
       - name: Verify exact official Node runtime
         if: steps.application-change.outputs.changed == 'true'
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
-      - name: Qualify installed app and packed MCP packages on Node 22.23.3
-        if: steps.application-change.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run smoke:mcp-artifacts
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        if: steps.application-change.outputs.changed == 'true'
-        with:
-          node-version: '24.2.0'
-          cache: npm
-      - name: Verify exact official Node runtime
-        if: steps.application-change.outputs.changed == 'true'
-        run: node scripts/verify-ci-node.mjs 24.2.0 --record
-      - name: Qualify installed app and packed MCP packages on Node 24.2.0
-        if: steps.application-change.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run smoke:mcp-artifacts
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        if: steps.application-change.outputs.changed == 'true'
-        with:
-          node-version: '24.21.0'
-          cache: npm
-      - name: Verify exact official Node runtime
-        if: steps.application-change.outputs.changed == 'true'
-        run: node scripts/verify-ci-node.mjs 24.21.0 --record
-      - name: Qualify installed app and packed MCP packages on Node 24.21.0
+        run: node scripts/verify-ci-node.mjs 24.22.1 --record
+      - name: Qualify installed app and packed MCP packages on Node 24.22.1
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
@@ -186,10 +158,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - run: npm ci --include=dev
       - name: Profile the unchanged full runtime workload
         env:
@@ -230,12 +202,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
       # Workflow structure checks use the lockfile-pinned YAML dependency.
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - run: npm ci --include=dev
       - name: Preserve clean release checkout after dependency install
         run: >-
@@ -249,6 +222,13 @@ jobs:
       # Tests intercept every release subprocess before execution.
       - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs scripts/installer-release.test.mjs
       - run: node --test tests/installer-repository.test.mjs
+      - name: Verify Windows installer decisions before publication
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+          Import-Module Pester -RequiredVersion 5.7.1
+          Invoke-Pester -Path tests/installer.Tests.ps1 -CI
       - name: Verify isolated launcher bootstrap and child environment
         run: node --test scripts/bootstrap-directory.test.mjs scripts/bootstrap-launcher.test.mjs
       - run: node --test scripts/run-local-jest.test.mjs
@@ -280,10 +260,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - run: npm ci --include=dev
       # tsconfig.json includes __tests__/, so this also type-checks the suite.
       # It stops after the first fatal syntax error, which is why the Jest run
@@ -308,14 +288,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # Integrity fixtures are pinned to an immutable historical revision.
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - run: npm ci --include=dev
-      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/required-check-workflow.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/required-check-workflow.test.mjs scripts/next-lint-glob.test.mjs scripts/selector-parser-security.test.mjs
+      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/required-check-workflow.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/required-check-workflow.test.mjs scripts/next-lint-glob.test.mjs scripts/selector-parser-security.test.mjs scripts/qualify-conversation-recovery.test.mjs
 
   dependency-security:
     name: dependency-security
@@ -327,10 +309,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - run: npm ci --include=dev
       - name: Audit the installed lockfile dependencies, including build tools
         run: npm audit --include=dev --audit-level=high --json > dependency-audit.json
@@ -382,10 +364,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - run: npm ci --include=dev
       # Covers src/, __tests__/ and scripts/ with warnings treated as errors.
       - name: Verify the locked Next lint adapter and real rule callers
@@ -402,10 +384,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - run: npm ci --include=dev
       # Workspace creation and migration exercise the shipped package payloads.
       # A clean checkout has no compiled dist until this explicit prerequisite.
@@ -422,7 +404,7 @@ jobs:
           # Both registries must provide the same pinned upstream manifest.
           digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'
           image_ref=''
-          for registry in node:22.23.3-bookworm-slim public.ecr.aws/docker/library/node:22.23.3-bookworm-slim; do
+          for registry in node:22.23.4-bookworm-slim public.ecr.aws/docker/library/node:22.23.4-bookworm-slim; do
             for attempt in 1 2; do
               if "$docker_path" --host "$daemon" pull "$registry@$digest"; then
                 image_ref="$registry@$digest"
@@ -454,15 +436,6 @@ jobs:
         run: npm run test:ci
       - name: Verify the published test baseline
         run: npm run verify:test-baseline -- --stage=ci --results=jest-results.json
-      - name: Run deterministic memory ranking experiment
-        run: npm run test:memory-experiment -- --json=memory-experiment-results.json --commit=${{ github.sha }}
-      - name: Upload memory experiment results
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: memory-experiment-results
-          path: memory-experiment-results.json
-          if-no-files-found: warn
       - name: Upload Jest results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -481,10 +454,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
           cache: npm
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - run: npm ci --include=dev
       - name: Build the standalone MCP packages
         run: npm run build:mcp
@@ -493,13 +466,6 @@ jobs:
       - name: Run the process-boundary suites
         id: jest
         continue-on-error: true
-        env:
-          # Hosted runners are slower than a developer laptop; the harness
-          # honours this override instead of a hardcoded budget.
-          FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS: 120000
-          # Preserve the exact reconciliation fields when the smoke gate fails.
-          PERSONA_SOAK_OUTPUT: soak-smoke-artifacts
-          PERSONA_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-isolated-smoke
         run: npm run test:isolated
       - name: Verify the published test baseline
         run: npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json
@@ -509,13 +475,6 @@ jobs:
         with:
           name: jest-results-isolated
           path: jest-results-isolated.json
-          if-no-files-found: warn
-      - name: Upload Persona smoke evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: persona-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: soak-smoke-artifacts/
           if-no-files-found: warn
 
   verification:
@@ -530,9 +489,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '22.23.3'
+          node-version: '22.23.4'
       - name: Verify exact official Node runtime
-        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
       - name: Refuse missing, skipped, cancelled or failed prerequisites
         env:
           VERIFICATION_NEEDS: ${{ toJSON(needs) }}

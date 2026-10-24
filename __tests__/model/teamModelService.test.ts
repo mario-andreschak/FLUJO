@@ -37,3 +37,9 @@ it('reports a partial catalogue without losing private models and never privatel
   expect(await modelService.getModel(sharedModel.id)).toBeNull();
   expect(saveItem).not.toHaveBeenCalled();
 });
+
+it('does not resolve an ambiguous public alias against a partial shared catalogue', async () => {
+  (listTeamModels as jest.Mock).mockResolvedValue({ models: [], unavailable: true });
+  expect(await modelService.generateChatCompletion({ modelIdentifier: 'Private', messages: [{ role: 'user', content: 'hello' }] }))
+    .toMatchObject({ success: false, statusCode: 503, error: { code: 'model_catalogue_unavailable' } });
+});

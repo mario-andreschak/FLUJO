@@ -7,6 +7,7 @@ import { createLogger } from '@/utils/logger';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { getInstallMode } from '@/utils/paths';
 import { AI_CLI_PACKAGES, buildWingetArgs, type AiCliTool } from './winget';
+import { inspectBundledCodexSetup } from '@/backend/services/model/adapters/codexSetup';
 
 const log = createLogger('app/api/setup/ai-cli/route');
 
@@ -18,6 +19,7 @@ async function GET_handler(_request: NextRequest) {
     platform: process.platform,
     installMode: getInstallMode(),
     oneClickInstall: process.platform === 'win32' && getInstallMode() !== 'container',
+    codex: await inspectBundledCodexSetup(),
   });
 }
 
@@ -36,7 +38,7 @@ async function POST_handler(request: NextRequest) {
   let tool: AiCliTool;
   try {
     const body = (await request.json()) as { tool?: unknown };
-    if (typeof body.tool !== 'string' || !(body.tool in AI_CLI_PACKAGES)) {
+    if (typeof body.tool !== 'string' || !Object.hasOwn(AI_CLI_PACKAGES, body.tool)) {
       return Response.json({ error: 'Unknown AI tool' }, { status: 400 });
     }
     tool = body.tool as AiCliTool;

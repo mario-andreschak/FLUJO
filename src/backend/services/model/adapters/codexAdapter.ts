@@ -25,6 +25,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult, type SteeringDelivery } from './types';
 import { steeringSource, watchSteering, UncertainSteeringSubmissionError } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
+import { assertCodexTransportInput } from './codexInputCompaction';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { assertNativeToolPort, assertNativeToolPortModelTools } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext } from '@/backend/execution/flow/handlers/nativeOriginalHost';
@@ -89,6 +90,7 @@ const MAX_SPAWN_CALLS = 32;
 // separate filesystem authority exposed by FLUJO's MCP bridge.
 export const CODEX_FLUJO_INSTRUCTIONS =
   'FLUJO MCP tools are the authoritative interface for the operations they expose. ' +
+  'Read flujo://run/ archive and image references using the FLUJO read_resource tool when offered; these are tool-managed resources, not MCP resources/list or read_mcp_resource entries. ' +
   'When filesystem__ tools are available, use them for all file operations; they run outside the Codex sandbox under FLUJO-managed roots and approvals, so a path may be valid even when it is outside the Codex working directory. ' +
   'Call filesystem__get_allowed_directories before guessing roots, and do not inspect the Codex runtime working directory unless the user explicitly asks.';
 
@@ -368,11 +370,12 @@ export class CodexAdapter implements CompletionAdapter {
         signal: requestSignal,
       }); } finally { recordToolCall(ti, messageId); }
     };
-    const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
+    const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'> & { media?: import('@/shared/types/model/media').ModelMediaPart[] }): void => {
       recordMessage({
         role: 'tool',
         tool_call_id: ti.id,
         content: ti.resultContent,
+        ...(ti.media?.length ? { media: ti.media } : {}),
         ...(ti.ui ? { ui: ti.ui } : {}),
       });
       unansweredTools.delete(ti.id);
@@ -511,18 +514,21 @@ export class CodexAdapter implements CompletionAdapter {
                 log.debug('Codex local tool call', { tool: fnName });
                 const toolStartedAt = Date.now();
                 let resultContent: string;
+                let localMedia: CallToolResult['content'] = [];
                 let isError = false;
                 try {
                   const localResult = await localExec(args ?? {});
+                  const split = splitToolResultMedia(localResult as CallToolResult);
+                  localMedia = split.mediaItems;
                   // Replay evidence already contains the original serialized tool result.
-                  resultContent = harnessExecution && typeof localResult === 'string' ? localResult : JSON.stringify(localResult);
+                  resultContent = harnessExecution && typeof localResult === 'string' ? localResult : JSON.stringify(split.textResult);
                 } catch (err) {
                   if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost') throw err;
                   resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
                   isError = true;
                 }
                 requestSignal?.throwIfAborted();
-                recordToolResult({ id: callId, resultContent });
+                recordToolResult({ id: callId, resultContent, media: extractNativeMediaParts(localMedia) });
                 if (runId) {
                   recordStatisticsEvent(createStatisticsEvent({
                     type: 'tool.invocation',
@@ -536,7 +542,7 @@ export class CodexAdapter implements CompletionAdapter {
                 }
                 return isError
                   ? { content: [{ type: 'text', text: resultContent }], isError: true }
-                  : { content: [{ type: 'text', text: resultContent }] };
+                  : { content: [{ type: 'text', text: resultContent }, ...localMedia] };
               } catch (error) {
                 if (requestSignal?.aborted && unansweredTools.has(callId)) recordToolResult({ id: callId,
                   resultContent: 'The user input request ended before completion; no answer was submitted.' });
@@ -949,6 +955,11 @@ export class CodexAdapter implements CompletionAdapter {
       }
 
       capturedThreadId = resumeThreadId;
+      assertCodexTransportInput([
+        ...inputItems.map(item => item.type === 'text' ? item.text : item.path),
+        // App-server instructions are supplied separately from the turn items.
+        ...(ordinaryThreadPath ? [configuration.developerInstructions, systemPrompt ?? ''] : []),
+      ]);
       if (resumeThreadId) {
         if (ordinaryThreadPath) protocolBaseline = codexSession?.totalUsage
           ?? findReusableCodexSession(sessionTracking!.key, sessionTracking!.prefixHash, messages)?.totalUsage;

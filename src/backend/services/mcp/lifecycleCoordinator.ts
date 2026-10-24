@@ -47,7 +47,7 @@ export interface McpRuntimeRecord {
   readonly runtimeId: string;
   state: McpRuntimeState;
   /**
-   * Incremented on every accepted connect. A callback (onclose/onerror) or a
+   * Incremented when an accepted connection replaces the client. A callback (onclose/onerror) or a
    * lease that captured an older generation is stale and must be a no-op.
    */
   generation: number;
@@ -174,16 +174,17 @@ export async function beginConnect<T>(
   return promise;
 }
 
-/** Record a successful connect: bump generation, clear failure state. */
-export function markConnected(serverName: string, configFingerprint?: string): number {
+/** Record success without invalidating leases when the same client was revalidated. */
+export function markConnected(serverName: string, configFingerprint?: string, reusedClient = false): number {
   const record = getRuntime(serverName);
-  record.generation += 1;
+  const newGeneration = !reusedClient || record.generation === 0;
+  if (newGeneration) record.generation += 1;
   record.shutdownReceipt = undefined;
   record.state = 'warm';
-  record.configFingerprint = configFingerprint;
+  if (newGeneration || configFingerprint !== undefined) record.configFingerprint = configFingerprint;
   record.retryAttempts = 0;
   record.lastError = undefined;
-  record.warmSince = Date.now();
+  if (newGeneration) record.warmSince = Date.now();
   record.lastUsedAt = Date.now();
   return record.generation;
 }

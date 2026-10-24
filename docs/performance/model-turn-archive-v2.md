@@ -76,7 +76,7 @@ all active writers. This reduces repeated registration overhead without making
 mutation bodies run serially. The synthetic local reproduction does not establish
 the original production deployment's latency or resolve every #757 finding.
 
-The [October 14 source qualification](evidence/dispatch-admission-757-2026-10-14.json)
+The October 14 source qualification
 uses actual saved-model lookup, credential decryption, storage, recovery and SDK
 calls with a counted loopback provider. At concurrency 16, two repetitions
 reduced `run:start` to `model:dispatch` p95 from 3014/2886 ms to 1734/1602 ms.

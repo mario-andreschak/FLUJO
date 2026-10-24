@@ -159,6 +159,23 @@ describe('armUrlWatch', () => {
     trigger.dispose();
   });
 
+  it('consumes a change rejected by AI while retaining ordinary skip retries', async () => {
+    const { deps, fetchImpl, getState } = makeDeps();
+    fetchImpl.mockResolvedValueOnce(htmlResponse('v1'));
+    const trigger = armUrlWatch(config, deps);
+    await flush();
+    const previous = getState().lastHash;
+    (deps.onFire as jest.Mock).mockResolvedValue({ status: 'skipped', conditionRejected: true });
+    fetchImpl.mockImplementation(async () => htmlResponse('v2'));
+    jest.advanceTimersByTime(1100);
+    await flush();
+    expect(getState().lastHash).not.toBe(previous);
+    jest.advanceTimersByTime(1100);
+    await flush();
+    expect(deps.onFire).toHaveBeenCalledTimes(1);
+    trigger.dispose();
+  });
+
   it('stops checking after dispose and exposes the next run time', async () => {
     const { deps, fetchImpl } = makeDeps();
     fetchImpl.mockResolvedValue(htmlResponse('a'));

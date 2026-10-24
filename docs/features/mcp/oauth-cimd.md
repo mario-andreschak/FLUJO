@@ -79,7 +79,7 @@ registrations, custom documents, issuer/state/replay failures, and GET/POST call
 
 ## Qualified CIMD maintenance acceptance (2026-10-16)
 
-[Exact inputs and results](../../audits/evidence/oauth-cimd-acceptance-2026-10-16.json)
+Exact inputs and results
 cover the existing CIMD implementation combined with main's Undici security patches.
 All 128 focused checks pass across both SDK generations, discovery/installation,
 issuer/state isolation, existing clients and the connection UI. The initial CIMD UI

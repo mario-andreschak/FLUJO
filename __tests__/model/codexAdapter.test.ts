@@ -880,6 +880,22 @@ describe('CodexAdapter — cooperative terminal controls', () => {
 });
 
 describe('CodexAdapter — tool bridging', () => {
+  it('delivers local resource images as native pixels and retains transcript media', async () => {
+    let sdkResult: unknown;
+    const pixels = { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' };
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      sdkResult = await capturedBridgeTools[0].handler({ uri: 'flujo://run/test/image' });
+      yield agentMessage('read');
+      yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+    })() }));
+    const { transcript } = await new CodexAdapter().createCompletion(baseInput({
+      tools: [{ type: 'function', function: { name: 'read_resource', parameters: { type: 'object' } } }],
+      localToolExecutors: { read_resource: async () => ({ content: [{ type: 'text', text: 'original crop' }, pixels] }) },
+    }));
+    expect(sdkResult).toMatchObject({ content: [expect.objectContaining({ type: 'text' }), pixels] });
+    expect(transcript?.find(message => message.role === 'tool')).toMatchObject({ media: [pixels] });
+    expect(transcript?.find(message => message.role === 'tool')?.content).not.toContain(pixels.data);
+  });
   it('rejects an MCP client replaced while bridge approval was pending', async () => {
     const approve = jest.fn(async () => {
       getClientGenerationMock.mockReturnValue(2);
@@ -1684,14 +1700,15 @@ describe('CodexAdapter — SDK thread reuse', () => {
     }
   });
 
-  it('resumes from durable metadata after the process-local cache is cleared', async () => {
+  it.each([false, true])('checks the appended turn after durable resume (oversized history: %s)', async oversized => {
+    const firstAnswer = oversized ? 'saved answer '.repeat(100_000) : 'first answer';
     let persisted: CompletionInput['codexSession'];
     const onCodexSessionChange = (session: CompletionInput['codexSession']) => { persisted = session; };
     runStreamedMock
       .mockImplementationOnce(async () => ({
         events: eventStream([
           threadStarted('thread-durable'),
-          agentMessage('first answer'),
+          agentMessage(firstAnswer),
           turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
         ])(),
       }))
@@ -1714,7 +1731,7 @@ describe('CodexAdapter — SDK thread reuse', () => {
       onCodexSessionChange,
       messages: [
         { role: 'user', content: 'hi' },
-        { role: 'assistant', content: 'first answer' },
+        { role: 'assistant', content: firstAnswer },
         { role: 'user', content: 'next' },
       ] as OpenAI.ChatCompletionMessageParam[],
     }));

@@ -48,12 +48,17 @@ async function stop() {
   return browserCallTool('browser_record_stop', { recordingId: 'inline-recording', outputPath }, new AbortController().signal, owner);
 }
 
+function isRecordingPath(filename: unknown) {
+  return String(filename) === outputPath || String(filename) === pathToFileURL(outputPath).href;
+}
+
 function observeHandles() {
   const realOpen = fs.open.bind(fs);
   const reads: jest.SpyInstance[] = [];
   const closes: jest.SpyInstance[] = [];
   jest.spyOn(fs, 'open').mockImplementation(async (filename, flags, mode) => {
     const handle = await realOpen(filename, flags, mode);
+    if (!isRecordingPath(filename)) return handle;
     reads.push(jest.spyOn(handle, 'read'));
     closes.push(jest.spyOn(handle, 'close'));
     return handle;
@@ -81,6 +86,18 @@ it.each([['webm', 'video/webm'], ['MP4', 'video/mp4'], ['mov', 'video/quicktime'
     outputPath = destination;
     const observed = observeHandles();
     const pathnameReads = jest.spyOn(fs, 'readFile');
+    // Admission/coordination work can touch other files while these spies are
+    // installed. Exercise that deterministically without counting its handles
+    // or allowing it to change the recording's byte/close assertions.
+    const unrelated = path.join(root, 'unrelated.txt');
+    await fs.writeFile(unrelated, 'unrelated');
+    expect(await fs.readFile(unrelated, 'utf8')).toBe('unrelated');
+    const unrelatedHandle = await fs.open(unrelated, 'r');
+    try {
+      expect((await unrelatedHandle.read(Buffer.alloc(9), 0, 9, 0)).bytesRead).toBe(9);
+    } finally {
+      await unrelatedHandle.close();
+    }
     const result = await stop();
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toEqual({
@@ -91,7 +108,9 @@ it.each([['webm', 'video/webm'], ['MP4', 'video/mp4'], ['mov', 'video/quicktime'
       type: 'resource', resource: { uri: pathToFileURL(outputPath).href, mimeType, blob: Buffer.from('WEBM').toString('base64') },
     });
     expect(mockStopRecording).toHaveBeenCalledWith({ recordingId: 'inline-recording', sessionId: undefined, outputPath }, owner);
-    expect(pathnameReads).not.toHaveBeenCalled();
+    // Workspace admission reads its coordination lock independently of video
+    // transport. The recording itself must only use the bounded descriptor.
+    expect(pathnameReads.mock.calls.filter(([filename]) => isRecordingPath(filename))).toHaveLength(0);
     await observed.expectBounded(5);
     observed.expectClosed();
   },
@@ -173,6 +192,7 @@ it('handles partial descriptor reads without exceeding the admitted size plus on
   let consumed = 0;
   jest.spyOn(fs, 'open').mockImplementation(async (filename, flags, mode) => {
     const handle = await realOpen(filename, flags, mode);
+    if (!isRecordingPath(filename)) return handle;
     const realRead = handle.read.bind(handle);
     const realClose = handle.close.bind(handle);
     jest.spyOn(handle, 'read').mockImplementation(async (...args) => {
@@ -198,6 +218,7 @@ it('keeps the stopped result and closes the handle on a private read error', asy
   const closed = jest.fn();
   jest.spyOn(fs, 'open').mockImplementation(async (filename, flags, mode) => {
     const handle = await realOpen(filename, flags, mode);
+    if (!isRecordingPath(filename)) return handle;
     const realClose = handle.close.bind(handle);
     jest.spyOn(handle, 'read').mockRejectedValue(new Error('private-host-filesystem-detail'));
     jest.spyOn(handle, 'close').mockImplementation(async () => { closed(); await realClose(); });
@@ -225,12 +246,12 @@ it('preserves a recording service failure without attempting a file open', async
   const result = await stop();
   expect(result.isError).toBe(true);
   expect(result.structuredContent).toEqual({ success: false, error: 'Recording was not owned by this session.' });
-  expect(opened).not.toHaveBeenCalled();
+  expect(opened.mock.calls.filter(([filename]) => isRecordingPath(filename))).toHaveLength(0);
 });
 
 it('preserves an active recording without attempting a file open', async () => {
   mockStopRecording.mockResolvedValue({ success: true, status: 'recording', outputPath });
   const opened = jest.spyOn(fs, 'open');
   expect((await stop()).structuredContent).toEqual({ success: true, status: 'recording', outputPath });
-  expect(opened).not.toHaveBeenCalled();
+  expect(opened.mock.calls.filter(([filename]) => isRecordingPath(filename))).toHaveLength(0);
 });

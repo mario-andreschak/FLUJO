@@ -1220,7 +1220,11 @@ async function listModels(args: Record<string, unknown>): Promise<CallToolResult
   if (minContextWindow !== undefined && minContextWindow < 0) {
     throw new ListArgumentError('"minContextWindow" must be zero or greater.');
   }
-  const models = await modelService.loadModels();
+  const catalogue = await modelService.listModels();
+  if (!catalogue.success || !catalogue.models || catalogue.sharedModelsUnavailable) {
+    throw new Error('The model catalogue is unavailable. Check local team access and retry.');
+  }
+  const models = catalogue.models;
   // Strict whitelist: model configs carry the (encrypted) ApiKey, which must never
   // reach a model's context. Only inert metadata goes out.
   const safeModels = models.filter((model) =>

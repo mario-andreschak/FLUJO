@@ -147,7 +147,7 @@ the result, and — on failure — hands back to "Produce" for another attempt.
   command, and prior decision from its own transcript, so the parent only needs to send
   the QC findings ("scene 3's audio is out of sync") rather than the entire task again.
 
-The [2026-10-12 reference-flow acceptance](../audits/reference-subflow-sessions-2026-10-12.md)
+The 2026-10-12 reference-flow acceptance
 completed two real `Website_Promo_Video_Producer` delivery reruns with identical
 verified media. The repeated researcher retained one child conversation, while the
 fresh-child baseline created two. The reuse run used 313,854 fewer prompt tokens

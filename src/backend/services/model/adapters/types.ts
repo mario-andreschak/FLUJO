@@ -99,6 +99,9 @@ export interface CompletionInput {
   readOnlyAssessment?: boolean;
   directCompletion?: boolean;
   temperatureOverride?: number;
+  /** OpenRouter recovery after a reasoning-only length stop. Request visible
+   * output within the same cap; never changes the model or saved settings. */
+  disableReasoningForRecovery?: boolean;
   /** Re-check execution authority immediately before every policy member. */
   beforeModelDispatch?: () => Promise<void>;
   /** Metadata only, used to attribute native dispatches and usage correctly. */
@@ -168,7 +171,7 @@ export interface CompletionInput {
       partial?: boolean; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } }) => void;
   /** Persisted Codex thread metadata supplied by the conversation owner. */
   codexSession?: CodexSessionMetadata;
-  /** Released Codex app-server structured-output constraint for this turn. */
+  /** Structured-output constraint for capable Codex/OpenAI-compatible routes. */
   outputSchema?: Record<string, unknown>;
   /** Replace or invalidate the durable Codex metadata after an adapter turn. */
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;

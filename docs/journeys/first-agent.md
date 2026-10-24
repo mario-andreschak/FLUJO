@@ -112,6 +112,6 @@ Next, [work with Maya on the workshop plan](persona.md). That guide uses an expe
 
 This first-use journey reached a successful live tool call and an assistant checklist that required source review and correction. It needed a manual installation-command correction, a working provider connection, and a longer source read. These are part of the example, not hidden setup steps.
 
-The [capture manifest](evidence/capture-manifest.json), [provenance notes](evidence/capture-provenance.md) and [runtime evidence](evidence/journey-runtime-evidence.json) record the installation, source revision, model, calls, outputs and later retakes. The screenshots use published **3.46.2**; the documentation source has a **3.46.3** version badge. The software was operated by an agent, including the review steps. The separate [Persona journey](persona.md) reached a completed goal and a reviewable workshop pack.
+The capture manifest, provenance notes and runtime evidence record the installation, source revision, model, calls, outputs and later retakes. The screenshots use published **3.46.2**; the documentation source has a **3.46.3** version badge. The software was operated by an agent, including the review steps. The separate [Persona journey](persona.md) reached a completed goal and a reviewable workshop pack.
 
 [Website Builder](website-builder.md) · [Start here](../start-here/README.md) · [Privacy and costs](../start-here/privacy.md)

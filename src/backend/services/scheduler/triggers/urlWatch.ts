@@ -30,7 +30,7 @@ export interface UrlWatchDeps {
     context: unknown;
     /** Stable content identity; unchanged until the baseline commits. */
     deliveryId: string;
-  }) => Promise<{ status: RunRecordStatus }>;
+  }) => Promise<{ status: RunRecordStatus; conditionRejected?: boolean }>;
   onError: (message: string) => void;
   /** Called after every successful check (fired or not) — clears stale errors. */
   onSuccess?: () => void;
@@ -92,7 +92,7 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
       // Content changed → fire, but advance the baseline only once the run
       // actually processes the change (commit-after-success, issue #75).
       await deps.assertCurrent?.();
-      const { status } = await deps.onFire({
+      const { status, conditionRejected } = await deps.onFire({
         summary: 'Online content changed',
         // Retain identity across ambiguous admission/crash retries, but advance
         // generation after a known terminal failure so bounded retries can run
@@ -114,6 +114,7 @@ export function armUrlWatch(config: UrlWatchTriggerConfig, deps: UrlWatchDeps): 
       await deps.assertCurrent?.();
       const { giveUpError } = await commitPendingAfterOutcome({
         status,
+        conditionRejected,
         pendingState: { lastHash: hash },
         priorFailures: state.pendingFailures ?? 0,
         saveState: deps.saveState,

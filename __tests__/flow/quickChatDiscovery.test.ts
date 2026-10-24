@@ -4,7 +4,10 @@ import { QUICK_CHAT_DISCOVERY_TOOLS } from '@/utils/shared/quickChat';
 const mockModels = jest.fn();
 const mockConfigs = jest.fn();
 const mockTools = jest.fn();
-jest.mock('@/backend/services/model', () => ({ modelService: { loadModels: (...args: unknown[]) => mockModels(...args) } }));
+const mockSharedUnavailable = jest.fn(() => false);
+jest.mock('@/backend/services/model', () => ({ modelService: {
+  listModels: async (...args: unknown[]) => ({ success: true, models: await mockModels(...args), sharedModelsUnavailable: mockSharedUnavailable() }),
+} }));
 jest.mock('@/backend/services/mcp', () => ({ mcpService: {
   loadServerConfigs: (...args: unknown[]) => mockConfigs(...args),
   listServerTools: (...args: unknown[]) => mockTools(...args),
@@ -19,6 +22,7 @@ const selection = { conversationId: 'quick', modelId: 'model-1' };
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockSharedUnavailable.mockReturnValue(false);
   mockModels.mockResolvedValue([{ id: 'model-1', name: 'My AI' }]);
   mockConfigs.mockResolvedValue([discovery, { name: 'Calendar', transport: 'streamable' }]);
   mockTools.mockResolvedValue({ tools: [{ name: 'read_events' }, { name: 'delete_events' }] });
@@ -32,6 +36,24 @@ it('starts with discovery on the renamed bundled connection and leaves app catal
   expect(nodes).toHaveLength(1);
   expect(nodes[0].data.properties).toMatchObject({ boundServer: 'Renamed FLUJO', enabledTools: [...QUICK_CHAT_DISCOVERY_TOOLS] });
   expect(mockTools).not.toHaveBeenCalled();
+});
+
+it('binds an admitted team model without copying its configuration into the chat flow', async () => {
+  const id = `team-model:${'t'.repeat(43)}:${'r'.repeat(43)}`;
+  mockModels.mockResolvedValue([{ id, name: 'local', displayName: 'Team AI', supportsTools: true }]);
+  const result = await buildQuickChatFlow({ ...selection, modelId: id });
+  expect(result.success).toBe(true);
+  if (!result.success) throw new Error(result.error);
+  expect(result.flow.nodes.find(node => node.type === 'process')?.data.properties?.boundModel).toBe(id);
+  expect(JSON.stringify(result.flow)).not.toContain('ApiKey');
+});
+
+it('reports unavailable team selection while preserving an explicitly selected private model', async () => {
+  mockSharedUnavailable.mockReturnValue(true);
+  expect(await buildQuickChatFlow({ ...selection, modelId: `team-model:${'t'.repeat(43)}:${'r'.repeat(43)}` }))
+    .toMatchObject({ success: false, statusCode: 503 });
+  expect(await buildQuickChatFlow({ ...selection, modelId: 'My AI' })).toMatchObject({ success: false, statusCode: 503 });
+  expect(await buildQuickChatFlow(selection)).toMatchObject({ success: true });
 });
 
 it('refuses a same-name third-party server instead of granting it the bootstrap identity', async () => {

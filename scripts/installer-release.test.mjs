@@ -131,7 +131,7 @@ test('both signature checks require official hosted workflow, source digest and 
     assert.equal(args[args.indexOf('--source-digest') + 1], revision);
     assert.equal(args[args.indexOf('--signer-digest') + 1], revision);
     assert.equal(args[args.indexOf('--source-ref') + 1], `refs/tags/v${version}`);
-    assert.equal(args[args.indexOf('--signer-workflow') + 1], 'mario-andreschak/FLUJO/.github/workflows/installer.yml');
+    assert.deepEqual(args.filter(arg => ['--cert-identity', '--cert-identity-regex', '--signer-repo', '--signer-workflow'].includes(arg)), ['--cert-identity']);
     assert.equal(args[args.indexOf('--cert-identity') + 1], `https://github.com/mario-andreschak/FLUJO/.github/workflows/installer.yml@refs/tags/v${version}`);
     assert.equal(args[args.indexOf('--cert-oidc-issuer') + 1], 'https://token.actions.githubusercontent.com');
     assert.ok(args.includes('--deny-self-hosted-runners'));
@@ -183,6 +183,14 @@ for (const job of ['installer-attest', 'installer-publish']) {
 
 for (const [name, change] of [
   ['build publication authority', (jobs) => { jobs['installer-build'].permissions = { contents: 'write' }; }],
+  ['signing without installed acceptance', (jobs) => { jobs['installer-attest'].needs.pop(); }],
+  ['optional installed acceptance', (jobs) => { jobs['installer-acceptance']['continue-on-error'] = true; }],
+  ['reduced fresh Windows coverage', (jobs) => { jobs['installer-acceptance'].strategy.matrix.os = ['windows-2025']; }],
+  ['skipped installed acceptance', (jobs) => { jobs['installer-acceptance'].if = 'false'; }],
+  ['unbound installed acceptance bytes', (jobs) => { delete jobs['installer-acceptance'].env.EXPECTED_INSTALLER_SHA256; }],
+  ['omitted real installation', (jobs) => { jobs['installer-acceptance'].steps = jobs['installer-acceptance'].steps.filter(step => !step.run?.startsWith('./scripts/verify-windows-install.ps1')); }],
+  ['omitted missing-Node acceptance', (jobs) => { jobs['installer-acceptance'].steps.find(step => step.run?.startsWith('./scripts/verify-windows-install.ps1')).run = './scripts/verify-windows-install.ps1'; }],
+  ['omitted older-Node acceptance', (jobs) => { jobs['installer-acceptance'].steps.find(step => step.run?.startsWith('./scripts/verify-windows-install.ps1')).run = "./scripts/verify-windows-install.ps1 -BootstrapNode:('${{ matrix.os }}' -eq 'windows-2025')"; }],
   ['signing on a pull request', (jobs) => { delete jobs['installer-attest'].if; }],
   ['mutable artifact selection', (jobs) => { delete jobs['installer-attest'].steps.find((s) => s.uses?.startsWith('actions/download-artifact@')).with['artifact-ids']; }],
   ['missing original digest', (jobs) => { delete jobs['installer-publish'].env.EXPECTED_INSTALLER_SHA256; }],
