@@ -20,6 +20,23 @@ goal card. The acceptance scenario below deliberately uses finite criteria so it
 verified end state is observable. Older saved goals without this optional policy
 retain completion on verified success criteria.
 
+## Recovery after a Native model failure
+
+A failed Native root no longer permanently blocks later rounds when its owned
+process exited cleanly, the host recorded an error without usage or handoff,
+the matching archived request records that error, and its private journal has
+no tool receipts. The next admitted Persona round rechecks these records under
+the current goal/lease fence before retiring that reservation for a fresh
+conversation. The failed Activity must still belong to this Persona and Goal.
+
+Retirement records the failed reservation digest and the new dispatch identity.
+It preserves the original unknown invocation, hold, archive and turn budget;
+it does not certify successful completion or replay the original invocation.
+Any tool receipt (including a completed one), missing exit, mismatched archive,
+unconfirmed handoff or incomplete ownership evidence keeps the reservation held.
+Worker admission retains its existing behavior. Paused and stopped goals gain
+no execution authority; stopped goals still cannot be reopened.
+
 ## Running
 
 No paid model request is made by the default offline mode:
@@ -171,3 +188,11 @@ The walkthrough also exposed a browser App preview ownership mismatch: browser
 research succeeded, but the App reconnected using the conversation ID instead
 of the originating logical run ID. That observed failure is retained separately
 from the successful Persona continuation and Stop evidence in issue #505.
+
+## Native Persona tool computation
+
+CodeModeOnly models require the Codex computational host to invoke granted MCP
+tools. Persona Native Originals enable that host at process startup and thread
+creation while keeping native shell, agents, browsers and other capabilities
+disabled. Calls still pass through the existing FLUJO broker and journal.
+Qualified Worker profiles and their inventory probes retain their tested policy.

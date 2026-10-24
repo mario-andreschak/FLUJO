@@ -6,6 +6,15 @@ export type NativeCodexAuthentication = 'chatgpt' | 'api-key' | 'offline-invento
 type Config = Record<string, unknown>;
 const refused = (): never => { throw new Error('Native Codex startup configuration is unavailable.'); };
 
+function nativeCapabilities(personaTools: boolean): Config {
+  const { forced_login_method: omitted, ...capabilities } = RESTRICTED_CODEX_CONFIG;
+  void omitted;
+  // CodeModeOnly models call the broker through this computational host. It
+  // provides no shell, filesystem, network, or extra MCP server authority.
+  // Qualified Workers and inventory probes retain their exact tested policy.
+  return { ...capabilities, features: { ...capabilities.features, code_mode_host: personaTools } };
+}
+
 function offlineInventoryConfiguration(config: Config): Config {
   const providers = config.model_providers as { inventory?: { base_url?: unknown } } | undefined;
   const value = providers?.inventory?.base_url;
@@ -27,12 +36,13 @@ function offlineInventoryConfiguration(config: Config): Config {
 export function nativeCodexStartupArguments(input: {
   cwd: string; config: Config; authentication: NativeCodexAuthentication;
   neutralTrustOverrides?: readonly string[];
+  personaTools?: boolean;
 }): string[] {
   if (!path.isAbsolute(input.cwd)) return refused();
   const neutral = ['project_root_markers=[]', `projects.${JSON.stringify(input.cwd)}.trust_level="untrusted"`];
   if (input.neutralTrustOverrides && JSON.stringify(input.neutralTrustOverrides) !== JSON.stringify(neutral)) return refused();
-  const { forced_login_method, ...capabilities } = RESTRICTED_CODEX_CONFIG;
-  const projected: Config = { ...capabilities,
+  const { forced_login_method } = RESTRICTED_CODEX_CONFIG;
+  const projected: Config = { ...nativeCapabilities(input.personaTools === true && input.authentication !== 'offline-inventory'),
     ...(input.authentication === 'chatgpt' ? { forced_login_method } : {}) };
   const catalog = input.config.model_catalog_json;
   if (catalog !== undefined) {
@@ -58,11 +68,11 @@ export function nativeCodexStartupArguments(input: {
 }
 
 /** API-key Persona and unauthenticated inventory must keep their selected auth. */
-export function nativeCodexThreadConfiguration(config: Config, authentication: NativeCodexAuthentication): Config {
+export function nativeCodexThreadConfiguration(config: Config, authentication: NativeCodexAuthentication, personaTools = false): Config {
   const { forced_login_method: omitted, ...rest } = config;
-  const { forced_login_method, ...capabilities } = RESTRICTED_CODEX_CONFIG;
+  const { forced_login_method } = RESTRICTED_CODEX_CONFIG;
   void omitted;
-  return { ...rest, ...capabilities,
+  return { ...rest, ...nativeCapabilities(personaTools && authentication !== 'offline-inventory'),
     ...(authentication === 'chatgpt' ? { forced_login_method } : {}),
     ...(authentication === 'offline-inventory' ? offlineInventoryConfiguration(config) : {}) };
 }

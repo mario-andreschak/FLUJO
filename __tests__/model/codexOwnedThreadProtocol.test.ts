@@ -2,7 +2,9 @@ import { createOwnedCodexThread } from '@/backend/services/model/adapters/codexO
 import type { NativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { startOwnedCodexAppServer } from '@/backend/services/model/adapters/codexAppServerProcess';
 
-jest.mock('@/backend/execution/flow/handlers/nativeOriginalHost', () => ({ assertNativeOriginalProcessHost: jest.fn() }));
+jest.mock('@/backend/execution/flow/handlers/nativeOriginalHost', () => ({
+  assertNativeOriginalProcessHost: jest.fn(), nativeOriginalUsesPersonaTools: () => true,
+}));
 jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => ({ startOwnedCodexAppServer: jest.fn() }));
 
 const start = jest.mocked(startOwnedCodexAppServer);

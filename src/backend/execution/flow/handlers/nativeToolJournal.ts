@@ -176,6 +176,7 @@ export async function nativeInvocationStatus(id: string, owner: NativeInvocation
 export async function readNativeInvocationTerminalEvidence(
   id: string, owner: NativeInvocationOwner, workspace: string,
   verifySaved?: (receipt: NativeInvocationReceipt) => Promise<void>,
+  requireFailedWithoutTools = false,
 ): Promise<{ receipt: NativeInvocationReceipt; holdAbsent: boolean; effectsResolved: boolean }> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
     throw new Error('Invalid native invocation identity.');
@@ -198,6 +199,14 @@ export async function readNativeInvocationTerminalEvidence(
     const names = hasTools && await assertTerminalDirectory(directory, true) ? await fs.readdir(directory) : [];
     if (names.length > 512 || names.some(name => !/^[a-f0-9]{64}\.json$/.test(name))) {
       throw new Error('Native terminal tool receipts are incomplete.');
+    }
+    // Retiring a failed goal-round reservation never resolves this original
+    // invocation. Its unknown call and authoritative hold remain untouched.
+    // Even a completed tool receipt rules out this narrowly effect-free retry.
+    if (requireFailedWithoutTools && (names.length !== 0 || !hold
+      || call.state !== 'unknown' || scope.state !== 'unknown' || call.outcome
+      || JSON.stringify(call) !== JSON.stringify(scope))) {
+      throw new NativeInvocationHeldError(id);
     }
     let effectsResolved = true;
     for (const name of names) {

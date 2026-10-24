@@ -2,7 +2,7 @@ import type { ThreadEvent, ThreadOptions, UserInput } from '@openai/codex-sdk';
 import { startOwnedCodexAppServer } from './codexAppServerProcess';
 import { bundledCodexExecutable } from './codexRestrictedProfile';
 import { nativeCodexStartupArguments, nativeCodexThreadConfiguration } from './codexNativeStartup';
-import { assertNativeOriginalProcessHost, type NativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { assertNativeOriginalProcessHost, nativeOriginalUsesPersonaTools, type NativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 
 const unavailable = (): never => { throw new Error('Native Codex Original protocol is held.'); };
 const record = (value: unknown): Record<string, unknown> => {
@@ -31,6 +31,7 @@ export function createOwnedCodexThread(input: {
   options: ThreadOptions; maxTurns: number; executable?: string; onThreadStarted?: (threadId: string) => void;
 }) {
   assertNativeOriginalProcessHost(input.host);
+  const personaTools = nativeOriginalUsesPersonaTools(input.host);
   let issued = false, closed = false;
   return Object.freeze({
     closureConfirmed: () => closed,
@@ -51,7 +52,7 @@ export function createOwnedCodexThread(input: {
         const authentication = input.env.CODEX_API_KEY ? 'api-key' : 'chatgpt';
         const child = await startOwnedCodexAppServer({
           executable: input.executable ?? bundledCodexExecutable(), args: ['app-server', '--stdio',
-            ...nativeCodexStartupArguments({ cwd: input.options.workingDirectory!, config: input.config, authentication })],
+            ...nativeCodexStartupArguments({ cwd: input.options.workingDirectory!, config: input.config, authentication, personaTools })],
           env: input.env, cwd: input.options.workingDirectory!, owner: input.host, signal: options.signal,
           register: process => input.host.register(process),
           onNotification: message => {
@@ -69,7 +70,7 @@ export function createOwnedCodexThread(input: {
           const started = record(await child.request('thread/start', {
             model: input.options.model, cwd: input.options.workingDirectory,
             approvalPolicy: 'never', sandbox: 'read-only', ephemeral: false,
-            config: nativeCodexThreadConfiguration(input.config, authentication),
+            config: nativeCodexThreadConfiguration(input.config, authentication, personaTools),
           }));
           const threadId = id(record(started.thread).id);
           if (started.model !== input.options.model) return unavailable();
