@@ -1,22 +1,35 @@
 # Single-gate tool approval proposal
 
-Status: Proposed; stakeholder sign-off required  
-Design issue: [#469](https://github.com/mario-andreschak/FLUJO/issues/469)  
-Removal history: [#438](https://github.com/mario-andreschak/FLUJO/issues/438)  
-Reviewed code baseline: `668516f2cbd176b422c8185d4058227e6b0e1781` on `main`  
-Plan baseline: `b9379f7522232c52a26cae119bdb164d6dbe15aa` (verified ancestor of the reviewed baseline)
+Status: Design accepted for implementation planning under user-delegated judgment; runtime acceptance pending
+
+Design issue: [#469](https://github.com/mario-andreschak/FLUJO/issues/469)
+
+Removal history: [#438](https://github.com/mario-andreschak/FLUJO/issues/438)
+
+Reviewed code baseline: `adfd3ea80d0e7c4a604992e1450bad414a271896` on `main` (October 24, 2026)
+
+Original plan baseline: `b9379f7522232c52a26cae119bdb164d6dbe15aa`
+
+Decision record: [user direction and delegated design responsibility](https://github.com/mario-andreschak/FLUJO/issues/469#issuecomment-6387339110)
 
 ## Purpose and scope
 
 This proposal defines one predictable approval model for ordinary tool calls. It is a
 design and requirements artifact only. Issue #469 must not change production
 behavior. Runtime changes and tests belong in a separate implementation issue
-created only after the sign-offs in this document are complete.
+created from the decision record below. The user's explicit delegation supersedes
+the former five-role sign-off process; it does not establish runtime test success.
 
 The design preserves the conversation-level **Require Tool Approval** checkbox as
 the only user approval gate. It distinguishes that choice from runtime bookkeeping,
 capability composition, and the operational outcome selected by a headless caller
 that has no approver.
+
+The product constraints are reliability, compatibility and a quiet interface.
+Reuse the existing checkbox, per-call actions and error/status surfaces. Add no
+approval settings, policy editor, onboarding, persistent banners or routine success
+notifications. Show an actionable error only when a save or operation actually
+fails; accessibility status announcements must not add visible clutter.
 
 ## Minimal user model
 
@@ -44,17 +57,19 @@ run as part of this design phase.
 
 | Concern | Current location | Classification | Finding |
 | --- | --- | --- | --- |
-| Checkbox and local state | `src/frontend/components/Chat/ChatInput.tsx`, `src/frontend/components/Chat/index.tsx` | User gate | Conversation-scoped UI, hydrated with a false fallback |
+| Checkbox and local state | `src/frontend/components/Chat/ChatInput.tsx`, `src/frontend/components/Chat/index.tsx` | User gate | Conversation-scoped UI, hydrated with a false fallback; failed saves only log and leave optimistic state |
 | Persistence client | `src/frontend/services/chat/index.ts` | User gate | PATCHes `requireApproval` |
 | Conversation GET/PATCH | `src/app/v1/chat/conversations/[conversationId]/route.ts` | User gate | Missing reads as false; writes require a boolean |
-| Runtime normalization and dispatch | `src/backend/execution/flow/runFlow.ts` | User gate | `input.requireApproval ?? false`; pauses or directly executes ordinary calls |
+| Runtime normalization and dispatch | `src/backend/execution/flow/runFlow.ts` | User gate | `input.requireApproval ?? false` captured at run entry; later-batch setting refresh is not established |
 | Pending call state | `pendingToolCalls`, `awaiting_tool_approval` | Runtime approval state | Describes undecided calls; does not decide permission |
-| Approval registry | `src/backend/execution/flow/toolApprovalRegistry.ts` | Runtime coordination | Locates pending work; not an allow/deny policy |
+| Approval registry | `src/backend/execution/flow/toolApprovalRegistry.ts` | Runtime coordination | Live SDK callbacks are process-local; restart recovery cannot rely on this registry alone |
 | Decision application | `src/backend/execution/flow/resumeAfterApproval.ts` | Runtime approval state | Decides one call, emits `tool denied` on rejection, resumes after drain |
 | Chat respond resume | `src/app/v1/chat/conversations/[conversationId]/respond/route.ts` | Boundary | Two false-default violations currently use `?? true` |
-| Approval API resume | `src/app/api/approvals/[id]/route.ts` | Boundary | Two false-default violations currently use `?? true` |
+| Approval API resume | `src/app/api/approvals/[id]/route.ts` | Boundary | Two false-default violations use `?? true`; omission of toolCallId explicitly resolves all pending calls |
+| Conversation execution lock | `src/backend/execution/flow/conversationExecutionLock.ts` | Runtime coordination | Both durable decision routes serialize and re-read state; process-local serialization is not durable exactly-once execution |
 | Scheduler policy mapping | `src/backend/services/scheduler/index.ts` | Headless transport behavior | Maps an explicit scheduler setting into gate and no-approver outcome |
-| Persona dispatcher | `src/backend/services/enduringAgents/personaDispatcher.ts` | Headless transport behavior | Carries explicit approval options into headless execution |
+| Persona dispatcher | `src/backend/services/enduringAgents/personaDispatcher.ts` | Headless transport behavior | Explicitly supplies requireApproval=false/onApprovalRequired=fail; gate-off ignores the no-approver outcome |
+| Claude adapter | `src/backend/services/model/adapters/claudeSubscriptionAdapter.ts` | Provider boundary | Explicit default permission mode, PreToolUse authority checks and human-decision callback; retain execution and capability fences |
 | `Flow.behaviorRules` / `SharedState.behaviorRules` | `src/backend/execution/flow/nodes/ProcessNode.ts` | Capability snapshot | Filters Persona-native capabilities; must never approve, deny, or bypass ordinary calls |
 | Removed allow/deny/ask and protected-path mechanisms | #438, commit `9c99e755` | Obsolete policy | Must not be reintroduced |
 
@@ -67,18 +82,23 @@ Existing regression intent is captured by:
 - `__tests__/scheduler/approvalPolicy.test.ts`
 - `__tests__/scheduler/approvalsRoute.test.ts`
 
+This inventory is not proof of coverage. In particular, requireApprovalDefault
+largely asserts local literals; the follow-up must exercise production routes and
+runtime entry points for absent/false/true settings.
+
 Intervening flow work stages mixed handoff/tool batches, excludes handoff calls from
 ordinary approval, preserves unanswered-call detection, and applies a repeat guard
 on resume. The implementation must preserve those behaviors.
 
-## Proposed decisions
+## Implementation decisions
 
-These decisions are normative once every required reviewer signs this document.
+These decisions define the follow-up requirements under the user's delegation.
+They are not a claim that the current runtime already implements the contract.
 
-| Topic | Proposed decision | Rationale |
+| Topic | Decision | Rationale |
 | --- | --- | --- |
 | Default | Missing `requireApproval` is false at every boundary, including all resume routes | Older records remain compatible and the checkbox remains opt-in |
-| No approver | Keep explicit `fail` and `pause` operational outcomes; default `auto` selects the entry point's documented behavior | This determines how an enabled gate is surfaced, not whether a call is authorized |
+| No approver | With gate on, fail terminates without execution; pause and runtime auto persist a pause. Gate off ignores this outcome | No silent approval or hidden second policy |
 | Mid-flight toggle | A run snapshots the value when it accepts a model-produced ordinary-call batch. Changes affect only later batches | Prevents a UI race from changing the meaning of already-rendered decisions |
 | Already-pending calls | They require decisions under the snapshot that created them, or explicit cancellation | Disabling the checkbox cannot silently execute visible pending calls |
 | Batch semantics | Decide calls individually and resume model execution only after the ordinary-call batch drains | Gives every call an explicit outcome while maintaining assistant-batch integrity |
@@ -88,6 +108,8 @@ These decisions are normative once every required reviewer signs this document.
 | Snapshot boundary | Preserve `behaviorRules` as backend-only capability snapshot data; accept legacy `permissionRules` only while reading old records | This vocabulary remains separate from the approval gate |
 | Alternate providers | All providers enter shared approval handling with identical semantics | Provider choice must not weaken or strengthen the gate |
 | Arguments | Show enough context for a decision, but do not add argument copies to telemetry, issue comments, or model rejection output | Supports informed decisions without widening data exposure |
+| Compatibility | Preserve existing explicit bulk decisions, scheduler settings and owner/capability checks; bind each decision to the displayed batch | Reliability includes existing callers |
+| UI | Reuse current controls and error surfaces; no extra settings, panels or routine notices | Quiet operation is an explicit user requirement |
 
 ## State contract
 
@@ -170,12 +192,21 @@ sequenceDiagram
 - A pending decision is bound to conversation, run, assistant batch, and tool-call
   identifiers. The server verifies ownership before applying it.
 - The first accepted decision for a call is final. An identical retry returns the
-  already-applied outcome or another documented idempotent success response.
+  already-applied outcome or a documented no-op response. Existing stale-request
+  404 behavior may remain for compatibility; it must never execute again.
   A contradictory retry returns a conflict and never invokes a tool.
 - Unknown, stale, cancelled, completed, or mismatched identifiers return a
   non-sensitive not-found or conflict response.
 - Restart recovery reloads the persisted pending batch and preserves all recorded
   outcomes. It must not execute undecided calls or re-execute decided calls.
+- Persist the decision and execution claim before invocation. A crash after an
+  external effect but before recording its result is an uncertain outcome, not
+  permission to retry. Surface that interruption through the existing run-error
+  surface and require reconciliation before another invocation. Use stable
+  downstream idempotency keys where supported; do not promise exactly-once
+  external effects for arbitrary tools.
+- A live SDK callback lost at restart must be safely reconstructed from durable
+  state or surfaced as interrupted. It must never be silently approved.
 - Cancellation atomically invalidates remaining pending calls.
 - A tool failure becomes that approved call's tool outcome and does not convert any
   undecided sibling into an approval.
@@ -195,6 +226,11 @@ type ConversationApprovalSettings = {
 - GET responses expose an effective boolean.
 - PATCH accepts only a JSON boolean and rejects other types.
 - A successful PATCH is the persistence boundary for later batches.
+- Serialize setting revisions and batch snapshot creation. Late responses and
+  failed saves must not overwrite a newer choice or another conversation's UI.
+- Before the first conversation is persisted, carry the chosen boolean in the
+  initial run request and persist it with that conversation. Do not treat this
+  initialization as a failed save on an existing conversation.
 - Existing conversations need no migration because a missing value means false.
 - Every runtime, debug, resume, scheduler, API, and provider adapter normalizes with
   `value ?? false`; truthiness coercion is forbidden.
@@ -222,6 +258,15 @@ Clients opt in only through `requireApproval=true`. They observe
 and treat fail-fast as a terminal, machine-readable approval-required error rather
 than a denial policy.
 
+For the existing approval inbox API, preserve omission of `toolCallId` as an
+explicit decision for all calls in that pending batch. Capture the call IDs under
+the decision lock and apply an outcome to each; never include calls generated by
+the continuation. Do not add a new bulk UI or require an incompatible request body.
+Make the opaque approval receipt identify one batch, retire it on drain/cancel,
+and issue a fresh receipt for a later batch. Existing conversation-ID receipts
+must be migrated as aliases for their current pending batch only and never reused
+for another batch. Tests must cover retrying the old receipt after continuation.
+
 ## No-approver behavior
 
 When the gate is false, `onApprovalRequired` is ignored.
@@ -232,15 +277,23 @@ When the gate is true:
 - a headless entry point configured to `pause` persists a resumable pending run;
 - a headless entry point configured to `fail` executes no tool and returns a
   machine-readable terminal error; and
-- `auto` resolves to the documented behavior of the entry point.
+- runtime `auto` pauses, just like `pause`.
 
 These values never auto-approve or reject a call and therefore are transport/runtime
 outcomes, not a second authorization source.
 
+Preserve the scheduler's existing auto/fail/pause configuration. When creating a
+new scheduled conversation, that explicit configuration initializes the one gate
+to false/true/true respectively. Once the conversation exists, its persisted
+boolean is authoritative on resume; the scheduler option cannot override it.
+Missing legacy conversation values still default to false. No new scheduler
+control or background approval requirement is introduced.
+
 ## Workflow review record
 
-This table records the source-level engineering walkthrough. Stakeholder acceptance
-must be added in the sign-off section; source inspection is not a substitute.
+This table records the source-level engineering walkthrough and intended user
+journeys. The decision record below delegates the design judgment; runtime and
+accessibility acceptance must still be demonstrated in the implementation issue.
 
 | ID | Actor and initial setting | Expected transitions and visible result | Pain point / security expectation | Proposed acceptance |
 | --- | --- | --- | --- | --- |
@@ -271,7 +324,7 @@ must be added in the sign-off section; source inspection is not a substitute.
 | R9 | No-approver behavior MUST be explicit and MUST NOT act as an independent allow/deny policy | W9 | Scheduler/headless pause/fail/auto tests |
 | R10 | Alternate providers MUST obey the same gate semantics | W10 | Shared adapter contract tests |
 | R11 | Capability snapshot fields MUST NOT authorize, deny, auto-approve, or bypass ordinary tool execution | W11 | Persona capability/gate separation tests |
-| R12 | Approval UI MUST expose tool identity and decision-safe argument context and MUST support labels, focus, keyboard operation, status announcement, and distinguishable actions | W1, W4, W7 | Component and accessibility tests |
+| R12 | Existing approval UI MUST expose tool identity and decision-safe argument context and support labels, focus, keyboard operation, status announcement, and distinguishable actions, without new settings, panels, persistent banners or routine success notices | W1, W4, W7 | Component and accessibility tests |
 | R13 | Sensitive arguments MUST NOT be newly copied into logs, analytics, issue comments, or rejection feedback | W1, W5, W8 | Logging/telemetry security review |
 | R14 | Mixed handoff/tool execution MUST preserve staged handoff ordering, unanswered-call detection, and repeat-guard state while excluding handoffs from approval prompts | W4, W7 | Mixed-batch and resume regressions |
 | R15 | UI and persisted state MUST converge; a failed setting PATCH MUST restore the persisted value and display an actionable error | W3, W6 | Client failure/component test |
@@ -289,9 +342,15 @@ Required corrections are expected in:
 
 The implementation issue must first verify every current site because line numbers
 and call structure may change. It must separate required contract fixes from the
-legacy `permissionRules` compatibility window. It must include rollback by reverting the
-implementation commit(s); no data backfill is required for default-false records.
+legacy `permissionRules` compatibility window. It must include rollback for the
+implementation commits and durable state changes; default-false records need no backfill.
 It must not introduce another authorization-policy layer.
+
+Preserve owner authentication, workspace isolation, capability availability and
+execution/cancellation fences. These determine which operations exist and remain
+valid; they are not remembered approval preferences. This work requires no team
+accounts or deferred #212/#1233 implementation. Human-input nodes tracked in #1095
+are separate workflow behavior, not a replacement tool-approval policy.
 
 ## Risks and mitigations
 
@@ -306,31 +365,30 @@ It must not introduce another authorization-policy layer.
 | Approval display leaks secrets | Decision-safe rendering and no new telemetry copies |
 | Flow changes reorder mixed batches | Preserve staged handoff and repeat-guard regressions |
 
-## Sign-off
+## Decision record and implementation handoff
 
-Implementation remains blocked until designated reviewers replace **Pending** with
-an explicit approval and link their review evidence. Absence of an objection is not
-approval.
+On October 24, 2026, the user explicitly delegated design judgment to the agent
+and required a good user experience, no application breakage and no UI noise.
+The [recorded direction](https://github.com/mario-andreschak/FLUJO/issues/469#issuecomment-6387339110)
+supersedes the five-role approval procedure; no independent stakeholder reviews
+are claimed. The [engineering review](https://github.com/mario-andreschak/FLUJO/issues/469#issuecomment-6387306310)
+provides source evidence and concrete scenarios. Its suggestion to reject omitted
+toolCallId is superseded by the compatible batch-bound contract above.
 
-| Reviewer | Role | Workflows | Decision | Date | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| Pending | Product/maintainer | W1–W11; user model and scope | Pending | — | — |
-| Pending | UX/accessibility | W1, W3–W7; approval interaction | Pending | — | — |
-| Pending | Backend/runtime | W1–W11; state, recovery, provider parity | Pending | — | — |
-| Pending | API/scheduler owner | W8–W10; headless contract | Pending | — | — |
-| Pending | Security | W1, W4–W11; ownership and data handling | Pending | — | — |
+| Review concern | Design disposition | Required implementation evidence |
+| --- | --- | --- |
+| Product, W1–W11 | Keep one checkbox and predictable off/on behavior | Real ordinary-chat off/on journey with no unexpected prompts |
+| UX/accessibility, W1/W3–W7 | Keep current controls; restore failed saves; no routine UI noise | Keyboard/focus/status and save-failure/conversation-switch checks |
+| Runtime, W1–W11 | Snapshot batches; preserve partial outcomes; never retry uncertain effects automatically | Mixed-call, toggle-race, cancel/retry/restart and failure-window tests |
+| API/scheduler, W8–W10 | Preserve request compatibility and scheduler configuration; one persisted gate | Absent/false/true route matrix and old-receipt replay tests |
+| Security, W1/W4–W11 | Preserve ownership/capability fences and safe argument handling | Stale/cross-run/cancelled decision and data-disclosure checks |
 
-## Implementation-issue gate
-
-After all five sign-offs are recorded:
-
-1. create a separate implementation issue linking #469 and this exact document
-   revision;
-2. copy R1–R15 and the approved decision table;
-3. enumerate the current files and required tests;
-4. distinguish required corrections from optional renaming;
-5. include migration and rollback notes; and
-6. state that no additional approval-policy layer may be introduced.
-
-Until then, no implementation issue is created and no production behavior is
-changed.
+The separate implementation issue must link #469 and this document revision,
+carry R1–R15 and these decisions, enumerate current files and production-path
+tests, and preserve existing behavior outside the stated corrections. Changing
+defaults needs no conversation backfill. Durable decision/receipt changes need
+backward-compatible readers and explicit legacy-receipt migration tests. Rollback
+must preserve decision records and avoid replaying any completed or uncertain
+effect; reverting code alone is insufficient if a storage format has changed.
+Runtime acceptance remains open in that follow-up; this document ships no runtime
+or UI changes.
