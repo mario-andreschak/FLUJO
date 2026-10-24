@@ -2,6 +2,7 @@ import { digest, opaque, type Ledger, type Session } from './ledger.js';
 import { TeamError, Teams } from './teams.js';
 import { readSharedModel, SHARED_MODEL_FORMAT } from './shared-model.js';
 import { flowDependencies, readSharedFlow, SHARED_FLOW_FORMAT } from './shared-flow.js';
+import { readSharedMcp, SHARED_MCP_FORMAT } from './shared-mcp.js';
 
 export const RESOURCE_KINDS = ['model', 'mcp', 'flow', 'chat', 'execution'] as const;
 export type ResourceKind = typeof RESOURCE_KINDS[number];
@@ -75,6 +76,10 @@ export class TeamResources {
       if (kind !== 'model') throw new TeamError(400, 'A shared model document must use the model kind.');
       try { value = readSharedModel(value); } catch { throw new TeamError(400, 'Invalid shared model configuration. Credentials and private bindings cannot be shared.'); }
       format = SHARED_MODEL_FORMAT;
+    } else if (requiredFormat === SHARED_MCP_FORMAT || (requiredFormat === undefined && (value as { format?: unknown }).format === SHARED_MCP_FORMAT)) {
+      if (kind !== 'mcp') throw new TeamError(400, 'A shared MCP document must use the mcp kind.');
+      try { value = readSharedMcp(value); } catch { throw new TeamError(400, 'Invalid shared MCP configuration. Credentials, private bindings and runtime permissions cannot be shared in this document.'); }
+      format = SHARED_MCP_FORMAT;
     } else if (requiredFormat === SHARED_FLOW_FORMAT || (requiredFormat === undefined && (value as { format?: unknown }).format === SHARED_FLOW_FORMAT)) {
       if (kind !== 'flow') throw new TeamError(400, 'A shared Flow document must use the flow kind.');
       try {

@@ -210,6 +210,30 @@ any grant exists; an empty catalogue confers no execution authority. At capacity
 execution-granted channels take priority over catalogue-only channels. Retired
 channels keep their slot until the child process is observed to exit.
 
+### Native team MCP configuration editor
+
+**MCP → Team MCP servers** or **Your teams → a team → Team MCP servers** opens
+`/teams/mcp`. Members can author a connection configuration or explicitly select a
+private server for review. The projection keeps its name, transport and a valid
+credential-free endpoint; commands, arguments, credentials, roots, OAuth state,
+private configuration and runtime capabilities are omitted. Commands and arguments
+must be authored again because they can contain private paths or embedded secrets.
+Publication requires confirmation after review. Literal text and URL paths can
+still contain sensitive information, so review all authored fields before sharing.
+
+The strict `flujo.mcp.v1` document describes stdio, SSE, Streamable HTTP or WebSocket
+connections. It may declare environment variable or HTTP header names, never their
+values. The controller validates transport compatibility, field limits and literal
+bindings at creation, save and restore. Typed format cannot be downgraded. Team
+Flows can select these typed dependencies; execution continues to reject MCP nodes
+until revision-bound runtime permissions and relays are implemented.
+
+The editor uses the existing session-bound exclusive lease and immutable revision
+history. Failed saves and revoked locks retain the draft. Download and reload also
+preserve incomplete endpoint text. Saving never installs, connects, publishes a
+proxy or enables a private MCP capability. Native MCP execution remains pending;
+this configuration editor alone does not complete Tier 1 sharing.
+
 ### Native team Flow configuration editor
 
 **Your teams → a team → Team Flows** opens `/teams/flows` in the private app.

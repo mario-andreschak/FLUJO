@@ -6,6 +6,7 @@ import { Teams, TeamError } from '../dist/teams.js';
 import { RESOURCE_BYTES, RESOURCE_KINDS, TeamResources } from '../dist/team-resources.js';
 import { modelConfigurationFields, publishableModel, readSharedModel, SHARED_MODEL_FORMAT } from '../dist/shared-model.js';
 import { TeamModelAccess } from '../dist/team-model-access.js';
+import { projectSharedMcp, readSharedMcp, sharedMcpDraftSchema, SHARED_MCP_FORMAT } from '../dist/shared-mcp.js';
 import { flowDependencies, projectSharedFlow, readSharedFlow, setFlowDependency, sharedFlowDraftSchema, SHARED_FLOW_FORMAT, teamDependencyId } from '../dist/shared-flow.js';
 import { privateFixture } from './private-fixture.mjs';
 
@@ -14,6 +15,77 @@ const status = code => error => error instanceof TeamError && error.status === c
 const flowDocument = (properties = {}) => ({ format: SHARED_FLOW_FORMAT, flow: { name: 'Team graph', nodes: [
   { id: 'process', type: 'process', position: { x: 100, y: 200 }, data: { type: 'process', label: 'Answer', properties } },
 ], edges: [] } });
+const mcpDocument = (fields = {}) => ({ format: SHARED_MCP_FORMAT,
+  mcp: { name: 'Team server', transport: 'stdio', command: 'node', args: ['server.mjs'], ...fields } });
+
+test('MCP publication removes private executable arguments, credentials and capabilities before review', () => {
+  const projected = projectSharedMcp({ name: 'Server', transport: 'stdio', command: 'C:/private/node',
+    args: ['--token=private-token'], env: { TOKEN: 'private-secret' }, roots: ['C:/private/root'],
+    rootPath: 'C:/private/root', headers: { Authorization: 'private-header' }, oauthTokens: 'private-oauth',
+    toolParameterPresets: { call: { key: 'private-preset' } }, sampling: { enabled: true, modelId: 'private-model' },
+    enableMcpApps: true, enableMcpSkills: true, exposeAsMcpServer: true, trustedHost: {}, isolation: {},
+    launch: { command: 'private-launch' }, _installCommand: 'private-install', _buildCommand: 'private-build' });
+  assert.deepEqual(projected.document, { format: SHARED_MCP_FORMAT, mcp: { name: 'Server', transport: 'stdio', command: '', args: [] } });
+  assert.ok(projected.omitted.includes('args')); assert.ok(projected.omitted.includes('oauthTokens'));
+  assert.ok(!JSON.stringify(projected).includes('private-'));
+  assert.throws(() => readSharedMcp(projected.document));
+  for (const serverUrl of ['https://user:pass@example.com/mcp', 'https://example.com/mcp?token=secret', 'file:///private/file', '${global:ENDPOINT}']) {
+    const copy = projectSharedMcp({ name: 'Remote', transport: 'streamable', serverUrl });
+    assert.equal(copy.document.mcp.serverUrl, ''); assert.ok(copy.omitted.includes('serverUrl'));
+  }
+});
+
+test('MCP typed documents reject private fields, mismatched transports, ambient bindings and unbounded inputs', () => {
+  for (const field of ['env', 'headers', 'oauthTokens', 'roots', 'rootPath', 'sampling', 'elicitation', 'trustedHost', 'isolation', 'toolParameterPresets', 'launch', 'enableMcpApps', 'runtimeHomeMode']) {
+    assert.throws(() => readSharedMcp(mcpDocument({ [field]: {} })), field);
+  }
+  for (const fields of [{ command: '' }, { command: '${global:COMMAND}' }, { args: ['${kv:secret}'] },
+    { args: ['bad\u0000argument'] }, { args: Array(257).fill('arg') }, { serverUrl: 'https://example.com' },
+    { environmentKeys: ['TOKEN', 'token'] }, { environmentKeys: ['SECRET=value'] }, { name: ' ' }]) {
+    assert.throws(() => readSharedMcp(mcpDocument(fields)), JSON.stringify(fields));
+  }
+  for (const transport of ['streamable', 'sse', 'websocket']) {
+    const mcp = { name: 'Remote', transport, [transport === 'websocket' ? 'websocketUrl' : 'serverUrl']:
+      transport === 'websocket' ? 'wss://example.com/mcp' : 'https://example.com/mcp' };
+    assert.deepEqual(readSharedMcp({ format: SHARED_MCP_FORMAT, mcp }).mcp, mcp);
+    assert.throws(() => readSharedMcp({ format: SHARED_MCP_FORMAT, mcp: { ...mcp, command: 'node' } }));
+    assert.throws(() => readSharedMcp({ format: SHARED_MCP_FORMAT, mcp: { ...mcp, headerNames: ['bad:header'] } }));
+  }
+});
+
+test('MCP draft roundtrips incomplete fields but cannot carry unrecognized private payloads', () => {
+  const draft = { format: 'flujo.mcp.draft.v1', document: { format: SHARED_MCP_FORMAT,
+    mcp: { name: '', transport: 'streamable', serverUrl: 'unfinished://', headerNames: [''] } } };
+  assert.deepEqual(sharedMcpDraftSchema.parse(draft), draft);
+  assert.throws(() => readSharedMcp(draft.document));
+  assert.throws(() => sharedMcpDraftSchema.parse({ ...draft, document: mcpDocument({ env: { SECRET: 'value' } }) }));
+});
+
+test('typed MCP resources enforce member editing, immutable format and revalidation on restore', async t => {
+  const f = await fixture(t); f.joinBob(); const resources = new TeamResources(f.ledger); const { alice, bob, charlie } = f.sessions;
+  const content = JSON.stringify(mcpDocument());
+  assert.throws(() => resources.create(alice, f.teamId, 'model', 'Wrong kind', content), status(400));
+  const id = resources.create(alice, f.teamId, 'mcp', 'Server', content);
+  assert.equal(resources.read(bob, f.teamId, id).resource.format, SHARED_MCP_FORMAT);
+  assert.throws(() => resources.read(charlie, f.teamId, id), status(404));
+  const lease = resources.acquire(bob, f.teamId, id, 1);
+  assert.throws(() => resources.acquire(alice, f.teamId, id, 1), status(423));
+  for (const invalid of ['{}', JSON.stringify(mcpDocument({ env: { SECRET: 'secret' } }))]) {
+    assert.throws(() => resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Invalid', invalid), status(400));
+  }
+  assert.equal(resources.read(bob, f.teamId, id).editor.actorId, 'bob');
+  resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Updated', JSON.stringify(mcpDocument({ args: ['updated.mjs'] })));
+  assert.throws(() => resources.save(bob, f.teamId, id, lease.token, lease.fence, 1, 'Stale', content), status(409));
+  resources.restore(alice, f.teamId, id, 2, 1);
+  assert.deepEqual(readSharedMcp(JSON.parse(resources.read(bob, f.teamId, id).revision.content)), mcpDocument());
+  f.ledger.db.prepare('UPDATE team_resource_versions SET content=? WHERE resource_id=? AND version=1')
+    .run(JSON.stringify(mcpDocument({ roots: ['/private'] })), id);
+  assert.throws(() => resources.restore(alice, f.teamId, id, 3, 1), status(400));
+  assert.equal(resources.read(alice, f.teamId, id).resource.version, 3);
+  const graph = flowDocument({ boundServer: teamDependencyId('mcp', f.teamId, id) });
+  graph.flow.nodes[0].type = 'mcp'; graph.flow.nodes[0].data.type = 'mcp';
+  assert.ok(resources.create(bob, f.teamId, 'flow', 'Bound server', JSON.stringify(graph)));
+});
 async function fixture(t) {
   const { directory, close } = privateFixture(t);
   const config = configSchema.parse({ schemaVersion: 2, stateDirectory: directory,
