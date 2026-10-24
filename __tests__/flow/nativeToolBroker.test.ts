@@ -5,7 +5,7 @@ import type OpenAI from 'openai';
 import {
   _setNativeToolJournalRootForTests, beginNativeTool, finishNativeInvocation,
   finishNativeTool, holdNativeInvocation, markNativeToolEffectMayHaveStarted, nativeInvocationStatus,
-  prepareNativeInvocation, submitNativeInvocation, type NativeInvocationOwner,
+  prepareNativeInvocation, readNativeInvocationTerminalEvidence, submitNativeInvocation, type NativeInvocationOwner,
 } from '@/backend/execution/flow/handlers/nativeToolJournal';
 import {
   assertNativeToolPort, createNativeBrokerAuthority, createNativeToolPort,
@@ -23,6 +23,29 @@ const owner = (conversationId: string, inventoryDigest = 'inventory'): NativeInv
 });
 
 describe('native broker journal', () => {
+  it('reconciles a permitted tool response whose durable receipt exceeds the small invocation-record limit', async () => {
+    const receipt = await prepareNativeInvocation(owner('large-tool-receipt'));
+    await submitNativeInvocation(receipt);
+    const { entry } = await beginNativeTool(receipt, 'read-source', 'fingerprint');
+    await markNativeToolEffectMayHaveStarted(entry);
+    const result = { content: [{ type: 'text' as const, text: 'x'.repeat(55_000) }] };
+    await finishNativeTool(entry, { result, transcriptText: JSON.stringify(result), kind: 'mcp' });
+    await finishNativeInvocation(receipt, 'completed', { assertCurrent: async () => undefined, signal: new AbortController().signal });
+    await expect(readNativeInvocationTerminalEvidence(receipt.invocationId, receipt.owner, 'default-workspace'))
+      .resolves.toMatchObject({ holdAbsent: true, effectsResolved: true });
+    const files = await fs.readdir(path.join(directory, 'tools', receipt.invocationId));
+    const saved = path.join(directory, 'tools', receipt.invocationId, files[0]);
+    const toolReceipt = JSON.parse(await fs.readFile(saved, 'utf8'));
+    await fs.writeFile(saved, JSON.stringify({ ...toolReceipt, padding: 'x'.repeat(2 * 1024 * 1024) }));
+    await expect(readNativeInvocationTerminalEvidence(receipt.invocationId, receipt.owner, 'default-workspace'))
+      .rejects.toThrow('Native source file is unsafe');
+    await fs.writeFile(saved, JSON.stringify(toolReceipt));
+    const callFile = path.join(directory, 'calls', `${receipt.invocationId}.json`);
+    const call = JSON.parse(await fs.readFile(callFile, 'utf8'));
+    await fs.writeFile(callFile, JSON.stringify({ ...call, padding: 'x'.repeat(64 * 1024) }));
+    await expect(readNativeInvocationTerminalEvidence(receipt.invocationId, receipt.owner, 'default-workspace'))
+      .rejects.toThrow('Native source file is unsafe');
+  });
   it('records oversized arguments as a recoverable no-effect rejection and admits a corrected new callback', async () => {
     const tools = [tool('worker_search')];
     const executor = jest.fn(async () => ({ ok: true }));
