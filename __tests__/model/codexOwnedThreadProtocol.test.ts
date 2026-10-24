@@ -62,6 +62,24 @@ it('keeps a silent live turn running while periodically checking its owner', asy
   } finally { jest.useRealTimers(); }
 });
 
+it('does not overflow the owned stream with unconsumed diagnostic deltas', async () => {
+  jest.useFakeTimers();
+  try {
+    const pending = protocol(absent, {}, true);
+    const result = pending.collect().then(frames => ({ frames }), error => ({ error }));
+    await jest.advanceTimersByTimeAsync(1);
+    const notify = start.mock.calls[0][0].onNotification;
+    for (let index = 0; index < 1024; index++) {
+      notify({ method: 'codex/event/agent_message_delta', params: { delta: 'unconsumed diagnostic' } });
+      notify({ method: 'item/agentMessage/delta', params: { delta: 'unconsumed text delta' } });
+    }
+    pending.releaseOutput();
+    const actual = await result;
+    expect(actual).toMatchObject({ frames: expect.arrayContaining([expect.objectContaining({ type: 'turn.completed' })]) });
+    expect(JSON.stringify(actual)).not.toContain('unconsumed');
+  } finally { jest.useRealTimers(); }
+});
+
 it('still stops a silent turn when its owned process closes or its authority is revoked', async () => {
   jest.useFakeTimers();
   try {

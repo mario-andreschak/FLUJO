@@ -11,6 +11,7 @@ const record = (value: unknown): Record<string, unknown> => {
 };
 const id = (value: unknown): string => typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : unavailable();
 const count = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : unavailable();
+const STREAM_METHODS = new Set(['turn/started', 'turn/completed', 'item/started', 'item/completed', 'thread/tokenUsage/updated']);
 
 /** Only system execution paths and the managed runtime home cross Native's boundary. */
 export function nativeCodexEnvironment(runtime: Record<string, string | undefined>, apiKey?: string): NodeJS.ProcessEnv {
@@ -56,6 +57,10 @@ export function createOwnedCodexThread(input: {
           env: input.env, cwd: input.options.workingDirectory!, owner: input.host, signal: options.signal,
           register: process => input.host.register(process),
           onNotification: message => {
+            // Diagnostic and delta frames are not consumed by this adapter.
+            // Large code-mode programs can otherwise fill the queue with
+            // duplicate notifications before their authoritative item arrives.
+            if (!STREAM_METHODS.has(message.method ?? '')) return;
             const bytes = Buffer.byteLength(JSON.stringify(message));
             if (notifications.length >= 256 || retainedBytes + bytes > 8 * 1024 * 1024) return unavailable();
             notifications.push(message); retainedBytes += bytes; wake?.();
@@ -105,7 +110,7 @@ export function createOwnedCodexThread(input: {
             if (!message) continue;
             retainedBytes -= Buffer.byteLength(JSON.stringify(message));
             const method = message.method;
-            if (!['turn/started', 'turn/completed', 'item/started', 'item/completed', 'thread/tokenUsage/updated'].includes(method ?? '')) continue;
+            if (!STREAM_METHODS.has(method ?? '')) continue;
             const params = record(message.params);
             if (params.threadId !== threadId) return unavailable();
             const messageTurn = method === 'turn/started' || method === 'turn/completed'
