@@ -196,3 +196,7 @@ tools. Persona Native Originals enable that host at process startup and thread
 creation while keeping native shell, agents, browsers and other capabilities
 disabled. Calls still pass through the existing FLUJO broker and journal.
 Qualified Worker profiles and their inventory probes retain their tested policy.
+
+A silent Native turn rechecks its current owner every 30 seconds. Silence alone
+does not certify failure or terminate a model that is still reasoning; process
+closure, cancellation and revoked ownership still terminate the turn.

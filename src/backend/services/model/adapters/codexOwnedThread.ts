@@ -87,11 +87,18 @@ export function createOwnedCodexThread(input: {
             if (!notifications.length) {
               let timer: NodeJS.Timeout | undefined;
               try {
-                const live = await Promise.race([
-                  new Promise<boolean>(resolve => { wake = () => resolve(true); timer = setTimeout(() => resolve(false), 30000); }),
-                  child.registration.close.then(() => false),
+                const event = await Promise.race([
+                  new Promise<'output' | 'check'>(resolve => { wake = () => resolve('output'); timer = setTimeout(() => resolve('check'), 30000); }),
+                  child.registration.close.then(() => 'closed' as const),
                 ]);
-                if (!live) return unavailable();
+                if (event === 'closed') return unavailable();
+                if (event === 'check') {
+                  // A live model may reason silently for more than 30 seconds.
+                  // Recheck the owner instead of turning silence into failure.
+                  options.signal?.throwIfAborted();
+                  await input.host.assertOutputCurrent();
+                  continue;
+                }
               } finally { wake = undefined; if (timer) clearTimeout(timer); }
             }
             const message = notifications.shift();
