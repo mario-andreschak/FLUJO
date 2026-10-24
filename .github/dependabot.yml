@@ -12,7 +12,7 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: daily
+      interval: weekly
     open-pull-requests-limit: 10
     ignore:
       # TypeScript7 has no compiler API; the locked parser supports versions below6.1.
