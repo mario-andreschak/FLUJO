@@ -148,12 +148,13 @@ export async function assertSavedNativePublishable(input: {
 /** Exact source terminal read for an already admitted original. The private
  * recovery callback is distinct from a live Worker lease and must be bound by
  * the host to its saved owner; this function has no public transport. */
-export async function readSavedNativeTerminal(input: { invocationId: string;
+type SavedNativeEvidenceInput = { invocationId: string;
   expectedOwner: NativeInvocationOwner; expectedLineageDigest: string;
   expectedDescriptorDigest: string; expectedWorkspace: string;
   assertReadAuthorized: () => Promise<void>;
-}): Promise<{ receipt: Awaited<ReturnType<typeof nativeInvocationStatus>>;
-  holdAbsent: boolean; effectsResolved: boolean }> {
+};
+
+async function readSavedNativeEvidence(input: SavedNativeEvidenceInput, failedGoalId?: string) {
   if (typeof input.assertReadAuthorized !== 'function') return held();
   await input.assertReadAuthorized();
   const saved = await readSaved(input.invocationId, input.expectedWorkspace);
@@ -163,6 +164,10 @@ export async function readSavedNativeTerminal(input: { invocationId: string;
     || nativeDigest(descriptor) !== input.expectedDescriptorDigest
     || descriptor.lineage.workspace !== input.expectedWorkspace
     || descriptor.archive.dispatchId !== input.invocationId) return held();
+  if (failedGoalId !== undefined && (descriptor.lineage.goalId !== failedGoalId
+    || descriptor.lineage.edges.length !== 0
+    || descriptor.lineage.rootConversationId !== input.expectedOwner.conversationId
+    || descriptor.lineage.rootLogicalRunId !== input.expectedOwner.runId)) return held();
   const terminal = await readNativeInvocationTerminalEvidence(input.invocationId, input.expectedOwner,
     input.expectedWorkspace, async () => {
       const archived = await readNativeModelTurnSnapshot(input.expectedOwner.conversationId,
@@ -176,7 +181,7 @@ export async function readSavedNativeTerminal(input: { invocationId: string;
         || archived.entry.attempt !== input.expectedOwner.attemptOrdinal
         || archived.entry.adapter !== descriptor.archive.adapter
         || archived.entry.operation !== descriptor.archive.operation
-        || archived.entry.outcome !== 'completed'
+        || archived.entry.outcome !== (failedGoalId === undefined ? 'completed' : 'error')
         || nativeDigest(archived.sdkRequest) !== descriptor.archive.sanitizedSdkRequestDigest
         || nativeDigest(archived.genericWire) !== descriptor.archive.sanitizedGenericWireDigest) return held();
       const payload = await readNativeSessionPayload(descriptor.payloadRef, input.expectedWorkspace);
@@ -189,9 +194,23 @@ export async function readSavedNativeTerminal(input: { invocationId: string;
           descriptor.inventory.terminationProtocol)
           !== descriptor.inventory.digest
         || descriptor.inventory.digest !== input.expectedOwner.inventoryDigest) return held();
-    });
+    }, failedGoalId !== undefined);
+  return { terminal, descriptor };
+}
+
+export async function readSavedNativeTerminal(input: SavedNativeEvidenceInput): Promise<{
+  receipt: Awaited<ReturnType<typeof nativeInvocationStatus>>; holdAbsent: boolean; effectsResolved: boolean }> {
+  const { terminal } = await readSavedNativeEvidence(input);
   if (terminal.receipt.state !== 'terminal' || terminal.receipt.outcome !== 'completed'
     || !terminal.holdAbsent || !terminal.effectsResolved) return held();
   await input.assertReadAuthorized();
   return terminal;
+}
+
+/** Historical failure proof only. It cannot release the invocation's journal,
+ * certify completion, resume its SDK session or authorize an effect. */
+export async function readSavedNativeFailureWithoutTools(input: SavedNativeEvidenceInput & { goalId: string }) {
+  const { descriptor } = await readSavedNativeEvidence(input, input.goalId);
+  await input.assertReadAuthorized();
+  return descriptor;
 }

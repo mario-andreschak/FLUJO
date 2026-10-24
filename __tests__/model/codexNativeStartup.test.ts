@@ -28,6 +28,16 @@ it('preserves API-key Persona authentication in both launch and thread configura
   expect(thread).not.toHaveProperty('forced_login_method');
   expect(thread.mcp_servers).toBe(config.mcp_servers);
 });
+it('allows the Persona computational bridge at startup and thread creation without enabling native capabilities', () => {
+  const args = nativeCodexStartupArguments({ cwd, config, authentication: 'chatgpt', personaTools: true });
+  expect(args).toContain('features.code_mode_host=true');
+  const thread = nativeCodexThreadConfiguration(config, 'chatgpt', true);
+  expect(thread.features).toMatchObject({ code_mode_host: true, code_mode: false,
+    shell_tool: false, unified_exec: false, multi_agent: false, apps: false,
+    browser_use: false, computer_use: false, plugins: false });
+  expect(thread.mcp_servers).toBe(config.mcp_servers);
+  expect(args.some(value => value.includes(capability))).toBe(false);
+});
 it('refuses an unverified relative catalog or caller-selected project trust override', () => {
   expect(() => nativeCodexStartupArguments({ cwd, config: { model_catalog_json: 'relative.json' }, authentication: 'chatgpt' })).toThrow('unavailable');
   expect(() => nativeCodexStartupArguments({ cwd, config, authentication: 'chatgpt', neutralTrustOverrides: ['features.shell_tool=true'] })).toThrow('unavailable');

@@ -2,22 +2,27 @@ import { createOwnedCodexThread } from '@/backend/services/model/adapters/codexO
 import type { NativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { startOwnedCodexAppServer } from '@/backend/services/model/adapters/codexAppServerProcess';
 
-jest.mock('@/backend/execution/flow/handlers/nativeOriginalHost', () => ({ assertNativeOriginalProcessHost: jest.fn() }));
+jest.mock('@/backend/execution/flow/handlers/nativeOriginalHost', () => ({
+  assertNativeOriginalProcessHost: jest.fn(), nativeOriginalUsesPersonaTools: () => true,
+}));
 jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => ({ startOwnedCodexAppServer: jest.fn() }));
 
 const start = jest.mocked(startOwnedCodexAppServer);
 const absent = Symbol('absent');
-function protocol(cacheWrite: unknown = absent, echo: { threadId?: string; turnId?: string; type?: string } = {}) {
+function protocol(cacheWrite: unknown = absent, echo: { threadId?: string; turnId?: string; type?: string } = {}, deferred = false) {
   const outputCurrent = jest.fn(async () => {});
   const host = { assertTurnBudget: jest.fn(async () => {}), beforeFirstPrompt: jest.fn(async () => {}),
     assertOutputCurrent: outputCurrent } as unknown as NativeOriginalProcessHost;
+  let releaseOutput: (() => void) | undefined, closeProcess!: () => void;
+  const close = new Promise<void>(resolve => { closeProcess = resolve; });
   start.mockImplementation(async input => {
     const notify = (method: string, params: Record<string, unknown>) => input.onNotification?.({ method, params });
-    return { registration: { exit: Promise.resolve({ code: 0, signal: null }), close: Promise.resolve() },
-      stop: jest.fn(async () => {}), notify: jest.fn(), request: jest.fn(async method => {
+    return { registration: { exit: Promise.resolve({ code: 0, signal: null }), close },
+      stop: jest.fn(async () => { closeProcess(); }), notify: jest.fn(), request: jest.fn(async method => {
         if (method === 'initialize') return {};
         if (method === 'thread/start') return { model: 'gpt-6-luna', thread: { id: 'thread' } };
         const scope = { threadId: 'thread', turnId: 'turn' };
+        releaseOutput = () => {
         notify('turn/started', { threadId: 'thread', turn: { id: 'turn' } });
         notify('item/started', { ...scope, ...echo, item: { id: 'echo', type: echo.type ?? 'userMessage',
           content: [{ type: 'text', text: 'INPUT_ECHO_SENTINEL' }] } });
@@ -27,6 +32,8 @@ function protocol(cacheWrite: unknown = absent, echo: { threadId?: string; turnI
           ...(cacheWrite === absent ? {} : { cacheWriteInputTokens: cacheWrite }),
         } } });
         notify('turn/completed', { threadId: 'thread', turn: { id: 'turn', status: 'completed' } });
+        };
+        if (!deferred) releaseOutput();
         return { turn: { id: 'turn' } };
       }) } as unknown as Awaited<ReturnType<typeof startOwnedCodexAppServer>>;
   });
@@ -38,10 +45,56 @@ function protocol(cacheWrite: unknown = absent, echo: { threadId?: string; turnI
     for await (const event of events) frames.push(event);
     return frames;
   };
-  return { collect, outputCurrent };
+  return { collect, outputCurrent, releaseOutput: () => releaseOutput!(), closeProcess };
 }
 
 beforeEach(() => start.mockReset());
+
+it('keeps a silent live turn running while periodically checking its owner', async () => {
+  jest.useFakeTimers();
+  try {
+    const pending = protocol(absent, {}, true);
+    const result = pending.collect().then(frames => ({ frames }), error => ({ error }));
+    await jest.advanceTimersByTimeAsync(60001);
+    expect(pending.outputCurrent).toHaveBeenCalledTimes(2);
+    pending.releaseOutput();
+    expect(await result).toMatchObject({ frames: expect.arrayContaining([expect.objectContaining({ type: 'turn.completed' })]) });
+  } finally { jest.useRealTimers(); }
+});
+
+it('does not overflow the owned stream with unconsumed diagnostic deltas', async () => {
+  jest.useFakeTimers();
+  try {
+    const pending = protocol(absent, {}, true);
+    const result = pending.collect().then(frames => ({ frames }), error => ({ error }));
+    await jest.advanceTimersByTimeAsync(1);
+    const notify = start.mock.calls[0][0].onNotification;
+    for (let index = 0; index < 1024; index++) {
+      notify({ method: 'codex/event/agent_message_delta', params: { delta: 'unconsumed diagnostic' } });
+      notify({ method: 'item/agentMessage/delta', params: { delta: 'unconsumed text delta' } });
+    }
+    pending.releaseOutput();
+    const actual = await result;
+    expect(actual).toMatchObject({ frames: expect.arrayContaining([expect.objectContaining({ type: 'turn.completed' })]) });
+    expect(JSON.stringify(actual)).not.toContain('unconsumed');
+  } finally { jest.useRealTimers(); }
+});
+
+it('still stops a silent turn when its owned process closes or its authority is revoked', async () => {
+  jest.useFakeTimers();
+  try {
+    const closed = protocol(absent, {}, true);
+    const closing = closed.collect().catch(error => error);
+    await jest.advanceTimersByTimeAsync(1);
+    closed.closeProcess();
+    expect(await closing).toEqual(expect.objectContaining({ message: 'Native Codex Original protocol is held.' }));
+    const revoked = protocol(absent, {}, true);
+    revoked.outputCurrent.mockRejectedValueOnce(new Error('owner revoked'));
+    const revoking = revoked.collect().catch(error => error);
+    await jest.advanceTimersByTimeAsync(30001);
+    expect(await revoking).toEqual(expect.objectContaining({ message: 'owner revoked' }));
+  } finally { jest.useRealTimers(); }
+});
 
 it.each([absent, 3])('ignores the bound input echo and maps only output with valid usage (%s)', async cacheWrite => {
   const { collect, outputCurrent } = protocol(cacheWrite);

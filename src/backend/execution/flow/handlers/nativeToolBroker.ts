@@ -192,14 +192,17 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       // any journal or approval await and use it through the final effect.
       const argsJson = JSON.stringify(args);
       if (!argsJson) throw new Error('Native tool arguments must be a JSON object.');
-      if (Buffer.byteLength(argsJson, 'utf8') > 256 * 1024) {
-        throw new Error('Native tool arguments exceed the broker bound.');
-      }
-      const callArgs = deepFreeze(JSON.parse(argsJson) as Record<string, unknown>);
+      const oversized = Buffer.byteLength(argsJson, 'utf8') > 256 * 1024;
+      const callArgs = oversized ? Object.freeze({}) : deepFreeze(JSON.parse(argsJson) as Record<string, unknown>);
       if (!callArgs || typeof callArgs !== 'object' || Array.isArray(callArgs)) {
         throw new Error('Native tool arguments must be a JSON object.');
       }
-      const fingerprint = nativeToolFingerprint(name, callArgs, inventoryDigest);
+      // A rejected oversized request still owns its callback identity, without
+      // persisting or forwarding those arguments. Separate its fingerprint
+      // domain from executable calls so changed arguments cannot be replayed.
+      const fingerprint = oversized
+        ? nativeDigest(['oversized-native-tool-arguments', name, inventoryDigest, argsJson])
+        : nativeToolFingerprint(name, callArgs, inventoryDigest);
       const { entry, fresh } = await beginNativeTool(input.receipt, toolInvocationId, fingerprint);
       const combined = combineAbortSignals(input.signal, controller.signal, signal)!;
       if (!fresh) {
@@ -221,6 +224,14 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       };
       const kind = kinds.get(name)!;
       await assertCurrent();
+      if (oversized) {
+        const result: CallToolResult = { isError: true, content: [{ type: 'text', text:
+          'Tool arguments exceed the 262144-byte limit. No tool was executed. Reduce the request size and try again with a new call.' }] };
+        const terminal = { result, transcriptText: JSON.stringify(result), kind };
+        await finishNativeTool(entry, terminal, { assertCurrent, signal: combined });
+        await assertCurrent();
+        return terminal;
+      }
       const approved = await input.requestToolApproval?.({ id: toolInvocationId, name, args: callArgs });
       let result: CallToolResult;
       if (approved === false) {

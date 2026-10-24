@@ -2,7 +2,7 @@ import type { ThreadEvent, ThreadOptions, UserInput } from '@openai/codex-sdk';
 import { startOwnedCodexAppServer } from './codexAppServerProcess';
 import { bundledCodexExecutable } from './codexRestrictedProfile';
 import { nativeCodexStartupArguments, nativeCodexThreadConfiguration } from './codexNativeStartup';
-import { assertNativeOriginalProcessHost, type NativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { assertNativeOriginalProcessHost, nativeOriginalUsesPersonaTools, type NativeOriginalProcessHost } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 
 const unavailable = (): never => { throw new Error('Native Codex Original protocol is held.'); };
 const record = (value: unknown): Record<string, unknown> => {
@@ -11,6 +11,7 @@ const record = (value: unknown): Record<string, unknown> => {
 };
 const id = (value: unknown): string => typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : unavailable();
 const count = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : unavailable();
+const STREAM_METHODS = new Set(['turn/started', 'turn/completed', 'item/started', 'item/completed', 'thread/tokenUsage/updated']);
 
 /** Only system execution paths and the managed runtime home cross Native's boundary. */
 export function nativeCodexEnvironment(runtime: Record<string, string | undefined>, apiKey?: string): NodeJS.ProcessEnv {
@@ -31,6 +32,7 @@ export function createOwnedCodexThread(input: {
   options: ThreadOptions; maxTurns: number; executable?: string; onThreadStarted?: (threadId: string) => void;
 }) {
   assertNativeOriginalProcessHost(input.host);
+  const personaTools = nativeOriginalUsesPersonaTools(input.host);
   let issued = false, closed = false;
   return Object.freeze({
     closureConfirmed: () => closed,
@@ -51,10 +53,14 @@ export function createOwnedCodexThread(input: {
         const authentication = input.env.CODEX_API_KEY ? 'api-key' : 'chatgpt';
         const child = await startOwnedCodexAppServer({
           executable: input.executable ?? bundledCodexExecutable(), args: ['app-server', '--stdio',
-            ...nativeCodexStartupArguments({ cwd: input.options.workingDirectory!, config: input.config, authentication })],
+            ...nativeCodexStartupArguments({ cwd: input.options.workingDirectory!, config: input.config, authentication, personaTools })],
           env: input.env, cwd: input.options.workingDirectory!, owner: input.host, signal: options.signal,
           register: process => input.host.register(process),
           onNotification: message => {
+            // Diagnostic and delta frames are not consumed by this adapter.
+            // Large code-mode programs can otherwise fill the queue with
+            // duplicate notifications before their authoritative item arrives.
+            if (!STREAM_METHODS.has(message.method ?? '')) return;
             const bytes = Buffer.byteLength(JSON.stringify(message));
             if (notifications.length >= 256 || retainedBytes + bytes > 8 * 1024 * 1024) return unavailable();
             notifications.push(message); retainedBytes += bytes; wake?.();
@@ -69,7 +75,7 @@ export function createOwnedCodexThread(input: {
           const started = record(await child.request('thread/start', {
             model: input.options.model, cwd: input.options.workingDirectory,
             approvalPolicy: 'never', sandbox: 'read-only', ephemeral: false,
-            config: nativeCodexThreadConfiguration(input.config, authentication),
+            config: nativeCodexThreadConfiguration(input.config, authentication, personaTools),
           }));
           const threadId = id(record(started.thread).id);
           if (started.model !== input.options.model) return unavailable();
@@ -86,18 +92,25 @@ export function createOwnedCodexThread(input: {
             if (!notifications.length) {
               let timer: NodeJS.Timeout | undefined;
               try {
-                const live = await Promise.race([
-                  new Promise<boolean>(resolve => { wake = () => resolve(true); timer = setTimeout(() => resolve(false), 30000); }),
-                  child.registration.close.then(() => false),
+                const event = await Promise.race([
+                  new Promise<'output' | 'check'>(resolve => { wake = () => resolve('output'); timer = setTimeout(() => resolve('check'), 30000); }),
+                  child.registration.close.then(() => 'closed' as const),
                 ]);
-                if (!live) return unavailable();
+                if (event === 'closed') return unavailable();
+                if (event === 'check') {
+                  // A live model may reason silently for more than 30 seconds.
+                  // Recheck the owner instead of turning silence into failure.
+                  options.signal?.throwIfAborted();
+                  await input.host.assertOutputCurrent();
+                  continue;
+                }
               } finally { wake = undefined; if (timer) clearTimeout(timer); }
             }
             const message = notifications.shift();
             if (!message) continue;
             retainedBytes -= Buffer.byteLength(JSON.stringify(message));
             const method = message.method;
-            if (!['turn/started', 'turn/completed', 'item/started', 'item/completed', 'thread/tokenUsage/updated'].includes(method ?? '')) continue;
+            if (!STREAM_METHODS.has(method ?? '')) continue;
             const params = record(message.params);
             if (params.threadId !== threadId) return unavailable();
             const messageTurn = method === 'turn/started' || method === 'turn/completed'

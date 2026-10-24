@@ -15,7 +15,8 @@ import { getPersonaActivity, getPersonaWorkItem } from '@/backend/services/endur
 import { createNativeBrokerAuthority, nativeDigest } from './nativeToolBroker';
 import { createNativeLineageRootBinding } from './nativeOriginLineage';
 import { createNativeInvocationSessionHook, type NativeInvocationSession, type NativeInvocationSessionPayloadRef } from './nativeInvocationSession';
-import { assertSavedNativePublishable, readSavedNativeOrigin, readSavedNativeTerminal } from './nativeSavedOrigin';
+import { assertSavedNativePublishable, readSavedNativeOrigin, readSavedNativeTerminal,
+  readSavedNativeFailureWithoutTools } from './nativeSavedOrigin';
 import { readNativeSessionPayload } from './nativeSessionPayload';
 import { assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '@/backend/services/model/adapters/claudeOwnedProcess';
 import { assertCodexOwnedProcessRegistration, probeCodexOwnedProcessRegistration, type CodexOwnedProcessRegistration } from '@/backend/services/model/adapters/codexAppServerProcess';
@@ -53,6 +54,8 @@ const modelPlan = (value: Model | null) => ({ id: value?.id, name: value?.name, 
 type Reservation = { invocationId: string; descriptorDigest: string; owner: NativeInvocationSession['descriptor']['receipt']['owner'];
   lineageDigest: string; acceptanceDigest: string; planDigest: string; modelId: string; maxTurns: number;
   state: 'accepted' | 'registered' | 'exited' | 'released';
+  retryRetirement?: { reason: 'failed-without-tools'; retiredAt: number; failedReservationDigest: string;
+    dispatchId: string; activityId: string; round: number };
   codexBudget?: { scope: 'outer-turn'; admittedTurns: 1; maxTurns: number; completedTurns?: 1 };
   handoff?: { protocol: NativeHandoffProtocol; toolInvocationIds: string[]; state: 'requested' | 'confirmed' };
   sdkUsage?: { source: 'claude-sdk-result'|'codex-app-server-turn'; numTurns?: number; outerTurns?:number; inputTokens?: number;
@@ -91,6 +94,11 @@ const hostContexts = hostRoot.__flujoNativeOriginalHostContexts ??= new WeakMap<
 export function assertNativeOriginalExecutionContext(host: unknown, context?: ExecutionExtensionContext): void {
   assertNativeOriginalProcessHost(host);
   if (hostContexts.get(host) !== context) return held();
+}
+/** Persona's computational tool bridge does not change a qualified Worker profile. */
+export function nativeOriginalUsesPersonaTools(host: unknown): boolean {
+  assertNativeOriginalProcessHost(host);
+  return !hostContexts.has(host);
 }
 /** In-process access only. JSON, a PID, or caller-supplied lifecycle callbacks
  * cannot recover a reader for an existing Original. No transport is exposed. */
@@ -248,6 +256,46 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>,
   }), binding.workspace);
 }
 
+/** A new, genuinely admitted Persona round may retire an exited failed root
+ * that admitted no tool effects. Keep the failed invocation, budget, archive
+ * and unknown journal intact: this is permission for a fresh conversation,
+ * never a successful terminal receipt or permission to replay the old one. */
+async function retireFailedPersonaReservations(binding: Binding): Promise<void> {
+  if (binding.kind !== 'persona') return held();
+  const assertCurrent = async () => {
+    binding.authority.signal.throwIfAborted();
+    const goal = await getPersonaWorkItem(binding.personaId, binding.goalId);
+    if (!goal?.goal || goal.goal.state !== 'active' || goal.goal.rounds !== binding.round
+      || goal.goal.pendingDispatchId !== binding.dispatchId) return held();
+    binding.authority.signal.throwIfAborted();
+  };
+  await mutate(binding, async ledger => {
+    for (const reservation of ledger.reservations) {
+      if (reservation.state === 'released') continue;
+      if (reservation.state !== 'exited' || reservation.sdkOutcome !== 'error'
+        || reservation.sdkUsage || reservation.handoff || reservation.retryRetirement
+        || !reservation.identity?.processBirthMarkerV2
+        || reservation.exit?.code !== 0 || reservation.exit.signal !== null
+        || reservation.owner.conversationId === binding.conversationId) return held();
+      const descriptor = await readSavedNativeFailureWithoutTools({
+        invocationId: reservation.invocationId, expectedOwner: reservation.owner,
+        expectedLineageDigest: reservation.lineageDigest, expectedDescriptorDigest: reservation.descriptorDigest,
+        expectedWorkspace: binding.workspace, goalId: binding.goalId, assertReadAuthorized: assertCurrent,
+      });
+      const activity = await getPersonaActivity(binding.personaId, descriptor.lineage.workerId);
+      if (!activity || activity.status !== 'error' || activity.conversationId !== reservation.owner.conversationId
+        || activity.runId !== reservation.owner.runId || activity.source.kind !== 'assignment'
+        || !activity.source.sourceId) return held();
+      const task = await getPersonaWorkItem(binding.personaId, activity.source.sourceId);
+      if (!task || (task.id !== binding.goalId && task.parentGoalId !== binding.goalId)) return held();
+      const failedReservationDigest = nativeDigest(reservation);
+      reservation.retryRetirement = { reason: 'failed-without-tools', retiredAt: Date.now(), failedReservationDigest,
+        dispatchId: binding.dispatchId, activityId: binding.activityId, round: binding.round };
+      reservation.state = 'released';
+    }
+  }, { assertCurrent, assertActive: () => binding.authority.signal.throwIfAborted() });
+}
+
 /** Dispatcher-only mint: inputs come from its claimed lease and frozen Core,
  * not Flow/HTTP metadata. JSON or a lookalike Flow authority cannot recover it. */
 export async function bindPersonaNativeOriginalAuthority(authority: FlowExecutionAuthority, input: {
@@ -272,7 +320,7 @@ export async function bindPersonaNativeOriginalAuthority(authority: FlowExecutio
       round: goal.goal.rounds, flow, planDigest: nativeDigest([input.revisionId, flow]), authority };
     // A later lease, model or Activity cannot evade an unresolved original.
     const prior = await readLedger(binding);
-    if (prior.reservations.some(item => item.state !== 'released')) return held();
+    if (prior.reservations.some(item => item.state !== 'released')) await retireFailedPersonaReservations(binding);
     bindings.set(authority, binding);
   });
 }

@@ -23,6 +23,35 @@ const owner = (conversationId: string, inventoryDigest = 'inventory'): NativeInv
 });
 
 describe('native broker journal', () => {
+  it('records oversized arguments as a recoverable no-effect rejection and admits a corrected new callback', async () => {
+    const tools = [tool('worker_search')];
+    const executor = jest.fn(async () => ({ ok: true }));
+    const digest = nativeToolInventoryDigest(tools, undefined, { worker_search: executor });
+    const receipt = await prepareNativeInvocation(owner('oversized', digest));
+    await submitNativeInvocation(receipt);
+    const approval = jest.fn(async () => true);
+    const current = jest.fn(async () => undefined);
+    const signal = new AbortController().signal;
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: { worker_search: executor },
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'], requestToolApproval: approval,
+      authority: createNativeBrokerAuthority('lease-a', current), signal });
+    const oversized = { toolInvocationId: 'large', name: 'worker_search', args: { content: 'x'.repeat(262144) }, signal };
+    const rejected = await port.dispatch(oversized);
+    expect(rejected.result.isError).toBe(true);
+    expect(rejected.transcriptText).toContain('No tool was executed');
+    expect(executor).not.toHaveBeenCalled(); expect(approval).not.toHaveBeenCalled();
+    expect(await port.dispatch(oversized)).toEqual(rejected);
+    await expect(port.dispatch({ ...oversized, args: { content: 'small' } })).rejects.toThrow(/Conflicting/);
+    const files = await fs.readdir(path.join(directory, 'tools', receipt.invocationId));
+    const saved = await fs.readFile(path.join(directory, 'tools', receipt.invocationId, files[0]), 'utf8');
+    expect(saved.length).toBeLessThan(4096);
+    expect(JSON.parse(saved)).toMatchObject({ state: 'terminal', result: { result: { isError: true } } });
+    await expect(port.dispatch({ toolInvocationId: 'corrected', name: 'worker_search', args: { content: 'small' }, signal }))
+      .resolves.toMatchObject({ result: { content: expect.any(Array) } });
+    expect(executor).toHaveBeenCalledTimes(1); expect(approval).toHaveBeenCalledTimes(1);
+    current.mockRejectedValueOnce(new Error('owner revoked'));
+    await expect(port.dispatch({ ...oversized, toolInvocationId: 'stale' })).rejects.toThrow('owner revoked');
+  });
   it('does not admit a handoff protocol string or fake exit promises as an owned host capability', async () => {
     const tools = [tool('handoff_to_finish')];
     const digest = nativeToolInventoryDigest(tools, undefined, undefined, NATIVE_HANDOFF_PROTOCOL);

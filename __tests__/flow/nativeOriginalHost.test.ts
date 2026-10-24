@@ -118,8 +118,8 @@ import { createExecutionExtensionContext, registerExecutionExtension, runWithExe
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { createNativeInvocationSessionHook, type NativeInvocationSession, type NativeSessionEvent } from '@/backend/execution/flow/handlers/nativeInvocationSession';
 import { nativeDigest, createNativeToolPort, createNativeBrokerAuthority, nativeToolInventoryDigest, assertNativeToolPortModelTools } from '@/backend/execution/flow/handlers/nativeToolBroker';
-import { prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
-import { createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, assertNativeOriginalExecutionContext, nativeOriginalSourceReader } from '@/backend/execution/flow/handlers/nativeOriginalHost';
+import { prepareNativeInvocation, submitNativeInvocation, nativeInvocationStatus } from '@/backend/execution/flow/handlers/nativeToolJournal';
+import { createPersonaNativeOriginalHost, createWorkerNativeOriginalHost, assertNativeOriginalExecutionContext, nativeOriginalSourceReader, nativeOriginalUsesPersonaTools } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { subflowExecutionAuthority } from '@/backend/execution/flow/executionAuthority';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { flowService } from '@/backend/services/flow';
@@ -581,6 +581,8 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
   it('uses actual Worker lineage and its separate journal with no Persona attribution', async () => {
     await withWorkerClaim(async ({ host, invoke, context, workerLedger }) => {
       assertNativeOriginalExecutionContext(host.process, context);
+      expect(nativeOriginalUsesPersonaTools(host.process)).toBe(false);
+      expect(() => nativeOriginalUsesPersonaTools({})).toThrow('held');
       expect(() => assertNativeOriginalExecutionContext(host.process)).toThrow('held');
       expect(() => assertNativeOriginalExecutionContext(host.process, {} as never)).toThrow('held');
       const result = await invoke();
@@ -751,11 +753,13 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       const wire = (await fs.readFile(path.join(directory, 'codex-wire.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
       expect(wire.map(message => message.method)).toEqual(['initialize', 'initialized', 'thread/start', 'turn/start']);
       const args = codexLaunchArguments[0];
-      expect(args).toContain('features.code_mode_host=false');
+      expect(args).toContain('features.code_mode_host=true');
+      expect(args).toContain('features.shell_tool=false');
       expect(args).toContain('project_root_markers=[]');
       expect(args.some(value => value.startsWith('projects.') && value.endsWith('.trust_level="untrusted"'))).toBe(true);
       expect(args.some(value => value.startsWith('forced_login_method='))).toBe(false);
       const threadConfig = wire.find(message => message.method === 'thread/start').params.config;
+      expect(threadConfig.features).toMatchObject({ code_mode_host: true, shell_tool: false, multi_agent: false });
       expect(threadConfig).not.toHaveProperty('forced_login_method');
       expect(args.some(value => value.startsWith('mcp_servers.'))).toBe(false);
       if (threadConfig.mcp_servers?.flujo?.url) {
@@ -766,6 +770,72 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index];
     }); }
   }, 30000);
+  it.each(['none', 'pending', 'terminal', 'missing-exit', 'usage', 'archive-success'] as const)(
+    'retries a failed exited Persona root only with complete failure proof (case=%s)', async condition => {
+      selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
+      codexForeignScope = 'thread';
+      await withClaim(async () => {}, async (personaId, goalId) => {
+        let before = await ledger();
+        const failed = before.reservations[0];
+        expect(failed).toMatchObject({ state: 'exited', sdkOutcome: 'error', exit: { code: 0, signal: null } });
+        expect(failed.sdkUsage).toBeUndefined();
+        const journal = path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal');
+        const callFile = path.join(journal, 'calls', `${failed.invocationId}.json`);
+        const callBytes = await fs.readFile(callFile);
+        if (condition === 'pending' || condition === 'terminal') {
+          const toolDirectory = path.join(journal, 'tools', failed.invocationId);
+          await fs.mkdir(toolDirectory, { recursive: true });
+          await fs.writeFile(path.join(toolDirectory, `${'a'.repeat(64)}.json`), JSON.stringify({ state: condition }));
+        } else if (condition === 'missing-exit' || condition === 'usage') {
+          const folder = path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', 'host-ledger');
+          if (condition === 'missing-exit') delete before.reservations[0].exit;
+          else before.reservations[0].sdkUsage = { source: 'codex-app-server-turn', inputTokens: 1 };
+          await fs.writeFile(path.join(folder, (await fs.readdir(folder))[0]), JSON.stringify(before));
+        } else if (condition === 'archive-success') {
+          const outcomeFile = path.join(getWorkspaceDataDir(), 'db', 'model-turns', failed.owner.conversationId,
+            `${failed.invocationId}.outcome.json`);
+          const outcome = JSON.parse(await fs.readFile(outcomeFile, 'utf8'));
+          await fs.writeFile(outcomeFile, JSON.stringify({ ...outcome, outcome: 'completed' }));
+        }
+        before = await ledger();
+        codexForeignScope = '';
+        const goal = (await getPersonaWorkItem(personaId, goalId))!;
+        const retryKey = 'native-host-retry';
+        const dispatchId = personaFlowDispatchId(personaId, retryKey);
+        await savePersonaWorkItem({ ...goal, goal: { ...goal.goal!, state: 'active', rounds: 2, roundsInWindow: 2,
+          pendingTaskId: goalId, pendingDispatchId: dispatchId, pendingAttemptKey: retryKey,
+          pendingPrompt: 'Continue the goal after the failed round', pendingPriority: 'normal' } });
+        const retried = jest.fn(runFlow);
+        const dispatcher = new PersonaFlowDispatcher({ dependencies: { runFlow: retried } });
+        const active = { dispatcher, personaId };
+        activeDispatchers.add(active);
+        try {
+          await dispatcher.submit({ personaId, idempotencyKey: retryKey, kind: 'assignment',
+            source: { kind: 'assignment', sourceId: goalId },
+            flowInput: { source: 'internal', prompt: 'Continue', mode: 'conversation', requireApproval: false, onApprovalRequired: 'fail' },
+          }, { startPump: false });
+          await dispatcher.pump(personaId);
+          const after = await ledger();
+          if (condition === 'none') {
+            expect(retried).toHaveBeenCalledTimes(1);
+            expect(after.reservations).toHaveLength(2);
+            expect(after.reservations[0]).toMatchObject({ ...failed, state: 'released',
+              retryRetirement: { reason: 'failed-without-tools', failedReservationDigest: nativeDigest(failed), dispatchId, round: 2 } });
+            expect(after.reservations[1]).toMatchObject({ state: 'released', sdkOutcome: 'completed' });
+          } else {
+            expect(retried).not.toHaveBeenCalled();
+            expect(after).toEqual(before);
+          }
+          expect(await fs.readFile(callFile)).toEqual(callBytes);
+          expect((await nativeInvocationStatus(failed.invocationId, failed.owner)).state).toBe('unknown');
+          await expect(prepareNativeInvocation({ ...failed.owner, leaseEpoch: 'replacement' })).rejects.toThrow(/unresolved/);
+        } finally {
+          await dispatcher.quiesce(personaId);
+          activeDispatchers.delete(active);
+        }
+      }, 'no-handoff-refusal');
+    }, 60000);
+
   it.each(['before-prompt', 'after-prompt', 'foreign-thread', 'foreign-turn'])(
     'holds a real Codex Original for %s without accepting transcript, usage or release', async mode => {
       if (mode === 'after-prompt') { phaseStart = performance.now(); phase('Codex after-prompt control started'); }
