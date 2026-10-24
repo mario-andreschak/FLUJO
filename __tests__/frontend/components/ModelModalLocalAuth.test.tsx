@@ -157,15 +157,9 @@ it('preserves saved text-only metadata when a different provider switches to nat
   });
 });
 
-it('selects and saves OrcaRouter with its own key, endpoint and Chat Completions adapter', async () => {
-  const onSave = showModel('openai', 'openai');
+it('does not offer OrcaRouter in manual creation', () => {
+  showModel('openai', 'openai');
   fireEvent.mouseDown(screen.getByRole('combobox', { name: /^Provider$/ }));
-  fireEvent.click(screen.getByRole('option', { name: 'OrcaRouter' }));
-  expect(screen.getByLabelText(/Base URL/)).toHaveValue('https://api.orcarouter.ai/v1');
-  fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'Orca Sonnet' } });
-  fireEvent.change(screen.getByLabelText(/Technical name/), { target: { value: 'anthropic/claude-sonnet-4' } });
-  fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'orca-fixture-key' } });
-  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-  await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-  expect(onSave.mock.calls[0][0]).toMatchObject({ provider: 'orcarouter', adapter: 'openai', name: 'anthropic/claude-sonnet-4', ApiKey: 'orca-fixture-key', baseUrl: 'https://api.orcarouter.ai/v1' });
+  expect(screen.queryByRole('option', { name: 'OrcaRouter' })).not.toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'OpenRouter' })).toBeInTheDocument();
 });

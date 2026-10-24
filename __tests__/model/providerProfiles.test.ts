@@ -19,7 +19,6 @@ describe('provider profiles', () => {
       'openrouter',
       'openrouter-messages',
       'openrouter-agent',
-      'orcarouter',
       'requesty',
       'xai',
       'ollama',
@@ -172,10 +171,4 @@ describe('provider profiles', () => {
   it('never substitutes a stale static catalog when Antigravity discovery is unavailable', () => {
     expect(ANTIGRAVITY_CLI_API_KEY_MODELS).toEqual(['default']);
   });
-});
-
-it('keeps OrcaRouter on Chat Completions for new and saved connections', () => {
-  expect(getProviderProfile('orcarouter')).toMatchObject({ id: 'orcarouter', provider: 'orcarouter', adapter: 'openai', baseUrl: 'https://api.orcarouter.ai/v1', showBaseUrl: true });
-  expect(resolveModelAdapter('orcarouter', 'openai')).toBe('openai');
-  expect(supportsProviderModelDiscovery(getProviderProfile('orcarouter'), 'https://api.orcarouter.ai/v1')).toBe(true);
 });
