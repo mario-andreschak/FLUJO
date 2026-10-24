@@ -1,3 +1,4 @@
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 import {
   AutomationAiGate,
   PlannedExecutionState,
@@ -149,7 +150,7 @@ async function askModel(modelId: string, task: string): Promise<string> {
   if (model.ownerCredentialBinding !== undefined) {
     throw new Error('config: Owner-bound models require an authorized model-step transport.');
   }
-  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  const resolvedKey = (isTeamModel(model) ? teamModelTransportKey(model) : await modelService.resolveAndDecryptApiKey(model.ApiKey));
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) {
     throw new Error('config: Could not resolve the AI-check model API key');

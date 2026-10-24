@@ -22,6 +22,7 @@ import {
 } from '@mui/material';
 import {
   AccountTreeRounded,
+  AccountCircleRounded,
   AutoStoriesRounded,
   BoltRounded,
   Brightness4Rounded,
@@ -398,7 +399,7 @@ function CurrentChatLinkButton() {
   );
 }
 
-export default function Navigation() {
+export default function Navigation({ controllerAccount = false }: { controllerAccount?: boolean }) {
   const { toggleTheme, isDarkMode } = useTheme();
   const { t } = useI18n();
   const theme = useMuiTheme();
@@ -457,6 +458,13 @@ export default function Navigation() {
   const handleDrawerNavClick = (href: string) => (event: React.MouseEvent) => {
     setDrawerOpen(false);
     handleNavClick(href)(event);
+  };
+
+  const handleAccountClick = (event: React.MouseEvent) => {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    // The account page belongs to a different HTTP server, so use document navigation.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- This controller route is outside Next's router.
+    if (interceptNavigation(() => window.location.assign('/_account'))) event.preventDefault();
   };
 
   const handleDrawerEntered = () => {
@@ -607,7 +615,7 @@ export default function Navigation() {
             <Chip
               data-app-private-chip
               size="small"
-              label={t('nav.privateDevice')}
+              label={t(controllerAccount ? 'nav.privateRuntime' : 'nav.privateDevice')}
               icon={
                 <Box
                   component="span"
@@ -633,6 +641,13 @@ export default function Navigation() {
           )}
 
           <LanguageMenu />
+
+          {controllerAccount && !isCompact && <Tooltip title={t('nav.account')}>
+            <IconButton component="a" href="/_account" onClick={handleAccountClick}
+              aria-label={t('nav.account')} color="inherit" sx={{ border: 1, borderColor: 'divider' }}>
+              <AccountCircleRounded />
+            </IconButton>
+          </Tooltip>}
 
           <BugReportButton variant="icon" />
 
@@ -768,6 +783,10 @@ export default function Navigation() {
 
         {/* Compact navigation gets the same workspace management menu. */}
         <WorkspaceTabs variant="drawer" onSwitch={() => setDrawerOpen(false)} />
+        {controllerAccount && <ListItemButton component="a" href="/_account" onClick={handleAccountClick}>
+          <ListItemIcon><AccountCircleRounded /></ListItemIcon>
+          <ListItemText primary={t('nav.account')} />
+        </ListItemButton>}
 
         <List disablePadding sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <NavigationEntries

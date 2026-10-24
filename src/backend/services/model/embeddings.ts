@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import OpenAI from 'openai';
 
 import { Model } from '@/shared/types/model';
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 import { supportsEmbeddings, EmbeddingCapabilityError, type EmbeddingInput, type EmbeddingOutput } from '@/shared/types/model/embeddings';
 import { createLogger } from '@/utils/logger';
 import { resolveAndDecryptApiKey } from './encryption';
@@ -42,7 +43,7 @@ export class EmbeddingProvider {
     }
 
     // Resolve and decrypt the API key
-    const apiKey = await resolveAndDecryptApiKey(model.ApiKey);
+    const apiKey = isTeamModel(model) ? teamModelTransportKey(model) : await resolveAndDecryptApiKey(model.ApiKey);
     if (!apiKey) {
       throw new Error(`No API key configured for embedding model '${model.name}'`);
     }
@@ -59,7 +60,7 @@ export class EmbeddingProvider {
     try {
       // Call the embeddings API
       const response = await client.embeddings.create({
-        model: input.modelId,
+        model: isTeamModel(model) ? model.name : input.modelId,
         input: input.text,
         dimensions: input.dimensions,
       });

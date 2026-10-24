@@ -29,6 +29,9 @@ import { buildNodeInformation } from './nodeInformation';
 import { FlowNamesContext } from './flowNamesContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
+// Scoped editors can reuse native nodes without advertising workspace actions.
+export const FlowQuickConnectEnabledContext = React.createContext(true);
+
 // Resource, signal, and trigger nodes use shared semantic tokens because the
 // MUI palette slots are already occupied by the other FlowBuilder node types.
 export const RESOURCE_COLOR = flowNodeColors.light.resource;
@@ -246,6 +249,7 @@ const getResourceHandleStyle = (theme: Theme) => ({
 });
 
 const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { selected?: boolean }) => {
+  const quickConnectEnabled = useContext(FlowQuickConnectEnabledContext);
   const theme = useTheme();
   const { t, tp, formatList } = useI18n();
   const flowNames = useContext(FlowNamesContext);
@@ -270,7 +274,7 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
     setHoverReady(false);
   }, [selected]);
 
-  const quickConnectVisible = !!selected || hoverReady;
+  const quickConnectVisible = quickConnectEnabled && (!!selected || hoverReady);
 
   const startHoverReveal = () => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);

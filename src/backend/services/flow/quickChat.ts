@@ -45,10 +45,15 @@ export async function buildQuickChatFlow(
 ): Promise<BuildQuickChatResult> {
   // Read identities first. Starting a chat does not inventory every app or flow;
   // the model discovers those capabilities through the small bootstrap catalog.
-  const [models, configs] = await Promise.all([
-    modelService.loadModels(),
+  const [catalogue, configs] = await Promise.all([
+    modelService.listModels(),
     mcpService.loadServerConfigs(),
   ]);
+  if (!catalogue.success || !catalogue.models || (catalogue.sharedModelsUnavailable
+    && !catalogue.models.some(model => model.id === selection.modelId))) {
+    return { success: false, error: 'The selected model catalogue is unavailable. Check team access and retry.', statusCode: 503 };
+  }
+  const models = catalogue.models;
   if (!Array.isArray(configs)) {
     return { success: false, error: configs.error ?? 'Could not load connected apps. Try again.', statusCode: 503 };
   }

@@ -521,7 +521,11 @@ export async function authoringCallTool(
         ? Math.min(Math.max(args.limit, 1), 20)
         : 8;
       if (!capability) return textResult({ error: 'Describe the required MCP capability.' }, true);
-      const models = await modelService.loadModels();
+      const catalogue = await modelService.listModels();
+      if (!catalogue.success || !catalogue.models || catalogue.sharedModelsUnavailable) {
+        return textResult({ error: 'The model catalogue is unavailable. Check local team access and retry.' }, true);
+      }
+      const models = catalogue.models;
       const configuredModel = requestedModelId
         ? models.find((model) => model.id === requestedModelId)
         : models[0];
@@ -659,7 +663,11 @@ export async function authoringCallTool(
         return textResult({ error: 'Describe what you want to connect in "capability".' }, true);
       }
 
-      const models = await modelService.loadModels();
+      const catalogue = await modelService.listModels();
+      if (!catalogue.success || !catalogue.models || catalogue.sharedModelsUnavailable) {
+        return textResult({ error: 'The model catalogue is unavailable. Check local team access and retry.' }, true);
+      }
+      const models = catalogue.models;
       const configuredModel = requestedModelId
         ? models.find((model) => model.id === requestedModelId)
         : models[0];

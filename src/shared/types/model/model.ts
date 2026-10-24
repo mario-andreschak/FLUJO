@@ -31,6 +31,8 @@ export function normalizeMaxTokens(value: unknown): number | undefined {
 }
 
 export interface Model {
+    /** Read-only projection from the local controller; never persisted in the private catalogue. */
+    teamModel?: import('../../../../packages/shared-controller/src/shared-model').TeamModelReference;
     /** A reusable ordered routing alias backed by existing workspace models. */
     fallbackPolicy?: import('./fallbackPolicy').ModelFallbackPolicy;
     /**

@@ -59,8 +59,10 @@ const useModelManagement = (
     setIsLoadingModels(true);
     setLoadError(null);
     try {
-      const modelsList = await modelService.loadModels();
-      setModels(modelsList);
+      const catalogue = await modelService.loadModelCatalogue();
+      if (!catalogue.models) throw new Error('Model catalogue unavailable.');
+      setModels(catalogue.models);
+      if (catalogue.sharedUnavailable) setLoadError(t('teams.models.unavailable'));
     } catch (error) {
       log.warn('loadModels: Failed to load models:', error);
       setLoadError(t('flows.process.loadModelsFailed'));

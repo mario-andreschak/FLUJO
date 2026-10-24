@@ -40,6 +40,7 @@ import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
 import type { QuickModelChangeResult } from '@/frontend/components/Flow/FlowDashboard/QuickChangeModelsDialog';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
+import { teamFlowEditorUrl } from '@/shared/types/flow/team';
 import {
   remapFlowModelBindings,
   type FlowModelReplacementMap,
@@ -89,6 +90,7 @@ const FlowsPage = () => {
     flowId: string,
     authoringMode?: FlowAuthoringMode,
   ) => {
+    if (flowId.startsWith('team-flow:')) { router.push(teamFlowEditorUrl({ id: flowId })); return; }
     log.debug('Entering flow editor', { flowId, authoringMode });
     setSelectedFlow(flowId);
     pushedByUsRef.current = true;
@@ -143,6 +145,8 @@ const FlowsPage = () => {
   const [flowToCopy, setFlowToCopy] = useState<Flow | null>(null);
   const [newFlowName, setNewFlowName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
+  const [sharedFlowsUnavailable, setSharedFlowsUnavailable] = useState(false);
+  const [catalogueRefresh, setCatalogueRefresh] = useState(0);
   
   // Snackbar for notifications
   const [snackbar, setSnackbar] = useState<{open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning'}>({
@@ -160,7 +164,8 @@ const FlowsPage = () => {
       try {
         // Persona creation/copy APIs also create ordinary Flows. A cached
         // pre-creation gallery must not reject their valid editor deep links.
-        const loadedFlows = await flowService.loadFlows({ refresh: true });
+        const loadedFlows = await flowService.loadFlows({ refresh: true, includeShared: true,
+          onSharedUnavailable: value => { if (!cancelled) setSharedFlowsUnavailable(value); } });
         if (cancelled) return;
         log.debug('Flows loaded successfully', { count: loadedFlows.length });
         setFlows(loadedFlows);
@@ -189,7 +194,7 @@ const FlowsPage = () => {
 
     loadFlows();
     return () => { cancelled = true; };
-  }, [selectedFlow, draftFlow, t]);
+  }, [selectedFlow, draftFlow, t, catalogueRefresh]);
   
   // Handle flow selection
   const handleSelectFlow = useCallback((flowId: string) => {
@@ -199,6 +204,7 @@ const FlowsPage = () => {
   }, [enterEditor]);
 
   const handleResolveFlowDeepLink = useCallback((flowId: string) => {
+    if (flowId.startsWith('team-flow:')) { router.replace(teamFlowEditorUrl({ id: flowId })); return; }
     setBuilderEntryMode(requestedAuthoringMode);
     setSelectedFlow(flowId);
     // The link is already a history entry. Preserve its Persona return path
@@ -785,6 +791,7 @@ const FlowsPage = () => {
     return (
       <Fade in={true} timeout={300}>
         <Box sx={{ height: { xs: 'auto', md: '100%' } }}>
+          {sharedFlowsUnavailable && <Alert severity="warning" action={<Button onClick={() => setCatalogueRefresh(value => value + 1)}>{t('teams.models.refresh')}</Button>}>{t('teams.flows.unavailable')}</Alert>}
           <FlowDashboard
             flows={flows}
             selectedFlow={selectedFlow}

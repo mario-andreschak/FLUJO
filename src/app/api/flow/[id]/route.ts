@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
+import { TeamFlowUnavailableError } from '@/backend/services/flow/teamCatalogue';
 import { listPersonas } from '@/backend/services/enduringAgents';
 import { json } from '../_helpers';
 
@@ -27,8 +28,9 @@ async function GET_handler(_request: NextRequest, { params }: RouteContext) {
       return json({ error: `Flow "${id}" not found` }, 404);
     }
 
-    return json(flow, 200);
+    const response = json(flow, 200); response.headers.set('Cache-Control', 'no-store'); return response;
   } catch (error) {
+    if (error instanceof TeamFlowUnavailableError) return json({ error: error.message, retryable: true }, 503);
     log.error('Error handling GET request', error);
     return json({ error: 'Internal server error' }, 500);
   }
@@ -46,6 +48,7 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
   try {
     const { id } = await params;
     const body = (await request.json()) as Flow;
+    if (id.startsWith('team-flow:')) return json({ error: 'Edit shared Flows in Team Flows.' }, 400);
 
     if (!body || typeof body !== 'object') {
       return json({ error: 'A flow is required' }, 400);
@@ -88,6 +91,7 @@ async function DELETE_handler(_request: NextRequest, { params }: RouteContext) {
 
   try {
     const { id } = await params;
+    if (id.startsWith('team-flow:')) return json({ error: 'Manage shared Flows in Team Flows.' }, 400);
 
     const existing = await flowService.getFlow(id);
     if (!existing) {

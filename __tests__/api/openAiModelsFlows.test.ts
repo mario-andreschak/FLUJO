@@ -4,12 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { installPrivateProfileFixture, unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
 import { runWithWorkspace } from '@/utils/workspace';
 import { GET } from '@/app/v1/models/route';
+import { modelService } from '@/backend/services/model';
 
-jest.mock('@/backend/services/model', () => ({ modelService: { loadModels: jest.fn(async () => []) } }));
+jest.mock('@/backend/services/model', () => ({ modelService: { listModels: jest.fn() } }));
 
 describe('OpenAI client discovery of saved Flow collections', () => {
   let fixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
   beforeEach(async () => {
+    (modelService.listModels as jest.Mock).mockReset().mockResolvedValue({ success: true, models: [] });
     fixture = await installPrivateProfileFixture();
     global.__flujo_flowsCache = null;
     global.__flujo_flowsMigration = undefined;
@@ -31,6 +33,17 @@ describe('OpenAI client discovery of saved Flow collections', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ object: 'list', data: [{ id: 'flow-Saved MCP agent', object: 'model' }] });
     await expect(fs.access(path.join(directory, '..', 'flows.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('exposes a stable team identifier and no shared configuration or credential data', async () => {
+    const id = `team-model:${'t'.repeat(43)}:${'r'.repeat(43)}`;
+    (modelService.listModels as jest.Mock).mockResolvedValue({ success: true, models: [
+      { id, name: 'local', displayName: 'Team AI', ApiKey: 'must-not-leak', promptTemplate: 'shared prompt',
+        baseUrl: 'http://127.0.0.1:4290/private-transport' },
+    ] });
+    const response = await GET(new Request('http://localhost/v1/models?workspace=default-workspace'));
+    expect(await response.json()).toEqual({ object: 'list', data: [{ id: `model-${id}`, object: 'model' }] });
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
   });
 
   it('keeps external client discovery scoped to the requested workspace', async () => {

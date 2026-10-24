@@ -170,9 +170,10 @@ function AppErrorFallback() {
 interface AppWrapperProps {
   children: React.ReactNode;
   phoneHost?: boolean;
+  controllerAccount?: boolean;
 }
 
-export default function AppWrapper({ children, phoneHost = false }: AppWrapperProps) {
+export default function AppWrapper({ children, phoneHost = false, controllerAccount = false }: AppWrapperProps) {
   const pathname = usePathname();
   // Sign-in must render before workspace/storage providers make protected requests.
   if (pathname === '/owner/login') return <>{children}</>;
@@ -188,7 +189,7 @@ export default function AppWrapper({ children, phoneHost = false }: AppWrapperPr
                 <AllowanceProvider>
                 <AskFlujoProvider>
                   <TourProvider>
-                    <LocalizedAppShell>
+                    <LocalizedAppShell controllerAccount={controllerAccount}>
                       {children}
                     </LocalizedAppShell>
                   </TourProvider>
@@ -204,7 +205,7 @@ export default function AppWrapper({ children, phoneHost = false }: AppWrapperPr
   );
 }
 
-function LocalizedAppShell({ children }: { children: React.ReactNode }) {
+function LocalizedAppShell({ children, controllerAccount }: { children: React.ReactNode; controllerAccount: boolean }) {
   const { t } = useI18n();
   const pathname = usePathname();
   const [embedded, setEmbedded] = useState(false);
@@ -226,7 +227,7 @@ function LocalizedAppShell({ children }: { children: React.ReactNode }) {
       </Link>
       {!world && !embedded && <LivingWorldGate />}
       <Suspense fallback={<AppLoading message="shell.loading.navigation" compact />}>
-        {!world && !embedded && <Navigation />}
+        {!world && !embedded && <Navigation controllerAccount={controllerAccount} />}
         <EncryptionAuthDialog />
         {!world && !embedded && <TelemetryNotice />}
         {!world && !embedded && <AskFlujoDock />}

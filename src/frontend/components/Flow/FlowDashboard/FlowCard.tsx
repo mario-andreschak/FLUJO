@@ -36,6 +36,7 @@ import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
+import { isTeamFlow, teamFlowEditorUrl } from '@/shared/types/flow/team';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
 
@@ -156,6 +157,7 @@ const FlowCard = ({
   const theme = useTheme();
   const { t, tp, formatNumber } = useI18n();
   const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
+  const shared = isTeamFlow(flow);
 
   // Surface flow problems at a glance: red when it won't run (errors), amber for
   // advisory warnings. The tooltip lists the first few issues.
@@ -229,7 +231,7 @@ const FlowCard = ({
       return (
         <Box sx={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Typography color="textSecondary" align="center">
-            {t('flows.card.nothing')}
+            {shared ? t('teams.flows.title') : t('flows.card.nothing')}
           </Typography>
         </Box>
       );
@@ -346,7 +348,7 @@ const FlowCard = ({
           }}
         />
       )}
-      {onToggleFavorite && !selectionMode && (
+      {onToggleFavorite && !shared && !selectionMode && (
         <Tooltip title={flow.favorite ? t('flows.card.favoriteRemove') : t('flows.card.favoriteAdd')} arrow placement="top">
           <IconButton
             size="small"
@@ -469,7 +471,7 @@ const FlowCard = ({
             </Typography>
           )}
           
-          <Box sx={{ display: 'flex', gap: 0.5, mt: 1.25, flexWrap: 'wrap' }}>
+          {shared ? <Chip size="small" label={flow.teamFlow?.teamName ?? t('teams.flows.title')} /> : <Box sx={{ display: 'flex', gap: 0.5, mt: 1.25, flexWrap: 'wrap' }}>
             <Chip 
               size="small" 
               label={tp('flows.card.step', stepCount)}
@@ -492,7 +494,7 @@ const FlowCard = ({
               variant="outlined"
               sx={{ fontSize: '0.7rem', height: 20 }}
             />
-          </Box>
+          </Box>}
         </CardContent>
       </CardActionArea>
       
@@ -516,7 +518,8 @@ const FlowCard = ({
               size="small"
               variant="outlined"
               startIcon={<EditIcon fontSize="small" />}
-              onClick={handleEditClick}
+              href={shared ? teamFlowEditorUrl(flow) : undefined}
+              onClick={shared ? undefined : handleEditClick}
               sx={{ flex: 1, minWidth: 0 }}
             >
               {t('flows.card.edit')}
@@ -535,7 +538,7 @@ const FlowCard = ({
               backgroundColor: alpha(theme.palette.background.default, 0.55),
             }}
           >
-            {onCopy && (
+            {onCopy && !shared && (
               <Tooltip title={t('flows.card.copy')}>
                 <IconButton size="small" onClick={handleCopyClick} aria-label={t('flows.card.copy')}>
                   <ContentCopyIcon fontSize="small" />
@@ -543,7 +546,7 @@ const FlowCard = ({
               </Tooltip>
             )}
 
-            {onSetFolder && (
+            {onSetFolder && !shared && (
               <Tooltip title={flow.folder ? t('flows.card.folder', { folder: flow.folder }) : t('flows.card.organize')}>
                 <IconButton
                   size="small"
@@ -556,7 +559,7 @@ const FlowCard = ({
               </Tooltip>
             )}
 
-            {onDelete && (
+            {onDelete && !shared && (
               <Tooltip title={t('flows.card.delete')}>
                 <IconButton size="small" onClick={handleDeleteClick} color="error" aria-label={t('flows.card.delete')}>
                   <DeleteIcon fontSize="small" />
@@ -570,7 +573,7 @@ const FlowCard = ({
       <Box sx={{ gridColumn: '1 / -1' }}>
         <AllowanceBar entity={{ kind: 'flows', id: flow.id }} modelIds={flow.nodes.flatMap(node => typeof node.data?.properties?.boundModel === 'string' ? [node.data.properties.boundModel] : [])} />
       </Box>
-      {!pickerMode && onSetFolder && (
+      {!pickerMode && onSetFolder && !shared && (
         <FolderAssignMenu
           anchorEl={folderAnchorEl}
           open={Boolean(folderAnchorEl)}

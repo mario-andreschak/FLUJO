@@ -271,6 +271,9 @@ jobs:
       # authoritative "everything parses" gate.
       - run: npm run typecheck
       - run: npm run typecheck:mcp
+      - run: npm run typecheck:controller
+      - name: Validate isolated-owner controller contracts on POSIX
+        run: npm run test:controller
       - run: node scripts/generate-api-inventory.mjs --check
       - name: Verify packed Avatar SDK installation
         run: |

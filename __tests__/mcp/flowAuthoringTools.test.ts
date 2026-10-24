@@ -9,6 +9,7 @@ const loadModelsMock = jest.fn();
 jest.mock('@/backend/services/model', () => ({
   modelService: {
     loadModels: (...a: unknown[]) => loadModelsMock(...a),
+    listModels: async (...a: unknown[]) => ({ success: true, models: await loadModelsMock(...a) }),
   },
 }));
 

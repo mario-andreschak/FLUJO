@@ -6,7 +6,7 @@
  * (rather than falsely blocking).
  */
 jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: jest.fn() } }));
-jest.mock('@/backend/services/model', () => ({ modelService: { loadModels: jest.fn() } }));
+jest.mock('@/backend/services/model', () => ({ modelService: { listModels: jest.fn() } }));
 jest.mock('@/backend/services/mcp', () => ({ mcpService: { loadServerConfigs: jest.fn() } }));
 
 import { flowService } from '@/backend/services/flow';
@@ -15,7 +15,8 @@ import { mcpService } from '@/backend/services/mcp';
 import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
 
 const getFlow = flowService.getFlow as jest.Mock;
-const loadModels = modelService.loadModels as jest.Mock;
+const catalogue = modelService.listModels as jest.Mock;
+const loadModels = jest.fn();
 const loadServerConfigs = mcpService.loadServerConfigs as jest.Mock;
 
 const flowFixture = (boundModel = 'm1') => ({
@@ -35,10 +36,22 @@ const flowFixture = (boundModel = 'm1') => ({
 beforeEach(() => {
   getFlow.mockReset();
   loadModels.mockReset();
+  catalogue.mockReset().mockImplementation(async () => ({ success: true, models: await loadModels() }));
   loadServerConfigs.mockReset();
 });
 
 describe('validateFlowForRun', () => {
+  it('recognizes admitted shared models and does not call temporary catalogue loss deletion', async () => {
+    const id = `team-model:${'t'.repeat(43)}:${'r'.repeat(43)}`;
+    getFlow.mockResolvedValue(flowFixture(id));
+    loadServerConfigs.mockResolvedValue([]);
+    catalogue.mockResolvedValueOnce({ success: true, models: [{ id, name: 'Team AI' }] });
+    expect((await validateFlowForRun('f1')).isRunnable).toBe(true);
+    catalogue.mockResolvedValueOnce({ success: true, models: [], sharedModelsUnavailable: true });
+    expect((await validateFlowForRun('f1')).issues.map(issue => issue.code)).not.toContain('process-model-missing');
+    catalogue.mockResolvedValueOnce({ success: true, models: [] });
+    expect((await validateFlowForRun('f1')).issues.map(issue => issue.code)).toContain('process-model-missing');
+  });
   it('blocks when the bound model no longer exists', async () => {
     getFlow.mockResolvedValue(flowFixture('deleted-model'));
     loadModels.mockResolvedValue([{ id: 'other', name: 'x' }]);

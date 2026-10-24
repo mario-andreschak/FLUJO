@@ -36,9 +36,9 @@ function sanitizeModelForFrontend(model: Model): Model {
  * Load all models
  * This adapter delegates to the backend service
  */
-export async function loadModels(): Promise<ModelListResponse> {
+export async function loadModels(includeShared = true): Promise<ModelListResponse> {
   log.debug('loadModels: Delegating to backend service');
-  const result = await modelService.listModels();
+  const result = includeShared ? await modelService.listModels() : await modelService.listModels(false);
   
   // Sanitize models before sending to frontend
   if (result.success && result.models) {

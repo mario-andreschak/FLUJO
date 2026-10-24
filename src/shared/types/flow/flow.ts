@@ -1,4 +1,5 @@
 import { Node, Edge } from '@xyflow/react';
+import type { TeamFlowBundle, TeamFlowReference } from '../../../../packages/shared-controller/src/shared-flow';
 
 export interface HistoryEntry {
   nodes: FlowNode[];
@@ -27,6 +28,10 @@ export interface BehaviorRule {
 }
 
 export interface Flow {
+  /** Controller-authored projections, never saved in the private Flow store.
+   * A reference is metadata; execution revalidates its complete bundle. */
+  teamFlow?: TeamFlowReference;
+  teamFlowBundle?: TeamFlowBundle;
   /** Durable immutable executable closure for Persona Core/Behavior revisions. */
   executionDependencies?: {
     schemaVersion: 1;

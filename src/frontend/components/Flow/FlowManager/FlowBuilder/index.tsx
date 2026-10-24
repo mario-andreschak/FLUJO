@@ -400,6 +400,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [saveStatus, setSaveStatus] = useState<SaveStatus>(isDraft ? 'unsaved' : 'saved');
   const [guidedModels, setGuidedModels] = useState<Model[]>([]);
   const [guidedModelsLoaded, setGuidedModelsLoaded] = useState(false);
+  const [sharedModelsUnavailable, setSharedModelsUnavailable] = useState(false);
+  const [modelReloadNonce, setModelReloadNonce] = useState(0);
   const [guidedSelectedModelId, setGuidedSelectedModelId] = useState<string | null>(null);
   const [guidedAiAssistance, setGuidedAiAssistance] = useState<'unasked' | 'manual' | 'assisted'>(
     () => isDraft && !(initialFlow?.nodes ?? []).some(node => node.data.type === 'process') ? 'unasked' : 'manual',
@@ -428,12 +430,15 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   useEffect(() => {
     let active = true;
-    void modelService.loadModels().then((models) => {
+    setGuidedModelsLoaded(false);
+    void modelService.loadModelCatalogue().then(({ models, sharedUnavailable }) => {
       if (!active) return;
+      if (!models) throw new Error('Model catalogue unavailable.');
+      setSharedModelsUnavailable(sharedUnavailable);
       setGuidedModels(models);
       setGuidedModelsLoaded(true);
       setGuidedSelectedModelId(current =>
-        current && models.some(model => model.id === current)
+        current && (models.some(model => model.id === current) || (sharedUnavailable && current.startsWith('team-model:')))
           ? current
           : getPreferredGuidedModelId(models)
       );
@@ -451,7 +456,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     return () => {
       active = false;
     };
-  }, []);
+  }, [modelReloadNonce]);
   
   // Filter out invalid edges (missing source/target handles)
   const filterInvalidEdges = useCallback((edges: Edge[]): Edge[] => {
@@ -2290,6 +2295,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             )}
           </ToolbarContainer>
 
+          {sharedModelsUnavailable && <Alert severity="warning" sx={{ mb: 1 }}
+            action={<Button disabled={!guidedModelsLoaded} onClick={() => setModelReloadNonce(value => value + 1)}>{t('teams.models.refresh')}</Button>}>
+            {t('teams.models.unavailable')}
+          </Alert>}
           <Collapse in={!!builderNotice} unmountOnExit>
             {builderNotice && (
               <Alert

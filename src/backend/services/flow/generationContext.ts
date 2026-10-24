@@ -78,7 +78,11 @@ export function truncate(text: string, max: number): string {
  * already connected are asked for their tools; offline ones are listed by name.
  */
 export async function gatherGenerationContext(): Promise<GenerationContext> {
-  const models = await modelService.loadModels();
+  const catalogue = await modelService.listModels();
+  if (!catalogue.success || !catalogue.models || catalogue.sharedModelsUnavailable) {
+    throw new Error('The model catalogue is unavailable. Check local team access and retry.');
+  }
+  const models = catalogue.models;
   const blockModels: BuildingBlockModel[] = models.map((m) => ({
     id: m.id,
     name: m.name,

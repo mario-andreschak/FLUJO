@@ -140,6 +140,16 @@ registration. The route is revoked when that MCP connection closes, errors,
 restarts, is disabled, or is deleted, so a later process reusing the loopback
 port cannot inherit it.
 
+In the managed local multi-user profile, the controller also requires a current
+owner-bound app session before forwarding HTTP or WebSocket traffic. The app
+gets a separate host-only cookie from its authenticated sandbox launch; owner
+login cookies and runtime credentials never reach the sidecar. Browser requests
+must originate from the exact app origin, and the registered runtime manifest
+still determines the allowed paths/methods. Retiring, replacing or evicting a
+registration closes its established streams, including both WebSocket peers.
+Local app sessions and fixed process pipes need no internet or LAN connection.
+Installed browser/sidecar acceptance is still a release gate for this profile.
+
 For mcp-vscode, the intended public manifest is only its unguessable
 `/ide/<192-bit-base64url>/` prefix (HTTP plus WebSocket) and, when configured,
 the exact `/stream` WebSocket. `/bridge`, `/mcp`, `/app`, `/session.json`, and

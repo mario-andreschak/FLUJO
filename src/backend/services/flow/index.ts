@@ -2,6 +2,8 @@ import { BundledFlujoWorkloadError } from '@/backend/services/security/bundledFl
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { FlowSnapshotSchema } from '@/shared/types/enduringAgent';
+import { isTeamFlow } from '@/shared/types/flow/team';
+import { listTeamFlows, resolveTeamFlow, TeamFlowUnavailableError } from './teamCatalogue';
 import { 
   FlowServiceResponse, 
   FlowOperationResponse, 
@@ -62,7 +64,9 @@ export interface MigrateMcpServerReferencesResponse extends FlowServiceResponse 
 }
 
 function canonicalizeFlow(value: unknown): Flow {
-  return FlowSnapshotSchema.parse(value);
+  const flow = FlowSnapshotSchema.parse(value);
+  if (isTeamFlow(flow)) throw new Error('Shared Flows must be resolved through Team Flows.');
+  return flow;
 }
 
 /** Remove runtime/legacy data before a flow crosses the persistence boundary. */
@@ -171,7 +175,7 @@ export class FlowService { // Add export keyword here
   }
 
   private async refreshOwnedFlows(flows: Flow[]): Promise<Flow[]> {
-    const refreshed = await Promise.all(flows.map((flow) => flow.personaOwnership ? this.getFlow(flow.id) : flow));
+    const refreshed = await Promise.all(flows.filter(flow => !isTeamFlow(flow)).map((flow) => flow.personaOwnership ? this.getFlow(flow.id) : flow));
     return refreshed.filter((flow): flow is Flow => flow !== null);
   }
   private get flowsCache(): Flow[] | null {
@@ -247,8 +251,15 @@ export class FlowService { // Add export keyword here
 
   /** Find a flow by its authored display name. */
   async getFlowByName(name: string): Promise<Flow | null> {
+    if (name.startsWith('team-flow:')) return resolveTeamFlow(name);
     const flows = await this.loadFlows();
-    return flows.find((flow) => flow.name === name) ?? null;
+    const privateFlow = flows.find((flow) => flow.name === name);
+    if (privateFlow) return privateFlow;
+    const shared = await listTeamFlows();
+    if (shared.unavailable) throw new TeamFlowUnavailableError();
+    const matches = shared.flows.filter(flow => flow.name === name);
+    if (matches.length > 1) throw new Error('Choose the shared Flow by its unique ID.');
+    return matches.length ? resolveTeamFlow(matches[0].id) : null;
   }
 
   /**
@@ -311,12 +322,13 @@ export class FlowService { // Add export keyword here
    * Get a specific flow by ID
    */
   async getFlow(flowId: string): Promise<Flow | null> {
+    if (flowId.startsWith('team-flow:')) return resolveTeamFlow(flowId);
     try {
       log.debug(`Getting flow by ID: ${flowId}`);
 
       // Cache hit first.
       const cached = this.flowsCache?.find(f => f.id === flowId) || null;
-      if (cached && !cached.personaOwnership) {
+      if (cached && !isTeamFlow(cached) && !cached.personaOwnership) {
         log.debug(`Flow ${flowId} found in cache`);
         return cached;
       }
@@ -364,6 +376,7 @@ export class FlowService { // Add export keyword here
    * the exact persisted definition and hash from a single authoritative read.
    */
   async readFlowExecutionSnapshot(flowId: string): Promise<FlowExecutionSnapshot | null> {
+    if (flowId.startsWith('team-flow:')) return createFlowExecutionSnapshot(getCurrentWorkspace(), await resolveTeamFlow(flowId));
     try {
       assertSafeCollectionId(flowId);
       await ensureFlowsMigrated();
@@ -398,6 +411,7 @@ export class FlowService { // Add export keyword here
    * Save a flow (create new or update existing)
    */
   async saveFlow(flow: Flow, options: { expectedUpdatedAt?: number } = {}): Promise<FlowServiceResponse> {
+    if (isTeamFlow(flow)) return { success: false, error: 'Edit shared Flows in Team Flows.' };
     try {
       return await withWorkspaceMutation(() => withFlowMutationLock(() => this.saveFlowWithinMutation(flow, options)));
     } catch (error) {
@@ -698,6 +712,7 @@ export class FlowService { // Add export keyword here
    * Delete a flow by ID
    */
   async deleteFlow(flowId: string): Promise<FlowServiceResponse> {
+    if (flowId.startsWith('team-flow:')) return { success: false, error: 'Manage shared Flows in Team Flows.' };
     try {
       return await withWorkspaceMutation(() => withFlowMutationLock(() => this.deleteFlowWithinMutation(flowId)));
     } catch (error) {
@@ -940,11 +955,12 @@ export class FlowService { // Add export keyword here
   /**
    * List all flows
    */
-  async listFlows(): Promise<FlowListResponse> {
+  async listFlows(options: { includeShared?: boolean } = {}): Promise<FlowListResponse> {
     log.debug('listFlows: Entering method');
     try {
       const flows = await this.loadFlows();
-      return { success: true, flows };
+      const shared = options.includeShared === false ? { flows: [], unavailable: false } : await listTeamFlows();
+      return { success: true, flows: [...flows, ...shared.flows], sharedFlowsUnavailable: shared.unavailable };
     } catch (error) {
       if (error instanceof BundledFlujoWorkloadError) throw error;
       log.warn('listFlows: Failed to list flows:', error);

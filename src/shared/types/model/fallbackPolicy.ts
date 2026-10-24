@@ -1,4 +1,5 @@
 import { isOwnerCredentialBoundModel, type Model } from './model';
+import { isTeamModel } from './team';
 
 export type FallbackTrigger = 'rate_limit' | 'unavailable' | 'timeout';
 export const DEFAULT_FALLBACK_TRIGGERS: FallbackTrigger[] = ['rate_limit', 'unavailable', 'timeout'];
@@ -21,10 +22,10 @@ export interface ModelRouteReceipt {
   }>;
 }
 
-/** Also reject old or hand-authored policies that reference an owner credential. */
+/** Also reject old or hand-authored policies that bypass owner or team admission. */
 export function hasOwnerBoundFallbackMember(model: Model, models: Model[]): boolean {
   return Boolean(model.fallbackPolicy?.modelIds.some(id =>
-    models.some(member => member.id === id && isOwnerCredentialBoundModel(member))));
+    (typeof id === 'string' && id.startsWith('team-model:')) || models.some(member => member.id === id && (isOwnerCredentialBoundModel(member) || isTeamModel(member)))));
 }
 
 export function validateFallbackPolicy(model: Model, models: Model[]): string | undefined {
@@ -44,8 +45,10 @@ export function validateFallbackPolicy(model: Model, models: Model[]): string | 
   if (new Set(policy.modelIds).size !== policy.modelIds.length) return 'Policy models must be unique';
   for (const id of policy.modelIds) {
     if (typeof id !== 'string' || id === model.id) return 'A policy cannot reference itself';
+    if (id.startsWith('team-model:')) return 'Shared models require their team execution admission and cannot join private fallback policies.';
     const member = models.find(item => item.id === id);
     if (!member) return `Policy model not found: ${id}`;
+    if (isTeamModel(member)) return 'Shared models cannot join private fallback policies.';
     if (member.fallbackPolicy) return 'Nested fallback policies are not supported';
   }
   if (policy.triggers !== undefined && (!Array.isArray(policy.triggers) || !policy.triggers.length ||

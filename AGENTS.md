@@ -1,3 +1,15 @@
+# Local-first multi-tenancy
+
+FLUJO must never rely on online isolation. Multi-user identity, authorization,
+tenant isolation, revocation, team sharing, edit locks and history must work on
+the local machine without internet access, including with LAN disabled. Cold
+start, account enrollment/recovery and restart must also work offline; cached
+online sessions are not sufficient. Do not require Fly Machines, another cloud
+service, an external identity provider, online DNS or online control-plane leases
+for these boundaries. Optional online integrations cannot confer or maintain
+local isolation. Qualify the actual local OS/process/filesystem boundaries on
+each supported platform before claiming complete multi-tenant support.
+
 # Repository hygiene
 
 Keep generated run records, provider traces, screenshots used only as proof,

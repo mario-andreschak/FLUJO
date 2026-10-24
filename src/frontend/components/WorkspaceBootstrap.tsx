@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import {
   DEFAULT_WORKSPACE,
   getSelectedWorkspace,
@@ -131,7 +130,7 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
     return <div className="app-loading" role="alert">
       <div className="app-loading__content">
         <span>Sign in as the owner to open this workspace.</span>
-        <Link href={`/owner/login?returnTo=${encodeURIComponent(returnTo)}`}>Owner sign in</Link>
+        <a href={`/owner/login?returnTo=${encodeURIComponent(returnTo)}`}>Owner sign in</a>
       </div>
     </div>;
   }

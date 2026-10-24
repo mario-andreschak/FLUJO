@@ -557,7 +557,7 @@ async function resolveSubflowTemplate(
     nodeId ? { nodeId, nodeType: 'subflow' } : undefined,
     sharedState,
   );
-  if (resolved.includes('${kv:')) {
+  if (!sharedState.flowSnapshot?.teamFlow && resolved.includes('${kv:')) {
     let folder: string | undefined;
     try {
       if (sharedState.flowSnapshot) {
@@ -574,7 +574,7 @@ async function resolveSubflowTemplate(
       personaAttribution: sharedState.personaAttribution,
     });
   }
-  if (templateValues !== undefined) {
+  if (!sharedState.flowSnapshot?.teamFlow && templateValues !== undefined) {
     const dynamic = await resolvePromptDynamicReferences(resolved, {
       flowId: sharedState.flowId,
       conversationId: sharedState.conversationId,

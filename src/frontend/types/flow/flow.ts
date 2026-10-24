@@ -1,5 +1,5 @@
 import type { Edge } from '@xyflow/react';
-import type { FlowNode, NodeType } from '@/shared/types/flow/flow';
+import type { FlowNode, NodeType, Flow as SharedFlow } from '@/shared/types/flow/flow';
 
 export type { FlowNode, NodeType } from '@/shared/types/flow/flow';
 
@@ -20,6 +20,8 @@ export interface Flow {
    * (mirrors `folder?` #71).
    */
   favorite?: boolean;
+  teamFlow?: SharedFlow['teamFlow'];
+  teamFlowBundle?: SharedFlow['teamFlowBundle'];
   personaOwnership?: {
     personaId: string;
     sourceFlowId?: string;

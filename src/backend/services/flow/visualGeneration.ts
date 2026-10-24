@@ -1,3 +1,4 @@
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
@@ -981,7 +982,7 @@ export async function generateFlowVisually(
   if (model.ownerCredentialBinding !== undefined) {
     throw new Error('Owner-bound models require an authorized model-step transport.');
   }
-  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  const resolvedKey = (isTeamModel(model) ? teamModelTransportKey(model) : await modelService.resolveAndDecryptApiKey(model.ApiKey));
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the generator model API key.');
   const [context, storedFlows] = await Promise.all([

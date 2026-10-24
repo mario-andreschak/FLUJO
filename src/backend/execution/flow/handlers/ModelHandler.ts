@@ -1,3 +1,4 @@
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
@@ -2280,7 +2281,7 @@ export class ModelHandler {
       // Resolve and decrypt the API key. Local-auth adapters accept an empty
       // key to use the host CLI's supported login; each adapter owns that auth.
       if (opts?.modelCatalogAdmission) await assertModelCatalogLeaseOwned();
-      const resolvedKey = ownerBound ? '' : await modelService.resolveAndDecryptApiKey(model.ApiKey);
+      const resolvedKey = ownerBound ? '' : (isTeamModel(model) ? teamModelTransportKey(model) : await modelService.resolveAndDecryptApiKey(model.ApiKey));
       const decryptedApiKey = ownerBound ? '' :
         resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {

@@ -5,6 +5,7 @@ import MemoryRoundedIcon from '@mui/icons-material/MemoryRounded';
 import Spinner from '@/frontend/components/shared/Spinner';
 import ScrollArea from '@/frontend/components/shared/ScrollArea';
 import PageHeader from '@/frontend/components/shared/PageHeader';
+import { headers } from 'next/headers';
 
 // Use dynamic import to prevent SSR issues with client-side code
 const ModelClient = dynamicImport(() => import('./ModelClient'), {
@@ -13,7 +14,8 @@ const ModelClient = dynamicImport(() => import('./ModelClient'), {
 
 export const dynamic = 'force-dynamic'; // Ensure dynamic rendering
 
-function ModelsPage() {
+async function ModelsPage() {
+  const controllerAccount = (await headers()).get('x-flujo-controller-account') === '1';
   return (
       <Box
         data-tour="models-overview"
@@ -31,7 +33,7 @@ function ModelsPage() {
           sx={{ p: { xs: 2, md: 3, lg: 4 }, flex: 1, width: '100%' }}
         >
           <Suspense fallback={<Spinner />}>
-            <ModelClient />
+            <ModelClient controllerAccount={controllerAccount} />
           </Suspense>
         </ScrollArea>
       </Box>

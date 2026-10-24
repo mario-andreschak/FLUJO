@@ -27,6 +27,7 @@ import {
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
 import { assertFlowExecutionCurrent } from '@/backend/execution/flow/executionAuthority';
+import { bindTeamFlowExecution } from './teamExecution';
 import { EmitFn, type RecoveryLaneIdentity, UsageTotals } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 import {
@@ -520,18 +521,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     ...input,
     abortSignal: combineAbortSignals(ownerSignal, registration.signal),
   };
+  const teamLifetimes: Array<() => void> = [];
   try {
-    if (!registeredInput.conversationId) return runFlowUnlocked(registeredInput);
-    const run = () => withConversationExecutionLock(registeredInput.conversationId!, () => runFlowUnlocked(registeredInput));
+    if (!registeredInput.conversationId) return await runFlowUnlocked(registeredInput, teamLifetimes);
+    const run = () => withConversationExecutionLock(registeredInput.conversationId!, () => runFlowUnlocked(registeredInput, teamLifetimes));
     if (executionExtensionSharesPersonaAuthority(registeredInput.executionExtensionContext, registeredInput.executionAuthority)) {
       return await runWithExecutionConversationAccess(registeredInput.conversationId,
         () => assertExecutionExtensionCurrent(registeredInput.executionExtensionContext), run);
     }
     return await withConversationExecutionLock(
       registeredInput.conversationId,
-      () => runFlowUnlocked(registeredInput),
+      () => runFlowUnlocked(registeredInput, teamLifetimes),
     );
   } finally {
+    for (const close of teamLifetimes) close();
     registration.release();
   }
 }
@@ -667,7 +670,7 @@ function installPersonaActivitySnapshot(
   sharedState.statisticsFlowRevisionId = undefined;
 }
 
-async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
+async function runFlowUnlocked(input: FlowRunInput, teamLifetimes: Array<() => void>): Promise<FlowRunResult> {
   if (!isFlowInvocationSource(input.source)) {
     throw new TypeError(
       `runFlow requires an explicit invocation source (${String(input.source)} is invalid)`,
@@ -1075,6 +1078,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // Never inherit a stale in-memory authority from an earlier invocation. A
   // paused Persona Activity must be explicitly reacquired by its dispatcher;
   // ordinary/legacy resumes remain authority-free.
+  if (stateSource !== 'new') {
+    const close = await bindTeamFlowExecution(input, sharedState); if (close) teamLifetimes.push(close);
+  }
   if (input.executionExtensionContext) {
     installExecutionExtensionContext(sharedState, input.executionExtensionContext);
   } else {
@@ -1411,6 +1417,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       resolvedFlow ??= await flowService.getFlow(resolvedFlowId) ?? undefined;
       if (resolvedFlow) sharedState.flowSnapshot = structuredClone(resolvedFlow);
     }
+
+    const closeTeamFlow = await bindTeamFlowExecution(input, sharedState);
+    if (closeTeamFlow) teamLifetimes.push(closeTeamFlow);
 
     // Preserve caller-provided ids/timestamps (like the resume path below).
     // The chat frontend sends its optimistic message id; keeping it means the

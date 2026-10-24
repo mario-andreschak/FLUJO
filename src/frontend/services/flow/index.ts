@@ -2,6 +2,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
+import { isTeamFlow } from '@/shared/types/flow/team';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
 import type {
@@ -60,17 +61,17 @@ class FlowService {
   /**
    * Load all flows
    */
-  async loadFlows(options: { refresh?: boolean } = {}): Promise<Flow[]> {
+  async loadFlows(options: { refresh?: boolean; includeShared?: boolean; onSharedUnavailable?: (unavailable: boolean) => void } = {}): Promise<Flow[]> {
     log.debug('loadFlows: Entering method');
     try {
       // Try to use cache first
-      if (this.flowsCache && !options.refresh) {
+      if (this.flowsCache && !options.refresh && !options.includeShared) {
         log.debug('loadFlows: Using cached flows', { count: this.flowsCache.length });
         return this.flowsCache;
       }
 
       // Call the API to list flows
-      const response = await fetch('/api/flow');
+      const response = await fetch(options.includeShared ? '/api/flow?shared=1' : '/api/flow', { cache: 'no-store' });
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -78,11 +79,13 @@ class FlowService {
       }
 
       const flows = (await response.json()) as Flow[];
+      options.onSharedUnavailable?.(response.headers?.get('X-Flujo-Shared-Flows') === 'unavailable');
       log.debug('loadFlows: Loaded flows from API', { count: flows.length });
-      this.flowsCache = flows;
+      this.flowsCache = flows.filter(flow => !isTeamFlow(flow));
       return flows;
     } catch (error) {
       log.warn('loadFlows: Failed to load flows:', error);
+      if (options.includeShared) options.onSharedUnavailable?.(true);
       return [];
     }
   }
@@ -212,7 +215,7 @@ class FlowService {
       // Try to use cache first
       if (this.flowsCache) {
         const cachedFlow = this.flowsCache.find(flow => flow.id === flowId);
-        if (cachedFlow) {
+        if (cachedFlow && !isTeamFlow(cachedFlow)) {
           log.debug('getFlow: Using cached flow', { flowId });
           return cachedFlow;
         }
@@ -264,6 +267,7 @@ class FlowService {
    * Create a new flow (POST /api/flow). Use updateFlow for an existing flow.
    */
   async addFlow(flow: Flow): Promise<{ success: boolean; error?: string }> {
+    if (isTeamFlow(flow)) return { success: false, error: 'Edit shared Flows in Team Flows.' };
     log.debug('addFlow: Entering method', {
       flowId: flow.id,
       flowName: flow.name,
@@ -511,6 +515,7 @@ class FlowService {
    * Update an existing flow (PUT /api/flow/{id}). Use addFlow to create a new flow.
    */
   async updateFlow(flow: Flow): Promise<{ success: boolean; error?: string }> {
+    if (isTeamFlow(flow)) return { success: false, error: 'Edit shared Flows in Team Flows.' };
     log.debug('updateFlow: Entering method', {
       flowId: flow.id,
       flowName: flow.name,
@@ -562,6 +567,7 @@ class FlowService {
    * Delete a flow by ID
    */
   async deleteFlow(flowId: string): Promise<{ success: boolean; error?: string }> {
+    if (flowId.startsWith('team-flow:')) return { success: false, error: 'Manage shared Flows in Team Flows.' };
     log.debug('deleteFlow: Entering method', { flowId });
     try {
       // Call the API to delete the flow

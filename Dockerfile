@@ -44,7 +44,12 @@ RUN node scripts/verify-ci-node.mjs 22.23.4 --binary-only
 # unlabelled local build. The worker resolver requires the complete labels.
 ARG FLUJO_APPLICATION_VERSION=""
 ARG FLUJO_BUILD_REVISION=""
+ARG FLUJO_WORKER_MODE=""
+ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
 LABEL io.flujo.application.version="${FLUJO_APPLICATION_VERSION}" \
+      io.flujo.local-owner.protocol="1" \
+      io.flujo.build.worker-mode="${FLUJO_WORKER_MODE}" \
+      io.flujo.build.execution-adapter="${FLUJO_EXECUTION_ADAPTER_MODULE}" \
       io.flujo.snapshot.format="2" \
       io.flujo.workspace.layout="2" \
       io.flujo.worker.protocol="1" \
@@ -111,6 +116,8 @@ COPY --from=builder /app/mcp-servers ./mcp-servers
 # Keep local lockfile targets available during the production install.
 COPY --from=builder /app/tooling/next-lint-glob ./tooling/next-lint-glob
 COPY --from=builder /app/packages/avatar-sdk ./packages/avatar-sdk
+COPY --from=builder /app/packages/shared-controller/dist ./packages/shared-controller/dist
+COPY --from=builder /app/packages/shared-controller/package.json /app/packages/shared-controller/README.md ./packages/shared-controller/
 # Reuse the browser payload downloaded by the workspace install lifecycle in the
 # builder. The following npm ci sees the version marker and does not download it again.
 COPY --from=builder /home/node/.cache/ms-playwright /home/node/.cache/ms-playwright
@@ -134,6 +141,8 @@ COPY --from=builder /app/src/shared/snapshotTransfer.json ./src/shared/snapshotT
 # servers.
 ENV HOME=/home/node
 RUN mkdir -p \
+      /owner-home \
+      /run/flujo-owner \
       /app/data/db \
       /app/data/mcp-servers \
       /app/data/workspaces/default-workspace/db \

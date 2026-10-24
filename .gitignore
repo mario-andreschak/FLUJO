@@ -225,6 +225,7 @@ next-env.d.ts
 /ci-node-runtime/
 /scripts/generated-smoke-owner-issuer.cjs
 /scripts/generated-smoke-owner-issuer.json
+/packages/shared-controller/dist/
 
 # Generated run records belong outside the public source checkout.
 **/evidence/

@@ -17,8 +17,12 @@ async function GET_handler(_request: Request) {
   if (_lock) return _lock;
 
   try {
-    const flows = await flowService.loadFlows();
-    return json(flows, 200);
+    const catalogue = await flowService.listFlows({ includeShared: new URL(_request.url).searchParams.get('shared') === '1' });
+    if (!catalogue.success) throw new Error(catalogue.error);
+    const response = json(catalogue.flows ?? [], 200);
+    response.headers.set('Cache-Control', 'no-store');
+    response.headers.set('X-Flujo-Shared-Flows', catalogue.sharedFlowsUnavailable ? 'unavailable' : 'available');
+    return response;
   } catch (error) {
     log.error('Error handling GET request', error);
     return json({ error: 'Internal server error' }, 500);

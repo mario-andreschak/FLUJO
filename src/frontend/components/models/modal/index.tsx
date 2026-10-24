@@ -67,9 +67,15 @@ export interface ModelModalProps {
   model: Model;  // Never null: edit mode passes the loaded model, add mode an in-memory draft
   onSave: (model: Model) => Promise<ModelResult>;
   onClose: () => void;
+  /** Shared configuration editing cannot discover providers or handle private credentials. */
+  configurationOnly?: boolean;
+  saveDisabled?: boolean;
+  saveLabel?: string;
+  notice?: React.ReactNode;
+  onDraftChange?: (model: Model) => void;
 }
 
-export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) => {
+export const ModelModal = ({ open, model, onSave, onClose, configurationOnly = false, saveDisabled = false, saveLabel, notice, onDraftChange }: ModelModalProps) => {
   const { t } = useI18n();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -89,7 +95,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const discoveryRequestIdRef = useRef(0);
   const currentProfile = getProviderProfile(formState.provider, formState.adapter);
   const canDiscoverProviderModels =
-    supportsProviderModelDiscovery(currentProfile, formState.baseUrl);
+    !configurationOnly && supportsProviderModelDiscovery(currentProfile, formState.baseUrl);
   const discoveryCredential = isApiKeyBound && boundToGlobalVar
     ? `\${global:${boundToGlobalVar}}`
     : currentProfile.id === 'antigravity-cli' && formState.ApiKey !== MASKED_API_KEY
@@ -128,6 +134,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   }, [model.id]);
 
   const handleAskFlujoAction = useCallback((action: AskFlujoUiAction) => {
+    if (configurationOnly) return { success: false, message: 'Edit shared model configuration in its team editor.' };
     if (action.target.kind !== 'model-field' || !action.target.field) {
       return { success: false, message: 'That model UI target is not supported.' };
     }
@@ -153,7 +160,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     setFormState(current => ({ ...current, [field]: action.value }));
     window.requestAnimationFrame(() => highlightModelField(field));
     return { success: true, message: `Updated ${field} in the unsaved form. Review it, then Save.` };
-  }, [askEditableFields, highlightModelField]);
+  }, [askEditableFields, highlightModelField, configurationOnly]);
 
   useAskFlujoPage({
     scopeId: `model:${model.id}`,
@@ -161,7 +168,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     route: '/models',
     title: formState.displayName || model.displayName || model.name || 'Model',
     identifiers: { modelId: model.id },
-    data: {
+    data: configurationOnly ? {} : {
       model: {
         ...formState,
         id: model.id,
@@ -170,8 +177,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       saved: false,
     },
     capabilities: {
-      highlightTargets: askEditableFields.map(field => ({ kind: 'model-field', field })),
-      editableTargets: askEditableFields.map(field => ({ kind: 'model-field', field })),
+      highlightTargets: configurationOnly ? [] : askEditableFields.map(field => ({ kind: 'model-field', field })),
+      editableTargets: configurationOnly ? [] : askEditableFields.map(field => ({ kind: 'model-field', field })),
       notes: [
         'This is the live, unsaved model form.',
         'API keys are never included in Ask FLUJO context and cannot be edited by Ask FLUJO.',
@@ -185,6 +192,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     profileId: string = currentProfile.id,
     apiKeyForFetch?: string,
   ) => {
+    if (configurationOnly) return;
     const requestId = ++discoveryRequestIdRef.current;
     log.debug("fetchModels called", {
       baseUrl,
@@ -243,7 +251,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         setIsLoadingModels(false);
       }
     }
-  }, [currentProfile.id, model.id]);
+  }, [currentProfile.id, model.id, configurationOnly]);
 
   // Opening or closing the modal invalidates any response still in flight.
   useEffect(() => {
@@ -319,13 +327,13 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
   // Refresh CLI catalogues while the editor is open.
   useEffect(() => {
-    if (!open || !['codex', 'antigravity-cli'].includes(currentProfile.id)) return;
+    if (configurationOnly || !open || !['codex', 'antigravity-cli'].includes(currentProfile.id)) return;
     // Pick up account/catalogue changes and a completed background CLI update.
     const interval = setInterval(() => {
       fetchModels('', undefined, currentProfile.id, discoveryCredential);
     }, 60_000);
     return () => clearInterval(interval);
-  }, [open, currentProfile.id, discoveryCredential, fetchModels]);
+  }, [open, currentProfile.id, discoveryCredential, fetchModels, configurationOnly]);
 
   // Cleanup timeout on component unmount
   useEffect(() => {
@@ -346,7 +354,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       });
       
       // Handle API key binding
-      const apiKeyValue = model.ApiKey || '';
+      const apiKeyValue = configurationOnly ? '' : model.ApiKey || '';
       const bindingMatch = apiKeyValue.match(/\$\{global:([^}]+)\}/);
       
       if (bindingMatch) {
@@ -360,7 +368,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         // Otherwise, mask the existing API key
         setFormState(prev => ({
           ...prev,
-          ApiKey: !model.name || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim())
+          ApiKey: configurationOnly || !model.name || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim())
             ? '' : MASKED_API_KEY
         }));
       }
@@ -382,7 +390,11 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     }
     setErrors({});
     setInfo(null);
-  }, [open, model]);
+  }, [open, model, configurationOnly]);
+
+  useEffect(() => {
+    if (open && onDraftChange) onDraftChange({ ...model, ...formState, ...(configurationOnly ? { ApiKey: '' } : {}) });
+  }, [open, model, formState, onDraftChange, configurationOnly]);
 
   // Note: the API key is intentionally NOT persisted as the user types. It is sent directly
   // to the provider-fetch endpoint for listing models, and only saved (encrypted) when the
@@ -464,6 +476,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saveDisabled) return;
     const newErrors: Record<string, string> = {};
 
     // Validation
@@ -504,7 +517,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       }
     }
     // Local-auth CLI profiles can use the login on the host running FLUJO.
-    if (!isApiKeyBound && !formState.ApiKey?.trim() && !supportsLocalModelAuth(currentProfile.adapter)) {
+    if (!configurationOnly && !isApiKeyBound && !formState.ApiKey?.trim() && !supportsLocalModelAuth(currentProfile.adapter)) {
       newErrors.ApiKey = t('models.modal.apiKeyRequired');
     }
 
@@ -523,7 +536,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         name: formState.name!,
         displayName: formState.displayName!,
         description: formState.description,
-        ApiKey: formState.ApiKey,
+        ApiKey: configurationOnly ? '' : formState.ApiKey,
         baseUrl: formState.baseUrl,
         azureApiVersion: currentProfile.adapter === 'azure' ? formState.azureApiVersion : '',
         provider: formState.provider!,
@@ -556,9 +569,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         maxTokens: configurationCapabilities.maxOutputTokens ? formState.maxTokens : undefined,
       } as Model);
 
-      if (result.success) {
+      if (result.success && !configurationOnly) {
         router.refresh();
-      } else {
+      } else if (!result.success) {
         setErrors({
           submit: result.error || t('models.saveFailed')
         });
@@ -618,6 +631,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             px: { xs: 2, sm: 3 },
           }}
         >
+          {notice}
           {errors.submit && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {errors.submit}
@@ -720,7 +734,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   />
                 )}
 
-                <Box sx={{ position: 'relative', mt: 1, mb: 1 }}>
+                {!configurationOnly && <Box sx={{ position: 'relative', mt: 1, mb: 1 }}>
                   <TextField
                     name="ApiKey"
                     margin="dense"
@@ -761,9 +775,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       ),
                     } }}
                   />
-                </Box>
+                </Box>}
 
-                {currentProfile.adapter === 'antigravity-cli' && (
+                {!configurationOnly && currentProfile.adapter === 'antigravity-cli' && (
                   <Box sx={{ my: 1 }}>
                     <Alert severity={catalogUnavailable ? 'warning' : 'info'}>
                       {t(isLoadingModels ? 'models.modal.antigravityCli.loading'
@@ -1100,20 +1114,21 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   {t('models.modal.promptTemplate')}
                 </Typography>
                 <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                  <PromptBuilder 
+                  {configurationOnly ? <TextField multiline minRows={8} fullWidth value={formState.promptTemplate || ''}
+                    onChange={event => handleChange('promptTemplate', event.target.value)} label={t('models.modal.promptTemplate')} /> : <PromptBuilder
                     ref={promptBuilderRef}
                     value={formState.promptTemplate || ''} 
                     onChange={(value) => handleChange('promptTemplate', value)}
                     label=""
                     height="100%"
-                  />
+                  />}
                 </Box>
               </Box>
             </Grid>
           </Grid>
           
           {/* Bind Modal */}
-          {showBindModal && (
+          {!configurationOnly && showBindModal && (
             <Box
               sx={{
                 position: 'absolute',
@@ -1180,8 +1195,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         </DialogContent>
         <DialogActions sx={{ flexShrink: 0 }}>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
-          <Button type="submit" variant="contained" color="primary">
-            {t('models.modal.save')}
+          <Button type="submit" variant="contained" color="primary" disabled={saveDisabled}>
+            {saveLabel || t('models.modal.save')}
           </Button>
         </DialogActions>
       </form>

@@ -1,5 +1,12 @@
 # Identity, storage and sharing contracts v1
 
+Product constraint, confirmed October 21, 2026: FLUJO is local first. Multi-user
+operation must work with internet disconnected and LAN disabled. Identity,
+authorization, isolation, revocation, sharing, locks and history are local
+responsibilities. Cold start, enrollment, recovery and restart cannot require a
+cloud VM, hosted identity provider, online DNS or remote control-plane lease.
+Optional online integrations do not establish or maintain the isolation boundary.
+
 Status: design proposal for #573, with a runnable source prototype. Security and
 maintainer review, #564 agreement, migration/artifact qualification and independent
 acceptance remain pending. #574/#575 must not enable shared/public deployment on
@@ -13,9 +20,37 @@ change Security's authentication, encryption or MCP enforcement primitives.
 Newer principal/recheck and credential migration contracts must be integrated
 under their own exact reviewed pins before implementation acceptance.
 
+Current inventory baseline, October 21, 2026:
+`791682ff54b3b37284171f4e33f940ed52e71673`. Regenerate the source survey with
+`node scripts/inventory-shared-runtime.mjs`; its source-tree digest also records
+uncommitted source inputs. This refresh does not rerun the prototype or accept
+the shared-deployment design. The current owner-only runtime already has durable
+browser sessions in `ownerSession.ts` and revocable request witnesses in
+`ownerAccess.ts`. Neither supplies multi-user identity selection, team grants or
+cross-owner runtime dispatch. The shared controller must remain separate from
+these private runtime modules and their process-wide state.
+
+The current implementation candidate is the separate
+[private-owner controller](../../packages/shared-controller/README.md). It adds
+local password accounts, a transactional session/revocation ledger and dispatch to
+local private runtimes with distinct browser hostnames. Its local engine driver
+provisions preinstalled Linux container images, separate data/home/authority
+volumes and networkless runtime processes, then relays HTTP through private local
+pipes. Start/stop intent is durable; admission requires fresh observed state, and
+revocation requires observed exit rather than a cancellation acknowledgement.
+The earlier OIDC-only draft is superseded because it depended on network identity
+discovery. The controller currently requires an unprivileged POSIX account and
+local disk. Real container/kernel and Windows qualification, team grants, disk
+quotas, optional integration brokering, migration and the full protocol matrix
+remain pending. This implementation does not turn the proposal into accepted
+shared-deployment support.
+
 ## Proposed topology and alternatives
 
-Choose one controller and a dedicated OS-isolated runtime/data root per owner.
+The incremental proposal uses one local controller and a locally OS-isolated
+runtime/data root per owner on the same computer. This is not a requirement for
+one VM per user, a hosting service or any internet connection. The exact local
+OS mechanism still needs platform-specific implementation and qualification.
 The controller handles identity, current grants, metadata and admission. It never
 loads FLUJO execution/MCP modules or any owner's keyring. Each runtime serves only
 its assigned owner namespace over a private authenticated channel. Team execution
@@ -48,12 +83,14 @@ Separate Node processes under one unrestricted OS account are insufficient.
 
 ## Identity and authority
 
-For hosted humans, choose a configured OpenID Connect provider and authorization
-code login with PKCE. Verify issuer, signature, audience, nonce/state and token
-lifetime; resolve `(issuer, subject)` to an operator-owned immutable actor ID.
-Email, parsed claims, proxy headers and selected workspace never create grants.
-Provider validation follows the [OpenID Connect validation contract](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation).
-This provider/session implementation is not present in the prototype.
+Local accounts use immutable, operator-assigned actor IDs and locally verified
+passwords. Enrollment and recovery are performed by the local installation
+operator; no email delivery, external identity provider or online account is
+required. Password changes revoke sessions and in-flight authentication attempts.
+Email, proxy headers and selected workspace never create grants. The controller
+stores salted scrypt verifiers in private local storage, with persistent login
+backoff and bounded concurrent verification. This implementation is separate from
+the older ownership fixture prototype and does not qualify runtime isolation.
 
 Browser sessions use server-issued opaque IDs, HttpOnly/Secure/SameSite cookies,
 exact allowed Origin/CSRF checks for mutations, rotation after authentication,
@@ -113,9 +150,12 @@ Cross-owner missing/forbidden reads use the same non-disclosing response.
 | Administrative controls/auth/key recovery | Installation operator | No team member privilege escalation | Out-of-band recovery, audit, revocation and explicit passphrase/key protection. |
 | OAuth/webhook/worker/adapter callbacks | Their independently authenticated protocol | No blanket exemption | Exact method/path, replay/current identity checks; sibling endpoints default deny. |
 
-The [source inventory](shared-runtime-inventory.json) enumerates all 201 `route.ts`
-paths at the baseline for method-level classification. It is a lexical inventory,
-not evidence that these routes enforce the proposed matrix. #574 must cover
+The [source inventory](shared-runtime-inventory.json) enumerates 229 App Router
+handlers at the current inventory baseline, with 313 explicit HTTP method exports
+parsed from their TypeScript syntax. `routeMethods` separately records Next's
+implicit HEAD and OPTIONS methods and any unresolved exports. Every method remains
+unreviewed for ownership. This is a source inventory, not evidence that these
+routes enforce the proposed matrix. #574 must cover
 list/read/write/delete/run/approve/subscribe/export for both principals, including
 guessed valid IDs and conflicting workspace selectors. Unclassified methods deny.
 
@@ -152,10 +192,14 @@ independent users completing the candidate-artifact share/edit/run/revoke journe
 
 ## State, budgets and migration
 
-The lexical state inventory records 400 occurrences in 105 backend/utility files
-at the baseline. It is deliberately marked incomplete pending semantic review.
-Each record identifies its exact file/line and requires a dedicated-owner runtime
-boundary; no runtime module may be imported into the shared controller.
+The refreshed lexical state inventory records 1,653 candidates in 377 files,
+covering backend/utility files and App Router handlers. It includes global access,
+singleton lookups and Map/Set/WeakMap/WeakSet allocations. Local allocations and
+comments can match; other forms of mutable state can be missed. The count is not
+comparable to the earlier narrower survey's 400 matches and is deliberately marked
+incomplete pending semantic review. Each record identifies its exact file/line for
+review under the dedicated-owner runtime boundary; no runtime module may be
+imported into the shared controller.
 
 | Actual state seam | Specific isolation plan |
 | --- | --- |
@@ -196,6 +240,16 @@ does not restore an execution permit. Operator recovery is out of band, audited
 and must not allow a team admin to recover another owner's raw credentials.
 
 ## Runnable prototype and remaining gates
+
+Offline release acceptance must cold-start the installed candidate with external
+network access blocked and LAN disabled, retaining only host-local communication.
+Create/recover two local accounts; sign in, use private data, share exact resources,
+edit with conflict protection, inspect history, revoke access, restart and restore
+backups. Confirm cross-user file, process, credential and execution denials before
+and after revocation. Use installed local tools or deterministic local workloads;
+no cloud inference is needed to demonstrate tenancy. Cached sessions or a mocked
+identity service do not satisfy this acceptance. Do not disconnect a user's live
+machine or services to run this drill; use an owned release-acceptance environment.
 
 From an owned checkout with Node 22+, dev dependencies and the pinned Security
 source, run:

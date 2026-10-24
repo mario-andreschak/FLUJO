@@ -1,3 +1,4 @@
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 /**
  * LLM flow generation (issue #14): "describe it, get a flow".
  *
@@ -434,7 +435,7 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
   if (model.ownerCredentialBinding !== undefined) {
     return { success: false, error: 'Owner-bound models require an authorized model-step transport.', statusCode: 403 };
   }
-  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  const resolvedKey = (isTeamModel(model) ? teamModelTransportKey(model) : await modelService.resolveAndDecryptApiKey(model.ApiKey));
   // Codex supports a keyless ChatGPT subscription login.  In that case the
   // SDK deliberately receives an empty key and the CLI uses `codex login`.
   // Keep this exception here (as in ModelHandler) rather than rejecting the
@@ -724,7 +725,7 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
   if (model.ownerCredentialBinding !== undefined) {
     return { success: false, error: 'Owner-bound models require an authorized model-step transport.', statusCode: 403 };
   }
-  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  const resolvedKey = (isTeamModel(model) ? teamModelTransportKey(model) : await modelService.resolveAndDecryptApiKey(model.ApiKey));
   // An empty Codex key means use the local ChatGPT-plan session from
   // `codex login`; all other unresolved keys remain an error.
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);

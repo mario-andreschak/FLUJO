@@ -1,16 +1,14 @@
-'use client';
-
 import { Box } from '@mui/material';
+import { headers } from 'next/headers';
 import MCPManager from '@/frontend/components/mcp';
-import { createLogger } from '@/utils/logger';
 
-const log = createLogger('app/mcp/page');
+export const dynamic = 'force-dynamic';
 
-export default function MCPPage() {
-  log.debug('Rendering MCPPage');
+export default async function MCPPage() {
+  const controllerAccount = (await headers()).get('x-flujo-controller-account') === '1';
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <MCPManager />
+      <MCPManager controllerAccount={controllerAccount} />
     </Box>
   );
 }

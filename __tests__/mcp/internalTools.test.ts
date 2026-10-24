@@ -14,11 +14,12 @@ jest.mock('@/backend/services/flow', () => ({
     revertFlow: jest.fn(),
   },
 }));
-jest.mock('@/backend/services/model', () => ({
-  modelService: {
-    loadModels: jest.fn(),
-  },
-}));
+jest.mock('@/backend/services/model', () => {
+  const loadModels = jest.fn();
+  return { modelService: { loadModels,
+    listModels: async () => ({ success: true, models: await loadModels() }),
+  } };
+});
 // create_ticket_for_human writes through the ticket service (#379); stub it so
 // the dispatch contract is pinned without touching the tickets collection.
 jest.mock('@/backend/services/ticket', () => ({

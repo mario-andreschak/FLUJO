@@ -18,7 +18,10 @@ const log = createLogger('backend/execution/flow/validateFlowForRun');
 export async function validateFlowObjectForRun(flow: Flow): Promise<FlowValidationResult> {
   let models: Array<{ id: string; name?: string; displayName?: string }> | undefined;
   try {
-    models = await modelService.loadModels();
+    const catalogue = await modelService.listModels();
+    // This is an advisory check. Dispatch still resolves and rechecks the
+    // selected model's authority; an incomplete catalogue is not deletion.
+    if (catalogue.success && !catalogue.sharedModelsUnavailable) models = catalogue.models;
   } catch (error) {
     log.warn('validateFlowObjectForRun: could not load models; skipping model checks', error);
   }

@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { isTeamModel } from '@/shared/types/model/team';
 import { z } from 'zod';
 import { resolveOwnerRequest } from '@/backend/services/security/ownerAccess';
 import { readOwnerPolicy, ownerPolicyRevision } from '@/backend/services/security/ownerPolicy';
@@ -50,7 +51,7 @@ export async function createOriginalOwnerAccount(request: Request, input: unknow
   return modelService.withOwnerCatalogUpdate(updateModel => mutateOriginalOwnerBook(async book => {
     assertAdministrator(auth);
     const model = await modelService.getModel(parsed.modelId);
-    if (!model || model.fallbackPolicy) refuse('original_owner_model_unavailable');
+    if (!model || model.fallbackPolicy || isTeamModel(model)) refuse('original_owner_model_unavailable');
     const native = model.adapter === 'codex-cli';
     if (!native && resolveCompletionAdapterRoute(model) !== 'openai') refuse('original_owner_adapter_unsupported');
     const approval = { ownerId: auth.principal.ownerId, credentialId: auth.principal.credentialId,

@@ -32,6 +32,7 @@ jest.mock('@/utils/storage/backend', () => ({
 
 jest.mock('@/backend/services/flow', () => ({ flowService: {
   loadFlows: jest.fn(async () => store.flows ?? []),
+  listFlows: jest.fn(async () => ({ success: true, flows: store.flows ?? [] })),
 } }));
 
 // Deterministic, crypto-free encryption so key handling can be asserted.

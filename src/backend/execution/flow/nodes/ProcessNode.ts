@@ -52,6 +52,7 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessa
 import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
+import { assertTeamFlowModel } from '@/backend/services/flow/teamCatalogue';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
@@ -391,6 +392,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // between the preflight and any preparation effect.
     return withModelCatalogLease(async () => {
       const admission = await admitCatalogModel(boundModel);
+      assertTeamFlowModel(sharedState.flowSnapshot, admission.model);
       return this.prepAdmitted(sharedState, node_params, admission);
     });
   }
@@ -507,7 +509,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       excludeModelPrompt: executionExtensionContext ? true : excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt,
-      rejectResourceBindings: Boolean(executionExtensionContext),
+      rejectResourceBindings: Boolean(executionExtensionContext || sharedState.flowSnapshot?.teamFlow),
       // A Persona execution is pinned to this immutable snapshot. Never fall
       // back to the mutable Flow record while one is present.
       ...(sharedState.flowSnapshot ? { flowSnapshot: sharedState.flowSnapshot } : {}),
@@ -548,7 +550,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Resolve configuration globals at execution time. The prompt-safe resolver
     // deliberately leaves secret globals as `${global:NAME}` so their values are
     // never sent to the model.
-    completePrompt = executionExtensionContext ? completePrompt : await resolvePromptDynamicReferences(completePrompt, {
+    completePrompt = executionExtensionContext || sharedState.flowSnapshot?.teamFlow ? completePrompt : await resolvePromptDynamicReferences(completePrompt, {
       conversationId: sharedState.conversationId,
       flowId,
       nodeId,
@@ -573,7 +575,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       };
       return kvCtx;
     };
-    if (!executionExtensionContext && completePrompt.includes('${kv:')) {
+    if (!executionExtensionContext && !sharedState.flowSnapshot?.teamFlow && completePrompt.includes('${kv:')) {
       completePrompt = await resolveKvNodeRefs(completePrompt, await kvContext());
     }
 
@@ -967,7 +969,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Chat references are a wire-only projection: preserve canonical serialized
     // pills in SharedState.messages, but expand only resources authorized for
     // this ProcessNode and non-secret globals before the model sees them.
-    if (!executionExtensionContext && wireBase.some((message) =>
+    if (!executionExtensionContext && !sharedState.flowSnapshot?.teamFlow && wireBase.some((message) =>
       message.role === 'user'
       && typeof message.content === 'string'
       && (message.content.includes('${') || message.content.includes('@'))
@@ -1030,7 +1032,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             sharedState,
           )
         : isolatedPrompt;
-      if (!executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
+      if (!executionExtensionContext && !sharedState.flowSnapshot?.teamFlow && typeof resolvedIsolatedPrompt === 'string') {
         resolvedIsolatedPrompt = await resolvePromptDynamicReferences(resolvedIsolatedPrompt, {
           conversationId: sharedState.conversationId,
           flowId,
@@ -1039,7 +1041,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           appId: currentAppId,
         }, admission.model) as string;
       }
-      if (!executionExtensionContext
+      if (!executionExtensionContext && !sharedState.flowSnapshot?.teamFlow
         && typeof resolvedIsolatedPrompt === 'string'
         && resolvedIsolatedPrompt.includes('${kv:')) {
         resolvedIsolatedPrompt = await resolveKvNodeRefs(resolvedIsolatedPrompt, await kvContext());
@@ -1047,7 +1049,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     }
 
       await assertModelCatalogLeaseOwned();
-      const approvedMcpSkills = executionExtensionContext ? undefined : await loadApprovedMcpSkillSelections(
+      const approvedMcpSkills = executionExtensionContext || sharedState.flowSnapshot?.teamFlow ? undefined : await loadApprovedMcpSkillSelections(
       sharedState.conversationId,
       sharedState.mcpSkillSelections,
     );
