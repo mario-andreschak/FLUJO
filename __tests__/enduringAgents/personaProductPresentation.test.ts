@@ -36,6 +36,70 @@ function mailbox(
 }
 
 describe('Persona product Task ordering', () => {
+  it.each(['goal', 'child'])('shows partial %s work as goal progress in history and conversations', (sourceId) => {
+    const bundle = {
+      persona: { id: 'persona_queue' },
+      workItems: [
+        { ...workItem('goal', 'normal', 10), goal: { state: 'active' } },
+        { ...workItem('child', 'normal', 10), parentGoalId: 'goal', status: 'completed' },
+      ],
+      mailboxItems: [],
+      activities: [{
+        id: 'progress', personaId: 'persona_queue', kind: 'assignment', status: 'completed',
+        source: { kind: 'assignment', sourceId }, conversationId: 'progress-conversation',
+        createdAt: 20, completedAt: 30,
+        outcome: { resolution: 'partial', summary: 'Verified a sourced guide.', nextAction: 'Research the next audience.', goalAchieved: false },
+      }],
+    } as unknown as Parameters<typeof projectPersonaPresentation>[0];
+    const presentation = projectPersonaPresentation(bundle);
+    expect(presentation.history[0].outcome).toBe('progress');
+    expect(presentation.conversations[0].outcome).toBe('progress');
+    // A later owner Stop must not rewrite a past round as failed or completed.
+    bundle.workItems[0].goal!.state = 'stopped';
+    expect(projectPersonaPresentation(bundle).history[0].outcome).toBe('progress');
+  });
+
+  it.each([
+    ['partial', undefined, false, 'completed'],
+    ['blocked', 'transient', true, 'completed'],
+    ['failed', undefined, true, 'completed'],
+    ['unknown', undefined, true, 'completed'],
+    ['partial', 'approval', true, 'completed'],
+    ['partial', 'transient', true, 'completed'],
+    ['partial', undefined, true, 'error'],
+  ])('preserves attention for %s / %s with goal=%s and status=%s', (resolution, blockerKind, linkedGoal, status) => {
+    const bundle = {
+      persona: { id: 'persona_queue' },
+      workItems: [{ ...workItem('task', 'normal', 10), ...(linkedGoal ? { goal: { state: 'active' } } : {}) }],
+      mailboxItems: [],
+      activities: [{
+        id: 'attention', personaId: 'persona_queue', kind: 'assignment', status,
+        source: { kind: 'assignment', sourceId: 'task' }, conversationId: 'attention-conversation',
+        createdAt: 20, completedAt: 30, outcome: { resolution, blockerKind },
+      }],
+    } as unknown as Parameters<typeof projectPersonaPresentation>[0];
+    const presentation = projectPersonaPresentation(bundle);
+    expect(presentation.history[0].outcome).toBe('needs_attention');
+    expect(presentation.conversations[0].outcome).toBe('needs_attention');
+  });
+
+  it.each(['missing', 'another-persona'])('does not infer goal progress through a %s parent', (parent) => {
+    const bundle = {
+      persona: { id: 'persona_queue' },
+      workItems: [
+        { ...workItem('child', 'normal', 10), parentGoalId: 'goal' },
+        ...(parent === 'missing' ? [] : [{ ...workItem('goal', 'normal', 10), personaId: 'other', goal: { state: 'active' } }]),
+      ],
+      mailboxItems: [],
+      activities: [{
+        id: 'orphan', personaId: 'persona_queue', kind: 'assignment', status: 'completed',
+        source: { kind: 'assignment', sourceId: 'child' }, createdAt: 20,
+        outcome: { resolution: 'partial' },
+      }],
+    } as unknown as Parameters<typeof projectPersonaPresentation>[0];
+    expect(projectPersonaPresentation(bundle).history[0].outcome).toBe('needs_attention');
+  });
+
   it('marks only generated labels for translation, including when an owner title matches a default', () => {
     const bundle = {
       persona: { id: 'persona_queue' },

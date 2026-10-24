@@ -991,6 +991,7 @@ export type PersonaPresentationOutcome =
   | 'queued'
   | 'working'
   | 'waiting'
+  | 'progress'
   | 'completed'
   | 'cancelled'
   | 'needs_attention';
