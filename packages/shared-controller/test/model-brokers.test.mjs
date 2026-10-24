@@ -184,10 +184,12 @@ test('member removal cancels a running shared stream and a later rejoin cannot r
   assert.notEqual(s.access.admit(bob, s.teamId, s.id, 1).generation, admission.generation);
 });
 
-test('an owner without personal model grants receives a relay only after explicit team delegation', async t => {
-  const f = await fixture(t, undefined, true); assert.equal(f.bob, undefined);
+test('an owner without personal model grants gets an empty catalogue and cannot execute until explicit delegation', async t => {
+  const f = await fixture(t, undefined, true);
+  assert.deepEqual(await (await fetch(`http://127.0.0.1:${f.bob}/teams/models`)).json(), { entries: [], next: null });
   const s = await sharedFixture(f);
   assert.deepEqual(s.access.describe(s.sessions.bob, s.teamId, s.id).options, []);
+  assert.equal((await s.post(s.body)).status, 403);
   s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 0, 'host');
   f.bob = await f.portFor('bob');
   const response = await s.post(s.body); assert.equal(response.status, 200);
@@ -211,6 +213,40 @@ test('grantor removal and rejoin cannot silently revive the delegated service', 
   assert.throws(() => s.access.admit(bob, teamId, id, 1), /grant ended/);
   s.access.authorize(s.sessions.alice, teamId, id, 1, 1, 'host');
   assert.notEqual(s.access.admit(bob, teamId, id, 1).generation, original.generation);
+});
+
+test('native catalogue pages disclose only admitted selector metadata and resolve the current revision', async t => {
+  const f = await fixture(t); const s = await sharedFixture(f);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 0, 'host');
+  for (let index = 0; index < 9; index++) {
+    const id = s.resources.create(s.sessions.alice, s.teamId, 'model', `Model ${index}`, JSON.stringify(s.document));
+    s.access.authorize(s.sessions.alice, s.teamId, id, 1, 0, 'host');
+  }
+  const root = `http://127.0.0.1:${f.bob}`; const entries = []; let after;
+  do {
+    const response = await fetch(`${root}/teams/models${after ? `/after/${after}` : ''}`);
+    assert.equal(response.status, 200); const page = await response.json();
+    assert.ok(page.entries.length <= 8); entries.push(...page.entries); after = page.next;
+  } while (after);
+  assert.equal(entries.length, 10); assert.equal(new Set(entries.map(item => item.reference.resourceId)).size, 10);
+  for (const entry of entries) {
+    assert.equal(entry.reference.teamName, 'Offline model team');
+    for (const key of ['ApiKey', 'baseUrl', 'promptTemplate', 'ownerCredentialBinding']) assert.equal(entry.model[key], undefined);
+  }
+  const response = await fetch(`${root}/teams/${s.teamId}/${s.id}/current`); const resolved = await response.json();
+  assert.deepEqual(resolved.document, s.document); assert.equal(resolved.reference.version, 1);
+  const url = `${root}/teams/${s.teamId}/${s.id}/revisions/1/grants/${resolved.reference.generation}/v1/chat/completions`;
+  const options = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s.body) };
+  assert.equal((await fetch(url, options)).status, 200);
+  s.access.revoke(s.sessions.alice, s.teamId, s.id, 1);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 2, 'host');
+  assert.equal((await fetch(url, options)).status, 403, 'Prepared requests cannot revive after a permission changes');
+  const fresh = await (await fetch(`${root}/teams/${s.teamId}/${s.id}/current`)).json();
+  assert.notEqual(fresh.reference.generation, resolved.reference.generation);
+  s.teams.remove(s.sessions.alice, s.teamId, s.teams.detail(s.sessions.alice, s.teamId).team.generation, 'bob');
+  assert.deepEqual(await (await fetch(`${root}/teams/models`)).json(), { entries: [], next: null });
+  assert.equal((await fetch(`${root}/teams/${s.teamId}/${s.id}/current`)).status, 403);
+  assert.equal(f.calls.length, 1);
 });
 
 test('owner pipes expose only granted catalogues and ignore caller credentials and host response cookies', async t => {

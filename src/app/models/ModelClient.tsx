@@ -154,7 +154,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
   useEffect(() => {
     if (!serviceReady) return;
     let cancelled = false;
-    void getModelService().loadModels()
+    void getModelService().loadModels('private')
       .then(loaded => {
         if (!cancelled) setModels(loaded);
       })
@@ -193,7 +193,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
       const result = isManualAddMode ? await service.addModel(model) : await service.updateModel(model);
       if (result.success) {
         // Refresh models list
-        const updatedModels = await service.loadModels();
+        const updatedModels = await service.loadModels('private');
         setModels(updatedModels);
 
         // Save and cancel consume the same modal history entry.
@@ -251,7 +251,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
 
     try {
       const service = getModelService();
-      const current = await service.loadModels();
+      const current = await service.loadModels('private');
       const known = [...current];
 
       for (const candidate of candidates) {
@@ -277,7 +277,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
           if ((candidate.ApiKey?.trim() && candidate.provider !== 'ollama') || clearsAntigravityKey) {
             const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey ?? '' });
             if (!result.success || !result.model) {
-              setModels(await service.loadModels());
+              setModels(await service.loadModels('private'));
               return { success: false, created, existing, error: result.error || t('models.saveFailed') };
             }
             existing.push(result.model);
@@ -300,7 +300,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
 
         const result = await service.addModel({ ...candidate, displayName });
         if (!result.success || !result.model) {
-          const updated = await service.loadModels();
+          const updated = await service.loadModels('private');
           setModels(updated);
           return {
             success: false,
@@ -313,7 +313,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
         known.push(result.model);
       }
 
-      const updated = await service.loadModels();
+      const updated = await service.loadModels('private');
       setModels(updated);
       router.refresh();
       return { success: true, created, existing };
@@ -335,7 +335,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
       await service.deleteModel(modelId);
       
       // Refresh models list
-      const updatedModels = await service.loadModels();
+      const updatedModels = await service.loadModels('private');
       setModels(updatedModels);
       
     } catch (error) {
@@ -366,7 +366,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
         setError(result.error || t('models.moveFailed'));
         return;
       }
-      const updatedModels = await service.loadModels();
+      const updatedModels = await service.loadModels('private');
       setModels(updatedModels);
     } catch (error: unknown) {
       log.error('Failed to set model folder', error);
@@ -397,7 +397,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
         setError(result.error || t('models.favoriteFailed'));
         return;
       }
-      const updatedModels = await service.loadModels();
+      const updatedModels = await service.loadModels('private');
       setModels(updatedModels);
     } catch (error: unknown) {
       log.error('Failed to toggle model favorite', error);
@@ -608,7 +608,7 @@ export default function ModelClient({ controllerAccount = false }: { controllerA
             const service = getModelService();
             const result = policyDraft ? await service.addModel(policy) : await service.updateModel(policy);
             if (result.success) {
-              setModels(await service.loadModels());
+              setModels(await service.loadModels('private'));
               if (policyDraft) setPolicyDraft(null); else await handleCloseModal();
             }
             return result;

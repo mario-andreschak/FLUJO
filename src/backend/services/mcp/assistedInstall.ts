@@ -1,3 +1,4 @@
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 import type OpenAI from 'openai';
 import path from 'node:path';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
@@ -112,7 +113,7 @@ async function aiCompletion(modelId: string, messages: OpenAI.ChatCompletionMess
     throw new Error('Owner-bound models require an authorized model-step transport.');
   }
   if (researchSignal && !supportsMcpModelRiskAssessment(model)) throw new Error('Research requires a supported, tool-free text model.');
-  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  const resolvedKey = (isTeamModel(model) ? teamModelTransportKey(model) : await modelService.resolveAndDecryptApiKey(model.ApiKey));
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the selected AI model credentials.');
   const adapter = getCompletionAdapter(model);

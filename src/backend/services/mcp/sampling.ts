@@ -1,3 +1,4 @@
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
   CreateMessageRequestSchema,
@@ -125,7 +126,7 @@ export function createSamplingHandler(
     if (model.fallbackPolicy || !getModelConfigurationCapabilities(model.provider, model.adapter, model.name).maxOutputTokens) {
       throw new McpError(ErrorCode.InvalidRequest, 'Sampling requires a model that supports an output-token limit');
     }
-    const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+    const resolvedKey = (isTeamModel(model) ? teamModelTransportKey(model) : await modelService.resolveAndDecryptApiKey(model.ApiKey));
     await assertTaskInputCurrent(options);
     const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
     if (apiKey === null) {

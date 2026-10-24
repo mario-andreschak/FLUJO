@@ -2,6 +2,7 @@ import type { Readable, Writable } from 'node:stream';
 import { TextDecoder } from 'node:util';
 import { z } from 'zod';
 import { grantId, MODEL_BODY_BYTES } from './model-grant.js';
+import { teamModelGeneration } from './team-model-protocol.js';
 
 const id = z.string().regex(/^[a-f0-9]{32}$/);
 const resourceId = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
@@ -10,7 +11,10 @@ export const runtimeModelFrame = z.discriminatedUnion('type', [
   z.object({ type: z.literal('request'), id, grant: grantId, operation: z.enum(['models', 'chat', 'embeddings']), body: z.unknown().optional() }).strict(),
   z.object({ type: z.literal('team-request'), id, teamId: resourceId, resourceId,
     version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    generation: teamModelGeneration.optional(),
     operation: z.enum(['configuration', 'models', 'chat', 'embeddings']), body: z.unknown().optional() }).strict(),
+  z.object({ type: z.literal('team-catalogue'), id, after: resourceId.optional() }).strict(),
+  z.object({ type: z.literal('team-resolve'), id, teamId: resourceId, resourceId }).strict(),
   z.object({ type: z.literal('cancel'), id }).strict(),
   z.object({ type: z.literal('ack'), id, sequence: z.number().int().nonnegative() }).strict(),
 ]);

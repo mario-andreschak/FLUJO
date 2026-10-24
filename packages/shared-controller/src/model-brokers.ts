@@ -10,7 +10,7 @@ import { TeamModelAccess } from './team-model-access.js';
 
 interface Job { abort: AbortController; current: () => boolean; sequence: number;
   credit?: { sequence: number; resolve: () => void; reject: () => void }; }
-interface Connection { stop: () => void; closed: Promise<void>; }
+interface Connection { stop: () => void; closed: Promise<void>; required: () => boolean; }
 
 /** One fixed exec channel per configured owner, tied to observed local runtime
  * identity. Runtime input never chooses its actor, endpoint, credential or URL. */
@@ -28,12 +28,20 @@ export class ModelBrokers {
     const tick = () => {
       if (this.stopping) return;
       try {
-        for (const runtime of this.config.runtimes) {
-          if (this.connections.size >= 64) break;
-          if (this.connections.has(runtime.id) || (this.retries.get(runtime.id)?.next ?? 0) > performance.now()
-            || (!runtime.modelGrants?.length && !this.teamModels.hasAccess(runtime))) continue;
+        const required = (runtime: Runtime) => Boolean(runtime.modelGrants?.length) || this.teamModels.hasAccess(runtime);
+        const ordered = this.config.runtimes.filter(runtime => runtime.localRuntime)
+          .map(runtime => ({ runtime, required: required(runtime) })).sort((a, b) => Number(b.required) - Number(a.required));
+        for (const { runtime, required: needsExecution } of ordered) {
+          if (this.connections.has(runtime.id) || (this.retries.get(runtime.id)?.next ?? 0) > performance.now()) continue;
           const intent = this.ledger.intents().find(item => item.runtimeId === runtime.id);
-          if (intent && runtime.localRuntime && this.ledger.available(runtime, runtimeRevision(this.config, runtime))) this.open(runtime, intent);
+          if (!intent || !runtime.localRuntime || !this.ledger.available(runtime, runtimeRevision(this.config, runtime))) continue;
+          if (this.connections.size >= 64) {
+            // A catalogue-only channel cannot starve an explicitly granted
+            // execution channel. Retain the retiring slot until observed exit.
+            if (needsExecution) [...this.connections.values()].find(connection => !connection.required())?.stop();
+            continue;
+          }
+          this.open(runtime, intent);
         }
       } catch { /* Missing current ledger evidence prevents new channels. */ }
       this.timer = setTimeout(tick, 1000);
@@ -48,8 +56,7 @@ export class ModelBrokers {
     let stopped = false; let ready = false; let lastHeartbeat = performance.now(); let diagnostics = 0;
     const started = performance.now(); const jobs = new Map<string, Job>();
     let kill: ReturnType<typeof setTimeout> | undefined;
-    const current = () => !stopped && !this.stopping && this.ledger.intentCurrent(intent) && this.ledger.available(runtime, revision)
-      && (Boolean(runtime.modelGrants?.length) || this.teamModels.hasAccess(runtime));
+    const current = () => !stopped && !this.stopping && this.ledger.intentCurrent(intent) && this.ledger.available(runtime, revision);
     const cancel = (job: Job) => { job.abort.abort(); job.credit?.reject(); job.credit = undefined; };
     const stop = () => {
       if (stopped) return; stopped = true;
@@ -62,7 +69,7 @@ export class ModelBrokers {
     const sendError = (id: string, code: 'denied' | 'invalid_request' | 'busy' | 'unavailable') => {
       void channel.send({ type: 'error', id, code }).catch(stop);
     };
-    const request = async (id: string, grant: ModelGrant, operation: 'configuration' | 'models' | 'chat' | 'embeddings', body: unknown,
+    const request = async (id: string, grant: ModelGrant | undefined, operation: 'configuration' | 'models' | 'chat' | 'embeddings', body: unknown,
       authorized: () => boolean, configuration?: unknown) => {
       const job: Job = { abort: new AbortController(), sequence: 0,
         current: () => current() && authorized() };
@@ -82,8 +89,11 @@ export class ModelBrokers {
           const bytes = Buffer.from(JSON.stringify(configuration));
           await channel.send({ type: 'headers', id, contentType: 'application/json' });
           for (let at = 0; at < bytes.length; at += 48 * 1024) await chunk(bytes.subarray(at, at + 48 * 1024));
-        } else await localModelRequest(grant, operation, body, job.abort.signal, job.current,
-          contentType => channel.send({ type: 'headers', id, contentType }), chunk);
+        } else {
+          if (!grant) throw new Error('No model grant.');
+          await localModelRequest(grant, operation, body, job.abort.signal, job.current,
+            contentType => channel.send({ type: 'headers', id, contentType }), chunk);
+        }
         if (!job.current() || job.abort.signal.aborted) throw new Error('Model grant revoked.');
         await channel.send({ type: 'end', id });
       } catch { if (!stopped) sendError(id, 'unavailable'); }
@@ -103,10 +113,27 @@ export class ModelBrokers {
       }
       if (jobs.has(frame.id)) throw new Error('Duplicate model request.');
       if (jobs.size >= 4 || this.jobs.size >= 16) { sendError(frame.id, 'busy'); return; }
+      if (frame.type === 'team-catalogue' || frame.type === 'team-resolve') {
+        try {
+          if (frame.type === 'team-catalogue') {
+            const page = this.teamModels.catalogue(runtime, frame.after);
+            void request(frame.id, undefined, 'configuration', undefined,
+              () => page.entries.every(entry => this.teamModels.current(runtime, entry.reference)), page).catch(stop);
+          } else {
+            const snapshot = this.teamModels.resolve(runtime, frame.teamId, frame.resourceId);
+            const reference = { teamId: snapshot.teamId, resourceId: snapshot.resourceId, teamName: snapshot.teamName,
+              version: snapshot.version, generation: snapshot.generation };
+            void request(frame.id, undefined, 'configuration', undefined, () => this.teamModels.current(runtime, snapshot),
+              { reference, document: snapshot.document }).catch(stop);
+          }
+        } catch { sendError(frame.id, 'denied'); }
+        return;
+      }
       if (frame.type === 'team-request') {
         let admission;
         try { admission = this.teamModels.admit(runtime, frame.teamId, frame.resourceId, frame.version); }
         catch { sendError(frame.id, 'denied'); return; }
+        if (frame.generation && frame.generation !== admission.generation) { sendError(frame.id, 'denied'); return; }
         try {
           if (frame.operation === 'models' || frame.operation === 'configuration') {
             if (frame.body !== undefined) throw new Error('Unexpected model read body.');
@@ -142,7 +169,8 @@ export class ModelBrokers {
     }));
     // A stopped CLI retains its slot until observed exit. No second helper is
     // launched merely because cancellation or a kill request was issued.
-    this.connections.set(runtime.id, { stop, closed });
+    this.connections.set(runtime.id, { stop, closed,
+      required: () => Boolean(runtime.modelGrants?.length) || this.teamModels.hasAccess(runtime) });
     child.once('error', stop); child.stderr.on('data', (chunk: Buffer) => { diagnostics += chunk.length; if (diagnostics > 16 * 1024) stop(); });
     void channel.send({ type: 'ping' }).catch(stop);
     this.trackUnconfirmed(child, closed);

@@ -50,3 +50,25 @@ export function publishableModel(input: Record<string, unknown>): SharedModelDoc
   const model = modelConfigurationFields(input);
   return readSharedModel({ format: SHARED_MODEL_FORMAT, model });
 }
+
+// Keep the browser contract in this leaf module. Node-only entry points can
+// re-export it with .js specifiers without making the app bundle resolve them.
+export const teamResourceId = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+export const teamModelGeneration = z.string().regex(/^[a-f0-9]{64}$/);
+export const teamModelReferenceSchema = z.object({ teamId: teamResourceId, resourceId: teamResourceId,
+  version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), generation: teamModelGeneration,
+  teamName: z.string().min(1).max(80) }).strict();
+export type TeamModelReference = z.infer<typeof teamModelReferenceSchema>;
+export const teamModelSummarySchema = z.object({ reference: teamModelReferenceSchema,
+  model: sharedModelSchema.pick({ name: true, displayName: true, provider: true, adapter: true,
+    contextWindow: true, supportsTools: true, inputModalities: true, outputModalities: true,
+    visionInputCapability: true, maxTokens: true }).strip() }).strict();
+export const teamModelCatalogueSchema = z.object({ entries: z.array(teamModelSummarySchema).max(8), next: teamResourceId.nullable() }).strict();
+export const resolvedTeamModelSchema = z.object({ reference: teamModelReferenceSchema, document: sharedModelDocumentSchema }).strict();
+export const teamModelId = (reference: Pick<TeamModelReference, 'teamId' | 'resourceId'>): string => `team-model:${reference.teamId}:${reference.resourceId}`;
+export function parseTeamModelId(id: string): { teamId: string; resourceId: string } | null {
+  const match = /^team-model:([A-Za-z0-9_-]{43}):([A-Za-z0-9_-]{43})$/.exec(id);
+  return match ? { teamId: match[1], resourceId: match[2] } : null;
+}
+export const teamModelBaseUrl = (reference: TeamModelReference): string =>
+  `http://127.0.0.1:4290/teams/${reference.teamId}/${reference.resourceId}/revisions/${reference.version}/grants/${reference.generation}/v1`;

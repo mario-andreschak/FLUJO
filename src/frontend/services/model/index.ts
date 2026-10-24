@@ -23,7 +23,7 @@ class ModelService {
     if (typeof window !== 'undefined') window.dispatchEvent(new Event(MODEL_CATALOG_CHANGED_EVENT));
   }
 
-  private async fetchWithErrorHandling<T>(url: string, options?: RequestInit): Promise<T> {
+  private async fetchWithErrorHandling<T>(url: string, options?: RequestInit, inspect?: (response: Response) => void): Promise<T> {
     try {
       // Log request attempt
       log.debug('Making API request', { 
@@ -32,6 +32,7 @@ class ModelService {
       });
 
       const response = await fetch(url, options);
+      inspect?.(response);
       let data = null;
       
       try {
@@ -124,18 +125,26 @@ class ModelService {
    * skips model checks on failure instead of reporting every binding as
    * deleted) use this variant.
    */
-  async tryLoadModels(): Promise<Model[] | null> {
+  async loadModelCatalogue(scope: 'private' | 'available' = 'available'): Promise<{ models: Model[] | null; sharedUnavailable: boolean }> {
+    let sharedUnavailable = false;
     try {
-      const models = await this.fetchWithErrorHandling<Model[]>('/api/model');
-      return Array.isArray(models) ? models : null;
+      const models = await this.fetchWithErrorHandling<Model[]>(scope === 'private' ? '/api/model?scope=private' : '/api/model',
+        { cache: 'no-store' }, response => { sharedUnavailable = response.headers.get('X-Flujo-Shared-Models') === 'unavailable'; });
+      return { models: Array.isArray(models) ? models : null, sharedUnavailable };
     } catch (error) {
       log.error('Failed to load models', error);
-      return null;
+      return { models: null, sharedUnavailable };
     }
   }
 
-  async loadModels(): Promise<Model[]> {
-    return (await this.tryLoadModels()) ?? [];
+  async tryLoadModels(scope: 'private' | 'available' = 'available'): Promise<Model[] | null> {
+    const catalogue = await this.loadModelCatalogue(scope);
+    // Validators must not classify unavailable shared bindings as deleted.
+    return scope === 'available' && catalogue.sharedUnavailable ? null : catalogue.models;
+  }
+
+  async loadModels(scope: 'private' | 'available' = 'available'): Promise<Model[]> {
+    return (await this.loadModelCatalogue(scope)).models ?? [];
   }
 
   async getModel(id: string): Promise<Model | null> {

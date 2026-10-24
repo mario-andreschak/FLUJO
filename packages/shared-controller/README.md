@@ -67,8 +67,8 @@ installed acceptance.
 **Your teams → a team → Shared documents and revision history** stores explicitly
 submitted JSON documents locally. Kind labels cover Models, MCP, Flows, Chats and
 Executions. Generic documents are passive snapshots; typed model configurations
-also have the native editing journey below. **Shared execution, dependency access
-and the remaining native editors are not connected yet.** This library does not
+also have the native editing and local execution journeys below. **Shared MCP,
+Flow, Chat and Execution editors and dependency access remain incomplete.** This library does not
 satisfy Tier 1 by itself. Generic JSON is structurally bounded, not validated
 against each native resource schema. It does not discover private resources, dereference dependency
 IDs, import keyrings, execute pasted commands, or confer runtime permissions.
@@ -160,7 +160,7 @@ the local expiry remains authoritative. Drafts are not persisted in browser stor
 This delivers native model **configuration sharing/editing**. The separate local
 execution permission and relay described below do not contact providers while
 editing, and existing private model setup behavior is unchanged. Linking shared
-models into native Flows/Chats remains #212 work. Release-only
+models into native Flows/Chats uses the admitted references described below. Release-only
 HTTP/SQLite and React regression sources cover projection, forged secret fields,
 format downgrade, legacy migration, provider-discovery suppression, shared saves
 and denied-save draft recovery. Native offline browser acceptance is still pending.
@@ -204,16 +204,44 @@ returns only the validated shared document and catalogue returns only the one
 delegated model. The host's endpoint, token and CA paths are never returned.
 Existing request/body/response limits, chunk credits and live authority checks
 apply. Runtime model channels are capped at 64, requests at four per channel and
-16 per controller. Owners without personal model grants can obtain a channel when
-they have a shared execution permission; the channel retires when that access ends.
+16 per controller. Managed owners also receive catalogue-only channels before
+any grant exists; an empty catalogue confers no execution authority. At capacity,
+execution-granted channels take priority over catalogue-only channels. Retired
+channels keep their slot until the child process is observed to exit.
 
-This is a controller/runtime execution path, not yet native model-picker,
-Flow/Chat admission or application catalogue integration. Those consumers still
-need an explicit shared-model reference and must resolve the current revision
-through this channel rather than copying it into private `models.json`. Release
-regressions cover permission replacement, credential exclusion, revision changes,
-revocation, stream cancellation and schema migration; installed offline acceptance
-is still required.
+### Shared models in native model selection and execution
+
+The application model catalogue includes admitted shared models, labelled with
+their team name, in Flow/Chat model selection. Private model settings and the
+publication source picker explicitly request private scope. Shared references use
+`team-model:<team-id>:<resource-id>`; private add/update/delete refuse those IDs or
+shared-reference metadata. No shared projection is written into `models.json`.
+Private fallback policies and original-owner credential rebinding do not accept
+shared model references; those features require their own dependency admission.
+
+The owner-pipe `GET /teams/models[/after/<resource-id>]` paginates eight admitted
+selector entries at a time. It excludes prompts and endpoints.
+`GET /teams/<team-id>/<resource-id>/current` resolves the current full configuration and
+permission generation. Each response rechecks the current authority while being
+sent. The application bounds catalogue retrieval to 20 seconds and 32 MiB, each
+response to 2 MiB, and rejects repeated/non-advancing cursors. Failed pagination
+discards partial shared results while retaining private choices and returning an
+explicit shared-unavailable flag. Guided selection preserves existing bindings
+on failure and can refresh without discarding the unsaved flow. Validation treats
+an incomplete catalogue as unavailable rather than calling those bindings deleted.
+
+Before executing a Process/Chat model, catalogue admission resolves its shared
+reference and captures the detached configuration and permission generation. It
+rechecks both before dispatch. The generated transport URL is fixed to the owner
+loopback relay and includes `/revisions/<version>/grants/<generation>/v1`; it never
+uses the shared document's stored endpoint. The host refuses a generation captured
+before revocation/rejoin or permission replacement. The SDK receives an inert
+local relay value, not an API key or login. Native model testing, direct completion,
+embeddings and model-assisted flows use the same pinned transport; no host
+credential is copied or decrypted by the recipient. Ordinary installations do not
+query this relay. Regression sources cover catalogue paging, current resolution,
+private/shared separation, denied admission and prepared-request revocation.
+Installed offline browser and full execution acceptance are still release work.
 
 ## Current development profile
 

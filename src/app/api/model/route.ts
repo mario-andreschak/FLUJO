@@ -11,12 +11,14 @@ const log = createLogger('app/api/model/route');
  * GET /api/model
  * List all models.
  */
-async function GET_handler(_request: Request) {
+async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
-    const result = await modelAdapter.loadModels();
+    const scope = new URL(request.url).searchParams.get('scope');
+    if (scope && !['private', 'available'].includes(scope)) return new Response('Invalid model scope', { status: 400 });
+    const result = scope === 'private' ? await modelAdapter.loadModels(false) : await modelAdapter.loadModels();
     if (!result.success) {
       return new Response(JSON.stringify({ error: result.error || 'Failed to load models' }), {
         status: 500,
@@ -25,7 +27,8 @@ async function GET_handler(_request: Request) {
     }
     return new Response(JSON.stringify(result.models), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+        'X-Flujo-Shared-Models': result.sharedModelsUnavailable ? 'unavailable' : 'available' },
     });
   } catch (error) {
     log.error('Error handling GET request', error);

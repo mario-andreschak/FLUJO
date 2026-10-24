@@ -83,15 +83,16 @@ jest.mock('@/frontend/services/flow', () => ({
 jest.mock('@/frontend/services/mcp', () => ({ mcpService: {} }));
 jest.mock('@/frontend/services/model', () => ({
   modelService: {
-    loadModels: jest.fn(() => {
+    loadModelCatalogue: jest.fn(() => {
       const models = [
         { id: 'model-backup', name: 'Backup AI', favorite: false },
         { id: 'model-favorite', name: 'Friendly AI', favorite: true },
       ];
       return {
-        then: (resolve: (value: typeof models) => unknown) => {
-          resolve(models);
-          return Promise.resolve(models);
+        then: (resolve: (value: { models: typeof models; sharedUnavailable: boolean }) => unknown) => {
+          const catalogue = { models, sharedUnavailable: false };
+          resolve(catalogue);
+          return Promise.resolve(catalogue);
         },
       };
     }),
@@ -522,12 +523,27 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.getByTestId('canvas')).toHaveTextContent('2:0');
   });
 
+  it('retries an unavailable shared catalogue without losing an unsaved guided goal', async () => {
+    window.localStorage.setItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode'), JSON.stringify('guided'));
+    (modelService.loadModelCatalogue as jest.Mock).mockResolvedValueOnce({ models: [], sharedUnavailable: true });
+    render(<FlowBuilder initialFlow={{ ...initialFlow, id: 'catalogue-retry-draft' }} isDraft
+      onSave={() => {}} onDelete={() => {}} allFlows={[]} />);
+    const recipe = screen.getByLabelText('Guided agent builder');
+    const goal = await within(recipe).findByLabelText('Workflow goal');
+    fireEvent.change(goal, { target: { value: 'Keep this unsaved goal.' } });
+    expect(screen.getByText(/Shared models are unavailable/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(modelService.loadModelCatalogue).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(/Shared models are unavailable/)).not.toBeInTheDocument());
+    expect(within(recipe).getByLabelText('Workflow goal')).toHaveValue('Keep this unsaved goal.');
+  });
+
   it('does not block goal creation when no AI is connected', async () => {
     window.localStorage.setItem(
       workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
       JSON.stringify('guided'),
     );
-    (modelService.loadModels as jest.Mock).mockResolvedValueOnce([]);
+    (modelService.loadModelCatalogue as jest.Mock).mockResolvedValueOnce({ models: [], sharedUnavailable: false });
     render(
       <FlowBuilder
         initialFlow={{ ...initialFlow, id: 'no-model-draft' }}
@@ -584,7 +600,7 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.queryByRole('button', { name: 'Auto-Align' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Agent settings')).not.toBeInTheDocument();
 
-    await waitFor(() => expect(modelService.loadModels).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(modelService.loadModelCatalogue).toHaveBeenCalledTimes(1));
     fireEvent.click(within(recipe).getByRole('button', { name: 'Yes, help me' }));
     expect(within(recipe).getByLabelText('AI helper')).toHaveTextContent('Friendly AI');
     const goalField = within(recipe).getByLabelText('Workflow goal');

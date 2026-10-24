@@ -15,6 +15,7 @@ export interface ModelServiceResponse {
  * Response for operations that return a list of models
  */
 export interface ModelListResponse extends ModelServiceResponse {
+  sharedModelsUnavailable?: boolean;
   models?: Model[];
 }
 

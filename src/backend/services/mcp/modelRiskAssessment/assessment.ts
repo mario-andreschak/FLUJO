@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 import { modelService } from '@/backend/services/model';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { resolveAndDecryptApiKey } from '@/backend/services/model/encryption';
@@ -67,7 +68,7 @@ export async function assessMcpGithubRisk(repositoryUrl: string, modelId: string
     // Resolve before sending any repository data to the provider. Failed bindings
     // cannot select host login, a different model or an alternate provider.
     stage = 'credentials';
-    const apiKey = await resolveAndDecryptApiKey(model.ApiKey);
+    const apiKey = isTeamModel(model) ? teamModelTransportKey(model) : await resolveAndDecryptApiKey(model.ApiKey);
     signal.throwIfAborted();
     if (!apiKey) return { status: 'unavailable', reason: 'credentials', model: selected };
 

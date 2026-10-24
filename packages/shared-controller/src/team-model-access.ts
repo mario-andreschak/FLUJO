@@ -3,6 +3,7 @@ import { digest, type Ledger, type Session } from './ledger.js';
 import type { ModelGrant } from './model-grant.js';
 import { readSharedModel, SHARED_MODEL_FORMAT, type SharedModelDocument } from './shared-model.js';
 import { Teams, TeamError } from './teams.js';
+import { teamModelSummarySchema, type TeamModelReference } from './team-model-protocol.js';
 
 const ID = /^[A-Za-z0-9_-]{43}$/;
 interface Binding {
@@ -12,7 +13,7 @@ interface Binding {
 }
 interface Resource { id: string; teamId: string; teamName: string; version: number; content: string; }
 export interface TeamModelAdmission {
-  teamId: string; resourceId: string; version: number; generation: string;
+  teamId: string; resourceId: string; teamName: string; version: number; generation: string;
   document: SharedModelDocument; grant: ModelGrant;
 }
 export interface TeamModelAccessState {
@@ -87,7 +88,7 @@ export class TeamModelAccess {
     // Narrow an owner grant to this one shared model. Never return host paths or
     // credentials in browser/runtime projections of this internal admission.
     const narrowed = { ...grant, models: [document.model.name] };
-    return { teamId, resourceId: id, version, document, grant: narrowed,
+    return { teamId, resourceId: id, teamName: resource.teamName, version, document, grant: narrowed,
       generation: digest(JSON.stringify([runtime.id, runtimeRevision(this.config, runtime), member,
         binding.generation, binding.runtime_revision, binding.grant_generation, sourceMember, version])) };
   }
@@ -96,9 +97,41 @@ export class TeamModelAccess {
     return this.ledger.transaction(() => this.admitCurrent(runtime, teamId, id, version));
   }
 
-  current(runtime: Runtime, admission: TeamModelAdmission): boolean {
+  current(runtime: Runtime, admission: Pick<TeamModelAdmission, 'teamId' | 'resourceId' | 'version' | 'generation'>): boolean {
     try { return this.admit(runtime, admission.teamId, admission.resourceId, admission.version).generation === admission.generation; }
     catch { return false; }
+  }
+
+  resolve(runtime: Runtime, teamId: string, id: string): TeamModelAdmission {
+    return this.ledger.transaction(() => {
+      // Check membership before reading even the current revision number.
+      this.member(runtime.actorId, teamId);
+      return this.admitCurrent(runtime, teamId, id, this.resource(teamId, id).version);
+    });
+  }
+
+  catalogue(runtime: Runtime, after = '') {
+    if (after && !ID.test(after)) throw new TeamError(400, 'Invalid catalogue cursor.');
+    return this.ledger.transaction(() => {
+      this.runtime(runtime.id);
+      const rows = this.ledger.db.prepare(`SELECT r.id,r.team_id AS teamId,r.version FROM team_resources r
+        JOIN teams t ON t.id=r.team_id JOIN team_members m ON m.team_id=t.id
+        JOIN team_model_access a ON a.resource_id=r.id
+        WHERE m.actor_id=? AND m.state='member' AND t.archived=0 AND r.format=?
+        AND a.enabled=1 AND a.version=r.version AND r.id>? ORDER BY r.id LIMIT 9`).all(runtime.actorId, SHARED_MODEL_FORMAT, after);
+      const entries = [];
+      for (const row of rows.slice(0, 8)) {
+        try {
+          const admission = this.admitCurrent(runtime, String(row.teamId), String(row.id), Number(row.version));
+          const reference: TeamModelReference = { teamId: admission.teamId, resourceId: admission.resourceId,
+            teamName: admission.teamName, version: admission.version, generation: admission.generation };
+          // Zod's default object projection removes prompts, endpoints and all
+          // other configuration fields from selector metadata.
+          entries.push(teamModelSummarySchema.parse({ reference, model: admission.document.model }));
+        } catch (error) { if (!(error instanceof TeamError)) throw error; }
+      }
+      return { entries, next: rows.length > 8 ? String(rows[7].id) : null };
+    });
   }
 
   describe(session: Session, teamId: string, id: string): TeamModelAccessState {

@@ -47,6 +47,8 @@ import { hasOwnerBoundFallbackMember, materializeFallbackPolicy, validateFallbac
 import { FallbackRoutingError } from './adapters/fallbackAdapter';
 import { withModelCatalogWriteLease } from './catalogAdmission';
 import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtimeLock';
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
+import { listTeamModels, resolveTeamModel } from './teamCatalogue';
 
 function catalogWriteFailure(error: unknown): ModelServiceResponse {
   return {
@@ -104,6 +106,7 @@ class ModelService {
   async getModel(modelId: string): Promise<Model | null> {
     log.debug(`getModel: Looking for model with ID: ${modelId}`);
     try {
+      if (modelId.startsWith('team-model:')) return await resolveTeamModel(modelId);
       const models = await this.loadModels();
       const model = models.find(model => model.id === modelId) || null;
       
@@ -138,6 +141,7 @@ class ModelService {
   private async addModelWithinLease(model: Model): Promise<ModelOperationResponse> {
     log.debug('addModel: Entering method');
     try {
+      if (isTeamModel(model)) return { success: false, error: 'Edit shared models in Team models. They cannot be saved in a private catalogue.' };
       const configurationError = validateModelConfiguration(model);
       if (configurationError) {
         return { success: false, error: configurationError };
@@ -260,6 +264,7 @@ class ModelService {
   private async updateModelWithinLease(model: Model): Promise<ModelOperationResponse> {
     log.debug('updateModel: Entering method');
     try {
+      if (isTeamModel(model)) return { success: false, error: 'Edit shared models in Team models. They cannot be saved in a private catalogue.' };
       log.debug('updateModel: validating model metadata', {
         modelId: model.id,
         provider: model.provider,
@@ -390,6 +395,7 @@ class ModelService {
   private async deleteModelWithinLease(id: string): Promise<ModelServiceResponse> {
     log.debug('deleteModel: Entering method');
     try {
+      if (id?.startsWith('team-model:')) return { success: false, error: 'Manage this shared model from Team models.' };
       // Validate required fields
       if (!id) {
         log.warn('deleteModel: Missing model ID');
@@ -446,17 +452,19 @@ class ModelService {
   /**
    * List all models
    */
-  async listModels(): Promise<ModelListResponse> {
+  async listModels(includeShared = true): Promise<ModelListResponse> {
     log.debug('listModels: Entering method');
     try {
-      const models = await this.loadModels();
+      const privateModels = (await this.loadModels()).filter(model => !isTeamModel(model));
+      const shared = includeShared ? await listTeamModels() : { models: [], unavailable: false };
+      const models = [...privateModels, ...shared.models];
       
       // Log success with count
       log.debug('listModels: Models loaded successfully', {
         count: models.length
       });
 
-      return { success: true, models };
+      return { success: true, models, ...(shared.unavailable ? { sharedModelsUnavailable: true } : {}) };
     } catch (error) {
       // Log detailed error
       log.error('listModels: Failed to list models', {
@@ -648,6 +656,11 @@ class ModelService {
     adapter?: ModelAdapter;
   }): Promise<ModelTestResult> {
     const { modelId, apiKey } = params;
+    if (modelId?.startsWith('team-model:')) {
+      const model = await resolveTeamModel(modelId);
+      return testModelConnection({ modelName: model.name, baseUrl: model.baseUrl,
+        apiKey: teamModelTransportKey(model), provider: model.provider, adapter: model.adapter, model });
+    }
     if (modelId) {
       const models = await this.loadModels();
       const selected = models.find(model => model.id === modelId);
@@ -783,7 +796,7 @@ class ModelService {
 
     try {
       // --- Resolve the identifier to a configured model (displayName first) ---
-      const models = await this.loadModels();
+      const models = [...await this.loadModels(), ...(await listTeamModels()).models];
       const needle = modelIdentifier.trim().toLowerCase();
 
       // Public identifiers are aliases, not model IDs. A display name can
@@ -804,7 +817,7 @@ class ModelService {
         };
       }
 
-      let candidates = modelIdentifier.startsWith('policy/')
+      let candidates = modelIdentifier.startsWith('team-model:') ? [await resolveTeamModel(modelIdentifier)] : modelIdentifier.startsWith('policy/')
         ? models.filter(m => m.fallbackPolicy && m.name.toLowerCase() === needle)
         : models.filter(m => (m.displayName?.trim().toLowerCase() || '') === needle);
       if (candidates.length === 0 && !modelIdentifier.startsWith('policy/')) {
@@ -837,7 +850,7 @@ class ModelService {
           statusCode: 400,
         };
       }
-      const model = materializeFallbackPolicy(candidates[0], models);
+      const model = isTeamModel(candidates[0]) ? await resolveTeamModel(candidates[0].id) : materializeFallbackPolicy(candidates[0], models);
       if (isOwnerCredentialBoundModel(model) || hasOwnerBoundFallbackMember(model, models)) {
         return {
           success: false,
@@ -871,7 +884,7 @@ class ModelService {
       // --- Resolve + decrypt the API key (never logged, never returned) ---
       // Local-auth CLI connections use their host login only when the saved
       // key is empty. Failed nonempty credentials must never select that path.
-      const resolvedKey = await resolveAndDecryptApiKey(model.ApiKey);
+      const resolvedKey = isTeamModel(model) ? teamModelTransportKey(model) : await resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey =
         resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {

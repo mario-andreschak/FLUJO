@@ -112,7 +112,7 @@ export default function TeamModels() {
   async function chooseSource() {
     if (acting.current) return;
     acting.current = true; setBusy(true); setError('');
-    try { const models = await getModelService().loadModels(); if (mounted.current) { setSourceModels(models); setSourceId(''); setSourceOpen(true); } }
+    try { const models = await getModelService().loadModels('private'); if (mounted.current) { setSourceModels(models); setSourceId(''); setSourceOpen(true); } }
     catch (failure) { if (mounted.current) setError(message(failure)); }
     finally { acting.current = false; if (mounted.current) setBusy(false); }
   }

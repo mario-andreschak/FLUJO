@@ -1,3 +1,4 @@
+import { isTeamModel, teamModelTransportKey } from '@/shared/types/model/team';
 import type OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import type { Flow } from '@/shared/types/flow';
@@ -84,7 +85,7 @@ async function authoringCompletion(
   if (model.ownerCredentialBinding !== undefined) {
     throw new FlowAuthoringValidationError('Owner-bound models require an authorized model-step transport.');
   }
-  const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
+  const resolvedKey = (isTeamModel(model) ? teamModelTransportKey(model) : await modelService.resolveAndDecryptApiKey(model.ApiKey));
   const apiKey = resolvedKey || (model.fallbackPolicy || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new FlowAuthoringValidationError('Could not resolve the selected AI model credentials.');
   const adapter = getCompletionAdapter(model);

@@ -12,6 +12,8 @@ import type { Model } from '@/shared/types/model';
 import { StorageKey } from '@/shared/types/storage';
 import { loadItem } from '@/utils/storage/backend';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { isTeamModel } from '@/shared/types/model/team';
+import { resolveTeamModel } from './teamCatalogue';
 
 /** A detached model and the exact filesystem generation admitted during prep. */
 export interface ModelCatalogAdmission {
@@ -55,9 +57,13 @@ async function readCatalog(): Promise<{ models: Model[]; generation: string }> {
 
 /** Must be called under withModelCatalogLease, before any prompt/resource/MCP work. */
 export async function admitCatalogModel(modelId: string): Promise<ModelCatalogAdmission> {
+  if (modelId.startsWith('team-model:')) {
+    const model = await resolveTeamModel(modelId);
+    return freezeSnapshot({ model, generation: `team:${model.teamModel!.generation}` });
+  }
   const { models, generation } = await readCatalog();
   const stored = models.find(model => model.id === modelId);
-  if (!stored || hasOwnerBoundFallbackMember(stored, models)) {
+  if (!stored || isTeamModel(stored) || hasOwnerBoundFallbackMember(stored, models)) {
     throw new ExecutionExtensionError('execution_model_not_found');
   }
   const model = materializeFallbackPolicy(stored, models);
@@ -66,6 +72,13 @@ export async function admitCatalogModel(modelId: string): Promise<ModelCatalogAd
 
 /** Must be called under the same lease immediately before local key and send work. */
 export async function assertCatalogAdmissionCurrent(admission: ModelCatalogAdmission): Promise<void> {
+  if (isTeamModel(admission.model)) {
+    const model = await resolveTeamModel(admission.model.id);
+    if (admission.generation !== `team:${model.teamModel!.generation}` || JSON.stringify(model) !== JSON.stringify(admission.model)) {
+      throw new ExecutionExtensionError('execution_model_catalog_changed');
+    }
+    return;
+  }
   const { models, generation } = await readCatalog();
   const stored = models.find(model => model.id === admission.model.id);
   const current = stored && !hasOwnerBoundFallbackMember(stored, models)
