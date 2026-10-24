@@ -68,8 +68,8 @@ installed acceptance.
 submitted JSON documents locally. Kind labels cover Models, MCP, Flows, Chats and
 Executions. Generic documents are passive snapshots; typed model configurations
 also have the native editing and local execution journeys below. Typed Flows have
-the configuration editor described below. **Shared Flow execution, MCP, Chat and
-Execution editors and dependency access remain incomplete.** This library does not
+the editor and bounded execution path described below. **Team MCP, Chat and
+Execution editors and their dependency access remain incomplete.** This library does not
 satisfy Tier 1 by itself. Generic JSON is structurally bounded, not validated
 against each native resource schema. It does not discover private resources, dereference dependency
 IDs, import keyrings, execute pasted commands, or confer runtime permissions.
@@ -234,8 +234,33 @@ includes unfinished JSON field text; reopen the current revision and use **Load
 draft** to recover it under a fresh lease. Invalid fields block saving until
 corrected or removed. History and restore remain available in the local library.
 The graph editor does not contact providers or invoke private workspace actions.
-**Execution of shared Flows is not implemented yet.** This configuration journey
-does not complete Tier 1 or establish installed offline acceptance.
+Supported shared Flows appear in the ordinary Flow dashboard and Chat picker.
+Their Edit action opens the team editor; private mutation, copy and bulk model
+replacement paths exclude them. OpenAI discovery uses `flow-team-flow:<team>:<id>`
+so renaming a team Flow does not change its execution identifier. Catalogue
+outages keep private choices visible and offer refresh without retaining stale
+shared choices. Catalogue entries are summaries, never executable snapshots.
+
+The owner pipe resolves the current graph and its same-team subflow/model closure
+in one ledger transaction. A bundle pins resource versions, member/auth/runtime
+generations and each delegated model grant. Limits are 128 Flows, 512 models,
+8 nested calls, 4096 dependency visits and 2 MiB. Cycles, missing dependencies,
+private/foreign references and unsupported capabilities fail admission. Publishing
+a model dependency still requires the explicit execution permission above.
+
+`runFlow` reacquires the bundle before first persistence and each resume, checks
+the full snapshot, and composes current authority with any enclosing authority.
+Existing dispatch/persistence checks plus a one-second cancellation watch stop
+work after edits, membership changes, grant revocation or password recovery.
+Subflows use only authored targets in the pinned closure; model preparation must
+match its pinned grant before prompt or tool preparation. Old saved conversations
+remain readable but require a new run after their shared revision changes.
+
+This path supports static text/mock tool history, shared models, nested Flows and
+run-scoped resources. It refuses MCP tools/resources, triggers, signals, private
+attachments and persistent KV capture. Private dynamic/global/KV reference and
+MCP skill lookups are disabled during team execution, including nested inputs.
+It does not complete Tier 1 or establish installed offline acceptance.
 
 ### Shared models in native model selection and execution
 

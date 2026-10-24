@@ -103,11 +103,15 @@ export class TeamModelAccess {
   }
 
   resolve(runtime: Runtime, teamId: string, id: string): TeamModelAdmission {
-    return this.ledger.transaction(() => {
-      // Check membership before reading even the current revision number.
-      this.member(runtime.actorId, teamId);
-      return this.admitCurrent(runtime, teamId, id, this.resource(teamId, id).version);
-    });
+    return this.ledger.transaction(() => this.resolveWithinTransaction(runtime, teamId, id));
+  }
+
+  /** Internal composition seam: the Flow closure caller already owns the
+   * synchronous ledger transaction. Do not open a nested SQLite transaction. */
+  resolveWithinTransaction(runtime: Runtime, teamId: string, id: string): TeamModelAdmission {
+    // Check membership before reading even the current revision number.
+    this.member(runtime.actorId, teamId);
+    return this.admitCurrent(runtime, teamId, id, this.resource(teamId, id).version);
   }
 
   catalogue(runtime: Runtime, after = '') {

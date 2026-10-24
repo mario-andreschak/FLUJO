@@ -3,6 +3,7 @@ import { z } from 'zod';
 // Browser-safe authored configuration. Runtime snapshots, credentials, schedule
 // identities, private resource IDs and provider configuration are not documents.
 export const SHARED_FLOW_FORMAT = 'flujo.flow.v1';
+export const TEAM_FLOW_BUNDLE_BYTES = 2 * 1024 * 1024;
 export const sharedFlowNodeTypes = ['start', 'process', 'finish', 'mcp', 'subflow', 'resource', 'signal', 'trigger', 'static'] as const;
 export type SharedFlowNodeType = typeof sharedFlowNodeTypes[number];
 const id = z.string().min(1).max(256);
@@ -68,6 +69,47 @@ export const sharedFlowDocumentSchema = z.object({ format: z.literal(SHARED_FLOW
   }
 });
 export type SharedFlowDocument = z.infer<typeof sharedFlowDocumentSchema>;
+const resourceId = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+export const teamFlowReferenceSchema = z.object({ teamId: resourceId, resourceId,
+  teamName: z.string().min(1).max(120), version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  generation: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export type TeamFlowReference = z.infer<typeof teamFlowReferenceSchema>;
+export const teamFlowBundleSchema = z.object({ reference: teamFlowReferenceSchema,
+  flows: z.array(z.object({ resourceId, version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    document: sharedFlowDocumentSchema }).strict()).min(1).max(128),
+  models: z.array(teamFlowReferenceSchema.omit({ teamName: true })).max(512),
+}).strict();
+export type TeamFlowBundle = z.infer<typeof teamFlowBundleSchema>;
+export const teamFlowCatalogueSchema = z.object({ entries: z.array(z.object({ reference: teamFlowReferenceSchema,
+  name: z.string().min(1).max(120), description: z.string().max(100_000).optional() }).strict()).max(8),
+  next: resourceId.nullable() }).strict();
+export const teamFlowId = (reference: Pick<TeamFlowReference, 'teamId' | 'resourceId'>) => `team-flow:${reference.teamId}:${reference.resourceId}`;
+export function parseTeamFlowId(value: string): { teamId: string; resourceId: string } | null {
+  const match = /^team-flow:([A-Za-z0-9_-]{43}):([A-Za-z0-9_-]{43})$/.exec(value);
+  return match ? { teamId: match[1], resourceId: match[2] } : null;
+}
+
+/** Configuration can be stored before every capability has a team runtime
+ * implementation. Execution must refuse unresolved ambient authority. */
+export function assertTeamFlowCapabilities(document: SharedFlowDocument): void {
+  for (const node of document.flow.nodes) {
+    const p = node.data.properties;
+    if (['mcp', 'signal', 'trigger'].includes(node.type) || (node.type === 'resource' && p.scope !== 'run')) {
+      throw new Error('This Flow requires a team MCP or Execution capability that is not available yet.');
+    }
+    if (p.captureKv || /\$\{(?:global|kv):/i.test(JSON.stringify(p))) {
+      throw new Error('Shared Flow execution cannot access private persistent state.');
+    }
+    if (node.type === 'static' && Array.isArray(p.entries)) for (const entry of p.entries) {
+      if (!entry || typeof entry !== 'object' || (entry.kind !== 'message' && entry.kind !== 'toolCall')
+        || (entry.kind === 'toolCall' && entry.executionMode !== undefined && entry.executionMode !== 'mock')
+        || (Array.isArray(entry.attachments) && entry.attachments.length)) {
+        throw new Error('Static tool execution and private attachments require explicit team capabilities.');
+      }
+    }
+  }
+}
 export const sharedFlowDraftSchema = z.object({ format: z.literal('flujo.flow.draft.v1'), document: sharedFlowDocumentSchema,
   pendingFields: z.record(z.string().max(600), z.string().max(200_000)),
 }).strict().superRefine((draft, context) => {

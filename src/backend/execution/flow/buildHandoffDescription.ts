@@ -22,6 +22,8 @@ import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
+import { assertTeamFlowSnapshot, projectTeamFlow, validateTeamFlowBundle } from '@/backend/services/flow/teamCatalogue';
+import { isTeamFlow } from '@/shared/types/flow/team';
 import { verifyBehaviorDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 import {
   HandoffNodeSummary,
@@ -45,6 +47,13 @@ interface BuildCaches {
 function newCaches(pinnedParent?: Flow): BuildCaches {
   const flows = new Map<string, Flow | null>();
   if (pinnedParent) {
+    if (isTeamFlow(pinnedParent)) {
+      const bundle = validateTeamFlowBundle(pinnedParent.teamFlowBundle);
+      assertTeamFlowSnapshot(pinnedParent, bundle);
+      for (const entry of bundle.flows) {
+        const flow = projectTeamFlow(bundle, entry.resourceId, { includeBundle: false }); flows.set(flow.id, flow);
+      }
+    }
     if (pinnedParent.executionDependencies) verifyBehaviorDependencies(pinnedParent);
     flows.set(pinnedParent.id, pinnedParent);
     for (const entry of pinnedParent.executionDependencies?.flows ?? []) flows.set(entry.flowId, entry.flowSnapshot);

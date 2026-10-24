@@ -16,8 +16,82 @@ import { Ledger } from '../dist/ledger.js';
 import { Teams } from '../dist/teams.js';
 import { TeamResources } from '../dist/team-resources.js';
 import { TeamModelAccess } from '../dist/team-model-access.js';
+import { TeamFlowAccess } from '../dist/team-flow-access.js';
 import { publishableModel } from '../dist/shared-model.js';
 import { privateFixture } from './private-fixture.mjs';
+
+function flowDocument(name, middle = { id: 'text', type: 'static', properties: { outputTemplate: 'offline answer' } }) {
+  const nodes = [{ id: 'start', type: 'start', properties: {} }, middle, { id: 'finish', type: 'finish', properties: {} }];
+  return { format: 'flujo.flow.v1', flow: { name,
+    nodes: nodes.map(({ id, type, properties }, x) => ({ id, type, position: { x: x * 200, y: 0 }, data: { type, label: id, properties } })),
+    edges: [{ id: 'a', source: 'start', target: middle.id }, { id: 'b', source: middle.id, target: 'finish' }] } };
+}
+
+test('team Flow owner pipes resolve an immutable closure without private grants or host credentials', async t => {
+  const f = await fixture(t, undefined, true); const s = await sharedFixture(f);
+  const child = s.resources.create(s.sessions.alice, s.teamId, 'flow', 'Child', JSON.stringify(flowDocument('Child')));
+  const document = flowDocument('Parent', { id: 'child', type: 'subflow', properties: { subflowId: `team-flow:${s.teamId}:${child}` } });
+  const root = s.resources.create(s.sessions.alice, s.teamId, 'flow', 'Parent', JSON.stringify(document));
+  const base = `http://127.0.0.1:${f.bob}/teams/flows`;
+  const catalogue = await (await fetch(base)).json(); assert.equal(catalogue.entries.length, 2);
+  assert.ok(catalogue.entries.every(item => !('document' in item) && !('nodes' in item)));
+  const url = `${base}/${s.teamId}/${root}/current`; const response = await fetch(url); assert.equal(response.status, 200);
+  const bundle = await response.json(); assert.equal(bundle.flows.length, 2); assert.deepEqual(bundle.models, []);
+  assert.deepEqual(bundle.flows.find(item => item.resourceId === root).document, document);
+  assert.ok(!JSON.stringify(bundle).includes(f.endpoint)); assert.ok(!JSON.stringify(bundle).includes('fixture-host-key'));
+  assert.deepEqual(await (await fetch(`${url}/${bundle.reference.generation}`)).json(), { reference: bundle.reference });
+  assert.notEqual((await fetch(url, { method: 'POST' })).status, 200);
+  assert.notEqual((await fetch(url, { headers: { Origin: 'https://foreign.invalid' } })).status, 200);
+  const other = s.teams.create(s.sessions.alice, 'Private team');
+  const otherFlow = s.resources.create(s.sessions.alice, other, 'flow', 'Other', JSON.stringify(flowDocument('Other')));
+  assert.equal((await fetch(`${base}/${other}/${otherFlow}/current`)).status, 403);
+  const lease = s.resources.acquire(s.sessions.alice, s.teamId, child, 1);
+  s.resources.save(s.sessions.alice, s.teamId, child, lease.token, lease.fence, 1, 'Child', JSON.stringify(flowDocument('Changed child')));
+  assert.equal((await fetch(`${url}/${bundle.reference.generation}`)).status, 403);
+  assert.notEqual((await (await fetch(url)).json()).reference.generation, bundle.reference.generation);
+  assert.equal(f.calls.length, 0, 'Flow discovery and admission must not call a provider');
+});
+
+test('team Flow admission is fenced by member recovery and each referenced model grant', async t => {
+  const f = await fixture(t); const s = await sharedFixture(f); const access = new TeamFlowAccess(f.config, f.ledger);
+  const document = flowDocument('Uses a model', { id: 'model', type: 'process', properties: { boundModel: `team-model:${s.teamId}:${s.id}` } });
+  const id = s.resources.create(s.sessions.alice, s.teamId, 'flow', 'Uses a model', JSON.stringify(document));
+  const bob = f.config.runtimes[1];
+  assert.throws(() => access.resolve(bob, s.teamId, id));
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 0, 'host');
+  const first = access.resolve(bob, s.teamId, id); assert.equal(first.models.length, 1);
+  assert.equal(access.current(bob, first.reference), true);
+  s.access.revoke(s.sessions.alice, s.teamId, s.id, 1);
+  assert.equal(access.current(bob, first.reference), false);
+  s.access.authorize(s.sessions.alice, s.teamId, s.id, 1, 2, 'host');
+  const second = access.resolve(bob, s.teamId, id); assert.notEqual(second.reference.generation, first.reference.generation);
+  s.teams.remove(s.sessions.alice, s.teamId, s.teams.detail(s.sessions.alice, s.teamId).team.generation, 'bob');
+  assert.equal(access.current(bob, second.reference), false); s.join();
+  const third = access.resolve(bob, s.teamId, id); assert.notEqual(third.reference.generation, second.reference.generation);
+  await f.ledger.setPassword(bob, runtimeRevision(f.config, bob), 'replacement flow fixture password');
+  assert.equal(access.current(bob, third.reference), false); assert.equal(f.calls.length, 0);
+});
+
+test('team Flow catalogue skips unsupported graphs, pages safely, and rejects recursive closures', async t => {
+  const f = await fixture(t); const s = await sharedFixture(f); const access = new TeamFlowAccess(f.config, f.ledger); const bob = f.config.runtimes[1];
+  const create = document => s.resources.create(s.sessions.alice, s.teamId, 'flow', document.flow.name, JSON.stringify(document));
+  const child = create(flowDocument('Child'));
+  const parent = create(flowDocument('Parent', { id: 'child', type: 'subflow', properties: { subflowId: `team-flow:${s.teamId}:${child}` } }));
+  const lease = s.resources.acquire(s.sessions.alice, s.teamId, child, 1);
+  s.resources.save(s.sessions.alice, s.teamId, child, lease.token, lease.fence, 1, 'Child', JSON.stringify(
+    flowDocument('Child', { id: 'parent', type: 'subflow', properties: { subflowId: `team-flow:${s.teamId}:${parent}` } })));
+  assert.throws(() => access.resolve(bob, s.teamId, parent), /cycle/);
+  for (const properties of [{ captureKv: 'global/secret' }, { promptTemplate: '${kv:global/secret}' }]) {
+    const id = create(flowDocument('Persistent state', { id: 'step', type: 'process', properties }));
+    assert.throws(() => access.resolve(bob, s.teamId, id), /private persistent state/);
+  }
+  const id = create(flowDocument('Real tool', { id: 'tool', type: 'static', properties: { entries: [{ kind: 'toolCall', executionMode: 'real', toolName: 'private' }] } }));
+  assert.throws(() => access.resolve(bob, s.teamId, id), /explicit team capabilities/);
+  for (let index = 0; index < 10; index++) create(flowDocument(`Runnable ${index}`));
+  const entries = []; let after;
+  do { const page = access.catalogue(bob, after); assert.ok(page.entries.length <= 8); entries.push(...page.entries); after = page.next; } while (after);
+  assert.equal(entries.length, 10); assert.equal(new Set(entries.map(item => item.reference.resourceId)).size, 10);
+});
 
 async function bounded(promise, ms = 10_000) {
   let timer;

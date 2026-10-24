@@ -963,7 +963,7 @@ const Chat: React.FC = () => {
     const loadFlows = async () => {
       log.debug('Loading flows');
       try {
-        const loadedFlows = await flowService.loadFlows();
+        const loadedFlows = await flowService.loadFlows({ includeShared: true });
         setFlows(loadedFlows);
       } catch (error) {
         log.error('Error loading flows:', error);
@@ -3554,7 +3554,7 @@ const Chat: React.FC = () => {
         if (!flow) {
           throw new Error(`Flow with ID ${conversation.flowId} not found`);
         }
-        modelName = `flow-${flow.name}`;
+        modelName = `flow-${flow.id.startsWith('team-flow:') ? flow.id : flow.name}`;
         log.debug('Sending to chat completions', { flowId: conversation.flowId, flowName: flow.name, conversationId: conversation.id });
       }
 

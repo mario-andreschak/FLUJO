@@ -163,5 +163,11 @@ export default function TeamFlowEditor({ value, teamId, resources, disabled, onC
           rawDraft(`edge:${edge.id}`); setError('');
         } catch { setError(t('teams.flows.invalidProperty')); }
       }} />}
+    {edge && <Button disabled={disabled || (!edge.data?.condition && propertyDrafts[`edge:${edge.id}`] === undefined)} onClick={() => {
+      commit({ ...value, flow: { ...value.flow, edges: value.flow.edges.map(item => {
+        if (item.id !== edge.id) return item;
+        const data = { ...item.data }; delete data.condition; return { ...item, data };
+      }) } }); rawDraft(`edge:${edge.id}`); setError('');
+    }}>{t('teams.flows.removeProperty')}: {t('teams.flows.condition')}</Button>}
   </Stack>;
 }

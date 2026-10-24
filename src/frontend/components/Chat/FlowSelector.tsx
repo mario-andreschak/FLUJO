@@ -6,6 +6,7 @@ import {
   Box,
   CircularProgress,
   Button,
+  Alert,
 } from '@mui/material';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import { Flow } from '@/frontend/types/flow/flow';
@@ -52,26 +53,33 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [sharedUnavailable, setSharedUnavailable] = useState(false);
+  const [refresh, setRefresh] = useState(0);
 
   // Load flows on component mount
   useEffect(() => {
+    let current = true;
     const loadFlows = async () => {
-      setIsLoading(true);
+      // Keep an already-open picker visible while its current membership is refreshed.
+      if (!pickerOpen) setIsLoading(true);
       setError(null);
 
       try {
-        const loadedFlows = await flowService.loadFlows();
+        const loadedFlows = await flowService.loadFlows({ includeShared: true,
+          onSharedUnavailable: value => { if (current) setSharedUnavailable(value); } });
+        if (!current) return;
         setFlows(loadedFlows);
       } catch (err) {
         console.error('Error loading flows:', err);
         setError(t('chat.selector.loadFailed'));
       } finally {
-        setIsLoading(false);
+        if (current) setIsLoading(false);
       }
     };
 
     loadFlows();
-  }, [t]);
+    return () => { current = false; };
+  }, [t, refresh, pickerOpen]);
 
   // Get selected flow name
   const getSelectedFlowName = () => {
@@ -136,6 +144,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
     : null;
 
   const selectedFlowName = getSelectedFlowName();
+  const sharedWarning = sharedUnavailable && <Alert severity="warning" action={<Button onClick={() => setRefresh(value => value + 1)}>{t('teams.models.refresh')}</Button>}>{t('teams.flows.unavailable')}</Alert>;
 
   useEffect(() => {
     onSelectedFlowNameChange?.(selectedFlowName);
@@ -143,7 +152,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
 
   if (embedded) {
     return (
-      <CardPickerGrid
+      <>{sharedWarning}<CardPickerGrid
         isLoading={isLoading}
         error={error}
         loadingMessage={t('chat.selector.loading')}
@@ -157,12 +166,13 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
         groups={flowPickerGroups}
         collapsedKeys={flowPicker.collapsedKeys}
         onToggleGroup={flowPicker.toggleGroup}
-      />
+      /></>
     );
   }
 
   return (
     <Box sx={{ minWidth: 0 }} data-tour="chat-flow-picker">
+      {sharedWarning}
       {!hideLabel && !compact && (
         <Typography variant="subtitle1" gutterBottom>
           {t('chat.selector.title')}

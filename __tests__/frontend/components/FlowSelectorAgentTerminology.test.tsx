@@ -69,6 +69,21 @@ describe('Talk agent picker terminology', () => {
     mockLoadFlows.mockReset();
   });
 
+  it('keeps private choices available on a shared outage and offers a fresh catalogue retry', async () => {
+    mockLoadFlows.mockImplementation(async (options: { includeShared?: boolean; onSharedUnavailable?: (value: boolean) => void }) => {
+      expect(options.includeShared).toBe(true); options.onSharedUnavailable?.(true); return agents;
+    });
+    render(<FlowSelector selectedFlowId="flow-research" onSelectFlow={() => undefined} />);
+    expect(await screen.findByText('Shared Flows are unavailable. Check team access and retry.')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Research Agent' })).toBeInTheDocument();
+    mockLoadFlows.mockImplementation(async (options: { onSharedUnavailable?: (value: boolean) => void }) => {
+      options.onSharedUnavailable?.(false); return agents;
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.queryByText('Shared Flows are unavailable. Check team access and retry.')).not.toBeInTheDocument());
+    expect(mockLoadFlows).toHaveBeenCalledTimes(2);
+  });
+
   it('uses the Agent name while the picker is loading', () => {
     mockLoadFlows.mockReturnValue(new Promise(() => undefined));
 

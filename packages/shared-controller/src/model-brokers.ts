@@ -7,6 +7,7 @@ import { admittedModelBody, MODEL_LIFETIME_MS, type ModelGrant } from './model-g
 import { localModelRequest } from './local-model-request.js';
 import type { RuntimeIntent } from './local-runtime-policy.js';
 import { TeamModelAccess } from './team-model-access.js';
+import { TeamFlowAccess } from './team-flow-access.js';
 
 interface Job { abort: AbortController; current: () => boolean; sequence: number;
   credit?: { sequence: number; resolve: () => void; reject: () => void }; }
@@ -20,8 +21,10 @@ export class ModelBrokers {
   private readonly retries = new Map<string, { count: number; next: number }>();
   private timer?: ReturnType<typeof setTimeout>; private stopping = false;
   private readonly teamModels: TeamModelAccess;
+  private readonly teamFlows: TeamFlowAccess;
   constructor(readonly config: ControllerConfig, readonly ledger: Ledger, readonly engine: Pick<LocalEngine, 'spawn'>) {
     this.teamModels = new TeamModelAccess(config, ledger);
+    this.teamFlows = new TeamFlowAccess(config, ledger);
   }
 
   start(): void {
@@ -113,6 +116,21 @@ export class ModelBrokers {
       }
       if (jobs.has(frame.id)) throw new Error('Duplicate model request.');
       if (jobs.size >= 4 || this.jobs.size >= 16) { sendError(frame.id, 'busy'); return; }
+      if (frame.type === 'flow-catalogue' || frame.type === 'flow-resolve') {
+        try {
+          if (frame.type === 'flow-catalogue') {
+            const page = this.teamFlows.catalogue(runtime, frame.after);
+            void request(frame.id, undefined, 'configuration', undefined,
+              () => page.entries.every(entry => this.teamFlows.current(runtime, entry.reference)), page).catch(stop);
+          } else {
+            const bundle = this.teamFlows.resolve(runtime, frame.teamId, frame.resourceId);
+            if (frame.generation && frame.generation !== bundle.reference.generation) { sendError(frame.id, 'denied'); return; }
+            void request(frame.id, undefined, 'configuration', undefined, () => this.teamFlows.current(runtime, bundle.reference),
+              frame.generation ? { reference: bundle.reference } : bundle).catch(stop);
+          }
+        } catch { sendError(frame.id, 'denied'); }
+        return;
+      }
       if (frame.type === 'team-catalogue' || frame.type === 'team-resolve') {
         try {
           if (frame.type === 'team-catalogue') {

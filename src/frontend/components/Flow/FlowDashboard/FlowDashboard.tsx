@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { validateFlow, FlowValidationResult, type VFlow } from '@/utils/shared/flowValidation';
+import { isTeamFlow } from '@/shared/types/flow/team';
 import { 
   Box, 
   Grid, 
@@ -193,6 +194,7 @@ const FlowDashboard = ({
   const validationByFlow = useMemo(() => {
     const map: Record<string, FlowValidationResult> = {};
     for (const flow of flows) {
+      if (isTeamFlow(flow)) continue;
       try {
         map[flow.id] = validateFlow(flow as VFlow, validationContext);
       } catch (error) {
@@ -352,6 +354,7 @@ const FlowDashboard = ({
             folders={folders}
             validation={validationByFlow[flow.id]}
             selectionMode={modelSelectionMode}
+            disabled={modelSelectionMode && isTeamFlow(flow)}
           />
         </Grid>
       ))}
@@ -400,7 +403,7 @@ const FlowDashboard = ({
                 <>
                   <Button
                     size="small"
-                    onClick={() => setSelectedForModelChange(new Set(filteredFlows.map((flow) => flow.id)))}
+                    onClick={() => setSelectedForModelChange(new Set(filteredFlows.filter(flow => !isTeamFlow(flow)).map((flow) => flow.id)))}
                   >
                     {t('flows.quickModels.selectVisible')}
                   </Button>

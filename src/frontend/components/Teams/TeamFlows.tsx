@@ -132,6 +132,7 @@ export default function TeamFlows() {
       </TextField><Button disabled={!team || busy || !!editing} onClick={() => void chooseSource()}>{t('teams.flows.share')}</Button>
       <Button disabled={!team || busy || !!editing} onClick={() => startEditor({ teamId, omitted: [], document: { format: SHARED_FLOW_FORMAT, flow: { name: t('teams.flows.defaultName'), nodes: [], edges: [] } } })}>{t('teams.flows.new')}</Button>
       <Button disabled={!team || busy} onClick={() => void refresh(teamId)}>{t('teams.models.refresh')}</Button>
+      <Button component="a" href="/flows" disabled={!!editing}>{t('flows.page.title')}</Button>
     </Stack>
     {busy && <CircularProgress size={24} aria-label={t('teams.models.loading')} />}
     {!teams.length && <Typography>{t('teams.models.noTeams')}</Typography>}

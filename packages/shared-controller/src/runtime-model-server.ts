@@ -52,7 +52,9 @@ export function createRuntimeModelServer(input: Readable, output: Writable) {
     const team = /^\/teams\/([A-Za-z0-9_-]{43})\/([A-Za-z0-9_-]{43})\/revisions\/([1-9][0-9]{0,14})\/(?:grants\/([a-f0-9]{64})\/)?v1\/(configuration|models|chat\/completions|embeddings)$/.exec(request.url ?? '');
     const catalogue = /^\/teams\/models(?:\/after\/([A-Za-z0-9_-]{43}))?$/.exec(request.url ?? '');
     const resolve = /^\/teams\/([A-Za-z0-9_-]{43})\/([A-Za-z0-9_-]{43})\/current$/.exec(request.url ?? '');
-    const path = match?.[2] ?? team?.[5] ?? ((catalogue || resolve) ? 'configuration' : undefined);
+    const flowCatalogue = /^\/teams\/flows(?:\/after\/([A-Za-z0-9_-]{43}))?$/.exec(request.url ?? '');
+    const flow = /^\/teams\/flows\/([A-Za-z0-9_-]{43})\/([A-Za-z0-9_-]{43})\/current(?:\/([a-f0-9]{64}))?$/.exec(request.url ?? '');
+    const path = match?.[2] ?? team?.[5] ?? ((catalogue || resolve || flowCatalogue || flow) ? 'configuration' : undefined);
     const operation = path === 'chat/completions' ? 'chat' : path;
     const reading = operation === 'models' || operation === 'configuration';
     const deny = (status: number) => {
@@ -61,7 +63,7 @@ export function createRuntimeModelServer(input: Readable, output: Writable) {
       response.writeHead(status, { 'Connection': 'close', 'Cache-Control': 'no-store' }); response.end();
     };
     if (stopped || performance.now() - heartbeat > 10_000) { deny(503); return; }
-    if ((!match && !team && !catalogue && !resolve) || !operation || !['configuration', 'models', 'chat', 'embeddings'].includes(operation)
+    if ((!match && !team && !catalogue && !resolve && !flowCatalogue && !flow) || !operation || !['configuration', 'models', 'chat', 'embeddings'].includes(operation)
         || request.method !== (reading ? 'GET' : 'POST') || request.headers.origin
         || (!reading && request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json')) { deny(400); return; }
     if (active >= 4) { deny(429); return; }
@@ -83,7 +85,9 @@ export function createRuntimeModelServer(input: Readable, output: Writable) {
       pending.set(id, { response, timer: setTimeout(() => { cancel(); response.destroy(); }, MODEL_LIFETIME_MS), sequence: 0, writing: false, headers: false });
       response.once('close', cancel);
       const payload = body === undefined ? {} : { body };
-      if (catalogue) await send({ type: 'team-catalogue', id, ...(catalogue[1] ? { after: catalogue[1] } : {}) });
+      if (flowCatalogue) await send({ type: 'flow-catalogue', id, ...(flowCatalogue[1] ? { after: flowCatalogue[1] } : {}) });
+      else if (flow) await send({ type: 'flow-resolve', id, teamId: flow[1], resourceId: flow[2], ...(flow[3] ? { generation: flow[3] } : {}) });
+      else if (catalogue) await send({ type: 'team-catalogue', id, ...(catalogue[1] ? { after: catalogue[1] } : {}) });
       else if (resolve) await send({ type: 'team-resolve', id, teamId: resolve[1], resourceId: resolve[2] });
       else if (team) await send({ type: 'team-request', id, teamId: team[1], resourceId: team[2], version: Number(team[3]),
         ...(team[4] ? { generation: team[4] } : {}), operation: operation as 'configuration' | 'models' | 'chat' | 'embeddings', ...payload });

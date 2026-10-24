@@ -21,6 +21,7 @@ export interface FlowOperationResponse extends FlowServiceResponse {
  */
 export interface FlowListResponse extends FlowServiceResponse {
   flows?: Flow[];
+  sharedFlowsUnavailable?: boolean;
 }
 
 // /**

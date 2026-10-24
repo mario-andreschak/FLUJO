@@ -15,6 +15,8 @@ export const runtimeModelFrame = z.discriminatedUnion('type', [
     operation: z.enum(['configuration', 'models', 'chat', 'embeddings']), body: z.unknown().optional() }).strict(),
   z.object({ type: z.literal('team-catalogue'), id, after: resourceId.optional() }).strict(),
   z.object({ type: z.literal('team-resolve'), id, teamId: resourceId, resourceId }).strict(),
+  z.object({ type: z.literal('flow-catalogue'), id, after: resourceId.optional() }).strict(),
+  z.object({ type: z.literal('flow-resolve'), id, teamId: resourceId, resourceId, generation: teamModelGeneration.optional() }).strict(),
   z.object({ type: z.literal('cancel'), id }).strict(),
   z.object({ type: z.literal('ack'), id, sequence: z.number().int().nonnegative() }).strict(),
 ]);

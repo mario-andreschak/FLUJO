@@ -121,7 +121,7 @@ export class StaticNode extends BaseNode<
       );
     const resolve = async (value: string): Promise<string> => {
       const text = await resolveRunText(value);
-      return sharedState.executionExtensionContext ? text : String(await resolvePromptDynamicReferences(text, referenceContext));
+      return sharedState.executionExtensionContext || sharedState.flowSnapshot?.teamFlow ? text : String(await resolvePromptDynamicReferences(text, referenceContext));
     };
 
     if (prepResult.injectOnce && alreadyInjected) {
@@ -181,7 +181,7 @@ export class StaticNode extends BaseNode<
               `Static node ${nodeId}: tool-call entry for "${toolName}" has invalid JSON arguments.`
             );
           }
-          if (!sharedState.executionExtensionContext) {
+          if (!sharedState.executionExtensionContext && !sharedState.flowSnapshot?.teamFlow) {
             // Resolve JSON values after parsing so quotes and nested structures
             // remain valid; hidden preset values are added only at dispatch.
             const resolvedArgs = await resolvePromptDynamicReferences(args, {
@@ -370,7 +370,7 @@ export class StaticNode extends BaseNode<
         authored, sharedState.ephemeral ? undefined : sharedState.conversationId,
         sharedState.emit, { nodeId }, sharedState,
       );
-      const referenceText = sharedState.executionExtensionContext ? resourceText
+      const referenceText = sharedState.executionExtensionContext || sharedState.flowSnapshot?.teamFlow ? resourceText
         : String(await resolvePromptDynamicReferences(resourceText, referenceContext));
       const output = boundStaticText(resolveRunVars(referenceText, sharedState.variables));
       sharedState.lastResponse = output;
