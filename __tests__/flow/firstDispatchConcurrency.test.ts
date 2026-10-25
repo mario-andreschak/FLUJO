@@ -2,6 +2,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Flow } from '@/shared/types/flow';
@@ -30,7 +31,7 @@ jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: () => {}, ver
 
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { _setConversationLogDirForTests, flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
 import { loadItem, saveItem, saveCollectionItem } from '@/utils/storage/backend';
 import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { ensureWorkspaceDirs, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
@@ -38,17 +39,38 @@ import { withWorkspaceMutation, withWorkspaceRecoveryCapture } from '@/backend/s
 import { getFlowRunAdmissionDiagnostics, isFlowRunPressureError } from '@/backend/execution/flow/runAdmission';
 import { CONVERSATION_PUBLICATION_LIMITS, getConversationPublicationDiagnostics, publishConversation } from '@/backend/execution/flow/conversationPublication';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { flushStatisticsEvents } from '@/backend/services/statistics';
 
 jest.setTimeout(180_000);
 let server: Server;
 let root: string;
 let previousDataDir: string | undefined;
+let previousParentDataDir: string | undefined;
+let logRoot: string, previousLogRoot: string, temporaryParent: string;
+let rootIdentity: BigIntStats;
 const requests = new Map<string, number[]>();
+
+function assertFixtureStorage(): void {
+  const relative = path.relative(root, getWorkspaceDataDir());
+  expect(relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)).toBe(true);
+  expect(path.resolve(logRoot)).toBe(path.join(root, 'conversation-logs'));
+}
 
 beforeAll(async () => {
   previousDataDir = process.env.FLUJO_DATA_DIR;
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-first-dispatch-'));
+  previousParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
+  temporaryParent = await fs.realpath(os.tmpdir());
+  root = await fs.mkdtemp(path.join(temporaryParent, 'flujo-first-dispatch-'));
+  rootIdentity = await fs.lstat(root, { bigint: true });
   process.env.FLUJO_DATA_DIR = root;
+  delete process.env.FLUJO_PARENT_DATA_DIR;
+  // Global Jest logs use a PID path, which a later Linux sandbox can reuse.
+  // Install a genuinely fresh log store owned by this fixture, retaining the
+  // previous override/records intact for teardown and failure provenance.
+  logRoot = path.join(root, 'conversation-logs');
+  await fs.mkdir(logRoot);
+  previousLogRoot = _setConversationLogDirForTests(logRoot);
+  assertFixtureStorage();
   server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', chunk => chunks.push(Buffer.from(chunk)));
@@ -76,15 +98,30 @@ beforeAll(async () => {
 afterAll(async () => {
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  process.env.FLUJO_DATA_DIR = root;
+  delete process.env.FLUJO_PARENT_DATA_DIR;
+  await flushStatisticsEvents();
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, terminalWaiters: 0, chains: 0, fences: 0 });
   FlowExecutor.conversationStates.clear();
   FlowExecutor.clearFlowCache();
+  const current = await fs.lstat(root, { bigint: true });
+  const relative = path.relative(temporaryParent, path.resolve(root));
+  if (relative !== path.basename(root) || !relative.startsWith('flujo-first-dispatch-')
+    || current.isSymbolicLink() || !current.isDirectory() || await fs.realpath(root) !== root
+    || current.dev !== rootIdentity.dev || current.ino !== rootIdentity.ino || current.birthtimeNs !== rootIdentity.birthtimeNs) {
+    throw new Error('Preserving replaced or unowned dispatch fixture');
+  }
+  _setConversationLogDirForTests(previousLogRoot);
   if (previousDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
   else process.env.FLUJO_DATA_DIR = previousDataDir;
+  if (previousParentDataDir === undefined) delete process.env.FLUJO_PARENT_DATA_DIR;
+  else process.env.FLUJO_PARENT_DATA_DIR = previousParentDataDir;
   await fs.rm(root, { recursive: true, force: true });
 });
 
 it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPATCH_300 === '1' ? [[false, 300]] as const : []), [true, 1], [true, 16], [true, 64]] as const)('measures saved-flow first dispatch (protected=%s, concurrency=%i)', async (protectedRun, count) => {
   await runWithWorkspace(`dispatch-${protectedRun ? 'protected' : 'ordinary'}-${count}`, async () => {
+    assertFixtureStorage();
     requests.clear();
     await ensureWorkspaceDirs();
     await saveItem(StorageKey.MODELS, [{ id: 'dispatch-model', name: 'dispatch-fixture',
@@ -166,6 +203,7 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
         expect(state?.messages.filter(message => message.role === 'assistant' && message.content === `answer ${id}`)).toHaveLength(1);
       }
       const events = await readConversationLog(id) ?? [];
+      expect((await fs.stat(path.join(logRoot, `${id}.jsonl`))).isFile()).toBe(true);
       expect(events.filter(event => event.type === 'run:done')).toHaveLength(1);
       if (result.status !== 'completed') expect(events.filter(event => event.type === 'model:dispatch')).toHaveLength(0);
       const summary = JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'conversation-summaries', `${id}.json`), 'utf8'));

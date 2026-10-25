@@ -296,14 +296,22 @@ describe('Conversation sequence safety before execution', () => {
       state.activeSubflowInvocationByNode = { [PROCESS]: invocation.id };
       return { sharedState: state, action: 'FINAL_RESPONSE' };
     });
-    const forward = executionEventBus.emitterFor(id);
-    const emitter = jest.spyOn(executionEventBus, 'emitterFor').mockImplementationOnce(() => event => {
-      if (boundary === 'done' ? event.type === 'run:done'
-        : event.type === 'recovery:transition' && event.recovery.classification === 'completed') throw failure;
-      forward(event);
+    const originalEmitterFor = executionEventBus.emitterFor.bind(executionEventBus);
+    let injectedFailures = 0;
+    const emitter = jest.spyOn(executionEventBus, 'emitterFor').mockImplementation((conversationId, onAdmitted) => {
+      const forward = originalEmitterFor(conversationId, onAdmitted);
+      return event => {
+        if (conversationId === id && (boundary === 'done' ? event.type === 'run:done'
+          : event.type === 'recovery:transition' && event.recovery.classification === 'completed')) {
+          injectedFailures++;
+          throw failure;
+        }
+        forward(event);
+      };
     });
     try {
       const failed = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'original user task' });
+      expect(injectedFailures).toBe(1);
       expect(failed.status).toBe('error');
       expect(failed.error).toMatchObject({ details: { code: failure.code } });
       const saved = structuredClone(persistedStates.at(-1)!);
@@ -333,6 +341,7 @@ describe('Conversation sequence safety before execution', () => {
       expect(persistedStates.at(-1)?.activeSubflowInvocationByNode?.[PROCESS]).toBeUndefined();
       expect(persistedStates.at(-1)?.subflowInvocations![invocation.id].foldReceipt?.continuedAt).toEqual(expect.any(Number));
       expect(getSubflowOutputDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+      expect(injectedFailures).toBe(1);
     } finally {
       emitter.mockRestore();
       (FlowExecutor.executeStep as jest.Mock).mockReset().mockImplementation(originalStep);
