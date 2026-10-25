@@ -11,6 +11,9 @@ import { getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmi
 import { getSubflowPreparationDiagnostics } from '@/backend/execution/flow/subflowPreparationBudget';
 import { getSubflowOutputDiagnostics } from '@/backend/execution/flow/subflowOutputBudget';
 import { getAllocationReservationSnapshot } from '@/backend/execution/flow/allocationReservations';
+import { getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
+import { getChatIngressDiagnostics } from '@/utils/http/chatIngress';
+import { getChatRateDiagnostics } from '@/utils/http/chatRateLimit';
 
 export const runtime = 'nodejs';
 
@@ -51,7 +54,9 @@ const GET_handler = async (request: Request, admission: Admission) => {
     if (unavailable) return unavailable;
     return Response.json({ ...snapshot, flowRunAdmission: getFlowRunAdmissionDiagnostics(),
       subflowPreparation: getSubflowPreparationDiagnostics(), subflowOutput: getSubflowOutputDiagnostics(),
-      conversationSequences: getConversationSequenceDiagnostics(), allocationReservations: getAllocationReservationSnapshot() }, {
+      conversationSequences: getConversationSequenceDiagnostics(), allocationReservations: getAllocationReservationSnapshot(),
+      conversationPublication: getConversationPublicationDiagnostics(), chatIngress: getChatIngressDiagnostics(),
+      chatRateLimit: getChatRateDiagnostics() }, {
       headers: { 'Cache-Control': 'no-store' },
     });
   } catch {
