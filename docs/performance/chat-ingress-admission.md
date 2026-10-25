@@ -1,15 +1,22 @@
 # Chat request ingress admission
 
-`/v1/chat/completions` reserves process capacity before reading POST bodies or
-decoding GET query parameters. Next's transport/proxy ceiling is independent:
-this boundary governs application decoding, parsing, and retained request input.
-Bytes already received by the HTTP stack are outside this allocation estimate.
+The public GET, POST, and OPTIONS exports of `/v1/chat/completions` reserve
+process capacity before invoking the workspace/authority wrapper, which itself
+decodes query parameters. Raw URL size and parameter count are checked before
+that wrapper for every method. One permit passes through workspace selection,
+POST body reading or GET parsing, and response construction; wrapper refusal
+or failure releases its route ownership. Authentication and workspace isolation
+still run inside the existing wrapper before the chat handler.
+
+This boundary governs application work after entering those public exports.
+Next's pre-handler request construction, transport/proxy processing, and bytes
+already received by the HTTP stack are outside this allocation estimate.
 
 | Policy | Hard limit |
 | --- | --- |
 | POST bytes actually read, regardless of Content-Length | 8 MiB |
-| GET raw URL | 8 Mi characters |
-| GET query parameters | 128 |
+| Raw URL, all methods | 8 Mi characters |
+| Query parameters, all methods | 128 |
 | JSON nesting / lexical values including object keys | 64 / 100,000 |
 | Body chunks / body read deadline | 100,000 / 30 seconds |
 | Simultaneous input owners | 16 |

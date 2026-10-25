@@ -24,7 +24,12 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
 jest.mock('@/backend/execution/flow/persistConversationState', () => ({
   persistConversationState: jest.fn(async () => undefined),
 }));
+jest.mock('@/app/api/_workspace', () => ({ withWorkspaceRoute: <T,>(handler: T) => handler }));
+jest.mock('@/utils/encryption/lockGate', () => ({ assertUnlocked: jest.fn(async () => null) }));
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConversationState: jest.fn(async () => undefined) }));
 
+import { NextRequest } from 'next/server';
+import { POST } from '@/app/v1/chat/completions/route';
 import { createStreamingResponse, processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
@@ -130,6 +135,25 @@ describe('ingress producer ownership', () => {
   };
   const tick = () => new Promise(resolve => setImmediate(resolve));
   afterEach(() => expect(getChatIngressDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 }));
+
+  it('retains public-route admission after disconnect until background Flow error persistence settles', async () => {
+    let reject!: (error: Error) => void;
+    let persisted!: () => void;
+    (runFlow as jest.Mock).mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    (persistConversationState as jest.Mock).mockImplementationOnce(() => new Promise<void>(resolve => { persisted = resolve; }));
+    const id = 'ingress-public-route-error';
+    FlowExecutor.conversationStates.set(id, { conversationId: id, messages: [], status: 'running', ephemeral: true } as never);
+    const response = await POST(new NextRequest('http://localhost/v1/chat/completions', { method: 'POST',
+      body: JSON.stringify({ ...data, metadata: { conversationId: id } }),
+    }));
+    expect(response.status).toBe(200);
+    expect(getChatIngressDiagnostics()).toMatchObject({ active: 1, parsing: 0 });
+    await response.body!.cancel();
+    expect(getChatIngressDiagnostics().active).toBe(1);
+    reject(new Error('public route provider fixture')); await tick();
+    expect(persisted).toBeDefined(); expect(getChatIngressDiagnostics().active).toBe(1);
+    persisted(); await tick();
+  });
 
   it('keeps a disconnected consumer charged until the background producer settles', async () => {
     let settle!: (value: unknown) => void;

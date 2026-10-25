@@ -55,6 +55,15 @@ function releaseOwner(record: Reservation): () => void {
 /** Before reader acquisition, URL decoding, buffers, or JSON parsing. No wait queue. */
 export function acquireChatIngress(request: Pick<Request, 'method' | 'url' | 'headers'>): ChatIngressPermit {
   if (request.url.length > CHAT_INGRESS_LIMITS.urlCharacters) refuseChatInput('CHAT_INPUT_TOO_LARGE');
+  // The workspace wrapper decodes query parameters for every HTTP method.
+  // Bound raw parameter work here as well as GET parsing, before that wrapper.
+  const queryStart = request.url.indexOf('?');
+  if (queryStart >= 0) {
+    let parameters = 1;
+    for (let index = queryStart + 1; index < request.url.length && request.url[index] !== '#'; index++) {
+      if (request.url[index] === '&' && ++parameters > CHAT_INGRESS_LIMITS.queryParameters) refuseChatInput('CHAT_INPUT_TOO_LARGE');
+    }
+  }
   const length = request.headers.get('content-length');
   if (length !== null && (length.length > 16 || !/^\d+$/.test(length) || Number(length) > CHAT_INGRESS_LIMITS.bodyBytes)) {
     refuseChatInput('CHAT_INPUT_TOO_LARGE');

@@ -26,7 +26,7 @@ const corsHeaders = {
 };
 
 // Handle both GET and POST requests with a common handler
-async function handleRequest(request: NextRequest) {
+async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
   const startTime = Date.now();
   const requestId = `req-${Date.now()}`;
   log.info('Handling request', {
@@ -34,7 +34,6 @@ async function handleRequest(request: NextRequest) {
     method: request.method,
   });
   
-  let ingress: ChatIngressPermit | undefined;
   try {
     // Get client IP for rate limiting
     // Check rate limit
@@ -65,7 +64,6 @@ async function handleRequest(request: NextRequest) {
     // Parse parameters from either query string or body
     log.debug('Parsing request parameters', { requestId });
     // parseRequestParameters now returns ParsedChatCompletionRequest which includes flujo and requireApproval
-    ingress = acquireChatIngress(request);
     const parsedData = await parseRequestParameters(request, ingress);
     // Destructure all flags, including flujodebug
     const {
@@ -226,8 +224,6 @@ async function handleRequest(request: NextRequest) {
         headers: { ...corsHeaders, ...(ingressError && (error.status === 429 || error.status === 503) ? { 'Retry-After': '5' } : {}) }
       }
     );
-  } finally {
-    ingress?.release();
   }
 }
 
@@ -250,7 +246,7 @@ async function OPTIONS_handler(request: NextRequest) {
 }
 
 // Handle GET requests
-async function GET_handler(request: NextRequest) {
+async function GET_handler(request: NextRequest, ingress: ChatIngressPermit) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
@@ -260,7 +256,7 @@ async function GET_handler(request: NextRequest) {
   });
   
   const startTime = Date.now();
-  const response = await handleRequest(request);
+  const response = await handleRequest(request, ingress);
   
   const duration = Date.now() - startTime;
   log.info('GET request completed', {
@@ -273,7 +269,7 @@ async function GET_handler(request: NextRequest) {
 }
 
 // Handle POST requests
-async function POST_handler(request: NextRequest) {
+async function POST_handler(request: NextRequest, ingress: ChatIngressPermit) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
@@ -285,7 +281,7 @@ async function POST_handler(request: NextRequest) {
   });
   
   const startTime = Date.now();
-  const response = await handleRequest(request);
+  const response = await handleRequest(request, ingress);
   
   const duration = Date.now() - startTime;
   log.info('POST request completed', {
@@ -297,6 +293,28 @@ async function POST_handler(request: NextRequest) {
   return response;
 }
 
-export const GET = withWorkspaceRoute(GET_handler);
-export const POST = withWorkspaceRoute(POST_handler);
-export const OPTIONS = withWorkspaceRoute(OPTIONS_handler);
+function withChatIngress(handler: (request: NextRequest, ingress: ChatIngressPermit) => Promise<Response>) {
+  const inWorkspace = withWorkspaceRoute(handler);
+  return async (request: NextRequest): Promise<Response> => {
+    let ingress: ChatIngressPermit;
+    try {
+      // Workspace and authority adapters may decode the URL. Admission belongs
+      // outside that wrapper, while its auth/isolation decisions stay intact.
+      ingress = acquireChatIngress(request);
+    } catch (error) {
+      if (!isChatIngressError(error)) throw error;
+      return NextResponse.json({ error: { message: error.message,
+        type: error.status === 429 ? 'rate_limit_error' : error.status === 503 ? 'api_error' : 'invalid_request_error',
+        code: error.code, param: null,
+      } }, { status: error.status,
+        headers: { ...corsHeaders, ...(error.status === 429 || error.status === 503 ? { 'Retry-After': '5' } : {}) },
+      });
+    }
+    try { return await inWorkspace(request, ingress); }
+    finally { ingress.release(); }
+  };
+}
+
+export const GET = withChatIngress(GET_handler);
+export const POST = withChatIngress(POST_handler);
+export const OPTIONS = withChatIngress(OPTIONS_handler);
