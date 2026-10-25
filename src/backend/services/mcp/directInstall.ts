@@ -127,23 +127,44 @@ function assertSupportedCommand(command: string): void {
   }
 }
 
-/** Split a display command into argv without ever invoking a shell. */
+/**
+ * Parse a portable display command without a shell. Backslashes before ordinary
+ * characters stay literal; before active quoting/separating syntax, pairs encode
+ * a literal backslash and an odd remainder escapes that syntax character.
+ */
 export function parseMcpCommandLine(value: string): { command: string; args: string[] } {
   if (!value.trim() || value.length > 16_384 || /[\0\r\n]/.test(value)) {
     throw new Error('The MCP command is empty or invalid.');
   }
   const tokens: string[] = [];
   let token = '';
+  let tokenStarted = false;
   let quote: '"' | "'" | '' = '';
-  let escaping = false;
-  for (const char of value.trim()) {
-    if (escaping) {
-      token += char;
-      escaping = false;
-      continue;
-    }
+
+  // An escaped final space belongs to its argument, so do not trim the input.
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
     if (char === '\\' && quote !== "'") {
-      escaping = true;
+      let end = index + 1;
+      while (value[end] === '\\') end++;
+      const count = end - index;
+      const next = value[end];
+      const escapesSyntax = next !== undefined && (
+        next === '"' || (!quote && (next === "'" || /\s/.test(next) || ';&|<>'.includes(next)))
+      );
+      tokenStarted = true;
+      if (escapesSyntax) {
+        token += '\\'.repeat(Math.floor(count / 2));
+        if (count % 2 !== 0) {
+          token += next;
+          index = end;
+        } else {
+          index = end - 1;
+        }
+      } else {
+        token += '\\'.repeat(count);
+        index = end - 1;
+      }
       continue;
     }
     if (quote) {
@@ -153,12 +174,14 @@ export function parseMcpCommandLine(value: string): { command: string; args: str
     }
     if (char === '"' || char === "'") {
       quote = char;
+      tokenStarted = true;
       continue;
     }
     if (/\s/.test(char)) {
-      if (token) {
+      if (tokenStarted) {
         tokens.push(token);
         token = '';
+        tokenStarted = false;
       }
       continue;
     }
@@ -166,9 +189,10 @@ export function parseMcpCommandLine(value: string): { command: string; args: str
     // misleading preview; the process is spawned directly without a shell.
     if (';&|<>'.includes(char)) throw new Error('Shell operators are not supported in MCP commands; pass one executable and its arguments.');
     token += char;
+    tokenStarted = true;
   }
-  if (escaping || quote) throw new Error('The MCP command contains an unfinished escape or quote.');
-  if (token) tokens.push(token);
+  if (quote) throw new Error('The MCP command contains an unfinished quote. Use single quotes or a command/args config for paths ending in a backslash.');
+  if (tokenStarted) tokens.push(token);
   const [command = '', ...args] = tokens;
   assertSupportedCommand(command);
   return { command, args };
@@ -287,9 +311,14 @@ function remoteUrl(value: string): URL | null {
 }
 
 function commandLike(value: string): boolean {
-  const first = value.trim().match(/^([^\s]+)/)?.[1]?.replace(/^['"]|['"]$/g, '') ?? '';
-  const basename = first.replace(/\\/g, '/').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? '';
-  return LOCAL_COMMANDS.has(basename);
+  const first = value.trim().match(/^("(?:\\.|[^"\\])*"|'[^']*'|[^\s]+)/)?.[1];
+  if (!first) return false;
+  try {
+    parseMcpCommandLine(first);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function configFromContainer(raw: Record<string, unknown>, requestedName?: string): { config: Record<string, unknown>; name?: string } {
@@ -496,7 +525,7 @@ export async function resolveDirectMcpInstall(input: DirectInstallInput): Promis
   }
 
   if (typeof source === 'string' && commandLike(source)) {
-    const parsed = parseMcpCommandLine(source);
+    const parsed = parseMcpCommandLine(typeof input.source === 'string' ? input.source : source);
     const fallback = parsed.args.find((arg) => !arg.startsWith('-')) ?? parsed.command;
     const config = normalizeConfig({ command: parsed.command, args: parsed.args, env: input.env ?? {} }, input, fallback);
     const plan = planFromConfig('command', source, config);
