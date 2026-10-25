@@ -167,7 +167,7 @@ async function main(output) {
     const bytes = JSON.stringify(record);
     assert(Buffer.byteLength(bytes) <= PROFILE.maxInspectorBytes, 'Inspector summary exceeds fixed allowance');
     fs.writeFileSync(path.join(output, 'inspector-' + record.label + '.json'), bytes, { flag: 'wx' });
-    const { top, ...compact } = record;
+    const compact = { ...record }; delete compact.top;
     inspectorReceipts.push({ ...compact, evidenceSha256: hash(bytes) });
   }, () => performance.now());
   async function terminal(id, state) {
