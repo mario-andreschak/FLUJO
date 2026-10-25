@@ -33,9 +33,23 @@ function sourceManifestHash(source) {
     assert(/^[a-f0-9]{64}$/.test(digest), 'Invalid source hash');
   }
   for (const key of ['openaiEntrySha256', 'lockSha256']) assert(/^[a-f0-9]{64}$/.test(source[key]), 'Invalid dependency hash');
+  const bridge = source.importBridge;
+  assert.equal(bridge?.format, 'declared-import-exports-v1', 'Declared import bridge manifest is required');
+  assert.equal(bridge.package, '@modelcontextprotocol/ext-tasks'); assert.equal(bridge.version, '0.2.2');
+  for (const key of ['packageJsonSha256', 'exportsSha256']) assert(/^[a-f0-9]{64}$/.test(bridge[key]), 'Invalid import bridge metadata hash');
+  const entries = Object.entries(bridge.entries ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  assert.deepEqual(entries.map(([key]) => key), ['@modelcontextprotocol/ext-tasks/client', '@modelcontextprotocol/ext-tasks/core', '@modelcontextprotocol/ext-tasks/core/v2']);
+  for (const [, record] of entries) {
+    assert(typeof record.target === 'string' && record.target.length <= 512 && record.target.startsWith('./') && !/[\\:\0]/.test(record.target)
+      && record.target.slice(2).split('/').every(part => part && part !== '.' && part !== '..'), 'Invalid import bridge target');
+    assert(/^[a-f0-9]{64}$/.test(record.sha256), 'Invalid import bridge entry hash');
+  }
+  const importBridge = { format: bridge.format, package: bridge.package, version: bridge.version,
+    packageJsonSha256: bridge.packageJsonSha256, exportsSha256: bridge.exportsSha256,
+    entries: entries.map(([key, record]) => [key, { target: record.target, sha256: record.sha256 }]) };
   assert.equal(typeof source.typescript, 'string'); assert(source.typescript.length > 0);
   return hash(JSON.stringify({ format: source.format, files, typescript: source.typescript,
-    openaiEntrySha256: source.openaiEntrySha256, lockSha256: source.lockSha256 }));
+    openaiEntrySha256: source.openaiEntrySha256, lockSha256: source.lockSha256, importBridge }));
 }
 function matchingPilotSource(pilot, peer) {
   assert.match(pilot.node, /^v\d+\.\d+\.\d+$/);

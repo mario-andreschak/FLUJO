@@ -16,6 +16,21 @@ def require_current_node(node, expected):
     return current
 
 
+def require_dependency_manifest(node, harness, root, dependencies, harness_hash, expected=None):
+    script = "const s=require(process.argv[1]),p=require(process.argv[2]);console.log(JSON.stringify({dependencies:s.dependencyManifest(process.argv[3],process.argv[4]),harnessSha256:p.harnessDigest()}))"
+    result = subprocess.run([node, '-e', script, str(harness / 'source-loader.cjs'), str(harness / 'profile.cjs'),
+                             str(root), str(dependencies)], capture_output=True, timeout=20, check=True)
+    if len(result.stdout) > 65536 or len(result.stderr) > 65536 or result.stderr:
+        raise RuntimeError('Dependency preflight output exceeds its contract')
+    record = json.loads(result.stdout)
+    if record.get('harnessSha256') != harness_hash:
+        raise RuntimeError('Current harness changed before child admission')
+    current = record['dependencies']
+    if expected is not None and current != expected:
+        raise RuntimeError('Installed dependency manifest changed before child admission')
+    return current
+
+
 def read_record(file):
     with file.open('rb') as stream:
         data = stream.read(65537)

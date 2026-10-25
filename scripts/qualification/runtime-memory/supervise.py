@@ -17,7 +17,7 @@ import subprocess
 import sys
 import threading
 import time
-from envelope_evidence import DiskAdmission, cgroup_paths, cgroup_controls, cgroup_sample, read_record, require_current_node
+from envelope_evidence import DiskAdmission, cgroup_paths, cgroup_controls, cgroup_sample, read_record, require_current_node, require_dependency_manifest
 from dataset_evidence import prepare_linux_dataset, inspect_linux_dataset, guest_disk_admission
 
 MIB = 1024 ** 2
@@ -279,6 +279,7 @@ def supervise(args):
     profile_command = [node, '-e', 'const p=require(process.argv[1]);console.log(JSON.stringify({profile:p.PROFILE,hash:p.profileSha256,harnessHash:p.harnessDigest()}))', str(HERE / 'profile.cjs')]
     profile_record = json.loads(subprocess.check_output(profile_command, text=True))
     profile = profile_record['profile']; cadence = profile['candidateCadenceMs']
+    dependencies_at_start = require_dependency_manifest(node, HERE, root, dependencies, profile_record['harnessHash'])
     # Bound the complete 1 Hz record stream before admitting either child.
     os_evidence_projection(OS_SAMPLE_MAX_BYTES, OS_SAMPLE_MAX_COUNT, profile['maxEvidenceFileBytes'])
     combined_reservation = 2 * GIB  # Pilot only; all actual growth is measured and guarded.
@@ -292,6 +293,8 @@ def supervise(args):
         plan_sha256 = hashlib.sha256(args.plan.read_bytes()).hexdigest()
         cadence = plan['cadenceMs']; combined_reservation = plan['combinedStorageBytes']
         qualification_source = plan['source']
+        if dependencies_at_start != {key: qualification_source[key] for key in dependencies_at_start}:
+            raise RuntimeError('Installed dependency manifest differs from successful pilots')
         verify_source = "const p=require(process.argv[1]),s=require(process.argv[2]);s.verifySourceManifest(process.argv[3],process.argv[4],p.readJson(process.argv[5]).source)"
         subprocess.check_call([node, '-e', verify_source, str(HERE / 'profile.cjs'), str(HERE / 'source-loader.cjs'),
                                str(root), str(dependencies), str(args.plan)])
@@ -309,6 +312,7 @@ def supervise(args):
     def admit_child():
         # Re-read the actual executable immediately before EACH child admission.
         current_node = require_current_node(node, expected_node)
+        require_dependency_manifest(node, HERE, root, dependencies, profile_record['harnessHash'], dependencies_at_start)
         if os.name != 'nt':
             guest_admissions.append(guest_disk_admission(output, phase_name,
                 combined_reservation + profile['budgets']['minimumFreeBytes']))

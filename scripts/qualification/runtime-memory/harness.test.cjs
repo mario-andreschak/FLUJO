@@ -12,9 +12,16 @@ const { allocationWindowLabel, BatchAllocationSampler } = require('./inspector-e
 const { history } = require('./fixtures.cjs');
 const { createProvider } = require('./provider.cjs');
 const { verifySourceManifest } = require('./source-loader.cjs');
+const bridgeMetadata = { name: '@modelcontextprotocol/ext-tasks', version: '0.2.2', type: 'module',
+  exports: Object.fromEntries(['core', 'core/v2', 'client'].map(key => ['./' + key, { import: './' + key.replace('/', '-') + '.js' }])) };
+const bridgeSource = 'export const value = 1;\n';
+const bridgeFixture = () => ({ format: 'declared-import-exports-v1', package: bridgeMetadata.name, version: bridgeMetadata.version,
+  packageJsonSha256: canonicalTextHash(JSON.stringify(bridgeMetadata)), exportsSha256: canonicalTextHash(JSON.stringify(bridgeMetadata.exports)),
+  entries: Object.fromEntries(Object.entries(bridgeMetadata.exports).map(([key, value]) => [bridgeMetadata.name + key.slice(1),
+    { target: value.import, sha256: canonicalTextHash(bridgeSource) }])) });
 const { assertSettledDiagnostics, assertChildOutcome, foldIdentity, TERMINAL_MARKER, TERMINAL_CODE, RETRY_MARKER } = require('./checks.cjs');
 const source = () => ({ format: 'source-lf-v1', files: { 'src/runtime.ts': canonicalTextHash('runtime\n') },
-  typescript: 'fixture-version', openaiEntrySha256: canonicalTextHash('sdk\n'), lockSha256: canonicalTextHash('lock\n') });
+  typescript: 'fixture-version', openaiEntrySha256: canonicalTextHash('sdk\n'), lockSha256: canonicalTextHash('lock\n'), importBridge: bridgeFixture() });
 const datasetFilesystem = () => ({ path:'/opt/flujo569/qualification/fixture/output', realPath:'/opt/flujo569/qualification/fixture/output',
   filesystemMagic:'0xef53', filesystem:'ext4', device:2048, inode:1234 });
 const receiptNames = ['runtime-receipt.json','supervisor-receipt.json','runtime-settled.json','provider-settled.json'];
@@ -224,6 +231,7 @@ test('canonical manifests normalize line endings and bind both platforms, file s
     { ...peer, source: { ...source(), files: { 'src/runtime.ts': canonicalTextHash('different') } } },
     { ...peer, source: { ...source(), files: { ...source().files, 'src/extra.ts': canonicalTextHash('extra') } } },
     { ...peer, source: { ...source(), openaiEntrySha256: canonicalTextHash('other sdk') } },
+    { ...peer, source: { ...source(), importBridge: { ...bridgeFixture(), exportsSha256: hash('changed exports') } } },
   ]) assert.throws(() => makePlanRaw(p, s, 450_000, changed, s));
   assert.throws(() => validatePlanRaw({ ...plan, source: { ...source(), lockSha256: canonicalTextHash('changed') } },
     p, 'revision', s, peer, s));
@@ -232,13 +240,19 @@ test('canonical manifests normalize line endings and bind both platforms, file s
 
 test('launch preflight compares actual canonical files and installed dependency entries with pilot manifest', () => {
   const root = fs.mkdtempSync(path.join(process.env.FLUJO_QUALIFICATION_TEST_EVIDENCE ?? os.tmpdir(), 'flujo-source-manifest-'));
-  for (const directory of ['src', 'node_modules/typescript', 'node_modules/openai']) fs.mkdirSync(path.join(root, directory), { recursive: true });
+  for (const directory of ['src', 'node_modules/typescript', 'node_modules/openai', 'node_modules/@modelcontextprotocol/ext-tasks']) fs.mkdirSync(path.join(root, directory), { recursive: true });
   fs.writeFileSync(path.join(root, 'package.json'), '{}');
   fs.writeFileSync(path.join(root, 'package-lock.json'), 'lock\r\n');
   fs.writeFileSync(path.join(root, 'src/runtime.ts'), 'runtime\r\n');
   fs.writeFileSync(path.join(root, 'node_modules/typescript/package.json'), JSON.stringify({ version: 'fixture-version' }));
   fs.writeFileSync(path.join(root, 'node_modules/openai/index.js'), 'sdk\r\n');
+  const bridgeRoot = path.join(root, 'node_modules/@modelcontextprotocol/ext-tasks');
+  fs.writeFileSync(path.join(bridgeRoot, 'package.json'), JSON.stringify(bridgeMetadata));
+  for (const entry of Object.values(bridgeMetadata.exports)) fs.writeFileSync(path.join(bridgeRoot, entry.import), bridgeSource);
   verifySourceManifest(root, root, source());
+  fs.writeFileSync(path.join(bridgeRoot, 'core.js'), 'export const value = 2;\n');
+  assert.throws(() => verifySourceManifest(root, root, source()), /do not match/);
+  fs.writeFileSync(path.join(bridgeRoot, 'core.js'), bridgeSource);
   fs.writeFileSync(path.join(root, 'src/runtime.ts'), 'changed\n');
   assert.throws(() => verifySourceManifest(root, root, source()), /do not match/);
 });

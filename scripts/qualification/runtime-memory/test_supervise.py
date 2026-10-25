@@ -1,6 +1,7 @@
 """Stdlib-only supervisor tests; never load production runtime or start a pilot."""
 import importlib.util
 import io
+import json
 from pathlib import Path
 import tempfile
 import threading
@@ -19,7 +20,7 @@ def preserved_directory():
 
 sys.path.insert(0, str(Path(__file__).parent))
 from dataset_evidence import validate_dataset_path, guest_disk_admission
-from envelope_evidence import cgroup_paths, cgroup_controls, validate_disk_receipt, require_current_node
+from envelope_evidence import cgroup_paths, cgroup_controls, validate_disk_receipt, require_current_node, require_dependency_manifest
 
 spec = importlib.util.spec_from_file_location('runtime_memory_supervisor', Path(__file__).with_name('supervise.py'))
 supervisor = importlib.util.module_from_spec(spec)
@@ -36,6 +37,21 @@ class FakeProcess:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_dependency_preflight_rechecks_each_child_and_rejects_changed_target_or_helper(self):
+        expected = {'importBridge': {'entries': {'core': {'sha256': 'initial'}}}}
+        initial = {'harnessSha256': 'harness', 'dependencies': expected}
+        def result(value):
+            return subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b'')
+        for changed in [{'harnessSha256': 'changed-helper', 'dependencies': expected},
+                        {'harnessSha256': 'harness', 'dependencies': {'importBridge': {'entries': {'core': {'sha256': 'changed'}}}}}]:
+            for admission in [0, 1]:
+                with patch('envelope_evidence.subprocess.run', side_effect=[result(initial)] * admission + [result(changed)]) as run:
+                    for _ in range(admission):
+                        self.assertEqual(require_dependency_manifest('node', Path('.'), Path('.'), Path('.'), 'harness', expected), expected)
+                    with self.assertRaisesRegex(RuntimeError, 'changed before child admission'):
+                        require_dependency_manifest('node', Path('.'), Path('.'), Path('.'), 'harness', expected)
+                    self.assertEqual(run.call_count, admission + 1)
+
     def test_full_duration_os_evidence_fits_without_reducing_guard_polling(self):
         # uint64 maxima exceed real memory, process and FD counters on both platforms.
         maximum = 2 ** 64 - 1

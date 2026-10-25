@@ -223,6 +223,15 @@ unattested mirror are insufficient. The remaining bindings include
 source revision and the exact matching canonical source manifests. Source text,
 the dependency lock and SDK entry use LF-normalized hashes on both platforms;
 the source file set and TypeScript version must also match. Launch preflight
+binds the installed `@modelcontextprotocol/ext-tasks` 0.2.2 package metadata,
+declared export map and exact `core`, `core/v2` and `client` import-target hashes.
+These three import-only package exports use their actual declared ESM files via
+Node 22 `require(esm)` in the CommonJS qualification adapter. Targets must remain
+regular files inside the package; unknown subpaths retain normal Node failures.
+The initial dependency manifest is re-read before both provider/runtime child
+admissions, compared with the successful pilots for endurance, and rechecked at
+runtime completion. Missing, changed or escaping targets fail admission.
+Launch preflight
 also requires the same Node version and external launcher/guardian digest across
 the pilot pair. The launcher verifies its equipment digest again at settlement.
 Launch preflight
