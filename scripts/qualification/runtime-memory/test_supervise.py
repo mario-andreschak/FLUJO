@@ -18,6 +18,7 @@ def preserved_directory():
     yield tempfile.mkdtemp(prefix='flujo-memory-supervisor-', dir=os.environ.get('FLUJO_QUALIFICATION_TEST_EVIDENCE'))
 
 sys.path.insert(0, str(Path(__file__).parent))
+from dataset_evidence import validate_dataset_path, guest_disk_admission
 from envelope_evidence import cgroup_paths, cgroup_controls, validate_disk_receipt, require_current_node
 
 spec = importlib.util.spec_from_file_location('runtime_memory_supervisor', Path(__file__).with_name('supervise.py'))
@@ -35,6 +36,18 @@ class FakeProcess:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_dataset_path_rejects_drvfs_and_other_phase_before_writing(self):
+        expected='/opt/flujo569/qualification/owned/output'
+        self.assertEqual(str(validate_dataset_path(expected,'owned')),str(Path(expected)))
+        for path in ['/mnt/c/evidence/output','/opt/flujo569/qualification/other/output',
+                     '/opt/flujo569/qualification/owned/../owned/output']:
+            with self.assertRaisesRegex(RuntimeError,'exact owned ext4'):
+                validate_dataset_path(path,'owned')
+        with patch('dataset_evidence.inspect_linux_dataset',return_value={'filesystemMagic':'0xef53'}), \
+                patch('dataset_evidence.shutil.disk_usage',return_value=type('Space',(),{'free':1})()):
+            with self.assertRaisesRegex(RuntimeError,'Guest ext4'):
+                guest_disk_admission(expected,'owned',22*supervisor.GIB)
+
     def test_each_admission_rechecks_executable_instead_of_reusing_first_version(self):
         with patch('envelope_evidence.subprocess.check_output', side_effect=['v22.23.4\n', 'v24.22.1\n']) as check:
             self.assertEqual(require_current_node('owned-node', 'v22.23.4'), 'v22.23.4')

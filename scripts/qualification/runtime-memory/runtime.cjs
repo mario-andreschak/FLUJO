@@ -17,6 +17,14 @@ async function main(output) {
   assert(!process.execArgv.some(arg => /expose-gc|max-old-space-size/.test(arg)) && !process.env.NODE_OPTIONS,
     'No forced-GC or heap overrides');
   process.env.FLUJO_DATA_DIR = path.join(output, 'data');
+  if (process.platform === 'linux') {
+    assert.equal(fs.realpathSync(output), output, 'Linux dataset path must not redirect');
+    assert.equal(fs.statfsSync(output).type, 0xef53, 'Linux workload requires ext4');
+    assert.equal(contract.datasetFilesystem?.path, output);
+    const directory = fs.statSync(output);
+    assert.equal(directory.dev, contract.datasetFilesystem.device);
+    assert.equal(directory.ino, contract.datasetFilesystem.inode);
+  }
   delete process.env.FLUJO_PARENT_DATA_DIR;
   process.env.FLUJO_EXPOSURE_MODE = 'localhost';
   const provider = readJson(path.join(output, 'provider-ready.json'));
@@ -498,6 +506,7 @@ async function main(output) {
     assert.equal(contract.harnessSha256, harnessDigest(), 'Harness changed during qualification');
     fs.writeFileSync(path.join(output, 'runtime-receipt.json'), JSON.stringify({ version: PROFILE.version, profileSha256,
       sourceHead: contract.sourceHead, harnessSha256: contract.harnessSha256, mode: contract.mode, completed: true, measuredElapsedMs,
+      datasetFilesystem: contract.datasetFilesystem,
       drainElapsedMs: performance.now() - drainStart, batches, peakRss, diagnostics: diagnostics(),
       growth: windows.result(contract.mode === 'endurance'), disk: await directoryBytes(process.env.FLUJO_DATA_DIR),
       source, events: eventCounts, node: process.version, platform: process.platform, execArgv: process.execArgv,

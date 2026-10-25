@@ -41,6 +41,32 @@ function assertOwnership(owner, pilot, supervisor) {
     assert.equal(owner.linux.aggregateCgroup, supervisor.envelope.path);
     assert.equal(owner.linux.workloadCgroup, supervisor.envelope.workloadPath);
     assert.equal(supervisor.envelope.guardianIncluded, true);
+    const mirror = owner.linux.datasetMirror;
+    assert.equal(mirror?.complete, true); assert.equal(mirror.version, 'ext4-receipt-mirror-v1');
+    assert.match(mirror.phase, /^[a-z0-9][a-z0-9-]{0,70}$/);
+    assert.equal(mirror.token, owner.linux.token);
+    assert.deepEqual(guard.datasetMirror, mirror, 'Outer guard did not verify the same receipt mirror');
+    const filesystem = mirror.datasetFilesystem;
+    assert.equal(filesystem.path, '/opt/flujo569/qualification/' + mirror.phase + '/output');
+    assert.equal(filesystem.realPath, filesystem.path); assert.equal(filesystem.filesystemMagic, '0xef53');
+    assert.equal(filesystem.filesystem, 'ext4');
+    assert(Number.isSafeInteger(filesystem.device) && filesystem.device >= 0);
+    assert(Number.isSafeInteger(filesystem.inode) && filesystem.inode > 0);
+    assert.deepEqual(supervisor.datasetFilesystem, filesystem);
+    assert.deepEqual(pilot.datasetFilesystem, filesystem);
+    const names = ['runtime-receipt.json', 'supervisor-receipt.json', 'runtime-settled.json', 'provider-settled.json'];
+    assert.deepEqual(Object.keys(mirror.files).sort(), names.sort());
+    for (const [name, record] of Object.entries(mirror.files)) {
+      assert.equal(record.sourcePath, filesystem.path + '/' + name);
+      assert(Number.isSafeInteger(record.bytes) && record.bytes > 0 && record.bytes <= 1024 ** 2);
+      assert.match(record.sha256, /^[a-f0-9]{64}$/);
+    }
+    assert.equal(supervisor.guestDiskAdmissions?.length, 2);
+    for (const admission of supervisor.guestDiskAdmissions) {
+      assert.deepEqual(admission.filesystem, filesystem);
+      assert.equal(admission.requiredFreeBytes, 22 * 1024 ** 3);
+      assert(admission.freeBytes >= admission.requiredFreeBytes);
+    }
   } else {
     assert.equal(supervisor.processes?.windowsJob?.activeProcessesBeforeCleanup, 0);
     assert.equal(supervisor.processes.windowsJob.forcedCleanup, false);

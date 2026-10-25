@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { PROFILE, profileSha256, harnessDigest, MiB, GiB, validatePlan: validatePlanBound, estimateStorage, inside,
-  canonicalTextHash, sourceManifestHash, validateLaunchIdentity } = require('./profile.cjs');
+  canonicalTextHash, sourceManifestHash, validateLaunchIdentity, readPilotEvidence, hash } = require('./profile.cjs');
 const { makePlan: makePlanBound } = require('./plan.cjs');
 const { BoundedJsonl, DrainWindows, directoryBytes } = require('./evidence.cjs');
 const { history } = require('./fixtures.cjs');
@@ -14,10 +14,17 @@ const { verifySourceManifest } = require('./source-loader.cjs');
 const { assertSettledDiagnostics, assertChildOutcome, foldIdentity, TERMINAL_MARKER, TERMINAL_CODE, RETRY_MARKER } = require('./checks.cjs');
 const source = () => ({ format: 'source-lf-v1', files: { 'src/runtime.ts': canonicalTextHash('runtime\n') },
   typescript: 'fixture-version', openaiEntrySha256: canonicalTextHash('sdk\n'), lockSha256: canonicalTextHash('lock\n') });
+const datasetFilesystem = () => ({ path:'/opt/flujo569/qualification/fixture/output', realPath:'/opt/flujo569/qualification/fixture/output',
+  filesystemMagic:'0xef53', filesystem:'ext4', device:2048, inode:1234 });
+const receiptNames = ['runtime-receipt.json','supervisor-receipt.json','runtime-settled.json','provider-settled.json'];
+const mirrorFixture = () => ({ complete:true, version:'ext4-receipt-mirror-v1', phase:'fixture', token:'fixture-token',
+  datasetFilesystem:datasetFilesystem(), files:Object.fromEntries(receiptNames.map(name => [name,{bytes:1,sha256:'a'.repeat(64),
+    sourcePath:datasetFilesystem().path+'/'+name}])) });
 const pilot = () => ({ mode: 'pilot', platform: 'win32', node: 'v22.23.4', completed: true, sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest(),
-  source: source(),
+  source: source(), datasetFilesystem: datasetFilesystem(),
   disk: { bytes: 240 * MiB }, batches: [{ diskBytesAdded: 100 * MiB, elapsedMs: 100_000 }, { diskBytesAdded: 120 * MiB, elapsedMs: 130_000 }] });
 const supervisor = () => ({ completed: true, sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest(),
+  datasetFilesystem: datasetFilesystem(), guestDiskAdmissions:[1,2].map(() => ({ filesystem:datasetFilesystem(), freeBytes:100*GiB, requiredFreeBytes:22*GiB })),
   processes: { windowsJob: { activeProcessesBeforeCleanup: 0, forcedCleanup: false } },
   envelope: { path: '/aggregate', workloadPath: '/aggregate/workload', guardianIncluded: true },
   diskAdmissions: [1, 2].map(sequence => ({ kind: 'windows-physical-volume-v1', volume: 'C:\\', admitted: true,
@@ -25,10 +32,10 @@ const supervisor = () => ({ completed: true, sourceHead: 'revision', profileSha2
       sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest(), node: 'v22.23.4', launcherSha256: 'a'.repeat(64) } })) });
 function ownership(p, s) { return { completed: true, equipmentOnly: false, launcherSha256: 'a'.repeat(64), platform: p?.platform, supervisor: s,
   mcp: { serverExited: true, serverExitCode: 0, serverExitSignal: null, stderrEnded: true, transportClosed: true, resultError: false },
-  guard: { completed: true, jobActiveProcesses: 0, forcedCleanup: false, childExitCode: 0, stdoutEnded: true, stderrEnded: true, copyThreadsStopped: true,
+  guard: { datasetMirror:mirrorFixture(), completed: true, jobActiveProcesses: 0, forcedCleanup: false, childExitCode: 0, stdoutEnded: true, stderrEnded: true, copyThreadsStopped: true,
     errors: [], stoppedByGuard: null, hostBackingVolume: 'C:\\', diskFloorBytes: 20 * GiB,
     minimumHostDiskFreeBytes: 50 * GiB, diskAdmissions: s?.diskAdmissions },
-  linux: { reason: 'command completed', forcedCleanup: false, beforeCleanupMembers: [], cleanupErrors: [], childExitCode: 0, remainingWorkloadMembers: [],
+  linux: { token:'fixture-token', datasetMirror:mirrorFixture(), reason: 'command completed', forcedCleanup: false, beforeCleanupMembers: [], cleanupErrors: [], childExitCode: 0, remainingWorkloadMembers: [],
     workloadCgroupEvents: 'populated 0\nfrozen 0', aggregateCgroup: '/aggregate', workloadCgroup: '/aggregate/workload' } }; }
 const makePlanRaw = (p, s, c, peer, ps) => makePlanBound(p, s, c, peer, ps, ownership(p, s), ownership(peer, ps));
 const validatePlanRaw = (plan, p, head, s, peer, ps) => validatePlanBound(plan, p, head, s, peer, ps, ownership(p, s), ownership(peer, ps));
@@ -296,4 +303,23 @@ test('current executable and helper identity are bound to the concrete plan befo
   assert.throws(() => validateLaunchIdentity(plan,p.node,'b'.repeat(64)), /Current launch equipment/);
   assert.throws(() => validatePlan({ ...plan, expectedNode:'v24.22.1' },p,'revision',s));
   assert.throws(() => validatePlan({ ...plan, launcherSha256:'b'.repeat(64) },p,'revision',s));
+});
+
+test('Linux plan inputs verify independently attested mirror bytes and ext4 provenance', () => {
+  const directory=fs.mkdtempSync(path.join(process.env.FLUJO_QUALIFICATION_TEST_EVIDENCE??os.tmpdir(),'flujo-mirror-'));
+  const p={...pilot(),platform:'linux'}, s=supervisor(), owner=ownership(p,s);
+  const values={'runtime-receipt.json':p,'supervisor-receipt.json':s,'runtime-settled.json':{completed:true},'provider-settled.json':{active:0}};
+  for(const name of receiptNames){
+    const bytes=Buffer.from(JSON.stringify(values[name])+'\n');fs.writeFileSync(path.join(directory,name),bytes);
+    owner.linux.datasetMirror.files[name]={bytes:bytes.length,sha256:hash(bytes),sourcePath:datasetFilesystem().path+'/'+name};
+  }
+  owner.guard.datasetMirror=structuredClone(owner.linux.datasetMirror);
+  const ownerFile=path.join(directory,'ownership-receipt.json');fs.writeFileSync(ownerFile,JSON.stringify(owner));
+  assert.equal(readPilotEvidence(directory).pilot.completed,true);
+  fs.appendFileSync(path.join(directory,'runtime-receipt.json'),' ');
+  assert.throws(() => readPilotEvidence(directory),/Attested mirror/);
+  fs.writeFileSync(path.join(directory,'runtime-receipt.json'),JSON.stringify(p)+'\n');
+  owner.linux.datasetMirror.datasetFilesystem.filesystemMagic='0x9fa0';
+  owner.guard.datasetMirror=structuredClone(owner.linux.datasetMirror);fs.writeFileSync(ownerFile,JSON.stringify(owner));
+  assert.throws(() => readPilotEvidence(directory),/0xef53/);
 });

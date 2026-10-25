@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 from envelope_evidence import DiskAdmission, cgroup_paths, cgroup_controls, cgroup_sample, read_record, require_current_node
+from dataset_evidence import prepare_linux_dataset, inspect_linux_dataset, guest_disk_admission
 
 MIB = 1024 ** 2
 GIB = 1024 ** 3
@@ -255,6 +256,9 @@ def supervise(args):
         raise RuntimeError('Output must be a new directory outside the checkout')
     if git(root, 'status', '--porcelain'):
         raise RuntimeError('Runtime source checkout must be clean')
+    phase_name = Path(os.environ['FLUJO_569_PHASE_EVIDENCE']).name
+    if os.name != 'nt':
+        prepare_linux_dataset(args.output, phase_name)
     source_head = git(root, 'rev-parse', 'HEAD')
     profile_command = [node, '-e', 'const p=require(process.argv[1]);console.log(JSON.stringify({profile:p.PROFILE,hash:p.profileSha256,harnessHash:p.harnessDigest()}))', str(HERE / 'profile.cjs')]
     profile_record = json.loads(subprocess.check_output(profile_command, text=True))
@@ -265,7 +269,7 @@ def supervise(args):
     if args.mode == 'endurance':
         if not args.plan or not args.pilot or not args.peer_pilot:
             raise RuntimeError('Endurance requires --plan, --pilot and --peer-pilot settled platform receipts')
-        validate = "const p=require(process.argv[1]),path=require('node:path');const a=p.readJson(process.argv[2]),read=(dir,name)=>p.readJson(path.join(dir,name+'.json'));p.validatePlan(a,read(process.argv[3],'runtime-receipt'),process.argv[4],read(process.argv[3],'supervisor-receipt'),read(process.argv[5],'runtime-receipt'),read(process.argv[5],'supervisor-receipt'),read(process.argv[3],'ownership-receipt'),read(process.argv[5],'ownership-receipt'));console.log(JSON.stringify(a))"
+        validate = "const p=require(process.argv[1]),a=p.readJson(process.argv[2]),x=p.readPilotEvidence(process.argv[3]),y=p.readPilotEvidence(process.argv[5]);p.validatePlan(a,x.pilot,process.argv[4],x.supervisor,y.pilot,y.supervisor,x.owner,y.owner);console.log(JSON.stringify(a))"
         plan = json.loads(subprocess.check_output([node, '-e', validate, str(HERE / 'profile.cjs'), str(args.plan), str(args.pilot), source_head, str(args.peer_pilot)], text=True))
         plan_sha256 = hashlib.sha256(args.plan.read_bytes()).hexdigest()
         cadence = plan['cadenceMs']; combined_reservation = plan['combinedStorageBytes']
@@ -283,9 +287,13 @@ def supervise(args):
         raise RuntimeError('Launch configuration belongs to a different owner')
     expected_node = plan['expectedNode'] if args.mode == 'endurance' else launch['identity']['node']
     expected_launcher = plan['launcherSha256'] if args.mode == 'endurance' else launch['identity']['launcherSha256']
+    guest_admissions = []
     def admit_child():
         # Re-read the actual executable immediately before EACH child admission.
         current_node = require_current_node(node, expected_node)
+        if os.name != 'nt':
+            guest_admissions.append(guest_disk_admission(output, phase_name,
+                combined_reservation + profile['budgets']['minimumFreeBytes']))
         disk_admission.identity.update({'node': current_node, 'launcherSha256': expected_launcher})
         admitted = disk_admission.admit()  # Watcher independently rehashes current helper files.
         if args.mode == 'endurance':
@@ -293,11 +301,13 @@ def supervise(args):
             subprocess.check_call([node, '-e', verify_launch, str(HERE / 'profile.cjs'), str(args.plan), admitted['currentLauncherSha256']])
     envelope = WindowsEnvelope() if os.name == 'nt' else LinuxEnvelope()
     output.mkdir(); (output / 'data').mkdir(); (output / 'home').mkdir()
+    dataset_filesystem = inspect_linux_dataset(output, phase_name) if os.name != 'nt' else None
     contract = {'version': profile['version'], 'profileSha256': profile_record['hash'], 'mode': args.mode,
                 'harnessSha256': profile_record['harnessHash'],
                 'root': str(root), 'dependencies': str(dependencies), 'sourceHead': source_head,
                 'cadenceMs': cadence, 'token': secrets.token_hex(24), 'envelope': envelope.receipt,
                 'combinedStorageReservationBytes': combined_reservation, 'source': qualification_source}
+    contract['datasetFilesystem'] = dataset_filesystem
     save(output / 'contract.json', contract)
     env = {key: os.environ[key] for key in ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC'] if key in os.environ}
     env.update({'HOME': str(output / 'home'), 'USERPROFILE': str(output / 'home'), 'NODE_ENV': 'production',
@@ -358,6 +368,8 @@ def supervise(args):
             raise RuntimeError('Provider retained requests')
         if git(root, 'rev-parse', 'HEAD') != source_head or git(root, 'status', '--porcelain'):
             raise RuntimeError('Runtime checkout changed during qualification')
+        if os.name != 'nt' and inspect_linux_dataset(output, phase_name) != dataset_filesystem:
+            raise RuntimeError('Linux dataset filesystem identity changed')
         if json.loads(subprocess.check_output(profile_command, text=True)) != profile_record:
             raise RuntimeError('Harness changed during qualification')
     except BaseException as error:
@@ -394,6 +406,7 @@ def supervise(args):
              'elapsedSeconds': time.monotonic() - started, 'processes': results, 'envelope': contract['envelope'],
              'sourceHead': source_head, 'profileSha256': profile_record['hash'],
              'harnessSha256': profile_record['harnessHash'], 'diskAdmissions': disk_admission.receipts,
+             'datasetFilesystem': dataset_filesystem, 'guestDiskAdmissions': guest_admissions,
              'evidencePreserved': True})
     if failure:
         raise RuntimeError(f'{failure}; evidence preserved at {output}')

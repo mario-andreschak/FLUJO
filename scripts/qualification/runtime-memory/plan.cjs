@@ -3,9 +3,8 @@
 // Produce a concrete plan; this command never starts a workload.
 const { assertOwnership } = require('./ownership.cjs');
 const fs = require('node:fs');
-const path = require('node:path');
 const assert = require('node:assert/strict');
-const { PROFILE, profileSha256, harnessDigest, readJson, hash, estimateStorage, matchingPilotSource } = require('./profile.cjs');
+const { PROFILE, profileSha256, harnessDigest, readPilotEvidence, hash, estimateStorage, matchingPilotSource } = require('./profile.cjs');
 function makePlan(pilot, supervisor, cadenceMs, peerPilot, peerSupervisor, owner, peerOwner) {
   assertOwnership(owner, pilot, supervisor); assertOwnership(peerOwner, peerPilot, peerSupervisor);
   assert.equal(owner.launcherSha256, peerOwner.launcherSha256, 'Platform launch equipment changed');
@@ -40,9 +39,8 @@ function makePlan(pilot, supervisor, cadenceMs, peerPilot, peerSupervisor, owner
 if (require.main === module) {
   const [pilotDirectory, peerDirectory, planFile, cadence] = process.argv.slice(2);
   if (!pilotDirectory || !peerDirectory || !planFile) throw new Error('Usage: node plan.cjs PILOT_DIRECTORY OTHER_PLATFORM_PILOT_DIRECTORY NEW_PLAN_FILE [CADENCE_MS]');
-  fs.writeFileSync(planFile, JSON.stringify(makePlan(readJson(path.join(pilotDirectory, 'runtime-receipt.json')),
-    readJson(path.join(pilotDirectory, 'supervisor-receipt.json')), Number(cadence ?? PROFILE.candidateCadenceMs),
-    readJson(path.join(peerDirectory, 'runtime-receipt.json')), readJson(path.join(peerDirectory, 'supervisor-receipt.json')),
-    readJson(path.join(pilotDirectory, 'ownership-receipt.json')), readJson(path.join(peerDirectory, 'ownership-receipt.json'))), null, 2), { flag: 'wx' });
+  const target = readPilotEvidence(pilotDirectory), peer = readPilotEvidence(peerDirectory);
+  fs.writeFileSync(planFile, JSON.stringify(makePlan(target.pilot, target.supervisor, Number(cadence ?? PROFILE.candidateCadenceMs),
+    peer.pilot, peer.supervisor, target.owner, peer.owner), null, 2), { flag: 'wx' });
 }
 module.exports = { makePlan };

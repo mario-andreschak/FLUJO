@@ -117,7 +117,10 @@ A pilot runs the same warmup/owners, then two measured batches at the candidate
 initialization and work, not a short loop disguised as endurance.
 
 Run a pilot separately on Windows and Linux at the same source revision. Use a
-new output directory outside every checkout, preferably on the same evidence
+new output directory outside every checkout. Linux requires
+`/opt/flujo569/qualification/<phase>/output` on the owned ext4 filesystem; its
+full dataset, samples, archives, home and child stdio never use DrvFs/9P. Windows
+keeps its native output directory. Both consume the measured physical C: backing
 volume. Preserve the complete directories, including failed receipts:
 
 ```text
@@ -148,6 +151,23 @@ child. The watcher continues enforcing the physical disk floor. Linux filesystem
 space is checked separately. The request/response handshake changes neither
 the profile nor any resource allowance.
 
+Linux admission uses kernel `fstatfs` to require the ext4 magic, exact owned-path
+containment and no symlink redirection. Existing phase directories are refused.
+The runtime also checks filesystem type, device and inode before touching its
+dataset. Guest ext4 free space is checked before each child admission and during
+execution, while the independent Windows watcher still admits the combined
+reservation plus 20 GiB against real C: free bytes for VHD growth. The full output
+stays ext4 so guest page-cache allocations remain in the aggregate cgroup.
+
+Only bounded control/heartbeat files and compact final receipts are published on
+C:. After workload settlement, the guardian independently opens the actual ext4
+directory and at most four regular receipt files, each at most 1 MiB, using
+descriptor-based filesystem checks and no-follow opens. It hashes their original
+bytes and mirrors them to the control phase's `receipts/` directory. Its receipt
+binds the ext4 path, device, inode, phase/token and original file hashes. The outer
+Windows guard rechecks the mirror bytes. Failed datasets and partial mirrors
+remain preserved and cannot qualify.
+
 Keep both platforms' final source, canonical harness and lock-matched installed
 dependencies identical before starting either pilot. The Windows launcher's
 expected identities must match the current Linux source before the handshake
@@ -158,7 +178,7 @@ After **both** pilots pass including independent process/stdio settlement, make
 a concrete plan for each target (target pilot first, other platform second):
 
 ```text
-node scripts/qualification/runtime-memory/plan.cjs TARGET_PILOT OTHER_PLATFORM_PILOT NEW_PLAN_FILE 450000
+node scripts/qualification/runtime-memory/plan.cjs TARGET_PILOT_RECEIPTS OTHER_PLATFORM_PILOT_RECEIPTS NEW_PLAN_FILE 450000
 ```
 
 The cadence must provide 25% headroom above both pilots' slowest batch, cannot
@@ -177,6 +197,11 @@ the ceiling to make a run pass.
 
 The plan binds both successful pilot receipts, supervisor receipts, final outer
 `ownership-receipt.json` files, profile,
+source and filesystem provenance. Pilot paths mean the native output directory
+on Windows and the bounded `receipts/` mirror on Linux. Both plan generation and
+endurance preflight read the mirror's original bytes and verify every guardian
+hash before accepting its parsed records; success/source assertions inside an
+unattested mirror are insufficient. The remaining bindings include
 source revision and the exact matching canonical source manifests. Source text,
 the dependency lock and SDK entry use LF-normalized hashes on both platforms;
 the source file set and TypeScript version must also match. Launch preflight
