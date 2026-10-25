@@ -129,6 +129,88 @@ it.each(['before', 'after'] as const)('reconciles an idempotent copied payload a
   } finally { atomic.mockImplementation(actualWrite); open.mockRestore(); }
 });
 
+async function leavePendingTextPayload(conversationId: string) {
+  const input = { conversationId, kind: 'text' as const, data: { text: 'owned result' }, producedBy, idempotencyKey: 'pending-effect' };
+  const actualWrite = jest.requireActual<typeof storage>('@/utils/storage/backend').writeFileAtomic;
+  const atomic = jest.mocked(storage.writeFileAtomic).mockRejectedValueOnce(new Error('index publication failed'));
+  try { await expect(writeRunResource(input)).rejects.toThrow('index publication failed'); }
+  finally { atomic.mockImplementation(actualWrite); }
+  const payloads = (await fs.readdir(path.join(tmpDir, conversationId))).filter(filename => filename.endsWith('.dat'));
+  expect(payloads).toHaveLength(1);
+  const filename = path.join(tmpDir, conversationId, payloads[0]);
+  expect(await fs.readFile(filename, 'utf8')).toBe(input.data.text);
+  expect(await listRunResources(conversationId)).toHaveLength(0);
+  return { input, filename };
+}
+
+it('reconciles a pending text payload after failed index publication without rewriting its bytes', async () => {
+  const { input, filename } = await leavePendingTextPayload('pending-text-retry');
+  const write = jest.spyOn(fs, 'writeFile');
+  try {
+    const retry = await writeRunResource(input) as RunResourceEntry;
+    expect(`${retry.id}.dat`).toBe(path.basename(filename));
+    expect(write.mock.calls.some(([target]) => target === filename)).toBe(false);
+    expect(await fs.readFile(filename, 'utf8')).toBe(input.data.text);
+    expect(await listRunResources(input.conversationId)).toHaveLength(1);
+  } finally { write.mockRestore(); }
+});
+
+it.each(['replacement', 'missing'] as const)('rejects a pending payload pathname that is %s after descriptor open', async mode => {
+  const { input, filename } = await leavePendingTextPayload(`pending-swap-${mode}`);
+  const actualOpen = fs.open.bind(fs), actualWrite = fs.writeFile.bind(fs);
+  let swapped = false;
+  const open = jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    const handle = await actualOpen(...args);
+    if (args[0] === filename && !swapped) {
+      swapped = true;
+      try {
+        await fs.rename(filename, `${filename}.owned`);
+        if (mode === 'replacement') await actualWrite(filename, 'foreign data', { flag: 'wx' });
+      } catch (error) { await handle.close(); throw error; }
+    }
+    return handle;
+  });
+  try {
+    await expect(writeRunResource(input)).rejects.toMatchObject(mode === 'replacement'
+      ? { name: 'RunResourceIdempotencyError' } : { code: 'ENOENT' });
+    expect(swapped).toBe(true);
+    expect(await listRunResources(input.conversationId)).toHaveLength(0);
+    expect(await fs.readFile(`${filename}.owned`, 'utf8')).toBe(input.data.text);
+    if (mode === 'replacement') expect(await fs.readFile(filename, 'utf8')).toBe('foreign data');
+    else await expect(fs.stat(filename)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { open.mockRestore(); }
+});
+
+it.each(['text', 'base64'] as const)('preserves a foreign file created just before a new %s payload write', async encoding => {
+  const conversationId = `exclusive-${encoding}`;
+  const actualWrite = fs.writeFile.bind(fs), actualOpen = fs.open.bind(fs);
+  let missingObserved = false, filename: string | undefined;
+  const open = jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    try { return await actualOpen(...args); }
+    catch (error) {
+      if (String(args[0]).includes(conversationId) && (error as NodeJS.ErrnoException).code === 'ENOENT') missingObserved = true;
+      throw error;
+    }
+  });
+  const write = jest.spyOn(fs, 'writeFile').mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
+    if (String(args[0]).includes(conversationId) && String(args[0]).endsWith('.dat')) {
+      filename = String(args[0]);
+      if (encoding === 'text') expect(missingObserved).toBe(true);
+      await actualWrite(filename, 'foreign bytes must survive', { flag: 'wx' });
+    }
+    return actualWrite(...args);
+  });
+  try {
+    await expect(writeRunResource({ conversationId, kind: 'text', producedBy,
+      ...(encoding === 'text' ? { idempotencyKey: 'new-effect', data: { text: 'new bytes' } }
+        : { data: { base64: Buffer.from('new bytes').toString('base64') } }),
+    })).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(filename).toBeDefined();
+    expect(await fs.readFile(filename!, 'utf8')).toBe('foreign bytes must survive');
+    expect(await listRunResources(conversationId)).toHaveLength(0);
+  } finally { write.mockRestore(); open.mockRestore(); }
+});
+
 it('keeps durable memory outside optional spill quotas without weakening ordinary capture limits', async () => {
   const memory = await writeRunResource({ conversationId: 'memory-quota', kind: 'text',
     data: { text: 'x'.repeat(4096) }, producedBy: { source: 'compaction-artifact' } });

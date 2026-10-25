@@ -260,7 +260,7 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
       fingerprint: input.idempotencyKey ? async () => createHash('sha256').update(text).digest('hex') : undefined,
       persist: async filename => {
         const payload = Buffer.from(text, 'utf8');
-        await fs.writeFile(filename, payload);
+        await fs.writeFile(filename, payload, { flag: 'wx' });
         return createHash('sha256').update(payload).digest('hex');
       },
     });
@@ -278,7 +278,7 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
     size: payload?.byteLength ?? 0,
     encoding,
     persist: payload ? async filename => {
-      await fs.writeFile(filename, payload);
+      await fs.writeFile(filename, payload, { flag: 'wx' });
       return createHash('sha256').update(payload).digest('hex');
     } : undefined,
   });
@@ -360,15 +360,23 @@ async function storePreparedRunResource(
         // path on retry instead of allocating another file/copy.
         let previous;
         try {
-          const named = await fs.lstat(filename, { bigint: true });
-          if (!named.isFile() || named.isSymbolicLink()) throw new RunResourceIdempotencyError();
-          previous = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-          const opened = await previous.stat({ bigint: true });
-          if (opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== BigInt(size)) throw new RunResourceIdempotencyError();
-          sha256 = await fingerprintPayloadSnapshot(previous, opened);
-          if (sha256 !== contentFingerprint) throw new RunResourceIdempotencyError();
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          // Open first: a pathname checked before open can be replaced while
+          // leaving the descriptor's fingerprint unrelated to the named file.
+          try {
+            previous = await fs.open(filename, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          if (previous) {
+            const opened = await previous.stat({ bigint: true });
+            if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size < BigInt(0)
+                || opened.size > BigInt(Number.MAX_SAFE_INTEGER) || opened.size !== BigInt(size)) throw new RunResourceIdempotencyError();
+            const named = await fs.lstat(filename, { bigint: true });
+            if (!named.isFile() || named.isSymbolicLink() || named.nlink !== BigInt(1)
+                || opened.dev !== named.dev || opened.ino !== named.ino) throw new RunResourceIdempotencyError();
+            sha256 = await fingerprintPayloadSnapshot(previous, opened);
+            if (sha256 !== contentFingerprint) throw new RunResourceIdempotencyError();
+          }
         } finally { await previous?.close(); }
       }
       sha256 ??= await payload.persist(filename);
