@@ -5,6 +5,13 @@ Independent threat-model review, #564 agreement, installed-artifact acceptance,
 and consumer migration approval remain pending. This document awards no grade.
 Baseline: `3511ba49514fe8cf525f5a22c16c3806bf3886ba` (source 3.46.2).
 
+This document records the initial bearer-only source contract. Its pending-work
+statements describe that historical slice, rather than the current issue status.
+Later source implements [browser sessions](owner-browser-session-v1.md),
+[first-owner pairing](first-owner-pairing-v1.md), and the
+[MCP container integration](mcp-isolation-integration-v1.md). See
+[project status](../project-status.md) for current capabilities and release limits.
+
 ## Threat model
 
 Assets are owner configuration, conversations, model/OAuth/environment secrets,

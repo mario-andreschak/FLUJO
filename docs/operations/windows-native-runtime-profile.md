@@ -36,22 +36,19 @@ correction supports an explanation for a pathname device value of zero;
 attribution to an individual libuv commit remains an inference. This run
 changes Node/libuv together and does not prove installed startup.
 
-## Proposed public runtime contract
+## Current public runtime contract
 
-This source proposal changes all five public packages and the internal shared
-workspace from their former Node 20+/22+ ranges to the closed range
-`^22.19.0 || ^24.2.0`. The Node 22 floor also meets Undici 8's
-[declared minimum](https://github.com/nodejs/undici/blob/v8.11.2/package.json);
-22.17/22.18 users must activate a current patched Node 22.x or 24.x before starting.
-The historical filesystem evidence below still describes its measured 22.17 runtime. These are six tracked engine declarations; the public
-release set remains the app plus four MCP packages. It excludes
-older Node 22, Node 23, early Node 24 and every other major. Node 22.17.0 and
-24.2.0 both contain libuv 1.51.0 ([Node 22 source](https://github.com/nodejs/node/blob/v22.17.0/deps/uv/include/uv/version.h),
-[Node 24 source](https://github.com/nodejs/node/blob/v24.2.0/deps/uv/include/uv/version.h)).
-They are structural minimum edges for regression testing; deploy a current
-patched release on either supported LTS line. The [official release guidance](https://nodejs.org/en/about/previous-releases)
-recommends Active or Maintenance LTS for production. A later major requires an
-explicit policy review and fresh qualification.
+The app, four public MCP packages and internal shared workspace require
+`^22.23.4 || ^24.22.1`, matching their six engine declarations and
+[`bin/node-runtime.mjs`](../../bin/node-runtime.mjs). Use Node 22.23.4 or later
+within 22.x, or Node 24.22.1 or later within 24.x. Earlier Node 22/24 releases,
+Node 23 and every other major fail the current guard.
+
+The historical filesystem measurements above retain their original Node/libuv
+tuples. Those probe versions and the earlier proposed `^22.19.0 || ^24.2.0`
+range do not meet today's security runtime floor and are not current installation
+advice. Supporting another major requires an updated runtime policy and fresh
+qualification.
 
 The app binary and four MCP entry points import a bounded preflight before
 dependency initialization. Each independent MCP tarball embeds byte-identical

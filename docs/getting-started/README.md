@@ -4,7 +4,7 @@ FLUJO runs on your computer and connects AI models to agents and optional tools.
 
 ## Install and open FLUJO
 
-Use Node.js **22.19+ within 22.x, or 24.2+ within 24.x** for npm/source installations, matching the [canonical runtime guard](../operations/windows-native-runtime-profile.md). Cloud providers require credentials or a supported subscription login; local inference requires a running Ollama instance and a downloaded model.
+Use Node.js **22.23.4+ within 22.x, or 24.22.1+ within 24.x** for npm/source installations, matching the [canonical runtime guard](../operations/windows-native-runtime-profile.md). Cloud providers require credentials or a supported subscription login; local inference requires a running Ollama instance and a downloaded model.
 
 | Installation | What you receive | Update method |
 | --- | --- | --- |
