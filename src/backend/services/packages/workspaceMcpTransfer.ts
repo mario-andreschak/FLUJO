@@ -491,6 +491,8 @@ async function prepareConfig(
       name: config.name, repositoryUrl: origin.ref, ref: origin.gitRef,
       subdirectory: origin.subdirectory, installCommand: origin.installCommand,
       buildCommand: origin.buildCommand, env: {}, disabled: true,
+      ...(Object.hasOwn(config, 'isolation') ? { isolation: config.isolation } : {}),
+      ...(Object.hasOwn(config, 'trustedHost') ? { trustedHost: config.trustedHost } : {}),
     });
     if (!prepared.installed || !prepared.config?.rootPath) throw new Error('GitHub runtime installation failed.');
     if (prepared.config.transport !== 'stdio' || !prepared.config.args?.[0]) throw new Error('The prepared GitHub runtime entry is missing.');

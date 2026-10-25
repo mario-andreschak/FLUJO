@@ -13,9 +13,11 @@ const cloneMock = jest.fn();
 const remoteMock = jest.fn();
 const statusMock = jest.fn();
 const rawMock = jest.fn();
+const gitEnvMock = jest.fn();
 jest.mock('simple-git', () => ({
   __esModule: true,
   simpleGit: jest.fn(() => ({
+    env(value: unknown) { gitEnvMock(value); return this; },
     clone: (...args: unknown[]) => cloneMock(...args),
     remote: (...args: unknown[]) => remoteMock(...args),
     status: (...args: unknown[]) => statusMock(...args),
@@ -123,6 +125,107 @@ describe('parseGithubRepositoryReference', () => {
 });
 
 describe('installGithubServer', () => {
+  it.each([
+    { isolation: null },
+    { isolation: {
+      schemaVersion: 1, kind: 'docker-deny-egress', image: `sha256:${'a'.repeat(64)}`,
+      dockerExecutable: path.join(os.tmpdir(), 'docker'),
+      daemon: process.platform === 'win32' ? 'npipe:////./pipe/dockerDesktopLinuxEngine' : 'unix:///var/run/docker.sock',
+      command: ['node', 'server.js'], environmentNames: [], mounts: [], memoryMiB: 128, cpus: 0.5, pidsLimit: 32,
+    } },
+    { trustedHost: null },
+    { trustedHost: {
+      schemaVersion: 1, kind: 'trusted-host', privileges: 'owner-account', runtime: 'native',
+      entryPoint: process.execPath, sourceRoot: os.tmpdir(), runtimeHome: 'host',
+      sourceDigest: 'a'.repeat(64), executableDigest: 'b'.repeat(64), environmentNames: [],
+    } },
+  ])('refuses explicit runtime profile selection before cloning: %j', async selection => {
+    const envReplacement = jest.replaceProperty(process, 'env', { NODE_ENV: 'production' });
+    try {
+      const result = await prepareGithubServerRuntime({
+        name: 'server', repositoryUrl: 'https://github.com/acme/server.git', env: {}, ...selection,
+      });
+      expect(result).toEqual({
+        installed: false,
+        error: expect.stringMatching(/Host install\/build is not supported by runtime execution grants/),
+      });
+      expect(cloneMock).not.toHaveBeenCalled();
+      expect(rawMock).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      envReplacement.restore();
+    }
+  });
+
+  it.each([
+    ['FLUJO_OWNER_AUTH_FILE', ''], ['FLUJO_OWNER_AUTH_FILE', 'missing-synthetic-policy'],
+    ['FLUJO_MCP_TRUSTED_HOST_FILE', ''], ['FLUJO_MCP_TRUSTED_HOST_FILE', 'missing-synthetic-policy'],
+    ['FLUJO_MCP_ISOLATION_FILE', ''], ['FLUJO_MCP_ISOLATION_FILE', 'missing-synthetic-policy'],
+    ['FLUJO_WORKER_MODE', '1'],
+  ])('refuses protected host installation before cloning for %s=%s', async (name, value) => {
+    const envReplacement = jest.replaceProperty(process, 'env', { NODE_ENV: 'production', [name]: value });
+    try {
+      const result = await prepareGithubServerRuntime({
+        name: 'server', repositoryUrl: 'https://github.com/acme/server.git', env: {},
+      });
+      expect(result).toEqual({
+        installed: false,
+        error: expect.stringMatching(/Host install\/build is not supported by runtime execution grants/),
+      });
+      expect(cloneMock).not.toHaveBeenCalled();
+      expect(rawMock).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(updateServerConfigMock).not.toHaveBeenCalled();
+    } finally {
+      envReplacement.restore();
+    }
+  });
+
+  it('scopes the host environment for both install and build commands', async () => {
+    const envReplacement = jest.replaceProperty(process, 'env', {
+      NODE_ENV: 'production',
+      PATH: 'synthetic-toolchain-path',
+      HOME: 'synthetic-installer-home',
+      OPENAI_API_KEY: 'synthetic-provider-secret',
+      FLUJO_API_KEY: 'synthetic-flujo-secret',
+      NODE_OPTIONS: '--require synthetic-loader',
+      NPM_CONFIG_USERCONFIG: 'synthetic-auth-config',
+      npm_config_include: 'optional',
+    });
+    try {
+      const result = await prepareGithubServerRuntime({
+        name: 'server', repositoryUrl: 'https://github.com/acme/server.git',
+        ref: 'release/2.x',
+        env: { API_TOKEN: 'synthetic-server-secret', LOG_LEVEL: 'debug' },
+        secretEnvNames: ['API_TOKEN'],
+      });
+
+      expect(result.installed).toBe(true);
+      expect(gitEnvMock).toHaveBeenCalledTimes(2);
+      for (const [gitEnv] of gitEnvMock.mock.calls) {
+        expect(gitEnv).toEqual({
+          NODE_ENV: 'production',
+          PATH: 'synthetic-toolchain-path',
+          HOME: 'synthetic-installer-home',
+          npm_config_include: 'dev',
+        });
+      }
+      expect(rawMock).toHaveBeenCalledWith(['fetch', '--depth=1', 'origin', 'release/2.x']);
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      for (const [, options] of spawnMock.mock.calls) {
+        expect(options.env).toEqual({
+          NODE_ENV: 'production',
+          PATH: 'synthetic-toolchain-path',
+          HOME: 'synthetic-installer-home',
+          npm_config_include: 'dev',
+        });
+      }
+      expect(process.env.npm_config_include).toBe('optional');
+    } finally {
+      envReplacement.restore();
+    }
+  });
+
   it('prepares a target runtime without saving or connecting a partially restored server', async () => {
     const result = await prepareGithubServerRuntime({
       name: 'restored-server', repositoryUrl: 'https://github.com/acme/server.git', env: {},

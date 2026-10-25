@@ -2,12 +2,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { windowsPrivateAuthorityStamp } from '@/backend/services/security/windowsPrivateAuthority';
+import { assertIsolatedMcpContainerInspection } from '@/backend/services/security/isolatedMcpInspection';
 import {
   createIsolatedMcpLaunch, isolatedMcpPolicyDigest, McpIsolationError,
   type IsolatedMcpPolicy,
 } from '@/backend/services/security/isolatedMcp';
 
 jest.mock('node:child_process', () => ({ execFileSync: jest.fn() }));
+jest.mock('@/backend/services/security/windowsPrivateAuthority', () => ({ windowsPrivateAuthorityStamp: jest.fn() }));
+jest.mock('@/backend/services/security/isolatedMcpInspection', () => ({
+  ...jest.requireActual('@/backend/services/security/isolatedMcpInspection'), assertIsolatedMcpContainerInspection: jest.fn(),
+}));
+const daemonInfo = { OSType: 'linux', MemoryLimit: true, SwapLimit: true, CpuCfsPeriod: true, CpuCfsQuota: true, PidsLimit: true, SecurityOptions: [] };
 const execute = jest.mocked(execFileSync);
 const id = 'c'.repeat(64);
 const controls = new Set<string>();
@@ -17,6 +24,8 @@ let generation: string;
 let exists: boolean;
 let refuseRemoval: boolean;
 let wrongOwner: boolean;
+let grantsFilename: string | undefined;
+let grantsContent: string | undefined;
 
 beforeEach(() => {
   workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'flujo-mcp-policy-test-'));
@@ -34,14 +43,24 @@ beforeEach(() => {
   exists = false;
   refuseRemoval = false;
   wrongOwner = false;
+  grantsFilename = undefined;
+  grantsContent = undefined;
+  jest.mocked(windowsPrivateAuthorityStamp).mockReset().mockReturnValue('private-file');
+  jest.mocked(assertIsolatedMcpContainerInspection).mockReset();
   execute.mockReset();
   execute.mockImplementation((_command, arguments_) => {
     const args = [...(arguments_ ?? [])] as string[];
     controls.add(args[args.indexOf('--config') + 1]);
     const operation = args.slice(4);
-    if (operation[0] === 'info') return 'linux\n';
-    if (operation[0] === 'image') return 'null\n';
+    if (operation[0] === 'info') return JSON.stringify(daemonInfo);
+    if (operation[0] === 'image') return JSON.stringify({ Id: policy.image, Config: { Volumes: null } });
+    if (operation[1] === 'inspect') return JSON.stringify({ Id: id });
     if (operation[1] === 'create') {
+      const envIndex = args.indexOf('--env-file');
+      if (envIndex !== -1) {
+        grantsFilename = args[envIndex + 1];
+        grantsContent = fs.readFileSync(grantsFilename, 'utf8');
+      }
       generation = args[args.indexOf('--label') + 1].split('=')[1];
       exists = true;
       return `${id}\n`;
@@ -56,8 +75,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  const temp = path.resolve(os.tmpdir());
   for (const directory of [...controls, workspace]) {
+    const temp = path.resolve(directory === workspace ? os.tmpdir() : process.platform === 'win32' ? process.env.LOCALAPPDATA! : os.tmpdir());
     const relative = path.relative(temp, directory);
     if (!/^flujo-mcp-(?:isolation|policy-test)-[A-Za-z0-9]+$/.test(relative)) throw new Error('Unsafe test cleanup target');
     fs.rmSync(directory, { recursive: true, force: true });
@@ -80,13 +99,20 @@ test('creates a stopped container with OS restrictions, then attaches by its exa
   ]));
   expect(args.some(arg => arg.includes('target=/grants/public,readonly'))).toBe(true);
   expect(args).not.toContain('approved secret');
-  expect(createCall[2]?.env).toMatchObject({ TEST_GRANTED_TOKEN: 'approved secret' });
+  expect(grantsContent).toBe('TEST_GRANTED_TOKEN=approved secret\n');
+  expect(grantsFilename).toBeDefined();
+  expect(fs.existsSync(grantsFilename!)).toBe(false);
+  expect(createCall[2]?.env).not.toHaveProperty('TEST_GRANTED_TOKEN');
   expect(createCall[2]?.env).not.toHaveProperty('HOST_SECRET');
   expect(result.env).not.toHaveProperty('TEST_GRANTED_TOKEN');
   expect(result.env).not.toHaveProperty('HOST_SECRET');
   expect(result.env.NODE_ENV).toBe('production');
   expect(result.args.slice(4)).toEqual(['container', 'start', '--attach', '--interactive', id]);
   expect(result.containerId).toBe(id);
+  expect(assertIsolatedMcpContainerInspection).toHaveBeenCalledWith({ Id: id }, expect.objectContaining({
+    containerId: id, generation: result.generation, imageId: policy.image,
+    mounts: [{ source: fs.realpathSync(path.join(workspace, 'storage/mcp-grants/public')), target: '/grants/public' }],
+  }));
   expect(Object.isFrozen(result)).toBe(true);
   expect(Object.isFrozen(result.args)).toBe(true);
   expect(result.close().outcome).toBe('removed');
@@ -145,10 +171,57 @@ test.each([
   expect(execute).not.toHaveBeenCalled();
 });
 
-test.each([undefined, 'a\0b', 'a'.repeat(16 * 1024 + 1)])('rejects missing or invalid environment grant values', value => {
+test.each([undefined, 'a\0b', 'a\rB=bad', 'a\nB=bad', 'a'.repeat(16 * 1024 + 1)])('rejects missing or invalid environment grant values', value => {
   expect(() => createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
     { TEST_GRANTED_TOKEN: value as string })).toThrow(McpIsolationError);
   expect(execute).not.toHaveBeenCalled();
+});
+
+test('container loader and CLI controls cannot influence any host Docker process', () => {
+  policy.environmentNames = ['LD_PRELOAD', 'GODEBUG', 'SSLKEYLOGFILE', 'PATH', 'SYSTEMROOT'];
+  const values = Object.fromEntries(policy.environmentNames.map(name => [name, `container-only-${name}`]));
+  const result = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace, values);
+  expect(grantsContent).toBe(policy.environmentNames.map(name => `${name}=${values[name]}\n`).join(''));
+  result.close();
+  for (const [, args, options] of execute.mock.calls) {
+    for (const [name, value] of Object.entries(values)) {
+      expect(args).not.toContain(value);
+      expect(options?.env?.[name]).not.toBe(value);
+    }
+  }
+});
+
+test('environment files preserve literal equals signs, quotes, spaces and empty values', () => {
+  policy.environmentNames = ['TOKEN', 'EMPTY'];
+  const result = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
+    { TOKEN: 'a=b # literal "value" ', EMPTY: '' });
+  expect(grantsContent).toBe('TOKEN=a=b # literal "value" \nEMPTY=\n');
+  result.close();
+});
+
+test('private grants refuse outsider-readable files before writing secret bytes', () => {
+  const open = fs.openSync;
+  let restore = () => {};
+  if (process.platform === 'win32') {
+    jest.mocked(windowsPrivateAuthorityStamp).mockImplementation(filename => {
+      expect(fs.readFileSync(filename as string)).toHaveLength(0);
+      throw new Error('nonprivate fixture');
+    });
+  } else {
+    const spy = jest.spyOn(fs, 'openSync').mockImplementation((filename, flags, mode) => {
+      const fd = open(filename, flags, mode);
+      if (typeof filename === 'string' && filename.endsWith(`${path.sep}container.env`)) {
+        expect(fs.fstatSync(fd).size).toBe(0);
+        fs.fchmodSync(fd, 0o644);
+      }
+      return fd;
+    });
+    restore = () => spy.mockRestore();
+  }
+  try {
+    expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+    expect(execute.mock.calls.some(([, args]) => args?.includes('create'))).toBe(false);
+  } finally { restore(); }
 });
 
 test('NODE_ENV cannot override the deliberately controlled CLI production environment', () => {
@@ -171,15 +244,29 @@ test('rejects a junction or symlink in a host grant', () => {
 });
 
 test('rejects image-declared volumes rather than granting implicit writable mounts', () => {
-  execute.mockImplementationOnce(() => 'linux').mockImplementationOnce(() => '{"/data":{}}');
+  execute.mockImplementationOnce(() => JSON.stringify(daemonInfo))
+    .mockImplementationOnce(() => JSON.stringify({ Id: policy.image, Config: { Volumes: { '/data': {} } } }));
   expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
   expect(execute).toHaveBeenCalledTimes(2);
 });
 
 test('rejects a non-Linux daemon without creating or executing a host fallback', () => {
-  execute.mockImplementationOnce(() => 'windows');
+  execute.mockImplementationOnce(() => JSON.stringify({ ...daemonInfo, OSType: 'windows' }));
   expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(execute).toHaveBeenCalledTimes(1);
+});
+
+test.each(['MemoryLimit', 'SwapLimit', 'CpuCfsPeriod', 'CpuCfsQuota', 'PidsLimit'])('refuses a daemon without %s support before container creation', capability => {
+  execute.mockImplementationOnce(() => JSON.stringify({ ...daemonInfo, [capability]: false }));
+  expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+test('an unverified created container is removed without returning a start command', () => {
+  jest.mocked(assertIsolatedMcpContainerInspection).mockImplementation(() => { throw new Error('unsafe daemon record'); });
+  expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(exists).toBe(false);
+  expect(execute.mock.calls.some(([, args]) => args?.includes('start') || args?.includes('run'))).toBe(false);
 });
 
 test('reconciles a timed out create only by the matching owned generation', () => {
@@ -193,6 +280,8 @@ test('reconciles a timed out create only by the matching owned generation', () =
   expect(exists).toBe(false);
   expect(execute.mock.calls.some(([, args]) => args?.includes('start') || args?.includes('run'))).toBe(false);
   expect(execute.mock.calls.find(([, args]) => args?.includes('rm'))?.[1]).toContain(id);
+  expect(grantsFilename).toBeDefined();
+  expect(fs.existsSync(grantsFilename!)).toBe(false);
 });
 
 test('redacts daemon failures and provides no host fallback', () => {
