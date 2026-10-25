@@ -19,6 +19,7 @@ import path from 'node:path';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { prepareImageInput } from './prepareImageInput';
 import { searchCompactionResource } from '@/backend/services/runResources/searchCompactionResource';
+import { NativeReadResourceError } from './nativeReadResourceError';
 
 /**
  * Run-resource tools (Tier 3, issue #161).
@@ -180,6 +181,7 @@ export interface RunResourceToolOutcome {
 
 /** Native adapters receive actual MCP image blocks, never base64 in JSON text. */
 export function nativeRunResourceResult(outcome: RunResourceToolOutcome): unknown {
+  if (!outcome.success) throw new NativeReadResourceError(outcome.error ?? 'read_resource failed');
   if (!outcome.media?.length) return outcome.data;
   return { content: [{ type: 'text', text: JSON.stringify(outcome.data) },
     ...outcome.media.filter(part => part.type === 'image' && part.data)

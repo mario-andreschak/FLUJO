@@ -214,6 +214,14 @@ File identity, directory, hard-link and terminal-effect checks remain unchanged.
 A permitted response must not become an unsafe-file error merely because its
 durable receipt includes both the result and its transcript.
 
+Returned results beyond Native's output limits are saved as private run resources
+and represented by bounded previews. If storage fails, the preview identifies
+that loss. Terminal receipts cache the returned representation without repeating
+the tool effect. A handled `read_resource` failure, such as searching a response
+that is not a compaction tree, is returned as a tool error so the model can
+correct its read. Transport failures, unclassified executor exceptions and
+revoked ownership still retain their existing holds and delivery fences.
+
 The terminal-only fixture's private MCP grant explicitly supplies the selected
 Node installation, standard OS tool directories and a fixture-local home. It
 does not inherit the operator's ambient PATH or unrelated environment variables.

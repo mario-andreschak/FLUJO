@@ -14,6 +14,8 @@ import {
 import { NATIVE_HANDOFF_PROTOCOL } from '@/backend/execution/flow/handlers/nativeHandoffProtocol';
 import * as runResources from '@/backend/services/runResources';
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
+import { NativeReadResourceError } from '@/backend/execution/flow/handlers/nativeReadResourceError';
+import { nativeRunResourceResult } from '@/backend/execution/flow/handlers/runResourceTools';
 
 jest.mock('@/backend/services/runResources', () => {
   const actual = jest.requireActual('@/backend/services/runResources');
@@ -610,6 +612,52 @@ describe('native broker journal', () => {
     await expect(port.dispatch(call)).rejects.toThrow(/unresolved/);
     await expect(port.dispatch(call)).rejects.toThrow(/unresolved/);
     expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a handled resource-read failure without holding the Native turn or repeating the read', async () => {
+    const tools = [tool('read_resource')];
+    const executor = jest.fn(async (args: Record<string, unknown>) => nativeRunResourceResult(args.corrected
+      ? { success: true, data: { text: 'saved response' } }
+      : { success: false, error: 'Search requires a stored compaction tree in this conversation.' }));
+    const receipt = await prepareNativeInvocation(owner('read-error', nativeToolInventoryDigest(tools, undefined, { read_resource: executor })));
+    await submitNativeInvocation(receipt);
+    const current = jest.fn(async () => undefined);
+    const signal = new AbortController().signal;
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: { read_resource: executor },
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'], authority: createNativeBrokerAuthority('lease-a', current), signal });
+    const call = { toolInvocationId: 'bad-search', name: 'read_resource', args: {}, signal };
+    const result = await port.dispatch(call);
+    expect(result.result.isError).toBe(true);
+    expect(result.transcriptText).toContain('Search requires a stored compaction tree');
+    expect(await port.dispatch(call)).toEqual(result);
+    expect(executor).toHaveBeenCalledTimes(1);
+    await expect(port.dispatch({ ...call, toolInvocationId: 'corrected-read', args: { corrected: true } }))
+      .resolves.toMatchObject({ result: { content: [{ type: 'text', text: JSON.stringify({ text: 'saved response' }) }] } });
+    expect(executor).toHaveBeenCalledTimes(2);
+    await finishNativeInvocation(receipt, 'completed', { assertCurrent: async () => undefined, signal });
+    await expect(readNativeInvocationTerminalEvidence(receipt.invocationId, receipt.owner, 'default-workspace'))
+      .resolves.toMatchObject({ holdAbsent: true, effectsResolved: true });
+  });
+
+  it('keeps unclassified synthetic failures unresolved and refuses handled read errors after revocation', async () => {
+    const tools = [tool('read_resource')];
+    let revoked = false;
+    const executor = jest.fn(async (args: Record<string, unknown>) => {
+      if (args.uncertain) throw new Error('read executor failed unexpectedly');
+      revoked = true;
+      throw new NativeReadResourceError('handled read error');
+    });
+    const receipt = await prepareNativeInvocation(owner('read-error-fence', nativeToolInventoryDigest(tools, undefined, { read_resource: executor })));
+    await submitNativeInvocation(receipt);
+    const signal = new AbortController().signal;
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: { read_resource: executor },
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'], signal,
+      authority: createNativeBrokerAuthority('lease-a', async () => { if (revoked) throw new Error('owner revoked'); }) });
+    const call = { toolInvocationId: 'uncertain', name: 'read_resource', args: { uncertain: true }, signal };
+    await expect(port.dispatch(call)).rejects.toThrow('read executor failed unexpectedly');
+    await expect(port.dispatch(call)).rejects.toThrow(/unresolved/);
+    await expect(port.dispatch({ ...call, toolInvocationId: 'revoked', args: {} })).rejects.toThrow('owner revoked');
+    expect(executor).toHaveBeenCalledTimes(2);
   });
 
   it('rejects strict handoff inventory before creating a native invocation', () => {
