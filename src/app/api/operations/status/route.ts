@@ -10,6 +10,7 @@ import { collectOperationsSnapshot, getObservationProcessId } from '@/backend/se
 import { getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
 import { getSubflowPreparationDiagnostics } from '@/backend/execution/flow/subflowPreparationBudget';
 import { getSubflowOutputDiagnostics } from '@/backend/execution/flow/subflowOutputBudget';
+import { getAllocationReservationSnapshot } from '@/backend/execution/flow/allocationReservations';
 
 export const runtime = 'nodejs';
 
@@ -24,9 +25,10 @@ const GET_handler = async (request: Request, admission: Admission) => {
   const locked = await assertUnlocked();
   if (locked) return locked;
   try {
-    const [{ getSchedulerService }, { FlowExecutor }, { listRuntimes }, { inspectWorkerRecovery }] = await Promise.all([
+    const [{ getSchedulerService }, { FlowExecutor }, { listRuntimes }, { inspectWorkerRecovery }, { getConversationSequenceDiagnostics }] = await Promise.all([
       import('@/backend/services/scheduler'), import('@/backend/execution/flow/FlowExecutor'),
       import('@/backend/services/mcp/lifecycleCoordinator'), import('@/backend/services/scheduler/workerLocalRecovery'),
+      import('@/backend/execution/flow/conversationLog'),
     ]);
     const scheduler = getSchedulerService();
     const budget = process.env.FLUJO_OPERATIONS_RSS_BUDGET_BYTES;
@@ -48,7 +50,8 @@ const GET_handler = async (request: Request, admission: Admission) => {
     const unavailable = assertWorkerRequestReady(request, workspace);
     if (unavailable) return unavailable;
     return Response.json({ ...snapshot, flowRunAdmission: getFlowRunAdmissionDiagnostics(),
-      subflowPreparation: getSubflowPreparationDiagnostics(), subflowOutput: getSubflowOutputDiagnostics() }, {
+      subflowPreparation: getSubflowPreparationDiagnostics(), subflowOutput: getSubflowOutputDiagnostics(),
+      conversationSequences: getConversationSequenceDiagnostics(), allocationReservations: getAllocationReservationSnapshot() }, {
       headers: { 'Cache-Control': 'no-store' },
     });
   } catch {

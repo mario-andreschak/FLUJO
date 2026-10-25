@@ -2,6 +2,7 @@ import { types } from 'node:util';
 import { getHeapStatistics } from 'node:v8';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { getFlowRunAdmissionDiagnostics } from './runAdmission';
+import { pendingAllocationBytes, setAllocationReservation } from './allocationReservations';
 
 const MiB = 1024 * 1024;
 export const SUBFLOW_PREPARATION_LIMITS = Object.freeze({
@@ -35,6 +36,7 @@ const globalBudget = globalThis as typeof globalThis & { __flujoSubflowPreparati
 const ledger = globalBudget.__flujoSubflowPreparation ??= { bytes: 0, active: 0, rejectedTooLarge: 0, rejectedMemory: 0 };
 ledger.rejectedTooLarge ??= 0;
 ledger.rejectedMemory ??= 0;
+setAllocationReservation('preparation', ledger.bytes);
 
 export class SubflowPreparationBudget {
   private bytes = 0;
@@ -54,7 +56,7 @@ export class SubflowPreparationBudget {
     const total = ledger.bytes - this.bytes + requested;
     const heap = getHeapStatistics();
     const flow = getFlowRunAdmissionDiagnostics();
-    const pending = total + flow.reservedBytes;
+    const pending = pendingAllocationBytes('preparation', total);
     const available = heap.heap_size_limit * 0.8 - heap.used_heap_size - 64 * MiB;
     const rss = process.memoryUsage().rss;
     if (!releasing && (total > SUBFLOW_PREPARATION_LIMITS.processBytes || !Number.isFinite(available)
@@ -62,6 +64,7 @@ export class SubflowPreparationBudget {
       throw new SubflowPreparationPressureError('SUBFLOW_PREPARATION_MEMORY', 'aggregate preparation allocation capacity is busy');
     }
     ledger.bytes = total;
+    setAllocationReservation('preparation', ledger.bytes);
     this.bytes = requested;
     this.baseBytes = base;
     this.scratchBytes = scratch;
@@ -89,6 +92,7 @@ export class SubflowPreparationBudget {
     if (this.closed) return;
     this.closed = true;
     ledger.bytes -= this.bytes;
+    setAllocationReservation('preparation', ledger.bytes);
   }
 }
 export async function withSubflowPreparationBudget<T>(task: (budget: SubflowPreparationBudget) => Promise<T>): Promise<T> {

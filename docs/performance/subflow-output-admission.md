@@ -19,10 +19,17 @@ media, histories, lane identities and dispatch attempts remain intact.
 | Concurrent promotions | 4 |
 
 These are conservative representation estimates, not OS memory reservations.
-The ledger also checks available V8 heap and RSS with outstanding Flow and
-preparation reservations. Authenticated operations status exposes numeric
+The ledger also checks available V8 heap and RSS using fixed process-wide
+observations for Flow, preparation, output and chat-ingress reservations. Each
+component retains its own limits and ownership; these four numeric slots do
+not register payloads or dynamic owners. Existing occupied ledgers initialize
+the observations on reload. Older release closures from before this mechanism
+may conservatively leave observations overstated until the component reloads
+or the process restarts. They never justify dropping an occupied reservation.
+Authenticated operations status exposes numeric
 `subflowOutput` active/reserved/refusal counters and policy values, without
-conversation IDs or output content. Policy is fixed before qualification;
+conversation IDs or output content, together with the shared observations and
+conversation sequence/descriptor pressure. Policy is fixed before qualification;
 failed memory profiles must not be addressed by raising the limits.
 
 Descriptor checks reject accessors, proxies, serialization hooks and cycles

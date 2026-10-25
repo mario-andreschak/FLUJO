@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { types } from 'node:util';
 import { getHeapStatistics } from 'node:v8';
+import { pendingAllocationBytes, setAllocationReservation } from './allocationReservations';
 
 import { getCurrentWorkspace } from '@/utils/workspace';
 
@@ -70,6 +71,7 @@ const runtime = globalRuntime.__flujoFlowRunAdmission ??= {
   active: 0, bytes: 0, workspaces: new Map(), reservations: new WeakMap(), scope: new AsyncLocalStorage(),
   rejectedBusy: 0, rejectedMemory: 0, rejectedInput: 0,
 };
+setAllocationReservation('run', runtime.bytes);
 
 function configured(name: string, fallback: number): number {
   const value = Number(process.env[`FLUJO_RUN_ADMISSION_${name}`]);
@@ -195,9 +197,10 @@ function checkMemory(bytes: number, workspace: WorkspaceUsage | undefined, repla
   // Reservations deliberately overlap already materialized input. This is a
   // conservative admission estimate, not a claim of exact RSS/heap accounting.
   const availableHeap = heap.heap_size_limit - heap.used_heap_size - Math.ceil(heap.heap_size_limit * 0.2) - 64 * MiB;
+  const pending = pendingAllocationBytes('run', processBytes);
   if (processBytes > config.maxProcessBytes || workspaceBytes > config.maxWorkspaceBytes
-    || !Number.isFinite(availableHeap) || processBytes > availableHeap
-    || !Number.isFinite(rss) || rss + processBytes > config.maxRssBytes) refuse('FLOW_RUN_MEMORY');
+    || !Number.isFinite(availableHeap) || pending > availableHeap
+    || !Number.isFinite(rss) || rss + pending > config.maxRssBytes) refuse('FLOW_RUN_MEMORY');
 }
 
 /** Immediate admission; reservations include time spent waiting for conversation locks. */
@@ -222,6 +225,7 @@ export function acquireFlowRunAdmission<T extends FlowRunAdmissionInput>(input: 
     if (!reservation.open) return;
     reservation.open = false;
     runtime.active--; runtime.bytes -= reservation.bytes;
+    setAllocationReservation('run', runtime.bytes);
     owner.active--; owner.bytes -= reservation.bytes;
     if (conversationId !== undefined) {
       const count = owner.conversations.get(conversationId)! - 1;
@@ -232,6 +236,7 @@ export function acquireFlowRunAdmission<T extends FlowRunAdmissionInput>(input: 
   } });
   runtime.reservations.set(permit, reservation);
   runtime.active++; runtime.bytes += bytes;
+  setAllocationReservation('run', runtime.bytes);
   owner.active++; owner.bytes += bytes;
   if (conversationId !== undefined) owner.conversations.set(conversationId, (owner.conversations.get(conversationId) ?? 0) + 1);
   return permit;
@@ -265,6 +270,7 @@ export function recheckFlowRunAdmission<T extends FlowRunAdmissionInput>(permit:
   checkMemory(bytes, usage, reservation.bytes, config);
   const growth = bytes - reservation.bytes;
   runtime.bytes += growth; usage.bytes += growth; reservation.bytes = bytes;
+  setAllocationReservation('run', runtime.bytes);
 }
 
 /** Scope owns preflight cleanup even when setup fails before runFlow claims it. */

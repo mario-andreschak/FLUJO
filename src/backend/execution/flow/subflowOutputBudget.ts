@@ -2,7 +2,7 @@ import { types } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getHeapStatistics } from 'node:v8';
 import { getFlowRunAdmissionDiagnostics } from './runAdmission';
-import { getSubflowPreparationDiagnostics } from './subflowPreparationBudget';
+import { pendingAllocationBytes, setAllocationReservation } from './allocationReservations';
 
 const MiB = 1024 * 1024;
 export const SUBFLOW_OUTPUT_LIMITS = Object.freeze({
@@ -17,6 +17,7 @@ const globals = globalThis as typeof globalThis & { __flujoSubflowOutput?: {
   __flujoSubflowFolds?: WeakMap<object, Promise<void>>;
 };
 const ledger = globals.__flujoSubflowOutput ??= { bytes: 0, active: 0, rejectedTooLarge: 0, rejectedMemory: 0 };
+setAllocationReservation('output', ledger.bytes);
 export class SubflowOutputPressureError extends Error {
   readonly status: 413 | 503;
   readonly details: { code: Code; status: number; type: string; retryAfter?: string };
@@ -126,7 +127,7 @@ export class SubflowOutputBudget {
     if (next === this.bytes) return;
     const total = ledger.bytes - this.bytes + next;
     const flow = getFlowRunAdmissionDiagnostics();
-    const pending = total + flow.reservedBytes + getSubflowPreparationDiagnostics().reservedBytes;
+    const pending = pendingAllocationBytes('output', total);
     const heap = getHeapStatistics();
     const rss = process.memoryUsage().rss;
     if (total > SUBFLOW_OUTPUT_LIMITS.processBytes || pending > heap.heap_size_limit * 0.8 - heap.used_heap_size - 64 * MiB
@@ -134,6 +135,7 @@ export class SubflowOutputBudget {
       throw new SubflowOutputPressureError('SUBFLOW_OUTPUT_MEMORY', 'aggregate output allocation capacity is busy');
     }
     ledger.bytes = total; this.bytes = next;
+    setAllocationReservation('output', ledger.bytes);
   }
   fallback(chars: number, parts = 0): void {
     assertOutputChars(chars);
@@ -157,6 +159,7 @@ export class SubflowOutputBudget {
   release(): void {
     if (this.closed) return;
     this.closed = true; ledger.bytes -= this.bytes; ledger.active--;
+    setAllocationReservation('output', ledger.bytes);
   }
 }
 
