@@ -296,6 +296,13 @@ test('child outcomes reject missing dispatch, arbitrary errors, wrong retry coun
   const refused = { status: 'error', lastResponse: { errorDetails: { code: 'MODEL_TURN_ARCHIVE_MEMORY_LIMIT' } } };
   const failedLane = { status: 'error', error: 'typed archive refusal' };
   assert.equal(assertChildOutcome(5, failedLane, refused, provider(5, 0), 0).kind, 'pre-sdk-archive-refusal');
+  for (const code of ['MODEL_TURN_ARCHIVE_MEMORY_LIMIT', 'MODEL_TURN_ARCHIVE_MEMORY_BUSY']) {
+    const archiveRefusal = { ...refused, lastResponse: { errorDetails: { code } } };
+    for (const index of [3, 4]) assert.throws(() => assertChildOutcome(index, failedLane, archiveRefusal, provider(index, 0), 0),
+      /Required child outcome cannot be replaced/);
+    for (const index of [5, 6, 7]) assert.equal(assertChildOutcome(index, failedLane, archiveRefusal, provider(index, 0), 0).kind,
+      'pre-sdk-archive-refusal');
+  }
   assert.throws(() => assertChildOutcome(5, failedLane, { ...refused, lastResponse: { errorDetails: { code: 'arbitrary_error' } } }, provider(5, 0), 0));
   assert.throws(() => assertChildOutcome(5, failedLane, refused, provider(5, 0), 1));
   const permanent = { status: 'error', lastResponse: { error: TERMINAL_MARKER, errorDetails: { code: TERMINAL_CODE } } };

@@ -31,9 +31,10 @@ four. Every admitted child is checked against fixed provider outcome counters,
 its logical archive dispatch count and its durable lane/history. Child 3 must
 have exactly one permanent 400 with the exact provider code and marker; child 4
 must have exactly two physical requests, one 429 and one exact completion marker.
-Children 5–7 must have exactly one matching completion. A child with zero
-requests is accepted only with a typed archive-memory refusal and no logical
-dispatch; arbitrary lane errors fail. Completed fixtures must never redispatch.
+Children 5–7 must have exactly one matching completion, or zero requests with a
+typed archive-memory refusal and no logical dispatch. This exception applies
+only to children 5–7; the required child 3 and 4 provider paths cannot be skipped.
+Arbitrary lane errors fail. Completed fixtures must never redispatch.
 
 Other controls exercise a held live request, a debugger pause, real unread and
 disconnected SSE bodies, SDK retry, explicit same-conversation `runFlow` retry

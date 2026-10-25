@@ -49,6 +49,7 @@ function assertChildOutcome(index, lane, state, provider, dispatchCount) {
     return { model, kind: 'saved-completed-fixture', physicalRequests: 0 };
   }
   if (count === 0) {
+    assert(index >= 5 && index <= 7, 'Required child outcome cannot be replaced by an archive refusal');
     const code = state.lastResponse?.errorDetails?.code;
     assert.equal(state.status, 'error'); assert.equal(lane.status, 'error'); assert.equal(dispatchCount, 0);
     assert(ARCHIVE_REFUSALS.has(code), 'Missing child dispatch was not a typed pre-SDK archive refusal');
