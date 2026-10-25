@@ -5,13 +5,17 @@ import { appendFromBus, appendRawForState, replaceConversationTranscript, flushC
   _setConversationLogDirForTests, latestSequence, readConversationLogForReplay } from '@/backend/execution/flow/conversationLog';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
-import type { SharedState } from '@/backend/execution/flow/types';
+import { getConversationPublicationDiagnostics, publishConversation, CONVERSATION_PUBLICATION_LIMITS } from '@/backend/execution/flow/conversationPublication';
+import type { SharedState, SubflowInvocation } from '@/backend/execution/flow/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { StorageKey } from '@/shared/types/storage';
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 import { fenceSubflowFold } from '@/backend/execution/flow/subflowFoldFence';
 import { saveItem } from '@/utils/storage/backend';
+import { persistSubflowParent } from '@/backend/execution/flow/subflowRecovery';
+import { persistConversationSummary } from '@/backend/execution/flow/conversationSummaryStore';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { runWithWorkspace } from '@/utils/workspace';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
 jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({ persistConversationSummary: jest.fn(async () => {}) }));
@@ -34,6 +38,7 @@ const events = async (value: SharedState): Promise<ExecutionEvent[]> => (await f
 beforeAll(async () => { directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-publication-')); previous = _setConversationLogDirForTests(directory); });
 afterEach(() => {
   jest.restoreAllMocks(); FlowExecutor.conversationStates.clear();
+  jest.mocked(persistConversationSummary).mockReset().mockResolvedValue(undefined);
   expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 0, allocationBytes: 0, retainedBytes: 0, chains: 0 });
 });
 afterAll(async () => { _setConversationLogDirForTests(previous); await fs.rm(directory, { recursive: true, force: true }); });
@@ -57,6 +62,103 @@ it('captures the complete snapshot before authority waits', async () => {
   value.messages[0].content = 'changed while waiting';
   blocked.release(); await saving;
   expect(JSON.parse(await fs.readFile(snapshotPath(value), 'utf8')).messages[0].content).toBe('old');
+});
+
+it('coalesces four large live-parent checkpoints and acknowledges every lane outcome only after the trailing snapshot', async () => {
+  const value = state(), entered = gate(), blocked = gate();
+  value.status = 'running';
+  value.messages = [message('parent', 'p'.repeat(2_000_000))];
+  const laneInput = 'l'.repeat(5_600_000);
+  const invocation: SubflowInvocation = { version: 1, id: 'visit', parentConversationId: value.conversationId!, parentNodeId: 'parent',
+    status: 'running', depth: 0, showSteps: false, concurrencyLimit: 4, joinSeparator: '\n', errorStrategy: 'collect-all',
+    createdAt: 1, updatedAt: 1, lanes: Array.from({ length: 8 }, (_, index) => ({ id: `lane-${index}`, index, count: 8,
+      subflowId: 'child', conversationId: `child-${index}`, status: 'pending', attempt: 0, updatedAt: 1, prompt: laneInput })) };
+  value.subflowInvocations = { visit: invocation };
+  value.executionAuthority = { signal: new AbortController().signal, assertCurrent: async () => { entered.release(); await blocked.promise; } };
+  const checkpoints: Array<Array<{ status: string; outputText?: string }>> = [];
+  jest.mocked(persistConversationSummary).mockImplementation(async (_id, snapshot) => {
+    checkpoints.push(snapshot.subflowInvocations!.visit.lanes.map(lane => ({ status: lane.status, outputText: lane.outputText })));
+  });
+  const before = getConversationPublicationDiagnostics();
+  invocation.lanes[0].status = 'running';
+  const pending = [persistSubflowParent(value)];
+  await entered.promise;
+  for (let index = 1; index < 4; index++) { invocation.lanes[index].status = 'running'; pending.push(persistSubflowParent(value)); }
+  expect(getConversationPublicationDiagnostics().retainedBytes).toBeGreaterThan(93_600_000);
+  expect(getConversationPublicationDiagnostics().retainedBytes).toBeLessThan(128 * 1024 * 1024);
+  let acknowledged = 0;
+  for (const promise of pending) void promise.then(() => { acknowledged++; });
+  await new Promise(resolve => setImmediate(resolve)); expect(acknowledged).toBe(0);
+  blocked.release(); await Promise.all(pending);
+  expect(checkpoints).toHaveLength(2);
+  expect(checkpoints[0].map(lane => lane.status)).toEqual(['running', ...Array(7).fill('pending')]);
+  expect(checkpoints[1].map(lane => lane.status)).toEqual([...Array(4).fill('running'), ...Array(4).fill('pending')]);
+  await Promise.all(invocation.lanes.slice(0, 4).map((lane, index) => {
+    lane.status = 'completed'; lane.outputText = `owned-result-${index}`;
+    return persistSubflowParent(value);
+  }));
+  expect(checkpoints.at(-1)!.slice(0, 4)).toEqual(Array.from({ length: 4 }, (_, index) => ({ status: 'completed', outputText: `owned-result-${index}` })));
+  expect((await fs.stat(snapshotPath(value))).size).toBeGreaterThan(46_800_000);
+  expect(FlowExecutor.conversationStates.get(value.conversationId!)).toBe(value);
+  expect(value.messages[0].content.length).toBe(2_000_000);
+  expect(invocation.lanes.every(lane => lane.prompt === laneInput)).toBe(true);
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, writers: 0, retainedBytes: 0, allocationBytes: 0 });
+}, 30_000);
+
+it('releases a coalesced parent cohort on definite storage failure and retries its latest owned progress', async () => {
+  const value = state(), entered = gate(), blocked = gate(), primary = Object.assign(new Error('checkpoint disk full'), { code: 'ENOSPC' });
+  value.status = 'running';
+  value.executionAuthority = { signal: new AbortController().signal, assertCurrent: async () => { entered.release(); await blocked.promise; } };
+  const before = getConversationPublicationDiagnostics();
+  jest.spyOn(fs, 'rename').mockRejectedValueOnce(primary);
+  const first = persistSubflowParent(value); await entered.promise;
+  value.messages.push(message('later-outcome'));
+  const second = persistSubflowParent(value);
+  const results = Promise.allSettled([first, second]); blocked.release();
+  const settled = await results;
+  expect(settled).toEqual([expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_IO', cause: primary }) }),
+    expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_IO', cause: primary }) })]);
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, allocationBytes: 0 });
+  jest.mocked(persistConversationSummary).mockImplementation(async () => {});
+  await persistSubflowParent(value);
+  expect(JSON.parse(await fs.readFile(snapshotPath(value), 'utf8')).messages.map((item: FlujoChatMessage) => item.id)).toEqual(['old', 'later-outcome']);
+});
+
+it('rejects a coalesced parent from another workspace before publishing cache or timestamp changes', async () => {
+  const value = state(), entered = gate(), blocked = gate();
+  value.status = 'running';
+  value.executionAuthority = { signal: new AbortController().signal, assertCurrent: async () => { entered.release(); await blocked.promise; } };
+  const first = persistSubflowParent(value); await entered.promise;
+  const before = value.updatedAt;
+  const set = jest.spyOn(FlowExecutor.conversationStates, 'set');
+  const open = jest.spyOn(fs, 'open');
+  try {
+    await runWithWorkspace('different-checkpoint-workspace', async () => {
+      await expect(persistSubflowParent(value)).rejects.toMatchObject({ code: 'flow_execution_authority_lost' });
+    });
+    expect(set).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
+    expect(value.updatedAt).toBe(before);
+  } finally { blocked.release(); await first; }
+});
+
+it('refuses a bus marker before live delivery or filesystem I/O without retaining an uncertain owner', async () => {
+  const value = state(), blocked = gate(), before = getConversationPublicationDiagnostics();
+  FlowExecutor.conversationStates.set(value.conversationId!, value);
+  const pending: Promise<void>[] = [];
+  while (getConversationPublicationDiagnostics().owners < CONVERSATION_PUBLICATION_LIMITS.owners) {
+    pending.push(publishConversation('refused-bus-capacity', null, async () => blocked.promise));
+  }
+  const listener = jest.fn(), unsubscribe = executionEventBus.subscribe(value.conversationId!, listener);
+  const open = jest.spyOn(fs, 'open');
+  try {
+    expect(() => executionEventBus.emitterFor(value.conversationId!)({ type: 'model:dispatch', turn: {} } as never))
+      .toThrow(expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_BUSY' }));
+    expect(listener).not.toHaveBeenCalled();
+    expect(executionEventBus.getBufferedSince(value.conversationId!, 0)).toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+  } finally { unsubscribe(); blocked.release(); await Promise.all(pending); }
+  await flushConversationLog(value.conversationId!);
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, writers: 0, retainedBytes: 0, allocationBytes: 0 });
 });
 
 it('refuses a replacement capture before reserving sequence space or changing durable history', async () => {

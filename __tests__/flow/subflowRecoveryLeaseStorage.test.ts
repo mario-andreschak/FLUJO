@@ -356,7 +356,8 @@ describe('parent resume lease with real storage', () => {
           error => error,
         );
         storageFailure = failure;
-        expect(['EISDIR', 'EPERM', 'EACCES', 'ENOTEMPTY', 'EEXIST']).toContain((failure as NodeJS.ErrnoException).code);
+        expect(failure).toMatchObject({ code: 'CONVERSATION_PUBLICATION_IO' });
+        expect(['EISDIR', 'EPERM', 'EACCES', 'ENOTEMPTY', 'EEXIST']).toContain(((failure as Error).cause as NodeJS.ErrnoException).code);
         expect(writes).toBe(2);
         expect(runFlowMock).not.toHaveBeenCalled();
         expect(global.__flujo_subflow_parent_resume_leases?.has(workspaceCacheKey('lease-invocation'))).toBe(false);

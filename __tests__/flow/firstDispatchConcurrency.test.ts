@@ -36,6 +36,8 @@ import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchi
 import { ensureWorkspaceDirs, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import { withWorkspaceMutation, withWorkspaceRecoveryCapture } from '@/backend/services/workspace/workspaceMutationGate';
 import { getFlowRunAdmissionDiagnostics, isFlowRunPressureError } from '@/backend/execution/flow/runAdmission';
+import { getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
 jest.setTimeout(180_000);
 let server: Server;
@@ -98,6 +100,10 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
     mockArchivePeakBytes = 0; mockArchivePeakWaiters = 0;
     const started = performance.now();
     const ids = Array.from({ length: count }, (_, index) => `dispatch-${protectedRun ? 'p' : 'o'}-${count}-${index}`);
+    const logicalDispatches = new Map<string, number>();
+    const unsubscribeDispatches = executionEventBus.subscribeGlobal(({ event }) => {
+      if (event.type === 'model:dispatch') logicalDispatches.set(event.conversationId, (logicalDispatches.get(event.conversationId) ?? 0) + 1);
+    });
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(new Error('Local batch deadline exceeded')), 120_000);
     const sampleMemory = setInterval(() => {
@@ -108,7 +114,7 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
       return runFlow({ conversationId, flowId: flow.id, prompt: conversationId, source: 'api', mode: 'conversation',
         abortSignal: controller.signal,
         ...(protectedRun ? { executionAuthority: { signal: controller.signal, assertCurrent: async () => {} } } : {}) });
-    })).finally(() => { clearTimeout(deadline); clearInterval(sampleMemory); });
+    })).finally(() => { clearTimeout(deadline); clearInterval(sampleMemory); unsubscribeDispatches(); });
     const results = submissions.flatMap(submission => submission.status === 'fulfilled' ? [submission.value] : []);
     const refused = submissions.filter(submission => submission.status === 'rejected');
     const latencies = ids.flatMap(id => (requests.get(id) ?? []).slice(0, 1).map(time => time - started)).sort((a, b) => a - b);
@@ -118,6 +124,7 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
       lastMs: Math.round(latencies.at(-1) ?? 0), completedMs: Math.round(performance.now() - started),
       errors: [...new Set(results.filter(result => result.status !== 'completed').map(result => result.error?.details?.code ?? result.error?.message))],
       archivePressure: getArchiveWritePressure(),
+      publicationPressure: getConversationPublicationDiagnostics(),
       archivePeak: { bytes: mockArchivePeakBytes, waiters: mockArchivePeakWaiters },
       admission: { count: mockAdmissions.length,
         beforeFirstDispatch: mockAdmissions.filter(timing => timing.start < started + (latencies[0] ?? 0)).length,
@@ -139,13 +146,16 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
         continue;
       }
       const result = submission.value;
-      if (!protectedRun) expect(result.status).toBe('completed');
       if (result.status === 'completed') {
         expect(result.outputText).toBe(`answer ${id}`);
         expect(requests.get(id)).toHaveLength(1);
       } else {
-        expect(result).toMatchObject({ status: 'error', error: { details: { code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' }, statusCode: 429 } });
+        // Both local admission boundaries may refuse this oversubscribed batch.
+        // Neither refusal may be accepted after a logical or physical dispatch.
+        expect(result).toMatchObject({ status: 'error', error: { statusCode: 429 } });
+        expect(['MODEL_TURN_ARCHIVE_MEMORY_BUSY', 'CONVERSATION_PUBLICATION_BUSY']).toContain(result.error?.details?.code);
         expect(requests.get(id) ?? []).toHaveLength(0);
+        expect(logicalDispatches.get(id) ?? 0).toBe(0);
       }
       await flushConversationLog(id);
       const state = await loadItem<SharedState | undefined>(`conversations/${id}` as StorageKey, undefined);
@@ -154,13 +164,17 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
         expect(state?.recovery?.classification).toBe('completed');
         expect(state?.messages.filter(message => message.role === 'assistant' && message.content === `answer ${id}`)).toHaveLength(1);
       }
-      expect((await readConversationLog(id) ?? []).filter(event => event.type === 'run:done')).toHaveLength(1);
+      const events = await readConversationLog(id) ?? [];
+      expect(events.filter(event => event.type === 'run:done')).toHaveLength(1);
+      if (result.status !== 'completed') expect(events.filter(event => event.type === 'model:dispatch')).toHaveLength(0);
       const summary = JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'conversation-summaries', `${id}.json`), 'utf8'));
       expect(summary).toMatchObject({ id, status: result.status });
     }
     expect(refused).toHaveLength(Math.max(0, count - getFlowRunAdmissionDiagnostics().maxWorkspaceRuns));
     expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0, workspaceActiveRuns: 0 });
     expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });
+    expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, allocationBytes: 0,
+      retainedBytes: 0, queuedWriters: 0, chains: 0, fences: 0, receipts: 0, quarantinedWriterSlots: 0 });
     expect(globalThis.__flujo_workspace_writer_admission_chains?.size ?? 0).toBe(0);
     await expect(withWorkspaceRecoveryCapture(async () => 'drained')).resolves.toBe('drained');
   });

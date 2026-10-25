@@ -48,6 +48,15 @@ nested work settles. Diagnostics expose only numeric owners, writers, captures,
 allocation bytes, queued writers, fences, receipts, and quarantined writer slots.
 The allocation observer has one fixed `publication` slot.
 
+Concurrent progress checkpoints for the same running subflow parent share one
+admitted publisher owner. Its run or preparation already owns the live canonical
+state; the publisher captures it only after reaching its writer. A dirty bit
+requests a trailing snapshot when another lane changes that state during I/O,
+and every caller waits for that snapshot to settle. This avoids retaining four
+copies of one parent's large history. Workspace and execution ownership must
+match before joining the checkpoint. Staged fold writes and newly submitted
+parked recovery or terminal snapshots retain their independent capture semantics.
+
 ## Transcript replacement
 
 Replacement appends context tombstones and replacement messages; it does not
@@ -67,7 +76,9 @@ rollback, or close outcomes retain the new log/live transcript for reconciliatio
 they never trigger a guessed rollback. A rollback failure preserves the primary
 snapshot error.
 
-Bus events receive sequence numbers synchronously. Replacement therefore
+Bus events receive sequence numbers synchronously. A synchronous publication
+refusal precedes live delivery and replay retention, leaves only a sequence gap,
+and creates no uncertain-I/O fence. Replacement therefore
 reserves an interval of `65,536 + replacement.length` before it waits, ensuring
 later independently stamped bus events cannot appear earlier in file order.
 Events consume the tail of that interval so the final durable event seals its
@@ -98,8 +109,8 @@ does not guess an automatic winner or provide an operator action that discards
 an unresolved intent.
 
 Required publication failures use typed busy, memory, data, I/O, or uncertain
-errors. A bus failure becomes a fence observed by the durability flush. Terminal
-cleanup recognizes these errors, preserves a preceding execution failure, and
+errors. An asynchronous bus failure becomes a fence observed by the durability
+flush. Terminal cleanup recognizes these errors, preserves a preceding execution failure, and
 does not report successful persistence after the final snapshot retry fails.
 The default event emitter and HTTP/SSE submission path preserve these typed
 errors. Model dispatch waits for its required marker; a result-marker failure

@@ -186,8 +186,9 @@ it.each(['provider', 'tool', 'authority'] as const)('keeps the primary %s failur
     throw primary;
   });
   seedState(`failed-projection-${kind}`);
-  const outcome = await callModel(`failed-projection-${kind}`);
-  expect(outcome).toMatchObject({ success: false, error: { message: primary.message } });
+  const pending = callModel(`failed-projection-${kind}`);
+  if (kind === 'authority') await expect(pending).rejects.toBe(primary);
+  else expect(await pending).toMatchObject({ success: false, error: { message: primary.message } });
   expect(createCompletionMock).toHaveBeenCalledTimes(1);
   const emitted = emitMock.mock.calls.length;
   late?.({ id: 'late', role: 'assistant', content: 'Late callback', timestamp: 2 });

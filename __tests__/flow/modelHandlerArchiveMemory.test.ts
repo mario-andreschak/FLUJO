@@ -44,6 +44,7 @@ import { _setConversationLogDirForTests, allocateSeq, flushConversationLog } fro
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { publishConversation, CONVERSATION_PUBLICATION_LIMITS, getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
 // One application observation is one actual HTTP request in this offline fixture.
 // This does not qualify the ordinary SDK's internal retry profile.
@@ -221,6 +222,9 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     const previous = _setConversationLogDirForTests(logDirectory);
     const canonical = structuredClone([message]);
     FlowExecutor.conversationStates.set(conversationId, { conversationId, messages: canonical } as SharedState);
+    const before = getConversationPublicationDiagnostics();
+    const delivered: string[] = [];
+    const unsubscribe = executionEventBus.subscribe(conversationId, event => { delivered.push(event.type); });
     const release = deferred();
     const pending: Promise<void>[] = [];
     const open = fs.open.bind(fs);
@@ -244,6 +248,10 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
         code: failurePoint === 'capture' ? 'CONVERSATION_PUBLICATION_BUSY' : 'CONVERSATION_PUBLICATION_UNCERTAIN',
       } });
       expect(requests).toHaveLength(0);
+      if (failurePoint === 'capture') {
+        expect(delivered).not.toContain('model:dispatch');
+        expect(executionEventBus.getBufferedSince(conversationId, 0)).toEqual([]);
+      }
       expect(canonical).toEqual([message]);
       expect(listInFlightToolCalls(conversationId)).toHaveLength(0);
       if (failurePoint === 'write') {
@@ -255,10 +263,14 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     } finally {
       release.resolve(); await Promise.all(pending);
       await flushConversationLog(conversationId).catch(() => {});
+      unsubscribe();
       writer.mockRestore(); sdkRequestObserved = undefined;
       FlowExecutor.conversationStates.delete(conversationId);
       _setConversationLogDirForTests(previous);
       expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 0, allocationBytes: 0, retainedBytes: 0, chains: 0 });
+      if (failurePoint === 'capture') expect(getConversationPublicationDiagnostics()).toMatchObject({
+        owners: before.owners, fences: before.fences, receipts: before.receipts, quarantinedWriterSlots: before.quarantinedWriterSlots,
+      });
     }
   });
 

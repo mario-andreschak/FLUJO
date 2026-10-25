@@ -261,13 +261,6 @@ export class ExecutionEventBus {
   emit(conversationId: string, raw: RawExecutionEvent): ExecutionEvent {
     // Authoritative, durable, per-conversation monotonic seq from the log.
     const seq = allocateSeq(conversationId);
-    const channel = this.getChannel(conversationId);
-    const key = workspaceCacheKey(conversationId);
-    if (channel) {
-      channel.seq = seq + 1; // durable high-water mirror; never grants execution authority
-      this.cancelCleanup(key);
-      channel.terminalSeq = raw.type === 'run:done' ? channel.seq : undefined;
-    }
     const event = {
       ...raw,
       conversationId,
@@ -275,20 +268,27 @@ export class ExecutionEventBus {
       timestamp: Date.now(),
     } as ExecutionEvent;
 
-    if (channel) {
-      this.retainConversationReplay(channel, event);
-      channel.emitter.emit('event', event);
-    }
-
     // The live stream IS the conversation log being appended (execution-core
     // v2 §3.1): every emit — regardless of which emitter produced it (runFlow's
     // loop, ModelHandler's mid-run transcript sink, control routes) — is tapped
     // into the append-only per-conversation log. The tap filters transient
     // event types and enforces the ephemeral policy itself, and is
     // asynchronous after bounded synchronous admission. Required callers flush
-    // before acknowledging durability; admission failures propagate from emit.
+    // before acknowledging durability; synchronous admission failure precedes
+    // all live delivery and replay retention. Its reserved seq remains a gap.
     appendFromBus(event);
 
+    const channel = this.getChannel(conversationId);
+    const key = workspaceCacheKey(conversationId);
+    if (channel) {
+      channel.seq = seq + 1; // durable high-water mirror; never grants execution authority
+      this.cancelCleanup(key);
+      channel.terminalSeq = raw.type === 'run:done' ? channel.seq : undefined;
+    }
+    if (channel) {
+      this.retainConversationReplay(channel, event);
+      channel.emitter.emit('event', event);
+    }
     // Fan the same event onto the global firehose. The per-conversation channel
     // above already delivered it (chat is unaffected); this is an extra tap for
     // all-conversations subscribers.

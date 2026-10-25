@@ -1162,6 +1162,7 @@ export class ModelHandler {
       };
     }
 
+    rethrowFlowExecutionAuthorityError(error);
     if (isConversationDurabilityError(error)) {
       return { success: false, error: createModelError(error.code, error.message, modelId,
         undefined, { status: error.status }) };
@@ -1846,7 +1847,7 @@ export class ModelHandler {
       beforeToolDispatch: input.beforeToolDispatch,
       executionExtensionContext: input.executionExtensionContext,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
-      beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
+      beforeModelDispatch: input.beforeModelDispatch ?? (() => assertFlowExecutionCurrent(durableContext)),
       durableContext,
       flushTranscriptProjection: flushLiveProjection,
       // Issue #400: project the handler's bounded session-limit wait onto the
