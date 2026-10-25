@@ -82,7 +82,7 @@ import {
   reconcileInterruptedRecovery,
   setRecoveryTransition,
 } from '@/backend/execution/flow/recoveryCheckpoint';
-import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { acknowledgeSubflowContinuation, queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
 import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement';
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
@@ -3191,11 +3191,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
             emitNewMessages();
             const fromNodeId = sharedState.currentNodeId;
+            const advancedSubflow = acknowledgeSubflowContinuation(sharedState, fromNodeId);
             // The engine marks only Process -> one-way TERMINAL Subflow calls.
             // Sequential Subflows and explicit bidirectional edges omit this,
             // and every later transition clears any previous marker.
             sharedState.pendingSubflowReturn = handoff.implicitSubflowReturn;
             sharedState.currentNodeId = nextNodeId;
+            if (advancedSubflow) await persistConversationState(storageKey, sharedState);
             sharedState.handoffRequested = undefined;
             emit({
               type: 'handoff',
@@ -3352,6 +3354,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       emitErrorOnce(sharedState, emit, error, { nodeId: sharedState.currentNodeId });
     }
   };
+  if (finalStatus === 'completed' || finalStatus === 'capped') acknowledgeSubflowContinuation(sharedState, sharedState.currentNodeId);
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
 
   // Persist the precise recovery transition before the legacy terminal event.

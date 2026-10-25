@@ -117,8 +117,9 @@ describe('SubflowNode durable invocation recovery', () => {
     const invocation = shared.subflowInvocations?.[firstPrep.invocationId!];
     expect(invocation?.status).toBe('folded');
     expect(invocation?.foldedAt).toEqual(expect.any(Number));
-    expect(shared.activeSubflowInvocationByNode?.['sub-node']).toBeUndefined();
-    expect(shared.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
+    expect(shared.activeSubflowInvocationByNode?.['sub-node']).toBe(firstPrep.invocationId);
+    expect(invocation?.foldReceipt).toMatchObject({ version: 1, action: 'NEXT' });
+    expect(shared.messages.filter((message) => message.role === 'assistant')).toHaveLength(2);
   });
 
   it('parks a durable collect-all join when any child was cancelled', async () => {

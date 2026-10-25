@@ -254,6 +254,7 @@ describe('conversation cache retained-payload accounting', () => {
     { debugPendingAction: { action: 'continue', phase: 'after-model' } },
     { debugPendingToolCalls: [{ id: 'pending-debug' }] },
     { subflowInvocations: { pending: { status: 'blocked' } } },
+    { subflowInvocations: { pending: { status: 'folded', foldReceipt: { version: 1, continuedAt: undefined } } } },
   ])('preserves unresolved ownership even under a stale terminal status (%j)', async pending => {
     await runWithWorkspace(WORKSPACE, async () => {
       const value = state('pending', pending as unknown as Partial<SharedState>);

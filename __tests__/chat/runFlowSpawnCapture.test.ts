@@ -117,6 +117,7 @@ import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/exec
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { getSubflowPreparationDiagnostics } from '@/backend/execution/flow/subflowPreparationBudget';
+import { saveItem } from '@/utils/storage/backend';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -136,6 +137,30 @@ beforeEach(() => {
 });
 
 describe('runFlow handoff capture — queued Subflow jobs', () => {
+  it('checkpoints the folded visit continuation with its next node before executing that node', async () => {
+    const checkpoints: Array<{ node?: string; continued?: number; active?: string }> = [];
+    jest.mocked(saveItem).mockImplementation(async (_key, value) => {
+      const state = value as SharedState;
+      if (state.subflowInvocations?.visit) checkpoints.push({ node: state.currentNodeId,
+        continued: state.subflowInvocations.visit.foldReceipt?.continuedAt, active: state.activeSubflowInvocationByNode?.[START] });
+    });
+    const originalStep = (FlowExecutor.executeStep as jest.Mock).getMockImplementation()!;
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async shared => {
+      const result = await originalStep(shared);
+      shared.subflowInvocations = { visit: { id: 'visit', parentNodeId: START, status: 'folded', foldedAt: 1,
+        lanes: [], foldReceipt: { version: 1, id: 'visit:fold:v1', presentation: 'joined', action: EDGE, messageIds: [] } } };
+      shared.activeSubflowInvocationByNode = { [START]: 'visit' };
+      return result;
+    }).mockImplementationOnce(async shared => {
+      expect(shared.currentNodeId).toBe(WORKER);
+      expect(checkpoints).toContainEqual({ node: WORKER, continued: expect.any(Number), active: undefined });
+      return originalStep(shared);
+    });
+    try {
+      expect((await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' })).status).toBe('completed');
+    } finally { jest.mocked(saveItem).mockImplementation(async () => undefined); }
+  });
+
   it.each(['source', 'depth', 'count', 'workers'] as const)('refuses excessive handoff %s before acknowledging or replacing pending work', async boundary => {
     targetType = 'subflow';
     const argumentsText = boundary === 'source' ? JSON.stringify({ task: 'x'.repeat(4 * 1024 * 1024) })

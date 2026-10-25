@@ -212,7 +212,8 @@ function isLiveOwned(state: SharedState | undefined): boolean {
   if (recovery?.currentCheckpoint?.effectStatus === 'pending' || recovery?.currentCheckpoint?.effectStatus === 'unknown') return true;
   if (state.pendingToolCalls?.length || state.debugPendingToolCalls?.length || state.debugPendingAction) return true;
   for (const invocationId in state.subflowInvocations) {
-    if (state.subflowInvocations[invocationId].status !== 'folded') return true;
+    const invocation = state.subflowInvocations[invocationId];
+    if (invocation.status !== 'folded' || (invocation.foldReceipt && !invocation.foldReceipt.continuedAt)) return true;
   }
   return false;
 }

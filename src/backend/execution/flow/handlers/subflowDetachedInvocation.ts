@@ -1,4 +1,5 @@
 import { createLogger } from '@/utils/logger';
+import { releaseSubflowOutput } from '../subflowOutputBudget';
 import type { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import type { SubflowTaskRecord } from '@/shared/types/subflowTasks';
 import {
@@ -138,6 +139,7 @@ async function runDetachedJob(
     const { runFlow } = await import('../runFlow');
     const { runSubflowLanes } = await import('../nodes/SubflowNode');
     const result = await runSubflowLanes(prep, runFlow, nodeRef, input);
+    try {
     const current = await getTask(task.taskId);
     if (await cancelled() || current?.status === 'cancelled') {
       await finishCancellation();
@@ -147,6 +149,7 @@ async function runDetachedJob(
     await terminal(result.success
       ? { status: 'completed', outputText: result.outputText }
       : { status: 'failed', error: result.error ?? 'Detached subflow failed.', failureReason: 'child-error' });
+    } finally { releaseSubflowOutput(result); }
   } catch (error) {
     if (await cancelled()) {
       await finishCancellation();

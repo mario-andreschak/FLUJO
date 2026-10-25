@@ -24,8 +24,11 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import {
   getSubflowRecoveryOptions,
   reportSubflowRunOutcome,
+  acknowledgeSubflowContinuation,
+  syncLaneFromPersistedChild,
 } from '@/backend/execution/flow/subflowRecovery';
 import type { SharedState, SubflowInvocation } from '@/backend/execution/flow/types';
+import { SubflowOutputBudget, getSubflowOutputDiagnostics } from '@/backend/execution/flow/subflowOutputBudget';
 
 function parentState(invocation: SubflowInvocation): SharedState {
   return {
@@ -53,6 +56,22 @@ describe('subflow recovery coordinator', () => {
     listCollectionItemsMock.mockClear();
     loadCollectionItemMock.mockClear();
     listConversationSummariesMock.mockReset().mockResolvedValue([]);
+  });
+
+  it('recovers the same admitted multimodal fallback from a completed child without changing its history', async () => {
+    const messages = [
+      { id: 'result', role: 'assistant', content: [{ type: 'text', text: 'exact ' }, { type: 'text', text: 'result' }], timestamp: 1 },
+      { id: 'finish', role: 'assistant', content: '', tool_calls: [{ id: 'finish-call', type: 'function', function: { name: 'finish', arguments: '{}' } }], timestamp: 2 },
+    ];
+    FlowExecutor.conversationStates.set('multimodal-child', { conversationId: 'multimodal-child', status: 'completed', lastResponse: '', messages } as SharedState);
+    const lane = { id: 'lane', index: 0, count: 1, subflowId: 'child', conversationId: 'multimodal-child', status: 'running' as const, attempt: 1, updatedAt: 1 };
+    const before = JSON.stringify(messages), budget = new SubflowOutputBudget();
+    try {
+      await expect(syncLaneFromPersistedChild(lane, budget)).resolves.toBe(true);
+      expect(lane).toMatchObject({ outputText: 'exact result', status: 'completed', attempt: 1 });
+      expect(JSON.stringify(messages)).toBe(before); expect(runFlowMock).not.toHaveBeenCalled();
+    } finally { budget.release(); }
+    expect(getSubflowOutputDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
   });
 
   it('does not hydrate unrelated histories when an ordinary failed chat opens recovery', async () => {
@@ -207,7 +226,13 @@ describe('subflow recovery coordinator', () => {
 
     invocation.status = 'folded';
     invocation.foldedAt = Date.now();
-    delete parent.activeSubflowInvocationByNode?.['sub-node'];
+    invocation.foldReceipt = { version: 1, id: 'inv-family:fold:v1', action: 'NEXT', presentation: 'separate', messageIds: [] };
+    await expect(getSubflowRecoveryOptions('parent')).resolves.toMatchObject({
+      hasRecoverableFamily: true, incompleteSiblingCount: 0, canRetryBranch: true, canRetrySiblings: false,
+    });
+    expect(acknowledgeSubflowContinuation(parent, 'sub-node')).toBe(true);
+    expect(parent.activeSubflowInvocationByNode?.['sub-node']).toBeUndefined();
+    expect(invocation.foldReceipt.continuedAt).toEqual(expect.any(Number));
     parent.status = 'completed';
     await expect(getSubflowRecoveryOptions('child-1')).resolves.toMatchObject({
       hasRecoverableFamily: false,

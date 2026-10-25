@@ -6,6 +6,7 @@ import { createLogger } from '@/utils/logger';
 import { persistConversationSummary } from './conversationSummaryStore';
 import { commitExecutionExtensionMutation } from '@/backend/execution/extensions';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
+import { reconcileSubflowFold } from './subflowFoldFence';
 
 const log = createLogger('backend/execution/flow/persistConversationState');
 
@@ -27,6 +28,7 @@ const log = createLogger('backend/execution/flow/persistConversationState');
  * to disk. Do NOT add call-site `if (!ephemeral)` guards; they are redundant.
  */
 export async function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
+  await reconcileSubflowFold(state);
   if (state.executionExtensionOwned && !state.executionExtensionContext) throw new Error('trusted_execution_context_required');
   // Path-traversal guard (issue #126): the key/id becomes a filesystem path via
   // getFilePath(), so an id like "../encryption_key" would escape db/conversations/

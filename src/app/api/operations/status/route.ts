@@ -9,6 +9,7 @@ import { boundedJsonReader } from '@/backend/services/operations/boundedRead';
 import { collectOperationsSnapshot, getObservationProcessId } from '@/backend/services/operations/snapshot';
 import { getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
 import { getSubflowPreparationDiagnostics } from '@/backend/execution/flow/subflowPreparationBudget';
+import { getSubflowOutputDiagnostics } from '@/backend/execution/flow/subflowOutputBudget';
 
 export const runtime = 'nodejs';
 
@@ -47,7 +48,7 @@ const GET_handler = async (request: Request, admission: Admission) => {
     const unavailable = assertWorkerRequestReady(request, workspace);
     if (unavailable) return unavailable;
     return Response.json({ ...snapshot, flowRunAdmission: getFlowRunAdmissionDiagnostics(),
-      subflowPreparation: getSubflowPreparationDiagnostics() }, {
+      subflowPreparation: getSubflowPreparationDiagnostics(), subflowOutput: getSubflowOutputDiagnostics() }, {
       headers: { 'Cache-Control': 'no-store' },
     });
   } catch {

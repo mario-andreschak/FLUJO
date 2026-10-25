@@ -599,6 +599,11 @@ export interface SubflowInvocation {
     concurrencyLimit: number;
     joinSeparator: string;
     errorStrategy: 'fail-fast' | 'collect-all';
+    resultPresentation?: 'separate' | 'joined';
+    /** Written with the parent messages; retained until the graph advances. */
+    foldReceipt?: { version: 1; id: string; action: string; presentation: 'separate' | 'joined'; messageIds: string[]; continuedAt?: number };
+    /** A pending KV attempt is deliberately not replayed after an ambiguous failure. */
+    captureKvReceipt?: { key: string; fingerprint: string; status: 'pending' | 'done' };
     /** Session configuration frozen with this durable visit so crash recovery
      *  cannot silently fall back to per-visit behavior. */
     sessionScope?: 'per-visit' | 'per-run' | 'per-key';

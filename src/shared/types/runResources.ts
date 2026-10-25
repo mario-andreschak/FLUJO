@@ -87,6 +87,8 @@ export interface RunResourceVerification {
 }
 
 export interface RunResourceEntry {
+  idempotencyKey?: string;
+  effectFingerprint?: string;
   /** uuid; also the payload file stem on disk. */
   id: string;
   /** flujo://run/<conversationId>/<id> */
