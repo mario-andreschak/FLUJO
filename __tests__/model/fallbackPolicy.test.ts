@@ -7,6 +7,10 @@ import { FallbackAdapter, FallbackRoutingError, fallbackReason } from '@/backend
 import { materializeFallbackPolicy, validateFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import type { Model } from '@/shared/types/model';
 import type { CompletionInput, CompletionResult } from '@/backend/services/model/adapters/types';
+import { observeSdkRequest } from '@/backend/services/model/adapters/types';
+import { ConversationPublicationError } from '@/backend/execution/flow/conversationPublicationError';
+import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 
 let workspace = 'default';
 const a: Model = { id: 'a', name: 'primary', ApiKey: 'key-a', provider: 'openai', temperature: '0.2', maxTokens: 200, contextWindow: 128000 };
@@ -52,6 +56,33 @@ it('preserves explicit token/temperature overrides', async () => {
   const call = jest.fn().mockResolvedValue(result);
   await new FallbackAdapter(() => ({ createCompletion: call })).createCompletion(input({ maxTokens: 42, temperatureOverride: 0.9 }));
   expect(call.mock.calls[0][0]).toMatchObject({ maxTokens: 42, temperature: 0.9 });
+});
+
+it.each([
+  new ConversationPublicationError('CONVERSATION_PUBLICATION_BUSY', 'fixture'),
+  new ConversationPublicationError('CONVERSATION_PUBLICATION_MEMORY', 'fixture'),
+  new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture'),
+  new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT'),
+])('does not route or cool down a provider for local admission failure %s', async failure => {
+  const call = jest.fn().mockRejectedValueOnce(failure).mockResolvedValue(result);
+  const adapter = new FallbackAdapter(() => ({ createCompletion: call }));
+  const model = { ...policy, id: `admission-${failure.name}-${failure.code}`, name: 'policy/admission', fallbackPolicy: { ...policy.fallbackPolicy!, cooldownSeconds: 60 } };
+  await expect(adapter.createCompletion(input({ model }))).rejects.toBe(failure);
+  expect(call).toHaveBeenCalledTimes(1);
+  await adapter.createCompletion(input({ model }));
+  expect(call.mock.calls.map(([value]) => value.model.id)).toEqual(['a', 'a']);
+});
+
+it('never dispatches a second model after successful inference loses its result publication', async () => {
+  const failure = new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'required result marker failed');
+  const physical = jest.fn(async () => result);
+  const call = jest.fn((value: CompletionInput) => observeSdkRequest(value,
+    { adapter: 'fixture', operation: 'create', request: {} }, physical));
+  await expect(new FallbackAdapter(() => ({ createCompletion: call })).createCompletion(input({
+    onSdkRequest: async () => 'actual-dispatch', onSdkRequestResult: async () => { throw failure; },
+  }))).rejects.toBe(failure);
+  expect(physical).toHaveBeenCalledTimes(1);
+  expect(call.mock.calls.map(([value]) => value.model.id)).toEqual(['a']);
 });
 
 it.each([

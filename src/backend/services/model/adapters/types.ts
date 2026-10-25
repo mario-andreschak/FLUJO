@@ -1,4 +1,4 @@
-import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
 import OpenAI from 'openai';
 import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
@@ -421,8 +421,9 @@ export function assertReadOnlyAssessmentInput(input: CompletionInput): void {
 
 /**
  * Wrap one concrete SDK/CLI invocation with durable request observation. Archive
- * failures remain best-effort, except a lost execution fence: an obsolete
- * Persona/meeting worker must not start or continue a provider request.
+ * failures remain best-effort except bounded admission, required conversation
+ * durability, and execution authority failures. None may acknowledge a missing
+ * dispatch marker or allow an obsolete worker to start a provider request.
  */
 export async function observeSdkRequest<T>(
   input: Pick<CompletionInput, 'onSdkRequest' | 'onSdkRequestResult' | 'signal'>,
@@ -434,18 +435,18 @@ export async function observeSdkRequest<T>(
   try {
     dispatchId = await input.onSdkRequest?.(snapshot);
   } catch (error) {
-    if (error instanceof ModelTurnArchiveMemoryError || isConversationSequenceSafetyError(error)) throw error;
+    if (error instanceof ModelTurnArchiveMemoryError || isConversationDurabilityError(error)) throw error;
     rethrowFlowExecutionAuthorityError(error);
     dispatchId = undefined;
   }
   const finalize = async (outcome: 'completed' | 'error' | 'cancelled'): Promise<void> => {
     if (!dispatchId || finalized) return;
     finalized = true;
-    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(error => { if (isConversationSequenceSafetyError(error)) throw error; rethrowFlowExecutionAuthorityError(error); });
+    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(error => { if (isConversationDurabilityError(error)) throw error; rethrowFlowExecutionAuthorityError(error); });
   };
   const finalizeAfterFailure = async () => {
     try { await finalize(input.signal?.aborted ? 'cancelled' : 'error'); }
-    catch (error) { if (!isConversationSequenceSafetyError(error)) throw error; }
+    catch (error) { if (!isConversationDurabilityError(error)) throw error; }
   };
   try {
     const result = await task();

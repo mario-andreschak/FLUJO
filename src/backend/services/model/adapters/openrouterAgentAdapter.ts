@@ -1,4 +1,4 @@
-import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
 import type OpenAI from 'openai';
 import type { Item } from '@openrouter/agent';
 import { z } from 'zod';
@@ -195,7 +195,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
             });
             if (id) dispatchIds.push(id);
           } catch (error) {
-            if (error instanceof ModelTurnArchiveMemoryError || isConversationSequenceSafetyError(error)) { admissionError = error; throw error; }
+            if (error instanceof ModelTurnArchiveMemoryError || isConversationDurabilityError(error)) { admissionError = error; throw error; }
             try { rethrowFlowExecutionAuthorityError(error); }
             catch (fatal) { admissionError = fatal; throw fatal; }
           }
@@ -265,7 +265,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
       let sequenceFailure: unknown;
       for (const dispatchId of dispatchIds) {
         await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(error => {
-          if (isConversationSequenceSafetyError(error)) { sequenceFailure ??= error; return; }
+          if (isConversationDurabilityError(error)) { sequenceFailure ??= error; return; }
           rethrowFlowExecutionAuthorityError(error);
         });
       }

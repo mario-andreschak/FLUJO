@@ -41,6 +41,10 @@ import { COMPACTION_SUMMARY_SECTIONS } from '@/backend/execution/flow/handlers/s
 import { _setModelTurnArchiveDirForTests, archiveModelDispatch, readModelTurnSnapshot, readModelTurnSnapshotResponse, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
 import { getArchiveWritePressure, MODEL_TURN_ARCHIVE_WRITE_LIMITS, withArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { _setConversationLogDirForTests, allocateSeq, flushConversationLog } from '@/backend/execution/flow/conversationLog';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import type { SharedState } from '@/backend/execution/flow/types';
+import { publishConversation, CONVERSATION_PUBLICATION_LIMITS, getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
 // One application observation is one actual HTTP request in this offline fixture.
 // This does not qualify the ordinary SDK's internal retry profile.
@@ -209,6 +213,107 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     const outcomes = await Promise.all((await fs.readdir(directory)).filter(name => name.endsWith('.outcome.json'))
       .map(async name => JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')).outcome));
     expect(outcomes.sort()).toEqual(['completed', 'error']);
+  });
+
+  it.each(['capture', 'write'] as const)('refuses real SDK HTTP dispatch when required publication fails at %s', async failurePoint => {
+    const conversationId = `publication-${failurePoint}`;
+    const logDirectory = path.join(root, 'publication-logs');
+    await fs.mkdir(logDirectory);
+    const previous = _setConversationLogDirForTests(logDirectory);
+    const canonical = structuredClone([message]);
+    FlowExecutor.conversationStates.set(conversationId, { conversationId, messages: canonical } as SharedState);
+    const before = getConversationPublicationDiagnostics();
+    const delivered: string[] = [];
+    const unsubscribe = executionEventBus.subscribe(conversationId, event => { delivered.push(event.type); });
+    const release = deferred();
+    const pending: Promise<void>[] = [];
+    const open = fs.open.bind(fs);
+    const writer = jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (failurePoint !== 'write' || !String(args[0]).endsWith(`${conversationId}.jsonl`)) return handle;
+      return new Proxy(handle, { get(target, key) {
+        if (key === 'write') return async () => { throw Object.assign(new Error('required log write failed'), { code: 'ENOSPC' }); };
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    });
+    sdkRequestObserved = () => {
+      if (failurePoint === 'capture') for (let index = 0; index < CONVERSATION_PUBLICATION_LIMITS.owners; index++) {
+        pending.push(publishConversation(`sdk-blocked-${index}`, null, async () => release.promise));
+      }
+    };
+    try {
+      const result = await invoke(canonical, canonical, { conversationId });
+      expect(result).toMatchObject({ success: false, error: {
+        code: failurePoint === 'capture' ? 'CONVERSATION_PUBLICATION_BUSY' : 'CONVERSATION_PUBLICATION_UNCERTAIN',
+      } });
+      expect(requests).toHaveLength(0);
+      if (failurePoint === 'capture') {
+        expect(delivered).not.toContain('model:dispatch');
+        expect(executionEventBus.getBufferedSince(conversationId, 0)).toEqual([]);
+      }
+      expect(canonical).toEqual([message]);
+      expect(listInFlightToolCalls(conversationId)).toHaveLength(0);
+      if (failurePoint === 'write') {
+        // The append's rejected promise has already left pendingCommits. Its
+        // bounded fence must still make a later flush fail closed.
+        await new Promise(resolve => setImmediate(resolve));
+        await expect(flushConversationLog(conversationId)).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
+      }
+    } finally {
+      release.resolve(); await Promise.all(pending);
+      await flushConversationLog(conversationId).catch(() => {});
+      unsubscribe();
+      writer.mockRestore(); sdkRequestObserved = undefined;
+      FlowExecutor.conversationStates.delete(conversationId);
+      _setConversationLogDirForTests(previous);
+      expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 0, allocationBytes: 0, retainedBytes: 0, chains: 0 });
+      if (failurePoint === 'capture') expect(getConversationPublicationDiagnostics()).toMatchObject({
+        owners: before.owners, fences: before.fences, receipts: before.receipts, quarantinedWriterSlots: before.quarantinedWriterSlots,
+      });
+    }
+  });
+
+  it('retains the completed inference receipt and never redispatches after real SDK result publication fails', async () => {
+    const conversationId = 'publication-result';
+    const logDirectory = path.join(root, 'result-publication-logs');
+    await fs.mkdir(logDirectory);
+    const previous = _setConversationLogDirForTests(logDirectory);
+    const canonical = structuredClone([message]);
+    FlowExecutor.conversationStates.set(conversationId, { conversationId, messages: canonical } as SharedState);
+    const open = fs.open.bind(fs);
+    const writer = jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (!String(args[0]).endsWith(`${conversationId}.jsonl`)) return handle;
+      return new Proxy(handle, { get(target, key) {
+        if (key === 'write') return async (bytes: Buffer, offset: number, length: number, position: number) => {
+          if (bytes.subarray(offset, offset + length).toString().includes('model:dispatch-result')) {
+            throw Object.assign(new Error('result marker write failed'), { code: 'ENOSPC' });
+          }
+          return target.write(bytes, offset, length, position);
+        };
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    });
+    const onRecoveryRetry = jest.fn();
+    try {
+      expect(await invoke(canonical, canonical, { conversationId, onRecoveryRetry })).toMatchObject({
+        success: false, error: { code: 'CONVERSATION_PUBLICATION_UNCERTAIN' },
+      });
+      expect(requests).toHaveLength(1);
+      expect(onRecoveryRetry).not.toHaveBeenCalled();
+      const archive = path.join(root, 'archives', conversationId);
+      const outcomes = (await fs.readdir(archive)).filter(name => name.endsWith('.outcome.json'));
+      expect(outcomes).toHaveLength(1);
+      expect(JSON.parse(await fs.readFile(path.join(archive, outcomes[0]), 'utf8')).outcome).toBe('completed');
+      expect(canonical).toEqual([message]);
+      expect(listInFlightToolCalls(conversationId)).toHaveLength(0);
+    } finally {
+      await flushConversationLog(conversationId).catch(() => {});
+      writer.mockRestore(); FlowExecutor.conversationStates.delete(conversationId);
+      _setConversationLogDirForTests(previous);
+    }
   });
 
   it('does not replay a failed stream after visible output', async () => {

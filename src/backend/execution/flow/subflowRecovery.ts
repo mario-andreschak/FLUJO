@@ -16,6 +16,8 @@ import type {
 import { bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { isPersonaOwnedConversationState } from './personaConversationOwnership';
 import { latestSubflowAssistantText, SubflowOutputBudget } from './subflowOutputBudget';
+import { publishConversation } from './conversationPublication';
+import { FlowExecutionAuthorityError } from './executionAuthority';
 
 const log = createLogger('backend/execution/flow/subflowRecovery');
 
@@ -74,11 +76,60 @@ export async function loadConversationState(conversationId: string): Promise<Sha
   });
 }
 
+type ParentCheckpoint = { key: string; dirty: boolean; promise: Promise<void>;
+  authority: SharedState['executionAuthority']; extension: SharedState['executionExtensionContext'] };
+const checkpointHost = globalThis as typeof globalThis & { __flujoParentCheckpoints?: WeakMap<SharedState, ParentCheckpoint> };
+const parentCheckpoints = checkpointHost.__flujoParentCheckpoints ??= new WeakMap();
+
 export async function persistSubflowParent(state: SharedState, options?: { publishLive?: boolean }): Promise<void> {
   if (!state.conversationId || state.ephemeral) return;
-  if (options?.publishLive !== false) FlowExecutor.conversationStates.set(state.conversationId, state);
+  const conversationId = state.conversationId;
+  const key = workspaceCacheKey('conversation-publication', conversationId);
+  const authority = state.executionAuthority, extension = state.executionExtensionContext;
+  const existing = options?.publishLive === false ? undefined : parentCheckpoints.get(state);
+  if (existing && (existing.key !== key || existing.authority !== authority || existing.extension !== extension)) {
+    throw new FlowExecutionAuthorityError('Parent checkpoint ownership changed.');
+  }
+  if (options?.publishLive !== false) FlowExecutor.conversationStates.set(conversationId, state);
   state.updatedAt = Date.now();
-  await persistConversationState(storageKey(state.conversationId), state);
+  // Staged fold/KV intents and parked recovery/terminal states own exact
+  // independent snapshots. Coalesce only progress of a running parent (or the
+  // final transition of an already active cohort), never a resume lease write.
+  if (options?.publishLive === false || (!existing && state.status !== 'running')) {
+    return persistConversationState(storageKey(conversationId), state);
+  }
+  if (existing) {
+    existing.dirty = true;
+    return existing.promise;
+  }
+  // The run/preparation owner already retains this canonical live state. Admit
+  // a bounded publisher owner before retaining the closure; do not capture the
+  // same large history once per concurrent lane while waiting for its writer.
+  const pending = publishConversation(key, null, async () => {
+    try {
+      do {
+        checkpoint.dirty = false;
+        if (state.conversationId !== conversationId || state.executionAuthority !== authority
+          || state.executionExtensionContext !== extension) {
+          throw new FlowExecutionAuthorityError('Parent checkpoint ownership changed.');
+        }
+        await persistConversationState(storageKey(conversationId), state);
+        // Every caller waits for the trailing checkpoint containing its progress
+        // or a later state of the same owned run. No caller is acknowledged after
+        // only the older snapshot; one dirty bit replaces a queue of histories.
+      } while (checkpoint.dirty);
+    } finally {
+      // Close acceptance synchronously with the final dirty check. Publisher
+      // frame draining still awaits afterwards; progress arriving in that gap
+      // must start a new ordered cohort rather than join this completed loop.
+      if (parentCheckpoints.get(state) === checkpoint) parentCheckpoints.delete(state);
+    }
+  });
+  const checkpoint: ParentCheckpoint = { key, dirty: true, authority, extension, promise: pending.finally(() => {
+    if (parentCheckpoints.get(state) === checkpoint) parentCheckpoints.delete(state);
+  }) };
+  parentCheckpoints.set(state, checkpoint);
+  return checkpoint.promise;
 }
 
 /** Read the actual durable commit, bypassing the live-state cache after an

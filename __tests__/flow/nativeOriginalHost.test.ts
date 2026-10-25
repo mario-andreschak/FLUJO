@@ -658,7 +658,9 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(await source.probeLive(handle, owner, generation)).toBeNull();
       };
       try {
-        expect((await prepared.invoke()).success).toBe(false);
+        const result = await prepared.invoke();
+        expect(result.success).toBe(false);
+        if (drift === 'goal') expect(result).toMatchObject({ error: { code: 'flow_execution_authority_lost' } });
         expect((await ledger()).reservations[0].state).not.toBe('released');
       } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
     }, undefined, false, drift === 'goal');
@@ -1327,7 +1329,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
             await savePersonaWorkItem({ ...root, goal: { ...root.goal!, state: 'paused' }, updatedAt: Date.now() });
           });
         };
-        expect((await invoke()).success).toBe(false);
+        expect(await invoke()).toMatchObject({ success: false, error: { code: 'flow_execution_authority_lost' } });
         expect(promptCount).toBe(0);
         expect((await ledger()).reservations[0].state).not.toBe('released');
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }

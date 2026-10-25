@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'node:crypto';
 import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execution/events';
 import { appendFromBus, allocateSeq } from '@/backend/execution/flow/conversationLog';
-import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
 import { createLogger } from '@/utils/logger';
 import { bindToCurrentWorkspace, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { boundedEventSnapshot, type EventSnapshot } from './boundedEventSnapshot';
@@ -258,16 +258,9 @@ export class ExecutionEventBus {
   }
 
   /** Publish an event; the bus stamps conversationId, seq and timestamp. */
-  emit(conversationId: string, raw: RawExecutionEvent): ExecutionEvent {
+  emit(conversationId: string, raw: RawExecutionEvent, onAdmitted?: () => void): ExecutionEvent {
     // Authoritative, durable, per-conversation monotonic seq from the log.
     const seq = allocateSeq(conversationId);
-    const channel = this.getChannel(conversationId);
-    const key = workspaceCacheKey(conversationId);
-    if (channel) {
-      channel.seq = seq + 1; // durable high-water mirror; never grants execution authority
-      this.cancelCleanup(key);
-      channel.terminalSeq = raw.type === 'run:done' ? channel.seq : undefined;
-    }
     const event = {
       ...raw,
       conversationId,
@@ -275,19 +268,30 @@ export class ExecutionEventBus {
       timestamp: Date.now(),
     } as ExecutionEvent;
 
-    if (channel) {
-      this.retainConversationReplay(channel, event);
-      channel.emitter.emit('event', event);
-    }
-
     // The live stream IS the conversation log being appended (execution-core
     // v2 §3.1): every emit — regardless of which emitter produced it (runFlow's
     // loop, ModelHandler's mid-run transcript sink, control routes) — is tapped
     // into the append-only per-conversation log. The tap filters transient
     // event types and enforces the ephemeral policy itself, and is
-    // fire-and-forget so persistence can never break live consumers.
+    // asynchronous after bounded synchronous admission. Required callers flush
+    // before acknowledging durability; synchronous admission failure precedes
+    // all live delivery and replay retention. Its reserved seq remains a gap.
     appendFromBus(event);
+    // This receipt precedes reentrant listeners. A later listener failure is
+    // not a refusal of this event and must never cause its automatic replay.
+    onAdmitted?.();
 
+    const channel = this.getChannel(conversationId);
+    const key = workspaceCacheKey(conversationId);
+    if (channel) {
+      channel.seq = seq + 1; // durable high-water mirror; never grants execution authority
+      this.cancelCleanup(key);
+      channel.terminalSeq = raw.type === 'run:done' ? channel.seq : undefined;
+    }
+    if (channel) {
+      this.retainConversationReplay(channel, event);
+      channel.emitter.emit('event', event);
+    }
     // Fan the same event onto the global firehose. The per-conversation channel
     // above already delivered it (chat is unaffected); this is an extra tap for
     // all-conversations subscribers.
@@ -304,12 +308,12 @@ export class ExecutionEventBus {
   }
 
   /** An emit function bound to a conversation, suitable to hand to the engine. */
-  emitterFor(conversationId: string): EmitFn {
+  emitterFor(conversationId: string, onAdmitted?: (event: RawExecutionEvent) => void): EmitFn {
     return bindToCurrentWorkspace((raw: RawExecutionEvent) => {
       try {
-        this.emit(conversationId, raw);
+        this.emit(conversationId, raw, onAdmitted ? () => onAdmitted(raw) : undefined);
       } catch (err) {
-        if (isConversationSequenceSafetyError(err)) throw err;
+        if (isConversationDurabilityError(err)) throw err;
         log.warn(`Failed to emit execution event for ${conversationId}`, { err });
       }
     });

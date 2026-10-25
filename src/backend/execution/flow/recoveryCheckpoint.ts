@@ -150,21 +150,26 @@ export function fingerprintRecoveryInput(state: SharedState, nodeId?: string): s
     .digest('hex');
 }
 
+type RecoveryPublicationOperation = <T>(operation: () => T | Promise<T>) => Promise<T>;
+type RecoveryEmitFn = (event: RawExecutionEvent) => void | Promise<void>;
 async function persistRecoveryEvent(
   storageKey: StorageKey,
   state: SharedState,
   raw: RawExecutionEvent,
-  emit?: EmitFn,
+  emit?: RecoveryEmitFn,
+  publication: RecoveryPublicationOperation = async operation => operation(),
 ): Promise<void> {
   if (emit) {
-    emit(raw);
+    // Terminal cleanup may supply an async admission-aware emitter. Await its
+    // acceptance before flushing, then retry the snapshot independently.
+    await emit(raw);
     if (state.conversationId && !state.ephemeral) {
       await flushConversationLog(state.conversationId);
     }
   } else {
-    await appendRawForState(state, [raw]);
+    await publication(() => appendRawForState(state, [raw]));
   }
-  await persistConversationState(storageKey, state);
+  await publication(() => persistConversationState(storageKey, state));
 }
 
 export async function commitRecoveryCheckpoint(
@@ -287,10 +292,11 @@ export async function commitRecoveryTransition(
   state: SharedState,
   classification: RecoveryClassification,
   options: Parameters<typeof setRecoveryTransition>[2] = {},
-  emit?: EmitFn,
+  emit?: RecoveryEmitFn,
+  publication?: RecoveryPublicationOperation,
 ): Promise<RecoveryRecord> {
   const recovery = setRecoveryTransition(state, classification, options);
-  await persistRecoveryEvent(storageKey, state, { type: 'recovery:transition', recovery: { ...recovery } }, emit);
+  await persistRecoveryEvent(storageKey, state, { type: 'recovery:transition', recovery: { ...recovery } }, emit, publication);
   return recovery;
 }
 

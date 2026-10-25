@@ -28,6 +28,8 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { registerExecutionExtension, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { fixtureAdapter, fixtureRun, mintFixture } from '../executionExtensions/fixtureAdapter';
+import { ConversationPublicationError } from '@/backend/execution/flow/conversationPublicationError';
+import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 const emitMock = jest.fn();
@@ -169,6 +171,50 @@ it('preserves indentation once visible text arrives and does not replay a partia
   expect(createCompletionMock).toHaveBeenCalledTimes(1);
   expect(emit.mock.calls.map(([event]) => event).filter(event => event.type === 'model:delta')
     .map(event => event.delta).join('')).toBe('\n  Visible');
+});
+
+it.each(['provider', 'tool', 'authority'] as const)('keeps the primary %s failure while draining a refused Claude transcript projection', async kind => {
+  getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'claude-subscription', adapter: 'claude-cli' });
+  const primary = kind === 'authority' ? new FlowExecutionAuthorityError('Primary authority failure') : new Error(`Primary ${kind} failure`);
+  const secondary = new ConversationPublicationError('CONVERSATION_PUBLICATION_BUSY', 'live projection refused');
+  let late!: CompletionInput['onTranscriptMessage'];
+  emitMock.mockImplementation(event => { if (event.type === 'message' || event.type === 'model:end') throw secondary; });
+  createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+    late = input.onTranscriptMessage;
+    input.onModelDelta?.({ messageId: 'live-draft', contentDelta: 'Partial provider output' });
+    input.onTranscriptMessage?.({ id: 'partial', role: 'assistant', content: 'Partial provider output', timestamp: 1 });
+    throw primary;
+  });
+  seedState(`failed-projection-${kind}`);
+  const pending = callModel(`failed-projection-${kind}`);
+  if (kind === 'authority') await expect(pending).rejects.toBe(primary);
+  else expect(await pending).toMatchObject({ success: false, error: { message: primary.message } });
+  expect(createCompletionMock).toHaveBeenCalledTimes(1);
+  const emitted = emitMock.mock.calls.length;
+  late?.({ id: 'late', role: 'assistant', content: 'Late callback', timestamp: 2 });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(emitMock).toHaveBeenCalledTimes(emitted);
+});
+
+it('surfaces projection refusal after an otherwise successful provider result without retrying', async () => {
+  const failure = new ConversationPublicationError('CONVERSATION_PUBLICATION_MEMORY', 'live result refused');
+  emitMock.mockImplementation(event => { if (event.type === 'message') throw failure; });
+  createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+    input.onTranscriptMessage?.({ id: 'result', role: 'assistant', content: 'Completed result', timestamp: 1 });
+    return completion('Completed result');
+  });
+  seedState('successful-projection-refused');
+  await expect(callModel('successful-projection-refused')).rejects.toBe(failure);
+  expect(createCompletionMock).toHaveBeenCalledTimes(1);
+});
+
+it('does not treat normalized required publication refusal as an automatic provider retry', async () => {
+  const failure = new ConversationPublicationError('CONVERSATION_PUBLICATION_BUSY', 'required result failed');
+  Object.assign(failure.details, { retryAfterMs: 0 });
+  createCompletionMock.mockRejectedValueOnce(failure).mockResolvedValue(completion('Must not redispatch'));
+  seedState('publication-not-retryable');
+  expect(await callModel('publication-not-retryable')).toMatchObject({ success: false, error: { code: failure.code } });
+  expect(createCompletionMock).toHaveBeenCalledTimes(1);
 });
 
 it('does not replay a tool stream following leading whitespace', async () => {

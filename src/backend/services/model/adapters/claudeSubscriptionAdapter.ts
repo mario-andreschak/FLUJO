@@ -1,4 +1,4 @@
-import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
 import OpenAI from 'openai';
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -1241,7 +1241,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw new Error('Native Claude SDK dispatch receipt differs from its broker origin.');
       }
     } catch (archiveError) {
-      if (nativeToolPort || archiveError instanceof ModelTurnArchiveMemoryError || isConversationSequenceSafetyError(archiveError)) {
+      if (nativeToolPort || archiveError instanceof ModelTurnArchiveMemoryError || isConversationDurabilityError(archiveError)) {
         closeInput();
         abortController.abort();
         signal?.removeEventListener('abort', onExternalAbort);
@@ -1278,7 +1278,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         try {
           await onSdkRequestResult({ dispatchId, outcome: signal?.aborted ? 'cancelled' : 'error' });
         } catch (archiveError) {
-          if (!isConversationSequenceSafetyError(archiveError)) {
+          if (!isConversationDurabilityError(archiveError)) {
             if (nativeToolPort) throw archiveError;
             rethrowFlowExecutionAuthorityError(archiveError);
             log.warn('Could not update Claude Agent SDK request archive', archiveError);
@@ -1693,7 +1693,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         try {
           await onSdkRequestResult({ dispatchId, outcome: dispatchOutcome });
         } catch (archiveError) {
-          if (isConversationSequenceSafetyError(archiveError)) {
+          if (isConversationDurabilityError(archiveError)) {
             if (!primaryFailure) teardownFailure ??= archiveError;
           } else {
             if (nativeToolPort) throw archiveError;
@@ -1702,7 +1702,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }
         }
       }
-      if (teardownFailure && !(primaryFailure && isConversationSequenceSafetyError(teardownFailure))) throw teardownFailure;
+      if (teardownFailure && !(primaryFailure && isConversationDurabilityError(teardownFailure))) throw teardownFailure;
     }
 
     const finalText = resultText || accumulatedText;

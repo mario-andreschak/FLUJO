@@ -173,6 +173,8 @@ import sequencePath from 'node:path';
 import sequenceOs from 'node:os';
 import { _setConversationLogDirForTests, flushConversationLog, allocateSeq, getConversationSequenceDiagnostics } from '@/backend/execution/flow/conversationLog';
 import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { ConversationPublicationError, publishConversation, getConversationPublicationDiagnostics,
+  CONVERSATION_PUBLICATION_LIMITS } from '@/backend/execution/flow/conversationPublication';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -294,14 +296,22 @@ describe('Conversation sequence safety before execution', () => {
       state.activeSubflowInvocationByNode = { [PROCESS]: invocation.id };
       return { sharedState: state, action: 'FINAL_RESPONSE' };
     });
-    const forward = executionEventBus.emitterFor(id);
-    const emitter = jest.spyOn(executionEventBus, 'emitterFor').mockImplementationOnce(() => event => {
-      if (boundary === 'done' ? event.type === 'run:done'
-        : event.type === 'recovery:transition' && event.recovery.classification === 'completed') throw failure;
-      forward(event);
+    const originalEmitterFor = executionEventBus.emitterFor.bind(executionEventBus);
+    let injectedFailures = 0;
+    const emitter = jest.spyOn(executionEventBus, 'emitterFor').mockImplementation((conversationId, onAdmitted) => {
+      const forward = originalEmitterFor(conversationId, onAdmitted);
+      return event => {
+        if (conversationId === id && (boundary === 'done' ? event.type === 'run:done'
+          : event.type === 'recovery:transition' && event.recovery.classification === 'completed')) {
+          injectedFailures++;
+          throw failure;
+        }
+        forward(event);
+      };
     });
     try {
       const failed = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'original user task' });
+      expect(injectedFailures).toBe(1);
       expect(failed.status).toBe('error');
       expect(failed.error).toMatchObject({ details: { code: failure.code } });
       const saved = structuredClone(persistedStates.at(-1)!);
@@ -331,6 +341,7 @@ describe('Conversation sequence safety before execution', () => {
       expect(persistedStates.at(-1)?.activeSubflowInvocationByNode?.[PROCESS]).toBeUndefined();
       expect(persistedStates.at(-1)?.subflowInvocations![invocation.id].foldReceipt?.continuedAt).toEqual(expect.any(Number));
       expect(getSubflowOutputDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+      expect(injectedFailures).toBe(1);
     } finally {
       emitter.mockRestore();
       (FlowExecutor.executeStep as jest.Mock).mockReset().mockImplementation(originalStep);
@@ -400,6 +411,67 @@ describe('Conversation sequence safety before execution', () => {
     expect(result.error?.message).toBe(original.message);
     expect(result.messages.some(message => message.id === 'real-dispatch-history')).toBe(true);
     expect(persistedStates.at(-1)?.status).toBe('error');
+  });
+
+  it('refuses dispatch after publication pressure and preserves the canonical owner through cleanup', async () => {
+    const failure = new ConversationPublicationError('CONVERSATION_PUBLICATION_MEMORY', 'fixture pressure');
+    const physicalDispatch = jest.fn();
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState, forward: (event: unknown) => void) => {
+      sharedState.messages.push({ id: 'publication-owner', role: 'assistant', content: 'Keep the canonical owner', timestamp: 1 });
+      forward({ type: 'model:dispatch', dispatchId: 'blocked' }); physicalDispatch();
+      return { sharedState, action: 'FINAL_RESPONSE' };
+    });
+    const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'input', emit: event => {
+      if (event.type === 'model:dispatch') throw failure;
+    } });
+    expect(result.status).toBe('error');
+    expect(result.error).toMatchObject({ details: { code: failure.code }, statusCode: 503 });
+    expect(physicalDispatch).not.toHaveBeenCalled();
+    expect(result.messages.some(message => message.id === 'publication-owner')).toBe(true);
+    expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(0);
+  });
+
+  it('propagates actual owner refusal through the default event-bus emitter before physical dispatch', async () => {
+    const physicalDispatch = jest.fn();
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState, forward: (event: unknown) => void) => {
+      let release!: () => void;
+      const blocked = new Promise<void>(resolve => { release = resolve; });
+      const pending: Promise<void>[] = [];
+      while (getConversationPublicationDiagnostics().owners < CONVERSATION_PUBLICATION_LIMITS.owners) {
+        pending.push(publishConversation('default-emitter-capacity', null, async () => blocked));
+      }
+      sharedState.messages.push({ id: 'default-publication-owner', role: 'assistant', content: 'Retain canonical history', timestamp: 1 });
+      try {
+        forward({ type: 'model:dispatch', dispatchId: 'blocked' });
+        physicalDispatch();
+        return { sharedState, action: 'FINAL_RESPONSE' };
+      } finally { release(); await Promise.all(pending); }
+    });
+    const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'input' });
+    expect(result.status).toBe('error');
+    expect(result.error).toMatchObject({ details: { code: 'CONVERSATION_PUBLICATION_BUSY' }, statusCode: 429 });
+    expect(physicalDispatch).not.toHaveBeenCalled();
+    expect(result.messages.some(message => message.id === 'default-publication-owner')).toBe(true);
+    expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(0);
+  });
+
+  it.each([false, true])('surfaces terminal publication failure while preserving an earlier execution failure (%s)', async originalFailure => {
+    const primary = new Error('Original provider failure');
+    if (originalFailure) (FlowExecutor.executeStep as jest.Mock).mockRejectedValueOnce(primary);
+    const save = saveItem as jest.Mock, previousSave = save.getMockImplementation()!;
+    const publication = new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'snapshot device failed');
+    save.mockImplementation(async (key: string, value: SharedState) => {
+      if (value.status === 'completed' || value.status === 'error') throw publication;
+      return previousSave(key, value);
+    });
+    try {
+      const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'Preserve input', mode: 'conversation' });
+      expect(result.status).toBe('error');
+      if (originalFailure) expect(result.error?.message).toBe(primary.message);
+      else expect(result.error).toMatchObject({ details: { code: publication.code } });
+      expect(result.messages.some(message => message.role === 'user' && message.content === 'Preserve input')).toBe(true);
+      expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(0);
+    } finally { save.mockImplementation(previousSave); }
   });
 });
 

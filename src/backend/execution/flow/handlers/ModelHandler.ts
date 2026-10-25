@@ -1,4 +1,4 @@
-import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError, isConversationDurabilityCode } from '@/backend/execution/flow/conversationPublicationError';
 import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
@@ -146,7 +146,7 @@ import {
   readNativeModelTurnSnapshot,
   updateModelDispatchOutcome,
 } from '@/backend/execution/flow/modelTurnArchive';
-import { appendRawForState } from '@/backend/execution/flow/conversationLog';
+import { appendRawForState, flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import {
   assertFlowExecutionCurrent,
   commitFlowDurableMutation,
@@ -1162,7 +1162,8 @@ export class ModelHandler {
       };
     }
 
-    if (isConversationSequenceSafetyError(error)) {
+    rethrowFlowExecutionAuthorityError(error);
+    if (isConversationDurabilityError(error)) {
       return { success: false, error: createModelError(error.code, error.message, modelId,
         undefined, { status: error.status }) };
     }
@@ -1846,7 +1847,7 @@ export class ModelHandler {
       beforeToolDispatch: input.beforeToolDispatch,
       executionExtensionContext: input.executionExtensionContext,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
-      beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
+      beforeModelDispatch: input.beforeModelDispatch ?? (() => assertFlowExecutionCurrent(durableContext)),
       durableContext,
       flushTranscriptProjection: flushLiveProjection,
       // Issue #400: project the handler's bounded session-limit wait onto the
@@ -1863,18 +1864,27 @@ export class ModelHandler {
           node: nodeId ? { nodeId } : undefined,
         });
       },
+    }).catch(async error => {
+      try { await finishLiveProjection(); }
+      catch (cleanupError) { log.warn('Failed to drain live projection after a model failure', { cleanupError }); }
+      throw error;
     });
 
-    await finishLiveProjection();
+    try { await finishLiveProjection(); }
+    catch (error) {
+      if (response.success) throw error;
+      log.warn('Live projection failed while retaining the primary model failure', { error });
+    }
 
     // Provider abort is cooperative and SDK callbacks can resolve after a lease
     // or meeting generation was replaced.  No returned media/message/resource
     // projection may observe that stale result.
-    await assertFlowExecutionCurrent(durableContext);
+    if (response.success) await assertFlowExecutionCurrent(durableContext);
 
     if (!response.success) {
       for (const messageId of liveMessageIds) {
-        emit?.({ type: 'model:end', messageId, discard: true, node: nodeId ? { nodeId } : undefined });
+        try { emit?.({ type: 'model:end', messageId, discard: true, node: nodeId ? { nodeId } : undefined }); }
+        catch (error) { log.warn('Failed to publish failed-model cleanup', { error }); }
       }
       log.warn('Model call returned an error', {
         modelId,
@@ -3192,6 +3202,7 @@ export class ModelHandler {
                         type: 'model:dispatch',
                         turn: entry,
                       });
+                      await flushConversationLog(opts!.conversationId!);
                       if (nativeReceipt) {
                         nativeReceipt = await submitNativeInvocation(nativeReceipt);
                         await opts!.nativeBrokerAuthority!.assertCurrent();
@@ -3278,7 +3289,7 @@ export class ModelHandler {
                       }
                       return entry.id;
                     } catch (error) {
-                      if (error instanceof ModelTurnArchiveMemoryError || isConversationSequenceSafetyError(error)) throw error;
+                      if (error instanceof ModelTurnArchiveMemoryError || isConversationDurabilityError(error)) throw error;
                       if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
@@ -3309,8 +3320,9 @@ export class ModelHandler {
                         dispatchId,
                         outcome,
                       });
+                      await flushConversationLog(opts!.conversationId!);
                     } catch (error) {
-                      if (nativeReceipt || isConversationSequenceSafetyError(error)) throw error;
+                      if (nativeReceipt || isConversationDurabilityError(error)) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
                     }
@@ -3598,8 +3610,19 @@ export class ModelHandler {
           // the same attempt is not in this set and remains durable. User-driven
           // cancellation has its own partial-run semantics, so leave it intact.
           if (model.adapter === 'claude-cli' && !abortController.signal.aborted) {
-            await opts?.flushTranscriptProjection?.();
-            await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
+            try {
+              await opts?.flushTranscriptProjection?.();
+              await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
+            } catch (cleanupError) {
+              log.warn('Failed to clean up streamed prose while retaining the primary model failure', { cleanupError });
+            }
+          }
+          if (nativeReceipt && isFlowExecutionAuthorityError(error)) {
+            // This attempt already owns a durable Original reservation. Report
+            // its held failure through the native Result contract; finally
+            // still holds/drains it, and native attempts cannot auto-retry.
+            // Preflight failures without a receipt retain their typed throw.
+            return { success: false, error: createModelError(error.code, error.message, modelId) };
           }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         } finally {
@@ -3659,7 +3682,7 @@ export class ModelHandler {
         for (;;) {
           attemptProducedOutput = false;
           const attemptResult = await attempt(attemptMessages, attemptTools, attemptTemperature);
-          if (attemptResult.success) return attemptResult;
+          if (attemptResult.success || isConversationDurabilityCode(attemptResult.error.code)) return attemptResult;
           if (singlePhysicalAttempt || getHarnessExecution()) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;

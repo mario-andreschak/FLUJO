@@ -171,7 +171,9 @@ export async function prepareResumedSessionTranscript(input: {
   const invalid = validateSessionTranscript(state.messages);
   if (invalid) return { kind: 'recovery', reason: 'corrupt', detail: invalid };
 
-  const original = structuredClone(state.messages);
+  // Loaded state owns its history. Compaction and trimming derive containers;
+  // publication captures the winning containers before any durable-write wait.
+  const original = state.messages;
   let candidate = original;
   let summarized = false;
 
@@ -222,7 +224,7 @@ export async function prepareResumedSessionTranscript(input: {
   }
 
   const trimmed = trimCompletedLogicalTurns(candidate, input.sessionTurnCap);
-  const changed = JSON.stringify(trimmed.messages) !== JSON.stringify(original);
+  const changed = summarized || trimmed.trimmedTurns > 0;
   if (changed) {
     await replaceConversationTranscript(state, trimmed.messages);
   }

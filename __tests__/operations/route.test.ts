@@ -20,6 +20,9 @@ import { acquireFlowRunAdmission } from '@/backend/execution/flow/runAdmission';
 import { withSubflowPreparationBudget } from '@/backend/execution/flow/subflowPreparationBudget';
 import { SubflowOutputBudget } from '@/backend/execution/flow/subflowOutputBudget';
 import { setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import { publishConversation } from '@/backend/execution/flow/conversationPublication';
+import { acquireChatIngress, claimChatIngress, finishChatInputParsing } from '@/utils/http/chatIngress';
+import { checkChatRateLimit } from '@/utils/http/chatRateLimit';
 
 const keys = ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_OPERATIONS_RSS_BUDGET_BYTES'] as const;
 const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
@@ -93,6 +96,57 @@ it('reports sequence ownership and descriptor pressure without exposing registry
   expect(result.conversationSequences).toMatchObject({ maxKeys: 4096, maxColdScans: 4, scanActive: 0, scanQuarantined: 0 });
   expect(Object.values(result.conversationSequences).every(value => typeof value === 'number')).toBe(true);
   expect(JSON.stringify(result.conversationSequences)).not.toMatch(/PRIVATE|fixture-workspace/);
+});
+it('reports ingress capacity while a producer still owns the parsed input and releases it after settlement', async () => {
+  const input = new NextRequest('http://localhost/v1/chat/completions?workspace=PRIVATE_WORKSPACE', {
+    method: 'POST', body: '{"prompt":"PRIVATE_PROMPT"}', headers: { authorization: 'Bearer PRIVATE_CREDENTIAL' },
+  });
+  const permit = acquireChatIngress(input);
+  finishChatInputParsing(permit, 27, 2);
+  const owner = claimChatIngress(permit);
+  const producerDone = owner.retain();
+  try {
+    permit.release(); owner.release();
+    const result = await (await GET(request('fixture-control'))).json();
+    expect(result.chatIngress).toMatchObject({ active: 1, parsing: 0 });
+    expect(result.chatIngress.reservedBytes).toBeGreaterThan(0);
+    expect(result.allocationReservations.ingress).toBe(result.chatIngress.reservedBytes);
+    expect(Object.values(result.chatIngress).every(value => typeof value === 'number' && Number.isFinite(value))).toBe(true);
+    expect(JSON.stringify(result.chatIngress)).not.toMatch(/PRIVATE|fixture-workspace/);
+  } finally { permit.release(); owner.release(); producerDone(); }
+  const released = await (await GET(request('fixture-control'))).json();
+  expect(released.chatIngress).toMatchObject({ active: 0, parsing: 0, reservedBytes: 0 });
+  expect(released.allocationReservations.ingress).toBe(0);
+});
+it('reports a live publication owner without exposing its key or captured content and drains after release', async () => {
+  let release!: () => void, entered!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const publication = publishConversation('PRIVATE_WORKSPACE/PRIVATE_CONVERSATION', {
+    content: 'PRIVATE_PROMPT', media: [{ uri: 'run-resource://PRIVATE_MEDIA' }],
+  }, async () => { entered(); await blocked; });
+  try {
+    await started;
+    const result = await (await GET(request('fixture-control'))).json();
+    expect(result.conversationPublication).toMatchObject({ owners: 1, writers: 1, queuedWriters: 0, chains: 1 });
+    expect(result.conversationPublication.retainedBytes).toBeGreaterThan(0);
+    expect(result.conversationPublication.allocationBytes).toBeGreaterThan(0);
+    expect(result.allocationReservations.publication).toBe(result.conversationPublication.allocationBytes);
+    expect(Object.values(result.conversationPublication).every(value => typeof value === 'number' && Number.isFinite(value))).toBe(true);
+    expect(JSON.stringify(result.conversationPublication)).not.toMatch(/PRIVATE|run-resource|fixture-workspace/);
+  } finally { release(); await publication; }
+  const released = await (await GET(request('fixture-control'))).json();
+  expect(released.conversationPublication).toMatchObject({ owners: 0, writers: 0, queuedWriters: 0, chains: 0, retainedBytes: 0, allocationBytes: 0 });
+  expect(released.allocationReservations.publication).toBe(0);
+});
+it('reports bounded numeric rate pressure without exposing retained IP quota keys', async () => {
+  const ip = '198.51.100.23';
+  expect(checkChatRateLimit(ip)).toBe('allowed');
+  const result = await (await GET(request('fixture-control'))).json();
+  expect(result.chatRateLimit).toMatchObject({ keys: 1, maxKeys: 4096, maxKeyBytes: 1024 * 1024 });
+  expect(result.chatRateLimit.keyBytes).toBeGreaterThan(0);
+  expect(Object.values(result.chatRateLimit).every(value => typeof value === 'number' && Number.isFinite(value))).toBe(true);
+  expect(JSON.stringify(result.chatRateLimit)).not.toMatch(/198\.51\.100\.23|PRIVATE|fixture-workspace/);
 });
 it('rechecks a rotated worker bearer after awaited reads', async () => {
   read.mockImplementationOnce(async () => { process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'rotated-fixture-control'; return undefined; });

@@ -13,7 +13,8 @@ import { acquireFlowRunAdmission, withFlowRunAdmission, isFlowRunPressureError,
   type FlowRunAdmissionPermit, type FlowRunPressureError } from '@/backend/execution/flow/runAdmission';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { prepareConversationSequence } from '@/backend/execution/flow/conversationLog';
-import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import type { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError, type ConversationPublicationError } from '@/backend/execution/flow/conversationPublicationError';
 import { ExecutionEvent } from '@/shared/types/execution/events';
 import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
 import { modelService } from '@/backend/services/model';
@@ -55,7 +56,7 @@ export function flowRunPressureResponse(error: FlowRunPressureError) {
   });
 }
 
-function sequenceSafetyResponse(error: ConversationSequenceSafetyError) {
+function conversationDurabilityResponse(error: ConversationSequenceSafetyError | ConversationPublicationError) {
   return NextResponse.json({ error: { message: error.message, type: error.details.type, code: error.code } }, { status: error.status });
 }
 
@@ -654,12 +655,13 @@ async function processAdmittedChatCompletion(
         mcpAppContexts: data.mcpAppContexts, mcpSkillSelections: data.mcpSkillSelections,
         processNodeId: data.processNodeId, conversationId: effectiveConvId });
     } catch (error) {
-      if (isConversationSequenceSafetyError(error)) return sequenceSafetyResponse(error);
+      if (isConversationDurabilityError(error)) return conversationDurabilityResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
       throw error;
     }
     let admission: CompletionStreamAdmission | undefined;
     const submissionFailure = new AbortController();
+    let primarySubmissionFailure: unknown;
     let submitted = false;
     try {
       admission = reserveCompletionStream(effectiveConvId);
@@ -672,12 +674,13 @@ async function processAdmittedChatCompletion(
       // The reference in FlowExecutor.conversationStates will prevent garbage collection
       const releaseProducer = ingressOwner?.retain();
       submitted = true;
-      withFlowRunAdmission(runAdmission, () =>
+      void withFlowRunAdmission(runAdmission, () =>
         processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId, continueDebug, userTurn))
         .catch(async error => {
+          primarySubmissionFailure = error;
           // Admission owns no execution state. A refused successor must not end
           // the currently running, paused or recovery-owned conversation.
-          if (isFlowRunPressureError(error) || isConversationSequenceSafetyError(error)) {
+          if (isFlowRunPressureError(error) || isConversationDurabilityError(error)) {
             log.warn('Flow submission refused after preflight', { code: error.code });
             submissionFailure.abort(error);
             return;
@@ -713,12 +716,25 @@ async function processAdmittedChatCompletion(
           // the run threw before emitting run:done (runFlow emits run:done on its
           // own error paths, but a throw before/around it would otherwise hang the
           // stream).
-          executionEventBus.emitterFor(effectiveConvId)({
-            type: 'run:done',
-            status: 'error',
-            ...(errorState?.lastError ? { error: errorState.lastError } : {}),
-          });
-        }).finally(() => releaseProducer?.());
+          try {
+            executionEventBus.emitterFor(effectiveConvId)({
+              type: 'run:done',
+              status: 'error',
+              ...(errorState?.lastError ? { error: errorState.lastError } : {}),
+            });
+          } catch (cleanupError) {
+            // A refused terminal marker cannot replace the original failure or
+            // leave the consumer waiting for an event that cannot be published.
+            log.warn('Failed to publish background terminal event', { cleanupError });
+            submissionFailure.abort(error);
+          }
+        }).finally(() => releaseProducer?.()).catch(error => {
+          // Observe the complete detached chain, including cleanup/release.
+          // The producer reservation lasts through that cleanup even if the
+          // HTTP consumer disconnected or response construction failed.
+          log.error('Background completion cleanup failed', { error });
+          submissionFailure.abort(primarySubmissionFailure ?? error);
+        });
 
       // Return streaming response immediately
       return createStreamingResponse(data.model, effectiveConvId, snapshotReplayFrom, streamFromSeq, admission, submissionFailure.signal);
@@ -727,7 +743,7 @@ async function processAdmittedChatCompletion(
       // scope owns the reservation until that execution actually settles.
       if (!submitted) runAdmission.release();
       admission?.release();
-      if (isConversationSequenceSafetyError(error)) return sequenceSafetyResponse(error);
+      if (isConversationDurabilityError(error)) return conversationDurabilityResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
       throw error;
     }
@@ -736,7 +752,7 @@ async function processAdmittedChatCompletion(
     try {
       return await processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
     } catch (error) {
-      if (isConversationSequenceSafetyError(error)) return sequenceSafetyResponse(error);
+      if (isConversationDurabilityError(error)) return conversationDurabilityResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
       throw error;
     }
@@ -918,7 +934,7 @@ export function createStreamingResponse(
               const body = isFlowRunPressureError(error)
                 ? { message: error.message, type: 'api_error', code: error.code,
                   ...(error.status === 413 ? {} : { retry_after: error.retryAfterSeconds }) }
-                : isConversationSequenceSafetyError(error)
+                : isConversationDurabilityError(error)
                   ? { message: error.message, type: error.details.type, code: error.code }
                   : { message: 'Flow submission could not start.', type: 'api_error', code: 'FLOW_RUN_SUBMISSION_FAILED' };
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: body })}\n\ndata: [DONE]\n\n`));

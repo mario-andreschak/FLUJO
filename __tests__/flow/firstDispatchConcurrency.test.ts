@@ -2,6 +2,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Flow } from '@/shared/types/flow';
@@ -30,23 +31,46 @@ jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: () => {}, ver
 
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { _setConversationLogDirForTests, flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
 import { loadItem, saveItem, saveCollectionItem } from '@/utils/storage/backend';
 import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { ensureWorkspaceDirs, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import { withWorkspaceMutation, withWorkspaceRecoveryCapture } from '@/backend/services/workspace/workspaceMutationGate';
 import { getFlowRunAdmissionDiagnostics, isFlowRunPressureError } from '@/backend/execution/flow/runAdmission';
+import { CONVERSATION_PUBLICATION_LIMITS, getConversationPublicationDiagnostics, publishConversation } from '@/backend/execution/flow/conversationPublication';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { flushStatisticsEvents } from '@/backend/services/statistics';
 
 jest.setTimeout(180_000);
 let server: Server;
 let root: string;
 let previousDataDir: string | undefined;
+let previousParentDataDir: string | undefined;
+let logRoot: string, previousLogRoot: string, temporaryParent: string;
+let rootIdentity: BigIntStats;
 const requests = new Map<string, number[]>();
+
+function assertFixtureStorage(): void {
+  const relative = path.relative(root, getWorkspaceDataDir());
+  expect(relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)).toBe(true);
+  expect(path.resolve(logRoot)).toBe(path.join(root, 'conversation-logs'));
+}
 
 beforeAll(async () => {
   previousDataDir = process.env.FLUJO_DATA_DIR;
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-first-dispatch-'));
+  previousParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
+  temporaryParent = await fs.realpath(os.tmpdir());
+  root = await fs.mkdtemp(path.join(temporaryParent, 'flujo-first-dispatch-'));
+  rootIdentity = await fs.lstat(root, { bigint: true });
   process.env.FLUJO_DATA_DIR = root;
+  delete process.env.FLUJO_PARENT_DATA_DIR;
+  // Global Jest logs use a PID path, which a later Linux sandbox can reuse.
+  // Install a genuinely fresh log store owned by this fixture, retaining the
+  // previous override/records intact for teardown and failure provenance.
+  logRoot = path.join(root, 'conversation-logs');
+  await fs.mkdir(logRoot);
+  previousLogRoot = _setConversationLogDirForTests(logRoot);
+  assertFixtureStorage();
   server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', chunk => chunks.push(Buffer.from(chunk)));
@@ -74,15 +98,30 @@ beforeAll(async () => {
 afterAll(async () => {
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  process.env.FLUJO_DATA_DIR = root;
+  delete process.env.FLUJO_PARENT_DATA_DIR;
+  await flushStatisticsEvents();
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, terminalWaiters: 0, chains: 0, fences: 0 });
   FlowExecutor.conversationStates.clear();
   FlowExecutor.clearFlowCache();
+  const current = await fs.lstat(root, { bigint: true });
+  const relative = path.relative(temporaryParent, path.resolve(root));
+  if (relative !== path.basename(root) || !relative.startsWith('flujo-first-dispatch-')
+    || current.isSymbolicLink() || !current.isDirectory() || await fs.realpath(root) !== root
+    || current.dev !== rootIdentity.dev || current.ino !== rootIdentity.ino || current.birthtimeNs !== rootIdentity.birthtimeNs) {
+    throw new Error('Preserving replaced or unowned dispatch fixture');
+  }
+  _setConversationLogDirForTests(previousLogRoot);
   if (previousDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
   else process.env.FLUJO_DATA_DIR = previousDataDir;
+  if (previousParentDataDir === undefined) delete process.env.FLUJO_PARENT_DATA_DIR;
+  else process.env.FLUJO_PARENT_DATA_DIR = previousParentDataDir;
   await fs.rm(root, { recursive: true, force: true });
 });
 
 it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPATCH_300 === '1' ? [[false, 300]] as const : []), [true, 1], [true, 16], [true, 64]] as const)('measures saved-flow first dispatch (protected=%s, concurrency=%i)', async (protectedRun, count) => {
   await runWithWorkspace(`dispatch-${protectedRun ? 'protected' : 'ordinary'}-${count}`, async () => {
+    assertFixtureStorage();
     requests.clear();
     await ensureWorkspaceDirs();
     await saveItem(StorageKey.MODELS, [{ id: 'dispatch-model', name: 'dispatch-fixture',
@@ -98,6 +137,10 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
     mockArchivePeakBytes = 0; mockArchivePeakWaiters = 0;
     const started = performance.now();
     const ids = Array.from({ length: count }, (_, index) => `dispatch-${protectedRun ? 'p' : 'o'}-${count}-${index}`);
+    const logicalDispatches = new Map<string, number>();
+    const unsubscribeDispatches = executionEventBus.subscribeGlobal(({ event }) => {
+      if (event.type === 'model:dispatch') logicalDispatches.set(event.conversationId, (logicalDispatches.get(event.conversationId) ?? 0) + 1);
+    });
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(new Error('Local batch deadline exceeded')), 120_000);
     const sampleMemory = setInterval(() => {
@@ -108,7 +151,7 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
       return runFlow({ conversationId, flowId: flow.id, prompt: conversationId, source: 'api', mode: 'conversation',
         abortSignal: controller.signal,
         ...(protectedRun ? { executionAuthority: { signal: controller.signal, assertCurrent: async () => {} } } : {}) });
-    })).finally(() => { clearTimeout(deadline); clearInterval(sampleMemory); });
+    })).finally(() => { clearTimeout(deadline); clearInterval(sampleMemory); unsubscribeDispatches(); });
     const results = submissions.flatMap(submission => submission.status === 'fulfilled' ? [submission.value] : []);
     const refused = submissions.filter(submission => submission.status === 'rejected');
     const latencies = ids.flatMap(id => (requests.get(id) ?? []).slice(0, 1).map(time => time - started)).sort((a, b) => a - b);
@@ -118,6 +161,7 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
       lastMs: Math.round(latencies.at(-1) ?? 0), completedMs: Math.round(performance.now() - started),
       errors: [...new Set(results.filter(result => result.status !== 'completed').map(result => result.error?.details?.code ?? result.error?.message))],
       archivePressure: getArchiveWritePressure(),
+      publicationPressure: getConversationPublicationDiagnostics(),
       archivePeak: { bytes: mockArchivePeakBytes, waiters: mockArchivePeakWaiters },
       admission: { count: mockAdmissions.length,
         beforeFirstDispatch: mockAdmissions.filter(timing => timing.start < started + (latencies[0] ?? 0)).length,
@@ -139,13 +183,17 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
         continue;
       }
       const result = submission.value;
-      if (!protectedRun) expect(result.status).toBe('completed');
+      if (count <= 16) expect(result.status).toBe('completed');
       if (result.status === 'completed') {
         expect(result.outputText).toBe(`answer ${id}`);
         expect(requests.get(id)).toHaveLength(1);
       } else {
-        expect(result).toMatchObject({ status: 'error', error: { details: { code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' }, statusCode: 429 } });
+        // Both local admission boundaries may refuse this oversubscribed batch.
+        // Neither refusal may be accepted after a logical or physical dispatch.
+        expect(result).toMatchObject({ status: 'error', error: { statusCode: 429 } });
+        expect(['MODEL_TURN_ARCHIVE_MEMORY_BUSY', 'CONVERSATION_PUBLICATION_BUSY']).toContain(result.error?.details?.code);
         expect(requests.get(id) ?? []).toHaveLength(0);
+        expect(logicalDispatches.get(id) ?? 0).toBe(0);
       }
       await flushConversationLog(id);
       const state = await loadItem<SharedState | undefined>(`conversations/${id}` as StorageKey, undefined);
@@ -154,13 +202,19 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
         expect(state?.recovery?.classification).toBe('completed');
         expect(state?.messages.filter(message => message.role === 'assistant' && message.content === `answer ${id}`)).toHaveLength(1);
       }
-      expect((await readConversationLog(id) ?? []).filter(event => event.type === 'run:done')).toHaveLength(1);
+      const events = await readConversationLog(id) ?? [];
+      expect((await fs.stat(path.join(logRoot, `${id}.jsonl`))).isFile()).toBe(true);
+      expect(events.filter(event => event.type === 'run:done')).toHaveLength(1);
+      if (result.status !== 'completed') expect(events.filter(event => event.type === 'model:dispatch')).toHaveLength(0);
       const summary = JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'conversation-summaries', `${id}.json`), 'utf8'));
       expect(summary).toMatchObject({ id, status: result.status });
     }
+    expect(results.filter(result => result.status === 'completed').length).toBeGreaterThan(0);
     expect(refused).toHaveLength(Math.max(0, count - getFlowRunAdmissionDiagnostics().maxWorkspaceRuns));
     expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0, workspaceActiveRuns: 0 });
     expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });
+    expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, allocationBytes: 0,
+      retainedBytes: 0, queuedWriters: 0, terminalWaiters: 0, chains: 0, fences: 0, receipts: 0, quarantinedWriterSlots: 0 });
     expect(globalThis.__flujo_workspace_writer_admission_chains?.size ?? 0).toBe(0);
     await expect(withWorkspaceRecoveryCapture(async () => 'drained')).resolves.toBe('drained');
   });
@@ -181,5 +235,86 @@ it('keeps recovery capture behind a live admitted writer', async () => {
     await writer;
     await capture;
     expect(captured).toBe(true);
+  });
+});
+
+it.each([false, true])('finishes durable terminal history after an already-started run meets temporary publication pressure (prior failure=%s)', async priorFailure => {
+  await runWithWorkspace(`dispatch-terminal-pressure-${priorFailure}`, async () => {
+    await ensureWorkspaceDirs();
+    const id = `dispatch-o-1-terminal-${priorFailure}`;
+    await saveItem(StorageKey.MODELS, [{ id: 'dispatch-model', name: 'dispatch-fixture', provider: 'openai', adapter: 'openai', ApiKey: '', baseUrl: mockBaseUrl }]);
+    const flow: Flow = { id: `terminal-pressure-flow-${priorFailure}`, name: 'terminal pressure',
+      nodes: [{ id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { label: 'start', type: 'start', properties: {} } },
+        ...(!priorFailure ? [{ id: 'process', type: 'process', position: { x: 1, y: 0 }, data: { label: 'process', type: 'process', properties: { boundModel: 'dispatch-model' } } }] : [])],
+      edges: priorFailure ? [] : [{ id: 'edge', source: 'start', target: 'process', data: { edgeType: 'standard' } }] };
+    await saveCollectionItem('flows', flow.id, flow);
+    let release!: () => void, entered!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const holders: Promise<void>[] = [];
+    const unsubscribe = executionEventBus.subscribe(id, event => {
+      if (event.type === 'run:start') {
+        while (getConversationPublicationDiagnostics().owners < CONVERSATION_PUBLICATION_LIMITS.owners) {
+          holders.push(publishConversation('terminal-pressure-holder', null, async () => blocked));
+        }
+        entered();
+      }
+    });
+    const pending = runFlow({ conversationId: id, flowId: flow.id, prompt: 'retain this accepted input', source: 'api', mode: 'conversation' });
+    try {
+      await started;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    } finally { release(); await Promise.all(holders); }
+    const result = await pending.finally(unsubscribe);
+    await flushConversationLog(id);
+    const events = await readConversationLog(id) ?? [];
+    const snapshot = await loadItem<SharedState | undefined>(`conversations/${id}` as StorageKey, undefined);
+    const summary = JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'conversation-summaries', `${id}.json`), 'utf8'));
+    console.info('TERMINAL_PUBLICATION_PRESSURE', JSON.stringify({ status: result.status, code: result.error?.details?.code,
+      events: events.map(event => event.type), snapshotStatus: snapshot?.status, summaryStatus: summary.status,
+      messageCount: snapshot?.messages.length, publication: getConversationPublicationDiagnostics() }));
+    const expectedCode = priorFailure ? 'flow_invalid' : 'CONVERSATION_PUBLICATION_BUSY';
+    expect(result).toMatchObject({ status: 'error', error: { details: { code: expectedCode }, statusCode: priorFailure ? 400 : 429 } });
+    expect(events.filter(event => event.type === 'run:start')).toHaveLength(1);
+    expect(events.filter(event => event.type === 'run:done')).toHaveLength(1);
+    expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+    expect(events.filter(event => event.type === 'recovery:transition')).toHaveLength(1);
+    expect(events.filter(event => event.type === 'model:dispatch')).toHaveLength(0);
+    expect(requests.get(id) ?? []).toHaveLength(0);
+    expect(snapshot).toMatchObject({ status: 'error', lastError: { code: expectedCode } });
+    expect(snapshot?.messages.filter(message => message.content === 'retain this accepted input')).toHaveLength(1);
+    expect(summary).toMatchObject({ id, status: 'error' });
+    expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+    expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, retainedBytes: 0, allocationBytes: 0,
+      chains: 0, fences: 0, receipts: 0, quarantinedWriterSlots: 0, terminalWaiters: 0 });
+  });
+});
+
+it('does not replay an opaque emitter that throws a real owner refusal after forwarding the terminal event', async () => {
+  await runWithWorkspace('dispatch-opaque-terminal', async () => {
+    await ensureWorkspaceDirs();
+    const id = 'opaque-terminal', flow: Flow = { id: 'opaque-invalid-flow', name: 'opaque emitter', nodes: [], edges: [] };
+    await saveCollectionItem('flows', flow.id, flow);
+    let release!: () => void, refusal: unknown;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const holders = Array.from({ length: CONVERSATION_PUBLICATION_LIMITS.owners }, () =>
+      publishConversation('opaque-refusal-holder', null, async () => blocked));
+    try { publishConversation('opaque-refusal', null, async () => undefined); }
+    catch (error) { refusal = error; }
+    finally { release(); await Promise.all(holders); }
+    expect(refusal).toMatchObject({ code: 'CONVERSATION_PUBLICATION_BUSY' });
+    const emit = executionEventBus.emitterFor(id);
+    let terminalCalls = 0;
+    const result = await runFlow({ conversationId: id, flowId: flow.id, prompt: 'opaque input', source: 'api', mode: 'conversation',
+      emit: event => {
+        emit(event);
+        if (event.type === 'run:done') { terminalCalls++; throw refusal; }
+      } });
+    await flushConversationLog(id);
+    expect(result).toMatchObject({ status: 'error', error: { details: { code: 'flow_invalid' } } });
+    expect(terminalCalls).toBe(1);
+    expect((await readConversationLog(id) ?? []).filter(event => event.type === 'run:done')).toHaveLength(1);
+    expect(await loadItem(`conversations/${id}` as StorageKey, undefined)).toMatchObject({ status: 'error' });
+    expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, terminalWaiters: 0, chains: 0, fences: 0, receipts: 0 });
   });
 });

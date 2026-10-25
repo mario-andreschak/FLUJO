@@ -1,4 +1,4 @@
-import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
 import OpenAI from 'openai';
 import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { v4 as uuidv4 } from 'uuid';
@@ -1164,7 +1164,7 @@ export class CodexAdapter implements CompletionAdapter {
               throw new Error('Native Codex SDK dispatch receipt differs from its broker origin.');
             }
           } catch (archiveError) {
-            if (nativeToolPort || isConversationSequenceSafetyError(archiveError)) throw archiveError;
+            if (nativeToolPort || isConversationDurabilityError(archiveError)) throw archiveError;
             rethrowFlowExecutionAuthorityError(archiveError);
             log.warn('Could not archive Codex SDK request', archiveError);
           }
@@ -1322,7 +1322,7 @@ export class CodexAdapter implements CompletionAdapter {
           }
         } catch (err) {
           primaryFailure = true;
-          if (isConversationSequenceSafetyError(err)) throw err;
+          if (isConversationDurabilityError(err)) throw err;
           rethrowFlowExecutionAuthorityError(err);
           // The SDK can yield turn.failed and then throw a generic CLI exit
           // error. Preserve the provider's actionable reason (for example a
@@ -1361,11 +1361,11 @@ export class CodexAdapter implements CompletionAdapter {
             try {
               await onSdkRequestResult({ dispatchId, outcome });
             } catch (archiveError) {
-              if (isConversationSequenceSafetyError(archiveError) && (primaryFailure || attemptFailure)) {
+              if (isConversationDurabilityError(archiveError) && (primaryFailure || attemptFailure)) {
                 // Keep the actual provider/authority failure; teardown below
                 // still drains this attempt and no physical retry is added.
               } else {
-                if (nativeToolPort || isConversationSequenceSafetyError(archiveError)) throw archiveError;
+                if (nativeToolPort || isConversationDurabilityError(archiveError)) throw archiveError;
                 rethrowFlowExecutionAuthorityError(archiveError);
                 log.warn('Could not update Codex SDK request archive', archiveError);
               }
@@ -1426,7 +1426,7 @@ export class CodexAdapter implements CompletionAdapter {
         throw new Error(`Codex run failed: ${failure}`);
       }
     } catch (err) {
-      if (isConversationSequenceSafetyError(err)) throw err;
+      if (isConversationDurabilityError(err)) throw err;
       rethrowFlowExecutionAuthorityError(err);
       if (sessionTracking) {
         invalidateCodexSession(sessionTracking.key);

@@ -5,6 +5,7 @@ const globalFences = globalThis as typeof globalThis & { __flujoSubflowFoldFence
 const pending = globalFences.__flujoSubflowFoldFences ??= new WeakMap<object, () => Promise<void>>();
 export function fenceSubflowFold(state: object, reconcile: () => Promise<void>): void { pending.set(state, reconcile); }
 export function clearSubflowFoldFence(state: object): void { pending.delete(state); }
+export function hasSubflowFoldFence(state: object): boolean { return pending.has(state); }
 export async function reconcileSubflowFold(state: object): Promise<boolean> {
   const reconcile = pending.get(state);
   if (!reconcile) return false;

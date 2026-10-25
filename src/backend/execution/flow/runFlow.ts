@@ -20,8 +20,9 @@ import {
   ownerScopeForRun,
   releaseRunOwnedBashSessions,
 } from '@/backend/services/mcp/ownerScope';
-import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState, prepareConversationSequence } from '@/backend/execution/flow/conversationLog';
+import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState, prepareConversationSequence, flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError } from './conversationLogSequence';
+import { isConversationPublicationError, retryOwnedConversationPublicationBusy, type ConversationPublicationError } from './conversationPublication';
 import {
   steeringCount,
   takeSteeringMessages,
@@ -1687,19 +1688,35 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const nodeTurnCounts = new Map<string, number>();
 
   // --- Execution event emission (live progress + debugger) ---
-  const underlyingEmit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
-  let sequenceFailure: ConversationSequenceSafetyError | undefined;
+  const isConversationDurabilityFailure = (error: unknown): error is ConversationSequenceSafetyError | ConversationPublicationError =>
+    isConversationSequenceSafetyError(error) || isConversationPublicationError(error);
+  let sequenceFailure: ConversationSequenceSafetyError | ConversationPublicationError | undefined;
   let sequenceErrorCleanup = false;
+  let lastEmissionAdmitted = false;
+  let errorEventAdmitted = false;
+  const underlyingEmit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId, event => {
+    lastEmissionAdmitted = true;
+    if (event.type === 'error') errorEventAdmitted = true;
+    if (event.type === 'message' && event.message.id) emittedMessageIds.add(event.message.id);
+  });
   const emit: EmitFn = event => {
+    lastEmissionAdmitted = false;
     if (sequenceFailure) {
       // A broken sequence cannot stamp another error about that same failure.
       // Normal work still throws, so no later dispatch is silently permitted.
       if (sequenceErrorCleanup || event.type === 'error') return;
       throw sequenceFailure;
     }
-    try { underlyingEmit(event); }
+    // Opaque callbacks have no trusted acceptance receipt. Once attempted,
+    // never replay their error/message event automatically after a throw.
+    if (input.emit && event.type === 'error') errorEventAdmitted = true;
+    try {
+      underlyingEmit(event);
+      lastEmissionAdmitted = true;
+      if (event.type === 'error') errorEventAdmitted = true;
+    }
     catch (error) {
-      if (isConversationSequenceSafetyError(error)) {
+      if (isConversationDurabilityFailure(error)) {
         sequenceFailure = error;
         if (sequenceErrorCleanup) return; // Preserve the original execution error.
       }
@@ -1762,19 +1779,19 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       // without an id could never be tracked (or deduped by any consumer).
       if (!msg.id) msg.id = crypto.randomUUID();
       if (emittedMessageIds.has(msg.id)) continue;
-      emittedMessageIds.add(msg.id);
       // The node's system prompt (prepended into the transcript by
       // ProcessNode.post's write-back) is model plumbing, not conversation
       // content — never emitted under the old index cursor either (it lands
       // BEFORE the cursor). Keep it out of the live stream.
-      if (msg.role === 'system') continue;
+      if (msg.role === 'system') { emittedMessageIds.add(msg.id); continue; }
+      if (input.emit) emittedMessageIds.add(msg.id);
       emit({
         type: 'message',
         message: msg,
         messageOrigin: inputMessageIds?.has(msg.id) ? 'input' : 'internal',
         node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
       });
-      accumulateUsage(msg);
+      if (lastEmissionAdmitted) { emittedMessageIds.add(msg.id); accumulateUsage(msg); }
     }
   };
 
@@ -1902,7 +1919,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       try {
         await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
       } catch (error) {
-        if (!isConversationSequenceSafetyError(error)) throw error;
+        if (!isConversationDurabilityFailure(error)) throw error;
         // The tool already failed. Keep that primary outcome; normal terminal
         // persistence below saves this unknown-effect classification without
         // recursively numbering it or masking the primary failure on a retry.
@@ -3321,8 +3338,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const finalExecutionTime = Date.now() - startTime;
   let finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   const recordTerminalSequenceFailure = (error: unknown) => {
-    if (!isConversationSequenceSafetyError(error)) throw error;
-    sequenceFailure ??= error;
+    if (!isConversationDurabilityFailure(error)) throw error;
+    if (!sequenceFailure || sequenceFailure.code === 'CONVERSATION_PUBLICATION_BUSY') sequenceFailure = error;
     sequenceErrorCleanup = true;
     if (finalStatus !== 'error') {
       sharedState.lastResponse = { success: false, error: error.message, errorDetails: error.details };
@@ -3337,6 +3354,33 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   };
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
 
+  // Execution remains fail-fast after an admission refusal. Terminal cleanup
+  // alone may wait for that definitely unstarted write; a broken sequence or
+  // uncertain I/O still suppresses further events and retains its fence.
+  const publishTerminalEvent = async (event: Parameters<EmitFn>[0]) => {
+    // Each outer event owns its receipt; a reentrant emission cannot overwrite
+    // it. Opaque emitters have no receipt and are attempted exactly once.
+    let admitted = false;
+    const terminalEmit = input.emit ?? executionEventBus.emitterFor(effectiveConvId, accepted => {
+      admitted = true;
+      if (accepted.type === 'error') errorEventAdmitted = true;
+      if (accepted.type === 'message' && accepted.message.id) emittedMessageIds.add(accepted.message.id);
+    });
+    await retryOwnedConversationPublicationBusy(() => {
+      admitted = false;
+      if (sequenceFailure && sequenceFailure.code !== 'CONVERSATION_PUBLICATION_BUSY') return;
+      terminalEmit(event);
+    }, () => !input.emit && !admitted);
+    if (!ephemeral) await flushConversationLog(effectiveConvId);
+  };
+  const terminalRecoveryEmit = input.emit ? undefined : publishTerminalEvent;
+  if (finalStatus === 'error' && sharedState.lastError && !errorEventAdmitted) {
+    try {
+      await publishTerminalEvent({ type: 'error', message: sharedState.lastError.message, error: sharedState.lastError,
+        node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
+    } catch (error) { recordTerminalSequenceFailure(error); }
+  }
+
   // Persist the precise recovery transition before the legacy terminal event.
   // Existing status values remain unchanged for backward compatibility.
   try {
@@ -3350,13 +3394,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           retryable: false,
         },
         cancellationRequestedAt: sharedState.recovery?.cancellationRequestedAt ?? Date.now(),
-      }, recoveryEmit);
+      }, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
     } else if (finalStatus === 'completed') {
-      await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, recoveryEmit);
+      await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
     } else if (finalStatus === 'capped') {
-      await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, recoveryEmit);
+      await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
     } else if (finalStatus === 'awaiting_tool_approval' || finalStatus === 'paused_debug') {
-      await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, recoveryEmit);
+      await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
     } else if (finalStatus === 'error') {
       const classified = classifyRecoveryFailure(sharedState.lastResponse);
       await commitRecoveryTransition(storageKey, sharedState, classified.classification, {
@@ -3365,7 +3409,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         manualActionRequired: classified.failure.category === 'tool_failure'
           ? true
           : sharedState.recovery?.manualActionRequired,
-      }, recoveryEmit);
+      }, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
     }
   } catch (error) {
     // Preserve an existing execution error, or report a late safety failure,
@@ -3374,10 +3418,19 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   }
 
   // Flush any trailing messages and signal terminal completion to live consumers.
-  try { emitNewMessages(); }
+  try {
+    for (const msg of sharedState.messages) {
+      if (!msg.id) msg.id = crypto.randomUUID();
+      if (emittedMessageIds.has(msg.id) || msg.role === 'system') continue;
+      await publishTerminalEvent({ type: 'message', message: msg, messageOrigin: 'internal',
+        node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined });
+      emittedMessageIds.add(msg.id);
+      accumulateUsage(msg);
+    }
+  }
   catch (error) { recordTerminalSequenceFailure(error); }
   if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
-    try { emit({
+    try { await publishTerminalEvent({
       type: 'run:done',
       status: finalStatus,
       ...(finalStatus === 'error' && sharedState.lastError ? { error: sharedState.lastError } : {}),
@@ -3422,6 +3475,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // succeed, so recovery reuses its receipt rather than dispatching new children.
   if (finalStatus === 'completed' || finalStatus === 'capped') acknowledgeSubflowContinuation(sharedState, sharedState.currentNodeId);
   let finalSnapshotPersisted = false;
+  let finalSnapshotFailure: ConversationSequenceSafetyError | ConversationPublicationError | undefined;
   try {
     sharedState.updatedAt = Date.now();
     if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
@@ -3431,11 +3485,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`);
       }
     }
-    await persistState(storageKey, sharedState); // chokepoint refuses ephemeral + deleted states
+    await retryOwnedConversationPublicationBusy(() => persistState(storageKey, sharedState)); // chokepoint refuses ephemeral + deleted states
     finalSnapshotPersisted = true;
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
+    if (isConversationDurabilityFailure(error)) finalSnapshotFailure = error;
   }
   // A conversation deleted mid-run must not be resurrected: the persist above is
   // already refused by the tombstone; drop the in-memory state too instead of
@@ -3481,10 +3536,15 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       await markConversationTerminal(effectiveConvId, sharedState, async () => {
         // The snapshot above already succeeded in the normal case; only retry it
         // when that write failed, so persist-before-evict still holds.
-        if (!finalSnapshotPersisted) await persistState(storageKey, sharedState);
+        if (!finalSnapshotPersisted) {
+          await retryOwnedConversationPublicationBusy(() => persistState(storageKey, sharedState));
+          finalSnapshotPersisted = true;
+        }
       });
     }
   }
+
+  if (!finalSnapshotPersisted && finalSnapshotFailure) recordTerminalSequenceFailure(finalSnapshotFailure);
 
   // An ephemeral run is transient: drop it from the in-memory map once it
   // reaches a terminal state so isolated/subflow runs don't accumulate.
