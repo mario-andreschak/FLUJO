@@ -7,7 +7,7 @@ import { persistConversationSummary } from './conversationSummaryStore';
 import { commitExecutionExtensionMutation } from '@/backend/execution/extensions';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { reconcileSubflowFold, hasSubflowFoldFence } from './subflowFoldFence';
-import { publishConversation, isConversationPublicationError, ConversationPublicationError } from './conversationPublication';
+import { publishConversation, freezeConversationSnapshot } from './conversationPublication';
 import { workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/execution/flow/persistConversationState');
@@ -64,16 +64,11 @@ export async function persistConversationState(key: StorageKey, state: SharedSta
     // A prior ambiguous fold owns the live state. Reconcile it before using the
     // capture; if it changed the winner, capture that resolved state afresh.
     if (await reconcileSubflowFold(state) || snapshot === null) return persistConversationState(key, state);
+    freezeConversationSnapshot(snapshot);
     // Persona-attributed work may persist only while its exact Activity fence is
     // current. The capability itself remains runtime-only and is stripped from
     // the durable snapshot below.
-    const writeSnapshot = async () => {
-      try { await saveItemBackend(key, snapshot); }
-      catch (error) {
-        if (isConversationPublicationError(error)) throw error;
-        throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'required snapshot publication failed', { cause: error });
-      }
-    };
+    const writeSnapshot = () => saveItemBackend(key, snapshot);
     if (extension) {
       await commitExecutionExtensionMutation(extension, async () => {
         await writeSnapshot();

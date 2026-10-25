@@ -41,6 +41,9 @@ import { COMPACTION_SUMMARY_SECTIONS } from '@/backend/execution/flow/handlers/s
 import { _setModelTurnArchiveDirForTests, archiveModelDispatch, readModelTurnSnapshot, readModelTurnSnapshotResponse, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
 import { getArchiveWritePressure, MODEL_TURN_ARCHIVE_WRITE_LIMITS, withArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { _setConversationLogDirForTests, allocateSeq, flushConversationLog } from '@/backend/execution/flow/conversationLog';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import type { SharedState } from '@/backend/execution/flow/types';
+import { publishConversation, CONVERSATION_PUBLICATION_LIMITS, getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
 
 // One application observation is one actual HTTP request in this offline fixture.
 // This does not qualify the ordinary SDK's internal retry profile.
@@ -209,6 +212,54 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     const outcomes = await Promise.all((await fs.readdir(directory)).filter(name => name.endsWith('.outcome.json'))
       .map(async name => JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')).outcome));
     expect(outcomes.sort()).toEqual(['completed', 'error']);
+  });
+
+  it.each(['capture', 'write'] as const)('refuses real SDK HTTP dispatch when required publication fails at %s', async failurePoint => {
+    const conversationId = `publication-${failurePoint}`;
+    const logDirectory = path.join(root, 'publication-logs');
+    await fs.mkdir(logDirectory);
+    const previous = _setConversationLogDirForTests(logDirectory);
+    const canonical = structuredClone([message]);
+    FlowExecutor.conversationStates.set(conversationId, { conversationId, messages: canonical } as SharedState);
+    const release = deferred();
+    const pending: Promise<void>[] = [];
+    const open = fs.open.bind(fs);
+    const writer = jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (failurePoint !== 'write' || !String(args[0]).endsWith(`${conversationId}.jsonl`)) return handle;
+      return new Proxy(handle, { get(target, key) {
+        if (key === 'write') return async () => { throw Object.assign(new Error('required log write failed'), { code: 'ENOSPC' }); };
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    });
+    sdkRequestObserved = () => {
+      if (failurePoint === 'capture') for (let index = 0; index < CONVERSATION_PUBLICATION_LIMITS.owners; index++) {
+        pending.push(publishConversation(`sdk-blocked-${index}`, null, async () => release.promise));
+      }
+    };
+    try {
+      const result = await invoke(canonical, canonical, { conversationId });
+      expect(result).toMatchObject({ success: false, error: {
+        code: failurePoint === 'capture' ? 'CONVERSATION_PUBLICATION_BUSY' : 'CONVERSATION_PUBLICATION_UNCERTAIN',
+      } });
+      expect(requests).toHaveLength(0);
+      expect(canonical).toEqual([message]);
+      expect(listInFlightToolCalls(conversationId)).toHaveLength(0);
+      if (failurePoint === 'write') {
+        // The append's rejected promise has already left pendingCommits. Its
+        // bounded fence must still make a later flush fail closed.
+        await new Promise(resolve => setImmediate(resolve));
+        await expect(flushConversationLog(conversationId)).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
+      }
+    } finally {
+      release.resolve(); await Promise.all(pending);
+      await flushConversationLog(conversationId).catch(() => {});
+      writer.mockRestore(); sdkRequestObserved = undefined;
+      FlowExecutor.conversationStates.delete(conversationId);
+      _setConversationLogDirForTests(previous);
+      expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 0, allocationBytes: 0, retainedBytes: 0, chains: 0 });
+    }
   });
 
   it('does not replay a failed stream after visible output', async () => {

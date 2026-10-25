@@ -3,36 +3,30 @@ import { types } from 'node:util';
 import { getHeapStatistics } from 'node:v8';
 import { pendingAllocationBytes, setAllocationReservation } from './allocationReservations';
 import { getFlowRunAdmissionDiagnostics } from './runAdmission';
+import { ConversationPublicationError } from './conversationPublicationError';
+export { ConversationPublicationError, isConversationPublicationError } from './conversationPublicationError';
 
 const MiB = 1024 * 1024;
 export const CONVERSATION_PUBLICATION_LIMITS = Object.freeze({
   owners: 64, writers: 4, retainedBytes: 256 * MiB, ownerBytes: 128 * MiB,
   slots: 262_144, depth: 128, bufferBytes: 64 * 1024, stringChars: 8192,
 });
-type PublicationCode = 'CONVERSATION_PUBLICATION_BUSY' | 'CONVERSATION_PUBLICATION_MEMORY'
-  | 'CONVERSATION_PUBLICATION_DATA' | 'CONVERSATION_PUBLICATION_UNCERTAIN' | 'CONVERSATION_PUBLICATION_IO';
-export class ConversationPublicationError extends Error {
-  readonly status: 429 | 503;
-  readonly details: { code: PublicationCode; status: number; type: string };
-  constructor(readonly code: PublicationCode, reason: string, options?: ErrorOptions) {
-    super(`Conversation publication refused: ${reason}. Existing durable history is retained.`, options);
-    this.name = 'ConversationPublicationError';
-    this.status = code === 'CONVERSATION_PUBLICATION_BUSY' ? 429 : 503;
-    this.details = { code, status: this.status, type: 'conversation_publication_error' };
-  }
-}
-export function isConversationPublicationError(error: unknown): error is ConversationPublicationError {
-  return error instanceof Error && error.name === 'ConversationPublicationError';
-}
+type PublicationCode = ConversationPublicationError['code'];
 type Owner = { key: string; live: boolean; bytes: number; quarantined: boolean; descriptorUncertain?: boolean;
   snapshotCommits: number };
 type Frame = { owner: Owner; live: boolean; tail: Promise<unknown>; pending: Set<Promise<unknown>>; failure?: unknown };
 type Ledger = { bytes: number; retained: number; owners: number; writers: number; quarantined: number;
   rejected: number; chains: Map<string, Promise<unknown>>; fences: Map<string, ConversationPublicationError>;
-  receipts: Map<string, Readonly<Record<string, string>>>; waiters: Array<() => void>; context: AsyncLocalStorage<Frame> };
+  receipts: Map<string, Readonly<Record<string, string>>>; waiters: Array<() => void>; context: AsyncLocalStorage<Frame>;
+  captures: WeakMap<object, Frame>; immutableSnapshots: WeakSet<object> };
 const host = globalThis as typeof globalThis & { __flujoConversationPublicationV1?: Ledger };
 const ledger: Ledger = host.__flujoConversationPublicationV1 ??= { bytes: 0, retained: 0, owners: 0, writers: 0,
-  quarantined: 0, rejected: 0, chains: new Map(), fences: new Map(), receipts: new Map(), waiters: [], context: new AsyncLocalStorage() };
+  quarantined: 0, rejected: 0, chains: new Map(), fences: new Map(), receipts: new Map(), waiters: [], context: new AsyncLocalStorage(),
+  captures: new WeakMap(), immutableSnapshots: new WeakSet() };
+// Keep a live development process compatible when an earlier module instance
+// initialized the shared ledger before immutable snapshot reuse was loaded.
+ledger.captures ??= new WeakMap();
+ledger.immutableSnapshots ??= new WeakSet();
 setAllocationReservation('publication', ledger.bytes);
 function refuse(code: PublicationCode, reason: string): never {
   ledger.rejected++;
@@ -74,8 +68,11 @@ const omitted = (value: unknown) => value === undefined || typeof value === 'fun
  * containers. String primitives are shared; a 37.6M-character history is never
  * cloned or encoded just to measure admission. Aliases count at every JSON use,
  * bounding serialization amplification as well as the capture itself. */
-function capture<T>(value: T, omitRootKeys?: ReadonlySet<string>): { value: T; retained: number; bytes: number } {
+function capture<T>(key: string, value: T, omitRootKeys?: ReadonlySet<string>): { value: T; retained: number; bytes: number; borrowed: boolean } {
   let slots = 0, retained = 0, metadata = 0;
+  const source = value !== null && typeof value === 'object' ? ledger.captures.get(value) : undefined;
+  const borrowed = !!source?.live && source.owner.live && source.owner.key === key && source.owner === ledger.context.getStore()?.owner
+    && ledger.immutableSnapshots.has(value as object) && !omitRootKeys;
   const ancestors = new Set<object>();
   const visit = (item: unknown, depth: number, copying: boolean): unknown => {
     if (!copying && (++slots > CONVERSATION_PUBLICATION_LIMITS.slots || depth > CONVERSATION_PUBLICATION_LIMITS.depth)) {
@@ -122,7 +119,7 @@ function capture<T>(value: T, omitRootKeys?: ReadonlySet<string>): { value: T; r
     return item;
   };
   if (omitted(value)) refuse('CONVERSATION_PUBLICATION_DATA', 'publication has no JSON value');
-  visit(value, 0, false);
+  if (!borrowed) visit(value, 0, false);
   // Fixed allowance also covers each owner's bounded encoder/receipt/queue.
   const bytes = metadata * 2 + 512 * 1024;
   const heap = getHeapStatistics();
@@ -135,7 +132,7 @@ function capture<T>(value: T, omitRootKeys?: ReadonlySet<string>): { value: T; r
   }
   ledger.bytes += bytes; ledger.retained += retained + metadata;
   setAllocationReservation('publication', ledger.bytes);
-  try { return { value: visit(value, 0, true) as T, retained: retained + metadata, bytes }; }
+  try { return { value: borrowed ? value : visit(value, 0, true) as T, retained: retained + metadata, bytes, borrowed }; }
   catch (error) {
     ledger.bytes -= bytes; ledger.retained -= retained + metadata;
     setAllocationReservation('publication', ledger.bytes);
@@ -165,7 +162,7 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
   const inherited = ledger.context.getStore();
   const nested = inherited?.live && inherited.owner.live && inherited.owner.key === key;
   if (ledger.owners >= CONVERSATION_PUBLICATION_LIMITS.owners) refuse('CONVERSATION_PUBLICATION_BUSY', 'publication owner capacity is occupied');
-  const owned = capture(value, omitRootKeys);
+  const owned = capture(key, value, omitRootKeys);
   try { prepare?.(owned.value); } catch (error) {
     ledger.bytes -= owned.bytes; ledger.retained -= owned.retained;
     setAllocationReservation('publication', ledger.bytes);
@@ -173,6 +170,7 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
   }
   const owner: Owner = nested ? inherited.owner : { key, live: true, bytes: 0, quarantined: false, snapshotCommits: 0 };
   const frame: Frame = { owner, live: true, tail: Promise.resolve(), pending: new Set() };
+  if (!owned.borrowed && owned.value !== null && typeof owned.value === 'object') ledger.captures.set(owned.value, frame);
   ledger.owners++;
   const invoke = async () => {
     const fence = ledger.fences.get(key);
@@ -217,6 +215,20 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
     });
   }
   return settled;
+}
+
+/** Only a privately captured snapshot may opt into immutable nested reuse.
+ * The owning frame drains nested work before releasing its original charge. */
+export function freezeConversationSnapshot<T extends object>(value: T): T {
+  const frame = ledger.captures.get(value);
+  if (!frame?.live || frame.owner !== ledger.context.getStore()?.owner) throw new Error('Snapshot is not owned by this live publication');
+  const freeze = (item: unknown): void => {
+    if (item === null || typeof item !== 'object') return;
+    for (const key in item) if (Object.hasOwn(item, key)) freeze((item as Record<string, unknown>)[key]);
+    if (!Object.isFrozen(item)) Object.freeze(item);
+  };
+  freeze(value); ledger.immutableSnapshots.add(value);
+  return value;
 }
 
 export function conversationPublicationSnapshotCommits(): number { return ledger.context.getStore()?.owner.snapshotCommits ?? 0; }

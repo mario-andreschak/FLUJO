@@ -11,6 +11,7 @@ import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { StorageKey } from '@/shared/types/storage';
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 import { fenceSubflowFold } from '@/backend/execution/flow/subflowFoldFence';
+import { saveItem } from '@/utils/storage/backend';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
 jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({ persistConversationSummary: jest.fn(async () => {}) }));
@@ -68,6 +69,51 @@ it('refuses a replacement capture before reserving sequence space or changing du
   expect(await fs.readFile(logPath(value), 'utf8')).toBe(before);
   expect(value.messages[0].id).toBe('old');
 });
+
+it('preserves exact authority errors raised inside the rewrite intent and atomic snapshot writer', async () => {
+  const value = state(); await appendRawForState(value, [{ type: 'message', message: value.messages[0] }]);
+  const original = await fs.readFile(logPath(value), 'utf8');
+  const failure = new Error('current Activity was lost');
+  value.executionAuthority = { signal: new AbortController().signal, assertCurrent: async () => { throw failure; } };
+  await expect(replaceConversationTranscript(value, [message('replacement')])).rejects.toBe(failure);
+  expect(await fs.readFile(logPath(value), 'utf8')).toBe(original);
+  let checks = 0;
+  await expect(saveItem(`conversations/${value.conversationId}` as StorageKey, { messages: value.messages }, async () => {
+    if (++checks === 3) throw failure; // After the temp descriptor has opened.
+  })).rejects.toBe(failure);
+  expect(value.messages[0].id).toBe('old');
+});
+
+it('streams a 2M parent plus eight 5.6M lanes through replacement and its durable snapshot within unchanged bounds', async () => {
+  const value = state(); await appendRawForState(value, [{ type: 'message', message: value.messages[0] }]);
+  // Logical JSON is 46.8M characters; immutable aliases keep source allocation small.
+  const lane = 'l'.repeat(5_600_000);
+  const replacement = [message('parent', 'p'.repeat(2_000_000)),
+    ...Array.from({ length: 8 }, (_, index) => message(`lane-${index}`, lane))];
+  const open = fs.open.bind(fs);
+  let peakRetained = 0;
+  jest.spyOn(fs, 'open').mockImplementation((...args) => {
+    peakRetained = Math.max(peakRetained, getConversationPublicationDiagnostics().retainedBytes);
+    return open(...args);
+  });
+  await replaceConversationTranscript(value, replacement);
+  expect(peakRetained).toBeGreaterThan(187_200_000);
+  expect(peakRetained).toBeLessThan(256 * 1024 * 1024);
+  for (const filename of [logPath(value), snapshotPath(value)]) {
+    const handle = await fs.open(filename, 'r');
+    try {
+      const size = (await handle.stat()).size;
+      expect(size).toBeGreaterThan(46_800_000);
+      expect(size).toBeLessThan(46_810_000);
+      const tail = Buffer.alloc(1024);
+      await handle.read(tail, 0, tail.length, size - tail.length);
+      expect(tail.toString()).toContain('timestamp');
+    } finally { await handle.close(); }
+  }
+  expect(value.messages).toHaveLength(9);
+  expect(value.messages[8].content).toBe(lane);
+  expect(Object.isFrozen(value.messages)).toBe(false);
+}, 30_000);
 
 it('serializes replacement, snapshot, and later appends with monotonic SSE cursors', async () => {
   const value = state(); await appendRawForState(value, [{ type: 'message', message: value.messages[0] }]);

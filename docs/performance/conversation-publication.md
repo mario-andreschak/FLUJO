@@ -21,6 +21,13 @@ plus eight lanes totalling 37.6M owned characters fits this policy without a
 whole-history stringify or structured clone. Media stays represented by its
 existing references.
 
+An internal snapshot freezes its privately captured containers before nested
+storage publication. That nested write borrows the live snapshot's original
+charge; a released or mutable capture cannot be borrowed. Replacement and its
+snapshot therefore hold two history charges, including the upper fixture of a
+2M-character parent plus eight 5.6M-character lanes (46.8M total). Streaming
+integration coverage checks this case with the unchanged 256 MiB bound.
+
 Plain JSON objects, null-prototype objects, and genuine foreign-realm plain
 objects/arrays are supported. Undefined, function, and symbol object values are
 omitted; array values become null, matching native JSON. Nonfinite numbers,

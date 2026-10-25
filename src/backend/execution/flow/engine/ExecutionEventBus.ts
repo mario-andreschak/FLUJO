@@ -285,7 +285,8 @@ export class ExecutionEventBus {
     // loop, ModelHandler's mid-run transcript sink, control routes) — is tapped
     // into the append-only per-conversation log. The tap filters transient
     // event types and enforces the ephemeral policy itself, and is
-    // fire-and-forget so persistence can never break live consumers.
+    // asynchronous after bounded synchronous admission. Required callers flush
+    // before acknowledging durability; admission failures propagate from emit.
     appendFromBus(event);
 
     // Fan the same event onto the global firehose. The per-conversation channel

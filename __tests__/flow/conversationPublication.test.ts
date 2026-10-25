@@ -1,6 +1,6 @@
 import vm from 'node:vm';
 import { publishConversation, conversationJsonChunks, getConversationPublicationDiagnostics,
-  CONVERSATION_PUBLICATION_LIMITS, fenceConversationPublication } from '@/backend/execution/flow/conversationPublication';
+  CONVERSATION_PUBLICATION_LIMITS, fenceConversationPublication, freezeConversationSnapshot } from '@/backend/execution/flow/conversationPublication';
 import { getAllocationReservationSnapshot } from '@/backend/execution/flow/allocationReservations';
 
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
@@ -77,6 +77,31 @@ it('bounds encoded chunks and emits lone surrogates and split surrogate pairs ex
       expect(chunk.length).toBeLessThanOrEqual(64 * 1024); copies.push(Buffer.from(chunk));
     }
     expect(Buffer.concat(copies).toString('utf8')).toBe(`${JSON.stringify({ text })}\n`);
+  });
+});
+
+it('borrows only a live immutable captured snapshot, keeping its original charge until nested settlement', async () => {
+  const original = { messages: [{ content: 'x'.repeat(2_000_000) }] };
+  let expired!: typeof original;
+  await publishConversation('immutable', original, async owned => {
+    Object.freeze(owned); // Even a pre-frozen root must have every child frozen.
+    freezeConversationSnapshot(owned);
+    expect(Object.isFrozen(owned.messages[0])).toBe(true);
+    expect(Object.isFrozen(original.messages[0])).toBe(false);
+    expired = owned;
+    const retained = getConversationPublicationDiagnostics().retainedBytes;
+    await publishConversation('immutable', owned, async nested => {
+      expect(nested).toBe(owned);
+      expect(getConversationPublicationDiagnostics().retainedBytes).toBe(retained);
+    });
+    await publishConversation('independent-owner', owned, async independent => {
+      expect(independent).not.toBe(owned);
+      expect(getConversationPublicationDiagnostics().retainedBytes).toBeGreaterThanOrEqual(retained * 2);
+    });
+  });
+  await publishConversation('immutable', expired, async captured => {
+    expect(captured).not.toBe(expired);
+    expect(getConversationPublicationDiagnostics().retainedBytes).toBeGreaterThan(4_000_000);
   });
 });
 

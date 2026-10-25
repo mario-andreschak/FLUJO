@@ -1,3 +1,4 @@
+import { ConversationPublicationError } from '@/backend/execution/flow/conversationPublicationError';
 /**
  * Unit tests for the Codex adapter (issue #301) — the Codex-SDK sibling of the
  * Claude Subscription adapter. The SDK and the loopback tool bridge are mocked;
@@ -436,8 +437,9 @@ describe('CodexAdapter — thread setup', () => {
     expect(startThreadMock).toHaveBeenCalledTimes(1);
   });
 
-  it('does not call or retry the SDK after sequence safety refuses its dispatch marker', async () => {
-    const refused = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture');
+  it.each(['sequence', 'publication'])('does not call or retry the SDK after %s refuses its dispatch marker', async kind => {
+    const refused = kind === 'sequence' ? new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture')
+      : new ConversationPublicationError('CONVERSATION_PUBLICATION_MEMORY', 'fixture');
     await expect(new CodexAdapter().createCompletion(baseInput({
       onSdkRequest: async () => { throw refused; },
     }))).rejects.toBe(refused);
@@ -445,9 +447,10 @@ describe('CodexAdapter — thread setup', () => {
     expect(startThreadMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the primary SDK failure when result sequencing also refuses', async () => {
+  it.each(['sequence', 'publication'])('keeps the primary SDK failure when result %s also refuses', async kind => {
     runStreamedMock.mockRejectedValueOnce(new Error('Primary actual Codex failure'));
-    const secondary = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'result marker');
+    const secondary = kind === 'sequence' ? new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'result marker')
+    : new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'result marker');
     const outcome = jest.fn(async () => { throw secondary; });
     await expect(new CodexAdapter().createCompletion(baseInput({
       onSdkRequest: async () => 'actual-dispatch', onSdkRequestResult: outcome,

@@ -1,4 +1,4 @@
-import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
 import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
@@ -146,7 +146,7 @@ import {
   readNativeModelTurnSnapshot,
   updateModelDispatchOutcome,
 } from '@/backend/execution/flow/modelTurnArchive';
-import { appendRawForState } from '@/backend/execution/flow/conversationLog';
+import { appendRawForState, flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import {
   assertFlowExecutionCurrent,
   commitFlowDurableMutation,
@@ -1162,7 +1162,7 @@ export class ModelHandler {
       };
     }
 
-    if (isConversationSequenceSafetyError(error)) {
+    if (isConversationDurabilityError(error)) {
       return { success: false, error: createModelError(error.code, error.message, modelId,
         undefined, { status: error.status }) };
     }
@@ -3192,6 +3192,7 @@ export class ModelHandler {
                         type: 'model:dispatch',
                         turn: entry,
                       });
+                      await flushConversationLog(opts!.conversationId!);
                       if (nativeReceipt) {
                         nativeReceipt = await submitNativeInvocation(nativeReceipt);
                         await opts!.nativeBrokerAuthority!.assertCurrent();
@@ -3278,7 +3279,7 @@ export class ModelHandler {
                       }
                       return entry.id;
                     } catch (error) {
-                      if (error instanceof ModelTurnArchiveMemoryError || isConversationSequenceSafetyError(error)) throw error;
+                      if (error instanceof ModelTurnArchiveMemoryError || isConversationDurabilityError(error)) throw error;
                       if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
@@ -3309,8 +3310,9 @@ export class ModelHandler {
                         dispatchId,
                         outcome,
                       });
+                      await flushConversationLog(opts!.conversationId!);
                     } catch (error) {
-                      if (nativeReceipt || isConversationSequenceSafetyError(error)) throw error;
+                      if (nativeReceipt || isConversationDurabilityError(error)) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
                     }

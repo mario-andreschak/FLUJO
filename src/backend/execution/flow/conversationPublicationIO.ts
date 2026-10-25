@@ -19,19 +19,12 @@ const intentContext = intentHost.__flujoPublicationIntentContextV1 ??= new Async
  * small, durable intent contains no transcript; its exclusive filename is the
  * restart fence until reconciliation has verified the snapshot and log. */
 export async function withConversationPublicationIntent<T>(conversationId: string, task: () => Promise<T>): Promise<T> {
-  try { return await withIntent(conversationId, task); }
-  catch (error) {
-    if (isConversationPublicationError(error) || (error instanceof Error && error.name === 'ConversationSequenceSafetyError')) throw error;
-    throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'required durable publication failed', { cause: error });
-  }
-}
-async function withIntent<T>(conversationId: string, task: () => Promise<T>): Promise<T> {
   const filename = path.join(getWorkspaceDataDir(), 'db', 'conversation-publications', `${conversationId}.json`);
   const inherited = intentContext.getStore();
   if (inherited?.live && inherited.filename === filename) return task();
   await assertCurrent();
-  await fs.mkdir(path.dirname(filename), { recursive: true });
-  const parent = await fs.lstat(path.dirname(filename), { bigint: true });
+  await conversationPublicationIO(() => fs.mkdir(path.dirname(filename), { recursive: true }));
+  const parent = await conversationPublicationIO(() => fs.lstat(path.dirname(filename), { bigint: true }));
   if (!parent.isDirectory() || parent.isSymbolicLink()) throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'publication intent directory is unsafe');
   let handle: FileHandle;
   try { handle = await fs.open(filename, 'wx', 0o600); }
@@ -56,8 +49,7 @@ async function withIntent<T>(conversationId: string, task: () => Promise<T>): Pr
   let primary: unknown;
   try { return await intentContext.run(intent, task); }
   catch (error) {
-    primary = isConversationPublicationError(error) ? error
-      : new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'required durable publication failed', { cause: error });
+    primary = error;
     throw primary;
   } finally {
     try { await drainConversationPublicationChildren(); }
@@ -78,6 +70,16 @@ async function withIntent<T>(conversationId: string, task: () => Promise<T>): Pr
     }
     // A detached nested failure is part of this transaction too.
     if (primary !== undefined) throw primary;
+  }
+}
+
+/** Wrap explicit I/O operations only; never convert the task's primary
+ * execution authority or sequence error while cleaning up its intent. */
+export async function conversationPublicationIO<T>(task: () => Promise<T>): Promise<T> {
+  try { return await task(); }
+  catch (error) {
+    if (isConversationPublicationError(error) || (error instanceof Error && error.name === 'ConversationSequenceSafetyError')) throw error;
+    throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'required durable publication failed', { cause: error });
   }
 }
 
@@ -102,24 +104,24 @@ export interface ConversationLogWriter {
 export async function withConversationLogWriter<T>(filename: string, task: (writer: ConversationLogWriter) => Promise<T>): Promise<T> {
   await assertCurrent();
   const directory = path.dirname(filename);
-  await fs.mkdir(directory, { recursive: true });
-  const parent = await fs.lstat(directory, { bigint: true });
-  if (!parent.isDirectory() || parent.isSymbolicLink()) throw new Error('Conversation log directory is unsafe');
-  const handle = await fs.open(filename, constants.O_RDWR | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o600);
+  await conversationPublicationIO(() => fs.mkdir(directory, { recursive: true }));
+  const parent = await conversationPublicationIO(() => fs.lstat(directory, { bigint: true }));
+  if (!parent.isDirectory() || parent.isSymbolicLink()) throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'conversation log directory is unsafe');
+  const handle = await conversationPublicationIO(() => fs.open(filename, constants.O_RDWR | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o600));
   let primary: unknown;
   let receipt: Record<string, string> = { filename };
   try {
-    const original = await handle.stat({ bigint: true });
+    const original = await conversationPublicationIO(() => handle.stat({ bigint: true }));
     if (!original.isFile() || original.nlink !== BigInt(1) || original.size > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new Error('Conversation log is not a regular owned file');
+      throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'conversation log is not a regular owned file');
     }
     let witness = original;
     let position = Number(original.size);
     receipt = { filename, dev: String(original.dev), ino: String(original.ino), start: String(original.size) };
     const verify = async () => {
-      const named = await fs.lstat(filename, { bigint: true });
-      const current = await handle.stat({ bigint: true });
-      const currentParent = await fs.lstat(directory, { bigint: true });
+      const named = await conversationPublicationIO(() => fs.lstat(filename, { bigint: true }));
+      const current = await conversationPublicationIO(() => handle.stat({ bigint: true }));
+      const currentParent = await conversationPublicationIO(() => fs.lstat(directory, { bigint: true }));
       if (!sameVersion(current, witness) || !sameVersion(named, witness)
         || !currentParent.isDirectory() || currentParent.isSymbolicLink()
         || currentParent.dev !== parent.dev || currentParent.ino !== parent.ino) {
@@ -129,7 +131,7 @@ export async function withConversationLogWriter<T>(filename: string, task: (writ
     };
     await verify();
     const writer: ConversationLogWriter = {
-      activeMessageIds: () => readActiveMessageIds(handle, Number(original.size)),
+      activeMessageIds: () => conversationPublicationIO(() => readActiveMessageIds(handle, Number(original.size))),
       append: async events => {
         await verify();
         try {

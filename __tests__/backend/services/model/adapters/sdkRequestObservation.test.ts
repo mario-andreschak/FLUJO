@@ -1,8 +1,34 @@
 import { observeSdkRequest } from '@/backend/services/model/adapters/types';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { ConversationPublicationError } from '@/backend/execution/flow/conversationPublicationError';
 
 describe('observeSdkRequest', () => {
+  it('refuses physical dispatch and successful completion when required publication fails', async () => {
+    const failure = new ConversationPublicationError('CONVERSATION_PUBLICATION_MEMORY', 'fixture');
+    const task = jest.fn(async () => 'physical result');
+    const request = { adapter: 'test', operation: 'create', request: {} };
+    await expect(observeSdkRequest({ onSdkRequest: async () => { throw failure; } }, request, task)).rejects.toBe(failure);
+    expect(task).not.toHaveBeenCalled();
+    await expect(observeSdkRequest({ onSdkRequest: async () => 'dispatch', onSdkRequestResult: async () => { throw failure; } }, request, task)).rejects.toBe(failure);
+    expect(task).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('preserves the primary provider failure when result publication fails (stream=%s)', async streaming => {
+    const primary = new Error('provider failed');
+    const failure = new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'result write failed');
+    const outcome = jest.fn(async () => { throw failure; });
+    const observed = observeSdkRequest({ onSdkRequest: async () => 'dispatch', onSdkRequestResult: outcome },
+      { adapter: 'test', operation: 'create', request: {} }, async () => {
+        if (!streaming) throw primary;
+        return (async function* () { yield 'partial'; throw primary; })();
+      });
+    if (streaming) {
+      const stream = await observed;
+      await expect((async () => { for await (const _value of stream!) { /* drain */ } })()).rejects.toBe(primary);
+    } else await expect(observed).rejects.toBe(primary);
+    expect(outcome).toHaveBeenCalledTimes(1);
+  });
   it('refuses physical dispatch when the immutable marker cannot obtain a safe sequence', async () => {
     const task = jest.fn(async () => 'physical dispatch');
     const failure = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture');

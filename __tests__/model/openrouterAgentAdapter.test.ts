@@ -1,3 +1,4 @@
+import { ConversationPublicationError } from '@/backend/execution/flow/conversationPublicationError';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { OpenRouterAgentAdapter, mapOpenRouterEnvelopeKeys } from '@/backend/services/model/adapters/openrouterAgentAdapter';
 import { __resetReasoningStore } from '@/backend/services/model/adapters/openaiResponsesAdapter';
@@ -284,16 +285,18 @@ it('refuses archive memory pressure before the provider dispatch', async () => {
   })).rejects.toBe(refused);
 });
 
-it('propagates sequence safety refusal through the request hook', async () => {
-  const refused = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture');
+it.each(['sequence', 'publication'])('propagates %s refusal through the request hook', async kind => {
+  const refused = kind === 'sequence' ? new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture')
+    : new ConversationPublicationError('CONVERSATION_PUBLICATION_MEMORY', 'fixture');
   await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(),
     onSdkRequest: async () => { throw refused; },
   })).rejects.toBe(refused);
 });
 
-it('preserves a primary provider rejection when its result sequence also refuses', async () => {
+it.each(['sequence', 'publication'])('preserves a primary provider rejection when its result %s also refuses', async kind => {
   failure = new Error('Primary provider rejection');
-  const secondary = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'result marker');
+  const secondary = kind === 'sequence' ? new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'result marker')
+    : new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'result marker');
   const outcome = jest.fn(async () => { throw secondary; });
   await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(),
     onSdkRequest: async () => 'actual-dispatch', onSdkRequestResult: outcome,

@@ -14,7 +14,7 @@ import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrati
 import { withWorkspaceMutation, assertWorkspaceMutationOwned } from '@/backend/services/workspace/workspaceMutationGate';
 import { publishConversation, conversationJsonChunks, recordConversationSnapshotCommit,
   fenceConversationPublication } from '@/backend/execution/flow/conversationPublication';
-import { withConversationPublicationIntent } from '@/backend/execution/flow/conversationPublicationIO';
+import { withConversationPublicationIntent, conversationPublicationIO } from '@/backend/execution/flow/conversationPublicationIO';
 
 const log = createLogger('utils/storage/backend');
 
@@ -150,21 +150,27 @@ async function renameWithRetry(tmpPath: string, filePath: string, validate: () =
 
 type ConversationJson = { conversation: true; value: unknown };
 export async function writeFileAtomic(filePath: string, data: string | ConversationJson, assertCurrent?: () => Promise<void>): Promise<void> {
+  let authorityFailed = false;
+  let authorityFailure: unknown;
+  const authority = async (task: () => Promise<void>) => {
+    try { await task(); } catch (error) { authorityFailed = true; authorityFailure = error; throw error; }
+  };
+  const io = <T>(task: () => Promise<T>) => typeof data === 'string' ? task() : conversationPublicationIO(task);
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     await assertCredentialStoreReady(filePath);
-    await assertWorkspaceMutationOwned();
+    await authority(() => assertWorkspaceMutationOwned());
     const dirPath = path.dirname(filePath);
-    await assertBundledFlujoWorkloadEffectCurrent();
+    await authority(() => assertBundledFlujoWorkloadEffectCurrent());
     if (assertCurrent) {
-      await assertCurrent();
-      await assertWorkspaceMutationOwned();
-      await assertBundledFlujoWorkloadEffectCurrent();
+      await authority(() => assertCurrent());
+      await authority(() => assertWorkspaceMutationOwned());
+      await authority(() => assertBundledFlujoWorkloadEffectCurrent());
     }
-    await fs.mkdir(dirPath, { recursive: true });
-    const directory = await fs.lstat(dirPath, { bigint: true });
-    const canonicalDirectory = await fs.realpath(dirPath);
-    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Atomic write parent is unsafe');
+    await io(() => fs.mkdir(dirPath, { recursive: true }));
+    const directory = await io(() => fs.lstat(dirPath, { bigint: true }));
+    const canonicalDirectory = await io(() => fs.realpath(dirPath));
+    if (!directory.isDirectory() || directory.isSymbolicLink()) await io(async () => { throw new Error('Atomic write parent is unsafe'); });
     // Temp file lives next to the target (same filesystem) so rename is atomic.
     const tmpPath = `${filePath}.tmp.${randomUUID()}`;
     let created = false;
@@ -174,23 +180,23 @@ export async function writeFileAtomic(filePath: string, data: string | Conversat
     let closeUncertain = false;
     let publicationHash: string | undefined;
     try {
-      await assertWorkspaceMutationOwned();
-      await assertBundledFlujoWorkloadEffectCurrent();
+      await authority(() => assertWorkspaceMutationOwned());
+      await authority(() => assertBundledFlujoWorkloadEffectCurrent());
       if (assertCurrent) {
-        await assertCurrent();
-        await assertWorkspaceMutationOwned();
-        await assertBundledFlujoWorkloadEffectCurrent();
+        await authority(() => assertCurrent());
+        await authority(() => assertWorkspaceMutationOwned());
+        await authority(() => assertBundledFlujoWorkloadEffectCurrent());
       }
       const handle = await fs.open(tmpPath, 'wx', 0o600);
       created = true;
       try {
         owned = await handle.stat({ bigint: true });
-        await assertWorkspaceMutationOwned();
-        await assertBundledFlujoWorkloadEffectCurrent();
+        await authority(() => assertWorkspaceMutationOwned());
+        await authority(() => assertBundledFlujoWorkloadEffectCurrent());
         if (assertCurrent) {
-          await assertCurrent();
-          await assertWorkspaceMutationOwned();
-          await assertBundledFlujoWorkloadEffectCurrent();
+          await authority(() => assertCurrent());
+          await authority(() => assertWorkspaceMutationOwned());
+          await authority(() => assertBundledFlujoWorkloadEffectCurrent());
         }
         if (typeof data === 'string') await handle.writeFile(data);
         else {
@@ -208,9 +214,9 @@ export async function writeFileAtomic(filePath: string, data: string | Conversat
           }
           publicationHash = hash.digest('hex');
         }
-        await assertWorkspaceMutationOwned();
+        await authority(() => assertWorkspaceMutationOwned());
         await handle.sync();
-        await assertWorkspaceMutationOwned();
+        await authority(() => assertWorkspaceMutationOwned());
         owned = await handle.stat({ bigint: true });
       } catch (error) {
         try { await handle.close(); } catch {
@@ -248,19 +254,19 @@ export async function writeFileAtomic(filePath: string, data: string | Conversat
             || parent.gid !== directory.gid || canonicalParent !== canonicalDirectory) {
           throw new Error('Atomic write file or parent changed');
         }
-        await assertWorkspaceMutationOwned();
-        await assertBundledFlujoWorkloadEffectCurrent();
+        await authority(() => assertWorkspaceMutationOwned());
+        await authority(() => assertBundledFlujoWorkloadEffectCurrent());
         if (assertCurrent) {
-          await assertCurrent();
-          await assertWorkspaceMutationOwned();
-          await assertBundledFlujoWorkloadEffectCurrent();
+          await authority(() => assertCurrent());
+          await authority(() => assertWorkspaceMutationOwned());
+          await authority(() => assertBundledFlujoWorkloadEffectCurrent());
         }
         renameStarted = true;
       });
       created = false;
       published = true;
       if (typeof data !== 'string') recordConversationSnapshotCommit();
-      await assertWorkspaceMutationOwned();
+      await authority(() => assertWorkspaceMutationOwned());
     } catch (error) {
       if (typeof data !== 'string' && renameStarted && !published && owned) {
         // A rejected rename/acknowledgement can follow an actual commit. Only
@@ -325,7 +331,10 @@ export async function writeFileAtomic(filePath: string, data: string | Conversat
           if (owned && current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) await fs.unlink(tmpPath);
         } catch { /* never clean up an unowned replacement */ }
       }
-      throw error;
+      // Authority callbacks can reject with an arbitrary primary Error. Preserve
+      // that exact value; only storage failures receive the durable I/O type.
+      if (authorityFailed && error === authorityFailure) throw error;
+      await io(async () => { throw error; });
     }
   });
 }
