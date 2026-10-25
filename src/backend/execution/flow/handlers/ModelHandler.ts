@@ -3617,6 +3617,13 @@ export class ModelHandler {
               log.warn('Failed to clean up streamed prose while retaining the primary model failure', { cleanupError });
             }
           }
+          if (nativeReceipt && isFlowExecutionAuthorityError(error)) {
+            // This attempt already owns a durable Original reservation. Report
+            // its held failure through the native Result contract; finally
+            // still holds/drains it, and native attempts cannot auto-retry.
+            // Preflight failures without a receipt retain their typed throw.
+            return { success: false, error: createModelError(error.code, error.message, modelId) };
+          }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         } finally {
           if (nativeReceipt && !nativeTerminal) {

@@ -3,7 +3,7 @@ import { types } from 'node:util';
 import { getHeapStatistics } from 'node:v8';
 import { pendingAllocationBytes, setAllocationReservation } from './allocationReservations';
 import { getFlowRunAdmissionDiagnostics } from './runAdmission';
-import { ConversationPublicationError } from './conversationPublicationError';
+import { ConversationPublicationError, isConversationPublicationError } from './conversationPublicationError';
 export { ConversationPublicationError, isConversationPublicationError } from './conversationPublicationError';
 
 const MiB = 1024 * 1024;
@@ -18,19 +18,25 @@ type Frame = { owner: Owner; live: boolean; tail: Promise<unknown>; pending: Set
 type Ledger = { bytes: number; retained: number; owners: number; writers: number; quarantined: number;
   rejected: number; chains: Map<string, Promise<unknown>>; fences: Map<string, ConversationPublicationError>;
   receipts: Map<string, Readonly<Record<string, string>>>; waiters: Array<() => void>; context: AsyncLocalStorage<Frame>;
+  terminalWaiters: number; capacityChange?: { promise: Promise<void>; resolve: () => void };
+  ownerRefusals: WeakSet<Error>;
   captures: WeakMap<object, Frame>; immutableSnapshots: WeakSet<object> };
 const host = globalThis as typeof globalThis & { __flujoConversationPublicationV1?: Ledger };
 const ledger: Ledger = host.__flujoConversationPublicationV1 ??= { bytes: 0, retained: 0, owners: 0, writers: 0,
-  quarantined: 0, rejected: 0, chains: new Map(), fences: new Map(), receipts: new Map(), waiters: [], context: new AsyncLocalStorage(),
-  captures: new WeakMap(), immutableSnapshots: new WeakSet() };
+  quarantined: 0, rejected: 0, chains: new Map(), fences: new Map(), receipts: new Map(), waiters: [], terminalWaiters: 0, context: new AsyncLocalStorage(),
+  captures: new WeakMap(), immutableSnapshots: new WeakSet(), ownerRefusals: new WeakSet() };
 // Keep a live development process compatible when an earlier module instance
 // initialized the shared ledger before immutable snapshot reuse was loaded.
 ledger.captures ??= new WeakMap();
 ledger.immutableSnapshots ??= new WeakSet();
+ledger.terminalWaiters ??= 0;
+ledger.ownerRefusals ??= new WeakSet();
 setAllocationReservation('publication', ledger.bytes);
 function refuse(code: PublicationCode, reason: string): never {
   ledger.rejected++;
-  throw new ConversationPublicationError(code, reason);
+  const error = new ConversationPublicationError(code, reason);
+  if (code === 'CONVERSATION_PUBLICATION_BUSY') ledger.ownerRefusals.add(error);
+  throw error;
 }
 
 /** Accept genuine plain objects/arrays from another VM without executing its code. */
@@ -205,6 +211,9 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
     owned.value = undefined as T;
     ledger.bytes -= owned.bytes; ledger.retained -= owned.retained;
     setAllocationReservation('publication', ledger.bytes);
+    const changed = ledger.capacityChange;
+    ledger.capacityChange = undefined;
+    changed?.resolve();
   });
   if (!nested) ledger.chains.set(key, settled);
   else {
@@ -292,9 +301,48 @@ export async function flushConversationPublication(key: string): Promise<void> {
   const fence = ledger.fences.get(key);
   if (fence) throw fence;
 }
+/** Terminal cleanup only: its existing admitted run owns the canonical state.
+ * Retry one definitely refused admission, never a provider call or event group.
+ * Waiters retain no capture and share one settlement signal, with no per-chain
+ * listeners accumulating across retries. An active publisher cannot wait on
+ * capacity that its own frame may be preventing from settling. */
+export async function retryOwnedConversationPublicationBusy<T>(operation: () => T | Promise<T>, ownsRefusal: () => boolean = () => true): Promise<T> {
+  let waiting = false;
+  let retryAvailableCapacity = true;
+  try {
+    while (true) {
+      try { return await operation(); }
+      catch (error) {
+        if (!isConversationPublicationError(error) || error.code !== 'CONVERSATION_PUBLICATION_BUSY'
+          || !ledger.ownerRefusals.has(error) || !ownsRefusal()) throw error;
+        const frame = ledger.context.getStore();
+        if (frame?.live && frame.owner.live) throw error;
+        // A different owner can settle between rejection and this catch. Try
+        // available capacity once before sleeping, without spinning when a
+        // snapshot still needs more than one free nested owner slot.
+        if (ledger.owners < CONVERSATION_PUBLICATION_LIMITS.owners && retryAvailableCapacity) {
+          retryAvailableCapacity = false;
+          continue;
+        }
+        if (!ledger.chains.size) throw error;
+        if (!waiting) {
+          if (ledger.terminalWaiters >= CONVERSATION_PUBLICATION_LIMITS.owners) throw error;
+          ledger.terminalWaiters++; waiting = true;
+        }
+        if (!ledger.capacityChange) {
+          let resolve!: () => void;
+          const promise = new Promise<void>(done => { resolve = done; });
+          ledger.capacityChange = { promise, resolve };
+        }
+        await ledger.capacityChange.promise;
+        retryAvailableCapacity = true;
+      }
+    }
+  } finally { if (waiting) ledger.terminalWaiters--; }
+}
 export function getConversationPublicationDiagnostics() {
   return { owners: ledger.owners, writers: ledger.writers, allocationBytes: ledger.bytes,
-    retainedBytes: ledger.retained, queuedWriters: ledger.waiters.length, chains: ledger.chains.size,
+    retainedBytes: ledger.retained, queuedWriters: ledger.waiters.length, terminalWaiters: ledger.terminalWaiters, chains: ledger.chains.size,
     fences: ledger.fences.size, receipts: ledger.receipts.size, quarantinedWriterSlots: ledger.quarantined, rejected: ledger.rejected };
 }
 

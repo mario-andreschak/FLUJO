@@ -5,7 +5,7 @@ import { appendFromBus, appendRawForState, replaceConversationTranscript, flushC
   _setConversationLogDirForTests, latestSequence, readConversationLogForReplay } from '@/backend/execution/flow/conversationLog';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { getConversationPublicationDiagnostics, publishConversation, CONVERSATION_PUBLICATION_LIMITS } from '@/backend/execution/flow/conversationPublication';
+import { getConversationPublicationDiagnostics, publishConversation, CONVERSATION_PUBLICATION_LIMITS, retryOwnedConversationPublicationBusy } from '@/backend/execution/flow/conversationPublication';
 import * as publication from '@/backend/execution/flow/conversationPublication';
 import type { SharedState, SubflowInvocation } from '@/backend/execution/flow/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
@@ -211,6 +211,31 @@ it('refuses a replacement capture before reserving sequence space or changing du
   expect(await latestSequence(value.conversationId!)).toBe(highWater);
   expect(await fs.readFile(logPath(value), 'utf8')).toBe(before);
   expect(value.messages[0].id).toBe('old');
+});
+
+it('does not replay an admitted bus event when its reentrant listener receives an owner refusal', async () => {
+  const value = state(), blocked = gate(), before = getConversationPublicationDiagnostics();
+  FlowExecutor.conversationStates.set(value.conversationId!, value);
+  const holders: Promise<void>[] = [];
+  while (getConversationPublicationDiagnostics().owners < CONVERSATION_PUBLICATION_LIMITS.owners - 1) {
+    holders.push(publishConversation('reentrant-bus-holder', null, async () => blocked.promise));
+  }
+  let admitted = false;
+  const emit = executionEventBus.emitterFor(value.conversationId!, () => { admitted = true; });
+  const listener = jest.fn(() => executionEventBus.emit(value.conversationId!, { type: 'run:start', flowId: 'nested-refused' }));
+  const unsubscribe = executionEventBus.subscribe(value.conversationId!, listener);
+  const operation = jest.fn(() => { admitted = false; emit({ type: 'run:done', status: 'error' }); });
+  try {
+    await expect(retryOwnedConversationPublicationBusy(operation, () => !admitted))
+      .rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_BUSY' });
+    expect(admitted).toBe(true);
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally { unsubscribe(); blocked.release(); await Promise.all(holders); }
+  await flushConversationLog(value.conversationId!);
+  expect((await events(value)).map(event => event.type)).toEqual(['run:done']);
+  expect(executionEventBus.getBufferedSince(value.conversationId!, 0).map(event => event.type)).toEqual(['run:done']);
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, terminalWaiters: 0 });
 });
 
 it('preserves exact authority errors raised inside the rewrite intent and atomic snapshot writer', async () => {

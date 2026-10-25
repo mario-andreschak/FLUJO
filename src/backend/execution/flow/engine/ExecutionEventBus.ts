@@ -258,7 +258,7 @@ export class ExecutionEventBus {
   }
 
   /** Publish an event; the bus stamps conversationId, seq and timestamp. */
-  emit(conversationId: string, raw: RawExecutionEvent): ExecutionEvent {
+  emit(conversationId: string, raw: RawExecutionEvent, onAdmitted?: () => void): ExecutionEvent {
     // Authoritative, durable, per-conversation monotonic seq from the log.
     const seq = allocateSeq(conversationId);
     const event = {
@@ -277,6 +277,9 @@ export class ExecutionEventBus {
     // before acknowledging durability; synchronous admission failure precedes
     // all live delivery and replay retention. Its reserved seq remains a gap.
     appendFromBus(event);
+    // This receipt precedes reentrant listeners. A later listener failure is
+    // not a refusal of this event and must never cause its automatic replay.
+    onAdmitted?.();
 
     const channel = this.getChannel(conversationId);
     const key = workspaceCacheKey(conversationId);
@@ -305,10 +308,10 @@ export class ExecutionEventBus {
   }
 
   /** An emit function bound to a conversation, suitable to hand to the engine. */
-  emitterFor(conversationId: string): EmitFn {
+  emitterFor(conversationId: string, onAdmitted?: (event: RawExecutionEvent) => void): EmitFn {
     return bindToCurrentWorkspace((raw: RawExecutionEvent) => {
       try {
-        this.emit(conversationId, raw);
+        this.emit(conversationId, raw, onAdmitted ? () => onAdmitted(raw) : undefined);
       } catch (err) {
         if (isConversationDurabilityError(err)) throw err;
         log.warn(`Failed to emit execution event for ${conversationId}`, { err });

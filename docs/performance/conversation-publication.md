@@ -112,6 +112,18 @@ Required publication failures use typed busy, memory, data, I/O, or uncertain
 errors. An asynchronous bus failure becomes a fence observed by the durability
 flush. Terminal cleanup recognizes these errors, preserves a preceding execution failure, and
 does not report successful persistence after the final snapshot retry fails.
+An already admitted run may wait for a definitely refused owner admission while
+publishing its terminal records. At most 64 terminal waiters share one capacity
+signal and retain their existing run ownership without another history capture.
+An active publisher frame cannot enter that wait. Each event and snapshot is
+admitted separately; an accepted recovery transition is never replayed because
+its later snapshot was busy. Uncertain I/O, exhausted sequences, and provider
+dispatch are never retried by this cleanup path. Numeric diagnostics include
+the terminal waiter count, which must return to zero after settlement.
+Retries require the publisher's private refusal identity. Bus event retries also
+require its admission receipt to show that the outer event was not accepted;
+a reentrant listener's refusal cannot replay an accepted outer event. Opaque
+custom emitters have no such receipt and are never automatically retried.
 The default event emitter and HTTP/SSE submission path preserve these typed
 errors. Model dispatch waits for its required marker; a result-marker failure
 does not trigger provider fallback or an automatic retry. A completed inference
