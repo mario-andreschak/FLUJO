@@ -1,3 +1,4 @@
+import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import type OpenAI from 'openai';
 import type { Item } from '@openrouter/agent';
 import { z } from 'zod';
@@ -132,6 +133,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
         : definition);
     const dispatchIds: string[] = [];
     let admissionError: unknown;
+    let primaryFailure = false;
     const liveMessageId = streaming ? uuidv4() : undefined;
     const toolIndexes = new Map<number, number>();
     const observe = (event: ProviderEvent) => {
@@ -193,7 +195,7 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
             });
             if (id) dispatchIds.push(id);
           } catch (error) {
-            if (error instanceof ModelTurnArchiveMemoryError) { admissionError = error; throw error; }
+            if (error instanceof ModelTurnArchiveMemoryError || isConversationSequenceSafetyError(error)) { admissionError = error; throw error; }
             try { rethrowFlowExecutionAuthorityError(error); }
             catch (fatal) { admissionError = fatal; throw fatal; }
           }
@@ -256,12 +258,18 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
         ...(liveMessageId ? { liveMessageId } : {}),
       };
     } catch (error) {
+      primaryFailure = true;
       if (outcome !== 'cancelled') outcome = input.signal?.aborted ? 'cancelled' : 'error';
       throw admissionError ?? (input.signal?.aborted ? input.signal.reason ?? error : error);
     } finally {
+      let sequenceFailure: unknown;
       for (const dispatchId of dispatchIds) {
-        await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(rethrowFlowExecutionAuthorityError);
+        await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(error => {
+          if (isConversationSequenceSafetyError(error)) { sequenceFailure ??= error; return; }
+          rethrowFlowExecutionAuthorityError(error);
+        });
       }
+      if (sequenceFailure && !primaryFailure) throw sequenceFailure;
     }
   }
 }

@@ -21,6 +21,7 @@ require.extensions['.ts'] = (module, file) => module._compile(ts.transpileModule
 const { OpenRouterAgentAdapter } = require(path.join(root, 'src/backend/services/model/adapters/openrouterAgentAdapter.ts'));
 const { FlowExecutionAuthorityError } = require(path.join(root, 'src/backend/execution/flow/executionAuthority.ts'));
 const { ModelTurnArchiveMemoryError } = require(path.join(root, 'src/backend/execution/flow/modelTurnArchiveWriteBudget.ts'));
+const { ConversationSequenceSafetyError } = require(path.join(root, 'src/backend/execution/flow/conversationLogSequence.ts'));
 let scenario = 'completed';
 const requests = [];
 const schema = JSON.parse('{"type":"object","properties":{"snake_name":{"type":"string"},"constructor":{"type":"string"},"__proto__":{"type":"string"}},"anyOf":[{"required":["snake_name"]},{"required":["constructor"]}]}');
@@ -72,7 +73,7 @@ const server = http.createServer(async (req, res) => {
   assert.deepEqual([...new Set(deltas.map(delta => delta.toolCallDelta?.index))], [0, 1]);
   assert.deepEqual(settled, [{ dispatchId: 'dispatch', outcome: 'completed' }]);
   assert.ok(!JSON.stringify(archived).includes('fixture-only'));
-  for (const refusal of [new FlowExecutionAuthorityError('fixture authority'), new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT')]) {
+  for (const refusal of [new FlowExecutionAuthorityError('fixture authority'), new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT'), new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture sequence')]) {
     const before = requests.length;
     await assert.rejects(adapter.createCompletion({ ...input(), onSdkRequest: async () => { throw refusal; } }), error => error === refusal);
     assert.equal(requests.length, before);

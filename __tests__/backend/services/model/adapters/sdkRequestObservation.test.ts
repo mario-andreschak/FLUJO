@@ -1,7 +1,43 @@
 import { observeSdkRequest } from '@/backend/services/model/adapters/types';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 
 describe('observeSdkRequest', () => {
+  it('refuses physical dispatch when the immutable marker cannot obtain a safe sequence', async () => {
+    const task = jest.fn(async () => 'physical dispatch');
+    const failure = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture');
+    await expect(observeSdkRequest({ onSdkRequest: async () => { throw failure; } },
+      { adapter: 'test', operation: 'create', request: {} }, task)).rejects.toBe(failure);
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it('propagates a result-marker safety refusal after exactly one actual dispatch', async () => {
+    const task = jest.fn(async () => 'physical result');
+    const failure = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture');
+    const result = jest.fn(async () => { throw failure; });
+    await expect(observeSdkRequest({ onSdkRequest: async () => 'actual-dispatch', onSdkRequestResult: result },
+      { adapter: 'test', operation: 'create', request: {} }, task)).rejects.toBe(failure);
+    expect(task).toHaveBeenCalledTimes(1);
+    expect(result).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('preserves a primary provider failure when result sequencing also fails (stream=%s)', async streaming => {
+    const primary = new Error('Actual provider failure');
+    const secondary = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'result marker');
+    const outcome = jest.fn(async () => { throw secondary; });
+    const observed = observeSdkRequest({ onSdkRequest: async () => 'actual-dispatch', onSdkRequestResult: outcome },
+      { adapter: 'test', operation: 'create', request: {} }, async () => {
+        if (!streaming) throw primary;
+        return (async function* () { yield 'retained partial result'; throw primary; })();
+      });
+    if (streaming) {
+      const stream = await observed;
+      const received: string[] = [];
+      await expect((async () => { for await (const value of stream!) received.push(value); })()).rejects.toBe(primary);
+      expect(received).toEqual(['retained partial result']);
+    } else await expect(observed).rejects.toBe(primary);
+    expect(outcome).toHaveBeenCalledTimes(1);
+  });
   it('stops before the provider call when archive admission loses execution authority', async () => {
     const task = jest.fn(async () => 'result');
     const lost = new FlowExecutionAuthorityError('Persona was deleted');

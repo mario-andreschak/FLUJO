@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'node:crypto';
 import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execution/events';
 import { appendFromBus, allocateSeq } from '@/backend/execution/flow/conversationLog';
+import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { createLogger } from '@/utils/logger';
 import { bindToCurrentWorkspace, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { boundedEventSnapshot, type EventSnapshot } from './boundedEventSnapshot';
@@ -258,10 +259,10 @@ export class ExecutionEventBus {
 
   /** Publish an event; the bus stamps conversationId, seq and timestamp. */
   emit(conversationId: string, raw: RawExecutionEvent): ExecutionEvent {
-    const channel = this.getChannel(conversationId);
-    const key = workspaceCacheKey(conversationId);
     // Authoritative, durable, per-conversation monotonic seq from the log.
     const seq = allocateSeq(conversationId);
+    const channel = this.getChannel(conversationId);
+    const key = workspaceCacheKey(conversationId);
     if (channel) {
       channel.seq = seq + 1; // durable high-water mirror; never grants execution authority
       this.cancelCleanup(key);
@@ -308,6 +309,7 @@ export class ExecutionEventBus {
       try {
         this.emit(conversationId, raw);
       } catch (err) {
+        if (isConversationSequenceSafetyError(err)) throw err;
         log.warn(`Failed to emit execution event for ${conversationId}`, { err });
       }
     });

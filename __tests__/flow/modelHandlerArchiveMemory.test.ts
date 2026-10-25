@@ -40,6 +40,7 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { COMPACTION_SUMMARY_SECTIONS } from '@/backend/execution/flow/handlers/summarizingCompaction';
 import { _setModelTurnArchiveDirForTests, archiveModelDispatch, readModelTurnSnapshot, readModelTurnSnapshotResponse, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
 import { getArchiveWritePressure, MODEL_TURN_ARCHIVE_WRITE_LIMITS, withArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
+import { _setConversationLogDirForTests, allocateSeq, flushConversationLog } from '@/backend/execution/flow/conversationLog';
 
 // One application observation is one actual HTTP request in this offline fixture.
 // This does not qualify the ordinary SDK's internal retry profile.
@@ -169,6 +170,29 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     expect(result.success).toBe(false);
     expect(result.error?.message).toContain('leaves no room for input');
     expect(requests).toHaveLength(0);
+  });
+
+  it('refuses real SDK HTTP dispatch when its immutable dispatch marker exhausts the conversation sequence', async () => {
+    const logDirectory = path.join(root, 'sequence-logs');
+    await fs.mkdir(logDirectory);
+    const previous = _setConversationLogDirForTests(logDirectory);
+    try {
+      await fs.writeFile(path.join(logDirectory, 'memory-conversation.jsonl'), `{"seq":${Number.MAX_SAFE_INTEGER - 2}}\n`);
+      // The callback runs immediately before the real ModelHandler observer.
+      sdkRequestObserved = () => { allocateSeq('memory-conversation'); };
+      const canonical = structuredClone([message]);
+      const result = await invoke(canonical);
+      expect(result).toMatchObject({ success: false, error: { code: 'CONVERSATION_SEQUENCE_EXHAUSTED' } });
+      expect(requests).toHaveLength(0);
+      expect(canonical).toEqual([message]);
+      expect(listInFlightToolCalls('memory-conversation')).toHaveLength(0);
+      const log = await fs.readFile(path.join(logDirectory, 'memory-conversation.jsonl'), 'utf8');
+      expect(log).not.toContain('model:dispatch');
+    } finally {
+      await flushConversationLog('memory-conversation');
+      sdkRequestObserved = undefined;
+      _setConversationLogDirForTests(previous);
+    }
   });
 
   it.each([false, true])('continues after an HTTP 200 failed response (stream=%s), archiving error then success', async stream => {

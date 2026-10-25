@@ -30,6 +30,7 @@ import {
   allocateSeq,
   latestSequence,
   _setConversationLogDirForTests,
+  prepareConversationSequence,
 } from '@/backend/execution/flow/conversationLog';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -573,6 +574,51 @@ describe('repairTruncatedConversationLog (issue #49: log behind the snapshot)', 
 });
 
 describe('authoritative monotonic seq (issue #261)', () => {
+  it('retains allocated sequence ownership across a failed append and subsequent log deletion', async () => {
+    const id = 'sequence-failed-append-owner';
+    const state = makeState(id);
+    const append = jest.spyOn(fs, 'appendFile').mockRejectedValueOnce(Object.assign(new Error('fixture append failure'), { code: 'EIO' }));
+    try {
+      await appendRawForState(state, [{ type: 'run:start', flowId: state.flowId }]);
+    } finally { append.mockRestore(); }
+    expect(allocateSeq(id)).toBe(1);
+    await deleteConversationLog(id);
+    expect(allocateSeq(id)).toBe(2);
+  });
+
+  it('preserves the cold high-water source after a refused scan instead of falling back to zero', async () => {
+    const id = 'sequence-unsafe-source';
+    const file = path.join(tmpDir, `${id}.jsonl`);
+    await fs.writeFile(file, '{"seq":9007199254740992}\n');
+    expect(() => allocateSeq(id)).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_EXHAUSTED' }));
+    expect(() => prepareConversationSequence(id)).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_EXHAUSTED' }));
+    await fs.writeFile(file, '{"seq":7}\n{"seq":3}\n');
+    expect(allocateSeq(id)).toBe(8);
+  });
+
+  it('never reuses the final allocatable integer when its successor is exhausted', async () => {
+    const id = 'sequence-last-safe-integer';
+    await fs.writeFile(path.join(tmpDir, `${id}.jsonl`), `{"seq":${Number.MAX_SAFE_INTEGER - 2}}\n`);
+    expect(allocateSeq(id)).toBe(Number.MAX_SAFE_INTEGER - 1);
+    expect(() => allocateSeq(id)).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_EXHAUSTED' }));
+    expect(() => allocateSeq(id)).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_EXHAUSTED' }));
+    expect(await latestSequence(id)).toBe(Number.MAX_SAFE_INTEGER - 1);
+  });
+
+  it('propagates typed cold-bootstrap refusal through the bound bus emitter without replay or append', async () => {
+    const id = 'sequence-bus-refusal';
+    await fs.writeFile(path.join(tmpDir, `${id}.jsonl`), '{"seq":1e309}\n');
+    const events: ExecutionEvent[] = [];
+    const unsubscribe = executionEventBus.subscribe(id, event => events.push(event));
+    try {
+      expect(() => executionEventBus.emitterFor(id)({ type: 'run:start', flowId: 'flow-1' }))
+        .toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_EXHAUSTED' }));
+      await flushConversationLog(id);
+      expect(events).toEqual([]);
+      expect(await fs.readFile(path.join(tmpDir, `${id}.jsonl`), 'utf8')).toBe('{"seq":1e309}\n');
+    } finally { unsubscribe(); }
+  });
+
   it('keeps seq strictly monotonic across a channel GC cycle (never resets to 0)', () => {
     const convId = 'conv-seq-gc';
     const e0 = executionEventBus.emit(convId, { type: 'run:start', flowId: 'f' } as any);

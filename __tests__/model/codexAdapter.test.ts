@@ -20,6 +20,7 @@ import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/mod
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { registerPendingApproval, listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
 import { hidePresetParameters } from '@/utils/shared/toolParameterPresets';
 import { executeQuestionTool } from '@/backend/execution/flow/handlers/runQuestionTool';
@@ -433,6 +434,26 @@ describe('CodexAdapter — thread setup', () => {
     }))).rejects.toBe(lost);
     expect(runStreamedMock).not.toHaveBeenCalled();
     expect(startThreadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call or retry the SDK after sequence safety refuses its dispatch marker', async () => {
+    const refused = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture');
+    await expect(new CodexAdapter().createCompletion(baseInput({
+      onSdkRequest: async () => { throw refused; },
+    }))).rejects.toBe(refused);
+    expect(runStreamedMock).not.toHaveBeenCalled();
+    expect(startThreadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the primary SDK failure when result sequencing also refuses', async () => {
+    runStreamedMock.mockRejectedValueOnce(new Error('Primary actual Codex failure'));
+    const secondary = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'result marker');
+    const outcome = jest.fn(async () => { throw secondary; });
+    await expect(new CodexAdapter().createCompletion(baseInput({
+      onSdkRequest: async () => 'actual-dispatch', onSdkRequestResult: outcome,
+    }))).rejects.toThrow('Primary actual Codex failure');
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+    expect(outcome).toHaveBeenCalledTimes(1);
   });
 
   it('propagates authority loss from SDK outcome persistence', async () => {

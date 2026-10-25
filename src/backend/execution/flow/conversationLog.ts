@@ -1,4 +1,4 @@
-import { constants, promises as fs, readFileSync } from 'fs';
+import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { StringDecoder } from 'node:string_decoder';
 import { withConversationLogReadAdmission, ConversationLogReadPressureError, type ConversationReadReservation } from './conversationLogReadAdmission';
@@ -16,6 +16,9 @@ import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
+import { scanConversationLogSequence, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
+import { CONVERSATION_SEQUENCE_REGISTRY_LIMITS, admitSequenceRegistryKey, insertSequenceRegistryKey, newSequenceRegistryAccounting, refuseNewSequenceRegistryKey, sequenceRegistryDiagnostics,
+  type SequenceRegistryAccounting } from './conversationSequenceRegistry';
 
 const log = createLogger('backend/execution/flow/conversationLog');
 
@@ -105,6 +108,8 @@ export function _setConversationLogDirForTests(dir: string): string {
   // Counters are seeded from the store on cold start; switching stores must
   // re-seed from the new directory rather than reuse a stale counter.
   nextSeq.clear();
+  sequenceAccounting.keyBytes = 0;
+  sequenceAccounting.accountedCount = 0;
   return previous ?? dir;
 }
 
@@ -120,6 +125,7 @@ declare global {
     appendChains: Map<string, Promise<unknown>>;
     nextSeq: Map<string, number>;
     pendingCommits: Map<string, Set<Promise<unknown>>>;
+    sequenceAccounting?: SequenceRegistryAccounting;
   } | undefined;
 }
 // Next's request and execution bundles can evaluate this module independently.
@@ -127,7 +133,7 @@ declare global {
 // separate chains also fail to serialize their writes. Share both for the whole
 // process, retaining the existing workspace-qualified keys and disk cold start.
 const processLogState = globalThis.__flujo_conversation_log_state_v1
-  ??= { appendChains: new Map(), nextSeq: new Map(), pendingCommits: new Map() };
+  ??= { appendChains: new Map(), nextSeq: new Map(), pendingCommits: new Map(), sequenceAccounting: newSequenceRegistryAccounting() };
 const appendChains = processLogState.appendChains;
 const pendingCommits = processLogState.pendingCommits;
 
@@ -152,34 +158,49 @@ function trackCommit(conversationId: string, pending: Promise<void>): Promise<vo
 //
 // In-memory: Map<conversationId, nextSeq>. Cold-start (first allocation for a
 // conversation this process has not seen, e.g. after restart) seeds the counter
-// by tail-reading the existing .jsonl and resuming at max(seq)+1, ignoring
+// by scanning the existing .jsonl and resuming at max(seq)+1, ignoring
 // legacy sentinel/non-numeric values — so pre-#261 logs are tolerated, never
 // rewritten. The counter then stays in memory for the process lifetime.
 const nextSeq = processLogState.nextSeq;
+const sequenceAccounting = processLogState.sequenceAccounting ??= newSequenceRegistryAccounting();
 
-/** Cold-start init of the durable counter from the persisted log tail. Runs at
+/** Numeric process diagnostics only; no conversation/workspace identities. */
+export function getConversationSequenceDiagnostics() {
+  let pendingCommitCount = 0;
+  for (const commits of pendingCommits.values()) pendingCommitCount += commits.size;
+  return { ...sequenceRegistryDiagnostics(nextSeq, sequenceAccounting), ...getConversationSequenceScanDiagnostics(),
+    pendingAppendChains: appendChains.size, pendingCommitConversations: pendingCommits.size, pendingCommits: pendingCommitCount };
+}
+
+/** Cold-start init of the durable counter from the complete descriptor snapshot. Runs at
  *  most once per conversation per process; a one-time synchronous read keeps
  *  allocateSeq usable from the bus's synchronous emit path. */
-function initSeqIfNeeded(conversationId: string): void {
-  if (nextSeq.has(ck(conversationId))) return;
-  let max = -1;
-  try {
-    const content = readFileSync(logFilePath(conversationId), 'utf-8');
-    for (const line of content.split('\n')) {
-      if (line.trim().length === 0) continue;
-      try {
-        const seq = (JSON.parse(line) as { seq?: unknown }).seq;
-        if (typeof seq === 'number' && Number.isFinite(seq) && seq > max) max = seq;
-      } catch {
-        /* skip a truncated/garbled tail line */
-      }
+function initSeqIfNeeded(conversationId: string): string {
+  if (conversationId.length * 2 > CONVERSATION_SEQUENCE_REGISTRY_LIMITS.maxKeyBytes) {
+    // A legacy/HMR owner must survive, but do not concatenate a new giant key
+    // just to refuse it. This exceptional lookup retains no additional string.
+    const prefix = ck('');
+    for (const key of nextSeq.keys()) {
+      if (key.length === prefix.length + conversationId.length && key.startsWith(prefix) && key.endsWith(conversationId)) return key;
     }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.warn(`Could not read conversation log ${conversationId} to seed seq; starting at 0.`, { err });
-    }
+    refuseNewSequenceRegistryKey(sequenceAccounting);
   }
-  nextSeq.set(ck(conversationId), max + 1);
+  const key = ck(conversationId);
+  if (nextSeq.has(key)) return key;
+  admitSequenceRegistryKey(nextSeq, sequenceAccounting, key);
+  // The bus also has virtual/nonpersistent channel IDs. They never qualify
+  // for a durable log path; keep their process HWM without touching storage.
+  const max = SAFE_ID.test(conversationId) ? scanConversationLogSequence(logFilePath(conversationId)) : -1;
+  requireAllocatableSequence(max + 1);
+  insertSequenceRegistryKey(nextSeq, sequenceAccounting, key, max + 1);
+  return key;
+}
+
+/** Validate cold-start storage and arithmetic before a run may mutate/dispatch.
+ * Does not consume a sequence or evict an existing process high-water mark. */
+export function prepareConversationSequence(conversationId: string): void {
+  const key = initSeqIfNeeded(conversationId);
+  requireAllocatableSequence(nextSeq.get(key)!);
 }
 
 /**
@@ -189,9 +210,10 @@ function initSeqIfNeeded(conversationId: string): void {
  * lifetime, seeded from disk on cold start.
  */
 export function allocateSeq(conversationId: string): number {
-  initSeqIfNeeded(conversationId);
-  const seq = nextSeq.get(ck(conversationId))!;
-  nextSeq.set(ck(conversationId), seq + 1);
+  const key = initSeqIfNeeded(conversationId);
+  const seq = nextSeq.get(key)!;
+  requireAllocatableSequence(seq);
+  nextSeq.set(key, seq + 1);
   return seq;
 }
 
@@ -202,8 +224,8 @@ export function allocateSeq(conversationId: string): number {
  */
 export async function latestSequence(conversationId: string): Promise<number> {
   if (!SAFE_ID.test(conversationId)) return -1;
-  initSeqIfNeeded(conversationId);
-  return nextSeq.get(ck(conversationId))! - 1;
+  const key = initSeqIfNeeded(conversationId);
+  return nextSeq.get(key)! - 1;
 }
 
 function chainAppend(conversationId: string, lines: string): Promise<void> {
