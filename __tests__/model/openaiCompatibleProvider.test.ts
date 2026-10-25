@@ -5,7 +5,7 @@ import { fetchModelsFromProvider, getProviderFromBaseUrl } from '@/backend/servi
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
 import { testModelConnection } from '@/backend/services/model/testConnection';
 
-const key = 'synthetic-orca-fixture-key';
+const key = 'synthetic-openai-compatible-fixture-key';
 const modelName = 'vendor/fixture-model';
 let server: Server;
 let baseUrl: string;
@@ -65,17 +65,17 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 });
 
-const model = (): Model => ({ id: 'orca-fixture', name: modelName, ApiKey: key, baseUrl, provider: 'orcarouter', adapter: 'openai' });
+const model = (): Model => ({ id: 'openai-compatible-fixture', name: modelName, ApiKey: key, baseUrl, provider: 'openai', adapter: 'openai' });
 
 it('infers the official hostname without matching credentials, paths or lookalike domains', () => {
-  expect(getProviderFromBaseUrl('https://API.ORCAROUTER.AI./v1')).toBe('orcarouter');
-  for (const url of ['https://api.orcarouter.ai.attacker.test/v1', 'https://api.orcarouter.ai@attacker.test/v1', 'https://attacker.test/api.orcarouter.ai/v1']) {
+  expect(getProviderFromBaseUrl('https://API.OPENAI.COM./v1')).toBe('openai');
+  for (const url of ['https://api.openai.com.attacker.test/v1', 'https://api.openai.com@attacker.test/v1', 'https://attacker.test/api.openai.com/v1']) {
     expect(getProviderFromBaseUrl(url)).toBe('ollama');
   }
 });
 
 it('discovers authenticated vendor/model IDs through the configured catalogue endpoint', async () => {
-  expect(await fetchModelsFromProvider('orcarouter', baseUrl, key)).toEqual([
+  expect(await fetchModelsFromProvider('openai', baseUrl, key)).toEqual([
     expect.objectContaining({ id: modelName, name: 'Fixture model', supportsTools: true, contextWindow: 32000 }),
   ]);
   expect(requests.map(request => request.path)).toEqual(['/v1/models']);
@@ -101,14 +101,14 @@ it('streams through the same adapter and emits live text', async () => {
 });
 
 it('runs the actual connection test and diagnostic tool round trip over loopback HTTP', async () => {
-  const result = await testModelConnection({ modelName, baseUrl, apiKey: key, provider: 'orcarouter', adapter: 'openai' });
-  expect(result).toMatchObject({ ok: true, provider: 'orcarouter', sdk: { ok: true }, axios: { ok: true }, tool: { ok: true } });
+  const result = await testModelConnection({ modelName, baseUrl, apiKey: key, provider: 'openai', adapter: 'openai' });
+  expect(result).toMatchObject({ ok: true, provider: 'openai', sdk: { ok: true }, axios: { ok: true }, tool: { ok: true } });
   expect(requests.every(request => request.path === '/v1/chat/completions')).toBe(true);
   expect(requests.some(request => request.body?.messages.some(message => message.role === 'tool'))).toBe(true);
 });
 
 it('reports invalid API keys through the real SDK and HTTP diagnostics', async () => {
-  const result = await testModelConnection({ modelName, baseUrl, apiKey: 'wrong-fixture-key', provider: 'orcarouter', adapter: 'openai' });
+  const result = await testModelConnection({ modelName, baseUrl, apiKey: 'wrong-fixture-key', provider: 'openai', adapter: 'openai' });
   expect(result).toMatchObject({ ok: false, sdk: { ok: false, status: 401 }, axios: { ok: false, status: 401 } });
   expect(result.diagnosis).toMatch(/auth|API key/i);
 });
