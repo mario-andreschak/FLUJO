@@ -17,6 +17,7 @@ import { combineAbortSignals } from '../combineAbortSignals';
 import { isNativeHandoffProtocol, type NativeHandoffProtocol } from './nativeHandoffProtocol';
 import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, type NativeOriginalProcessHost } from './nativeOriginalHost';
 import type { ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { NativeReadResourceError } from './nativeReadResourceError';
 
 const ports = new WeakSet<object>();
 const modelToolGates = new WeakMap<object, (context: ExecutionExtensionContext) => Promise<void>>();
@@ -249,10 +250,17 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
         await assertCurrent();
         await markNativeToolEffectMayHaveStarted(entry);
         await assertCurrent();
-        const output = await executors[name](callArgs);
+        try {
+          const output = await executors[name](callArgs);
+          result = { content: [{ type: 'text', text: JSON.stringify(output) }] };
+        } catch (error) {
+          // Only the trusted reader's returned application failure is handled.
+          // Arbitrary executor errors still leave an unresolved effect marker.
+          if (name !== 'read_resource' || !(error instanceof NativeReadResourceError)) throw error;
+          result = { isError: true, content: [{ type: 'text', text: error.message }] };
+        }
         await input.authority.assertCurrent();
         await input.afterToolDispatch?.();
-        result = { content: [{ type: 'text', text: JSON.stringify(output) }] };
       } else {
         const decoded = bound[name];
         const effectiveArgs = await applyPresetArguments(callArgs, decoded.presetArgs, decoded.context);

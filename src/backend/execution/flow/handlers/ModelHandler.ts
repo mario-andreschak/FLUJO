@@ -1622,7 +1622,6 @@ export class ModelHandler {
                 mcpNodes: mcpNodes ?? [],
                 ...durableContext,
               });
-              if (!outcome.success) throw new Error(outcome.error ?? 'read_resource failed');
               return nativeRunResourceResult(outcome);
             },
             // list_mcp_resources (issue #239): list native MCP server resources in-loop.
@@ -3018,7 +3017,6 @@ export class ModelHandler {
                 node: opts.nodeId ? { nodeId: opts.nodeId, nodeType: 'process' } : undefined,
                 ...opts.durableContext,
               });
-              if (!outcome.success) throw new Error(outcome.error ?? 'read_resource failed');
               return nativeRunResourceResult(outcome);
             } }
           : opts?.localToolExecutors;
