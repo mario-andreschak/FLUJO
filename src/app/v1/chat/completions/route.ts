@@ -153,9 +153,9 @@ async function handleRequest(request: NextRequest) {
       requestId,
       modelCharacters: completionData.model?.length,
       messageCount: completionData.messages?.length || 0,
-      stream: completionData.stream,
-      temperature: completionData.temperature,
-      max_tokens: completionData.max_tokens,
+      stream: completionData.stream === true,
+      temperature: typeof completionData.temperature === 'number' && Number.isFinite(completionData.temperature) ? completionData.temperature : undefined,
+      max_tokens: typeof completionData.max_tokens === 'number' && Number.isFinite(completionData.max_tokens) ? completionData.max_tokens : undefined,
       flujo,
       hasConversationId: Boolean(conversation_id),
       requireApproval,
@@ -200,13 +200,13 @@ async function handleRequest(request: NextRequest) {
     const ingressError = isChatIngressError(error);
     const unsupportedTool = error instanceof UnsupportedOpenAIToolTypeError;
     const invalidPersonaMetadata = error instanceof InvalidPersonaChatMetadataError;
+    const errorCode = ingressError ? error.code : unsupportedTool ? 'unsupported_tool_type'
+      : invalidPersonaMetadata ? 'invalid_persona_metadata' : 'internal_error';
     log.error('Error handling request', {
       requestId,
-      error: error instanceof Error ? {
-        name: error.name,
-        message: error.message,
-        stack: error.stack
-      } : error,
+      // Error messages/stacks can contain arbitrary wire values (including a
+      // multi-megabyte unsupported tool type). Log only the bounded category.
+      code: errorCode,
       duration: `${duration}ms`
     });
     
@@ -214,13 +214,10 @@ async function handleRequest(request: NextRequest) {
     return NextResponse.json(
       {
         error: {
-          message: error instanceof Error ? error.message : 'Failed to process chat completion',
+          message: unsupportedTool ? 'Unsupported OpenAI tool type; FLUJO supports function tools only.'
+            : error instanceof Error ? error.message : 'Failed to process chat completion',
           type: ingressError ? (error.status === 429 ? 'rate_limit_error' : error.status === 503 ? 'api_error' : 'invalid_request_error') : unsupportedTool || invalidPersonaMetadata ? 'invalid_request_error' : 'internal_error',
-          code: ingressError ? error.code : unsupportedTool
-            ? error.code
-            : invalidPersonaMetadata
-              ? error.code
-              : 'internal_error',
+          code: errorCode,
           param: null
         }
       },

@@ -42,6 +42,11 @@ Refusal happens before conversation loading, stream-reader admission, or
 provider/Flow invocation. Existing running, paused, approval and uncertain-effect
 owners are untouched.
 
+Request diagnostics contain only scalar summaries: unvalidated option values,
+error messages, and stacks are not passed to the ingress logger. Unsupported
+tool types retain their 400/code envelope with a fixed explanatory message,
+so a caller-controlled type cannot be copied into logs or the error response.
+
 The route and service hold separate references to one opaque, single-claim
 permit. A streaming Flow's background promise holds another reference through
 actual execution settlement and awaited terminal-error persistence. Returning

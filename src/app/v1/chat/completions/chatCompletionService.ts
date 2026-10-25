@@ -128,13 +128,13 @@ async function processChatCompletionInternal(
 ) {
   const startTime = Date.now();
   log.info('Processing chat completion request', {
-    model: data.model,
+    modelCharacters: data.model.length,
     messageCount: data.messages?.length || 0,
-    stream: data.stream,
+    stream: data.stream === true,
     flujo,
     requireApproval,
     flujodebug,
-    conversationId,
+    hasConversationId: Boolean(conversationId),
   });
 
   const result = await runFlow({
@@ -634,7 +634,7 @@ async function processAdmittedChatCompletion(
         flujo,
         requireApproval,
         flujodebug,
-        conversationId,
+        hasConversationId: Boolean(conversationId),
       });
     }
     return processDirectModelCompletion(data);
@@ -753,9 +753,9 @@ async function processAdmittedChatCompletion(
 async function processDirectModelCompletion(data: ChatCompletionRequest) {
   const identifier = data.model.startsWith('policy/') ? data.model : data.model.slice('model-'.length);
   log.info('Processing direct model completion', {
-    model: data.model,
+    modelCharacters: data.model.length,
     messageCount: data.messages?.length || 0,
-    stream: data.stream,
+    stream: data.stream === true,
     hasTools: Boolean(data.tools && data.tools.length > 0),
   });
 
@@ -769,7 +769,7 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
 
   if (!result.success) {
     log.warn('Direct model completion failed', {
-      model: data.model,
+      modelCharacters: data.model.length,
       code: result.error.code,
       statusCode: result.statusCode,
     });

@@ -262,7 +262,7 @@ async function parseAdmittedRequest(request: NextRequest, permit: ChatIngressPer
         hasMessages: !!data.messages,
         messageCount: data.messages?.length || 0,
         stream: !!data.stream,
-        temperature: data.temperature,
+        temperature: typeof data.temperature === 'number' && Number.isFinite(data.temperature) ? data.temperature : undefined,
         flujo,
         hasConversationId: Boolean(conversationId),
         requireApproval,
@@ -292,7 +292,7 @@ async function parseAdmittedRequest(request: NextRequest, permit: ChatIngressPer
       const duration = Date.now() - startTime;
       log.error('Error parsing request body', {
         requestId,
-        errorName: error instanceof Error ? error.name : 'Error',
+        errorType: error instanceof Error ? 'Error' : typeof error,
         duration: `${duration}ms`,
         // Worker control tokens and other credentials arrive in headers.
         // Header names are sufficient for request-shape diagnostics.
