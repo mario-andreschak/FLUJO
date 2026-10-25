@@ -1,5 +1,13 @@
 # MCP container integration v1: source contract and evidence
 
+The source/evidence pins below describe the original integration slice. Current
+unconfigured localhost installations retain legacy host stdio execution when no
+owner, trusted-host or isolation policy is selected and the server config selects
+neither `trustedHost` nor `isolation`. That compatibility path is not isolated.
+Protected host launches require separate trusted-host consent; configured isolated
+profiles use the container path. See [project status](../project-status.md) for
+current capabilities and release limits.
+
 This integration carries #615's container transport behavior onto current #813
 source `3e909494755c9c2dee198debfd1abce62ed23edd`. It preserves the current owner,
 tool pagination, transport admission and process shutdown behavior, using the

@@ -67,10 +67,11 @@ This does not prove cancellation of effects in a producer that ignores cancellat
 or cover transports that do not use this wrapper.
 
 This implements browser login/session/logout, request-time revocation and owner
-SSE revocation at the shared workspace boundary. The first-owner one-time
-pairing/bootstrap workflow, remaining transport and sensitive service boundaries, consumer migration,
-private legacy credential migration and complete OS isolation acceptance remain
-part of #566–#568. Source tests do not establish current installed-artifact,
+SSE revocation at the shared workspace boundary. The separate
+[first-owner pairing guide](first-owner-pairing-v1.md) describes the implemented
+one-time enrollment workflow. Remaining transport and sensitive service boundary
+coverage, consumer migration and complete OS isolation acceptance retain their
+own requirements. Source tests do not establish current installed-artifact,
 human or independent external acceptance, and do not award the A- outcome.
 
 The sign-in page renders outside workspace/bootstrap providers, so an
