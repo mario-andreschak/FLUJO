@@ -45,13 +45,24 @@ function presentationOrigin(source: PersonaActivitySourceKind): PersonaPresentat
   }
 }
 
-function presentationOutcome(activity: PersonaActivity): PersonaPresentationOutcome {
+function presentationOutcome(
+  activity: PersonaActivity,
+  byWorkItemId?: ReadonlyMap<string, PersonaWorkItem>,
+): PersonaPresentationOutcome {
   switch (activity.status) {
     case 'queued': return 'queued';
     case 'running': return 'working';
     case 'waiting': return 'waiting';
     case 'completed':
       if (activity.kind === 'maintenance' || !activity.outcome) return 'completed';
+      if (activity.outcome.resolution === 'partial' && !activity.outcome.blockerKind
+        && activity.kind === 'assignment' && activity.source.kind === 'assignment') {
+        const task = activity.source.sourceId ? byWorkItemId?.get(activity.source.sourceId) : undefined;
+        const goal = task?.goal ? task : task?.parentGoalId ? byWorkItemId?.get(task.parentGoalId) : undefined;
+        if (task?.personaId === activity.personaId && goal?.personaId === activity.personaId && goal.goal) {
+          return 'progress';
+        }
+      }
       return activity.outcome.resolution === 'succeeded'
         ? 'completed'
         : 'needs_attention';
@@ -106,7 +117,7 @@ function historyEntry(
     }),
     kind: activity.kind,
     origin: presentationOrigin(activity.source.kind),
-    outcome: presentationOutcome(activity),
+    outcome: presentationOutcome(activity, byWorkItemId),
     occurredAt: activityTime(activity),
     summary: activitySummary(activity, byWorkItemId),
     ...(activity.kind === 'assignment' && activity.source.sourceId && byWorkItemId?.has(activity.source.sourceId)
@@ -214,7 +225,7 @@ export function projectPersonaPresentation(
   const conversations = [...latestByConversation.entries()].map(([conversationId, activity]) => ({
     conversationId,
     origin: presentationOrigin(activity.source.kind),
-    outcome: presentationOutcome(activity),
+    outcome: presentationOutcome(activity, byWorkItemId),
     occurredAt: activityTime(activity),
     active: currentActivity?.conversationId === conversationId,
     queuedInputCount: bundle.mailboxItems.filter((item) => (

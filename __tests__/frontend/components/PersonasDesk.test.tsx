@@ -752,6 +752,23 @@ it('explains why a finished conversation can still need review without claiming 
   expect(screen.getByText('Needs attention')).toBeInTheDocument();
 });
 
+it('presents ongoing goal progress without asking the owner to review a successful continuation', async () => {
+  getMock.mockResolvedValue({ ...detail, presentation: { ...detail.presentation, history: [{
+    key: 'history-progress', kind: 'assignment', origin: 'assignment', outcome: 'progress',
+    occurredAt: 1, summary: 'Research the next audience', resultSummary: 'Saved a sourced audience brief.',
+    recordLinks: [{ kind: 'conversation', id: 'conversation-progress' }],
+    advanced: { activityKind: 'assignment', sourceKind: 'assignment', status: 'completed' },
+  }] } });
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity history' }));
+  expect(await screen.findByText('Progress made')).toBeInTheDocument();
+  expect(screen.getByText('This Activity made progress toward an ongoing goal. It did not mark the goal complete.')).toBeInTheDocument();
+  expect(screen.getByText('Saved a sourced audience brief.')).toBeInTheDocument();
+  expect(screen.queryByText('Needs attention')).not.toBeInTheDocument();
+  expect(screen.queryByText(/The run finished, but successful completion/)).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Open chat' })).toHaveAttribute('href', expect.stringContaining('conversation-progress'));
+});
+
 it('discovers externally started work while the persona detail was idle', async () => {
   render(<PersonasDesk initialPersonaId="jim" />);
   expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
