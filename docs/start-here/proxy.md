@@ -1,6 +1,6 @@
 # Corporate proxies and certificates
 
-Both one-line installers and `flujo-setup.exe` are network bootstrappers. They require Node.js 22.19+ within 22.x, or 24.2+ within 24.x and may contact GitHub/`raw.githubusercontent.com`, the OS package manager, the npm registry, and Patchright 1.61.1's managed-browser mirrors at `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`. Ask your network administrator to allow those services or provide an approved mirror.
+Both one-line installers and `flujo-setup.exe` are network bootstrappers. They require Node.js 22.23.4+ within 22.x, or 24.22.1+ within 24.x and may contact GitHub/`raw.githubusercontent.com`, the OS package manager, the npm registry, and Patchright 1.61.1's managed-browser mirrors at `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`. Ask your network administrator to allow those services or provide an approved mirror.
 
 Prefer your organization's approved OS trust configuration. If that is unavailable, set an explicit proxy and readable PEM CA bundle for the installer session. The `FLUJO_*` aliases are mapped only into installer child processes; they do not change global npm/Git configuration, the certificate store, or persistent environment variables.
 
