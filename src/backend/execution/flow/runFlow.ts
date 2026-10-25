@@ -22,6 +22,7 @@ import {
 } from '@/backend/services/mcp/ownerScope';
 import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState, prepareConversationSequence } from '@/backend/execution/flow/conversationLog';
 import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError } from './conversationLogSequence';
+import { isConversationPublicationError, type ConversationPublicationError } from './conversationPublication';
 import {
   steeringCount,
   takeSteeringMessages,
@@ -1688,7 +1689,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
   // --- Execution event emission (live progress + debugger) ---
   const underlyingEmit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
-  let sequenceFailure: ConversationSequenceSafetyError | undefined;
+  const isConversationDurabilityFailure = (error: unknown): error is ConversationSequenceSafetyError | ConversationPublicationError =>
+    isConversationSequenceSafetyError(error) || isConversationPublicationError(error);
+  let sequenceFailure: ConversationSequenceSafetyError | ConversationPublicationError | undefined;
   let sequenceErrorCleanup = false;
   const emit: EmitFn = event => {
     if (sequenceFailure) {
@@ -1699,7 +1702,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     }
     try { underlyingEmit(event); }
     catch (error) {
-      if (isConversationSequenceSafetyError(error)) {
+      if (isConversationDurabilityFailure(error)) {
         sequenceFailure = error;
         if (sequenceErrorCleanup) return; // Preserve the original execution error.
       }
@@ -1902,7 +1905,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       try {
         await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
       } catch (error) {
-        if (!isConversationSequenceSafetyError(error)) throw error;
+        if (!isConversationDurabilityFailure(error)) throw error;
         // The tool already failed. Keep that primary outcome; normal terminal
         // persistence below saves this unknown-effect classification without
         // recursively numbering it or masking the primary failure on a retry.
@@ -3321,7 +3324,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const finalExecutionTime = Date.now() - startTime;
   let finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   const recordTerminalSequenceFailure = (error: unknown) => {
-    if (!isConversationSequenceSafetyError(error)) throw error;
+    if (!isConversationDurabilityFailure(error)) throw error;
     sequenceFailure ??= error;
     sequenceErrorCleanup = true;
     if (finalStatus !== 'error') {
@@ -3422,6 +3425,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // succeed, so recovery reuses its receipt rather than dispatching new children.
   if (finalStatus === 'completed' || finalStatus === 'capped') acknowledgeSubflowContinuation(sharedState, sharedState.currentNodeId);
   let finalSnapshotPersisted = false;
+  let finalSnapshotFailure: ConversationSequenceSafetyError | ConversationPublicationError | undefined;
   try {
     sharedState.updatedAt = Date.now();
     if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
@@ -3436,6 +3440,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
+    if (isConversationDurabilityFailure(error)) finalSnapshotFailure = error;
   }
   // A conversation deleted mid-run must not be resurrected: the persist above is
   // already refused by the tombstone; drop the in-memory state too instead of
@@ -3481,10 +3486,15 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       await markConversationTerminal(effectiveConvId, sharedState, async () => {
         // The snapshot above already succeeded in the normal case; only retry it
         // when that write failed, so persist-before-evict still holds.
-        if (!finalSnapshotPersisted) await persistState(storageKey, sharedState);
+        if (!finalSnapshotPersisted) {
+          await persistState(storageKey, sharedState);
+          finalSnapshotPersisted = true;
+        }
       });
     }
   }
+
+  if (!finalSnapshotPersisted && finalSnapshotFailure) recordTerminalSequenceFailure(finalSnapshotFailure);
 
   // An ephemeral run is transient: drop it from the in-memory map once it
   // reaches a terminal state so isolated/subflow runs don't accumulate.

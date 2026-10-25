@@ -19,6 +19,9 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { scanConversationLogSequence, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
 import { CONVERSATION_SEQUENCE_REGISTRY_LIMITS, admitSequenceRegistryKey, insertSequenceRegistryKey, newSequenceRegistryAccounting, refuseNewSequenceRegistryKey, sequenceRegistryDiagnostics,
   type SequenceRegistryAccounting } from './conversationSequenceRegistry';
+import { publishConversation, flushConversationPublication, conversationPublicationSnapshotCommits,
+  fenceConversationPublication, conversationPublicationIsFenced, ConversationPublicationError } from './conversationPublication';
+import { withConversationLogWriter, withConversationPublicationIntent } from './conversationPublicationIO';
 
 const log = createLogger('backend/execution/flow/conversationLog');
 
@@ -92,6 +95,7 @@ const logDir = () =>
  * sequence numbering, or serialize its appends behind A's (#406).
  */
 const ck = (conversationId: string) => workspaceCacheKey('conversation-log', conversationId);
+const publicationKey = (conversationId: string) => workspaceCacheKey('conversation-publication', conversationId);
 
 /**
  * Test seam: point the store at a temp directory. Returns the previous
@@ -228,35 +232,12 @@ export async function latestSequence(conversationId: string): Promise<number> {
   return nextSeq.get(key)! - 1;
 }
 
-function chainAppend(conversationId: string, lines: string): Promise<void> {
-  return chainLogMutation(conversationId, async () => {
-        await fs.mkdir(logDir(), { recursive: true });
-        await fs.appendFile(logFilePath(conversationId), lines);
-  });
-}
-
 function chainLogMutation(conversationId: string, task: () => Promise<void>): Promise<void> {
   const key = ck(conversationId);
-  const previous = appendChains.get(key) ?? Promise.resolve();
-  // Reserve order synchronously. Cross-process workspace admission performs I/O
-  // and must not let later events overtake an earlier submitted append.
-  const run = withWorkspaceMutation(async () => {
-    await previous.catch(() => undefined);
-    await task();
-  });
+  const run = publishConversation(publicationKey(conversationId), null, () => withWorkspaceMutation(task));
   appendChains.set(key, run);
   return run.finally(() => {
     if (appendChains.get(key) === run) appendChains.delete(key);
-  });
-}
-
-// Truncating rewrite of a whole log, serialized through the SAME per-conversation
-// chain as appends so it never interleaves with an in-flight append. Used by the
-// transactional transcript-replacement path so it can roll back atomically.
-function chainWrite(conversationId: string, content: string): Promise<void> {
-  return chainLogMutation(conversationId, async () => {
-        await fs.mkdir(logDir(), { recursive: true });
-        await fs.writeFile(logFilePath(conversationId), content);
   });
 }
 
@@ -305,16 +286,10 @@ async function commitConversationWrite<T>(
   return task();
 }
 
-function serialize(event: ExecutionEvent): string {
-  // One event per line. `emit` callbacks or other functions never appear on
-  // events, so plain JSON.stringify is safe.
-  return `${JSON.stringify(event)}\n`;
-}
-
 /**
  * Bus tap: persist a just-emitted (stamped) event to its conversation's log.
- * Fire-and-forget by design — a disk hiccup must never break the live stream.
- * Applies the persisted-type filter and the ephemeral policy.
+ * Capture/admission rejects synchronously; asynchronous failures fence the
+ * conversation and are surfaced by the required durability flush.
  */
 export function appendFromBus(event: ExecutionEvent): void {
   if (!PERSISTED_EVENT_TYPES.has(event.type)) return;
@@ -324,10 +299,20 @@ export function appendFromBus(event: ExecutionEvent): void {
   }
   const state = persistableState(event.conversationId);
   if (!state) return;
-  void trackCommit(event.conversationId, commitConversationWrite(
-    state,
-    () => chainAppend(event.conversationId, serialize(event)),
-  )).catch((err) =>
+  const conversationId = event.conversationId;
+  // Synchronous capture/admission can reject the emit before it acknowledges a
+  // required event. Async failures leave a finite fence that flush must surface.
+  const pending = publishConversation(publicationKey(conversationId), event, async owned => {
+    try {
+      await commitConversationWrite(state, () => withWorkspaceMutation(() =>
+        withConversationPublicationIntent(conversationId, () =>
+          withConversationLogWriter(logFilePath(conversationId), writer => writer.append([owned])))));
+    } catch (error) {
+      fenceConversationPublication('required bus event was not acknowledged durably', error);
+      throw error;
+    }
+  });
+  void trackCommit(conversationId, pending).catch((err) =>
     log.warn(`Failed to append event to conversation log ${event.conversationId}`, { err })
   );
 }
@@ -339,7 +324,7 @@ export function appendFromBus(event: ExecutionEvent): void {
  * seq (issue #261 — no more seq -1), drawn from the same durable per-conversation
  * counter as bus events. The ephemeral policy is checked on the state itself.
  * Awaitable so callers that need durability (reconcile before a run) can wait;
- * errors are logged, not thrown.
+ * required publication errors propagate to the caller.
  */
 export async function appendRawForState(state: SharedState, raws: RawExecutionEvent[]): Promise<void> {
   if (raws.length === 0) return;
@@ -347,40 +332,48 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
   const conversationId = state.conversationId;
   if (!conversationId || !SAFE_ID.test(conversationId)) return;
   if (isConversationDeleted(conversationId)) return;
-  const lines = raws
-    .map((raw) => serialize({ ...raw, conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() } as ExecutionEvent))
-    .join('');
   try {
-    await trackCommit(conversationId, commitConversationWrite(state, () => chainAppend(conversationId, lines)));
+    const pending = publishConversation(publicationKey(conversationId), raws,
+      owned => commitConversationWrite(state, () => withWorkspaceMutation(() =>
+        withConversationPublicationIntent(conversationId, () =>
+          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned))))),
+      undefined, owned => {
+        for (const raw of owned) Object.assign(raw, { conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() });
+      });
+    await trackCommit(conversationId, pending);
   } catch (err) {
     log.warn(`Failed to append ${raws.length} event(s) to conversation log ${conversationId}`, { err });
-    // Persona-related input is acknowledged only after this append succeeds;
-    // surface the failure so runFlow can requeue the stable message ids.
-    if (state.executionExtensionContext || state.executionAuthority || state.personaAttribution) throw err;
+    // Input and recovery/dispatch markers are acknowledged only after this
+    // append succeeds; callers retain their canonical owner on failure.
+    throw err;
   }
 }
 
 /**
  * Wait for this conversation's in-flight appends (as of the call) to reach
  * disk. Appends from the bus tap are fire-and-forget; readers that must
- * observe them (projection reads, tests) can flush first. Never rejects.
+ * observe them (projection reads, tests) can flush first. Required publication
+ * failures reject instead of acknowledging a missing canonical event.
  */
-export function flushConversationLog(conversationId: string): Promise<void> {
+export async function flushConversationLog(conversationId: string): Promise<void> {
   const key = ck(conversationId);
   // Admission and Activity-authority checks may await before reaching the disk
   // chain. A flush must include those already-submitted commits too.
   const pending = [...pendingCommits.get(key) ?? []];
   const append = appendChains.get(key);
   if (append) pending.push(append);
-  return Promise.allSettled(pending).then(() => undefined);
+  const results = await Promise.allSettled(pending);
+  await flushConversationPublication(publicationKey(conversationId));
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
 }
 
 /**
  * Authoritatively replace a persisted conversation transcript while preserving
  * the append-only audit log. The log receives removals for every prior projected
  * message followed by the replacement in canonical order; the SharedState
- * snapshot is then persisted. If snapshot persistence fails, both the log bytes
- * and in-memory transcript are rolled back before the error is rethrown.
+ * snapshot is then persisted. A definitely uncommitted snapshot permits owned
+ * suffix rollback; committed or unknown outcomes preserve the replacement.
  */
 export async function replaceConversationTranscript(
   state: SharedState,
@@ -392,60 +385,63 @@ export async function replaceConversationTranscript(
     throw new Error('Cannot rewrite a transcript without a safe conversation id.');
   }
 
-  await flushConversationLog(conversationId);
-  const file = logFilePath(conversationId);
-  let originalLog = '';
-  try {
-    originalLog = await fs.readFile(file, 'utf-8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
-
-  const originalMessages = state.messages;
-  const existingEvents = originalLog
-    .split('\n')
-    .filter((line) => line.trim().length > 0)
-    .flatMap((line) => {
-      try { return [JSON.parse(line) as ExecutionEvent]; } catch { return []; }
+  // Future synchronous bus emits already receive their seq before reaching
+  // disk. Reserve a bounded interval now so they cannot overtake this rewrite.
+  let rewriteEnd = 0;
+  return publishConversation(publicationKey(conversationId), replacement, owned => withWorkspaceMutation(() => withConversationPublicationIntent(conversationId, () =>
+    withConversationLogWriter(logFilePath(conversationId), async writer => {
+      const originalMessages = state.messages;
+      const projectedIds = await writer.activeMessageIds();
+      const baselineIds = projectedIds;
+      if (!baselineIds.length) {
+        let chars = 0;
+        for (const message of originalMessages) {
+          if (message.role === 'system') continue;
+          if (baselineIds.length >= 65_536 || message.id.length > 4096 || (chars += message.id.length) > 1024 * 1024) {
+            throw new ConversationPublicationError('CONVERSATION_PUBLICATION_MEMORY', 'rewrite message IDs exceed the bounded metadata policy');
+          }
+          baselineIds.push(message.id);
+        }
+      }
+      let replacementEvents = 0;
+      for (const message of owned) if (message.role !== 'system') replacementEvents++;
+      // Seal the reserved high-water mark in the final durable event, so a
+      // cold scan after restart cannot regress a successfully rewritten cursor.
+      let rewriteSeq = rewriteEnd - baselineIds.length - replacementEvents;
+      function* events(): Generator<ExecutionEvent> {
+        for (const messageId of baselineIds) yield { type: 'message:removed', messageId, conversationId,
+          seq: rewriteSeq++, timestamp: Date.now() } as ExecutionEvent;
+        for (const message of owned) {
+          if (message.role !== 'system') yield { type: 'message', message, conversationId,
+            seq: rewriteSeq++, timestamp: Date.now() } as ExecutionEvent;
+        }
+      }
+      await commitConversationWrite(state, () => writer.append(events()));
+      state.messages = owned;
+      const commitsBefore = conversationPublicationSnapshotCommits();
+      try { await persistConversationState(`conversations/${conversationId}` as StorageKey, state); }
+      catch (error) {
+        // A successful rename is a commit even when a later authority check
+        // rejects. Unknown outcomes retain the new transcript and log for
+        // reconciliation. Neither permits destructive rollback.
+        if (conversationPublicationSnapshotCommits() === commitsBefore
+          && !conversationPublicationIsFenced()) {
+          try {
+            await commitConversationWrite(state, () => writer.rollback());
+            state.messages = originalMessages;
+          } catch (rollbackError) {
+            fenceConversationPublication('transcript rollback did not finish', rollbackError);
+            log.error('Failed to roll back conversation transcript', { conversationId, rollbackError });
+          }
+        }
+        throw error;
+      }
+    }))), undefined, owned => {
+      const key = initSeqIfNeeded(conversationId);
+      rewriteEnd = nextSeq.get(key)! + 65_536 + owned.length;
+      requireAllocatableSequence(rewriteEnd);
+      nextSeq.set(key, rewriteEnd);
     });
-  const projected = projectModelContextMessages(existingEvents);
-  const baseline = projected.length > 0
-    ? projected
-    : originalMessages.filter((message) => message.role !== 'system');
-  const raws: RawExecutionEvent[] = [
-    ...baseline.map((message) => ({ type: 'message:removed' as const, messageId: message.id })),
-    ...replacement
-      .filter((message) => message.role !== 'system')
-      .map((message) => ({ type: 'message' as const, message })),
-  ];
-  const appended = raws
-    .map((raw) => serialize({
-      ...raw,
-      conversationId,
-      seq: allocateSeq(conversationId),
-      timestamp: Date.now(),
-    } as ExecutionEvent))
-    .join('');
-
-  await commitConversationWrite(state, () => chainWrite(conversationId, originalLog + appended));
-  state.messages = structuredClone(replacement);
-  try {
-    await persistConversationState(
-      `conversations/${conversationId}` as StorageKey,
-      state,
-    );
-  } catch (error) {
-    state.messages = originalMessages;
-    try {
-      await commitConversationWrite(state, () => chainWrite(conversationId, originalLog));
-    } catch (rollbackError) {
-      log.error('Failed to roll back conversation log after transcript rewrite failure', {
-        conversationId,
-        rollbackError,
-      });
-    }
-    throw error;
-  }
 }
 
 /**

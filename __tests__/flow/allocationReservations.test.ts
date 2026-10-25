@@ -56,7 +56,7 @@ it('observes all four live owners and drains only each settling owner', () => {
   const output = new SubflowOutputBudget();
   try {
     prep.reserve(MiB); output.reserve(MiB);
-    expect(getAllocationReservationSnapshot()).toEqual({ ingress: 96 * MiB, run: MiB, preparation: MiB, output: MiB, total: 99 * MiB });
+    expect(getAllocationReservationSnapshot()).toEqual({ ingress: 96 * MiB, run: MiB, preparation: MiB, output: MiB, publication: 0, total: 99 * MiB });
     run.release();
     expect(getAllocationReservationSnapshot()).toMatchObject({ run: 0, total: 98 * MiB });
     prep.release();

@@ -1,7 +1,7 @@
 import { assertBundledFlujoWorkloadEffectCurrent } from '@/backend/services/security/bundledFlujoWorkload';
-import { promises as fs, type BigIntStats } from 'fs';
+import { constants, promises as fs, type BigIntStats } from 'fs';
 import path from 'path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { withConversationLogReadAdmission, type ConversationReadReservation } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { readPlainFile } from '@/utils/readPlainFile';
 import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
@@ -12,6 +12,9 @@ import { getDataDir } from '@/utils/paths';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { withWorkspaceMutation, assertWorkspaceMutationOwned } from '@/backend/services/workspace/workspaceMutationGate';
+import { publishConversation, conversationJsonChunks, recordConversationSnapshotCommit,
+  fenceConversationPublication } from '@/backend/execution/flow/conversationPublication';
+import { withConversationPublicationIntent } from '@/backend/execution/flow/conversationPublicationIO';
 
 const log = createLogger('utils/storage/backend');
 
@@ -145,7 +148,8 @@ async function renameWithRetry(tmpPath: string, filePath: string, validate: () =
   }
 }
 
-export async function writeFileAtomic(filePath: string, data: string, assertCurrent?: () => Promise<void>): Promise<void> {
+type ConversationJson = { conversation: true; value: unknown };
+export async function writeFileAtomic(filePath: string, data: string | ConversationJson, assertCurrent?: () => Promise<void>): Promise<void> {
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     await assertCredentialStoreReady(filePath);
@@ -165,6 +169,10 @@ export async function writeFileAtomic(filePath: string, data: string, assertCurr
     const tmpPath = `${filePath}.tmp.${randomUUID()}`;
     let created = false;
     let owned: BigIntStats | undefined;
+    let renameStarted = false;
+    let published = false;
+    let closeUncertain = false;
+    let publicationHash: string | undefined;
     try {
       await assertWorkspaceMutationOwned();
       await assertBundledFlujoWorkloadEffectCurrent();
@@ -184,12 +192,40 @@ export async function writeFileAtomic(filePath: string, data: string, assertCurr
           await assertWorkspaceMutationOwned();
           await assertBundledFlujoWorkloadEffectCurrent();
         }
-        await handle.writeFile(data);
+        if (typeof data === 'string') await handle.writeFile(data);
+        else {
+          let position = 0;
+          const hash = createHash('sha256');
+          for (const bytes of conversationJsonChunks([data.value], false)) {
+            hash.update(bytes);
+            let offset = 0;
+            while (offset < bytes.length) {
+              const result = await handle.write(bytes, offset, bytes.length - offset, position + offset);
+              if (!result.bytesWritten) throw new Error('Conversation snapshot made no write progress');
+              offset += result.bytesWritten;
+            }
+            position += bytes.length;
+          }
+          publicationHash = hash.digest('hex');
+        }
         await assertWorkspaceMutationOwned();
         await handle.sync();
         await assertWorkspaceMutationOwned();
         owned = await handle.stat({ bigint: true });
-      } finally { await handle.close(); }
+      } catch (error) {
+        try { await handle.close(); } catch {
+          closeUncertain = true;
+          if (typeof data !== 'string') fenceConversationPublication('snapshot descriptor closure is uncertain', undefined, true);
+        }
+        throw error;
+      }
+      if (!closeUncertain) {
+        try { await handle.close(); } catch (error) {
+          closeUncertain = true;
+          if (typeof data !== 'string') throw fenceConversationPublication('snapshot descriptor closure is uncertain', error, true);
+          throw error;
+        }
+      }
       await renameWithRetry(tmpPath, filePath, async () => {
         const witnesses = await Promise.allSettled([
           fs.lstat(tmpPath, { bigint: true }),
@@ -219,12 +255,71 @@ export async function writeFileAtomic(filePath: string, data: string, assertCurr
           await assertWorkspaceMutationOwned();
           await assertBundledFlujoWorkloadEffectCurrent();
         }
+        renameStarted = true;
       });
       created = false;
+      published = true;
+      if (typeof data !== 'string') recordConversationSnapshotCommit();
       await assertWorkspaceMutationOwned();
     } catch (error) {
+      if (typeof data !== 'string' && renameStarted && !published && owned) {
+        // A rejected rename/acknowledgement can follow an actual commit. Only
+        // exact owned identities distinguish committed from not committed.
+        const readIdentity = async (filename: string) => {
+          try { return await fs.lstat(filename, { bigint: true }); }
+          catch (failure) { if ((failure as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw failure; }
+        };
+        try {
+          const currentParent = await fs.lstat(dirPath, { bigint: true });
+          const currentCanonicalParent = await fs.realpath(dirPath);
+          if (!currentParent.isDirectory() || currentParent.isSymbolicLink()
+            || currentParent.dev !== directory.dev || currentParent.ino !== directory.ino
+            || currentCanonicalParent !== canonicalDirectory) throw new Error('Snapshot commit parent changed');
+          const destination = await readIdentity(filePath);
+          const temporary = await readIdentity(tmpPath);
+          const matches = (current: BigIntStats | undefined) => current?.isFile() && !current.isSymbolicLink()
+            && current.nlink === BigInt(1) && current.dev === owned!.dev && current.ino === owned!.ino && current.size === owned!.size;
+          if (matches(destination)) {
+            // A rejected rename needs both the owned inode and exact bytes,
+            // read through the descriptor rather than a second whole string.
+            const reader = await fs.open(filePath, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+            let readFailure: unknown;
+            try {
+              const before = await reader.stat({ bigint: true });
+              if (!matches(before) || before.mtimeNs !== destination!.mtimeNs || before.ctimeNs !== destination!.ctimeNs) throw new Error('Snapshot readback identity changed');
+              const buffer = Buffer.alloc(64 * 1024), hash = createHash('sha256');
+              let position = 0;
+              while (position < Number(owned.size)) {
+                const { bytesRead } = await reader.read(buffer, 0, Math.min(buffer.length, Number(owned.size) - position), position);
+                if (!bytesRead) throw new Error('Snapshot readback ended early');
+                position += bytesRead; hash.update(buffer.subarray(0, bytesRead));
+              }
+              const after = await reader.stat({ bigint: true });
+              const named = await fs.lstat(filePath, { bigint: true });
+              if (!matches(after) || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs
+                || !matches(named) || named.mtimeNs !== after.mtimeNs || named.ctimeNs !== after.ctimeNs
+                || hash.digest('hex') !== publicationHash) throw new Error('Snapshot readback bytes changed');
+            } catch (error) { readFailure = error; throw error; }
+            finally {
+              try { await reader.close(); }
+              catch (error) {
+                const uncertain = fenceConversationPublication('snapshot readback descriptor closure is uncertain', error, true);
+                if (readFailure === undefined) throw uncertain;
+              }
+            }
+            recordConversationSnapshotCommit(); created = false;
+          }
+          else if (!matches(temporary) || temporary!.mtimeNs !== owned.mtimeNs || temporary!.ctimeNs !== owned.ctimeNs
+            || temporary!.mode !== owned.mode || temporary!.uid !== owned.uid || temporary!.gid !== owned.gid) {
+            throw new Error('Snapshot commit has no exclusive owned witness');
+          }
+        } catch (witnessError) {
+          throw fenceConversationPublication('snapshot rename outcome requires reconciliation', witnessError, false,
+            { destination: filePath, temporary: tmpPath, dev: String(owned.dev), ino: String(owned.ino), size: String(owned.size) });
+        }
+      }
       // Best-effort cleanup so a failed write doesn't leave temp files behind.
-      if (created) {
+      if (created && !closeUncertain) {
         try {
           const current = await fs.lstat(tmpPath, { bigint: true });
           if (owned && current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) await fs.unlink(tmpPath);
@@ -237,6 +332,13 @@ export async function writeFileAtomic(filePath: string, data: string, assertCurr
 
 export async function saveItem<T>(key: StorageKey, value: T, assertCurrent?: () => Promise<void>): Promise<void> {
   const filePath = getFilePath(key);
+  if (key.startsWith('conversations/')) {
+    const id = key.slice('conversations/'.length);
+    assertSafeCollectionId(id);
+    return publishConversation(workspaceCacheKey('conversation-publication', id), value,
+      owned => withWorkspaceMutation(() => withConversationPublicationIntent(id,
+        () => writeFileAtomic(filePath, { conversation: true, value: owned }, assertCurrent))));
+  }
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     // Serialize against any in-flight write for the same key. We chain off the
@@ -878,6 +980,11 @@ export function runInWriteChain<T>(chainKey: string, task: () => Promise<T>): Pr
 export async function saveCollectionItem<T>(collection: string, id: string, value: T): Promise<void> {
   assertSafeCollectionId(id);
   const filePath = getCollectionItemPath(collection, id);
+  if (collection === 'conversations') {
+    return publishConversation(workspaceCacheKey('conversation-publication', id), value,
+      owned => withWorkspaceMutation(() => withConversationPublicationIntent(id,
+        () => writeFileAtomic(filePath, { conversation: true, value: owned }))));
+  }
   try {
     await runInWriteChain(`${collection}/${id}`, () =>
       writeFileAtomic(filePath, JSON.stringify(value, null, 2)));

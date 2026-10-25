@@ -6,9 +6,13 @@ import { createLogger } from '@/utils/logger';
 import { persistConversationSummary } from './conversationSummaryStore';
 import { commitExecutionExtensionMutation } from '@/backend/execution/extensions';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
-import { reconcileSubflowFold } from './subflowFoldFence';
+import { reconcileSubflowFold, hasSubflowFoldFence } from './subflowFoldFence';
+import { publishConversation, isConversationPublicationError, ConversationPublicationError } from './conversationPublication';
+import { workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/execution/flow/persistConversationState');
+const RUNTIME_FIELDS = new Set(['executionTrace', 'emit', 'executionAuthority', 'executionExtensionContext',
+  'personaCoreAppRefs', 'abortSignal', 'mcpContext']);
 
 /**
  * Persist a conversation's SharedState to storage WITHOUT the debug execution
@@ -28,7 +32,6 @@ const log = createLogger('backend/execution/flow/persistConversationState');
  * to disk. Do NOT add call-site `if (!ephemeral)` guards; they are redundant.
  */
 export async function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
-  await reconcileSubflowFold(state);
   if (state.executionExtensionOwned && !state.executionExtensionContext) throw new Error('trusted_execution_context_required');
   // Path-traversal guard (issue #126): the key/id becomes a filesystem path via
   // getFilePath(), so an id like "../encryption_key" would escape db/conversations/
@@ -55,36 +58,40 @@ export async function persistConversationState(key: StorageKey, state: SharedSta
       'Persona-attributed conversation persistence requires current execution authority.',
     );
   }
-  // Persona-attributed work may persist only while its exact Activity fence is
-  // current. The capability itself remains runtime-only and is stripped from
-  // the durable snapshot below.
-  const writeSnapshot = () => saveItemBackend(key, {
-      ...state,
-      executionTrace: undefined,
-      emit: undefined,
-      executionAuthority: undefined,
-      executionExtensionContext: undefined,
-      // Persona App bindings are an out-of-band runtime capability input. Keep
-      // this explicit even though runFlow installs them non-enumerably.
-      personaCoreAppRefs: undefined,
-    });
-  if (state.executionExtensionContext) {
-    await commitExecutionExtensionMutation(state.executionExtensionContext, async () => {
-      await writeSnapshot();
-      await persistConversationSummary(idFromKey, state);
-    });
-    return;
-  }
-  // Snapshot and its sidebar projection belong to one admitted mutation.
-  // Nested storage writes retain their per-key queues and ownership checks,
-  // while recovery capture drains both publications before reading either.
-  await withWorkspaceMutation(async () => {
-    if (state.executionAuthority?.commitWhileCurrent) {
-      await state.executionAuthority.commitWhileCurrent(writeSnapshot);
-    } else {
-      await state.executionAuthority?.assertCurrent();
-      await writeSnapshot();
+  const authority = state.executionAuthority;
+  const extension = state.executionExtensionContext;
+  return publishConversation(workspaceCacheKey('conversation-publication', idFromKey), hasSubflowFoldFence(state) ? null : state, async snapshot => {
+    // A prior ambiguous fold owns the live state. Reconcile it before using the
+    // capture; if it changed the winner, capture that resolved state afresh.
+    if (await reconcileSubflowFold(state) || snapshot === null) return persistConversationState(key, state);
+    // Persona-attributed work may persist only while its exact Activity fence is
+    // current. The capability itself remains runtime-only and is stripped from
+    // the durable snapshot below.
+    const writeSnapshot = async () => {
+      try { await saveItemBackend(key, snapshot); }
+      catch (error) {
+        if (isConversationPublicationError(error)) throw error;
+        throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'required snapshot publication failed', { cause: error });
+      }
+    };
+    if (extension) {
+      await commitExecutionExtensionMutation(extension, async () => {
+        await writeSnapshot();
+        await persistConversationSummary(idFromKey, snapshot);
+      });
+      return;
     }
-    await persistConversationSummary(idFromKey, state);
-  });
+    // Snapshot and its sidebar projection belong to one admitted mutation.
+    // Nested storage writes retain their per-key queues and ownership checks,
+    // while recovery capture drains both publications before reading either.
+    await withWorkspaceMutation(async () => {
+      if (authority?.commitWhileCurrent) {
+        await authority.commitWhileCurrent(writeSnapshot);
+      } else {
+        await authority?.assertCurrent();
+        await writeSnapshot();
+      }
+      await persistConversationSummary(idFromKey, snapshot);
+    });
+  }, RUNTIME_FIELDS);
 }
