@@ -36,6 +36,25 @@ class FakeProcess:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_full_duration_os_evidence_fits_without_reducing_guard_polling(self):
+        # uint64 maxima exceed real memory, process and FD counters on both platforms.
+        maximum = 2 ** 64 - 1
+        process = {'rss': maximum, 'peakRss': maximum, 'handles': maximum}
+        cgroup = {key: maximum for key in ['memory.current', 'memory.peak', 'pids.current']}
+        record = {'elapsedSeconds': 92640.12345678901,
+                  **{key: process for key in ['provider', 'runtime', 'supervisor']},
+                  'cgroup': {'aggregate': cgroup, 'workload': cgroup}}
+        encoded = supervisor.encode_os_sample(record)
+        self.assertLessEqual(len(encoded.encode()), supervisor.OS_SAMPLE_MAX_BYTES)
+        self.assertLessEqual(92640 + 2, supervisor.OS_SAMPLE_MAX_COUNT)
+        projected = supervisor.os_evidence_projection(supervisor.OS_SAMPLE_MAX_BYTES,
+            supervisor.OS_SAMPLE_MAX_COUNT, 64 * supervisor.MIB)
+        self.assertEqual(projected, 65_600_000)
+        with self.assertRaisesRegex(RuntimeError, 'projection'):
+            supervisor.os_evidence_projection(741, 92642, 64 * supervisor.MIB)
+        with self.assertRaisesRegex(RuntimeError, 'record bound'):
+            supervisor.encode_os_sample({**record, 'unexpected': 'x' * 656})
+
     def test_dataset_path_rejects_drvfs_and_other_phase_before_writing(self):
         expected='/opt/flujo569/qualification/owned/output'
         self.assertEqual(str(validate_dataset_path(expected,'owned')),str(Path(expected)))

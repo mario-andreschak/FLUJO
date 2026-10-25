@@ -69,6 +69,12 @@ Windows uses a Job Object with two CPUs, two child processes and 1920 MiB shared
 memory, reserving 128 MiB for the supervisor. Linux requires an already enforced
 cgroup v2 with at most two CPUs, 2 GiB and zero swap; it does not silently run
 unlimited. OS RSS/handle or FD samples are independent of runtime samples.
+OS guard polling and full OS evidence both remain at 1 Hz. Each serialized OS
+record is bounded to 656 bytes (explicit LF on both platforms), and the existing
+100,000-record limit projects at most 65,600,000 bytes, below the unchanged 64 MiB
+file allowance. This projection is checked before child admission; an oversized
+record fails immediately. The longest supervisor deadline is 92,640 seconds,
+including all warmup, parked and drain allowances. No evidence is downsampled.
 Linux receipts parse and preserve numeric `memory.events` before/after values
 and deltas. Increases in `oom`, `oom_kill`, or `oom_group_kill` fail qualification.
 Increases in `low`, `high`, and `max` remain reported reclaim-pressure evidence:

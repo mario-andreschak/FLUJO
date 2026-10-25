@@ -23,6 +23,22 @@ from dataset_evidence import prepare_linux_dataset, inspect_linux_dataset, guest
 MIB = 1024 ** 2
 GIB = 1024 ** 3
 HERE = Path(__file__).resolve().parent
+OS_SAMPLE_MAX_BYTES = 656
+OS_SAMPLE_MAX_COUNT = 100_000
+
+
+def os_evidence_projection(record_bytes, sample_count, allowance):
+    projected = record_bytes * sample_count
+    if projected > allowance:
+        raise RuntimeError('OS evidence projection exceeds fixed file allowance')
+    return projected
+
+
+def encode_os_sample(value):
+    record = json.dumps(value) + '\n'
+    if len(record.encode('utf8')) > OS_SAMPLE_MAX_BYTES:
+        raise RuntimeError('OS sample exceeds predeclared record bound')
+    return record
 
 
 def save(file, value):
@@ -263,6 +279,8 @@ def supervise(args):
     profile_command = [node, '-e', 'const p=require(process.argv[1]);console.log(JSON.stringify({profile:p.PROFILE,hash:p.profileSha256,harnessHash:p.harnessDigest()}))', str(HERE / 'profile.cjs')]
     profile_record = json.loads(subprocess.check_output(profile_command, text=True))
     profile = profile_record['profile']; cadence = profile['candidateCadenceMs']
+    # Bound the complete 1 Hz record stream before admitting either child.
+    os_evidence_projection(OS_SAMPLE_MAX_BYTES, OS_SAMPLE_MAX_COUNT, profile['maxEvidenceFileBytes'])
     combined_reservation = 2 * GIB  # Pilot only; all actual growth is measured and guarded.
     qualification_source = None
     plan_sha256 = None
@@ -326,16 +344,16 @@ def supervise(args):
         duration = profile['enduranceMs'] if args.mode == 'endurance' else profile['pilotBatches'] * cadence
         deadline = time.monotonic() + (duration + profile['drainMs'] + profile['parkedHoldMs']
                      + (profile['warmupBatches'] + 2) * profile['batchDeadlineMs'] + 120_000) / 1000
-        with (output / 'os-samples.jsonl').open('x', encoding='utf8') as metrics:
+        with (output / 'os-samples.jsonl').open('x', encoding='utf8', newline='\n') as metrics:
             count = 0; metrics_bytes = 0
             while runtime.process.poll() is None:
                 current = {child.name: process_metrics(child.process.pid) for child in children}
                 current['supervisor'] = process_metrics(os.getpid())
                 count += 1
-                if count > 100_000:
+                if count > OS_SAMPLE_MAX_COUNT:
                     raise RuntimeError('OS sample count exceeded allowance')
                 cgroup = envelope.sample() if isinstance(envelope, LinuxEnvelope) else None
-                record = json.dumps({'elapsedSeconds': time.monotonic() - started, **current, 'cgroup': cgroup}) + '\n'
+                record = encode_os_sample({'elapsedSeconds': time.monotonic() - started, **current, 'cgroup': cgroup})
                 metrics_bytes += len(record.encode('utf8'))
                 if metrics_bytes > profile['maxEvidenceFileBytes']:
                     raise RuntimeError('OS evidence exceeded fixed file allowance')
