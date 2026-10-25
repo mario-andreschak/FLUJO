@@ -1,7 +1,7 @@
 # Contributing to Flujo
 
 You can run the focused checks below without a model account, private files,
-an existing FLUJO installation, or paid tool calls. Node.js **22.19.0 or newer in the 22.x line, or 24.2.0 or newer in the 24.x line**, npm
+an existing FLUJO installation, or paid tool calls. Node.js **22.23.4 or newer in the 22.x line, or 24.22.1 or newer in the 24.x line**, npm
 and Git are required. Start from a fresh clone; preserve any existing checkout.
 
 ## Reproducible setup

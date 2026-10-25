@@ -48,7 +48,8 @@ not certify that every descendant exited, remote cleanup completed, a business
 drain finished, or a provider settled billing. Network connection closure provides
 no evidence that a remotely owned process stopped.
 
-Disposable source acceptance (Node 22+, checkout-local `npm ci --include=dev`):
+Disposable source acceptance (Node 22.23.4+ within 22.x or 24.22.1+ within 24.x,
+checkout-local `npm ci --include=dev`):
 
 ```text
 node scripts/run-local-jest.cjs --selectProjects node --runInBand --testMatch "**/__tests__/**/*.test.{ts,tsx}" --runTestsByPath __tests__/mcp/lifecycleShutdownReceipts.test.ts __tests__/mcp/shutdownReceiptProcesses.test.ts __tests__/mcp/mcpConnectionLifecycle.test.ts __tests__/mcp/mcpRestApi.test.ts

@@ -197,8 +197,8 @@ and must not allow a team admin to recover another owner's raw credentials.
 
 ## Runnable prototype and remaining gates
 
-From an owned checkout with Node 22+, dev dependencies and the pinned Security
-source, run:
+From an owned checkout with Node 22.23.4+ within 22.x or 24.22.1+ within 24.x,
+dev dependencies and the pinned Security source, run:
 
 ```text
 node scripts/ownership-prototype/run.cjs
