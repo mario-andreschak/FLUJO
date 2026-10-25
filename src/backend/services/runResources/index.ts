@@ -18,7 +18,7 @@ import type { MCPReadResourceResult } from '@/shared/types/mcp';
 import type { VisualArchiveResourceMetadata } from '@/shared/types/visualArchive';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { readPayloadProjection } from './readPayloadProjection';
-import { copyPayloadSnapshot } from './copyPayloadSnapshot';
+import { copyPayloadSnapshot, fingerprintPayloadSnapshot } from './copyPayloadSnapshot';
 import { prepareJsonPayload } from './jsonPayload';
 import { withRunResourceCopyAdmission } from './copyAdmission';
 import { clearRunResourceIndexCache, invalidateRunResourceIndex, loadRunResourceIndex, publishRunResourceIndex } from './indexCache';
@@ -210,6 +210,9 @@ async function mutateIndex<T>(
 // --- Store API ---------------------------------------------------------------
 
 export type WriteRunResourceInput = {
+  /** Durable effect identity, scoped by workspace + conversation in the index.
+   * Reusing it for different bytes/metadata is a conflict, never an overwrite. */
+  idempotencyKey?: string;
   conversationId: string;
   name?: string;
   mimeType?: string;
@@ -225,7 +228,12 @@ export type WriteRunResourceInput = {
 export type WriteRunResourceResult = RunResourceEntry | { skipped: 'size-cap' | 'conversation-cap' };
 export type CopyRunResourceResult = WriteRunResourceResult | { skipped: 'copy-pressure' };
 
+export class RunResourceIdempotencyError extends Error {
+  constructor() { super('Run-resource idempotency key conflicts with different content or metadata'); this.name = 'RunResourceIdempotencyError'; }
+}
+
 export type CopyRunResourceInput = {
+  idempotencyKey?: string;
   /** Existing flujo://run/... resource to copy. */
   uri: string;
   /** Conversation that will own the durable copy. */
@@ -243,14 +251,25 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
     return storePreparedRunResource(input, settings, prepareJsonPayload(input.data.json));
   }
 
-  // Decode/measure the payload first so caps are enforced on real bytes.
+  // Measure before allocating UTF-8. The per-conversation quota transaction
+  // invokes persist only after both quotas (and an existing receipt) pass.
+  if (input.data && 'text' in input.data) {
+    const text = input.data.text;
+    return storePreparedRunResource(input, settings, {
+      size: Buffer.byteLength(text, 'utf8'), encoding: 'utf8',
+      fingerprint: input.idempotencyKey ? async () => createHash('sha256').update(text).digest('hex') : undefined,
+      persist: async filename => {
+        const payload = Buffer.from(text, 'utf8');
+        await fs.writeFile(filename, payload, { flag: 'wx' });
+        return createHash('sha256').update(payload).digest('hex');
+      },
+    });
+  }
+  // Binary callers retain their existing decoding semantics.
   let payload: Buffer | null = null;
   let encoding: 'utf8' | 'base64' = 'utf8';
   if (input.data) {
-    if ('text' in input.data) {
-      payload = Buffer.from(input.data.text, 'utf8');
-      encoding = 'utf8';
-    } else {
+    if ('base64' in input.data) {
       payload = Buffer.from(input.data.base64, 'base64');
       encoding = 'base64';
     }
@@ -259,7 +278,7 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
     size: payload?.byteLength ?? 0,
     encoding,
     persist: payload ? async filename => {
-      await fs.writeFile(filename, payload);
+      await fs.writeFile(filename, payload, { flag: 'wx' });
       return createHash('sha256').update(payload).digest('hex');
     } : undefined,
   });
@@ -277,20 +296,31 @@ function isDurableTextSummary(entry: RunResourceEntry): boolean {
 async function storePreparedRunResource(
   input: WriteRunResourceInput,
   settings: RunResourceSettings,
-  payload: { size: number; encoding: 'utf8' | 'base64'; persist?: (filename: string) => Promise<string> },
+  payload: { size: number; encoding: 'utf8' | 'base64'; fingerprint?: string | (() => Promise<string>); persist?: (filename: string) => Promise<string> },
 ): Promise<WriteRunResourceResult> {
   const { size, encoding } = payload;
+  let contentFingerprint: string | undefined;
+  const fingerprintEffect = async () => {
+    if (!input.idempotencyKey) return undefined;
+    contentFingerprint = typeof payload.fingerprint === 'function' ? await payload.fingerprint() : payload.fingerprint;
+    return createHash('sha256').update(JSON.stringify({
+    name: input.name, mimeType: input.mimeType, kind: input.kind, origin: input.origin,
+    archive: input.archive, producedBy: input.producedBy, size, encoding,
+    content: contentFingerprint,
+  })).digest('hex');
+  };
+  if (input.idempotencyKey && payload.persist && !payload.fingerprint) throw new Error('Run-resource idempotency requires a content fingerprint');
   const durableMemory = input.producedBy.source === 'compaction-artifact' && input.kind === 'text'
     && encoding === 'utf8' && input.data !== undefined && 'text' in input.data
     && (!input.mimeType || /^text\/(plain|markdown)(?:;|$)/i.test(input.mimeType));
-  if (!durableMemory && size > settings.maxResourceBytes) {
+  const oversized = !durableMemory && size > settings.maxResourceBytes;
+  if (oversized && !input.idempotencyKey) {
     log.warn(`Run-resource write skipped (size ${size} > cap ${settings.maxResourceBytes})`, {
       conversationId: input.conversationId, name: input.name, kind: input.kind,
     });
     return { skipped: 'size-cap' };
   }
 
-  const id = randomUUID();
   let replacedToUnlink: RunResourceEntry | undefined;
 
   // The read (loadIndex), the conversation-byte cap check, the payload file
@@ -298,12 +328,19 @@ async function storePreparedRunResource(
   // section, so a concurrent writer to the same conversation can never clobber
   // this write and the payload + index stay mutually consistent.
   const result = await mutateIndex<WriteRunResourceResult>(input.conversationId, async (entries) => {
+    const priorEffect = input.idempotencyKey ? entries.find(entry => entry.idempotencyKey === input.idempotencyKey) : undefined;
+    if (priorEffect) {
+      if (priorEffect.size !== size) throw new RunResourceIdempotencyError();
+      if (priorEffect.effectFingerprint !== await fingerprintEffect()) throw new RunResourceIdempotencyError();
+      return { next: entries, result: priorEffect };
+    }
+    if (oversized) return { next: entries, result: { skipped: 'size-cap' } };
     // Named overwrite: a repeated captureResource NAME replaces the previous
     // entry (and its payload) so `${res:NAME}` is stable — mirrors the
     // captureVariable last-write-wins semantics.
     const replaced = input.name ? entries.find(e => e.name === input.name) : undefined;
 
-    const usedBytes = entries.reduce((sum, e) => sum + (e === replaced || isDurableTextSummary(e) ? 0 : e.size), 0);
+    const usedBytes = entries.reduce((sum, e) => sum + ((e === replaced && !e.idempotencyKey) || isDurableTextSummary(e) ? 0 : e.size), 0);
     if (!durableMemory && usedBytes + size > settings.maxConversationBytes) {
       log.warn(`Run-resource write skipped (conversation budget ${usedBytes}+${size} > ${settings.maxConversationBytes})`, {
         conversationId: input.conversationId, name: input.name, kind: input.kind,
@@ -312,12 +349,41 @@ async function storePreparedRunResource(
     }
 
     let sha256: string | undefined;
+    const effectFingerprint = await fingerprintEffect();
+    const id = input.idempotencyKey ? createHash('sha256').update(input.conversationId).update('\0')
+      .update(input.idempotencyKey).update('\0').update(effectFingerprint!).digest('hex') : randomUUID();
     if (payload.persist) {
       await fs.mkdir(conversationDir(input.conversationId), { recursive: true });
-      sha256 = await payload.persist(payloadPath(input.conversationId, id));
+      const filename = payloadPath(input.conversationId, id);
+      if (input.idempotencyKey) {
+        // A payload can precede its index commit. Reconcile that exact owned
+        // path on retry instead of allocating another file/copy.
+        let previous;
+        try {
+          // Open first: a pathname checked before open can be replaced while
+          // leaving the descriptor's fingerprint unrelated to the named file.
+          try {
+            previous = await fs.open(filename, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          if (previous) {
+            const opened = await previous.stat({ bigint: true });
+            if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size < BigInt(0)
+                || opened.size > BigInt(Number.MAX_SAFE_INTEGER) || opened.size !== BigInt(size)) throw new RunResourceIdempotencyError();
+            const named = await fs.lstat(filename, { bigint: true });
+            if (!named.isFile() || named.isSymbolicLink() || named.nlink !== BigInt(1)
+                || opened.dev !== named.dev || opened.ino !== named.ino) throw new RunResourceIdempotencyError();
+            sha256 = await fingerprintPayloadSnapshot(previous, opened);
+            if (sha256 !== contentFingerprint) throw new RunResourceIdempotencyError();
+          }
+        } finally { await previous?.close(); }
+      }
+      sha256 ??= await payload.persist(filename);
     }
     const entry: RunResourceEntry = {
       id,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey, effectFingerprint } : {}),
       uri: buildRunResourceUri(input.conversationId, id),
       conversationId: input.conversationId,
       name: input.name,
@@ -335,9 +401,13 @@ async function storePreparedRunResource(
       verifications: [],
     };
 
-    const next = replaced ? entries.filter(e => e !== replaced) : entries.slice();
+    // Keep immutable effect receipts/bytes when a later capture reuses a name.
+    // An old retry must not overwrite the later visit or invent a fresh URI.
+    const next = replaced?.idempotencyKey
+      ? entries.map(entry => entry === replaced ? { ...entry, name: undefined } : entry)
+      : replaced ? entries.filter(e => e !== replaced) : entries.slice();
     next.push(entry);
-    replacedToUnlink = replaced && replaced.size > 0 ? replaced : undefined;
+    replacedToUnlink = replaced && !replaced.idempotencyKey && replaced.size > 0 ? replaced : undefined;
     log.debug(`Stored run resource ${entry.uri}`, { kind: entry.kind, size, name: entry.name });
     return { next, result: entry };
   });
@@ -551,6 +621,7 @@ export async function copyRunResourceToConversation(
     const source = entries.find(entry => entry.id === parsed.id);
     if (!source) return null;
     const destination: WriteRunResourceInput = {
+      idempotencyKey: input.idempotencyKey,
       conversationId: input.conversationId, name: input.name, mimeType: source.mimeType,
       kind: source.kind, producedBy: input.producedBy, archive: source.archive,
       origin: source.kind === 'link' ? source.origin : { server: 'flujo', uri: source.uri },
@@ -576,6 +647,7 @@ export async function copyRunResourceToConversation(
       const settings = await getRunResourceSettings();
       return await storePreparedRunResource(destination, settings, {
         size: Number(initial.size), encoding: source.encoding,
+        fingerprint: input.idempotencyKey ? () => fingerprintPayloadSnapshot(handle, initial) : undefined,
         persist: filename => copyPayloadSnapshot(handle, initial, filename),
       });
     } finally {

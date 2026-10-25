@@ -10,6 +10,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import * as storage from '@/utils/storage/backend';
 import {
   writeRunResource,
   listRunResources,
@@ -40,6 +41,7 @@ jest.mock('@/utils/storage/backend', () => {
   const actual = jest.requireActual('@/utils/storage/backend');
   return {
     ...actual,
+    writeFileAtomic: jest.fn((...args: unknown[]) => actual.writeFileAtomic(...args)),
     loadItem: jest.fn(async (_key: unknown, defaultValue: unknown) => ({
       ...(defaultValue as Record<string, unknown>),
       maxResourceBytes: 1024,
@@ -66,6 +68,148 @@ beforeEach(() => {
 });
 
 const producedBy = { source: 'capture' as const, nodeId: 'node-1' };
+
+it('admits real text captures before UTF-8 Buffer.from for both quota refusals', async () => {
+  const oversized = 'oversized-' + 'x'.repeat(1024);
+  const from = jest.spyOn(Buffer, 'from');
+  try {
+    expect(await writeRunResource({ conversationId: 'encode-size', kind: 'text', data: { text: oversized }, producedBy })).toEqual({ skipped: 'size-cap' });
+    expect(from.mock.calls.some(([value]) => value === oversized)).toBe(false);
+    await writeRunResource({ conversationId: 'encode-conversation', kind: 'text', data: { text: 'a'.repeat(1024) }, producedBy });
+    await writeRunResource({ conversationId: 'encode-conversation', kind: 'text', data: { text: 'b'.repeat(1024) }, producedBy });
+    const refused = 'must not encode after conversation quota';
+    expect(await writeRunResource({ conversationId: 'encode-conversation', kind: 'text', data: { text: refused }, producedBy })).toEqual({ skipped: 'conversation-cap' });
+    expect(from.mock.calls.some(([value]) => value === refused)).toBe(false);
+  } finally { from.mockRestore(); }
+});
+
+it('reuses capture receipts and immutable bytes while rejecting changed content or metadata', async () => {
+  const input = { conversationId: 'capture-effects', kind: 'text' as const, name: 'answer', data: { text: 'first result' }, producedBy, idempotencyKey: 'visit-1:capture' };
+  const first = await writeRunResource(input) as RunResourceEntry;
+  const again = await writeRunResource(input) as RunResourceEntry;
+  expect(again.uri).toBe(first.uri);
+  await expect(writeRunResource({ ...input, data: { text: 'other result' } })).rejects.toMatchObject({ name: 'RunResourceIdempotencyError' });
+  await expect(writeRunResource({ ...input, mimeType: 'text/plain' })).rejects.toMatchObject({ name: 'RunResourceIdempotencyError' });
+  const later = await writeRunResource({ ...input, data: { text: 'later result' }, idempotencyKey: 'visit-2:capture' }) as RunResourceEntry;
+  expect((await writeRunResource(input) as RunResourceEntry).uri).toBe(first.uri);
+  expect((await findRunResourceByName(input.conversationId, 'answer'))?.uri).toBe(later.uri);
+  expect((await readRunResource(first.uri))?.contents.contents[0]).toMatchObject({ text: 'first result' });
+});
+
+it('copies each source effect once across retries and conflicts on changed source bytes', async () => {
+  const source = await writeRunResource({ conversationId: 'effect-child', kind: 'text', data: { text: 'owned source' }, producedBy }) as RunResourceEntry;
+  const input = { uri: source.uri, conversationId: 'effect-parent', idempotencyKey: 'visit:source', producedBy };
+  const first = await copyRunResourceToConversation(input) as RunResourceEntry;
+  const again = await copyRunResourceToConversation(input) as RunResourceEntry;
+  expect(again.uri).toBe(first.uri); expect(await listRunResources('effect-parent')).toHaveLength(1);
+  await fs.writeFile(path.join(tmpDir, source.conversationId, `${source.id}.dat`), 'changed source');
+  await expect(copyRunResourceToConversation(input)).rejects.toMatchObject({ name: 'RunResourceIdempotencyError' });
+  expect(await listRunResources('effect-parent')).toHaveLength(1);
+});
+
+it.each(['before', 'after'] as const)('reconciles an idempotent copied payload after a %s-index-commit failure', async phase => {
+  const child = await writeRunResource({ conversationId: `orphan-child-${phase}`, kind: 'text', data: { text: 'exact source' }, producedBy }) as RunResourceEntry;
+  const input = { uri: child.uri, conversationId: `orphan-parent-${phase}`, idempotencyKey: 'visit-source', producedBy };
+  const actualWrite = jest.requireActual<typeof storage>('@/utils/storage/backend').writeFileAtomic;
+  const atomic = jest.mocked(storage.writeFileAtomic).mockImplementationOnce(async (...args) => {
+    if (phase === 'after') await actualWrite(...args);
+    throw new Error('index acknowledgement failed');
+  });
+  const open = jest.spyOn(fs, 'open');
+  try {
+    await expect(copyRunResourceToConversation(input)).rejects.toThrow('index acknowledgement failed');
+    atomic.mockImplementation(actualWrite);
+    const files = await fs.readdir(path.join(tmpDir, input.conversationId));
+    const payloads = files.filter(filename => filename.endsWith('.dat'));
+    expect(payloads).toHaveLength(1);
+    const retry = await copyRunResourceToConversation(input) as RunResourceEntry;
+    expect(`${retry.id}.dat`).toBe(payloads[0]);
+    expect(await listRunResources(input.conversationId)).toHaveLength(1);
+    expect(open.mock.calls.filter(([filename, flags]) => String(filename).endsWith(payloads[0]) && flags === 'wx')).toHaveLength(1);
+  } finally { atomic.mockImplementation(actualWrite); open.mockRestore(); }
+});
+
+async function leavePendingTextPayload(conversationId: string) {
+  const input = { conversationId, kind: 'text' as const, data: { text: 'owned result' }, producedBy, idempotencyKey: 'pending-effect' };
+  const actualWrite = jest.requireActual<typeof storage>('@/utils/storage/backend').writeFileAtomic;
+  const atomic = jest.mocked(storage.writeFileAtomic).mockRejectedValueOnce(new Error('index publication failed'));
+  try { await expect(writeRunResource(input)).rejects.toThrow('index publication failed'); }
+  finally { atomic.mockImplementation(actualWrite); }
+  const payloads = (await fs.readdir(path.join(tmpDir, conversationId))).filter(filename => filename.endsWith('.dat'));
+  expect(payloads).toHaveLength(1);
+  const filename = path.join(tmpDir, conversationId, payloads[0]);
+  expect(await fs.readFile(filename, 'utf8')).toBe(input.data.text);
+  expect(await listRunResources(conversationId)).toHaveLength(0);
+  return { input, filename };
+}
+
+it('reconciles a pending text payload after failed index publication without rewriting its bytes', async () => {
+  const { input, filename } = await leavePendingTextPayload('pending-text-retry');
+  const write = jest.spyOn(fs, 'writeFile');
+  try {
+    const retry = await writeRunResource(input) as RunResourceEntry;
+    expect(`${retry.id}.dat`).toBe(path.basename(filename));
+    expect(write.mock.calls.some(([target]) => target === filename)).toBe(false);
+    expect(await fs.readFile(filename, 'utf8')).toBe(input.data.text);
+    expect(await listRunResources(input.conversationId)).toHaveLength(1);
+  } finally { write.mockRestore(); }
+});
+
+it.each(['replacement', 'missing'] as const)('rejects a pending payload pathname that is %s after descriptor open', async mode => {
+  const { input, filename } = await leavePendingTextPayload(`pending-swap-${mode}`);
+  const actualOpen = fs.open.bind(fs), actualWrite = fs.writeFile.bind(fs);
+  let swapped = false;
+  const open = jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    const handle = await actualOpen(...args);
+    if (args[0] === filename && !swapped) {
+      swapped = true;
+      try {
+        await fs.rename(filename, `${filename}.owned`);
+        if (mode === 'replacement') await actualWrite(filename, 'foreign data', { flag: 'wx' });
+      } catch (error) { await handle.close(); throw error; }
+    }
+    return handle;
+  });
+  try {
+    await expect(writeRunResource(input)).rejects.toMatchObject(mode === 'replacement'
+      ? { name: 'RunResourceIdempotencyError' } : { code: 'ENOENT' });
+    expect(swapped).toBe(true);
+    expect(await listRunResources(input.conversationId)).toHaveLength(0);
+    expect(await fs.readFile(`${filename}.owned`, 'utf8')).toBe(input.data.text);
+    if (mode === 'replacement') expect(await fs.readFile(filename, 'utf8')).toBe('foreign data');
+    else await expect(fs.stat(filename)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { open.mockRestore(); }
+});
+
+it.each(['text', 'base64'] as const)('preserves a foreign file created just before a new %s payload write', async encoding => {
+  const conversationId = `exclusive-${encoding}`;
+  const actualWrite = fs.writeFile.bind(fs), actualOpen = fs.open.bind(fs);
+  let missingObserved = false, filename: string | undefined;
+  const open = jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    try { return await actualOpen(...args); }
+    catch (error) {
+      if (String(args[0]).includes(conversationId) && (error as NodeJS.ErrnoException).code === 'ENOENT') missingObserved = true;
+      throw error;
+    }
+  });
+  const write = jest.spyOn(fs, 'writeFile').mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
+    if (String(args[0]).includes(conversationId) && String(args[0]).endsWith('.dat')) {
+      filename = String(args[0]);
+      if (encoding === 'text') expect(missingObserved).toBe(true);
+      await actualWrite(filename, 'foreign bytes must survive', { flag: 'wx' });
+    }
+    return actualWrite(...args);
+  });
+  try {
+    await expect(writeRunResource({ conversationId, kind: 'text', producedBy,
+      ...(encoding === 'text' ? { idempotencyKey: 'new-effect', data: { text: 'new bytes' } }
+        : { data: { base64: Buffer.from('new bytes').toString('base64') } }),
+    })).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(filename).toBeDefined();
+    expect(await fs.readFile(filename!, 'utf8')).toBe('foreign bytes must survive');
+    expect(await listRunResources(conversationId)).toHaveLength(0);
+  } finally { write.mockRestore(); open.mockRestore(); }
+});
 
 it('keeps durable memory outside optional spill quotas without weakening ordinary capture limits', async () => {
   const memory = await writeRunResource({ conversationId: 'memory-quota', kind: 'text',

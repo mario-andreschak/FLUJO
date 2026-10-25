@@ -6,6 +6,7 @@
 
 - Bound simultaneous and waiting Flow submissions by process, workspace, conversation and retained input size. Refuse excess work with a retryable pressure error before cancellation registration or execution; preserve active, paused and recovery-owned conversations. Streaming clients receive admission errors before the stream starts, and operations status reports redacted pressure counters.
 - Bound subflow item parsing, template expansion and durable plan preparation before child execution. Preserve pending tasks and existing invocation identities when a complete plan exceeds admission limits.
+- Admit subflow output joins, framing and captures before materialization; retain completed child histories and pending joins on refusal. Promote each artifact once through four workers, preserve separate presentation on recovery, and reconcile durable fold/resource receipts before retrying effects or advancing the graph.
 - Protect unresolved recovery records under cache pressure while allowing persisted, resolved terminal states to leave the cache. Include genuine foreign-realm plain objects and binary backing stores in payload estimates.
 
 ### Workspace startup

@@ -15,6 +15,7 @@ import type {
 } from './types';
 import { bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { isPersonaOwnedConversationState } from './personaConversationOwnership';
+import { latestSubflowAssistantText, SubflowOutputBudget } from './subflowOutputBudget';
 
 const log = createLogger('backend/execution/flow/subflowRecovery');
 
@@ -73,22 +74,39 @@ export async function loadConversationState(conversationId: string): Promise<Sha
   });
 }
 
-export async function persistSubflowParent(state: SharedState): Promise<void> {
+export async function persistSubflowParent(state: SharedState, options?: { publishLive?: boolean }): Promise<void> {
   if (!state.conversationId || state.ephemeral) return;
-  FlowExecutor.conversationStates.set(state.conversationId, state);
+  if (options?.publishLive !== false) FlowExecutor.conversationStates.set(state.conversationId, state);
   state.updatedAt = Date.now();
   await persistConversationState(storageKey(state.conversationId), state);
+}
+
+/** Read the actual durable commit, bypassing the live-state cache after an
+ * ambiguous write (e.g. snapshot committed but summary publication failed). */
+export async function readPersistedSubflowParent(conversationId: string): Promise<SharedState | undefined> {
+  return withConversationSnapshot<SharedState, SharedState | undefined>(conversationId, async stored => stored);
+}
+
+/** Call only when currentNodeId/status advance in the same state publication. */
+export function acknowledgeSubflowContinuation(state: SharedState, nodeId: string | undefined): boolean {
+  if (!nodeId) return false;
+  const id = state.activeSubflowInvocationByNode?.[nodeId];
+  const invocation = id ? state.subflowInvocations?.[id] : undefined;
+  if (!invocation?.foldReceipt || !invocation.foldedAt) return false;
+  invocation.foldReceipt.continuedAt = Date.now();
+  delete state.activeSubflowInvocationByNode?.[nodeId];
+  return true;
 }
 
 /** Derive the same callable output shape runFlow returns from a persisted child.
  *  Used to heal the small crash window where the child reached completed but the
  *  parent lane record was not updated yet. */
-export function completedOutputFromState(state: SharedState): {
+export function completedOutputFromState(state: SharedState, outputBudget?: SubflowOutputBudget): {
   outputText: string;
   outputMedia?: ModelMediaPart[];
 } {
   let outputText = typeof state.lastResponse === 'string' ? state.lastResponse : '';
-  if (!outputText) {
+  if (!outputText && !outputBudget) {
     for (let i = state.messages.length - 1; i >= 0; i--) {
       const message = state.messages[i];
       if (message.role === 'assistant' && typeof message.content === 'string') {
@@ -105,13 +123,14 @@ export function completedOutputFromState(state: SharedState): {
       break;
     }
   }
+  if (outputBudget && !outputText.trim() && !outputMedia?.length) outputText = latestSubflowAssistantText(state.messages, outputBudget);
   return { outputText, ...(outputMedia ? { outputMedia } : {}) };
 }
 
-export async function syncLaneFromPersistedChild(lane: SubflowInvocationLane): Promise<boolean> {
+export async function syncLaneFromPersistedChild(lane: SubflowInvocationLane, outputBudget?: SubflowOutputBudget): Promise<boolean> {
   const child = await loadConversationState(lane.conversationId);
   if (!child || (child.status !== 'completed' && child.status !== 'capped')) return false;
-  const output = completedOutputFromState(child);
+  const output = completedOutputFromState(child, outputBudget);
   lane.status = 'completed';
   lane.outputText = output.outputText;
   lane.outputMedia = output.outputMedia;
@@ -241,10 +260,20 @@ export async function reportSubflowRunOutcome(result: SubflowRunOutcome): Promis
   const lane = invocation.lanes.find((candidate) => candidate.id === laneRef.laneId);
   if (!lane || lane.conversationId !== result.conversationId) return;
 
-  applyOutcome(lane, result);
-  invocation.updatedAt = Date.now();
-  if (invocationReady(invocation)) invocation.status = 'ready';
-  await persistSubflowParent(parent);
+  // runFlow queues this callback before its caller receives the child result.
+  // It must admit its own new parent-checkpoint representations, independently
+  // of the lane engine. Refusal leaves the dispatched lane untouched so its
+  // completed child history remains the source for a later recovery attempt.
+  const outputBudget = new SubflowOutputBudget();
+  try {
+    outputBudget.lane(lane.id, laneStatusForOutcome(result) === 'completed'
+      ? { outputText: result.outputText, outputMedia: result.outputMedia }
+      : { error: result.error?.message || 'Subflow execution failed' });
+    applyOutcome(lane, result);
+    invocation.updatedAt = Date.now();
+    if (invocationReady(invocation)) invocation.status = 'ready';
+    await persistSubflowParent(parent);
+  } finally { outputBudget.release(); }
 
   if (invocation.status === 'ready') {
     await resumeReadyParent(parent, invocation);
@@ -267,6 +296,7 @@ export function queueSubflowRunOutcome(result: SubflowRunOutcome): void {
 }
 
 type RecoveryInvocation = Pick<SubflowInvocation, 'id' | 'parentNodeId' | 'status'> & {
+  continuationPending?: boolean;
   lanes: Array<Pick<SubflowInvocationLane, 'id' | 'conversationId' | 'status'>>;
 };
 type RecoveryConversation = Pick<SharedState,
@@ -289,6 +319,7 @@ function recoveryProjection(state: SharedState): RecoveryConversation {
     activeSubflowInvocationByNode: state.activeSubflowInvocationByNode,
     subflowInvocations: state.subflowInvocations && Object.fromEntries(Object.entries(state.subflowInvocations).map(([id, invocation]) => [id, {
       id: invocation.id, parentNodeId: invocation.parentNodeId, status: invocation.status,
+      continuationPending: Boolean(invocation.foldReceipt && !invocation.foldReceipt.continuedAt),
       lanes: invocation.lanes.map(lane => ({ id: lane.id, conversationId: lane.conversationId, status: lane.status })),
     }])),
   };
@@ -324,7 +355,7 @@ function activeInvocationOwnedBy(state: RecoveryConversation): RecoveryInvocatio
   const activeIds = Object.values(state.activeSubflowInvocationByNode ?? {});
   return activeIds
     .map((id) => state.subflowInvocations?.[id])
-    .find((invocation): invocation is RecoveryInvocation => !!invocation && invocation.status !== 'folded');
+    .find((invocation): invocation is RecoveryInvocation => !!invocation && (invocation.status !== 'folded' || !!invocation.continuationPending));
 }
 
 async function familyConversationStates(conversationId: string, signal?: AbortSignal): Promise<RecoveryConversation[]> {
@@ -447,7 +478,7 @@ export async function getSubflowRecoveryOptions(conversationId: string, signal?:
   const ownedInvocation = current ? activeInvocationOwnedBy(current) : undefined;
   const incompleteSiblingCount = active
     ? active.invocation.lanes.filter((lane) => lane.status !== 'completed').length
-    : ownedInvocation
+    : ownedInvocation && ownedInvocation.status !== 'folded'
       ? ownedInvocation.lanes.filter((lane) => lane.status !== 'completed').length
     : 0;
   const rootId = current?.rootConversationId ?? current?.conversationId ?? conversationId;

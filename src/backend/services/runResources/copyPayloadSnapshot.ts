@@ -4,6 +4,23 @@ import { createHash } from 'node:crypto';
 
 const COPY_CHUNK_BYTES = 64 * 1024;
 
+/** Fingerprint the actual opened source, including legacy entries with no hash.
+ * Shares the copy admission slot and uses one bounded buffer. */
+export async function fingerprintPayloadSnapshot(source: FileHandle, initial: BigIntStats): Promise<string> {
+  const size = Number(initial.size);
+  const buffer = Buffer.alloc(Math.min(COPY_CHUNK_BYTES, size));
+  const hash = createHash('sha256');
+  for (let position = 0; position < size;) {
+    const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, size - position), position);
+    if (!bytesRead) throw new Error('Run-resource copy source changed during fingerprinting.');
+    hash.update(buffer.subarray(0, bytesRead)); position += bytesRead;
+  }
+  const final = await source.stat({ bigint: true });
+  if (final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size
+    || final.mtimeNs !== initial.mtimeNs || final.ctimeNs !== initial.ctimeNs) throw new Error('Run-resource copy source changed during fingerprinting.');
+  return hash.digest('hex');
+}
+
 /** Copy exactly the admitted opened snapshot, without text/base64 materialization. */
 export async function copyPayloadSnapshot(source: FileHandle, initial: BigIntStats, filename: string): Promise<string> {
   if (!initial.isFile() || initial.size < BigInt(0) || initial.size > BigInt(Number.MAX_SAFE_INTEGER)) {

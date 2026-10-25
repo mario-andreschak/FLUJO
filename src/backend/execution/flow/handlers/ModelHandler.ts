@@ -119,6 +119,7 @@ import {
 } from './meetingTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
+import { withSubflowOutputConsumption } from '../subflowOutputBudget';
 import { isSubflowCommunicationTool, executeSubflowCommunicationTool } from '../subflowCommunication';
 import { isBehaviorToolName, executeBehaviorToolCall } from './behaviorToolInvocation';
 import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
@@ -1262,6 +1263,10 @@ export class ModelHandler {
    * Does NOT handle tool execution loops internally.
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
+    return withSubflowOutputConsumption(() => this.callModelAdmitted(input));
+  }
+
+  private static async callModelAdmitted(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     if (input.modelCatalogAdmission && input.modelCatalogAdmission.model.id !== input.modelId) {
       throw new ExecutionExtensionError('execution_model_binding_changed');
     }
@@ -1676,7 +1681,7 @@ export class ModelHandler {
       for (const toolName of subflowToolCallNames) {
         localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
           const outcome = await executeSubflowToolCall(toolName, args, { conversationId, emit });
-          if (!outcome.success) throw new Error(outcome.error ?? 'call_subflow failed');
+          if (!outcome.success) throw Object.assign(new Error(outcome.error ?? 'call_subflow failed'), { details: outcome.errorDetails });
           return outcome.data;
         };
       }
@@ -3946,6 +3951,10 @@ export class ModelHandler {
   public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
+    return withSubflowOutputConsumption(() => this.processToolCallsAdmitted(input));
+  }
+
+  private static async processToolCallsAdmitted(input: ToolCallProcessingInput): Promise<Result<ToolCallProcessingResult>> {
     const { toolCalls, toolNameMap, emit, conversationId, runId, node, signal, mcpNodes } = input;
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
@@ -4378,7 +4387,7 @@ export class ModelHandler {
             const outcome = await executeSubflowToolCall(name, args, { conversationId, emit });
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
-              : `Error: ${outcome.error}`;
+              : outcome.errorDetails ? JSON.stringify({ success: false, error: outcome.error, errorDetails: outcome.errorDetails }) : `Error: ${outcome.error}`;
             emit?.({
               type: 'tool:result',
               toolCallId: id,
@@ -4967,11 +4976,23 @@ export class ModelHandler {
         if (bucket) bucket.push(i);
         else groups.set(key, [i]);
       }
+      // A run-level authority failure must stop new dispatch without letting
+      // Promise.all close the output-consumption scope while sibling workers
+      // still serialize their results. Swallow only at this pool boundary,
+      // drain every started group/worker, then preserve the first failure.
+      let batchFailed = false, batchFailure: unknown;
       await Promise.all(
         Array.from(groups.entries()).map(([key, indices]) =>
-          runWithConcurrency(indices, limitForGroup(key), executeOneToolCall)
+          runWithConcurrency(indices, limitForGroup(key), async index => {
+            if (batchFailed) return;
+            try { await executeOneToolCall(index); }
+            catch (error) {
+              if (!batchFailed) { batchFailed = true; batchFailure = error; }
+            }
+          })
         )
       );
+      if (batchFailed) throw batchFailure;
 
       if (terminalSilentCallIndex >= 0) {
         const reason = 'Meeting turn ended silently before this tool call; it was not executed.';

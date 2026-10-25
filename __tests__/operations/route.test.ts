@@ -18,6 +18,7 @@ jest.mock('@/backend/services/security/ownerAccess', () => ({ resolveOwnerReques
 import { GET } from '@/app/api/operations/status/route';
 import { acquireFlowRunAdmission } from '@/backend/execution/flow/runAdmission';
 import { withSubflowPreparationBudget } from '@/backend/execution/flow/subflowPreparationBudget';
+import { SubflowOutputBudget } from '@/backend/execution/flow/subflowOutputBudget';
 import { setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 
 const keys = ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_OPERATIONS_RSS_BUDGET_BYTES'] as const;
@@ -71,6 +72,27 @@ it('reports held preparation capacity as numeric observations until its owner se
   });
   expect((await (await GET(request('fixture-control'))).json()).subflowPreparation)
     .toMatchObject({ active: 0, reservedBytes: 0 });
+});
+it('reports held output capacity with numeric values only', async () => {
+  const budget = new SubflowOutputBudget();
+  try {
+    budget.reserve(8192);
+    const response = await GET(request('fixture-control'));
+    const result = await response.json();
+    expect(result.subflowOutput).toMatchObject({ active: 1, reservedBytes: 8192, promotionWorkers: 4 });
+    expect(result.allocationReservations).toMatchObject({ output: 8192, total: 8192 });
+    expect(Object.values(result.allocationReservations).every(value => typeof value === 'number')).toBe(true);
+    expect(Object.values(result.subflowOutput).every(value => typeof value === 'number')).toBe(true);
+    expect(JSON.stringify(result.subflowOutput)).not.toMatch(/PRIVATE|fixture-workspace/);
+  } finally { budget.release(); }
+  expect((await (await GET(request('fixture-control'))).json()).subflowOutput).toMatchObject({ active: 0, reservedBytes: 0 });
+});
+it('reports sequence ownership and descriptor pressure without exposing registry keys', async () => {
+  const response = await GET(request('fixture-control'));
+  const result = await response.json();
+  expect(result.conversationSequences).toMatchObject({ maxKeys: 4096, maxColdScans: 4, scanActive: 0, scanQuarantined: 0 });
+  expect(Object.values(result.conversationSequences).every(value => typeof value === 'number')).toBe(true);
+  expect(JSON.stringify(result.conversationSequences)).not.toMatch(/PRIVATE|fixture-workspace/);
 });
 it('rechecks a rotated worker bearer after awaited reads', async () => {
   read.mockImplementationOnce(async () => { process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'rotated-fixture-control'; return undefined; });

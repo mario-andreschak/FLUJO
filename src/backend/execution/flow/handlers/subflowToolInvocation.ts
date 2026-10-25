@@ -23,6 +23,7 @@ import { pinnedSubflowDefinition } from '../subflowDependencies';
 import { subflowExecutionAuthority } from '../executionAuthority';
 import { isExecutionProtectedState } from '@/backend/execution/extensions';
 import { normalizeSessionKey, normalizeSessionTurnCap } from '../sessionManagement';
+import { retainConsumedSubflowOutput, isSubflowOutputPressureError } from '../subflowOutputBudget';
 
 /**
  * Callable-subflow TOOL invocation (issue #385, deferred Part B of #359).
@@ -107,6 +108,7 @@ export interface SubflowToolCallOutcome {
   success: boolean;
   data?: unknown;
   error?: string;
+  errorDetails?: Record<string, unknown>;
 }
 
 /**
@@ -306,6 +308,7 @@ export async function executeSubflowToolCall(
       nodeRef,
       isolatedMessage ? { prompt: isolatedMessage } : { prompt: '' },
     );
+    retainConsumedSubflowOutput(result);
 
     recordSubflowOutcome(
       sharedState.isCancelled
@@ -328,6 +331,6 @@ export async function executeSubflowToolCall(
     const message = err instanceof Error ? err.message : String(err);
     recordSubflowOutcome('error', { error: err });
     log.warn('call_subflow tool execution failed', { toolName: name, err: message });
-    return { success: false, error: message };
+    return { success: false, error: message, ...(isSubflowOutputPressureError(err) ? { errorDetails: err.details } : {}) };
   }
 }

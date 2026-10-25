@@ -82,7 +82,8 @@ import {
   reconcileInterruptedRecovery,
   setRecoveryTransition,
 } from '@/backend/execution/flow/recoveryCheckpoint';
-import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { acknowledgeSubflowContinuation, queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { withSubflowOutputConsumption } from '@/backend/execution/flow/subflowOutputBudget';
 import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement';
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
@@ -1894,7 +1895,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
   const processToolCallsRecoverably = async (
     args: Parameters<typeof ModelHandler.processToolCalls>[0],
-  ): ReturnType<typeof ModelHandler.processToolCalls> => {
+    persistAfter = false,
+  ): ReturnType<typeof ModelHandler.processToolCalls> => withSubflowOutputConsumption(async () => {
     await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'before', recoveryEmit);
     const markUnknown = async () => {
       try {
@@ -1922,8 +1924,28 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       throw error;
     }
     if (!result.success) await markUnknown();
+    else {
+      // Own inline subflow output through its actual transcript publication,
+      // including the new serialized tool strings in the parent checkpoint.
+      const messages: FlujoChatMessage[] = result.value.toolCallMessages.map(msg => ({
+        ...msg, id: crypto.randomUUID(), timestamp: Date.now(), processNodeId: sharedState.currentNodeId,
+      }));
+      sharedState.messages.push(...messages);
+      applyRepeatGuard(result.value.processedToolCalls);
+      FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+      emitNewMessages();
+      await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'completed', recoveryEmit);
+      if (persistAfter) {
+        try {
+          sharedState.updatedAt = Date.now();
+          await persistState(storageKey, sharedState);
+        } catch (error) {
+          log.error(`Failed to save state after debug tool execution for conv ${effectiveConvId}:`, error);
+        }
+      }
+    }
     return result;
-  };
+  });
 
   // --- Mid-run steering (user intervention while the run is in flight) --------
   // A correction is only useful if it reaches the model that is going the wrong
@@ -2330,29 +2352,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
             shouldAbort: runCancelled,
             mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
-          });
+          }, true);
           if (!toolProcessingResult.success) {
             log.error(`Debug tool processing failed for conv ${effectiveConvId}`, { error: toolProcessingResult.error });
             sharedState.lastResponse = { success: false, error: 'Tool processing failed', errorDetails: toolProcessingResult.error };
             currentAction = ERROR_ACTION;
             break;
-          }
-          const toolResultMessages: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
-            ...msg,
-            id: crypto.randomUUID(),
-            timestamp: Date.now(),
-            processNodeId: sharedState.currentNodeId,
-          }));
-          sharedState.messages.push(...toolResultMessages);
-          applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
-          FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-          emitNewMessages();
-          await commitToolCheckpoint(storageKey, sharedState, callsToExecute, 'completed', recoveryEmit);
-          try {
-            sharedState.updatedAt = Date.now();
-            await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
-          } catch (error) {
-            log.error(`Failed to save state after debug tool execution for conv ${effectiveConvId}:`, error);
           }
           const nextModelPreview = remainingCalls.length === 0
             ? await previewNextModelInput()
@@ -2823,18 +2828,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   break;
                 }
 
-                log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} tool result messages for conv ${effectiveConvId}`);
-                const toolResultMessagesWithTimestamp: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
-                  ...msg,
-                  id: crypto.randomUUID(),
-                  timestamp: Date.now(),
-                  processNodeId: sharedState.currentNodeId,
-                }));
-                sharedState.messages.push(...toolResultMessagesWithTimestamp);
-                applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
-                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-                emitNewMessages();
-                await commitToolCheckpoint(storageKey, sharedState, ordinaryToolCalls, 'completed', recoveryEmit);
                 if (isMeetingTurnSilent(sharedState.meetingTurn)) {
                   sharedState.status = 'completed';
                   currentAction = FINAL_RESPONSE_ACTION;
@@ -2895,18 +2888,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   break;
                 }
 
-                log.info(`Adding ${toolProcessingResult.value.toolCallMessages.length} internal tool result messages for conv ${effectiveConvId}`);
-                const internalToolResultMessagesWithTimestamp: FlujoChatMessage[] = toolProcessingResult.value.toolCallMessages.map(msg => ({
-                  ...msg,
-                  id: crypto.randomUUID(),
-                  timestamp: Date.now(),
-                  processNodeId: sharedState.currentNodeId,
-                }));
-                sharedState.messages.push(...internalToolResultMessagesWithTimestamp);
-                applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
-                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-                emitNewMessages();
-                await commitToolCheckpoint(storageKey, sharedState, internalTools, 'completed', recoveryEmit);
                 log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (flujo=false).`);
                 continue;
 
@@ -3191,11 +3172,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
             emitNewMessages();
             const fromNodeId = sharedState.currentNodeId;
+            const advancedSubflow = acknowledgeSubflowContinuation(sharedState, fromNodeId);
             // The engine marks only Process -> one-way TERMINAL Subflow calls.
             // Sequential Subflows and explicit bidirectional edges omit this,
             // and every later transition clears any previous marker.
             sharedState.pendingSubflowReturn = handoff.implicitSubflowReturn;
             sharedState.currentNodeId = nextNodeId;
+            if (advancedSubflow) await persistConversationState(storageKey, sharedState);
             sharedState.handoffRequested = undefined;
             emit({
               type: 'handoff',
@@ -3434,6 +3417,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     sharedState.lastBreakNodeId = undefined;
   }
 
+  // Terminal event publication can still downgrade a successful fold to an
+  // error. Retain the active visit until those sequence-sensitive emissions
+  // succeed, so recovery reuses its receipt rather than dispatching new children.
+  if (finalStatus === 'completed' || finalStatus === 'capped') acknowledgeSubflowContinuation(sharedState, sharedState.currentNodeId);
   let finalSnapshotPersisted = false;
   try {
     sharedState.updatedAt = Date.now();
