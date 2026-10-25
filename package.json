@@ -160,7 +160,7 @@
     "@testing-library/react": "^16.3.3",
     "@types/crypto-js": "^4.2.2",
     "@types/jest": "^30.0.0",
-    "@types/lodash": "^4.17.26",
+    "@types/lodash": "^4.17.27",
     "@types/node": "^22.20.5",
     "@types/picomatch": "^4.0.3",
     "@types/react": "^19.2.18",
