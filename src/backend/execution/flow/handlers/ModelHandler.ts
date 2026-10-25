@@ -2314,7 +2314,9 @@ export class ModelHandler {
         );
         return media === message.media ? message : { ...message, media };
       }));
-      const projectedMessages = toApiMessages(messagesWithMaterializedMedia, resolveModelAdapter(model.provider, model.adapter) === 'gemini');
+      const projectedSourceIndexes: Array<number | undefined> = [];
+      const projectedMessages = toApiMessages(messagesWithMaterializedMedia,
+        resolveModelAdapter(model.provider, model.adapter) === 'gemini', projectedSourceIndexes);
       // Antigravity CLI rejects unsupported attachments explicitly in its preflight.
       // Filtering them here would turn an image request into text before that
       // check and allow a response from a model that never received the image.
@@ -2323,9 +2325,12 @@ export class ModelHandler {
         : filterUnsupportedMediaInputs(projectedMessages, model.inputModalities);
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
       const modelInputForArchive = cloneModelInputSnapshot(opts?.modelInputForArchive);
-      let apiSourceIds: Array<string | undefined> = (opts?.wireMessageIds?.length === apiMessages.length
+      const inputSourceIds = opts?.wireMessageIds?.length === messagesWithMaterializedMedia.length
         ? opts.wireMessageIds
-        : messagesWithMaterializedMedia.map(message => message.id)).slice();
+        : messagesWithMaterializedMedia.map(message => message.id);
+      let apiSourceIds: Array<string | undefined> = projectedSourceIndexes.map(index => (
+        index === undefined ? undefined : inputSourceIds[index]
+      ));
 
       // Strip trailing assistant message(s) for providers that require the last
       // message to be user/tool role. This is a wire-only mutation — sharedState is
