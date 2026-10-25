@@ -668,6 +668,23 @@ function takeWorkspaceSteering(workspaceId: string, conversationId: string): voi
 }
 
 describe('Persona Flow dispatcher', () => {
+  it('reports detached pump failure using the admitted scalar identity after request ownership ends', async () => {
+    const harness = makeHarness(workspace('detached-request-identity'));
+    let fail!: (error: Error) => void;
+    jest.spyOn(harness.dispatcher, 'pump').mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const errorLog = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const input = dispatchInput('persona_test', 'detached-request-identity');
+    input.flowInput.messages = [{ role: 'user', content: 'owned request input' }];
+    const submission = await harness.dispatcher.submit(input);
+    expect(submission.dispatch.flowInput?.messages).not.toBe(input.flowInput.messages);
+    input.personaId = 'persona_changed_after_handoff';
+    fail(new Error('detached pump fixture'));
+    await new Promise(resolve => setImmediate(resolve));
+    const logged = JSON.stringify(errorLog.mock.calls);
+    expect(logged).toContain('Persona Flow pump failed for persona_test');
+    expect(logged).not.toContain('persona_changed_after_handoff');
+  });
+
   beforeEach(() => {
     // Keep durable ownership checks deterministic under parallel Windows CI load.
     _setPersonaRuntimeLockProcessBirthProbeForTests(async (pid) => `win32-v2:${pid}`);

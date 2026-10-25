@@ -11,6 +11,7 @@ import {
 import { parseMcpAppModelContexts } from '@/backend/mcpApps/modelContext';
 import { parseMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { requireFunctionToolCalls, requireFunctionTools } from '@/shared/types/openai';
+import { acquireChatIngress, CHAT_INGRESS_LIMITS, finishChatInputParsing, preflightChatJson, readChatJson, refuseChatInput, type ChatIngressPermit } from '@/utils/http/chatIngress';
 
 const log = createLogger('app/v1/chat/completions/requestParser');
 
@@ -123,18 +124,24 @@ export interface ParsedChatCompletionRequest extends Omit<ChatCompletionRequest,
 }
 
 // Parse request parameters from either query string or body
-export async function parseRequestParameters(request: NextRequest): Promise<ParsedChatCompletionRequest> { // Update return type
+export async function parseRequestParameters(request: NextRequest, permit?: ChatIngressPermit): Promise<ParsedChatCompletionRequest> {
+  const owned = permit ?? acquireChatIngress(request);
+  try { return await parseAdmittedRequest(request, owned); }
+  finally { if (!permit) owned.release(); }
+}
+
+async function parseAdmittedRequest(request: NextRequest, permit: ChatIngressPermit): Promise<ParsedChatCompletionRequest> {
   const startTime = Date.now();
   const requestId = `req-${Date.now()}`;
-  log.debug('Parsing request parameters', { requestId, method: request.method, url: request.url });
+  log.debug('Parsing request parameters', { requestId, method: request.method });
   
   if (request.method === 'GET') {
     // Extract parameters from query string
+    let parameters = 1;
+    for (let index = request.url.indexOf('?') + 1; index < request.url.length; index++) {
+      if (request.url[index] === '&' && ++parameters > CHAT_INGRESS_LIMITS.queryParameters) refuseChatInput('CHAT_INPUT_TOO_LARGE');
+    }
     const url = new URL(request.url);
-    log.debug('Parsing GET request query parameters', {
-      requestId,
-      searchParams: Object.fromEntries(url.searchParams)
-    });
     
     const model = url.searchParams.get('model') || '';
     const messageContent = url.searchParams.get('message') || '';
@@ -147,10 +154,8 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
     
     log.debug('Extracted parameters from query string', {
       requestId,
-      model,
+      modelCharacters: model.length,
       messageContentLength: messageContent.length,
-      messageContentPreview: messageContent.length > 50 ?
-        `${messageContent.substring(0, 50)}...` : messageContent,
       stream,
       temperature: isNaN(temperature) ? undefined : temperature,
       max_tokens
@@ -179,19 +184,32 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
     log.info('GET request parameters parsed successfully', {
       requestId,
       duration: `${duration}ms`,
-      model,
+      modelCharacters: model.length,
       stream
     });
     
+    finishChatInputParsing(permit, request.url.length, parameters * 2);
     return result;
   } else {
     // Parse the request body for POST
     log.debug('Parsing request body for POST', { requestId });
     try {
       const contentType = request.headers.get('content-type') || '';
-      log.debug('Request content type', { requestId, contentType });
+      log.debug('Request content type', { requestId, contentTypeCharacters: contentType.length });
       
-      const data: ChatCompletionRequest = await request.json(); // Add type annotation
+      const decoded = await readChatJson(request, permit);
+      const data = decoded.data as ChatCompletionRequest;
+      if (typeof data.model !== 'string' || !Array.isArray(data.messages)
+        || data.messages.some(message => !message || typeof message !== 'object' || Array.isArray(message))
+        || (data.metadata !== undefined && (!data.metadata || typeof data.metadata !== 'object' || Array.isArray(data.metadata)))) {
+        refuseChatInput('CHAT_INPUT_INVALID');
+      }
+      // Nested JSON strings also receive a lexical limit before their parsers.
+      let metadataValues = 0;
+      for (const serialized of [data.metadata?.mcpAppContexts, data.metadata?.mcpSkills]) {
+        if (typeof serialized === 'string') metadataValues += preflightChatJson(Buffer.from(serialized));
+      }
+      if (decoded.values + metadataValues > CHAT_INGRESS_LIMITS.values) refuseChatInput('CHAT_INPUT_TOO_LARGE');
 
       // `personaTarget` is an internal parsed field, not a public wire field.
       // Rejecting it here prevents an unvalidated top-level JSON property from
@@ -226,13 +244,13 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       if (parsedAppContexts.error) {
         log.warn('Ignoring invalid MCP App model context metadata', {
           requestId,
-          error: parsedAppContexts.error,
+          invalidContextMetadata: true,
         });
       }
       if (parsedSkillSelections.error) {
         log.warn('Ignoring invalid MCP Skill selection metadata', {
           requestId,
-          error: parsedSkillSelections.error,
+          invalidSkillMetadata: true,
         });
       }
 
@@ -240,13 +258,13 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       log.info('POST request body parsed successfully', {
         requestId,
         duration: `${duration}ms`,
-        model: data.model,
+        modelCharacters: data.model.length,
         hasMessages: !!data.messages,
         messageCount: data.messages?.length || 0,
         stream: !!data.stream,
         temperature: data.temperature,
         flujo,
-        conversationId,
+        hasConversationId: Boolean(conversationId),
         requireApproval,
         flujodebug,
         personaTargeted: Boolean(personaTarget),
@@ -256,6 +274,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       const { metadata, conversation_id: deprecated_conv_id, ...restData } = data;
 
       // Return the rest of the data object along with the extracted flags and processNodeId
+      finishChatInputParsing(permit, decoded.characters, decoded.values + metadataValues, decoded.rawBytes);
       return { 
         ...restData, 
         flujo, 
@@ -273,7 +292,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       const duration = Date.now() - startTime;
       log.error('Error parsing request body', {
         requestId,
-        error,
+        errorName: error instanceof Error ? error.name : 'Error',
         duration: `${duration}ms`,
         // Worker control tokens and other credentials arrive in headers.
         // Header names are sufficient for request-shape diagnostics.
@@ -281,71 +300,5 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       });
       throw error;
     }
-  }
-}
-
-// Helper function to log detailed request information
-// Currently disabled but kept for future use
-export async function _logRequestDetails(request: NextRequest) {
-  return; // for now return early
-  log.debug('Request details', { 
-    url: request.url,
-    method: request.method,
-    headerNames: Array.from(request.headers.keys())
-  });
-  
-  if (request.nextUrl.search) {
-    log.debug('Query parameters', { params: Object.fromEntries(request.nextUrl.searchParams) });
-  }
-  
-  try {
-    // Clone the request to avoid consuming the body
-    const clonedRequest = request.clone();
-    const contentType = request.headers.get('content-type') || '';
-    
-    if (contentType.includes('application/json')) {
-      try {
-        const body = await clonedRequest.json();
-        // Truncate messages content if present
-        if (body && body.messages && Array.isArray(body.messages)) {
-          const truncatedBody = { ...body };
-          // Use OpenAI type instead of custom interface
-          type Message = OpenAI.ChatCompletionMessageParam;
-          
-          truncatedBody.messages = body.messages.map((msg: Message) => {
-            if (msg && msg.content && typeof msg.content === 'string' && msg.content.length > 100) {
-              return {
-                ...msg,
-                content: msg.content.substring(0, 100) + `... (${msg.content.length - 100} more characters)`
-              };
-            }
-            return msg;
-          });
-          log.debug('Request body (JSON, truncated)', truncatedBody);
-        } else {
-          log.debug('Request body (JSON)', body);
-        }
-      } catch (error) {
-        log.debug('Failed to parse JSON body', error);
-      }
-    } else if (contentType.includes('application/x-www-form-urlencoded')) {
-      try {
-        const formData = await clonedRequest.formData();
-        log.debug('Request body (Form)', Object.fromEntries(formData));
-      } catch (error) {
-        log.debug('Failed to parse form data', error);
-      }
-    } else {
-      try {
-        const text = await clonedRequest.text();
-        const truncatedText = text.length > 100 ? 
-          text.substring(0, 100) + `... (${text.length - 100} more characters)` : text;
-        log.debug('Request body (Text, truncated)', { text: truncatedText });
-      } catch (error) {
-        log.debug('Failed to read request text', error);
-      }
-    }
-  } catch (error) {
-    log.debug('Failed to process request body', error);
   }
 }

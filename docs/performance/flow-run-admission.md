@@ -82,11 +82,15 @@ removes the additive operations metrics; it does not modify persisted history.
 ## Qualification scope
 
 This change bounds inputs retained by submitted `runFlow` calls. It does not
-bound request-body parsing before submission, preconstructed task lists, growing
+by itself bound request-body parsing before submission, preconstructed task lists, growing
 live histories, provider/SDK outputs, all media hydration, full final completion
 payloads, or allocations made by already admitted work. Direct model completions
 and durable Persona dispatch-envelope queues retain their existing boundaries;
 the eventual Persona Flow execution uses the same public admission gate.
+The separate [chat ingress boundary](chat-ingress-admission.md) now bounds
+application request decoding and input lifetimes. All participating allocation
+ledgers observe the fixed process-wide reservation slots without replacing
+their own admission policies.
 
 The original workload and archive negative controls remain separate equipment.
 Several older performance documents describe superseded Source proposals:
