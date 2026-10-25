@@ -166,12 +166,12 @@ describe('runFlow handoff capture — queued Subflow jobs', () => {
       expect(reserve).toHaveBeenCalledTimes(1);
       expect(lane).toMatchObject({ id: 'lane', conversationId: 'callback-child', status: 'running', attempt: 1 });
       expect(lane).not.toHaveProperty('outputText');
-      expect(jest.mocked(saveItem).mock.calls.some(([key]) => key === 'conversations/callback-parent')).toBe(false);
+      expect(jest.mocked(saveItem).mock.calls.some(([key]) => String(key) === 'conversations/callback-parent')).toBe(false);
       const childHistory = JSON.stringify(result.messages);
       reserve.mockRestore();
       let parentWrites = 0;
       jest.mocked(saveItem).mockImplementation(async (key) => {
-        if (key === 'conversations/callback-parent') {
+        if (String(key) === 'conversations/callback-parent') {
           parentWrites++;
           expect(getSubflowOutputDiagnostics().reservedBytes).toBeGreaterThan(0);
           await Promise.resolve();
@@ -229,7 +229,7 @@ describe('runFlow handoff capture — queued Subflow jobs', () => {
         flujo: mode !== 'internal', debug: mode === 'debug', userTurn: false });
       expect(result.status).toBe(mode === 'debug' ? 'paused_debug' : 'completed');
       expect(checkpointWrites).toBeGreaterThanOrEqual(mode === 'debug' ? 2 : 1);
-      expect(result.messages.filter(message => message.tool_call_id === call.id)).toHaveLength(1);
+      expect(result.messages.filter(message => message.role === 'tool' && message.tool_call_id === call.id)).toHaveLength(1);
       expect(getSubflowOutputDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
     } finally { jest.mocked(saveItem).mockImplementation(async () => undefined); }
   });
