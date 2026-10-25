@@ -4,14 +4,14 @@ const path = require('node:path');
 const Module = require('node:module');
 const assert = require('node:assert/strict');
 const { canonicalTextHash, sourceManifestHash, inside } = require('./profile.cjs');
+const { readBoundedFile } = require('./file-evidence.cjs');
 const EXT_TASKS_REQUESTS = ['@modelcontextprotocol/ext-tasks/core', '@modelcontextprotocol/ext-tasks/core/v2', '@modelcontextprotocol/ext-tasks/client'];
 function declaredImportBridge(dependencies) {
   const packageRoot = fs.realpathSync(path.join(dependencies, 'node_modules/@modelcontextprotocol/ext-tasks'));
   assert(inside(fs.realpathSync(dependencies), packageRoot), 'Import bridge package escaped dependencies');
   const metadataPath = fs.realpathSync(path.join(packageRoot, 'package.json'));
   assert(inside(packageRoot, metadataPath), 'Import bridge metadata escaped package');
-  assert(fs.statSync(metadataPath).isFile() && fs.statSync(metadataPath).size <= 1024 ** 2, 'Invalid import bridge package metadata');
-  const metadataBytes = fs.readFileSync(metadataPath);
+  const metadataBytes = readBoundedFile(metadataPath, 1024 ** 2);
   const metadata = JSON.parse(metadataBytes.toString('utf8'));
   assert.equal(metadata.name, '@modelcontextprotocol/ext-tasks');
   assert.equal(metadata.version, '0.2.2', 'Import bridge package version changed');
@@ -24,9 +24,7 @@ function declaredImportBridge(dependencies) {
       && target.slice(2).split('/').every(part => part && part !== '.' && part !== '..'), 'Invalid declared import target: ' + request);
     const real = fs.realpathSync(path.join(packageRoot, target));
     assert(inside(packageRoot, real), 'Declared import target escaped package');
-    const stat = fs.statSync(real);
-    assert(stat.isFile() && stat.size <= 1024 ** 2, 'Declared import target is not a bounded regular file');
-    entries[request] = { target, sha256: canonicalTextHash(fs.readFileSync(real)) };
+    entries[request] = { target, sha256: canonicalTextHash(readBoundedFile(real, 1024 ** 2)) };
     targets[request] = real;
   }
   return { targets, manifest: { format: 'declared-import-exports-v1', package: metadata.name, version: metadata.version,

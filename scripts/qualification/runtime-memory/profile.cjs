@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { assertOwnership } = require('./ownership.cjs');
+const { readBoundedFile } = require('./file-evidence.cjs');
 const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
 // Change the version, rerun the pilot and review a new plan if these change.
@@ -61,7 +62,7 @@ function matchingPilotSource(pilot, peer) {
 const profileSha256 = hash(JSON.stringify(PROFILE));
 function harnessDigest() {
   const files = ['profile.cjs', 'provider.cjs', 'source-loader.cjs', 'network-guard.cjs', 'fixtures.cjs',
-    'evidence.cjs', 'inspector-evidence.cjs', 'checks.cjs', 'runtime.cjs', 'plan.cjs', 'supervise.py', 'envelope_evidence.py', 'dataset_evidence.py', 'ownership.cjs'];
+    'evidence.cjs', 'file-evidence.cjs', 'inspector-evidence.cjs', 'checks.cjs', 'runtime.cjs', 'plan.cjs', 'supervise.py', 'envelope_evidence.py', 'dataset_evidence.py', 'ownership.cjs'];
   return hash(JSON.stringify(files.map(file => [file, hash(fs.readFileSync(path.join(__dirname, file), 'utf8').replaceAll('\r\n', '\n'))])));
 }
 function inside(root, file) {
@@ -69,9 +70,7 @@ function inside(root, file) {
   return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep));
 }
 function readJson(file, maximum = MiB) {
-  assert(fs.statSync(file).size <= maximum, 'JSON receipt exceeds allowance');
-  const bytes = fs.readFileSync(file);
-  assert(bytes.length <= maximum, 'JSON receipt grew beyond allowance');
+  const bytes = readBoundedFile(file, maximum);
   return JSON.parse(bytes.toString('utf8'));
 }
 function readPilotEvidence(directory) {
@@ -81,19 +80,7 @@ function readPilotEvidence(directory) {
   const mirror = owner.platform === 'linux' ? owner.linux?.datasetMirror : undefined;
   if (owner.platform === 'linux') assert.equal(mirror?.complete, true, 'Independent ext4 mirror attestation is required');
   for (const name of names) {
-    const descriptor = fs.openSync(path.join(directory, name), 'r');
-    let bytes;
-    try {
-      assert(fs.fstatSync(descriptor).isFile(), 'Pilot receipt must be regular');
-      const buffer = Buffer.alloc(MiB + 1); let length = 0;
-      while (length < buffer.length) {
-        const count = fs.readSync(descriptor, buffer, length, buffer.length - length, null);
-        if (!count) break;
-        length += count;
-      }
-      assert(length <= MiB, 'Pilot receipt exceeds allowance');
-      bytes = buffer.subarray(0, length);
-    } finally { fs.closeSync(descriptor); }
+    const bytes = readBoundedFile(path.join(directory, name), MiB);
     if (mirror) {
       assert.equal(bytes.length, mirror.files?.[name]?.bytes, 'Attested mirror length differs: ' + name);
       assert.equal(hash(bytes), mirror.files[name].sha256, 'Attested mirror bytes differ: ' + name);
