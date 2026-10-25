@@ -121,6 +121,7 @@ import { saveItem } from '@/utils/storage/backend';
 import { SubflowOutputBudget, SubflowOutputPressureError, getSubflowOutputDiagnostics,
   holdSubflowOutput, retainConsumedSubflowOutput, withSubflowOutputConsumption } from '@/backend/execution/flow/subflowOutputBudget';
 import { reportSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -254,6 +255,35 @@ describe('runFlow handoff capture — queued Subflow jobs', () => {
     });
     try {
       expect((await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' })).status).toBe('completed');
+    } finally { jest.mocked(saveItem).mockImplementation(async () => undefined); }
+  });
+
+  it('keeps the acknowledged fold on the advanced node when handoff event sequencing fails', async () => {
+    const checkpoints: Array<{ node?: string; active?: string; continued?: number }> = [];
+    jest.mocked(saveItem).mockImplementation(async (_key, value) => {
+      const state = value as SharedState;
+      if (state.subflowInvocations?.visit) checkpoints.push({ node: state.currentNodeId,
+        active: state.activeSubflowInvocationByNode?.[START], continued: state.subflowInvocations.visit.foldReceipt?.continuedAt });
+    });
+    const originalStep = (FlowExecutor.executeStep as jest.Mock).getMockImplementation()!;
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async shared => {
+      const result = await originalStep(shared);
+      shared.subflowInvocations = { visit: { id: 'visit', parentNodeId: START, status: 'folded', foldedAt: 1,
+        lanes: [], foldReceipt: { version: 1, id: 'visit:fold:v1', presentation: 'joined', action: EDGE, messageIds: [] } } };
+      shared.activeSubflowInvocationByNode = { [START]: 'visit' };
+      return result;
+    });
+    const failure = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'handoff event unavailable');
+    try {
+      const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation', emit: event => {
+        if (event.type === 'handoff') throw failure;
+      } });
+      expect(result.status).toBe('error');
+      expect(result.sharedState.currentNodeId).toBe(WORKER);
+      expect(FlowExecutor.executeStep).toHaveBeenCalledTimes(1);
+      const acknowledged = checkpoints.filter(checkpoint => checkpoint.continued !== undefined);
+      expect(acknowledged.length).toBeGreaterThan(0);
+      expect(acknowledged.every(checkpoint => checkpoint.node === WORKER && checkpoint.active === undefined)).toBe(true);
     } finally { jest.mocked(saveItem).mockImplementation(async () => undefined); }
   });
 

@@ -13,7 +13,7 @@
  * Like the other chat tests, the engine (FlowExecutor) is stubbed with a tiny
  * start->process->finish state machine, so there is no network/model call.
  */
-import type { FlowExecutionAuthority, SharedState } from '@/backend/execution/flow/types';
+import type { FlowExecutionAuthority, SharedState, SubflowInvocation, SubflowNodeParams } from '@/backend/execution/flow/types';
 import { IMPLICIT_SUBFLOW_RETURN_ACTION } from '@/backend/execution/flow/types';
 import type { PersonaInstructionContext } from '@/shared/types/enduringAgent';
 import type { Flow } from '@/shared/types/flow';
@@ -174,6 +174,9 @@ import sequenceOs from 'node:os';
 import { _setConversationLogDirForTests, flushConversationLog, allocateSeq, getConversationSequenceDiagnostics } from '@/backend/execution/flow/conversationLog';
 import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { getSubflowOutputDiagnostics } from '@/backend/execution/flow/subflowOutputBudget';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -268,6 +271,70 @@ describe('Conversation sequence safety before execution', () => {
     else expect(lastEvent).toMatchObject({ type: 'recovery:checkpoint', checkpoint: { phase: 'node:after' } });
     expect(isConversationExecutionLocked(id)).toBe(false);
     expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+  });
+
+  it.each(['transition', 'done'] as const)('retains a folded terminal visit after late %s failure and retries without child dispatch or duplicate fold', async boundary => {
+    const failure = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'temporary terminal publication failure');
+    const originalStep = (FlowExecutor.executeStep as jest.Mock).getMockImplementation()!;
+    const invocation: SubflowInvocation = {
+      version: 1, id: 'folded-visit', parentConversationId: id, parentNodeId: PROCESS,
+      status: 'folded', depth: 1, showSteps: false, concurrencyLimit: 1, joinSeparator: '\n\n',
+      errorStrategy: 'collect-all', sharedInput: { prompt: 'original child task' }, createdAt: 1, updatedAt: 1,
+      foldedAt: 1, foldReceipt: { version: 1, id: 'folded-visit:fold:v1', action: 'FINAL_RESPONSE',
+        presentation: 'joined', messageIds: ['folded-visit:fold:v1:joined:0'] },
+      lanes: [{ id: 'original-lane', index: 0, count: 1, subflowId: 'child-flow', conversationId: 'original-child',
+        status: 'completed', attempt: 1, updatedAt: 1, outputText: 'Already folded child result' }],
+    };
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (state: SharedState) => {
+      state.currentNodeId = PROCESS;
+      state.flowSnapshot = { id: FLOW_ID, name: 'TestFlow', nodes: [], edges: [] };
+      state.lastResponse = 'Already folded child result';
+      state.messages.push({ id: 'folded-visit:fold:v1:joined:0', role: 'assistant', content: state.lastResponse, timestamp: 1 });
+      state.subflowInvocations = { [invocation.id]: invocation };
+      state.activeSubflowInvocationByNode = { [PROCESS]: invocation.id };
+      return { sharedState: state, action: 'FINAL_RESPONSE' };
+    });
+    const forward = executionEventBus.emitterFor(id);
+    const emitter = jest.spyOn(executionEventBus, 'emitterFor').mockImplementationOnce(() => event => {
+      if (boundary === 'done' ? event.type === 'run:done'
+        : event.type === 'recovery:transition' && event.recovery.classification === 'completed') throw failure;
+      forward(event);
+    });
+    try {
+      const failed = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'original user task' });
+      expect(failed.status).toBe('error');
+      expect(failed.error).toMatchObject({ details: { code: failure.code } });
+      const saved = structuredClone(persistedStates.at(-1)!);
+      expect(saved).toMatchObject({ status: 'error', currentNodeId: PROCESS,
+        activeSubflowInvocationByNode: { [PROCESS]: invocation.id } });
+      expect(saved.subflowInvocations![invocation.id].foldReceipt?.continuedAt).toBeUndefined();
+      const messages = JSON.stringify(saved.messages);
+      emitter.mockRestore();
+      conversationStates.delete(id);
+      mockLoadItem.mockResolvedValue(saved);
+      const node = new SubflowNode();
+      const params = { id: PROCESS, type: 'subflow', properties: { subflowId: 'child-flow', saveConversation: true } } as SubflowNodeParams;
+      (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (state: SharedState) => {
+        const prep = await node.prep(state, params);
+        expect(prep.invocationId).toBe(invocation.id);
+        const output = await node.execCore(prep);
+        const action = await node.post(prep, output, state, params);
+        return { sharedState: state, action };
+      });
+      const retried = await runFlow({ flowId: FLOW_ID, conversationId: id, userTurn: false });
+      expect(retried.status).toBe('completed');
+      expect(FlowExecutor.executeStep).toHaveBeenCalledTimes(2); // Parent step once per attempt; no child run.
+      expect(JSON.stringify(retried.messages)).toBe(messages);
+      expect(retried.sharedState.subflowInvocations![invocation.id].lanes[0]).toMatchObject({
+        id: 'original-lane', conversationId: 'original-child', status: 'completed', attempt: 1,
+      });
+      expect(persistedStates.at(-1)?.activeSubflowInvocationByNode?.[PROCESS]).toBeUndefined();
+      expect(persistedStates.at(-1)?.subflowInvocations![invocation.id].foldReceipt?.continuedAt).toEqual(expect.any(Number));
+      expect(getSubflowOutputDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+    } finally {
+      emitter.mockRestore();
+      (FlowExecutor.executeStep as jest.Mock).mockReset().mockImplementation(originalStep);
+    }
   });
 
   it.each(['throw', 'result'] as const)('preserves a primary tool %s when the unknown-effect checkpoint exhausts', async outcome => {

@@ -77,6 +77,9 @@ advancement acknowledges the receipt in the same checkpoint as the next node
 before that node starts. A restarted completed fold returns its saved action,
 including when a stale success or failure arrives. Recovery retains separate
 presentation and does not redispatch completed lanes.
+Terminal completion acknowledges the visit only after sequence-sensitive
+terminal events succeed. A late logging safety failure keeps the folded visit
+pending in the error snapshot, allowing a safe retry to reuse the receipt.
 
 Media promotion deduplicates source URIs, preserves requested reference order,
 and reuses the promoted parent URI for aggregate and separate messages. The

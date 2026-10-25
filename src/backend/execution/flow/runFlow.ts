@@ -3335,7 +3335,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       emitErrorOnce(sharedState, emit, error, { nodeId: sharedState.currentNodeId });
     }
   };
-  if (finalStatus === 'completed' || finalStatus === 'capped') acknowledgeSubflowContinuation(sharedState, sharedState.currentNodeId);
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
 
   // Persist the precise recovery transition before the legacy terminal event.
@@ -3418,6 +3417,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     sharedState.lastBreakNodeId = undefined;
   }
 
+  // Terminal event publication can still downgrade a successful fold to an
+  // error. Retain the active visit until those sequence-sensitive emissions
+  // succeed, so recovery reuses its receipt rather than dispatching new children.
+  if (finalStatus === 'completed' || finalStatus === 'capped') acknowledgeSubflowContinuation(sharedState, sharedState.currentNodeId);
   let finalSnapshotPersisted = false;
   try {
     sharedState.updatedAt = Date.now();
