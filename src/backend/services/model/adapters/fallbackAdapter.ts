@@ -1,3 +1,5 @@
+import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
+import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { createHash } from 'node:crypto';
 import { isOwnerCredentialBoundModel, type Model } from '@/shared/types/model';
 import {
@@ -19,7 +21,7 @@ const cooldowns = new Map<string, { until: number; reason: FallbackTrigger }>();
 
 /** Read error facts locally; raw messages/bodies never enter route receipts. */
 export function fallbackReason(error: unknown): FallbackTrigger | undefined {
-  if (isFlowExecutionAuthorityError(error)) return undefined;
+  if (isFlowExecutionAuthorityError(error) || isConversationDurabilityError(error) || error instanceof ModelTurnArchiveMemoryError) return undefined;
   const root = error && typeof error === 'object' ? error as Record<string, unknown> : {};
   const details = (root.details ?? root.error ?? root) as Record<string, unknown>;
   const status = Number(root.status ?? details?.status ?? details?.statusCode ?? details?.code);

@@ -114,6 +114,43 @@ it('releases captures but keeps a finite fence after uncertain publication', asy
   expect(() => publishConversation('uncertain', {}, async () => undefined)).toThrow(expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' }));
 });
 
+it('charges a frozen capture handed from a live child to a queued sibling', async () => {
+  const entered = gate(), release = gate();
+  let snapshot!: { text: string };
+  await publishConversation('siblings-owned', null, async () => {
+    const first = publishConversation('siblings-owned', { text: 'x'.repeat(2_000_000) }, async owned => {
+      snapshot = freezeConversationSnapshot(owned); entered.release(); await release.promise;
+    });
+    await entered.promise;
+    const second = publishConversation('siblings-owned', snapshot, async owned => {
+      expect(owned).not.toBe(snapshot);
+      expect(getConversationPublicationDiagnostics().retainedBytes).toBeGreaterThan(4_000_000);
+    });
+    expect(getConversationPublicationDiagnostics().retainedBytes).toBeGreaterThan(8_000_000);
+    release.release(); await Promise.all([first, second]);
+  });
+});
+
+it('charges a new root submitted from a settled child callback while its ancestor capture is live', async () => {
+  const submitted = gate();
+  let late!: Promise<void>;
+  await publishConversation('delayed-owned', { text: 'x'.repeat(2_000_000) }, async snapshot => {
+    freezeConversationSnapshot(snapshot);
+    await publishConversation('delayed-owned', null, async () => {
+      setImmediate(() => {
+        late = publishConversation('delayed-owned', snapshot, async owned => {
+          expect(owned).not.toBe(snapshot);
+          expect(getConversationPublicationDiagnostics().retainedBytes).toBeGreaterThan(4_000_000);
+        });
+        submitted.release();
+      });
+    });
+    await submitted.promise;
+    expect(getConversationPublicationDiagnostics().retainedBytes).toBeGreaterThan(8_000_000);
+  });
+  await late;
+});
+
 it('serializes nested siblings, permits grandchildren, and holds the outer writer until detached children settle', async () => {
   const blocked = gate(), entered = gate(); const trace: string[] = [];
   const root = publishConversation('nested', null, async () => {

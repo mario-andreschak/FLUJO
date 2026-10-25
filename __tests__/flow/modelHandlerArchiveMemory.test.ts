@@ -262,6 +262,48 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     }
   });
 
+  it('retains the completed inference receipt and never redispatches after real SDK result publication fails', async () => {
+    const conversationId = 'publication-result';
+    const logDirectory = path.join(root, 'result-publication-logs');
+    await fs.mkdir(logDirectory);
+    const previous = _setConversationLogDirForTests(logDirectory);
+    const canonical = structuredClone([message]);
+    FlowExecutor.conversationStates.set(conversationId, { conversationId, messages: canonical } as SharedState);
+    const open = fs.open.bind(fs);
+    const writer = jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (!String(args[0]).endsWith(`${conversationId}.jsonl`)) return handle;
+      return new Proxy(handle, { get(target, key) {
+        if (key === 'write') return async (bytes: Buffer, offset: number, length: number, position: number) => {
+          if (bytes.subarray(offset, offset + length).toString().includes('model:dispatch-result')) {
+            throw Object.assign(new Error('result marker write failed'), { code: 'ENOSPC' });
+          }
+          return target.write(bytes, offset, length, position);
+        };
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    });
+    const onRecoveryRetry = jest.fn();
+    try {
+      expect(await invoke(canonical, canonical, { conversationId, onRecoveryRetry })).toMatchObject({
+        success: false, error: { code: 'CONVERSATION_PUBLICATION_UNCERTAIN' },
+      });
+      expect(requests).toHaveLength(1);
+      expect(onRecoveryRetry).not.toHaveBeenCalled();
+      const archive = path.join(root, 'archives', conversationId);
+      const outcomes = (await fs.readdir(archive)).filter(name => name.endsWith('.outcome.json'));
+      expect(outcomes).toHaveLength(1);
+      expect(JSON.parse(await fs.readFile(path.join(archive, outcomes[0]), 'utf8')).outcome).toBe('completed');
+      expect(canonical).toEqual([message]);
+      expect(listInFlightToolCalls(conversationId)).toHaveLength(0);
+    } finally {
+      await flushConversationLog(conversationId).catch(() => {});
+      writer.mockRestore(); FlowExecutor.conversationStates.delete(conversationId);
+      _setConversationLogDirForTests(previous);
+    }
+  });
+
   it('does not replay a failed stream after visible output', async () => {
     responsesMode = 'partial';
     getModelMock.mockResolvedValue({ ...(await getModelMock()), adapter: 'openai-responses' });

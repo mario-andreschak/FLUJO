@@ -71,7 +71,8 @@ const omitted = (value: unknown) => value === undefined || typeof value === 'fun
 function capture<T>(key: string, value: T, omitRootKeys?: ReadonlySet<string>): { value: T; retained: number; bytes: number; borrowed: boolean } {
   let slots = 0, retained = 0, metadata = 0;
   const source = value !== null && typeof value === 'object' ? ledger.captures.get(value) : undefined;
-  const borrowed = !!source?.live && source.owner.live && source.owner.key === key && source.owner === ledger.context.getStore()?.owner
+  const current = ledger.context.getStore();
+  const borrowed = !!source?.live && source === current && source.owner.live && source.owner.key === key
     && ledger.immutableSnapshots.has(value as object) && !omitRootKeys;
   const ancestors = new Set<object>();
   const visit = (item: unknown, depth: number, copying: boolean): unknown => {

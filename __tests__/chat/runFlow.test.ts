@@ -173,7 +173,8 @@ import sequencePath from 'node:path';
 import sequenceOs from 'node:os';
 import { _setConversationLogDirForTests, flushConversationLog, allocateSeq, getConversationSequenceDiagnostics } from '@/backend/execution/flow/conversationLog';
 import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
-import { ConversationPublicationError } from '@/backend/execution/flow/conversationPublication';
+import { ConversationPublicationError, publishConversation, getConversationPublicationDiagnostics,
+  CONVERSATION_PUBLICATION_LIMITS } from '@/backend/execution/flow/conversationPublication';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -418,6 +419,30 @@ describe('Conversation sequence safety before execution', () => {
     expect(result.error).toMatchObject({ details: { code: failure.code }, statusCode: 503 });
     expect(physicalDispatch).not.toHaveBeenCalled();
     expect(result.messages.some(message => message.id === 'publication-owner')).toBe(true);
+    expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(0);
+  });
+
+  it('propagates actual owner refusal through the default event-bus emitter before physical dispatch', async () => {
+    const physicalDispatch = jest.fn();
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState, forward: (event: unknown) => void) => {
+      let release!: () => void;
+      const blocked = new Promise<void>(resolve => { release = resolve; });
+      const pending: Promise<void>[] = [];
+      while (getConversationPublicationDiagnostics().owners < CONVERSATION_PUBLICATION_LIMITS.owners) {
+        pending.push(publishConversation('default-emitter-capacity', null, async () => blocked));
+      }
+      sharedState.messages.push({ id: 'default-publication-owner', role: 'assistant', content: 'Retain canonical history', timestamp: 1 });
+      try {
+        forward({ type: 'model:dispatch', dispatchId: 'blocked' });
+        physicalDispatch();
+        return { sharedState, action: 'FINAL_RESPONSE' };
+      } finally { release(); await Promise.all(pending); }
+    });
+    const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'input' });
+    expect(result.status).toBe('error');
+    expect(result.error).toMatchObject({ details: { code: 'CONVERSATION_PUBLICATION_BUSY' }, statusCode: 429 });
+    expect(physicalDispatch).not.toHaveBeenCalled();
+    expect(result.messages.some(message => message.id === 'default-publication-owner')).toBe(true);
     expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(0);
   });
 

@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'node:crypto';
 import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execution/events';
 import { appendFromBus, allocateSeq } from '@/backend/execution/flow/conversationLog';
-import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
 import { createLogger } from '@/utils/logger';
 import { bindToCurrentWorkspace, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { boundedEventSnapshot, type EventSnapshot } from './boundedEventSnapshot';
@@ -310,7 +310,7 @@ export class ExecutionEventBus {
       try {
         this.emit(conversationId, raw);
       } catch (err) {
-        if (isConversationSequenceSafetyError(err)) throw err;
+        if (isConversationDurabilityError(err)) throw err;
         log.warn(`Failed to emit execution event for ${conversationId}`, { err });
       }
     });

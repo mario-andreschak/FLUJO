@@ -23,7 +23,10 @@ existing references.
 
 An internal snapshot freezes its privately captured containers before nested
 storage publication. That nested write borrows the live snapshot's original
-charge; a released or mutable capture cannot be borrowed. Replacement and its
+charge only when the submitting active frame owns that exact capture. Sibling
+handoffs, delayed callbacks from settled frames, and other conversation owners
+must recapture and reserve independently. A released or mutable capture cannot
+be borrowed. Replacement and its
 snapshot therefore hold two history charges, including the upper fixture of a
 2M-character parent plus eight 5.6M-character lanes (46.8M total). Streaming
 integration coverage checks this case with the unchanged 256 MiB bound.
@@ -98,6 +101,12 @@ Required publication failures use typed busy, memory, data, I/O, or uncertain
 errors. A bus failure becomes a fence observed by the durability flush. Terminal
 cleanup recognizes these errors, preserves a preceding execution failure, and
 does not report successful persistence after the final snapshot retry fails.
+The default event emitter and HTTP/SSE submission path preserve these typed
+errors. Model dispatch waits for its required marker; a result-marker failure
+does not trigger provider fallback or an automatic retry. A completed inference
+receipt already acknowledged by the archive remains completed if its later
+conversation marker fails. This does not establish exactly-once inference or
+resolve an uncertain durable outcome automatically.
 
 Focused tests cover bounded queued ownership, blocked-authority capture,
 foreign JSON, large shared strings, partial writes, nested transaction lifetime,

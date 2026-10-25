@@ -43,6 +43,7 @@ import sequencePath from 'node:path';
 import sequenceOs from 'node:os';
 import { _setConversationLogDirForTests } from '@/backend/execution/flow/conversationLog';
 import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { ConversationPublicationError } from '@/backend/execution/flow/conversationPublicationError';
 import { acquireChatIngress, finishChatInputParsing, getChatIngressDiagnostics } from '@/utils/http/chatIngress';
 
 // Fail loudly if the implementation ever reaches back out over HTTP.
@@ -124,6 +125,35 @@ describe('Conversation sequence refusal in completion responses', () => {
     expect(response.headers.get('Retry-After')).toBeNull();
     expect(await response.json()).toMatchObject({ error: { code: 'CONVERSATION_SEQUENCE_REGISTRY_FULL' } });
   });
+
+  it.each(['CONVERSATION_PUBLICATION_BUSY', 'CONVERSATION_PUBLICATION_IO'] as const)('maps %s to HTTP and late SSE without mutating the existing owner', async code => {
+    const failure = new ConversationPublicationError(code, 'fixture');
+    (runFlow as jest.Mock).mockRejectedValue(failure);
+    const response = await processChatCompletion({ ...request, stream: false } as any, false, false, false, `http-${code}`);
+    expect(response.status).toBe(failure.status);
+    expect(await response.json()).toMatchObject({ error: { code } });
+    const id = `sse-${code}`;
+    const owner = { conversationId: id, status: 'paused_debug', messages: [] } as any;
+    FlowExecutor.conversationStates.set(id, owner);
+    const streamed = await processChatCompletion(request as any, false, false, false, id);
+    const body = await readAll(streamed);
+    expect(body).toContain(code); expect(body).toContain('[DONE]');
+    expect(FlowExecutor.conversationStates.get(id)).toBe(owner);
+    expect(owner.status).toBe('paused_debug');
+    expect(persistConversationState).not.toHaveBeenCalled();
+  });
+
+  it('maps a pre-response publication refusal without leaving a submitted owner or reader', async () => {
+    const failure = new ConversationPublicationError('CONVERSATION_PUBLICATION_BUSY', 'projection capacity');
+    const projection = jest.spyOn(executionEventBus, 'ensureConversationProjection').mockImplementationOnce(() => { throw failure; });
+    try {
+      const response = await processChatCompletion(request as any, false, false, false, 'pre-response-publication');
+      expect(response.status).toBe(429);
+      expect(await response.json()).toMatchObject({ error: { code: failure.code } });
+      expect(runFlow).not.toHaveBeenCalled();
+      expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+    } finally { projection.mockRestore(); }
+  });
 });
 
 describe('ingress producer ownership', () => {
@@ -153,6 +183,31 @@ describe('ingress producer ownership', () => {
     reject(new Error('public route provider fixture')); await tick();
     expect(persisted).toBeDefined(); expect(getChatIngressDiagnostics().active).toBe(1);
     persisted(); await tick();
+    expect(getChatIngressDiagnostics().active).toBe(0);
+  });
+
+  it('drains terminal publication refusal after a primary failure without unhandled rejection or early producer release', async () => {
+    const id = 'ingress-terminal-publication';
+    const primary = new Error('original provider failure');
+    const secondary = new ConversationPublicationError('CONVERSATION_PUBLICATION_UNCERTAIN', 'terminal log fenced');
+    let reject!: (error: Error) => void, persisted!: () => void;
+    (runFlow as jest.Mock).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    (persistConversationState as jest.Mock).mockImplementationOnce(() => new Promise<void>(resolve => { persisted = resolve; }));
+    const owner = { conversationId: id, messages: [], status: 'running', ephemeral: true } as any;
+    FlowExecutor.conversationStates.set(id, owner);
+    const emit = jest.spyOn(executionEventBus, 'emit').mockImplementationOnce(() => { throw secondary; });
+    const unhandled = jest.fn(); process.on('unhandledRejection', unhandled);
+    const admitted = permit();
+    try {
+      const response = await processChatCompletion(data as any, false, false, false, id, false, true, undefined, admitted);
+      admitted.release(); reject(primary); await tick();
+      expect(getChatIngressDiagnostics().active).toBe(1);
+      persisted();
+      expect(await readAll(response)).toContain('[DONE]'); await tick();
+      expect(owner.lastError.message).toBe(primary.message);
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(getChatIngressDiagnostics().active).toBe(0);
+    } finally { admitted.release(); emit.mockRestore(); process.off('unhandledRejection', unhandled); }
   });
 
   it('keeps a disconnected consumer charged until the background producer settles', async () => {

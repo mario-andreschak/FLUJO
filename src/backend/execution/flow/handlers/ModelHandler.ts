@@ -1,4 +1,4 @@
-import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
+import { isConversationDurabilityError, isConversationDurabilityCode } from '@/backend/execution/flow/conversationPublicationError';
 import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
@@ -1863,18 +1863,27 @@ export class ModelHandler {
           node: nodeId ? { nodeId } : undefined,
         });
       },
+    }).catch(async error => {
+      try { await finishLiveProjection(); }
+      catch (cleanupError) { log.warn('Failed to drain live projection after a model failure', { cleanupError }); }
+      throw error;
     });
 
-    await finishLiveProjection();
+    try { await finishLiveProjection(); }
+    catch (error) {
+      if (response.success) throw error;
+      log.warn('Live projection failed while retaining the primary model failure', { error });
+    }
 
     // Provider abort is cooperative and SDK callbacks can resolve after a lease
     // or meeting generation was replaced.  No returned media/message/resource
     // projection may observe that stale result.
-    await assertFlowExecutionCurrent(durableContext);
+    if (response.success) await assertFlowExecutionCurrent(durableContext);
 
     if (!response.success) {
       for (const messageId of liveMessageIds) {
-        emit?.({ type: 'model:end', messageId, discard: true, node: nodeId ? { nodeId } : undefined });
+        try { emit?.({ type: 'model:end', messageId, discard: true, node: nodeId ? { nodeId } : undefined }); }
+        catch (error) { log.warn('Failed to publish failed-model cleanup', { error }); }
       }
       log.warn('Model call returned an error', {
         modelId,
@@ -3600,8 +3609,12 @@ export class ModelHandler {
           // the same attempt is not in this set and remains durable. User-driven
           // cancellation has its own partial-run semantics, so leave it intact.
           if (model.adapter === 'claude-cli' && !abortController.signal.aborted) {
-            await opts?.flushTranscriptProjection?.();
-            await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
+            try {
+              await opts?.flushTranscriptProjection?.();
+              await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
+            } catch (cleanupError) {
+              log.warn('Failed to clean up streamed prose while retaining the primary model failure', { cleanupError });
+            }
           }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         } finally {
@@ -3661,7 +3674,7 @@ export class ModelHandler {
         for (;;) {
           attemptProducedOutput = false;
           const attemptResult = await attempt(attemptMessages, attemptTools, attemptTemperature);
-          if (attemptResult.success) return attemptResult;
+          if (attemptResult.success || isConversationDurabilityCode(attemptResult.error.code)) return attemptResult;
           if (singlePhysicalAttempt || getHarnessExecution()) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;

@@ -19,3 +19,8 @@ export function isConversationPublicationError(error: unknown): error is Convers
 export function isConversationDurabilityError(error: unknown): error is ConversationPublicationError | ConversationSequenceSafetyError {
   return isConversationPublicationError(error) || (error instanceof Error && error.name === 'ConversationSequenceSafetyError');
 }
+
+/** Normalized model errors retain their code after losing Error identity. */
+export function isConversationDurabilityCode(code: unknown): boolean {
+  return typeof code === 'string' && (code.startsWith('CONVERSATION_PUBLICATION_') || code.startsWith('CONVERSATION_SEQUENCE_'));
+}
