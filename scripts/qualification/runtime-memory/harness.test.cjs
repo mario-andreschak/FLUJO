@@ -208,7 +208,7 @@ test('settlement rejects quarantined scanners, leaked output owners and missing 
     subflowOutput: { active: 0, reservedBytes: 0 }, archive: { bytes: 0, writers: 0, quarantined: 0 },
     archiveRead: { activeReads: 0, quarantinedReads: 0, reservedJsonAllocationBytes: 0, cleanupFailures: 0 },
     cache: { inFlightLoads: 0 }, publication: { owners: 0, writers: 0, allocationBytes: 0, retainedBytes: 0,
-      queuedWriters: 0, chains: 0, fences: 0, receipts: 0, quarantinedWriterSlots: 0, rejected: 7 },
+      queuedWriters: 0, chains: 0, fences: 0, receipts: 0, quarantinedWriterSlots: 0, terminalWaiters: 0, rejected: 7 },
     ingress: { active: 0, parsing: 0, reservedBytes: 0, rejectedSize: 3 },
     allocation: { run: 0, preparation: 0, output: 0, ingress: 0, publication: 0, total: 0 },
     rate: { keys: 1, keyBytes: 128, maxKeys: 4096, maxKeyBytes: 1048576, capacityRefusals: 0, rateRefusals: 0, expired: 20 }, streams: { active: 0, replayReads: 0, workspaces: 0, conversations: 0 },
@@ -218,7 +218,7 @@ test('settlement rejects quarantined scanners, leaked output owners and missing 
   assertSettledDiagnostics(d);
   for (const [group, field] of [['sequence', 'scanQuarantined'], ['sequence', 'scanActive'], ['sequence', 'pendingCommits'],
     ['subflowOutput', 'active'], ['subflowOutput', 'reservedBytes'], ['streams', 'conversations'],
-    ...['owners', 'writers', 'allocationBytes', 'retainedBytes', 'queuedWriters', 'chains', 'fences', 'receipts', 'quarantinedWriterSlots'].map(f => ['publication', f]),
+    ...['owners', 'writers', 'allocationBytes', 'retainedBytes', 'queuedWriters', 'chains', 'fences', 'receipts', 'quarantinedWriterSlots', 'terminalWaiters'].map(f => ['publication', f]),
     ...['active', 'parsing', 'reservedBytes'].map(f => ['ingress', f]),
     ...['run', 'preparation', 'output', 'ingress', 'publication', 'total'].map(f => ['allocation', f]),
     ['archiveRead', 'reservedJsonAllocationBytes'], ['archiveRead', 'cleanupFailures'], ['cache', 'inFlightLoads']]) {
@@ -319,6 +319,11 @@ test('Linux plan inputs verify independently attested mirror bytes and ext4 prov
   fs.appendFileSync(path.join(directory,'runtime-receipt.json'),' ');
   assert.throws(() => readPilotEvidence(directory),/Attested mirror/);
   fs.writeFileSync(path.join(directory,'runtime-receipt.json'),JSON.stringify(p)+'\n');
+  // Hash-correct old receipts copied to a new ext4 inode still cannot qualify.
+  owner.linux.datasetMirror.datasetFilesystem.inode++;
+  owner.guard.datasetMirror=structuredClone(owner.linux.datasetMirror);fs.writeFileSync(ownerFile,JSON.stringify(owner));
+  assert.throws(() => readPilotEvidence(directory), /inode/);
+  owner.linux.datasetMirror.datasetFilesystem.inode--;
   owner.linux.datasetMirror.datasetFilesystem.filesystemMagic='0x9fa0';
   owner.guard.datasetMirror=structuredClone(owner.linux.datasetMirror);fs.writeFileSync(ownerFile,JSON.stringify(owner));
   assert.throws(() => readPilotEvidence(directory),/0xef53/);

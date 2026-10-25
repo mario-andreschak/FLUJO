@@ -170,8 +170,12 @@ C:. After workload settlement, the guardian independently opens the actual ext4
 directory and at most four regular receipt files, each at most 1 MiB, using
 descriptor-based filesystem checks and no-follow opens. It hashes their original
 bytes and mirrors them to the control phase's `receipts/` directory. Its receipt
-binds the ext4 path, device, inode, phase/token and original file hashes. The outer
-Windows guard rechecks the mirror bytes. Failed datasets and partial mirrors
+binds the ext4 path, device, inode, phase/token and original file hashes. The
+guardian requires both runtime and supervisor receipt filesystem identities to
+match its directory descriptor before attesting completion. The Windows guard
+and final MCP ownership check independently repeat that comparison for pilots
+and endurance runs. Copying old receipts into a replacement ext4 inode fails.
+The Windows guard also rechecks the mirror bytes. Failed datasets and partial mirrors
 remain preserved and cannot qualify.
 
 Keep both platforms' final source, canonical harness and lock-matched installed
