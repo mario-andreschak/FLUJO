@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { simpleGit } from 'simple-git';
 import path from 'path';
 import fs from 'fs/promises';
+import { realpathSync } from 'fs';
 import { execSync, spawn, ExecSyncOptionsWithStringEncoding } from 'child_process';
 import { createLogger } from '@/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
@@ -15,6 +16,9 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 import { killProcessTree } from '@/utils/process/killProcessTree';
 import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
+import { assertMcpHostInstallationAllowed, createMcpInstallerEnvironment, McpHostInstallationError } from '@/backend/services/mcp/installerEnvironment';
+import { loadItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('app/api/git/route');
 
@@ -32,6 +36,7 @@ type CommandExecutionOptions = {
   env?: Record<string, string>;
   actionName: string;
   requestId: string;
+  installerSelection?: StoredInstallerProfile & { serverName?: unknown };
 };
 // Define a base directory for storing cloned repositories. Resolved from the
 // data dir (see utils/paths) so a packaged install (npm/Docker) clones servers
@@ -41,6 +46,49 @@ type CommandExecutionOptions = {
 // SELECTED workspace and a module constant would pin the route to whichever
 // workspace happened to load it first.
 const reposBaseDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
+
+type StoredInstallerProfile = {
+  isolation?: unknown;
+  trustedHost?: unknown;
+  rootPath?: unknown;
+  cwd?: unknown;
+  launch?: unknown;
+};
+
+async function assertRepoHostInstallationAllowed(
+  savePath: unknown,
+  selection: StoredInstallerProfile & { serverName?: unknown },
+): Promise<void> {
+  assertMcpHostInstallationAllowed(selection);
+  // Existing clients identify the server by its working directory. Read raw
+  // records: config normalization can perform Git probes before admission.
+  const stored = await loadItem<Record<string, StoredInstallerProfile>>(StorageKey.MCP_SERVERS, {});
+  // No asynchronous work follows this current snapshot and global-policy check.
+  assertMcpHostInstallationAllowed(selection);
+  const canonicalPath = (value: string) => {
+    const absolute = path.isAbsolute(value) ? value : path.resolve(getWorkspaceDataDir(), value);
+    try { return realpathSync(absolute); } catch { return absolute; }
+  };
+  const requested = typeof savePath === 'string' && savePath.trim()
+    ? canonicalPath(path.resolve(savePath)) : undefined;
+  const contains = (parent: string, child: string) => {
+    const relative = path.relative(parent, child);
+    return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  };
+  for (const [name, config] of Object.entries(stored)) {
+    if (!config || typeof config !== 'object') continue;
+    if (config.isolation === undefined && config.trustedHost === undefined) continue;
+    if (name === selection.serverName) assertMcpHostInstallationAllowed(config);
+    const launch = config.launch && typeof config.launch === 'object' && 'cwd' in config.launch
+      ? config.launch.cwd : undefined;
+    for (const location of [config.rootPath, config.cwd, launch]) {
+      if (!requested || typeof location !== 'string' || !location.trim()) continue;
+      const root = canonicalPath(location);
+      // Cover both the server subtree and source-tree install/build parents.
+      if (contains(root, requested) || contains(requested, root)) assertMcpHostInstallationAllowed(config);
+    }
+  }
+}
 
 // Ensure the base directory exists
 async function ensureReposDir() {
@@ -195,7 +243,7 @@ async function checkRepoUpdateStatus(savePath: string, requestId: string): Promi
 }
 
 // Helper function to execute a command in a repository directory
-async function executeCommandInRepo({ savePath, command, args, actionName, requestId, env }: CommandExecutionOptions) {
+async function executeCommandInRepo({ savePath, command, args, actionName, requestId, env, installerSelection }: CommandExecutionOptions) {
   if (!savePath) {
     log.error(`Missing repository path [${requestId}]`);
     return NextResponse.json({ error: 'Missing repository path' }, { status: 400 });
@@ -233,7 +281,10 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
           // Install/build commands can contain a plain or compound `npm install`.
           // Force devDependencies at the execution boundary so production mode cannot
           // silently prune the compiler/bundler required by an MCP server build.
-          env: withNpmDevDependencies(process.env, env),
+          env: withNpmDevDependencies(
+            actionName === 'Run' ? process.env : createMcpInstallerEnvironment(),
+            env,
+          ),
         };
         
         // Add timeout for "Run" action
@@ -242,6 +293,7 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
           execOptions.timeout = 10000; // 10 seconds in milliseconds
         }
         
+        if (actionName !== 'Run') await assertRepoHostInstallationAllowed(savePath, installerSelection ?? {});
         commandOutput = execSync(finalCommand, execOptions);
         log.info(`${actionName} command executed successfully [${requestId}]`);
         log.debug(`${actionName} output summary [${requestId}]`, { 
@@ -249,6 +301,7 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
           outputPreview: commandOutput.substring(0, 200) + (commandOutput.length > 200 ? '...' : '')
         });
       } catch (error) {
+        if (error instanceof McpHostInstallationError) throw error;
         // If the command fails, capture the error output
         log.error(`${actionName} command failed [${requestId}]`, error);
         const execError = error as { stdout?: Buffer; stderr?: Buffer; killed?: boolean; code?: string };
@@ -302,6 +355,9 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
       });
       return NextResponse.json(response);
     } catch (commandError) {
+      if (commandError instanceof McpHostInstallationError) {
+        return NextResponse.json({ error: commandError.message }, { status: 403 });
+      }
       log.error(`${actionName} command execution failed [${requestId}]`, commandError);
       // Extract command output from error if available
       let commandOutput = `${actionName} output not available`;
@@ -348,7 +404,7 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
 // execSync. There is deliberately NO timeout: a heavy install is exactly the long case
 // this feature is about (the `Run` action's 10s timeout stays in executeCommandInRepo).
 function streamCommandInRepo(
-  { savePath, command, args, actionName, requestId, env }: CommandExecutionOptions,
+  { savePath, command, args, actionName, requestId, env, installerSelection }: CommandExecutionOptions,
   request: NextRequest
 ): Response {
   return createNdjsonStreamResponse(async (emit, signal) => {
@@ -371,6 +427,9 @@ function streamCommandInRepo(
     // base command un-quoted, each arg shell-quoted as one literal token).
     const finalCommand = buildRepoCommand(command || '', args);
 
+    // Re-read policy after filesystem awaits, directly before the host effect.
+    await assertRepoHostInstallationAllowed(savePath, installerSelection ?? {});
+
     log.info(`Streaming ${actionName} command: ${finalCommand} in ${savePath} [${requestId}]`);
     emit({ type: 'status', phase: 'running', message: `Executing: ${finalCommand}\n` });
 
@@ -382,7 +441,7 @@ function streamCommandInRepo(
       const child = spawn(finalCommand, {
         cwd: savePath,
         shell: true,
-        env: withNpmDevDependencies(process.env, env),
+        env: withNpmDevDependencies(createMcpInstallerEnvironment(), env),
         detached: process.platform !== 'win32',
       });
 
@@ -475,6 +534,15 @@ async function POST_handler(request: NextRequest) {
       return NextResponse.json({ error: 'Missing action parameter' }, { status: 400 });
     }
 
+    if (['install', 'installStream', 'build', 'buildStream'].includes(action)) {
+      try {
+        await assertRepoHostInstallationAllowed(savePath, requestBody);
+      } catch (error) {
+        if (!(error instanceof McpHostInstallationError)) throw error;
+        return NextResponse.json({ error: error.message }, { status: 403 });
+      }
+    }
+
     await ensureReposDir();
     log.info(`Executing action: ${action} [${requestId}]`);
 
@@ -538,6 +606,7 @@ async function POST_handler(request: NextRequest) {
           savePath,
           command: installCommand,
           env,
+          installerSelection: requestBody,
           actionName: 'Install',
           requestId
         });
@@ -550,6 +619,7 @@ async function POST_handler(request: NextRequest) {
           savePath,
           command: installCommand,
           env,
+          installerSelection: requestBody,
           actionName: 'Install',
           requestId
         }, request);
@@ -701,6 +771,7 @@ async function POST_handler(request: NextRequest) {
           savePath,
           command: buildCommand || '',
           env,
+          installerSelection: requestBody,
           actionName: 'Build',
           requestId
         });
@@ -714,6 +785,7 @@ async function POST_handler(request: NextRequest) {
           savePath,
           command: buildCommand || '',
           env,
+          installerSelection: requestBody,
           actionName: 'Build',
           requestId
         }, request);

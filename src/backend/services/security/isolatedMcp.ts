@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import { windowsPrivateAuthorityStamp } from './windowsPrivateAuthority';
+import { assertIsolatedMcpContainerInspection, assertIsolatedMcpDaemonInfo } from './isolatedMcpInspection';
 
 const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
 const mountSchema = z.object({
@@ -40,8 +42,8 @@ export type IsolatedMcpPolicy = z.infer<typeof isolatedMcpPolicySchema>;
 export class McpIsolationError extends Error {
   constructor(readonly code: 'ISOLATION_POLICY_INVALID' | 'ISOLATION_RECONSENT_REQUIRED' | 'ISOLATION_UNAVAILABLE') {
     super(code === 'ISOLATION_RECONSENT_REQUIRED' ? 'MCP isolation capabilities changed. Review and approve the new policy.'
-      : code === 'ISOLATION_UNAVAILABLE' ? 'MCP isolation is unavailable. Check the local Linux Docker daemon and preinstalled image; host fallback is disabled.'
-        : 'MCP isolation policy is invalid. Review the image, local daemon, grants and limits.');
+      : code === 'ISOLATION_UNAVAILABLE' ? 'MCP isolation is unavailable. Check the local Linux Docker daemon, supported resource limits, preinstalled image and private grant files; host fallback is disabled.'
+        : 'MCP isolation policy is invalid. Review the image, local daemon, mounts, single-line environment grants and limits.');
     this.name = 'McpIsolationError';
   }
 }
@@ -100,6 +102,43 @@ function safeMount(workspaceRoot: string, relative: string): string {
   return actual;
 }
 
+/** Container grants must never become loader/runtime options for the host CLI. */
+function privateEnvironmentFile(control: string, environment: Readonly<Record<string, string>>) {
+  const filename = path.join(control, 'container.env');
+  const fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
+    | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+  const identity = fs.fstatSync(fd, { bigint: true });
+  let content: Buffer | undefined;
+  function assertOwned() {
+    const held = fs.fstatSync(fd, { bigint: true });
+    const named = fs.lstatSync(filename, { bigint: true });
+    if (!held.isFile() || !named.isFile() || named.isSymbolicLink() || held.nlink !== BigInt(1)
+        || held.dev !== identity.dev || held.ino !== identity.ino || named.dev !== held.dev || named.ino !== held.ino
+        || held.uid !== identity.uid || held.gid !== identity.gid || held.mode !== identity.mode) {
+      throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+    }
+  }
+  function dispose() {
+    content?.fill(0);
+    try { assertOwned(); fs.unlinkSync(filename); }
+    finally { fs.closeSync(fd); }
+  }
+  try {
+    assertOwned();
+    // Validate the empty file first: a Windows mode bit alone cannot protect a
+    // secret, and a failed ACL check must never leave secret bytes on disk.
+    if (process.platform === 'win32') windowsPrivateAuthorityStamp(filename);
+    else if (identity.uid !== BigInt(process.getuid!()) || (identity.mode & BigInt(0o077)) !== BigInt(0)) {
+      throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+    }
+    assertOwned();
+    content = Buffer.from(Object.entries(environment).map(([name, value]) => `${name}=${value}\n`).join(''));
+    fs.writeFileSync(fd, content);
+    assertOwned();
+    return { filename, dispose };
+  } catch (error) { dispose(); throw error; }
+}
+
 /**
  * Materialize an approved OS-backed launch without inheriting host secrets or
  * allowing arbitrary Docker flags. No image pull, build, host command fallback,
@@ -113,18 +152,22 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
   if (approvedDigest !== isolatedMcpPolicyDigest(policy)) throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
   if (!path.isAbsolute(workspaceRoot)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   if (ownership && !/^[a-f0-9]{64}$/.test(ownership.key)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
-  const env: DockerEnvironment = hostEssentials();
+  const containerEnvironment: Record<string, string> = {};
   for (const name of policy.environmentNames) {
     const provided = environment[name];
-    if (typeof provided !== 'string' || provided.length > 16 * 1024 || provided.includes('\0')) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
+    if (typeof provided !== 'string' || provided.length > 16 * 1024 || /[\0\r\n]/.test(provided)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
     if (name === 'NODE_ENV' && provided !== 'production') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
-    env[name] = provided;
+    containerEnvironment[name] = provided;
   }
   const generation = randomUUID();
   // Docker's atomic name uniqueness also fences other processes and restarts.
   // A predecessor cannot be bypassed by allocating a fresh random generation.
   const name = `flujo-mcp-${ownership?.key ?? generation}`;
-  const tempRoot = path.resolve(os.tmpdir());
+  // Windows Temp can inherit outsider read access. Use the private profile
+  // anchor and still require native ACL admission before writing any grants.
+  const tempParent = process.platform === 'win32' ? process.env.LOCALAPPDATA : os.tmpdir();
+  if (!tempParent || !path.isAbsolute(tempParent)) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+  const tempRoot = path.resolve(tempParent);
   const control = fs.mkdtempSync(path.join(tempRoot, 'flujo-mcp-isolation-'));
   function cleanupControl() {
     const relative = path.relative(tempRoot, control);
@@ -155,8 +198,11 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
   }
   let creationRequested = false;
   try {
-    if (docker(['info', '--format', '{{.OSType}}']) !== 'linux') throw new McpIsolationError('ISOLATION_UNAVAILABLE');
-    const volumes = JSON.parse(docker(['image', 'inspect', policy.image, '--format', '{{json .Config.Volumes}}']));
+    assertIsolatedMcpDaemonInfo(JSON.parse(docker(['info', '--format', '{{json .}}'])));
+    const image = JSON.parse(docker(['image', 'inspect', policy.image, '--format',
+      '{"Id":{{json .Id}},"Config":{"Volumes":{{json (index .Config "Volumes")}}}}']));
+    if (!image || !/^sha256:[a-f0-9]{64}$/.test(image.Id)) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+    const volumes: unknown = image.Config?.Volumes;
     if (volumes !== null && (typeof volumes !== 'object' || Array.isArray(volumes) || Object.keys(volumes).length !== 0)) {
       throw new McpIsolationError('ISOLATION_POLICY_INVALID');
     }
@@ -166,28 +212,43 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
     const args = ['container', 'create', '--interactive', '--init', '--pull=never',
       '--name', name, '--label', `co.flujo.mcp-generation=${generation}`,
       '--read-only', '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges:true',
+      '--cgroupns=private', '--ipc=private',
       '--user=65534:65534', '--no-healthcheck', '--memory', `${policy.memoryMiB}m`,
       '--log-driver=none',
       '--memory-swap', `${policy.memoryMiB}m`, '--cpus', String(policy.cpus),
       '--pids-limit', String(policy.pidsLimit), '--shm-size=1m',
       '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777'];
     if (ownership) args.push('--label', `co.flujo.mcp-ownership=${ownership.key}`);
-    for (const mount of policy.mounts) {
-      args.push('--mount', `type=bind,source=${safeMount(workspaceRoot, mount.source)},target=/grants/${mount.name},readonly`);
+    const mounts = policy.mounts.map(mount => ({ source: safeMount(workspaceRoot, mount.source), target: `/grants/${mount.name}` }));
+    for (const mount of mounts) {
+      args.push('--mount', `type=bind,source=${mount.source},target=${mount.target},readonly,bind-recursive=disabled`);
     }
-    for (const variable of policy.environmentNames) args.push('--env', variable);
-    args.push(policy.image, ...policy.command);
+    const grants = policy.environmentNames.length ? privateEnvironmentFile(control, containerEnvironment) : undefined;
+    if (grants) args.push('--env-file', grants.filename);
+    args.push(image.Id, ...policy.command);
     // Create without executing first. Starting by immutable ID prevents a late
     // `run` request from creating a server after transport cleanup observed none.
-    creationRequested = true;
-    const containerId = execFileSync(policy.dockerExecutable, [...globalArgs, ...args], {
-      env, windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
-    }).trim();
+    let containerId: string;
+    try {
+      creationRequested = true;
+      containerId = execFileSync(policy.dockerExecutable, [...globalArgs, ...args], {
+        env: hostEssentials(), windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
+      }).trim();
+    } finally { grants?.dispose(); }
     if (!/^[a-f0-9]{64}$/.test(containerId)
       || ownedRows(`id=${containerId}`).join('\n') !== `${containerId} ${generation}`) {
       throw new McpIsolationError('ISOLATION_UNAVAILABLE');
     }
+    // Do not read Config.Env back into CLI output: it contains granted secrets.
+    const inspectionFormat = '{"Id":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},'
+      + '"State":{{json .State}},"RestartCount":{{json .RestartCount}},"HostConfig":{{json .HostConfig}},'
+      + '"Mounts":{{json .Mounts}},"NetworkSettings":{{json .NetworkSettings}},"Config":{'
+      + '"Image":{{json .Config.Image}},"User":{{json .Config.User}},"Cmd":{{json .Config.Cmd}},'
+      + '"Labels":{{json .Config.Labels}},"Volumes":{{json .Config.Volumes}},"Healthcheck":{{json .Config.Healthcheck}}}}';
+    assertIsolatedMcpContainerInspection(JSON.parse(docker(['container', 'inspect', containerId, '--format', inspectionFormat])), {
+      containerId, generation, name, imageId: image.Id, policy, mounts, ownershipKey: ownership?.key,
+    });
     let completed: { outcome: 'removed' | 'absent' } | undefined;
     return Object.freeze({ command: policy.dockerExecutable,
       args: Object.freeze([...globalArgs, 'container', 'start', '--attach', '--interactive', containerId]),

@@ -14,12 +14,21 @@ afterEach(async () => { await privateFixture?.restore(); });
 
 import os from 'os';
 import { EventEmitter } from 'events';
+import path from 'path';
+import fs from 'fs/promises';
 import type { CommandStreamEvent } from '@/shared/types/streaming';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 const spawnMock = jest.fn();
+const execSyncMock = jest.fn();
 jest.mock('child_process', () => {
   const actual = jest.requireActual('child_process');
-  return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+    execSync: (...args: unknown[]) => execSyncMock(...args),
+  };
 });
 
 // The route imports simple-git at module load; it is not used by the streaming path.
@@ -84,6 +93,175 @@ function request(body: unknown) {
 
 describe('git route streaming Install/Build (#65)', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it.each(['install', 'build', 'installStream', 'buildStream'].flatMap(action =>
+    ['stored profile', 'global policy'].map(mutation => [action, mutation]),
+  ))('%s rechecks %s changed while filesystem access is paused', async (action, mutation) => {
+    const envReplacement = jest.replaceProperty(process, 'env', {
+      NODE_ENV: 'production', FLUJO_DATA_DIR: privateFixture.root,
+    });
+    const originalAccess = fs.access.bind(fs);
+    let reachedPause!: () => void;
+    let releasePause!: () => void;
+    const paused = new Promise<void>(resolve => { reachedPause = resolve; });
+    const resumed = new Promise<void>(resolve => { releasePause = resolve; });
+    const accessSpy = jest.spyOn(fs, 'access').mockImplementation(async (file, mode) => {
+      if (String(file) === SAVE_PATH) {
+        reachedPause();
+        await resumed;
+      }
+      return originalAccess(file, mode);
+    });
+    armSpawn(0);
+    execSyncMock.mockReturnValue('build completed');
+    const response = POST(request({
+      action, savePath: SAVE_PATH, installCommand: 'npm install', buildCommand: 'npm run build',
+    }));
+    try {
+      await paused;
+      if (mutation === 'stored profile') {
+        await saveItem(StorageKey.MCP_SERVERS, { changed: { rootPath: SAVE_PATH, isolation: {} } });
+      } else {
+        process.env.FLUJO_MCP_ISOLATION_FILE = '';
+      }
+      releasePause();
+      const res = await response;
+      if (action.endsWith('Stream')) {
+        const events = await drain(res);
+        expect(events[events.length - 1]).toEqual(expect.objectContaining({
+          type: 'result', success: false,
+          error: expect.stringMatching(/Host install\/build is not supported by runtime execution grants/),
+        }));
+      } else {
+        expect(res.status).toBe(403);
+        expect(await res.json()).toEqual({
+          error: expect.stringMatching(/Host install\/build is not supported by runtime execution grants/),
+        });
+      }
+      expect(execSyncMock).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      releasePause();
+      accessSpy.mockRestore();
+      envReplacement.restore();
+    }
+  });
+
+  it.each([
+    ['FLUJO_OWNER_AUTH_FILE', ''], ['FLUJO_OWNER_AUTH_FILE', 'missing-synthetic-policy'],
+    ['FLUJO_MCP_TRUSTED_HOST_FILE', ''], ['FLUJO_MCP_TRUSTED_HOST_FILE', 'missing-synthetic-policy'],
+    ['FLUJO_MCP_ISOLATION_FILE', ''], ['FLUJO_MCP_ISOLATION_FILE', 'missing-synthetic-policy'],
+    ['FLUJO_WORKER_MODE', '1'],
+  ])('refuses every install/build variant before subprocesses for %s=%s', async (name, value) => {
+    const envReplacement = jest.replaceProperty(process, 'env', {
+      NODE_ENV: 'production', FLUJO_DATA_DIR: privateFixture.root, [name]: value,
+    });
+    try {
+      for (const action of ['install', 'build', 'installStream', 'buildStream']) {
+        const res = await POST(request({
+          action, savePath: SAVE_PATH, installCommand: 'npm install', buildCommand: 'npm run build',
+        }));
+        if (name === 'FLUJO_OWNER_AUTH_FILE') {
+          // The outer owner gate rejects invalid policy paths before the handler.
+          expect(res.status).toBe(503);
+          expect(await res.json()).toEqual({ error: 'Owner authentication is unavailable.', code: 'OWNER_AUTH_UNAVAILABLE' });
+        } else if (name === 'FLUJO_WORKER_MODE') {
+          expect(res.status).toBe(503);
+          expect(await res.json()).toEqual({ error: 'Snapshot control plane is not configured.' });
+        } else {
+          expect(res.status).toBe(403);
+          expect(await res.json()).toEqual({ error: expect.stringMatching(/Host install\/build is not supported by runtime execution grants/) });
+        }
+      }
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(execSyncMock).not.toHaveBeenCalled();
+    } finally {
+      envReplacement.restore();
+    }
+  });
+
+  it.each([
+    { isolation: null }, { isolation: {} }, { trustedHost: false }, { trustedHost: {} },
+  ])('refuses stored profile selection without a host installer grant: %j', async selection => {
+    await saveItem(StorageKey.MCP_SERVERS, { protectedServer: { rootPath: SAVE_PATH, ...selection } });
+    for (const action of ['install', 'build', 'installStream', 'buildStream']) {
+      const res = await POST(request({
+        action, savePath: SAVE_PATH, installCommand: 'npm install', buildCommand: 'npm run build',
+      }));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: expect.stringMatching(/preinstalled immutable image/) });
+    }
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('matches a protected stored working directory when building its source-tree parent', async () => {
+    await saveItem(StorageKey.MCP_SERVERS, {
+      protectedServer: { launch: { cwd: path.join(SAVE_PATH, 'synthetic-server-subdirectory') }, isolation: {} },
+    });
+    const res = await POST(request({ action: 'build', savePath: SAVE_PATH, buildCommand: 'npm run build' }));
+    expect(res.status).toBe(403);
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses explicit malformed profile selection before storing a server', async () => {
+    const res = await POST(request({
+      action: 'installStream', savePath: SAVE_PATH, installCommand: 'npm install', trustedHost: false,
+    }));
+    expect(res.status).toBe(403);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['install', 'installCommand', 'npm install'],
+    ['build', 'buildCommand', 'npm run build'],
+    ['installStream', 'installCommand', 'npm install'],
+    ['buildStream', 'buildCommand', 'npm run build'],
+  ])('%s scopes host credentials while preserving explicit server environment', async (action, commandKey, command) => {
+    const envReplacement = jest.replaceProperty(process, 'env', {
+      NODE_ENV: 'production',
+      FLUJO_DATA_DIR: privateFixture.root,
+      PATH: 'synthetic-installer-path',
+      HOME: 'synthetic-installer-home',
+      OPENAI_API_KEY: 'synthetic-host-provider-secret',
+      FLUJO_API_KEY: 'synthetic-host-flujo-secret',
+      NODE_OPTIONS: '--require synthetic-loader',
+      NPM_CONFIG_USERCONFIG: 'synthetic-host-auth-config',
+      npm_config_registry: 'https://synthetic-host-registry.invalid',
+    });
+    const explicitEnv = {
+      SERVER_ACCESS_TOKEN: 'synthetic-explicit-server-secret',
+      LOG_LEVEL: 'debug',
+      NPM_CONFIG_INCLUDE: 'optional',
+    };
+    try {
+      armSpawn(0);
+      execSyncMock.mockReturnValue('build completed');
+      const res = await POST(request({
+        action, savePath: SAVE_PATH, [commandKey]: command, env: explicitEnv,
+      }));
+      const isStream = action.endsWith('Stream');
+      if (isStream) {
+        const events = await drain(res);
+        expect(events[events.length - 1]).toEqual(expect.objectContaining({ type: 'result', success: true }));
+      } else {
+        expect(await res.json()).toEqual(expect.objectContaining({ success: true }));
+      }
+      const commandMock = isStream ? spawnMock : execSyncMock;
+      expect(commandMock).toHaveBeenCalledTimes(1);
+      expect(commandMock.mock.calls[0][1].env).toEqual({
+        NODE_ENV: 'production',
+        PATH: 'synthetic-installer-path',
+        HOME: 'synthetic-installer-home',
+        SERVER_ACCESS_TOKEN: 'synthetic-explicit-server-secret',
+        LOG_LEVEL: 'debug',
+        npm_config_include: 'dev',
+      });
+      expect(explicitEnv.NPM_CONFIG_INCLUDE).toBe('optional');
+    } finally {
+      envReplacement.restore();
+    }
+  });
 
   it('installStream forwards stdout/stderr live and reports success on exit 0', async () => {
     armSpawn(0);

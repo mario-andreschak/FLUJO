@@ -1,5 +1,10 @@
 # MCP execution consent contract
 
+Current installer refusal and platform/install support are maintained in
+[MCP execution profiles](mcp-execution-profiles.md). Runtime consent never grants
+host install/build authority; the historical experiments below retain their
+original qualification limits.
+
 Native localhost installations without a selected private owner, trusted-host or isolation policy retain their existing local MCP launch behavior. Their installed and bundled servers run with the local account's permissions; runtime-home directories and MCP roots do not provide OS confinement. This compatibility path is unavailable in worker mode or network/public exposure. Selecting any private approval file (including an empty or unavailable one), or an explicit server execution profile, requires the protected checks below. An invalid protected profile never falls back to compatibility mode.
 
 This Source layer provides #568's opt-in protected execution profiles. A server's stored trust checkbox, installation assessment, imported configuration, or browser login does not constitute a protected runtime grant. Source guards below are implemented; exact-graph whole-suite, installed-artifact and complete #568 qualification remain pending.

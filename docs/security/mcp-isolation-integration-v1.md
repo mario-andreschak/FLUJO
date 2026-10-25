@@ -1,5 +1,9 @@
 # MCP container integration v1: source contract and evidence
 
+For current profile restrictions, installer behavior and platform/install support,
+see [MCP execution profiles](mcp-execution-profiles.md). The source pins and test
+results below are historical records, not qualification of later revisions.
+
 The source/evidence pins below describe the original integration slice. Current
 unconfigured localhost installations retain legacy host stdio execution when no
 owner, trusted-host or isolation policy is selected and the server config selects
@@ -38,8 +42,8 @@ rejected, and malformed/null profiles cannot fall through to a host launch.
 
 An operator separately configures absolute `FLUJO_MCP_ISOLATION_FILE` and
 `FLUJO_OWNER_AUTH_FILE`. Both are bounded 64 KiB regular JSON files, with private
-POSIX permissions required. Windows ACL ownership/privacy is an operator
-responsibility and has not been qualified by this code. The owner identities must
+POSIX permissions required. The shared private-file reader also validates native
+Windows owner/DACL privacy and protected ancestors. The owner identities must
 match. The approval file has this strict format (synthetic example):
 
 ```json

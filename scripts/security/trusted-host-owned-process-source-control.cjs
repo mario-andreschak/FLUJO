@@ -9,10 +9,12 @@ const resolve = Module._resolveFilename;
 Module._resolveFilename = function (name, ...args) {
   // This Source-only CJS transpilation selects the package's documented import
   // entry for its ESM-only exports. It does not modify the installed package.
-  if (name === 'mcp-stdio-oauth' || name.startsWith('mcp-stdio-oauth/')) {
-    const packageRoot = path.join(sourceRoot, 'node_modules/mcp-stdio-oauth');
+  const importPackage = ['mcp-stdio-oauth', '@modelcontextprotocol/ext-tasks']
+    .find(candidate => name === candidate || name.startsWith(`${candidate}/`));
+  if (importPackage) {
+    const packageRoot = path.join(sourceRoot, 'node_modules', importPackage);
     const spec = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
-    const key = name === 'mcp-stdio-oauth' ? '.' : `./${name.slice('mcp-stdio-oauth/'.length)}`;
+    const key = name === importPackage ? '.' : `./${name.slice(importPackage.length + 1)}`;
     return resolve.call(this, path.join(packageRoot, spec.exports[key].import), ...args);
   }
   return resolve.call(this, name.startsWith('@/') ? path.join(sourceRoot, 'src', name.slice(2)) : name, ...args);

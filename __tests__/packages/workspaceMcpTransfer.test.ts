@@ -181,10 +181,31 @@ it('builds GitHub runtimes using the package installer without passing stored cr
     name: config.name, repositoryUrl: 'https://github.com/acme/server', ref: 'abc123',
     subdirectory: 'packages/server', installCommand: 'npm ci', buildCommand: 'npm run build', env: {},
   }));
+  expect(prepareGithub.mock.calls[0][0]).not.toHaveProperty('isolation');
+  expect(prepareGithub.mock.calls[0][0]).not.toHaveProperty('trustedHost');
   expect(updateConfig.mock.calls[0][1].args).toEqual([
     path.join(mockWorkspace, 'mcp-servers', 'new-repo', 'dist', 'index.js'),
     '--mode', 'specific', `--cache=${path.join(mockWorkspace, 'userdata', 'cache')}`,
   ]);
+});
+
+it.each([
+  { isolation: null }, { isolation: { schemaVersion: 1, kind: 'docker-deny-egress' } },
+  { trustedHost: null }, { trustedHost: { schemaVersion: 1, kind: 'trusted-host' } },
+])('propagates restored GitHub profile selection to installer admission: %j', async selection => {
+  const config = server({ command: 'node', args: ['./dist/index.js'],
+    source: { type: 'github', repositoryUrl: 'https://github.com/acme/server', ref: 'a'.repeat(40) },
+    ...selection,
+  });
+  loadConfigs.mockResolvedValue([config]);
+  prepareGithub.mockResolvedValueOnce({ installed: false, error: 'Protected host installation refused.' });
+  const result = await reinstallWorkspaceMcpServers(buildWorkspaceMcpTransferPlan([config], source));
+  expect(result.ok).toBe(false);
+  expect(prepareGithub).toHaveBeenCalledWith(expect.objectContaining(selection));
+  const absentProfile = Object.hasOwn(selection, 'isolation') ? 'trustedHost' : 'isolation';
+  expect(prepareGithub.mock.calls[0][0]).not.toHaveProperty(absentProfile);
+  expect(updateConfig).not.toHaveBeenCalled();
+  expect(connect).not.toHaveBeenCalled();
 });
 
 it('reuses prepared GitHub and Registry runtimes after restart, preserving job files and private config', async () => {

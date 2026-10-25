@@ -7,7 +7,7 @@ import { simpleGit } from 'simple-git';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
 import { killProcessTree } from '@/utils/process/killProcessTree';
-import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
+import { assertMcpHostInstallationAllowed, createMcpInstallerEnvironment } from '@/backend/services/mcp/installerEnvironment';
 import { mcpService } from '@/backend/services/mcp';
 import type { EnvVarValue, MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
 import type { McpArgTemplate } from '@/shared/types/package';
@@ -24,6 +24,8 @@ export interface GithubInstallInput {
   argTemplates?: McpArgTemplate[];
   disabled?: boolean;
   folder?: string;
+  isolation?: unknown;
+  trustedHost?: unknown;
 }
 
 export interface GithubInstallResult {
@@ -146,9 +148,8 @@ async function run(
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
-        // A reviewed manifest may still contain a plain `npm install`. Keep its build
-        // toolchain available even though the production FLUJO process uses NODE_ENV=production.
-        env: withNpmDevDependencies(),
+        // Repository scripts receive only the host paths/build basics they need.
+        env: createMcpInstallerEnvironment(),
       });
     } catch (error) {
     if (error instanceof BundledFlujoWorkloadError) throw error;
@@ -308,10 +309,11 @@ async function prepareRepository(
       throw new Error(`Refusing to clone into non-empty directory: ${repoPath}`);
     }
     await assertBundledFlujoWorkloadEffectCurrent();
-    await simpleGit().clone(repositoryUrl, repoPath, { '--depth': 1 });
+    await simpleGit().env(createMcpInstallerEnvironment()).clone(repositoryUrl, repoPath, { '--depth': 1 });
   }
 
-  const git = simpleGit({ baseDir: repoPath, timeout: { block: 120_000 } });
+  const git = simpleGit({ baseDir: repoPath, timeout: { block: 120_000 } })
+    .env(createMcpInstallerEnvironment());
   const remoteUrl = String(await git.remote(['get-url', 'origin'])).trim();
   if (normalizedRemoteUrl(remoteUrl) !== normalizedRemoteUrl(repositoryUrl)) {
     throw new Error('Existing clone origin does not match the requested GitHub repository');
@@ -339,6 +341,7 @@ async function prepareRepository(
 export async function prepareGithubServerRuntime(input: GithubInstallInput): Promise<PreparedGithubServerRuntime> {
   let parsed: ParsedRepositoryReference;
   try {
+    assertMcpHostInstallationAllowed(input);
     parsed = parseGithubRepositoryReference(input.repositoryUrl, input.ref);
   } catch (error) {
     if (error instanceof BundledFlujoWorkloadError) throw error;

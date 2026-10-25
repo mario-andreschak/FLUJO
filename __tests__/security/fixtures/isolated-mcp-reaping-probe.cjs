@@ -6,8 +6,10 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const ts = require('typescript');
 const source = path.resolve(__dirname, '../../../src/backend/services/security/isolatedMcp.ts');
+const allowedSources = new Set(['isolatedMcp.ts', 'isolatedMcpInspection.ts', 'windowsPrivateAuthority.ts']
+  .map(name => path.join(path.dirname(source), name)));
 require.extensions['.ts'] = (module, filename) => {
-  if (filename !== source) throw new Error('Unexpected source module');
+  if (!allowedSources.has(filename)) throw new Error('Unexpected source module');
   module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
   }).outputText, filename);

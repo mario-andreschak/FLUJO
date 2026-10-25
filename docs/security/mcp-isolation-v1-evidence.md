@@ -1,5 +1,9 @@
 # MCP isolation v1 source primitive and evidence
 
+Current profile restrictions and the explicit unsupported platform/install matrix
+are maintained in [MCP execution profiles](mcp-execution-profiles.md). The dated
+source experiments below retain their original scope.
+
 This component advances #568 under epic #563. The application now calls this
 primitive for explicitly approved isolated stdio profiles through the
 [container transport integration](./mcp-isolation-integration-v1.md). Host launches
