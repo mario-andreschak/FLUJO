@@ -40,6 +40,13 @@ cannot qualify a current release. Its schema and all acceptance assertions remai
 maintained under `scripts/`. Pass a current external ledger when assessing a new
 candidate.
 
+The maintained [scorecard foundation contract](quality/scorecard-foundation.md)
+defines the nine dimensions, three deployment profiles and numeric targets for
+future measurements under the fully automated development policy. Its checker
+can initialize a clean-source external evidence collection without inventing
+distribution identities, measured passes or independent grades. Foundation
+development checks do not replace release acceptance or external reassessment.
+
 Open issues are tracked in [GitHub](https://github.com/mario-andreschak/FLUJO/issues).
 Release notes belong in [CHANGELOG.md](../CHANGELOG.md), including migration
 requirements, known regressions and experimental limits.

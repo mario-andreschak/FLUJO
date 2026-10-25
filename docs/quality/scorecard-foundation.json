@@ -1,0 +1,1311 @@
+{
+  "contractVersion": 2,
+  "issue": 564,
+  "epic": 563,
+  "purpose": "A measurable foundation contract for automated development; not a scorecard grade or release-acceptance report.",
+  "declaredAt": "2026-10-25T07:45:14.507Z",
+  "historicalMinimumRevision": "03e6639812191f018e485f090761a0a6c3421fe8",
+  "sourceBaseline": {
+    "sha": "fd8370ecf4140ad0e23db2888f679c2ebc24d88f",
+    "packageVersion": "3.48.2",
+    "nodeRange": "^22.23.4 || ^24.22.1"
+  },
+  "scope": {
+    "objective": "All nine original dimensions independently reassessed at A- or better",
+    "profileReduction": "none",
+    "sharedPublicAndAutonomy": "separate-required-capabilities",
+    "externalGradeStatus": "not-assessed"
+  },
+  "developmentPolicy": {
+    "mode": "fully-automated",
+    "authority": "https://github.com/mario-andreschak/FLUJO/issues/564#issuecomment-6395012416",
+    "humanResponseRequired": false,
+    "humanApprovalRequired": false,
+    "maintainerIdentity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+    "reviewerIdentity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6/foundation_review",
+    "reviewKind": "independent-automated-source-review",
+    "independentHumanReviewClaimed": false,
+    "externalGradeAgreementClaimed": false,
+    "supersededDevelopmentConditions": [
+      "Waiting for human owner assignments",
+      "Waiting for human maintainer/reviewer approval or answers during development"
+    ],
+    "futureEvidenceRule": "Independent external grades and real human/community observations remain required by their original outcome contracts; automated development checks do not supply them.",
+    "mechanicalVerifier": "scripts/check-scorecard-foundation.mjs",
+    "reviewEvidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/564#issuecomment-6395160004",
+    "reviewerModel": "gpt-6.1-sol",
+    "reviewerReasoningEffort": "xhigh"
+  },
+  "owners": [
+    {
+      "id": "product-fit",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Idea / product fit acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    },
+    {
+      "id": "feature-surface",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Feature surface acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    },
+    {
+      "id": "engineering",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Engineering discipline acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    },
+    {
+      "id": "code-health",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Code health acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    },
+    {
+      "id": "security",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Security acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    },
+    {
+      "id": "maturity",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Maturity / stability acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    },
+    {
+      "id": "community",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Community / bus factor acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    },
+    {
+      "id": "docs",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Docs honesty acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    },
+    {
+      "id": "production",
+      "identity": "codex:01a171f0-3dcc-72f3-92ba-f42187ed48e6",
+      "kind": "automation",
+      "responsibility": "Maintain the Production-readiness acceptance definition, preregistration and truthful evidence collection; actual human-study participants and external assessors are never fabricated."
+    }
+  ],
+  "rubric": [
+    {
+      "id": "product-fit",
+      "dimension": "Idea / product fit",
+      "originalGrade": "A-",
+      "targetGrade": "A-",
+      "ownerId": "product-fit",
+      "baseline": "Original audit identifies a useful local MCP hub niche; independent retention evidence is not yet retained.",
+      "criteria": [
+        "Ten independent weekly users for eight elapsed weeks; report all enrollment, drop-off, missing and weekly activity denominators.",
+        "At least eight of ten target novices complete a first model-plus-MCP run in <=15 minutes without coding or live coaching.",
+        "Independent users record repeated MCP hub/debugger/agent workflows and benefits; stars and bots cannot satisfy adoption."
+      ],
+      "evidenceRequired": [
+        "human-study"
+      ],
+      "issues": [
+        572,
+        577
+      ]
+    },
+    {
+      "id": "feature-surface",
+      "dimension": "Feature surface",
+      "originalGrade": "A-",
+      "targetGrade": "A-",
+      "ownerId": "feature-surface",
+      "baseline": "Advertised breadth exists; #517 local fixes and published observations differ, and #526 lacks full 128-tool release confirmation.",
+      "criteria": [
+        "Installed-artifact matrix retains all advertised model, MCP tool/resource/prompt/App, graph/branch/loop/subflow, debugger, HITL, automation, /v1 and proxy journeys.",
+        "Reach all 128 tools in the #526 fixture, preserve arguments during same-server discovery, and never invoke before Test.",
+        "Record supported platform/install/provider/tool failures and prerequisites; passing fixture coverage alone is insufficient."
+      ],
+      "evidenceRequired": [
+        "installed-artifact",
+        "human-study"
+      ],
+      "issues": [
+        570,
+        572,
+        578,
+        517,
+        526
+      ]
+    },
+    {
+      "id": "engineering",
+      "dimension": "Engineering discipline",
+      "originalGrade": "B+",
+      "targetGrade": "A-",
+      "ownerId": "engineering",
+      "baseline": "Exact-source verify run reports success; effective-main rules were reported inactive in the plan; enforcement and distribution acceptance are pending.",
+      "criteria": [
+        "Require review and meaningful root/MCP typecheck, lint, ordinary/isolated tests, API inventory, Windows/Linux builds and packed process smoke on the selected release SHA.",
+        "Verify npm/container/installer provenance, migration requirements and retained raw checksums; a version string cannot substitute for source correspondence.",
+        "Accountable human owners execute vulnerability response and disposable release drills."
+      ],
+      "evidenceRequired": [
+        "source-check",
+        "installed-artifact",
+        "human-study"
+      ],
+      "issues": [
+        564,
+        565,
+        576
+      ]
+    },
+    {
+      "id": "code-health",
+      "dimension": "Code health",
+      "originalGrade": "B-",
+      "targetGrade": "A-",
+      "ownerId": "code-health",
+      "baseline": "Backend/shared/frontend split exists with complex execution/MCP modules; independent maintainability demonstration is pending.",
+      "criteria": [
+        "Version module ownership and execution/MCP contracts; enforce prohibited imports and use behavior-preserving incremental refactors.",
+        "A second human diagnoses and changes a core execution/MCP path using onboarding guidance and passing boundary checks.",
+        "No new critical/high regression in claimed profiles; evidence records change scope and exact revision."
+      ],
+      "evidenceRequired": [
+        "source-check",
+        "human-study"
+      ],
+      "issues": [
+        571,
+        576
+      ]
+    },
+    {
+      "id": "security",
+      "dimension": "Security",
+      "originalGrade": "C+",
+      "targetGrade": "A-",
+      "ownerId": "security",
+      "baseline": "Local-first is a trust boundary, not host MCP confinement; owner ingress, migration, safe transfer and enforced isolation remain acceptance work.",
+      "criteria": [
+        "Authenticated owner sessions and scoped API/MCP ingress reject every declared unauthorized matrix case, including CSRF and account/workspace confusion.",
+        "Private credential migration round-trips verified disposable legacy records; tampered/unknown/cross-owner transfers fail closed with no plaintext leakage.",
+        "Independent threat-model review has zero unresolved high/critical findings; OS/container enforcement, not scanner scores, bounds declared MCP capabilities."
+      ],
+      "evidenceRequired": [
+        "security-review",
+        "installed-artifact"
+      ],
+      "issues": [
+        565,
+        566,
+        567,
+        568,
+        573,
+        574,
+        575,
+        101,
+        527
+      ]
+    },
+    {
+      "id": "maturity",
+      "dimension": "Maturity / stability",
+      "originalGrade": "C",
+      "targetGrade": "A-",
+      "ownerId": "maturity",
+      "baseline": "The #520 controlled regression detects two fixed defects but does not replay the original live OOM workload. Persona automated passes coexist with manual/live gates.",
+      "criteria": [
+        "Retain #520 negative control and confirm the original workload on the installed release; byte/concurrency/archive/event budgets fail safely before unbounded allocation.",
+        "Run declared interactive and persistent-worker failure/recovery matrix; zero lost accepted work or duplicate external effects, with uncertain effects retained for observation.",
+        "Full exact-revision offline Persona soak and validator satisfy unchanged append/RSS/growth contracts; live and manual acceptance remain separately required."
+      ],
+      "evidenceRequired": [
+        "source-check",
+        "offline-simulation",
+        "installed-artifact"
+      ],
+      "issues": [
+        569,
+        570,
+        572,
+        578,
+        520,
+        515,
+        517,
+        526,
+        505,
+        435
+      ]
+    },
+    {
+      "id": "community",
+      "dimension": "Community / bus factor",
+      "originalGrade": "D",
+      "targetGrade": "A-",
+      "ownerId": "community",
+      "baseline": "Original audit reports concentration in author/bot commits; no independent continuity or sustained human study is recorded here.",
+      "criteria": [
+        "Two additional humans independently review, perform disposable release/recovery drills and accept backup responsibility.",
+        "At least three non-author humans make substantive contributions/reviews across 90 elapsed days.",
+        "Record unique human identities, participation windows, missing observations and conflicts; bot activity and promotion do not qualify."
+      ],
+      "evidenceRequired": [
+        "human-study"
+      ],
+      "issues": [
+        576,
+        577
+      ]
+    },
+    {
+      "id": "docs",
+      "dimension": "Docs honesty",
+      "originalGrade": "A",
+      "targetGrade": "A-",
+      "ownerId": "docs",
+      "baseline": "project-status preserves the September 16 failed simulation. Later reported passes need release attribution without deleting failures.",
+      "criteria": [
+        "Every support/maturity/security/migration/runtime claim maps to an exact-source/artifact evidence entry and visible scope limits.",
+        "README, project-status, changelog and topic-owned architecture/API/security guides agree on claimed profiles, prerequisites, failures and experimental limits.",
+        "Historical failures, later automated results, local patches, simulations, live runs and human observations remain distinguishable; independent rubric/reassessment disagreements block closure."
+      ],
+      "evidenceRequired": [
+        "baseline-observation",
+        "independent-assessment"
+      ],
+      "issues": [
+        564,
+        565,
+        570,
+        578
+      ]
+    },
+    {
+      "id": "production",
+      "dimension": "Production-readiness",
+      "originalGrade": "C-",
+      "targetGrade": "A-",
+      "ownerId": "production",
+      "baseline": "Local single-owner remains the present envelope; persistent-worker recovery and multi-user isolation/sharing are separately gated.",
+      "criteria": [
+        "Installed releases pass install/upgrade/backup/restore, crash recovery, resource/health/audit controls on each claimed platform/install profile.",
+        "Generation-bound #547 receipts distinguish observed owned-process exit from disconnected state; #553 opts in only proven worker-local schedules while copied schedules stay suppressed.",
+        "Shared/public profile passes two-user isolation, credential/process separation, team share/revoke/edit-conflict matrices and independent security review; authentication alone is insufficient."
+      ],
+      "evidenceRequired": [
+        "installed-artifact",
+        "security-review",
+        "human-study"
+      ],
+      "issues": [
+        566,
+        567,
+        568,
+        569,
+        570,
+        573,
+        574,
+        575,
+        578,
+        553,
+        547,
+        212
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "local-owner",
+      "label": "Local single-owner workbench (current default envelope)",
+      "status": "current-local-envelope",
+      "trustBoundaries": [
+        "One trusted owner, loopback listeners; host MCP code can access host privileges and remote providers receive selected data.",
+        "Workspace separation is logical; no claim of multiple-user authorization or sandboxing from local-first defaults."
+      ],
+      "osInstallMatrix": [
+        {
+          "platform": "Windows",
+          "methods": [
+            "versioned installer",
+            "npm package",
+            "pinned source"
+          ],
+          "acceptance": "documented-unverified",
+          "evidenceIds": []
+        },
+        {
+          "platform": "Linux",
+          "methods": [
+            "npm package",
+            "pinned source",
+            "container"
+          ],
+          "acceptance": "documented-unverified",
+          "evidenceIds": []
+        },
+        {
+          "platform": "macOS",
+          "methods": [
+            "npm package",
+            "pinned source"
+          ],
+          "acceptance": "documented-unverified",
+          "evidenceIds": []
+        }
+      ],
+      "prerequisites": [
+        "Node ^22.23.4 || ^24.22.1 for this source baseline; the chosen distribution must declare its own exact runtime identity. Provider credential/subscription/quota or compatible local model; network as selected.",
+        "MCP-dependent git/Python/uv/browser/system prerequisites and operator consent; custom encryption protection and migration acceptance."
+      ],
+      "exclusions": [
+        "Personas/persistent goals remain experimental outside demonstrated envelope.",
+        "Untrusted shared/public access and unattended multi-week claims need their own gates."
+      ],
+      "gateIds": [
+        "rubric-agreement",
+        "release-acceptance",
+        "local-security"
+      ],
+      "definitionStatus": "adopted-for-future-qualification",
+      "supportedReleaseClaim": false
+    },
+    {
+      "id": "persistent-worker",
+      "label": "Authenticated persistent worker/service",
+      "status": "gated-proposal",
+      "trustBoundaries": [
+        "Dedicated scoped worker bearer and immutable worker identity separate from owner/browser session.",
+        "Snapshot/config data may contain secrets; capture/import require original authority and private credential handling.",
+        "Startup recovery admits only proven worker-local eligible schedules; copied snapshot schedules stay suppressed."
+      ],
+      "osInstallMatrix": [
+        {
+          "platform": "Linux",
+          "methods": [
+            "pinned container/service"
+          ],
+          "acceptance": "pending",
+          "evidenceIds": []
+        },
+        {
+          "platform": "Windows",
+          "methods": [
+            "pinned native service"
+          ],
+          "acceptance": "pending",
+          "evidenceIds": []
+        }
+      ],
+      "prerequisites": [
+        "Accepted owner/scoped ingress, credential migration, enforced MCP capabilities and resource budgets.",
+        "Service health/audit/backup/restore, process receipts and declared OS/provider/tool prerequisites; no live controller activation implied."
+      ],
+      "exclusions": [
+        "Multi-user/team hosting has separate acceptance.",
+        "Sealed cross-stream source fixtures and process death are not spending/replay/cleanup authority.",
+        "Autonomy remains experimental pending actual elapsed evidence."
+      ],
+      "gateIds": [
+        "rubric-agreement",
+        "release-acceptance",
+        "worker-operations",
+        "cross-stream-contracts"
+      ],
+      "definitionStatus": "adopted-for-future-qualification",
+      "supportedReleaseClaim": false
+    },
+    {
+      "id": "shared-public",
+      "label": "Authenticated isolated shared/public deployment",
+      "status": "gated-proposal",
+      "trustBoundaries": [
+        "Authenticated principal bound to owner/account/workspace; isolated credentials, processes, storage and exports.",
+        "Teams share only explicit versioned permissions with revocation and edit-conflict protection; public ingress requires TLS/proxy/session/API threat-model review.",
+        "Original/current request/account identity and uncertainty survive cross-stream adapters; no new replay authority from source acceptance."
+      ],
+      "osInstallMatrix": [
+        {
+          "platform": "Linux",
+          "methods": [
+            "hardened pinned container/service with authenticated ingress"
+          ],
+          "acceptance": "pending",
+          "evidenceIds": []
+        }
+      ],
+      "prerequisites": [
+        "#573 architecture decision, #574 Tier 0 isolation, #575 team-sharing acceptance.",
+        "Independent security review and installed operator/backup/recovery matrix; OS/install restrictions explicitly accepted by reviewer."
+      ],
+      "exclusions": [
+        "No current supported shared/public envelope claimed.",
+        "Tier 2 fine-grained roles remain unimplemented beyond accepted contract.",
+        "No silent profile reduction; all nine original dimensions stay in scope."
+      ],
+      "gateIds": [
+        "rubric-agreement",
+        "release-acceptance",
+        "shared-profile",
+        "cross-stream-contracts",
+        "independent-reassessment"
+      ],
+      "definitionStatus": "adopted-for-future-qualification",
+      "supportedReleaseClaim": false
+    }
+  ],
+  "budgets": [
+    {
+      "id": "persona-append-p95",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Each simulated day's nearest-rank event append p95",
+      "operator": "<",
+      "limit": 150,
+      "unit": "ms",
+      "denominator": "Raw append samples for every one of 28 days, 20 Activities/day, seed 459, learning enabled",
+      "window": "28 simulated days; no elapsed-time inference",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 28
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-peak-rss",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Peak RSS",
+      "operator": "<=",
+      "limit": 805306368,
+      "unit": "bytes",
+      "denominator": "Daily runtime observations on pinned controlled Node 22 runner",
+      "window": "Entire 28 x 20 simulated workload",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-rss-growth",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Final RSS minus day-1 RSS",
+      "operator": "<=",
+      "limit": 268435456,
+      "unit": "bytes",
+      "denominator": "Matched day-1/final observations on same runner",
+      "window": "28 simulated days",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-append-flatness",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Final-seven median daily p95 / max(first-seven median,20 ms)",
+      "operator": "<=",
+      "limit": 2,
+      "unit": "ratio",
+      "denominator": "All daily raw append samples and nearest-rank p95",
+      "window": "First seven versus last seven simulated days",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-total-collection",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Records per detailed collection",
+      "operator": "<=",
+      "limit": 1248,
+      "unit": "records",
+      "denominator": "2 x 560 generated Activities + 128; all collection kinds included",
+      "window": "Every daily checkpoint",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-mailbox",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Uncompacted mailbox items",
+      "operator": "<=",
+      "limit": 500,
+      "unit": "records",
+      "denominator": "All Persona mailbox records",
+      "window": "Every daily checkpoint",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-activities",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Uncompacted Activities",
+      "operator": "<=",
+      "limit": 200,
+      "unit": "records",
+      "denominator": "All Persona Activity records",
+      "window": "Every daily checkpoint",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-dispatches",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Uncompacted flow dispatches",
+      "operator": "<=",
+      "limit": 200,
+      "unit": "records",
+      "denominator": "All Persona flow dispatch records",
+      "window": "Every daily checkpoint",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-pins",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Uncompacted Behavior call pins",
+      "operator": "<=",
+      "limit": 200,
+      "unit": "records",
+      "denominator": "All Persona Behavior call pins",
+      "window": "Every daily checkpoint",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-leases",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Retained lease history",
+      "operator": "<=",
+      "limit": 50,
+      "unit": "records",
+      "denominator": "All current and legacy Persona lease records",
+      "window": "After every guarded sweep",
+      "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "persona-recall-p95",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Full-candidate recall nearest-rank p95",
+      "operator": "<",
+      "limit": 150,
+      "unit": "ms",
+      "denominator": "50,000 items; 20 searches, with full-candidate and ranking quality checks",
+      "window": "One exact-revision controlled run",
+      "basis": "docs/performance/persona-memory-recall-benchmark.md",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 20
+      },
+      "originalStatus": "existing-contract",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "pilot-users",
+      "ownerId": "product-fit",
+      "status": "adopted-for-future-measurement",
+      "metric": "Independent weekly active users",
+      "operator": ">=",
+      "limit": 10,
+      "unit": "humans",
+      "denominator": "All enrolled humans reported; ten independent target users each week, excluding author/bots",
+      "window": "Eight consecutive elapsed weeks",
+      "basis": "#563 published plan; #577 agreement pending",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 4838400,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 10
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "novice-success",
+      "ownerId": "feature-surface",
+      "status": "adopted-for-future-measurement",
+      "metric": "Uncoached first model-plus-MCP completion",
+      "operator": ">=",
+      "limit": 8,
+      "unit": "humans",
+      "denominator": "Ten novices; provisioning, drop-offs and missing outcomes separately recorded, no favorable replacement",
+      "window": "One attempt per novice, within 15 minutes",
+      "basis": "#563 published plan; #572/#577 agreement pending",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 10
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "novice-time",
+      "ownerId": "feature-surface",
+      "status": "adopted-for-future-measurement",
+      "metric": "First model-plus-MCP run completion time",
+      "operator": "<=",
+      "limit": 900,
+      "unit": "seconds",
+      "denominator": "All ten attempts from install start; preprovisioning time separately reported",
+      "window": "Single 15-minute attempt",
+      "basis": "#563 published plan; #572/#577 agreement pending",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 10
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "backup-maintainers",
+      "ownerId": "community",
+      "status": "adopted-for-future-measurement",
+      "metric": "Additional independent human maintainers",
+      "operator": ">=",
+      "limit": 2,
+      "unit": "humans",
+      "denominator": "Named additional humans completing review and disposable release/recovery drills",
+      "window": "After training; observed drills before acceptance",
+      "basis": "#563 published plan; #576 agreement pending",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 2
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "human-contributors",
+      "ownerId": "community",
+      "status": "adopted-for-future-measurement",
+      "metric": "Substantive non-author contributors/reviewers",
+      "operator": ">=",
+      "limit": 3,
+      "unit": "humans",
+      "denominator": "Unique humans, excluding author and all bots",
+      "window": "90 elapsed days",
+      "basis": "#563 published plan; #576 agreement pending",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 7776000,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 3
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "runtime-peak-rss",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Peak app/service RSS at supported ordinary-flow envelope",
+      "operator": "<=",
+      "limit": 1073741824,
+      "unit": "bytes",
+      "denominator": "Node 22 controlled 2-CPU/2-GiB Windows/Linux runner, eight mixed lanes with <=four active; >=2 MB parent/<=5.6 MB child transcripts; media separately bounded",
+      "window": "24 elapsed hours; measured admission/refusal plus original #520 reproduction",
+      "basis": "#569 resource owner must ratify workload and admission budgets before measurement; not a current guarantee",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 86400,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 24
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "runtime-rss-growth",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Steady-state retained RSS growth",
+      "operator": "<=",
+      "limit": 134217728,
+      "unit": "bytes",
+      "denominator": "Same #569 workload, first hour baseline after warmup, no cache reset",
+      "window": "Hours 2 through 24",
+      "basis": "#569 proposal; must distinguish GC/allocator high water and retained growth",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 86400,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 24
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "runtime-concurrency",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Concurrent lanes at reference envelope",
+      "operator": "<=",
+      "limit": 4,
+      "unit": "lanes",
+      "denominator": "Eight queued lanes; refusal/backpressure counts, owned paused states and archive bytes reported",
+      "window": "24 elapsed hours",
+      "basis": "#569 proposal; does not authorize silently reducing configured parallelism",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 86400,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 8
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "recovery-rto",
+      "ownerId": "production",
+      "status": "adopted-for-future-measurement",
+      "metric": "Service recovery time after restart",
+      "operator": "<=",
+      "limit": 120,
+      "unit": "seconds",
+      "denominator": "Ten injected process kills and ten graceful restarts per claimed OS/install profile; readiness plus admitted/suppressed schedule state, not port-open alone",
+      "window": "Twenty fault trials per profile",
+      "basis": "#570/#553 owners must ratify; interrupted effects never blindly replay",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 20
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "backup-rpo",
+      "ownerId": "production",
+      "status": "adopted-for-future-measurement",
+      "metric": "Loss of accepted durable records in backup/restore",
+      "operator": "=",
+      "limit": 0,
+      "unit": "records",
+      "denominator": "Ten disposable round trips per claimed profile; corruption/unknown-version/foreign-owner negative controls included",
+      "window": "Ten trials per OS/install profile",
+      "basis": "#570/#567 proposal; coherent writer freeze required before capture",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 10
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "duplicate-effects",
+      "ownerId": "production",
+      "status": "adopted-for-future-measurement",
+      "metric": "Duplicate verified external effects",
+      "operator": "=",
+      "limit": 0,
+      "unit": "effects",
+      "denominator": "All admitted effect IDs across restart/fault trials; unknown outcomes counted separately, never success",
+      "window": "All recovery trials and authorized live runs",
+      "basis": "#570/#553/#578 proposal",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "unauthorized-access",
+      "ownerId": "security",
+      "status": "adopted-for-future-measurement",
+      "metric": "Accepted unauthorized operations",
+      "operator": "=",
+      "limit": 0,
+      "unit": "operations",
+      "denominator": "Every positive/negative row of session/token/origin/CSRF/account/workspace/process/export/share/revoke matrix; report exact row count, skipped rows block",
+      "window": "One complete release matrix per profile",
+      "basis": "#566-#568/#574-#575; security owner must sign coverage",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "high-findings",
+      "ownerId": "security",
+      "status": "adopted-for-future-measurement",
+      "metric": "Unresolved high or critical findings in claimed profiles",
+      "operator": "=",
+      "limit": 0,
+      "unit": "findings",
+      "denominator": "All independent review findings; severity dispute remains blocker",
+      "window": "At final independent reassessment",
+      "basis": "#563/#578",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "live-smoke",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Bounded authorized real-provider smoke duration",
+      "operator": ">=",
+      "limit": 3600,
+      "unit": "seconds",
+      "denominator": "All due rounds, admitted Activities, verified effects, failures, unscheduled interventions and spend observations",
+      "window": "One elapsed hour, before longer live stages",
+      "basis": "#578 proposal; concrete account/model scope and separately declared enforced monetary envelope remain unset",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 3600,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "live-seven-days",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Real-provider stage duration",
+      "operator": ">=",
+      "limit": 604800,
+      "unit": "seconds",
+      "denominator": "All due rounds and verified effects across restarts; no omitted downtime; >=99% successful due rounds, zero duplicate effects",
+      "window": "Seven consecutive elapsed days",
+      "basis": "#578 proposal; enforceable account/model spend cap and owner authorization required",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 604800,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "live-28-days",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Real-provider multi-week claim duration",
+      "operator": ">=",
+      "limit": 2419200,
+      "unit": "seconds",
+      "denominator": "All due rounds and verified effects across entire claim; no simulated-time substitution",
+      "window": "28 consecutive elapsed days, if multi-week autonomy claimed",
+      "basis": "#578; claim stays experimental until demonstrated",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 2419200,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "live-success-rate",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Successfully verified due rounds",
+      "operator": ">=",
+      "limit": 0.99,
+      "unit": "ratio",
+      "denominator": "All due rounds, including missed/stalled/rejected/failed; zero denominator fails; planned faults and unscheduled interventions separate",
+      "window": "Each authorized seven/28-day run",
+      "basis": "#505/#578 proposal; requires useful output-quality assessment, not repeated no-op checks",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "live-interventions",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Unscheduled human interventions",
+      "operator": "=",
+      "limit": 0,
+      "unit": "interventions",
+      "denominator": "All intervention requests/actions after setup; scheduled fault/control actions also reported separately",
+      "window": "Each claimed unattended live window",
+      "basis": "#505/#578 proposal; human absence cannot be inferred from fixture automation",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    },
+    {
+      "id": "live-spend",
+      "ownerId": "maturity",
+      "status": "adopted-for-future-measurement",
+      "metric": "Authorized live-provider monetary cap",
+      "operator": "<=",
+      "limit": 0,
+      "unit": "USD",
+      "denominator": "Every provider charge attributable to a future declared run/account/model scope, including retries and failed/unknown invocations; unknown cost is not zero. No new paid provider run is authorized; a future positive cap needs an explicit contract revision and existing task authorization.",
+      "window": "Per future authorized run",
+      "basis": "Fully automated foundation task with no provider-spend authorization: zero USD is a refusal ceiling, not evidence that a paid account is funded or its accounting is enforced.",
+      "declaredAt": "2026-10-25T07:45:14.507Z",
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      },
+      "originalStatus": "proposed",
+      "originalDeclaredAt": "2026-10-03T21:32:32.7220347Z",
+      "measurementStatus": "not-measured-by-this-contract"
+    }
+  ],
+  "issueReconciliation": [
+    {
+      "number": 520,
+      "state": "OPEN",
+      "updatedAt": "2026-10-25T07:05:41Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/520",
+      "sourceStatus": "integrated-scoped-fix",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/520#issuecomment-6394620344",
+      "scopeLimits": "Original fatal OOM and full original eight-lane workload remain unaccepted; #1293 fixes a separate continuation mapping defect."
+    },
+    {
+      "number": 517,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-07T11:37:24Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/517",
+      "sourceStatus": "reported-compiled-release",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/517#issuecomment-6037093190",
+      "scopeLimits": "Compiled 3.46.3 pre-invocation retention/refresh evidence is bounded; no universal/current-release schema or successful anonymous scrape claim."
+    },
+    {
+      "number": 526,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-08T22:06:45Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/526",
+      "sourceStatus": "integrated-source",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/pull/955",
+      "scopeLimits": "128-tool source/SDK regression fixtures are integrated through #955; a new installed distribution needs its own complete server journey."
+    },
+    {
+      "number": 553,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-08T22:06:45Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/553",
+      "sourceStatus": "integrated-source",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/pull/955",
+      "scopeLimits": "Worker-local recovery implementation is integrated through #955; earlier failed/unlaunched fixtures are retained and new installed acceptance is separate."
+    },
+    {
+      "number": 547,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-08T22:06:44Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/547",
+      "sourceStatus": "integrated-source",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/pull/955",
+      "scopeLimits": "Generation-bound shutdown receipts are integrated through #955; connection/config state and unknown exit remain distinct."
+    },
+    {
+      "number": 101,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-10T06:17:40Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/101",
+      "sourceStatus": "integrated-source",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/101#issuecomment-6094574903",
+      "scopeLimits": "Optional model risk assessment is integrated through #977; advisory judgments do not grant trust or execution consent."
+    },
+    {
+      "number": 527,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-10T06:17:35Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/527",
+      "sourceStatus": "integrated-source",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/527#issuecomment-6094574308",
+      "scopeLimits": "Optional pinned offline SkillSpector review is integrated through #977; static coverage does not certify installed bytes or enforce isolation."
+    },
+    {
+      "number": 505,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-25T05:52:31Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/505",
+      "sourceStatus": "reported-exact-source-acceptance",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/505#issuecomment-6389256392",
+      "scopeLimits": "91.0341-minute single Native workload and exact-source runtime/recall gates are reported; this is not a population 99% or seven/28-day claim."
+    },
+    {
+      "number": 435,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-13T16:48:18Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/435",
+      "sourceStatus": "integrated-scoped-fix",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/435#issuecomment-6086331438",
+      "scopeLimits": "Goal-editing source improvement #1002 does not establish broader screen-reader/zoom/language/novice/recovery acceptance."
+    },
+    {
+      "number": 418,
+      "state": "CLOSED",
+      "updatedAt": "2026-10-13T16:56:56Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/418",
+      "sourceStatus": "closed-roadmap",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/418#issuecomment-5770833381",
+      "scopeLimits": "Closed roadmap state supplies no additional human/operational evidence; #435/#505 retain their narrower scopes."
+    },
+    {
+      "number": 212,
+      "state": "OPEN",
+      "updatedAt": "2026-10-24T15:14:42Z",
+      "url": "https://github.com/mario-andreschak/FLUJO/issues/212",
+      "sourceStatus": "deferred-unintegrated-work",
+      "selectedReleaseStatus": "not-qualified-by-this-contract",
+      "evidenceUrl": "https://github.com/mario-andreschak/FLUJO/issues/212#issuecomment-6385878528",
+      "scopeLimits": "PR #1233 at fb1c845ac390b3d4663a2df2d5991883d7814fb4 remains draft/open and explicitly deferred; no shared/public support claimed."
+    }
+  ],
+  "evidenceLedger": {
+    "format": "source-release-evidence-collection/v2",
+    "requiredFields": [
+      "id",
+      "kind",
+      "sourceSha",
+      "artifactIdentity",
+      "profileId",
+      "command",
+      "platform",
+      "ownerId",
+      "startedAt",
+      "finishedAt",
+      "clock",
+      "result",
+      "rawLocation",
+      "rawSha256",
+      "scopeLimits",
+      "budgetIds",
+      "numerator",
+      "denominator"
+    ],
+    "allowedResults": [
+      "unverified",
+      "passed",
+      "failed",
+      "skipped",
+      "manual",
+      "unknown"
+    ],
+    "kinds": [
+      "source-check",
+      "offline-simulation",
+      "installed-artifact",
+      "human-study",
+      "live-provider",
+      "security-review",
+      "independent-assessment"
+    ],
+    "distinctions": [
+      "unintegrated-local-work",
+      "integrated-source",
+      "reported-specific-release",
+      "verified-installed-artifact",
+      "unverified-claim"
+    ],
+    "closureValidator": "scripts/validate-scorecard.mjs",
+    "closureRule": "The version-1 release validator and all original grade/evidence assertions remain unchanged; collection and foundation validation cannot award grades."
+  }
+}

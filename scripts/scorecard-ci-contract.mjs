@@ -4,8 +4,9 @@ export const SCORECARD_TEST_SUITES = Object.freeze([
   'scripts/validate-scorecard.test.mjs',
   'scripts/check-scorecard-publication.test.mjs',
   'scripts/scorecard-ci-contract.test.mjs',
+  'scripts/check-scorecard-foundation.test.mjs',
 ]);
-export const MINIMUM_SCORECARD_TESTS = 99;
+export const MINIMUM_SCORECARD_TESTS = 122;
 export const SCORECARD_CHECKS = Object.freeze(['tests', 'ledger', 'closure', 'publication']);
 export const scorecardTestArguments = () => ['--test', '--test-reporter=tap', ...SCORECARD_TEST_SUITES];
 export const closureState = exitCode => ({0: 'ledger-declares-closure', 2: 'incomplete'})[exitCode] ?? 'invalid';
