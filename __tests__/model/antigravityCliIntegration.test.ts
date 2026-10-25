@@ -63,9 +63,28 @@ import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionA
 
 type GenAiRequest = {
   contents?: Array<{ role?: string; parts?: Array<{ text?: string; functionResponse?: { name: string; response: unknown } }> }>;
-  tools?: Array<{ functionDeclarations?: Array<{ name: string }> }>;
+  tools?: Array<{ functionDeclarations?: Array<{
+    name: string;
+    parameters?: { properties?: Record<string, unknown> };
+    parametersJsonSchema?: { properties?: Record<string, unknown> };
+  }> }>;
   systemInstruction?: unknown;
 };
+
+function nativeMcpCall(body: GenAiRequest, args: { ServerName: string; ToolName: string; Arguments: object }, summary: string, action: string) {
+  const declaration = body.tools?.flatMap(tool => tool.functionDeclarations ?? []).find(tool => tool.name === 'call_mcp_tool');
+  const properties = declaration?.parameters?.properties ?? declaration?.parametersJsonSchema?.properties;
+  if (!properties || !['ServerName', 'ToolName', 'Arguments'].every(name => Object.hasOwn(properties, name))) {
+    throw new Error('Native call_mcp_tool declaration lacks its routing schema: ' + JSON.stringify(declaration));
+  }
+  // Supported native versions differ: some reject these fields, others require
+  // them. Follow the advertised schema, as a real model request must do.
+  return { functionCall: { name: 'call_mcp_tool', args: {
+    ...args,
+    ...(Object.hasOwn(properties, 'toolSummary') ? { toolSummary: summary } : {}),
+    ...(Object.hasOwn(properties, 'toolAction') ? { toolAction: action } : {}),
+  } } };
+}
 
 function respond(res: ServerResponse, streaming: boolean, parts: object[]): void {
   const body = {
@@ -175,10 +194,9 @@ describe('Antigravity pinned native executable integration', () => {
         respond(res, streaming, [{ text: 'Verified ' + nonce }]);
       } else if (names.length && !requestedTool) {
         requestedTool = true; advertisedNames = names;
-        respond(res, streaming, [{ functionCall: { name: 'call_mcp_tool', args: {
+        respond(res, streaming, [nativeMcpCall(body, {
           ServerName: 'flujo', ToolName: 'synthetic__controlled_nonce', Arguments: { purpose: 'model-attempt' },
-          toolSummary: 'Nonce lookup', toolAction: 'Retrieving nonce',
-        } } }]);
+        }, 'Nonce lookup', 'Retrieving nonce')]);
       } else {
         respond(res, streaming, [{ text: 'done' }]);
       }
@@ -233,16 +251,14 @@ describe('Antigravity pinned native executable integration', () => {
       } else if (requestedHandoff && !requestedLaterTool && responseText.includes('Handing off.')) {
         receivedHandoff = true;
         requestedLaterTool = true;
-        respond(res, streaming, [{ functionCall: { name: 'call_mcp_tool', args: {
+        respond(res, streaming, [nativeMcpCall(body, {
           ServerName: 'flujo', ToolName: 'controlled_nonce', Arguments: {},
-          toolSummary: 'Forbidden follow-up', toolAction: 'Testing the closed handoff boundary',
-        } } }]);
+        }, 'Forbidden follow-up', 'Testing the closed handoff boundary')]);
       } else if (names.includes('call_mcp_tool') && !requestedHandoff) {
         requestedHandoff = true;
-        respond(res, streaming, [{ functionCall: { name: 'call_mcp_tool', args: {
+        respond(res, streaming, [nativeMcpCall(body, {
           ServerName: 'flujo', ToolName: 'handoff_to_finish', Arguments: {},
-          toolSummary: 'Finish handoff', toolAction: 'Handing off the completed turn',
-        } } }]);
+        }, 'Finish handoff', 'Handing off the completed turn')]);
       } else {
         respond(res, streaming, [{ text: 'done' }]);
       }
@@ -318,10 +334,9 @@ describe('Antigravity pinned native executable integration', () => {
         respond(res, streaming, [{ text: 'Tool was denied.' }]);
       } else if (names.includes('call_mcp_tool') && !requested) {
         requested = true;
-        respond(res, streaming, [{ functionCall: { name: 'call_mcp_tool', args: {
+        respond(res, streaming, [nativeMcpCall(body, {
           ServerName: 'flujo', ToolName: 'synthetic__controlled_nonce', Arguments: {},
-          toolSummary: 'Approval boundary', toolAction: 'Requesting controlled nonce',
-        } } }]);
+        }, 'Approval boundary', 'Requesting controlled nonce')]);
       } else {
         respond(res, streaming, [{ text: 'Bootstrap response.' }]);
       }
