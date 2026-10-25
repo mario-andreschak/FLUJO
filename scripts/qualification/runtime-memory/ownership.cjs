@@ -1,0 +1,75 @@
+'use strict';
+const assert = require('node:assert/strict');
+function assertOwnership(owner, pilot, supervisor) {
+  assert.equal(owner?.completed, true, 'Final outer ownership receipt is required');
+  assert.equal(owner.equipmentOnly, false, 'Equipment is not an application pilot');
+  assert.match(owner.launcherSha256, /^[a-f0-9]{64}$/);
+  assert.equal(owner.platform, pilot.platform);
+  assert.deepEqual(owner.supervisor, supervisor, 'Outer receipt must bind the actual supervisor result');
+  for (const field of ['sourceHead', 'profileSha256', 'harnessSha256']) assert.equal(supervisor[field], pilot[field]);
+  for (const field of ['serverExited', 'stderrEnded', 'transportClosed']) assert.equal(owner.mcp?.[field], true, 'MCP owner did not settle');
+  assert.equal(owner.mcp.resultError, false);
+  assert.equal(owner.mcp.serverExitCode, 0); assert.equal(owner.mcp.serverExitSignal, null);
+  const guard = owner.guard;
+  assert.equal(guard?.completed, true); assert.equal(guard.childExitCode, 0);
+  for (const field of ['stdoutEnded', 'stderrEnded', 'copyThreadsStopped']) assert.equal(guard[field], true);
+  assert.deepEqual(guard.errors, []); assert.equal(guard.stoppedByGuard, null);
+  assert.equal(guard.jobActiveProcesses, 0, 'Outer job retained descendants');
+  assert.equal(guard.forcedCleanup, false, 'Forced cleanup cannot qualify');
+  assert.equal(guard.hostBackingVolume, 'C:\\');
+  assert.equal(guard.diskFloorBytes, 20 * 1024 ** 3);
+  assert(guard.minimumHostDiskFreeBytes >= guard.diskFloorBytes);
+  assert.equal(supervisor.diskAdmissions?.length, 2, 'Both child launches need fresh disk admission');
+  assert.deepEqual(guard.diskAdmissions, supervisor.diskAdmissions);
+  for (const receipt of supervisor.diskAdmissions) {
+    assert.equal(receipt.kind, 'windows-physical-volume-v1'); assert.equal(receipt.volume, 'C:\\');
+    assert.equal(receipt.admitted, true); assert(receipt.freeBytes >= receipt.request.requiredFreeBytes);
+    assert.equal(receipt.request.requiredFreeBytes, 22 * 1024 ** 3, 'Pilot disk reservation changed');
+    assert.equal(receipt.request.mode, 'pilot'); assert.equal(receipt.request.planSha256, null);
+    assert.equal(receipt.request.node, pilot.node);
+    assert.equal(receipt.request.launcherSha256, owner.launcherSha256);
+    assert.equal(receipt.currentLauncherSha256, owner.launcherSha256);
+    for (const field of ['sourceHead', 'profileSha256', 'harnessSha256']) assert.equal(receipt.request[field], pilot[field]);
+  }
+  if (pilot.platform === 'linux') {
+    assert.equal(owner.linux?.reason, 'command completed'); assert.equal(owner.linux.childExitCode, 0);
+    assert.deepEqual(owner.linux.remainingWorkloadMembers, []);
+    assert.deepEqual(owner.linux.beforeCleanupMembers, []);
+    assert.deepEqual(owner.linux.cleanupErrors, []);
+    assert.equal(owner.linux.forcedCleanup, false);
+    assert.match(owner.linux.workloadCgroupEvents, /(?:^|\n)populated 0(?:\n|$)/);
+    assert.equal(owner.linux.aggregateCgroup, supervisor.envelope.path);
+    assert.equal(owner.linux.workloadCgroup, supervisor.envelope.workloadPath);
+    assert.equal(supervisor.envelope.guardianIncluded, true);
+    const mirror = owner.linux.datasetMirror;
+    assert.equal(mirror?.complete, true); assert.equal(mirror.version, 'ext4-receipt-mirror-v1');
+    assert.match(mirror.phase, /^[a-z0-9][a-z0-9-]{0,70}$/);
+    assert.equal(mirror.token, owner.linux.token);
+    assert.deepEqual(guard.datasetMirror, mirror, 'Outer guard did not verify the same receipt mirror');
+    const filesystem = mirror.datasetFilesystem;
+    assert.equal(filesystem.path, '/opt/flujo569/qualification/' + mirror.phase + '/output');
+    assert.equal(filesystem.realPath, filesystem.path); assert.equal(filesystem.filesystemMagic, '0xef53');
+    assert.equal(filesystem.filesystem, 'ext4');
+    assert(Number.isSafeInteger(filesystem.device) && filesystem.device >= 0);
+    assert(Number.isSafeInteger(filesystem.inode) && filesystem.inode > 0);
+    assert.deepEqual(supervisor.datasetFilesystem, filesystem);
+    assert.deepEqual(pilot.datasetFilesystem, filesystem);
+    const names = ['runtime-receipt.json', 'supervisor-receipt.json', 'runtime-settled.json', 'provider-settled.json'];
+    assert.deepEqual(Object.keys(mirror.files).sort(), names.sort());
+    for (const [name, record] of Object.entries(mirror.files)) {
+      assert.equal(record.sourcePath, filesystem.path + '/' + name);
+      assert(Number.isSafeInteger(record.bytes) && record.bytes > 0 && record.bytes <= 1024 ** 2);
+      assert.match(record.sha256, /^[a-f0-9]{64}$/);
+    }
+    assert.equal(supervisor.guestDiskAdmissions?.length, 2);
+    for (const admission of supervisor.guestDiskAdmissions) {
+      assert.deepEqual(admission.filesystem, filesystem);
+      assert.equal(admission.requiredFreeBytes, 22 * 1024 ** 3);
+      assert(admission.freeBytes >= admission.requiredFreeBytes);
+    }
+  } else {
+    assert.equal(supervisor.processes?.windowsJob?.activeProcessesBeforeCleanup, 0);
+    assert.equal(supervisor.processes.windowsJob.forcedCleanup, false);
+  }
+}
+module.exports = { assertOwnership };
