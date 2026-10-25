@@ -101,6 +101,35 @@ const sharedBufferSize = typeof SharedArrayBuffer === 'undefined' ? undefined
 const typedArrayBuffer = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'buffer')!.get!;
 const dataViewBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer')!.get!;
 
+function isIntrinsicConstructorPrototype(prototype: object, intrinsic: ObjectConstructor | ArrayConstructor): boolean {
+  if (types.isProxy(prototype)) return false;
+  const constructor = Object.getOwnPropertyDescriptor(prototype, 'constructor');
+  if (!constructor || !('value' in constructor) || typeof constructor.value !== 'function'
+    || types.isProxy(constructor.value)) return false;
+  return Object.getOwnPropertyDescriptor(constructor.value, 'prototype')?.value === prototype
+    && Function.prototype.toString.call(constructor.value) === Function.prototype.toString.call(intrinsic);
+}
+
+function isIntrinsicObjectPrototype(prototype: object | null): boolean {
+  return prototype !== null && !types.isProxy(prototype) && Object.getPrototypeOf(prototype) === null
+    && isIntrinsicConstructorPrototype(prototype, Object);
+}
+
+/** structuredClone/VM data can have another realm's genuine Object/Array prototypes.
+ * Match intrinsic constructor ownership, not a local prototype identity or a
+ * caller-controlled constructor name. Unknown classes and prototype proxies
+ * still refuse admission without evaluating accessors or proxy traps.
+ */
+function hasDataPrototype(value: object, array: boolean): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype === null) return true;
+  if (types.isProxy(prototype)) return false;
+  return array
+    ? Array.isArray(prototype) && isIntrinsicConstructorPrototype(prototype, Array)
+      && isIntrinsicObjectPrototype(Object.getPrototypeOf(prototype))
+    : isIntrinsicObjectPrototype(prototype);
+}
+
 /** No cloning, JSON serialization, accessors or publisher callbacks. Reject uncertainty. */
 function estimateInputBytes(input: FlowRunAdmissionInput, ceiling: number): number {
   let bytes = 0;
@@ -125,8 +154,7 @@ function estimateInputBytes(input: FlowRunAdmissionInput, ceiling: number): numb
       return;
     }
     const array = Array.isArray(value);
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== null && prototype !== (array ? Array.prototype : Object.prototype)) refuse('FLOW_RUN_INPUT_TOO_LARGE');
+    if (!hasDataPrototype(value, array)) refuse('FLOW_RUN_INPUT_TOO_LARGE');
     if (array) {
       if (value.length > MAX_VALUES) refuse('FLOW_RUN_INPUT_TOO_LARGE');
       add(value.length * 8); // Sparse arrays retain their slot capacity too.

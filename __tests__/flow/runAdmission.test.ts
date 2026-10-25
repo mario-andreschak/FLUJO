@@ -1,6 +1,7 @@
 jest.mock('node:v8', () => ({ getHeapStatistics: jest.fn() }));
 
 import { getHeapStatistics } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import {
   acquireFlowRunAdmission,
   claimFlowRunAdmission,
@@ -145,6 +146,59 @@ it('excludes runtime capabilities only at the input boundary', () => {
   acquire(input);
   expect(getter).not.toHaveBeenCalled();
   expect(() => acquire({ variables: { executionAuthority: new Proxy({}, {}) } })).toThrow(FlowRunPressureError);
+});
+
+it.each(['structuredClone', 'vm'] as const)('admits %s native-host data without walking opaque authority', source => {
+  const data = {
+    flowDefinition: { id: 'native-host-flow', nodes: [{ id: 'process', data: { properties: { model: 'native' } } }], edges: [] },
+    personaInstructionContext: { instruction: 'P'.repeat(200_000) },
+    messages: [{ role: 'user', content: 'Offline native-host request' }],
+  };
+  const foreign = source === 'structuredClone' ? structuredClone(data)
+    : runInNewContext(`({
+        flowDefinition: { id: 'native-host-flow', nodes: [{ id: 'process', data: { properties: { model: 'native' } } }], edges: [] },
+        personaInstructionContext: { instruction: 'P'.repeat(200000) },
+        messages: [{ role: 'user', content: 'Offline native-host request' }]
+      })`) as typeof data;
+  if (source === 'vm') {
+    expect(Object.getPrototypeOf(foreign.flowDefinition)).not.toBe(Object.prototype);
+    expect(Object.getPrototypeOf(foreign.messages)).not.toBe(Array.prototype);
+  }
+  const authorityGetter = jest.fn(() => { throw new Error('authority must remain opaque'); });
+  const contextTrap = jest.fn(() => { throw new Error('context must remain opaque'); });
+  class OwnedAuthority {}
+  const authority = Object.defineProperty(new OwnedAuthority(), 'state', { enumerable: true, get: authorityGetter });
+  const input = { ...foreign, conversationId: 'native-host-owned', executionAuthority: authority,
+    executionExtensionContext: new Proxy({}, { ownKeys: contextTrap, getPrototypeOf: contextTrap }),
+    abortSignal: new AbortController().signal };
+  const permit = acquire(input);
+  recheckFlowRunAdmission(permit, input);
+  expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(1);
+  // Cross-realm instructions are counted; the fix must not exempt private inputs.
+  expect(getFlowRunAdmissionDiagnostics().reservedBytes).toBeGreaterThan(200_000 * 2 * 4);
+  expect(authorityGetter).not.toHaveBeenCalled();
+  expect(contextTrap).not.toHaveBeenCalled();
+});
+
+it('still refuses unknown classes, forged intrinsic prototypes and prototype hooks', () => {
+  class UnknownPayload { value = 'private'; }
+  class UnknownArray extends Array {}
+  expect(() => acquire({ variables: new UnknownPayload() })).toThrow(FlowRunPressureError);
+  expect(() => acquire({ messages: new UnknownArray() })).toThrow(FlowRunPressureError);
+  const forgedPrototype = Object.create(null);
+  Object.defineProperty(forgedPrototype, 'constructor', { value: Object });
+  expect(() => acquire({ variables: Object.create(forgedPrototype) })).toThrow(FlowRunPressureError);
+  const getter = jest.fn(() => Object);
+  const accessorPrototype = Object.defineProperty(Object.create(null), 'constructor', { get: getter });
+  expect(() => acquire({ variables: Object.create(accessorPrototype) })).toThrow(FlowRunPressureError);
+  const trap = jest.fn(() => { throw new Error('prototype proxy must not run'); });
+  const proxyPrototype = new Proxy(Object.create(null), { getPrototypeOf: trap, getOwnPropertyDescriptor: trap });
+  expect(() => acquire({ variables: Object.create(proxyPrototype) })).toThrow(FlowRunPressureError);
+  const foreign = runInNewContext('({})');
+  Object.defineProperty(foreign, 'payload', { enumerable: true, get: getter });
+  expect(() => acquire({ variables: foreign })).toThrow(FlowRunPressureError);
+  expect(getter).not.toHaveBeenCalled();
+  expect(trap).not.toHaveBeenCalled();
 });
 
 it.each(['heap', 'rss'] as const)('refuses measured %s pressure and can retry after pressure subsides', kind => {
