@@ -17,6 +17,7 @@ jest.mock('@/backend/services/scheduler/workerLocalRecovery', () => ({ inspectWo
 jest.mock('@/backend/services/security/ownerAccess', () => ({ resolveOwnerRequest: (...args: unknown[]) => resolve(...args) }));
 import { GET } from '@/app/api/operations/status/route';
 import { acquireFlowRunAdmission } from '@/backend/execution/flow/runAdmission';
+import { withSubflowPreparationBudget } from '@/backend/execution/flow/subflowPreparationBudget';
 import { setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 
 const keys = ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_OPERATIONS_RSS_BUDGET_BYTES'] as const;
@@ -58,6 +59,18 @@ it('reports numeric submission pressure without exposing retained inputs or iden
     expect(JSON.stringify(result.flowRunAdmission)).not.toMatch(/PRIVATE_CONVERSATION|PRIVATE_PROMPT|fixture-workspace/);
   } finally { permit.release(); }
   expect((await (await GET(request('fixture-control'))).json()).flowRunAdmission).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+});
+it('reports held preparation capacity as numeric observations until its owner settles', async () => {
+  await withSubflowPreparationBudget(async budget => {
+    budget.reserve(2 * 1024 ** 2);
+    const response = await GET(request('fixture-control'));
+    const result = await response.json();
+    expect(result.subflowPreparation).toMatchObject({ active: 1, reservedBytes: 2 * 1024 ** 2 });
+    expect(Object.values(result.subflowPreparation).every(value => typeof value === 'number')).toBe(true);
+    expect(JSON.stringify(result.subflowPreparation)).not.toMatch(/PRIVATE|fixture-workspace/);
+  });
+  expect((await (await GET(request('fixture-control'))).json()).subflowPreparation)
+    .toMatchObject({ active: 0, reservedBytes: 0 });
 });
 it('rechecks a rotated worker bearer after awaited reads', async () => {
   read.mockImplementationOnce(async () => { process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'rotated-fixture-control'; return undefined; });

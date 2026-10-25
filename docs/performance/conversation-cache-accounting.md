@@ -46,6 +46,12 @@ actions or an unfolded subflow invocation also remains protected. Byte/count
 pressure never authorizes discarding that ownership. The cache does not truncate
 canonical messages, drop retry markers or clear a live registry to meet a budget.
 
+Recovery checks use the real record's manual-action flag, interrupted state and
+pending/unknown checkpoint effects. An owner ID/heartbeat retained on a fully
+resolved terminal record is historical attribution. Genuine foreign-realm plain
+objects and binary stores produced by native `structuredClone` are included in
+payload estimates; opaque classes and proxy graphs remain excluded.
+
 ## Complete conversation-log recovery
 
 Canonical JSONL recovery streams 64 KiB chunks from one opened file instead of

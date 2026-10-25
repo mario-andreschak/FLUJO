@@ -26,6 +26,7 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { resolveDataTemplate, resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
+import { findPromptRefs } from '@/utils/shared/promptRefs';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue } from '../resolveKvNodeRefs';
 import {
@@ -57,6 +58,12 @@ import {
 import {
   prepareResumedSessionTranscript,
 } from '../sessionTranscriptPolicy';
+import {
+  assertSubflowLaneCount, assertSubflowSource, estimateSubflowData, isSubflowPreparationPressureError,
+  mapSubflowPreparation, preflightSubflowItems, preflightSubflowJson, preflightSubflowReferences, reserveExistingSubflowPlan, reserveSubflowData, reserveSubflowPlan, reserveSubflowSpawn,
+  resolveBoundedSubflowTokens, subflowWorkerLimit, withSubflowPreparationBudget,
+  type SubflowPreparationBudget, SubflowPreparationPressureError,
+} from '../subflowPreparationBudget';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 const nativePreparedSubflows = new WeakMap<
@@ -86,13 +93,28 @@ export type SubflowRunInput = { messages: FlujoChatMessage[] } | { prompt: strin
 /** Reduce a parent-side lane input to one genuine follow-up turn. The resumed
  * child's own transcript is already persisted, so replaying the parent's full
  * history would replace/duplicate the memory we are trying to preserve. */
-export function buildSessionFollowupInput(input: SubflowRunInput): SubflowRunInput {
+export function buildSessionFollowupInput(input: SubflowRunInput, allocation?: { reserve: (bytes: number) => void }): SubflowRunInput {
   if ('prompt' in input) return { prompt: input.prompt };
-  const latest = [...input.messages].reverse().find((message) =>
-    (message.role === 'user' || message.role === 'assistant')
-    && (hasContent(message.content) || (message.media?.length ?? 0) > 0),
-  );
+  let latest: FlujoChatMessage | undefined;
+  for (let index = input.messages.length - 1; index >= 0; index--) {
+    const message = input.messages[index];
+    if ((message.role === 'user' || message.role === 'assistant')
+      && (hasContent(message.content) || (message.media?.length ?? 0) > 0)) { latest = message; break; }
+  }
   if (!latest) return { prompt: '' };
+  if (allocation) {
+    let bytes = 4096;
+    if (Array.isArray(latest.content)) {
+      for (const part of latest.content) {
+        if (!part || typeof part !== 'object') continue;
+        const value = part as { text?: unknown; refusal?: unknown };
+        const text = typeof value.text === 'string' ? value.text : typeof value.refusal === 'string' ? value.refusal : '';
+        bytes += text.length * 4 + 16;
+      }
+    }
+    if (latest.media?.length) bytes += estimateSubflowData(latest.media, 'clone').heap * 2;
+    allocation.reserve(bytes);
+  }
   return {
     messages: [{
       role: 'user',
@@ -210,18 +232,20 @@ function latestUserMessage(sanitized: FlujoChatMessage[]): FlujoChatMessage[] {
 
 /** Flatten a message's content down to plain text (map-over-list source). A
  *  multimodal content array keeps only its text parts. */
-function messageText(content: unknown): string {
-  if (typeof content === 'string') return content;
+function messageText(content: unknown, preparation = false): string {
+  if (typeof content === 'string') { if (preparation) assertSubflowSource(content); return content; }
   if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === 'string') return part;
-        if (part && typeof part === 'object' && 'text' in part && typeof part.text === 'string') {
-          return part.text;
-        }
-        return '';
-      })
-      .join('');
+    if (preparation) assertSubflowLaneCount(content.length);
+    const chunks: string[] = [];
+    let chars = 0;
+    for (const part of content) {
+      const text = typeof part === 'string' ? part
+        : part && typeof part === 'object' && 'text' in part && typeof part.text === 'string' ? part.text : '';
+      chars += text.length;
+      if (preparation && chars > 4 * 1024 * 1024) throw new SubflowPreparationPressureError('SUBFLOW_PREPARATION_TOO_LARGE', 'message text exceeds 8 MiB');
+      chunks.push(text);
+    }
+    return chunks.join('');
   }
   return '';
 }
@@ -341,6 +365,7 @@ async function promoteSubflowMedia(
  *     map" result rather than guessing.
  */
 function splitItems(text: string, mode: 'json-array' | 'lines'): string[] {
+  preflightSubflowItems(text, mode);
   if (mode === 'lines') {
     return text
       .split(/\r?\n/)
@@ -379,8 +404,10 @@ function activeInvocationForNode(
 function prepFromInvocation(
   sharedState: SharedState,
   invocation: SubflowInvocation,
+  budget: SubflowPreparationBudget,
 ): SubflowNodePrepResult {
   const sharedInput = invocation.sharedInput;
+  reserveExistingSubflowPlan(budget, sharedInput, invocation.lanes, invocation.concurrencyLimit, true);
   return {
     nodeId: invocation.parentNodeId,
     nodeType: 'subflow',
@@ -424,7 +451,12 @@ function prepFromInvocation(
 async function attachDurableInvocation(
   sharedState: SharedState,
   prepResult: SubflowNodePrepResult,
+  budget: SubflowPreparationBudget,
+  handoff?: SharedState['handoffInput'],
 ): Promise<void> {
+  const plannedInput: SubflowRunInput = prepResult.messages
+    ? { messages: prepResult.messages } : { prompt: prepResult.inputText ?? '' };
+  reserveSubflowPlan(budget, plannedInput, prepResult.lanes ?? [], prepResult.concurrencyLimit);
   // A durable join is meaningful only when both parent and children are
   // persisted. Ephemeral runs retain the existing in-request behavior.
   if (
@@ -457,7 +489,7 @@ async function attachDurableInvocation(
     showSteps: prepResult.showSteps,
     nodeName: prepResult.nodeName,
     subflowName: prepResult.subflowName,
-    concurrencyLimit: Math.max(1, prepResult.concurrencyLimit ?? 4),
+    concurrencyLimit: subflowWorkerLimit(prepResult.concurrencyLimit),
     joinSeparator: prepResult.joinSeparator ?? '\n\n',
     errorStrategy: prepResult.errorStrategy ?? 'collect-all',
     sessionScope: prepResult.sessionScope,
@@ -482,6 +514,7 @@ async function attachDurableInvocation(
   sharedState.subflowInvocations[invocationId] = invocation;
   sharedState.activeSubflowInvocationByNode = sharedState.activeSubflowInvocationByNode ?? {};
   sharedState.activeSubflowInvocationByNode[prepResult.nodeId] = invocationId;
+  if (handoff && sharedState.handoffInput === handoff) sharedState.handoffInput = undefined;
   prepResult.invocationId = invocationId;
   prepResult.lanes = invocation.lanes.map((lane) => ({
     subflowId: lane.subflowId,
@@ -507,7 +540,7 @@ async function attachDurableInvocation(
  * as map-over-list (`json-array` default, or `lines`), trimmed, de-duplicated
  * preserving first-seen order, empties dropped, an optional self-reference
  * removed (trivial-recursion guard — the depth cap still backstops), and capped
- * at MAX_DYNAMIC_FANOUT_LANES. Pure/total: never throws, never does I/O. Id
+ * at MAX_DYNAMIC_FANOUT_LANES. Pure: refuses oversized source work before parsing. Id
  * EXISTENCE is validated separately against the flows store in prep().
  */
 export function resolveDynamicFanoutIds(
@@ -543,20 +576,29 @@ async function resolveSubflowTemplate(
   sharedState: SharedState,
   nodeId: string | undefined,
   templateValues?: Record<string, unknown>,
+  budget?: SubflowPreparationBudget,
 ): Promise<string> {
+  if (!budget) return withSubflowPreparationBudget(owned => resolveSubflowTemplate(text, sharedState, nodeId, templateValues, owned));
+  assertSubflowSource(text);
+  reserveSubflowData(budget, { variables: sharedState.variables, templateValues });
   const mergedValues = { ...(sharedState.variables ?? {}), ...(templateValues ?? {}) };
   const runVariables = Object.fromEntries(
     Object.entries(mergedValues)
       .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
       .map(([key, value]) => [key, String(value)]),
   );
-  let resolved = await resolveRunResourceRefs(
-    resolveRunVars(resolveDataTemplate(text, mergedValues), runVariables),
+  let resolved = await resolveBoundedSubflowTokens(text, /\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}/g,
+    async token => resolveDataTemplate(token, mergedValues), budget);
+  resolved = await resolveBoundedSubflowTokens(resolved, /\$\{var:([^}]+)\}/g,
+    async token => resolveRunVars(token, runVariables), budget);
+  resolved = await resolveBoundedSubflowTokens(resolved, /\$\{res:([^}]+)\}/g, token => resolveRunResourceRefs(
+    token,
     sharedState.ephemeral ? undefined : sharedState.conversationId,
     sharedState.emit,
     nodeId ? { nodeId, nodeType: 'subflow' } : undefined,
     sharedState,
-  );
+    { maxChars: 200_000 },
+  ), budget, true);
   if (resolved.includes('${kv:')) {
     let folder: string | undefined;
     try {
@@ -567,21 +609,25 @@ async function resolveSubflowTemplate(
         folder = (await flowService.getFlow(sharedState.flowId))?.folder;
       }
     } catch { /* best effort */ }
-    resolved = await resolveKvNodeRefs(resolved, {
+    resolved = await resolveBoundedSubflowTokens(resolved, /\$\{kv:([^}]+)\}/g, token => resolveKvNodeRefs(token, {
       flowId: sharedState.flowId,
       folder,
       executionAuthority: sharedState.executionAuthority,
       personaAttribution: sharedState.personaAttribution,
-    });
+    }), budget, true);
   }
   if (templateValues !== undefined) {
-    const dynamic = await resolvePromptDynamicReferences(resolved, {
+    preflightSubflowReferences(resolved);
+    const references = findPromptRefs(resolved).filter(reference => reference.kind === 'mention' || reference.kind === 'global');
+    resolved = await resolveBoundedSubflowTokens(resolved,
+      references,
+      async token => String(await resolvePromptDynamicReferences(token, {
       flowId: sharedState.flowId,
       conversationId: sharedState.conversationId,
       nodeId,
-    });
-    resolved = String(dynamic ?? '');
+    }) ?? ''), budget, true);
   }
+  budget.resolved(resolved);
   return resolved;
 }
 
@@ -594,9 +640,10 @@ function laneTemplateValues(lane: SubflowLanePlan): Record<string, unknown> {
     text = input.prompt;
   } else if (input && 'messages' in input) {
     const latest = [...input.messages].reverse().find((message) => hasContent(message.content));
-    text = latest ? messageText(latest.content) : undefined;
+    text = latest ? messageText(latest.content, true) : undefined;
   }
   if (text) {
+    preflightSubflowJson(text);
     try {
       const parsed = JSON.parse(text);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -612,13 +659,17 @@ export async function resolveSubflowSessionKeys(
   preparation: SubflowNodePrepResult,
   sharedState: SharedState,
   nodeId: string | undefined,
+  budget?: SubflowPreparationBudget,
 ): Promise<void> {
   if (preparation.sessionScope !== 'per-key' || !preparation.lanes?.length) return;
-  preparation.lanes = await Promise.all(preparation.lanes.map(async (lane, laneIndex) => {
+  if (!budget) return withSubflowPreparationBudget(owned => resolveSubflowSessionKeys(preparation, sharedState, nodeId, owned));
+  reserveSubflowPlan(budget, preparation.messages ? { messages: preparation.messages } : { prompt: preparation.inputText ?? '' },
+    preparation.lanes, preparation.concurrencyLimit);
+  preparation.lanes = await mapSubflowPreparation(preparation.lanes, async (lane, laneIndex) => {
     const callerKey = normalizeSessionKey(lane.callerSessionKey);
     const template = preparation.sessionKeyTemplate?.trim();
     const templateKey = !callerKey && template
-      ? normalizeSessionKey(await resolveSubflowTemplate(template, sharedState, nodeId, laneTemplateValues(lane)))
+      ? normalizeSessionKey(await resolveSubflowTemplate(template, sharedState, nodeId, laneTemplateValues(lane), budget))
       : undefined;
     const resolvedKey = callerKey ?? templateKey;
     const { sessionKey: _previousKey, ...baseLane } = lane;
@@ -629,7 +680,7 @@ export async function resolveSubflowSessionKeys(
       return baseLane;
     }
     return { ...baseLane, sessionKey: resolvedKey };
-  }));
+  });
 }
 
 /**
@@ -710,6 +761,11 @@ function buildChildEmit(
  */
 export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, SubflowNodePrepResult, SubflowNodeExecResult> {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
+    return withSubflowPreparationBudget(budget => this.prepAdmitted(sharedState, node_params, budget));
+  }
+
+  private async prepAdmitted(sharedState: SharedState, node_params: SubflowNodeParams | undefined,
+    budget: SubflowPreparationBudget): Promise<SubflowNodePrepResult> {
     const extensionContext = sharedState.executionExtensionContext;
     const protectedParent = Boolean(extensionContext) || isExecutionProtectedState(sharedState);
     const nativeRoot = isNativeRootExecutionContext(extensionContext);
@@ -738,7 +794,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
         laneCount: existingInvocation.lanes.length,
         status: existingInvocation.status,
       });
-      return prepFromInvocation(sharedState, existingInvocation);
+      return prepFromInvocation(sharedState, existingInvocation, budget);
     }
     // Consume the single-shot, node-id-scoped handoff input ONCE here (issue #96
     // caller prompt + issue #130 Phase 4 caller-chosen fan-out set). Reading it
@@ -750,9 +806,15 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       sharedState.handoffInput && sharedState.handoffInput.targetNodeId === node_params?.id
         ? sharedState.handoffInput
         : undefined;
-    if (handoffForThisNode) {
-      sharedState.handoffInput = undefined; // consume on read
-    }
+    // Admission refusals must preserve the pending handoff. Consume it only
+    // after the complete plan is accepted, alongside durable publication.
+    assertSubflowLaneCount(node_params?.properties?.parallelSubflowIds?.length ?? 0);
+    assertSubflowLaneCount(node_params?.properties?.spawnBriefs?.length ?? 0);
+    assertSubflowLaneCount(handoffForThisNode?.tasks?.length ?? 0);
+    assertSubflowLaneCount(handoffForThisNode?.parallelFlows?.length ?? 0);
+    assertSubflowLaneCount(handoffForThisNode?.sessionKeys?.length ?? 0);
+    const workerLimit = subflowWorkerLimit(handoffForThisNode?.concurrencyLimit ?? node_params?.properties?.concurrencyLimit);
+    reserveSubflowData(budget, { handoff: handoffForThisNode, properties: node_params?.properties });
     let parallelIds = (node_params?.properties?.parallelSubflowIds ?? []).filter(
       (id): id is string => typeof id === 'string' && id.trim() !== '',
     );
@@ -770,6 +832,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     const parallelSubflowIdsVar = node_params?.properties?.parallelSubflowIdsVar?.trim();
     let dynamicFanout = false;
     if (parallelSubflowIdsVar) {
+      const raw = sharedState.variables?.[parallelSubflowIdsVar];
+      if (typeof raw === 'string') preflightSubflowItems(raw, itemSplit, budget);
       const dyn = resolveDynamicFanoutIds(
         sharedState.variables?.[parallelSubflowIdsVar],
         itemSplit,
@@ -798,7 +862,6 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     // Normalized/capped/self-reference-dropped by the same pure helper, then
     // validated against the flows store below. An all-unknown caller set is a
     // loud ERROR now, not the old silent zero-lane success (issue #156 defect 2).
-    let callerConcurrency: number | undefined;
     let callerFanout = false;
     const allowCallerFanout = node_params?.properties?.allowCallerFanout === true;
     if (allowCallerFanout && handoffForThisNode?.parallelFlows && handoffForThisNode.parallelFlows.length > 0) {
@@ -816,9 +879,6 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
           nodeId: node_params?.id,
         });
       }
-    }
-    if (typeof handoffForThisNode?.concurrencyLimit === 'number' && handoffForThisNode.concurrencyLimit >= 1) {
-      callerConcurrency = Math.floor(handoffForThisNode.concurrencyLimit);
     }
     // Every matching model handoff call contributes one queued task. This is no
     // longer gated by `allowCallerFanout`: queueing is the canonical Subflow
@@ -920,7 +980,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       // Canonical default ON (issue #138): absent => the caller MAY pass a prompt,
       // matching the modal's display. Only an explicit `false` opts out.
       const allowCallerPrompt = node_params?.properties?.allowCallerPrompt !== false;
-      // handoffForThisNode was already consumed (and cleared) at the top of prep().
+      // The captured handoff remains pending until the complete plan is admitted.
       if (allowCallerPrompt && handoffForThisNode?.prompt?.trim()) {
         prepResult.inputText = handoffForThisNode.prompt;
         log.info('Using caller-supplied prompt for isolated subflow', { nodeId: node_params?.id });
@@ -928,6 +988,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
         prepResult.inputText = promptTemplate ?? '';
       }
     } else {
+      // Check retained/recovered context before sanitizing/copying its graph.
+      reserveSubflowSpawn(budget, { messages: sharedState.messages }, spawnTasks?.length ?? 0, Boolean(spawnTasks));
       const sanitized = sanitizeForSubflow(sharedState.messages);
       prepResult.messages = inputMode === 'latest-message' ? latestUserMessage(sanitized) : sanitized;
     }
@@ -942,7 +1004,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       // shared with the spawn-brief resolution (issue #156). Kv keys scope off
       // the PARENT flow (its folder), so a subflow node shares a board with the
       // parent flow's process nodes.
-      prepResult.inputText = await resolveSubflowTemplate(prepResult.inputText, sharedState, node_params?.id);
+      prepResult.inputText = await resolveSubflowTemplate(prepResult.inputText, sharedState, node_params?.id, undefined, budget);
     }
 
     // Lane plan. The single decision point for both concurrency features: which
@@ -970,6 +1032,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       spawnTasks = undefined;
     }
     if (spawnTasks && spawnTasks.length > 0 && subflowId) {
+      reserveSubflowSpawn(budget, prepResult.messages ? { messages: prepResult.messages } : { prompt: prepResult.inputText ?? '' },
+        spawnTasks.length, prepResult.messages !== undefined);
       // Spawn-with-brief (issue #156): one lane per brief, all running THIS
       // node's sub-agent. Each lane's input composes the brief with the node's
       // inputMode: isolated lanes receive the brief as their single prompt
@@ -990,9 +1054,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       } catch {
         /* attribution only */
       }
-      const resolvedBriefs = await Promise.all(
-        spawnTasks.map((brief) => resolveSubflowTemplate(brief, sharedState, node_params?.id)),
-      );
+      const resolvedBriefs = await mapSubflowPreparation(spawnTasks,
+        brief => resolveSubflowTemplate(brief, sharedState, node_params?.id, undefined, budget));
       prepResult.lanes = resolvedBriefs.map((brief, i) => {
         const hasBrief = brief.trim().length > 0;
         const suppliedKey = callerSessionKeys?.[i];
@@ -1024,7 +1087,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
         };
       });
       prepResult.subflowName = subflowName;
-      prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
+      prepResult.concurrencyLimit = workerLimit;
       // Model-created queues always drain completely. Legacy author-defined
       // briefs keep their saved join/error settings for backwards compatibility.
       prepResult.joinSeparator = callerTasks ? '\n\n' : node_params?.properties?.joinSeparator ?? '\n\n';
@@ -1041,8 +1104,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       try {
         const { flowService } = await import('@/backend/services/flow/index');
         const missing = new Set<string>();
-        await Promise.all(
-          lanes.map(async (lane) => {
+        await mapSubflowPreparation(lanes, async (lane) => {
             try {
               const flow = pinnedSubflowDefinition(prepResult, lane.subflowId).flowDefinition ?? await flowService.getFlow(lane.subflowId);
               if (flow?.name) lane.subflowName = flow.name;
@@ -1053,8 +1115,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
             } catch {
               if (dynamicFanout) missing.add(lane.subflowId);
             }
-          }),
-        );
+          });
         if (dynamicFanout && missing.size > 0) {
           log.warn('Dropping unknown dynamic fan-out target id(s)', { dropped: [...missing] });
           lanes = lanes.filter((lane) => !missing.has(lane.subflowId));
@@ -1063,7 +1124,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
         if (lanes.length > 0 && lanes.every(lane => lane.subflowId === lanes[0].subflowId)) {
           prepResult.subflowName = lanes[0].subflowName;
         }
-      } catch {
+      } catch (error) {
+        if (isSubflowPreparationPressureError(error)) throw error;
         /* attribution only */
       }
       // Dynamic fan-out that validated away ALL lanes: a CALLER-chosen set that
@@ -1081,7 +1143,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
         }
       }
       prepResult.lanes = lanes;
-      prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
+      prepResult.concurrencyLimit = workerLimit;
       prepResult.joinSeparator = node_params?.properties?.joinSeparator ?? '\n\n';
       prepResult.errorStrategy = node_params?.properties?.errorStrategy ?? 'collect-all';
     } else if (mapOverList && subflowId) {
@@ -1093,7 +1155,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       const sourceText =
         prepResult.inputText !== undefined
           ? prepResult.inputText
-          : messageText(latestUserMessage(prepResult.messages ?? [])[0]?.content);
+          : messageText(latestUserMessage(prepResult.messages ?? [])[0]?.content, true);
+      preflightSubflowItems(sourceText ?? '', itemSplit, budget);
       const items = splitItems(sourceText ?? '', itemSplit);
       let subflowName: string | undefined;
       try {
@@ -1115,7 +1178,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       prepResult.mapOverList = true; // let execCore treat an EMPTY list as "nothing to map"
       // `sequential` pins the pool to 1 (in-order, one item at a time) rather than
       // adding a second execution path.
-      prepResult.concurrencyLimit = sequential ? 1 : Math.max(1, node_params?.properties?.concurrencyLimit ?? 4);
+      prepResult.concurrencyLimit = sequential ? 1 : workerLimit;
       prepResult.joinSeparator = node_params?.properties?.joinSeparator ?? '\n\n';
       prepResult.errorStrategy = node_params?.properties?.errorStrategy ?? 'collect-all';
     } else if (subflowId) {
@@ -1132,7 +1195,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       // this default job; repeated handoff calls take the task branch above and
       // contribute one job per call.
       prepResult.lanes = [{ subflowId, subflowName, itemIndex: 0, itemCount: 1, laneTitle: subflowName }];
-      prepResult.concurrencyLimit = Math.max(1, node_params?.properties?.concurrencyLimit ?? 4);
+      prepResult.concurrencyLimit = workerLimit;
       prepResult.joinSeparator = '\n\n';
       prepResult.errorStrategy = 'collect-all';
     }
@@ -1141,7 +1204,9 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     // authored template; templates see run variables, dynamic references, and
     // lane-local JSON fields such as `{{scene_id}}`. Missing/unresolved values
     // deliberately remain per-visit and never collapse into an empty session.
-    await resolveSubflowSessionKeys(prepResult, sharedState, node_params?.id);
+    reserveSubflowPlan(budget, prepResult.messages ? { messages: prepResult.messages } : { prompt: prepResult.inputText ?? '' },
+      prepResult.lanes ?? [], prepResult.concurrencyLimit);
+    await resolveSubflowSessionKeys(prepResult, sharedState, node_params?.id, budget);
 
     // Validate the complete resolved plan before durable child admission. In a
     // Persona run a dynamic ID outside this node's authored set fails loudly.
@@ -1157,7 +1222,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       prepResult.sessionScope = undefined;
       prepResult.sessionKeyTemplate = undefined;
     }
-    await attachDurableInvocation(sharedState, prepResult);
+    await attachDurableInvocation(sharedState, prepResult, budget, handoffForThisNode);
+    if (handoffForThisNode && sharedState.handoffInput === handoffForThisNode) sharedState.handoffInput = undefined;
     if (nativeRoot) nativePreparedSubflows.set(prepResult, extensionContext!);
 
     log.info('prep() completed', {
@@ -1589,9 +1655,16 @@ export async function runSubflowLanes(
   nodeRef: NodeRef,
   runInput: SubflowRunInput,
 ): Promise<SubflowNodeExecResult> {
+  return withSubflowPreparationBudget(budget => runSubflowLanesAdmitted(prepResult, runFlow, nodeRef, runInput, budget));
+}
+
+async function runSubflowLanesAdmitted(
+  prepResult: SubflowNodePrepResult, runFlow: RunFlowModule['runFlow'], nodeRef: NodeRef,
+  runInput: SubflowRunInput, budget: SubflowPreparationBudget,
+): Promise<SubflowNodeExecResult> {
     const lanes = prepResult.lanes ?? [];
     const laneCount = lanes.length;
-    const concurrencyLimit = Math.max(1, prepResult.concurrencyLimit ?? 4);
+    const concurrencyLimit = subflowWorkerLimit(prepResult.concurrencyLimit);
     const joinSeparator = prepResult.joinSeparator ?? '\n\n';
     const errorStrategy = prepResult.errorStrategy ?? 'collect-all';
     const { FlowExecutor } = await import('../FlowExecutor');
@@ -1614,6 +1687,7 @@ export async function runSubflowLanes(
     if (protectedPlan && !nativeRoot) {
       throw new ExecutionExtensionError('execution_subflow_child_authority_required');
     }
+    reserveExistingSubflowPlan(budget, runInput, lanes, concurrencyLimit);
     if (nativeRoot) {
       if (nativePreparedSubflows.get(prepResult) !== extensionContext
         || consumedNativeSubflows.has(prepResult)) {
@@ -1709,6 +1783,7 @@ export async function runSubflowLanes(
       const releaseSession = sessionIdentity
         ? await acquireSessionExecution(sessionIdentity)
         : undefined;
+      const laneScratch = budget.scratch();
       try {
         if (parentChainCancelled()) {
           aborted = true;
@@ -1775,16 +1850,6 @@ export async function runSubflowLanes(
         }
       }
 
-      // Issue #391: populate the lane's visibility fields so the durable lane
-      // record (and, transitively, the live view) can show whether this visit
-      // resumed a prior child conversation.
-      if (durableLane && sessionIdentity) {
-        durableLane.conversationId = laneConversationId!;
-        durableLane.sessionIdentity = sessionIdentity;
-        durableLane.sessionKey = lane.sessionKey;
-        durableLane.resumedVisit = resumedVisit;
-        durableLane.sessionVisit = sessionVisit;
-      }
       // Jobs without a brief fall back to the child-flow name so live-view row
       // labels and sidebar titles agree (and are non-empty).
       const laneTitle = lane.laneTitle ?? lane.subflowName;
@@ -1807,6 +1872,17 @@ export async function runSubflowLanes(
         },
       );
 
+      let effectiveInput: SubflowRunInput | undefined;
+      const prepareEffectiveInput = (): SubflowRunInput => {
+        try {
+          return resumedVisit ? buildSessionFollowupInput(lane.input ?? runInput, laneScratch) : (lane.input ?? runInput);
+        } catch (error) {
+          if (isSubflowPreparationPressureError(error) && sessionIdentity && parentState && priorSessionEntry) {
+            parentState.subflowSessions![sessionIdentity] = priorSessionEntry;
+          }
+          throw error;
+        }
+      };
       if (durableLane) {
         // A newly-created visit may intentionally point at a child conversation
         // that completed on an earlier visit. Only heal from that persisted child
@@ -1837,6 +1913,15 @@ export async function runSubflowLanes(
           };
           return;
         }
+        effectiveInput = prepareEffectiveInput();
+        // Publish session visibility only after its follow-up clone/join is admitted.
+        if (sessionIdentity) {
+          durableLane.conversationId = laneConversationId!;
+          durableLane.sessionIdentity = sessionIdentity;
+          durableLane.sessionKey = lane.sessionKey;
+          durableLane.resumedVisit = resumedVisit;
+          durableLane.sessionVisit = sessionVisit;
+        }
         durableLane.status = 'running';
         durableLane.attempt += 1;
         durableLane.error = undefined;
@@ -1845,6 +1930,7 @@ export async function runSubflowLanes(
         invocation!.updatedAt = Date.now();
         if (parentState) await persistSubflowParent(parentState);
       }
+      effectiveInput ??= prepareEffectiveInput();
       if (nativeRoot) {
         await assertExecutionExtensionCurrent(extensionContext, {
           conversationId: parentState?.conversationId,
@@ -1865,9 +1951,6 @@ export async function runSubflowLanes(
         // persists as its own sidebar conversation via the sanctioned runFlow
         // mode, titled by its brief/item and linked through parentRunId — lanes
         // no longer stay force-ephemeral.
-        const effectiveInput = resumedVisit
-          ? buildSessionFollowupInput(lane.input ?? runInput)
-          : (lane.input ?? runInput);
         const r = await runFlow({
           flowId: lane.subflowId,
           ...pinnedSubflowDefinition(prepResult, lane.subflowId),
@@ -2006,6 +2089,7 @@ export async function runSubflowLanes(
         aborted = true; // stop the pool from starting any further lanes
       }
       } finally {
+        laneScratch.release();
         releaseSession?.();
       }
     };
@@ -2050,7 +2134,17 @@ export async function runSubflowLanes(
     };
 
     const poolSize = Math.min(concurrencyLimit, laneQueues.length);
-    await Promise.all(Array.from({ length: poolSize }, () => worker()));
+    let workerFailed = false, workerFailure: unknown;
+    await Promise.all(Array.from({ length: poolSize }, async () => {
+      try { await worker(); }
+      catch (error) {
+        aborted = true;
+        if (!workerFailed) { workerFailed = true; workerFailure = error; }
+      }
+    }));
+    // Persistence/authority failures can escape a lane's ordinary error fold.
+    // Keep admission until every started child and durable write has settled.
+    if (workerFailed) throw workerFailure;
 
     // Filter preserves array index order => deterministic child-order join.
     const ordered = results.filter((r): r is SubflowLaneResult => r !== undefined);

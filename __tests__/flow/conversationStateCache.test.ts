@@ -10,7 +10,11 @@ import {
   noteWrite,
 } from '@/backend/execution/flow/conversationStateCache';
 import type { SharedState } from '@/backend/execution/flow/types';
+import { initializeRecovery, markDanglingToolEffectsUnknown, setRecoveryTransition } from '@/backend/execution/flow/recoveryCheckpoint';
+import type { RecoveryCheckpointRef, RecoveryClassification } from '@/shared/types/execution/events';
+import type { Flow } from '@/shared/types/flow';
 import { runWithWorkspace } from '@/utils/workspace';
+import { runInNewContext } from 'node:vm';
 
 const WORKSPACE = 'cache-payload-fixture';
 const OTHER_WORKSPACE = 'cache-payload-fixture-other';
@@ -89,6 +93,54 @@ describe('conversation cache retained-payload accounting', () => {
     const estimate = estimateStateBytes(value);
     expect(estimate).toBeGreaterThanOrEqual(backing.byteLength + shared.payload.length * 2);
     expect(estimate).toBeLessThan(backing.byteLength + shared.payload.length * 2 + 10_000);
+  });
+
+  it.each(['native structuredClone', 'foreign VM'])('counts full messages and saved flow data after %s snapshot creation', origin => {
+    const flowSnapshot: Flow = {
+      id: 'fixture-flow', name: 'Saved Flow',
+      nodes: [{ id: 'process', type: 'process', position: { x: 0, y: 0 },
+        data: { type: 'process', label: 'Process', properties: { promptTemplate: 'P'.repeat(400_000) } } }],
+      edges: [],
+    };
+    const original = state('cloned-payload', { flowSnapshot,
+      messages: [{ id: 'retained', role: 'user', content: 'H'.repeat(2_000_000), timestamp: 1 }] });
+    const snapshot: SharedState = origin === 'native structuredClone' ? structuredClone(original)
+      : runInNewContext('JSON.parse(serialized)', { serialized: JSON.stringify(original) });
+    if (origin === 'foreign VM') expect(Object.getPrototypeOf(snapshot)).not.toBe(Object.prototype);
+    const estimate = estimateStateBytes(snapshot);
+    expect(estimate).toBeGreaterThanOrEqual(2 * (2_000_000 + 400_000));
+    expect(estimate).toBe(estimateStateBytes(original));
+    runWithWorkspace(WORKSPACE, () => {
+      register(snapshot);
+      expect(getConversationCacheDiagnostics().estimatedBytes).toBe(estimate);
+    });
+  });
+
+  it('counts a foreign typed view by its complete backing store without invoking an own buffer getter', () => {
+    const binary = runInNewContext('new Uint8Array(new ArrayBuffer(1024 * 1024), 0, 8)') as Uint8Array;
+    const get = jest.fn(() => { throw new Error('own buffer getter must not run'); });
+    Object.defineProperty(binary, 'buffer', { get });
+    const estimate = estimateStateBytes(state('foreign-binary', { lastResponse: { binary } }));
+    expect(estimate).toBeGreaterThanOrEqual(1024 * 1024);
+    expect(estimate).toBeLessThan(1024 * 1024 + 10_000);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('keeps proxy traps, forged intrinsic prototypes and opaque classes out of payload accounting', () => {
+    const trap = jest.fn(() => { throw new Error('proxy trap must not run'); });
+    const proxy = new Proxy({}, { get: trap, getPrototypeOf: trap, ownKeys: trap, getOwnPropertyDescriptor: trap });
+    const proxyPrototype = Object.create(new Proxy(Object.prototype, { getPrototypeOf: trap, ownKeys: trap, getOwnPropertyDescriptor: trap }));
+    class Client { payload = 'X'.repeat(2_000_000); }
+    class OpaqueArray extends Array<unknown> {}
+    const opaqueArray = new OpaqueArray();
+    opaqueArray.push('Y'.repeat(2_000_000));
+    const fakePrototype = Object.create(null);
+    Object.defineProperty(fakePrototype, 'constructor', { get: trap });
+    const fakePlain = Object.create(fakePrototype);
+    fakePlain.payload = 'Z'.repeat(2_000_000);
+    const value = state('opaque-graphs', { lastResponse: { proxy, proxyPrototype, fakePlain, client: new Client(), opaqueArray } });
+    expect(estimateStateBytes(value)).toBeLessThan(10_000);
+    expect(trap).not.toHaveBeenCalled();
   });
 
   it('does not invoke getters/toJSON or traverse runtime capability/client graphs', () => {
@@ -198,7 +250,6 @@ describe('conversation cache retained-payload accounting', () => {
   );
 
   it.each([
-    { recovery: { owner: { processId: 'fixture' } } },
     { pendingToolCalls: [{ id: 'pending' }] },
     { debugPendingAction: { action: 'continue', phase: 'after-model' } },
     { debugPendingToolCalls: [{ id: 'pending-debug' }] },
@@ -215,6 +266,143 @@ describe('conversation cache retained-payload accounting', () => {
       expect(FlowExecutor.conversationStates.get('pending')).toBe(value);
     });
   });
+
+  const recoveryCases = ['running-owner', 'paused-owner', 'running-without-owner', 'paused-without-owner',
+    'interrupted', 'manual-action', 'pending-effect', 'unknown-effect'] as const;
+  const recoveryPressures = ['count', 'bytes', 'ttl'] as const;
+  type RecoveryCase = typeof recoveryCases[number];
+  function unresolvedRecovery(value: SharedState, kind: RecoveryCase): void {
+    const recovery = initializeRecovery(value, 'real-recovery-run');
+    if (kind === 'paused-owner' || kind === 'paused-without-owner') setRecoveryTransition(value, 'paused');
+    if (kind === 'running-without-owner' || kind === 'paused-without-owner') {
+      // Both are optional on the real persisted RecoveryRecord. Their absence
+      // cannot turn an unfinished legacy/recovered boundary into completed work.
+      delete recovery.ownerId;
+      delete recovery.ownerHeartbeatAt;
+    }
+    if (kind === 'interrupted') setRecoveryTransition(value, 'interrupted');
+    if (kind === 'manual-action') setRecoveryTransition(value, 'permanent_failure', { manualActionRequired: true });
+    if (kind === 'pending-effect') {
+      // This is the exact persisted checkpoint shape produced before a write
+      // tool starts. A stale legacy terminal status cannot settle that effect.
+      const checkpoint: RecoveryCheckpointRef = {
+        id: 'pending-write', phase: 'tool:before', attempt: recovery.attempt,
+        inputFingerprint: 'a'.repeat(64), safe: false, effectStatus: 'pending',
+        tools: [{ toolCallId: 'write-call', name: 'write', readOnly: false, idempotent: false }],
+        createdAt: Date.now(),
+      };
+      recovery.currentCheckpoint = checkpoint;
+      setRecoveryTransition(value, 'cancelled');
+    }
+    if (kind === 'unknown-effect') {
+      markDanglingToolEffectsUnknown(value);
+      // Isolate effect ownership from the separate interruption/manual guards.
+      setRecoveryTransition(value, 'cancelled', { manualActionRequired: false });
+    }
+  }
+
+  it.each(recoveryCases.flatMap(kind => recoveryPressures.map(pressure => [kind, pressure] as const)))(
+    'preserves actual %s recovery ownership under %s cache pressure', async (kind, pressure) => {
+      await runWithWorkspace(WORKSPACE, async () => {
+        const value = state('real-recovery', { messages: [{ id: 'retained', role: 'user', content: 'X'.repeat(10_000), timestamp: 1 }] });
+        unresolvedRecovery(value, kind);
+        const original = structuredClone(value);
+        register(value);
+        const persist = jest.fn(async () => undefined);
+        await markTerminal('real-recovery', value, persist);
+        const terminal = state('ordinary-terminal');
+        register(terminal);
+        await markTerminal('ordinary-terminal', terminal, async () => undefined);
+        if (pressure === 'count') process.env.FLUJO_CONVERSATION_CACHE_MAX_ENTRIES = '1';
+        if (pressure === 'bytes') process.env.FLUJO_CONVERSATION_CACHE_MAX_BYTES = '1000';
+        if (pressure === 'ttl') {
+          process.env.FLUJO_CONVERSATION_CACHE_TTL_MS = '1';
+          jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+        }
+        expect(enforceBounds()).toBe(1);
+        expect(FlowExecutor.conversationStates.has('ordinary-terminal')).toBe(false);
+        expect(FlowExecutor.conversationStates.get('real-recovery')).toBe(value);
+        expect(value).toEqual(original);
+        expect(persist).not.toHaveBeenCalled();
+        expect(getConversationCacheDiagnostics()).toMatchObject({ entries: 1, protectedEntries: 1, evictableEntries: 0 });
+      });
+    },
+  );
+
+  it('retains legacy explicit recovery ownership on an otherwise resolved real record', async () => {
+    await runWithWorkspace(WORKSPACE, async () => {
+      const value = state('legacy-recovery-owner');
+      const recovery = initializeRecovery(value, 'legacy-run');
+      Object.assign(recovery, { owner: { processId: 'legacy-owner' } });
+      setRecoveryTransition(value, 'completed');
+      register(value);
+      const persist = jest.fn(async () => undefined);
+      await markTerminal('legacy-recovery-owner', value, persist);
+      expect(persist).not.toHaveBeenCalled();
+      expect(getConversationCacheDiagnostics()).toMatchObject({ protectedEntries: 1, evictableEntries: 0 });
+    });
+  });
+
+  it('revokes an older terminal persistence receipt when an actual dangling effect becomes unknown', async () => {
+    await runWithWorkspace(WORKSPACE, async () => {
+      const value = state('recovery-after-persist');
+      initializeRecovery(value, 'persisted-run');
+      setRecoveryTransition(value, 'completed');
+      register(value);
+      await markTerminal('recovery-after-persist', value, async () => undefined);
+      expect(getConversationCacheDiagnostics().evictableEntries).toBe(1);
+      markDanglingToolEffectsUnknown(value);
+      process.env.FLUJO_CONVERSATION_CACHE_MAX_BYTES = '1000';
+      process.env.FLUJO_CONVERSATION_CACHE_MAX_ENTRIES = '1';
+      process.env.FLUJO_CONVERSATION_CACHE_TTL_MS = '1';
+      jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+      expect(enforceBounds()).toBe(0);
+      expect(FlowExecutor.conversationStates.get('recovery-after-persist')).toBe(value);
+      expect(value.recovery).toMatchObject({ classification: 'interrupted', manualActionRequired: true,
+        currentCheckpoint: { phase: 'tool:unknown', safe: false, effectStatus: 'unknown' } });
+      expect(getConversationCacheDiagnostics()).toMatchObject({ protectedEntries: 1, evictableEntries: 0 });
+    });
+  });
+
+  it.each<RecoveryClassification>(['completed', 'capped', 'cancelled', 'retryable_failure', 'permanent_failure'])(
+    'allows a resolved %s record with historical owner identity to leave only after persistence succeeds', async classification => {
+      await runWithWorkspace(WORKSPACE, async () => {
+        const value = state('resolved-recovery', { messages: [{ id: 'retained', role: 'user', content: 'X'.repeat(10_000), timestamp: 1 }] });
+        initializeRecovery(value, 'resolved-run');
+        markDanglingToolEffectsUnknown(value);
+        register(value);
+        const unresolvedPersist = jest.fn(async () => undefined);
+        await markTerminal('resolved-recovery', value, unresolvedPersist);
+        expect(unresolvedPersist).not.toHaveBeenCalled();
+
+        // Resolution is a terminal transition plus a completed, safe effect
+        // checkpoint, not removal of the historical owner or warning text.
+        const recovery = setRecoveryTransition(value, classification, { manualActionRequired: false });
+        recovery.currentCheckpoint = {
+          ...recovery.currentCheckpoint!, phase: 'tool:after', safe: true, effectStatus: 'completed',
+        };
+        recovery.lastSafeCheckpoint = recovery.currentCheckpoint;
+        expect(recovery.ownerId).toBeTruthy();
+        expect(recovery.ownerHeartbeatAt).toEqual(expect.any(Number));
+        process.env.FLUJO_CONVERSATION_CACHE_MAX_BYTES = '1000';
+        await markTerminal('resolved-recovery', value, async () => { throw new Error('Persistence unavailable'); });
+        expect(enforceBounds()).toBe(0);
+        expect(FlowExecutor.conversationStates.get('resolved-recovery')).toBe(value);
+        expect(getConversationCacheDiagnostics()).toMatchObject({ persistFailures: 1, protectedEntries: 1, evictableEntries: 0 });
+
+        const disk = deferred();
+        const persist = jest.fn(() => disk.promise);
+        const marking = markTerminal('resolved-recovery', value, persist);
+        expect(persist).toHaveBeenCalledTimes(1);
+        expect(enforceBounds()).toBe(0);
+        expect(FlowExecutor.conversationStates.get('resolved-recovery')).toBe(value);
+        disk.resolve();
+        await marking;
+        expect(FlowExecutor.conversationStates.has('resolved-recovery')).toBe(false);
+        expect(getConversationCacheDiagnostics()).toMatchObject({ entries: 0, evictions: 1 });
+      });
+    },
+  );
 
   it('counts resumed protected bytes accurately when selecting remaining terminal candidates', async () => {
     await runWithWorkspace(WORKSPACE, async () => {
