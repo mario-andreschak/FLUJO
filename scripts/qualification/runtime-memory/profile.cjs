@@ -79,6 +79,8 @@ function estimateStorage(pilot, cadenceMs) {
 function validatePlan(plan, pilot, sourceHead, supervisor, peerPilot, peerSupervisor, owner, peerOwner) {
   assertOwnership(owner, pilot, supervisor); assertOwnership(peerOwner, peerPilot, peerSupervisor);
   assert.equal(owner.launcherSha256, peerOwner.launcherSha256, 'Platform launch equipment changed');
+  assert.equal(plan.expectedNode, pilot.node);
+  assert.equal(plan.launcherSha256, owner.launcherSha256);
   assert.equal(plan.pilotOwnershipSha256, hash(JSON.stringify(owner)));
   assert.equal(plan.peerOwnershipSha256, hash(JSON.stringify(peerOwner)));
   assert.equal(plan.version, PROFILE.version);
@@ -118,5 +120,11 @@ function validatePlan(plan, pilot, sourceHead, supervisor, peerPilot, peerSuperv
   assert(plan.combinedStorageBytes <= PROFILE.budgets.maximumPlannedBytes, 'Combined platform runs and pilots exceed fixed disk allowance');
   return storage;
 }
+function validateLaunchIdentity(plan, node, launcherSha256) {
+  assert.match(plan.expectedNode, /^v\d+\.\d+\.\d+$/);
+  assert.match(plan.launcherSha256, /^[a-f0-9]{64}$/);
+  assert.equal(node, plan.expectedNode, 'Current Node differs from the successful pilots');
+  assert.equal(launcherSha256, plan.launcherSha256, 'Current launch equipment differs from the successful pilots');
+}
 module.exports = { PROFILE, profileSha256, harnessDigest, MiB, GiB, hash, canonicalTextHash, sourceManifestHash,
-  matchingPilotSource, inside, readJson, estimateStorage, validatePlan };
+  matchingPilotSource, inside, readJson, estimateStorage, validatePlan, validateLaunchIdentity };

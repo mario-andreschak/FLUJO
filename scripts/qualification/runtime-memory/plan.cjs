@@ -29,6 +29,7 @@ function makePlan(pilot, supervisor, cadenceMs, peerPilot, peerSupervisor, owner
   const combinedStorageBytes = storage.plannedBytes + peerStorage.plannedBytes + pilot.disk.bytes + peerPilot.disk.bytes;
   assert(combinedStorageBytes <= PROFILE.budgets.maximumPlannedBytes, 'Two platform runs plus preserved pilots exceed suite allowance');
   return { version: PROFILE.version, profileSha256, sourceHead: pilot.sourceHead, sourceManifestSha256, source: pilot.source,
+    expectedNode: pilot.node, launcherSha256: owner.launcherSha256,
     pilotSha256: hash(JSON.stringify(pilot)), pilotSupervisorSha256: hash(JSON.stringify(supervisor)),
     peerPilotSha256: hash(JSON.stringify(peerPilot)), peerSupervisorSha256: hash(JSON.stringify(peerSupervisor)),
     pilotOwnershipSha256: hash(JSON.stringify(owner)), peerOwnershipSha256: hash(JSON.stringify(peerOwner)),

@@ -209,6 +209,25 @@ receipts, absent outer evidence and any failed settlement. A 36-hour MCP client
 timeout is transport capacity, not permission to change the supervisor deadline
 or the unchanged 24-hour measurement and 31-minute drain.
 
+The plan explicitly stores `expectedNode` and `launcherSha256`. Before each
+provider/runtime child admission, the supervisor invokes the selected executable
+to obtain its current version, and the Windows watcher independently hashes the
+current launcher/guardian/cleanup helpers. Those current values must match the
+plan's successful pilots, not merely each other or an earlier launch reading.
+The fresh admission receipt records the current helper digest. A changed Node
+binary or helper file cannot start either workload child.
+
+Clean stdio is insufficient when a descendant closes its inherited pipes. The
+inner Windows Job is queried before destructive close; active descendants cause
+failure and the receipt records that forced cleanup was required. Linux records
+membership before cleanup and rejects an otherwise successful command that left
+members behind. Successful guardian receipts require empty pre-cleanup members,
+`forcedCleanup: false`, and empty cleanup errors. All post-spawn guardian work,
+including receipt writes, is inside its cleanup scope. On missing or abnormal
+guardian completion, the outer Windows guard independently cleans the uniquely
+owned Linux phase cgroup and records `populated 0`; it never accepts that cleanup
+as qualification and never stops an unrelated phase or the whole WSL service.
+
 ## Equipment tests
 
 ```text

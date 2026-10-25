@@ -3,9 +3,17 @@ import json
 import os
 from pathlib import Path
 import secrets
+import subprocess
 import time
 
 GIB = 1024 ** 3
+
+
+def require_current_node(node, expected):
+    current = subprocess.check_output([node, '--version'], text=True).strip()
+    if current != expected:
+        raise RuntimeError('Current Node differs from the launch contract')
+    return current
 
 
 def read_record(file):
@@ -19,6 +27,8 @@ def read_record(file):
 def validate_disk_receipt(request, receipt, lease, now_ms):
     if receipt.get('request') != request or receipt.get('kind') != 'windows-physical-volume-v1':
         raise RuntimeError('Physical disk receipt does not bind this launch request')
+    if receipt.get('currentLauncherSha256') != request.get('launcherSha256') or not request.get('launcherSha256'):
+        raise RuntimeError('Current launcher differs from the expected launch identity')
     if (lease.get('token') != request['token'] or lease.get('state') != 'running'
             or lease.get('pid') != receipt.get('watcherPid')
             or not 0 <= now_ms - lease.get('time', 0) <= 4000):

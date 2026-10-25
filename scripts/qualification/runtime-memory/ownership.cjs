@@ -15,6 +15,7 @@ function assertOwnership(owner, pilot, supervisor) {
   for (const field of ['stdoutEnded', 'stderrEnded', 'copyThreadsStopped']) assert.equal(guard[field], true);
   assert.deepEqual(guard.errors, []); assert.equal(guard.stoppedByGuard, null);
   assert.equal(guard.jobActiveProcesses, 0, 'Outer job retained descendants');
+  assert.equal(guard.forcedCleanup, false, 'Forced cleanup cannot qualify');
   assert.equal(guard.hostBackingVolume, 'C:\\');
   assert.equal(guard.diskFloorBytes, 20 * 1024 ** 3);
   assert(guard.minimumHostDiskFreeBytes >= guard.diskFloorBytes);
@@ -25,15 +26,24 @@ function assertOwnership(owner, pilot, supervisor) {
     assert.equal(receipt.admitted, true); assert(receipt.freeBytes >= receipt.request.requiredFreeBytes);
     assert.equal(receipt.request.requiredFreeBytes, 22 * 1024 ** 3, 'Pilot disk reservation changed');
     assert.equal(receipt.request.mode, 'pilot'); assert.equal(receipt.request.planSha256, null);
+    assert.equal(receipt.request.node, pilot.node);
+    assert.equal(receipt.request.launcherSha256, owner.launcherSha256);
+    assert.equal(receipt.currentLauncherSha256, owner.launcherSha256);
     for (const field of ['sourceHead', 'profileSha256', 'harnessSha256']) assert.equal(receipt.request[field], pilot[field]);
   }
   if (pilot.platform === 'linux') {
     assert.equal(owner.linux?.reason, 'command completed'); assert.equal(owner.linux.childExitCode, 0);
     assert.deepEqual(owner.linux.remainingWorkloadMembers, []);
+    assert.deepEqual(owner.linux.beforeCleanupMembers, []);
+    assert.deepEqual(owner.linux.cleanupErrors, []);
+    assert.equal(owner.linux.forcedCleanup, false);
     assert.match(owner.linux.workloadCgroupEvents, /(?:^|\n)populated 0(?:\n|$)/);
     assert.equal(owner.linux.aggregateCgroup, supervisor.envelope.path);
     assert.equal(owner.linux.workloadCgroup, supervisor.envelope.workloadPath);
     assert.equal(supervisor.envelope.guardianIncluded, true);
+  } else {
+    assert.equal(supervisor.processes?.windowsJob?.activeProcessesBeforeCleanup, 0);
+    assert.equal(supervisor.processes.windowsJob.forcedCleanup, false);
   }
 }
 module.exports = { assertOwnership };

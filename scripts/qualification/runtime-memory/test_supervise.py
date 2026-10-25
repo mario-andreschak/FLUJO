@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import os
 import sys
 import subprocess
@@ -17,7 +18,7 @@ def preserved_directory():
     yield tempfile.mkdtemp(prefix='flujo-memory-supervisor-', dir=os.environ.get('FLUJO_QUALIFICATION_TEST_EVIDENCE'))
 
 sys.path.insert(0, str(Path(__file__).parent))
-from envelope_evidence import cgroup_paths, cgroup_controls, validate_disk_receipt
+from envelope_evidence import cgroup_paths, cgroup_controls, validate_disk_receipt, require_current_node
 
 spec = importlib.util.spec_from_file_location('runtime_memory_supervisor', Path(__file__).with_name('supervise.py'))
 supervisor = importlib.util.module_from_spec(spec)
@@ -34,16 +35,22 @@ class FakeProcess:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_each_admission_rechecks_executable_instead_of_reusing_first_version(self):
+        with patch('envelope_evidence.subprocess.check_output', side_effect=['v22.23.4\n', 'v24.22.1\n']) as check:
+            self.assertEqual(require_current_node('owned-node', 'v22.23.4'), 'v22.23.4')
+            with self.assertRaisesRegex(RuntimeError, 'Current Node'):
+                require_current_node('owned-node', 'v22.23.4')
+            self.assertEqual(check.call_count, 2)
     def test_disk_admission_requires_current_guard_measurement_bound_to_nonce_and_plan(self):
-        request = {'token': 'a' * 32, 'nonce': 'unique', 'planSha256': 'plan', 'requiredFreeBytes': 22 * supervisor.GIB}
+        request = {'token': 'a' * 32, 'nonce': 'unique', 'planSha256': 'plan', 'requiredFreeBytes': 22 * supervisor.GIB, 'launcherSha256': 'a' * 64}
         receipt = {'request': request, 'kind': 'windows-physical-volume-v1', 'watcherPid': 123,
-                   'volume': 'C:\\', 'admitted': True, 'freeBytes': 30 * supervisor.GIB, 'measuredAtMs': 10000}
+                   'currentLauncherSha256': 'a' * 64, 'volume': 'C:\\', 'admitted': True, 'freeBytes': 30 * supervisor.GIB, 'measuredAtMs': 10000}
         lease = {'token': request['token'], 'state': 'running', 'pid': 123, 'time': 10000}
         self.assertEqual(validate_disk_receipt(request, receipt, lease, 11000), receipt)
         for changed in [{**receipt, 'freeBytes': 1}, {**receipt, 'measuredAtMs': 1},
                         {**receipt, 'request': {**request, 'nonce': 'stale'}},
                         {**receipt, 'request': {**request, 'planSha256': 'other'}},
-                        {**receipt, 'volume': '/virtual'}, {**receipt, 'admitted': False}]:
+                        {**receipt, 'currentLauncherSha256': 'b' * 64}, {**receipt, 'volume': '/virtual'}, {**receipt, 'admitted': False}]:
             with self.assertRaises(RuntimeError): validate_disk_receipt(request, changed, lease, 11000)
         with self.assertRaises(RuntimeError): validate_disk_receipt(request, receipt, {**lease, 'state': 'stopped'}, 11000)
 
@@ -107,6 +114,23 @@ class SupervisorTests(unittest.TestCase):
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out, err = child.communicate(timeout=10)
             self.assertEqual(child.returncode, 0); self.assertEqual(out.strip(), b'job-owned'); self.assertEqual(err, b'')
+        finally:
+            envelope.close()
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job orphan equipment only')
+    def test_windows_job_detects_closed_stdio_orphan_before_cleanup(self):
+        envelope = supervisor.WindowsEnvelope()
+        try:
+            code = ('import subprocess,sys; '
+                'p=subprocess.Popen([sys.executable,"-B","-c","import time;time.sleep(60)"],'
+                'stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);print(p.pid)')
+            direct = envelope.spawn([sys.executable, '-B', '-c', code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = direct.communicate(timeout=10)
+            self.assertEqual(direct.returncode, 0); self.assertEqual(err, b''); self.assertTrue(out.strip().isdigit())
+            before = envelope.settlement()
+            self.assertGreaterEqual(before['activeProcessesBeforeCleanup'], 1)
+            self.assertIsNotNone(supervisor.process_metrics(int(out.strip())))
+            self.assertTrue(before['forcedCleanup'])
         finally:
             envelope.close()
 

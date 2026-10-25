@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { PROFILE, profileSha256, harnessDigest, MiB, GiB, validatePlan: validatePlanBound, estimateStorage, inside,
-  canonicalTextHash, sourceManifestHash } = require('./profile.cjs');
+  canonicalTextHash, sourceManifestHash, validateLaunchIdentity } = require('./profile.cjs');
 const { makePlan: makePlanBound } = require('./plan.cjs');
 const { BoundedJsonl, DrainWindows, directoryBytes } = require('./evidence.cjs');
 const { history } = require('./fixtures.cjs');
@@ -18,16 +18,17 @@ const pilot = () => ({ mode: 'pilot', platform: 'win32', node: 'v22.23.4', compl
   source: source(),
   disk: { bytes: 240 * MiB }, batches: [{ diskBytesAdded: 100 * MiB, elapsedMs: 100_000 }, { diskBytesAdded: 120 * MiB, elapsedMs: 130_000 }] });
 const supervisor = () => ({ completed: true, sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest(),
+  processes: { windowsJob: { activeProcessesBeforeCleanup: 0, forcedCleanup: false } },
   envelope: { path: '/aggregate', workloadPath: '/aggregate/workload', guardianIncluded: true },
   diskAdmissions: [1, 2].map(sequence => ({ kind: 'windows-physical-volume-v1', volume: 'C:\\', admitted: true,
-    freeBytes: 100 * GiB, request: { sequence, requiredFreeBytes: 22 * GiB, mode: 'pilot', planSha256: null,
-      sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest() } })) });
+    freeBytes: 100 * GiB, currentLauncherSha256: 'a'.repeat(64), request: { sequence, requiredFreeBytes: 22 * GiB, mode: 'pilot', planSha256: null,
+      sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest(), node: 'v22.23.4', launcherSha256: 'a'.repeat(64) } })) });
 function ownership(p, s) { return { completed: true, equipmentOnly: false, launcherSha256: 'a'.repeat(64), platform: p?.platform, supervisor: s,
   mcp: { serverExited: true, serverExitCode: 0, serverExitSignal: null, stderrEnded: true, transportClosed: true, resultError: false },
-  guard: { completed: true, jobActiveProcesses: 0, childExitCode: 0, stdoutEnded: true, stderrEnded: true, copyThreadsStopped: true,
+  guard: { completed: true, jobActiveProcesses: 0, forcedCleanup: false, childExitCode: 0, stdoutEnded: true, stderrEnded: true, copyThreadsStopped: true,
     errors: [], stoppedByGuard: null, hostBackingVolume: 'C:\\', diskFloorBytes: 20 * GiB,
     minimumHostDiskFreeBytes: 50 * GiB, diskAdmissions: s?.diskAdmissions },
-  linux: { reason: 'command completed', childExitCode: 0, remainingWorkloadMembers: [],
+  linux: { reason: 'command completed', forcedCleanup: false, beforeCleanupMembers: [], cleanupErrors: [], childExitCode: 0, remainingWorkloadMembers: [],
     workloadCgroupEvents: 'populated 0\nfrozen 0', aggregateCgroup: '/aggregate', workloadCgroup: '/aggregate/workload' } }; }
 const makePlanRaw = (p, s, c, peer, ps) => makePlanBound(p, s, c, peer, ps, ownership(p, s), ownership(peer, ps));
 const validatePlanRaw = (plan, p, head, s, peer, ps) => validatePlanBound(plan, p, head, s, peer, ps, ownership(p, s), ownership(peer, ps));
@@ -276,7 +277,9 @@ test('durable fold identity rejects joined, duplicate, changed child identity an
   for (const mutate of [o => { o.completed = false; }, o => { o.equipmentOnly = true; }, o => { o.mcp.serverExitCode = 1; }, o => { o.guard.jobActiveProcesses = 1; }, o => { o.mcp.stderrEnded = false; },
     o => { o.mcp.serverExited = false; }, o => { o.guard.stdoutEnded = false; },
     o => { o.guard.minimumHostDiskFreeBytes = 1; }, o => { o.guard.diskAdmissions = []; },
-    o => { o.linux.remainingWorkloadMembers = [{ pid: 123 }]; },
+    o => { o.linux.forcedCleanup = true; }, o => { o.guard.forcedCleanup = true; },
+    o => { o.supervisor.processes.windowsJob.forcedCleanup = true; },
+    o => { o.linux.beforeCleanupMembers = [{pid:123}]; }, o => { o.linux.remainingWorkloadMembers = [{ pid: 123 }]; },
     o => { o.linux.aggregateCgroup = '/unrelated'; }]) {
     const changed = structuredClone(other); mutate(changed);
     assert.throws(() => makePlanBound(p, s, 450000, peer, s, owner, changed));
@@ -285,3 +288,12 @@ test('durable fold identity rejects joined, duplicate, changed child identity an
   assert.throws(() => makePlanBound(p, s, 450000, peer, s, owner, { ...other, launcherSha256: 'b'.repeat(64) }));
   assert.throws(() => validatePlanBound({ ...plan, pilotOwnershipSha256: 'wrong' }, p, 'revision', s, peer, s, owner, other));
  });
+
+test('current executable and helper identity are bound to the concrete plan before launch', () => {
+  const p=pilot(), s=supervisor(), plan=makePlan(p,s,450000);
+  validateLaunchIdentity(plan,p.node,'a'.repeat(64));
+  assert.throws(() => validateLaunchIdentity(plan,'v24.22.1','a'.repeat(64)), /Current Node/);
+  assert.throws(() => validateLaunchIdentity(plan,p.node,'b'.repeat(64)), /Current launch equipment/);
+  assert.throws(() => validatePlan({ ...plan, expectedNode:'v24.22.1' },p,'revision',s));
+  assert.throws(() => validatePlan({ ...plan, launcherSha256:'b'.repeat(64) },p,'revision',s));
+});

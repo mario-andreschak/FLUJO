@@ -17,7 +17,7 @@ import subprocess
 import sys
 import threading
 import time
-from envelope_evidence import DiskAdmission, cgroup_paths, cgroup_controls, cgroup_sample
+from envelope_evidence import DiskAdmission, cgroup_paths, cgroup_controls, cgroup_sample, read_record, require_current_node
 
 MIB = 1024 ** 2
 GIB = 1024 ** 3
@@ -121,6 +121,7 @@ class WindowsEnvelope:
         self.kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, w.LPCWSTR]
         self.kernel.SetInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD]
         self.kernel.AssignProcessToJobObject.argtypes = [w.HANDLE, w.HANDLE]
+        self.kernel.QueryInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.c_void_p]
         self.kernel.TerminateJobObject.argtypes = [w.HANDLE, w.UINT]
         self.kernel.CloseHandle.argtypes = [w.HANDLE]
         self.kernel.GetCurrentProcess.restype = w.HANDLE
@@ -163,7 +164,24 @@ class WindowsEnvelope:
         except BaseException:
             process.kill(); process.wait(); raise
 
+    def settlement(self):
+        from ctypes import wintypes as w
+        class Accounting(ctypes.Structure):
+            _fields_ = [(key, ctypes.c_int64) for key in ['user', 'kernel', 'periodUser', 'periodKernel']] + [
+                (key, w.DWORD) for key in ['pageFaults', 'totalProcesses', 'activeProcesses', 'terminatedProcesses']]
+        value = Accounting()
+        until = time.monotonic() + 1
+        while True:
+            if not self.kernel.QueryInformationJobObject(self.job, 1, ctypes.byref(value), ctypes.sizeof(value), None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if not value.activeProcesses or time.monotonic() >= until:
+                break
+            time.sleep(.01)  # Allow natural Job accounting settlement, never kill to obtain zero.
+        return {'activeProcessesBeforeCleanup': value.activeProcesses, 'totalProcesses': value.totalProcesses,
+                'forcedCleanup': value.activeProcesses != 0}
+
     def close(self):
+        # Cleanup never upgrades a run to success. The caller records settlement first.
         self.kernel.TerminateJobObject(self.job, 2); self.kernel.CloseHandle(self.job)
 
 
@@ -260,6 +278,19 @@ def supervise(args):
     disk_admission = DiskAdmission({'sourceHead': source_head, 'profileSha256': profile_record['hash'],
         'harnessSha256': profile_record['harnessHash'], 'mode': args.mode, 'planSha256': plan_sha256},
         combined_reservation + profile['budgets']['minimumFreeBytes'])
+    launch = read_record(disk_admission.phase / 'launch-config.json')
+    if launch.get('token') != disk_admission.token:
+        raise RuntimeError('Launch configuration belongs to a different owner')
+    expected_node = plan['expectedNode'] if args.mode == 'endurance' else launch['identity']['node']
+    expected_launcher = plan['launcherSha256'] if args.mode == 'endurance' else launch['identity']['launcherSha256']
+    def admit_child():
+        # Re-read the actual executable immediately before EACH child admission.
+        current_node = require_current_node(node, expected_node)
+        disk_admission.identity.update({'node': current_node, 'launcherSha256': expected_launcher})
+        admitted = disk_admission.admit()  # Watcher independently rehashes current helper files.
+        if args.mode == 'endurance':
+            verify_launch = "const p=require(process.argv[1]);p.validateLaunchIdentity(p.readJson(process.argv[2]),process.version,process.argv[3])"
+            subprocess.check_call([node, '-e', verify_launch, str(HERE / 'profile.cjs'), str(args.plan), admitted['currentLauncherSha256']])
     envelope = WindowsEnvelope() if os.name == 'nt' else LinuxEnvelope()
     output.mkdir(); (output / 'data').mkdir(); (output / 'home').mkdir()
     contract = {'version': profile['version'], 'profileSha256': profile_record['hash'], 'mode': args.mode,
@@ -273,14 +304,14 @@ def supervise(args):
                 'FLUJO_DATA_DIR': str(output / 'data'), 'CODEX_HOME': str(output / 'home' / '.codex')})
     children = []; results = {}; failure = None; started = time.monotonic()
     try:
-        disk_admission.admit()
+        admit_child()
         provider = Child('provider', envelope, [node, str(HERE / 'provider.cjs'), str(output)], output, env); children.append(provider)
         until = time.monotonic() + 20
         while not (output / 'provider-ready.json').exists():
             if provider.process.poll() is not None or provider.errors or time.monotonic() > until:
                 raise RuntimeError('Provider did not become ready')
             time.sleep(.05)
-        disk_admission.admit()
+        admit_child()
         runtime = Child('runtime', envelope, [node, str(HERE / 'runtime.cjs'), str(output)], output, env); children.append(runtime)
         duration = profile['enduranceMs'] if args.mode == 'endurance' else profile['pilotBatches'] * cadence
         deadline = time.monotonic() + (duration + profile['drainMs'] + profile['parkedHoldMs']
@@ -340,6 +371,14 @@ def supervise(args):
             except BaseException as settlement_error:
                 results[child.name] = {'settlementError': repr(settlement_error)}
     finally:
+        if isinstance(envelope, WindowsEnvelope):
+            try:
+                results['windowsJob'] = envelope.settlement()
+                if results['windowsJob']['forcedCleanup']:
+                    failure = failure or 'Windows Job retained descendants before cleanup'
+            except BaseException as error:
+                results['windowsJob'] = {'measurementError': repr(error)}
+                failure = failure or 'Could not establish Windows Job settlement'
         if isinstance(envelope, LinuxEnvelope):
             try:
                 results['cgroup'] = memory_event_report(envelope.events_before, (envelope.root / 'memory.events').read_text())
