@@ -1,3 +1,5 @@
+import { acquireChatIngress, isChatIngressError, type ChatIngressPermit } from '@/utils/http/chatIngress';
+import { checkChatRateLimit } from '@/utils/http/chatRateLimit';
 import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
@@ -7,7 +9,6 @@ import { processChatCompletion } from './chatCompletionService';
 import {
   InvalidPersonaChatMetadataError,
   parseRequestParameters,
-  _logRequestDetails,
   ChatCompletionRequest,
 } from './requestParser'; // Import ChatCompletionRequest
 import { UnsupportedOpenAIToolTypeError } from '@/shared/types/openai';
@@ -24,94 +25,38 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': '*'
 };
 
-// Rate limiting - simple implementation
-const RATE_LIMIT = 6000; // requests per minute
-const requestCounts = new Map<string, { count: number, resetTime: number }>();
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const resetTime = Math.floor(now / 60000) * 60000 + 60000; // Next minute boundary
-  
-  log.debug('Checking rate limit', { ip, now, resetTime, currentLimit: RATE_LIMIT });
-  
-  if (!requestCounts.has(ip) || requestCounts.get(ip)!.resetTime < now) {
-    const isReset = requestCounts.has(ip);
-    log.info(isReset ? 'Rate limit window reset' : 'First request from IP', {
-      ip,
-      isReset,
-      previousCount: isReset ? requestCounts.get(ip)!.count : 0
-    });
-    requestCounts.set(ip, { count: 1, resetTime });
-    return true;
-  }
-  
-  const record = requestCounts.get(ip)!;
-  const remainingRequests = RATE_LIMIT - record.count;
-  
-  if (record.count >= RATE_LIMIT) {
-    const timeToReset = Math.ceil((resetTime - now) / 1000);
-    log.warn('Rate limit exceeded', {
-      ip,
-      count: record.count,
-      limit: RATE_LIMIT,
-      timeToResetSec: timeToReset
-    });
-    return false;
-  }
-  
-  record.count++;
-  log.debug('Request count incremented', {
-    ip,
-    count: record.count,
-    remainingRequests: remainingRequests - 1,
-    utilizationPercentage: Math.round((record.count / RATE_LIMIT) * 100)
-  });
-  return true;
-}
-
 // Handle both GET and POST requests with a common handler
-async function handleRequest(request: NextRequest) {
+async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
   const startTime = Date.now();
   const requestId = `req-${Date.now()}`;
   log.info('Handling request', {
     requestId,
     method: request.method,
-    url: request.url,
-    userAgent: request.headers.get('user-agent') || 'unknown'
   });
   
   try {
     // Get client IP for rate limiting
-    const ip = request.headers.get('x-forwarded-for') || 'unknown';
-    const referer = request.headers.get('referer') || 'unknown';
-    log.debug('Request details', {
-      requestId,
-      ip,
-      referer,
-      contentType: request.headers.get('content-type') || 'unknown'
-    });
-    
     // Check rate limit
-    if (!checkRateLimit(ip)) {
+    const rate = checkChatRateLimit(request.headers.get('x-forwarded-for'));
+    if (rate !== 'allowed') {
       const duration = Date.now() - startTime;
       log.warn('Rate limit exceeded, returning 429 response', {
         requestId,
-        ip,
         duration: `${duration}ms`
       });
       // Return OpenAI-compatible rate limit error with CORS headers
       return NextResponse.json(
         {
           error: {
-            message: 'Rate limit exceeded. Please try again later.',
+            message: rate === 'capacity' ? 'Chat IP quota capacity is busy. Retry after the current minute window expires.' : 'Rate limit exceeded. Please try again later.',
             type: 'rate_limit_error',
-            code: 'rate_limit_exceeded',
+            code: rate === 'capacity' ? 'chat_rate_capacity' : 'rate_limit_exceeded',
             param: null
           }
         },
         { 
           status: 429,
-          headers: corsHeaders
+          headers: { ...corsHeaders, 'Retry-After': '60' }
         }
       );
     }
@@ -119,7 +64,7 @@ async function handleRequest(request: NextRequest) {
     // Parse parameters from either query string or body
     log.debug('Parsing request parameters', { requestId });
     // parseRequestParameters now returns ParsedChatCompletionRequest which includes flujo and requireApproval
-    const parsedData = await parseRequestParameters(request);
+    const parsedData = await parseRequestParameters(request, ingress);
     // Destructure all flags, including flujodebug
     const {
       flujo,
@@ -202,56 +147,15 @@ async function handleRequest(request: NextRequest) {
       }
     }
 
-    // Truncated payload dump for VERBOSE only. Built lazily (thunk): the map
-    // walks every message (and multipart image parts), which is O(history) per
-    // request — previously this ran unconditionally even at LOG_LEVEL=ERROR.
-    // Truncation keeps long content and pasted-screenshot data URLs out of logs.
-    log.verbose('Chat completion request payload (truncated)', () => ({
-      ...completionData,
-      messages: Array.isArray(completionData.messages)
-        ? completionData.messages.map((msg) => {
-            if (msg && msg.content && typeof msg.content === 'string' && msg.content.length > 100) {
-              return {
-                ...msg,
-                content: msg.content.substring(0, 100) + `... (${msg.content.length - 100} more characters)`
-              };
-            }
-            if (msg && Array.isArray(msg.content)) {
-              return {
-                ...msg,
-                content: msg.content.map((part) => {
-                  const partRecord = part && typeof part === 'object'
-                    ? part as unknown as Record<string, unknown>
-                    : undefined;
-                  if (partRecord?.type === 'text' && typeof partRecord.text === 'string' && partRecord.text.length > 100) {
-                    return { ...partRecord, text: partRecord.text.substring(0, 100) + `... (${partRecord.text.length - 100} more characters)` };
-                  }
-                  if (partRecord?.type === 'image_url') {
-                    const imageUrl = partRecord.image_url && typeof partRecord.image_url === 'object'
-                      ? partRecord.image_url as Record<string, unknown>
-                      : {};
-                    const url = typeof imageUrl.url === 'string' ? imageUrl.url : '';
-                    const isData = url.startsWith('data:');
-                    return { ...partRecord, image_url: { ...imageUrl, url: isData ? `[image data url, ${url.length} chars]` : url } };
-                  }
-                  return part;
-                })
-              };
-            }
-            return msg;
-          })
-        : completionData.messages,
-    }));
-
     log.info('Request parameters parsed, processing chat completion', {
       requestId,
-      model: completionData.model,
+      modelCharacters: completionData.model?.length,
       messageCount: completionData.messages?.length || 0,
-      stream: completionData.stream,
-      temperature: completionData.temperature,
-      max_tokens: completionData.max_tokens,
+      stream: completionData.stream === true,
+      temperature: typeof completionData.temperature === 'number' && Number.isFinite(completionData.temperature) ? completionData.temperature : undefined,
+      max_tokens: typeof completionData.max_tokens === 'number' && Number.isFinite(completionData.max_tokens) ? completionData.max_tokens : undefined,
       flujo,
-      conversation_id,
+      hasConversationId: Boolean(conversation_id),
       requireApproval,
       flujodebug,
       personaTargeted: Boolean(personaTarget),
@@ -267,6 +171,7 @@ async function handleRequest(request: NextRequest) {
       false, // continueDebug: only the debug "Continue" control sets this
       true, // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
       personaTarget,
+      ingress,
     );
 
     const duration = Date.now() - startTime;
@@ -290,15 +195,16 @@ async function handleRequest(request: NextRequest) {
   } catch (error) {
     if (error instanceof ConversationLogReadPressureError) throw error;
     const duration = Date.now() - startTime;
+    const ingressError = isChatIngressError(error);
     const unsupportedTool = error instanceof UnsupportedOpenAIToolTypeError;
     const invalidPersonaMetadata = error instanceof InvalidPersonaChatMetadataError;
+    const errorCode = ingressError ? error.code : unsupportedTool ? 'unsupported_tool_type'
+      : invalidPersonaMetadata ? 'invalid_persona_metadata' : 'internal_error';
     log.error('Error handling request', {
       requestId,
-      error: error instanceof Error ? {
-        name: error.name,
-        message: error.message,
-        stack: error.stack
-      } : error,
+      // Error messages/stacks can contain arbitrary wire values (including a
+      // multi-megabyte unsupported tool type). Log only the bounded category.
+      code: errorCode,
       duration: `${duration}ms`
     });
     
@@ -306,19 +212,16 @@ async function handleRequest(request: NextRequest) {
     return NextResponse.json(
       {
         error: {
-          message: error instanceof Error ? error.message : 'Failed to process chat completion',
-          type: unsupportedTool || invalidPersonaMetadata ? 'invalid_request_error' : 'internal_error',
-          code: unsupportedTool
-            ? error.code
-            : invalidPersonaMetadata
-              ? error.code
-              : 'internal_error',
+          message: unsupportedTool ? 'Unsupported OpenAI tool type; FLUJO supports function tools only.'
+            : error instanceof Error ? error.message : 'Failed to process chat completion',
+          type: ingressError ? (error.status === 429 ? 'rate_limit_error' : error.status === 503 ? 'api_error' : 'invalid_request_error') : unsupportedTool || invalidPersonaMetadata ? 'invalid_request_error' : 'internal_error',
+          code: errorCode,
           param: null
         }
       },
       { 
-        status: unsupportedTool || invalidPersonaMetadata ? 400 : 500,
-        headers: corsHeaders
+        status: ingressError ? error.status : unsupportedTool || invalidPersonaMetadata ? 400 : 500,
+        headers: { ...corsHeaders, ...(ingressError && (error.status === 429 || error.status === 503) ? { 'Retry-After': '5' } : {}) }
       }
     );
   }
@@ -329,8 +232,7 @@ async function OPTIONS_handler(request: NextRequest) {
   const requestId = `options-${Date.now()}`;
   log.info('OPTIONS request received (CORS preflight)', {
     requestId,
-    url: request.url,
-    origin: request.headers.get('origin') || 'unknown'
+    hasOrigin: request.headers.has('origin')
   });
   
   // Return a 204 No Content response with CORS headers
@@ -344,19 +246,17 @@ async function OPTIONS_handler(request: NextRequest) {
 }
 
 // Handle GET requests
-async function GET_handler(request: NextRequest) {
+async function GET_handler(request: NextRequest, ingress: ChatIngressPermit) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
   const requestId = `get-${Date.now()}`;
   log.info('GET request received', {
     requestId,
-    url: request.url,
-    userAgent: request.headers.get('user-agent') || 'unknown'
   });
   
   const startTime = Date.now();
-  const response = await handleRequest(request);
+  const response = await handleRequest(request, ingress);
   
   const duration = Date.now() - startTime;
   log.info('GET request completed', {
@@ -369,20 +269,19 @@ async function GET_handler(request: NextRequest) {
 }
 
 // Handle POST requests
-async function POST_handler(request: NextRequest) {
+async function POST_handler(request: NextRequest, ingress: ChatIngressPermit) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
   const requestId = `post-${Date.now()}`;
   log.info('POST request received', {
     requestId,
-    url: request.url,
-    contentType: request.headers.get('content-type') || 'unknown',
-    contentLength: request.headers.get('content-length') || 'unknown'
+    hasContentType: request.headers.has('content-type'),
+    hasContentLength: request.headers.has('content-length')
   });
   
   const startTime = Date.now();
-  const response = await handleRequest(request);
+  const response = await handleRequest(request, ingress);
   
   const duration = Date.now() - startTime;
   log.info('POST request completed', {
@@ -394,6 +293,28 @@ async function POST_handler(request: NextRequest) {
   return response;
 }
 
-export const GET = withWorkspaceRoute(GET_handler);
-export const POST = withWorkspaceRoute(POST_handler);
-export const OPTIONS = withWorkspaceRoute(OPTIONS_handler);
+function withChatIngress(handler: (request: NextRequest, ingress: ChatIngressPermit) => Promise<Response>) {
+  const inWorkspace = withWorkspaceRoute(handler);
+  return async (request: NextRequest): Promise<Response> => {
+    let ingress: ChatIngressPermit;
+    try {
+      // Workspace and authority adapters may decode the URL. Admission belongs
+      // outside that wrapper, while its auth/isolation decisions stay intact.
+      ingress = acquireChatIngress(request);
+    } catch (error) {
+      if (!isChatIngressError(error)) throw error;
+      return NextResponse.json({ error: { message: error.message,
+        type: error.status === 429 ? 'rate_limit_error' : error.status === 503 ? 'api_error' : 'invalid_request_error',
+        code: error.code, param: null,
+      } }, { status: error.status,
+        headers: { ...corsHeaders, ...(error.status === 429 || error.status === 503 ? { 'Retry-After': '5' } : {}) },
+      });
+    }
+    try { return await inWorkspace(request, ingress); }
+    finally { ingress.release(); }
+  };
+}
+
+export const GET = withChatIngress(GET_handler);
+export const POST = withChatIngress(POST_handler);
+export const OPTIONS = withChatIngress(OPTIONS_handler);

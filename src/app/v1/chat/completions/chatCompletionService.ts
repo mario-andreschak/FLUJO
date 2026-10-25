@@ -1,3 +1,4 @@
+import { claimChatIngress, type ChatIngressPermit } from '@/utils/http/chatIngress';
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -127,13 +128,13 @@ async function processChatCompletionInternal(
 ) {
   const startTime = Date.now();
   log.info('Processing chat completion request', {
-    model: data.model,
+    modelCharacters: data.model.length,
     messageCount: data.messages?.length || 0,
-    stream: data.stream,
+    stream: data.stream === true,
     flujo,
     requireApproval,
     flujodebug,
-    conversationId,
+    hasConversationId: Boolean(conversationId),
   });
 
   const result = await runFlow({
@@ -577,6 +578,25 @@ export async function processChatCompletion(
   continueDebug: boolean = false,
   userTurn: boolean = false,
   personaTarget?: PersonaChatCompletionTarget,
+  ingress?: ChatIngressPermit,
+) {
+  const owner = ingress ? claimChatIngress(ingress) : undefined;
+  try {
+    return await processAdmittedChatCompletion(data, flujo, requireApproval, flujodebug,
+      conversationId, continueDebug, userTurn, personaTarget, owner);
+  } finally { owner?.release(); }
+}
+
+async function processAdmittedChatCompletion(
+  data: ChatCompletionRequest,
+  flujo: boolean,
+  requireApproval: boolean,
+  flujodebug: boolean,
+  conversationId?: string,
+  continueDebug: boolean = false,
+  userTurn: boolean = false,
+  personaTarget?: PersonaChatCompletionTarget,
+  ingressOwner?: ReturnType<typeof claimChatIngress>,
 ) {
   if (personaTarget && typeof data.model === 'string' && (data.model.startsWith('model-') || data.model.startsWith('policy/'))) {
     return NextResponse.json({
@@ -614,7 +634,7 @@ export async function processChatCompletion(
         flujo,
         requireApproval,
         flujodebug,
-        conversationId,
+        hasConversationId: Boolean(conversationId),
       });
     }
     return processDirectModelCompletion(data);
@@ -650,10 +670,11 @@ export async function processChatCompletion(
       log.info(`Streaming requested for conversation ${effectiveConvId}. Starting async processing.`);
       // Start processing asynchronously (don't await)
       // The reference in FlowExecutor.conversationStates will prevent garbage collection
+      const releaseProducer = ingressOwner?.retain();
       submitted = true;
       withFlowRunAdmission(runAdmission, () =>
         processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId, continueDebug, userTurn))
-        .catch(error => {
+        .catch(async error => {
           // Admission owns no execution state. A refused successor must not end
           // the currently running, paused or recovery-owned conversation.
           if (isFlowRunPressureError(error) || isConversationSequenceSafetyError(error)) {
@@ -683,7 +704,7 @@ export async function processChatCompletion(
 
             // Also save to storage
             const storageKey = `conversations/${effectiveConvId}` as StorageKey;
-            persistState(storageKey, errorState).catch(storageError => {
+            await persistState(storageKey, errorState).catch(storageError => {
               log.error(`Failed to save error state for conversation ${effectiveConvId}:`, storageError);
             });
           }
@@ -697,7 +718,7 @@ export async function processChatCompletion(
             status: 'error',
             ...(errorState?.lastError ? { error: errorState.lastError } : {}),
           });
-        });
+        }).finally(() => releaseProducer?.());
 
       // Return streaming response immediately
       return createStreamingResponse(data.model, effectiveConvId, snapshotReplayFrom, streamFromSeq, admission, submissionFailure.signal);
@@ -732,9 +753,9 @@ export async function processChatCompletion(
 async function processDirectModelCompletion(data: ChatCompletionRequest) {
   const identifier = data.model.startsWith('policy/') ? data.model : data.model.slice('model-'.length);
   log.info('Processing direct model completion', {
-    model: data.model,
+    modelCharacters: data.model.length,
     messageCount: data.messages?.length || 0,
-    stream: data.stream,
+    stream: data.stream === true,
     hasTools: Boolean(data.tools && data.tools.length > 0),
   });
 
@@ -748,7 +769,7 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
 
   if (!result.success) {
     log.warn('Direct model completion failed', {
-      model: data.model,
+      modelCharacters: data.model.length,
       code: result.error.code,
       statusCode: result.statusCode,
     });

@@ -24,7 +24,12 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
 jest.mock('@/backend/execution/flow/persistConversationState', () => ({
   persistConversationState: jest.fn(async () => undefined),
 }));
+jest.mock('@/app/api/_workspace', () => ({ withWorkspaceRoute: <T,>(handler: T) => handler }));
+jest.mock('@/utils/encryption/lockGate', () => ({ assertUnlocked: jest.fn(async () => null) }));
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConversationState: jest.fn(async () => undefined) }));
 
+import { NextRequest } from 'next/server';
+import { POST } from '@/app/v1/chat/completions/route';
 import { createStreamingResponse, processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
@@ -38,6 +43,7 @@ import sequencePath from 'node:path';
 import sequenceOs from 'node:os';
 import { _setConversationLogDirForTests } from '@/backend/execution/flow/conversationLog';
 import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { acquireChatIngress, finishChatInputParsing, getChatIngressDiagnostics } from '@/utils/http/chatIngress';
 
 // Fail loudly if the implementation ever reaches back out over HTTP.
 const fetchSpy = jest.spyOn(global, 'fetch' as any).mockImplementation(() => {
@@ -117,6 +123,74 @@ describe('Conversation sequence refusal in completion responses', () => {
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBeNull();
     expect(await response.json()).toMatchObject({ error: { code: 'CONVERSATION_SEQUENCE_REGISTRY_FULL' } });
+  });
+});
+
+describe('ingress producer ownership', () => {
+  const data = { model: 'flow-Test', messages: [{ role: 'user', content: 'input' }], stream: true } as const;
+  const permit = () => {
+    const admitted = acquireChatIngress({ method: 'POST', url: 'http://localhost/v1/chat/completions', headers: new Headers() });
+    finishChatInputParsing(admitted, 128, 10);
+    return admitted;
+  };
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  afterEach(() => expect(getChatIngressDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 }));
+
+  it('retains public-route admission after disconnect until background Flow error persistence settles', async () => {
+    let reject!: (error: Error) => void;
+    let persisted!: () => void;
+    (runFlow as jest.Mock).mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    (persistConversationState as jest.Mock).mockImplementationOnce(() => new Promise<void>(resolve => { persisted = resolve; }));
+    const id = 'ingress-public-route-error';
+    FlowExecutor.conversationStates.set(id, { conversationId: id, messages: [], status: 'running', ephemeral: true } as never);
+    const response = await POST(new NextRequest('http://localhost/v1/chat/completions', { method: 'POST',
+      body: JSON.stringify({ ...data, metadata: { conversationId: id } }),
+    }));
+    expect(response.status).toBe(200);
+    expect(getChatIngressDiagnostics()).toMatchObject({ active: 1, parsing: 0 });
+    await response.body!.cancel();
+    expect(getChatIngressDiagnostics().active).toBe(1);
+    reject(new Error('public route provider fixture')); await tick();
+    expect(persisted).toBeDefined(); expect(getChatIngressDiagnostics().active).toBe(1);
+    persisted(); await tick();
+  });
+
+  it('keeps a disconnected consumer charged until the background producer settles', async () => {
+    let settle!: (value: unknown) => void;
+    (runFlow as jest.Mock).mockImplementation(() => new Promise(resolve => { settle = resolve; }));
+    const admitted = permit();
+    const response = await processChatCompletion(data as any, false, false, false, 'ingress-disconnect', false, true, undefined, admitted);
+    admitted.release();
+    await response.body!.cancel();
+    expect(getChatIngressDiagnostics().active).toBe(1);
+    settle({ flowNotFound: { name: 'Test' } }); await tick();
+  });
+
+  it('keeps ownership when Response construction fails after execution was submitted', async () => {
+    let settle!: (value: unknown) => void;
+    (runFlow as jest.Mock).mockImplementation(() => new Promise(resolve => { settle = resolve; }));
+    const admitted = permit();
+    const response = jest.spyOn(global, 'Response').mockImplementationOnce(() => { throw new Error('construction fixture'); });
+    try {
+      await expect(processChatCompletion(data as any, false, false, false, 'ingress-construction', false, true, undefined, admitted)).rejects.toThrow('construction fixture');
+    } finally { response.mockRestore(); admitted.release(); }
+    expect(getChatIngressDiagnostics().active).toBe(1);
+    settle({ flowNotFound: { name: 'Test' } }); await tick();
+  });
+
+  it('keeps ownership through delayed terminal error persistence after provider failure', async () => {
+    let reject!: (error: Error) => void;
+    let persisted!: () => void;
+    (runFlow as jest.Mock).mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    (persistConversationState as jest.Mock).mockImplementationOnce(() => new Promise<void>(resolve => { persisted = resolve; }));
+    const id = 'ingress-error-persist';
+    FlowExecutor.conversationStates.set(id, { conversationId: id, messages: [], status: 'running', ephemeral: true } as never);
+    const admitted = permit();
+    const response = await processChatCompletion(data as any, false, false, false, id, false, true, undefined, admitted);
+    admitted.release(); await response.body!.cancel();
+    reject(new Error('provider failure fixture')); await tick();
+    expect(persisted).toBeDefined(); expect(getChatIngressDiagnostics().active).toBe(1);
+    persisted(); await tick();
   });
 });
 

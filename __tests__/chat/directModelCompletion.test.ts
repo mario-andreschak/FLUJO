@@ -29,6 +29,7 @@ jest.mock('@/backend/services/model', () => ({
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { modelService } from '@/backend/services/model';
+import { acquireChatIngress, finishChatInputParsing, getChatIngressDiagnostics } from '@/utils/http/chatIngress';
 
 const generateChatCompletion = modelService.generateChatCompletion as jest.Mock;
 const runFlowMock = runFlow as jest.Mock;
@@ -62,6 +63,21 @@ beforeEach(() => {
 });
 
 describe('model- routing on /v1/chat/completions', () => {
+  it.each([false, true])('holds ingress during a blocked direct SDK completion (stream=%s)', async stream => {
+    let finish!: (value: unknown) => void;
+    generateChatCompletion.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const ingress = acquireChatIngress({ method: 'POST', url: 'http://localhost/v1/chat/completions', headers: new Headers() });
+    finishChatInputParsing(ingress, 128, 10);
+    const pending = processChatCompletion({ model: 'model-Test', messages: [], stream }, false, false, false,
+      undefined, false, false, undefined, ingress);
+    ingress.release();
+    expect(getChatIngressDiagnostics().active).toBe(1);
+    finish({ success: true, completion: completionFixture() });
+    const response = await pending;
+    expect(getChatIngressDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+    await response.body?.cancel();
+  });
+
   it('routes a policy alias directly and returns its selected-model receipt', async () => {
     const completion = { ...completionFixture(), model: 'actual-provider-model', flujo_routing: {
       policyId: 'p', selectedModelId: 'backup', attempts: [{ modelId: 'backup', outcome: 'completed' }],

@@ -1526,6 +1526,13 @@ export class PersonaFlowDispatcher {
     });
   }
 
+  /** Keep detached completion reporting outside submit's request-payload scope. */
+  private startSubmittedPump(personaId: string): void {
+    void this.pump(personaId).catch((error) => {
+      log.error(`Persona Flow pump failed for ${personaId}:`, error);
+    });
+  }
+
   async submit(
     input: SubmitPersonaFlowDispatchInput,
     options: SubmitPersonaFlowDispatchOptions = {},
@@ -1607,9 +1614,7 @@ export class PersonaFlowDispatcher {
       routed = { ...routed, duplicate: true };
     }
     if (routed.dispatch.state === 'queued' && options.startPump !== false) {
-      void this.pump(input.personaId).catch((error) => {
-        log.error(`Persona Flow pump failed for ${input.personaId}:`, error);
-      });
+      this.startSubmittedPump(input.personaId);
     }
     if (options.waitForCompletion) {
       routed = {
