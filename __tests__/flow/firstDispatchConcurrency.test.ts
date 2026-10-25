@@ -35,6 +35,7 @@ import { loadItem, saveItem, saveCollectionItem } from '@/utils/storage/backend'
 import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { ensureWorkspaceDirs, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import { withWorkspaceMutation, withWorkspaceRecoveryCapture } from '@/backend/services/workspace/workspaceMutationGate';
+import { getFlowRunAdmissionDiagnostics, isFlowRunPressureError } from '@/backend/execution/flow/runAdmission';
 
 jest.setTimeout(180_000);
 let server: Server;
@@ -103,14 +104,16 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
       mockArchivePeakBytes = Math.max(mockArchivePeakBytes, getArchiveWritePressure().bytes);
       mockArchivePeakWaiters = Math.max(mockArchivePeakWaiters, (globalThis as typeof globalThis & { __flujoArchiveWriteQueue?: unknown[] }).__flujoArchiveWriteQueue?.length ?? 0);
     }, 5);
-    const results = await Promise.all(ids.map(conversationId => {
+    const submissions = await Promise.allSettled(ids.map(conversationId => {
       return runFlow({ conversationId, flowId: flow.id, prompt: conversationId, source: 'api', mode: 'conversation',
         abortSignal: controller.signal,
         ...(protectedRun ? { executionAuthority: { signal: controller.signal, assertCurrent: async () => {} } } : {}) });
     })).finally(() => { clearTimeout(deadline); clearInterval(sampleMemory); });
+    const results = submissions.flatMap(submission => submission.status === 'fulfilled' ? [submission.value] : []);
+    const refused = submissions.filter(submission => submission.status === 'rejected');
     const latencies = ids.flatMap(id => (requests.get(id) ?? []).slice(0, 1).map(time => time - started)).sort((a, b) => a - b);
     console.info('FIRST_DISPATCH_BASELINE', JSON.stringify({ protectedRun, count, dispatched: latencies.length,
-      completed: results.filter(result => result.status === 'completed').length,
+      completed: results.filter(result => result.status === 'completed').length, refusedBeforeExecution: refused.length,
       firstMs: Math.round(latencies[0] ?? 0), medianMs: Math.round(latencies[Math.floor(latencies.length / 2)] ?? 0),
       lastMs: Math.round(latencies.at(-1) ?? 0), completedMs: Math.round(performance.now() - started),
       errors: [...new Set(results.filter(result => result.status !== 'completed').map(result => result.error?.details?.code ?? result.error?.message))],
@@ -123,7 +126,19 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
       },
     }));
     for (const [index, id] of ids.entries()) {
-      const result = results[index];
+      const submission = submissions[index];
+      if (submission.status === 'rejected') {
+        expect(isFlowRunPressureError(submission.reason)).toBe(true);
+        expect(submission.reason).toMatchObject({ code: 'FLOW_RUN_BUSY', status: 429 });
+        expect(requests.get(id) ?? []).toHaveLength(0);
+        expect(FlowExecutor.conversationStates.has(id)).toBe(false);
+        await expect(loadItem(`conversations/${id}` as StorageKey, undefined)).resolves.toBeUndefined();
+        expect(await readConversationLog(id) ?? []).toHaveLength(0);
+        await expect(fs.stat(path.join(getWorkspaceDataDir(), 'db', 'conversation-summaries', `${id}.json`)))
+          .rejects.toMatchObject({ code: 'ENOENT' });
+        continue;
+      }
+      const result = submission.value;
       if (!protectedRun) expect(result.status).toBe('completed');
       if (result.status === 'completed') {
         expect(result.outputText).toBe(`answer ${id}`);
@@ -143,6 +158,8 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
       const summary = JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'conversation-summaries', `${id}.json`), 'utf8'));
       expect(summary).toMatchObject({ id, status: result.status });
     }
+    expect(refused).toHaveLength(Math.max(0, count - getFlowRunAdmissionDiagnostics().maxWorkspaceRuns));
+    expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0, workspaceActiveRuns: 0 });
     expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });
     expect(globalThis.__flujo_workspace_writer_admission_chains?.size ?? 0).toBe(0);
     await expect(withWorkspaceRecoveryCapture(async () => 'drained')).resolves.toBe('drained');

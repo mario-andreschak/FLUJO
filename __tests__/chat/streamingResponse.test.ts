@@ -21,11 +21,17 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: jest.fn(),
 }));
 
+jest.mock('@/backend/execution/flow/persistConversationState', () => ({
+  persistConversationState: jest.fn(async () => undefined),
+}));
+
 import { createStreamingResponse, processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { acquireFlowRunAdmission, FlowRunPressureError, getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 
 // Fail loudly if the implementation ever reaches back out over HTTP.
@@ -53,6 +59,170 @@ beforeEach(() => { (runFlow as jest.Mock).mockReset(); });
 
 const contentDeltas = (body: string): string => body.split('\n').filter(line => line.startsWith('data: {'))
   .map(line => JSON.parse(line.slice(6)).choices[0].delta.content ?? '').join('');
+
+describe('Flow submission pressure in completion responses', () => {
+  const request = { model: 'flow-Test', messages: [{ role: 'user', content: 'New request' }], stream: true };
+  const admissionVariables = [
+    'FLUJO_RUN_ADMISSION_MAX_CONVERSATION_RUNS', 'FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES',
+    'FLUJO_RUN_ADMISSION_MAX_RSS_BYTES',
+  ];
+  let previousEnvironment: Array<string | undefined>;
+  const drained = () => expect(getFlowRunAdmissionDiagnostics()).toMatchObject({
+    activeRuns: 0, reservedBytes: 0, activeWorkspaces: 0, workspaceConversations: 0,
+  });
+
+  beforeEach(() => {
+    previousEnvironment = admissionVariables.map(name => process.env[name]);
+    process.env.FLUJO_RUN_ADMISSION_MAX_CONVERSATION_RUNS = '1';
+    process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES = String(128 * 1024 * 1024);
+    process.env.FLUJO_RUN_ADMISSION_MAX_RSS_BYTES = String(Number.MAX_SAFE_INTEGER);
+    (persistConversationState as jest.Mock).mockClear();
+    drained();
+  });
+  afterEach(() => {
+    admissionVariables.forEach((name, index) => {
+      const value = previousEnvironment[index];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    });
+    drained();
+  });
+
+  it.each([
+    ['running', 'running'], ['paused', 'paused_debug'], ['approval', 'awaiting_tool_approval'], ['recovery', 'error'],
+  ])('refuses overloaded %s submissions before reader setup and preserves the current owner', async (label, status) => {
+    const conversationId = `completion-admission-${label}`;
+    const state = { conversationId, status, messages: [{ id: 'original', role: 'user', content: 'Original history', timestamp: 1 }],
+      pendingToolCalls: [{ id: 'owned-tool' }], recovery: { runId: 'original-run', effect: 'uncertain' } };
+    const original = structuredClone(state);
+    FlowExecutor.conversationStates.set(conversationId, state as never);
+    const held = acquireFlowRunAdmission({ conversationId });
+    const reserveReader = jest.spyOn(executionStreamAdmission, 'reserve');
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe');
+    const emit = jest.spyOn(executionEventBus, 'emit');
+    const before = executionStreamAdmission.diagnostics();
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await processChatCompletion(request as any, false, false, false, conversationId, false, true);
+        expect(response.status).toBe(429);
+        expect(response.headers.get('Retry-After')).toBe('5');
+        await expect(response.json()).resolves.toMatchObject({ error: { code: 'FLOW_RUN_BUSY', retry_after: 5 } });
+      }
+      expect(runFlow).not.toHaveBeenCalled();
+      expect(reserveReader).not.toHaveBeenCalled();
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalled();
+      expect(persistConversationState).not.toHaveBeenCalled();
+      expect(FlowExecutor.conversationStates.get(conversationId)).toBe(state);
+      expect(state).toEqual(original);
+      expect(executionStreamAdmission.diagnostics()).toEqual(before);
+      expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(1);
+    } finally { held.release(); reserveReader.mockRestore(); subscribe.mockRestore(); emit.mockRestore(); }
+  });
+
+  it('returns retryable memory pressure before reader reservation or background execution', async () => {
+    process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES = '1';
+    const reserveReader = jest.spyOn(executionStreamAdmission, 'reserve');
+    try {
+      const response = await processChatCompletion(request as any, false, false, false, 'completion-memory-pressure');
+      expect(response.status).toBe(503);
+      expect(response.headers.get('Retry-After')).toBe('5');
+      await expect(response.json()).resolves.toMatchObject({ error: { code: 'FLOW_RUN_MEMORY', retry_after: 5 } });
+      expect(runFlow).not.toHaveBeenCalled();
+      expect(reserveReader).not.toHaveBeenCalled();
+      expect(persistConversationState).not.toHaveBeenCalled();
+      drained();
+    } finally { reserveReader.mockRestore(); }
+  });
+
+  it('keeps submitted execution charged when constructing its response throws', async () => {
+    const conversationId = 'completion-submitted-response-failure';
+    const before = executionStreamAdmission.diagnostics();
+    const problem = new Error('response constructor failed after submission');
+    let rejectRun!: (error: Error) => void;
+    (runFlow as jest.Mock).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRun = reject; }));
+    const responseConstructor = jest.spyOn(global, 'Response').mockImplementationOnce(() => { throw problem; });
+    try {
+      await expect(processChatCompletion(request as any, false, false, false, conversationId, false, true)).rejects.toBe(problem);
+      responseConstructor.mockRestore();
+      expect(runFlow).toHaveBeenCalledTimes(1);
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+      expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 1, workspaceConversations: 1 });
+      expect(() => acquireFlowRunAdmission({ conversationId })).toThrow(expect.objectContaining({ code: 'FLOW_RUN_BUSY' }));
+      rejectRun(new FlowRunPressureError('FLOW_RUN_MEMORY'));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      drained();
+      expect(persistConversationState).not.toHaveBeenCalled();
+    } finally {
+      responseConstructor.mockRestore();
+      rejectRun?.(new FlowRunPressureError('FLOW_RUN_MEMORY'));
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  });
+
+  it.each(['FLOW_RUN_BUSY', 'FLOW_RUN_MEMORY'] as const)('maps nonstreaming %s refusal without changing conversation ownership', async code => {
+    const conversationId = `completion-nonstream-${code}`;
+    const state = { conversationId, status: 'awaiting_tool_approval', messages: [], recovery: { runId: 'original-run' } };
+    FlowExecutor.conversationStates.set(conversationId, state as never);
+    (runFlow as jest.Mock).mockRejectedValueOnce(new FlowRunPressureError(code));
+    const reserveReader = jest.spyOn(executionStreamAdmission, 'reserve');
+    const emit = jest.spyOn(executionEventBus, 'emit');
+    try {
+      const response = await processChatCompletion({ ...request, stream: false } as any, false, false, false, conversationId);
+      expect(response.status).toBe(code === 'FLOW_RUN_BUSY' ? 429 : 503);
+      expect(response.headers.get('Retry-After')).toBe('5');
+      await expect(response.json()).resolves.toMatchObject({ error: { code, retry_after: 5 } });
+      expect(runFlow).toHaveBeenCalledTimes(1);
+      expect(reserveReader).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalled();
+      expect(persistConversationState).not.toHaveBeenCalled();
+      expect(FlowExecutor.conversationStates.get(conversationId)).toBe(state);
+      expect(state.status).toBe('awaiting_tool_approval');
+    } finally { reserveReader.mockRestore(); emit.mockRestore(); }
+  });
+
+  it.each(['FLOW_RUN_BUSY', 'FLOW_RUN_MEMORY'] as const)('settles a post-200 %s race only on the submitting stream', async code => {
+    const conversationId = `completion-submission-race-${code}`;
+    const state = { conversationId, status: 'paused_debug', messages: [{ id: 'retained', role: 'assistant', content: 'Original answer', timestamp: 1 }],
+      recovery: { runId: 'original-run', effect: 'uncertain' } };
+    const original = structuredClone(state);
+    FlowExecutor.conversationStates.set(conversationId, state as never);
+    const ownerListener = jest.fn();
+    const stopOwnerListener = executionEventBus.subscribe(conversationId, ownerListener);
+    const before = executionStreamAdmission.diagnostics();
+    const sequence = executionEventBus.currentSeq(conversationId);
+    let rejectSubmission!: (error: Error) => void;
+    (runFlow as jest.Mock).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSubmission = reject; }));
+    const emit = jest.spyOn(executionEventBus, 'emit');
+    let response: Response | undefined;
+    try {
+      response = await processChatCompletion(request as any, false, false, false, conversationId, false, true);
+      expect(response.status).toBe(200);
+      expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(1);
+      expect(executionStreamAdmission.diagnostics().active).toBe(before.active + 1);
+      rejectSubmission(new FlowRunPressureError(code));
+      const body = await readAll(response);
+      expect(body).toContain(`"code":"${code}"`);
+      expect(body).toContain('data: [DONE]');
+      expect(body).not.toContain('"finish_reason":"error"');
+      expect(FlowExecutor.conversationStates.get(conversationId)).toBe(state);
+      expect(state).toEqual(original);
+      expect(persistConversationState).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalled();
+      expect(ownerListener).not.toHaveBeenCalled();
+      expect(executionEventBus.currentSeq(conversationId)).toBe(sequence);
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+      drained();
+      const continuingEvent = executionEventBus.emit(conversationId, { type: 'model:delta', messageId: 'owner-answer', delta: 'Owner continues' });
+      expect(ownerListener).toHaveBeenCalledWith(continuingEvent);
+    } finally {
+      rejectSubmission?.(new FlowRunPressureError(code));
+      await response?.body?.cancel().catch(() => undefined);
+      stopOwnerListener();
+      emit.mockRestore();
+    }
+  });
+});
 
 describe('createStreamingResponse (event-bus driven)', () => {
   it('recovers a fast oversized result from the canonical current turn without emitting FLUJO controls', async () => {

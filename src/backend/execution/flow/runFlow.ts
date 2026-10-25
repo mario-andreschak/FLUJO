@@ -7,6 +7,7 @@ import type { FlowReplayInputs } from '@/shared/types/execution/flowInputs';
 import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
+import { claimFlowRunAdmission, recheckFlowRunAdmission, type FlowRunAdmissionPermit } from './runAdmission';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { bindExecutionModelStepOrdinals } from '@/backend/execution/flow/modelStepOrdinals';
 import {
@@ -506,10 +507,20 @@ export interface FlowRunResult {
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   if (getHarnessExecution()) input = { ...input, mode: 'ephemeral', conversationId: undefined, runId: undefined,
     abortSignal: getHarnessExecution()!.signal };
+  const admission = claimFlowRunAdmission(input);
+  try {
+    return await runFlowAdmitted(input, admission);
+  } finally {
+    admission.release();
+  }
+}
+
+async function runFlowAdmitted(input: FlowRunInput, admission: FlowRunAdmissionPermit): Promise<FlowRunResult> {
   const delegated=await prepareExecutionSubflowInput(input);
-  if(delegated)return runWithExecutionInput(delegated,()=>runFlow(delegated));
+  if(delegated)return runWithExecutionInput(delegated,()=>runFlowAdmitted(delegated, admission));
   input = await applyOriginalOwnerRunInput(applyExecutionRunInput(input));
   await validateExecutionExtensionRun(input);
+  recheckFlowRunAdmission(admission, input);
   const ownerSignal = combineAbortSignals(input.abortSignal, input.executionAuthority?.signal);
   const registration = await registerCancellableRun({
     runId: input.runId,
@@ -521,15 +532,21 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     abortSignal: combineAbortSignals(ownerSignal, registration.signal),
   };
   try {
-    if (!registeredInput.conversationId) return runFlowUnlocked(registeredInput);
-    const run = () => withConversationExecutionLock(registeredInput.conversationId!, () => runFlowUnlocked(registeredInput));
+    const execute = () => {
+      // A lock/barrier can outlive the original input estimate or process
+      // headroom. Recheck before touching the conversation it protects.
+      recheckFlowRunAdmission(admission, registeredInput);
+      return runFlowUnlocked(registeredInput);
+    };
+    if (!registeredInput.conversationId) return await execute();
+    const run = () => withConversationExecutionLock(registeredInput.conversationId!, execute);
     if (executionExtensionSharesPersonaAuthority(registeredInput.executionExtensionContext, registeredInput.executionAuthority)) {
       return await runWithExecutionConversationAccess(registeredInput.conversationId,
         () => assertExecutionExtensionCurrent(registeredInput.executionExtensionContext), run);
     }
     return await withConversationExecutionLock(
       registeredInput.conversationId,
-      () => runFlowUnlocked(registeredInput),
+      execute,
     );
   } finally {
     registration.release();
@@ -3371,8 +3388,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   //  2. The conversation stayed in the global state map forever. Marking it
   //     terminal makes it evictable ONLY after its durable snapshot exists, so a
   //     later resume/inspect transparently reloads it from storage.
-  // Both are best-effort and deliberately not awaited: neither may delay or fail
-  // the run's result.
+  // Bash cleanup remains independent. Terminal persistence retries are awaited
+  // so their transcript and write allocations retain this run's admission.
   const terminalStatus =
     sharedState.status === 'completed' ||
     sharedState.status === 'error' ||
@@ -3389,7 +3406,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     });
     if (!getHarnessExecution()) void releaseRunOwnedBashSessions(runOwnerScope);
     if (!isConversationDeleted(effectiveConvId) && !ephemeral) {
-      void markConversationTerminal(effectiveConvId, sharedState, async () => {
+      await markConversationTerminal(effectiveConvId, sharedState, async () => {
         // The snapshot above already succeeded in the normal case; only retry it
         // when that write failed, so persist-before-evict still holds.
         if (!finalSnapshotPersisted) await persistState(storageKey, sharedState);
