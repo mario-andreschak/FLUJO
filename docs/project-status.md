@@ -26,8 +26,9 @@ The npm package uses versioned releases. Windows bootstrappers built from the cu
 
 During development, use local typecheck and lint, plus a non-container application
 build before committing. Full CI, security scanners, broader regression suites
-and installed-artifact acceptance run immediately before a release. Automatic CI
-on merge is paused.
+and installed-artifact acceptance belong to release preflight or an explicit
+owner request. Inspect current workflow activation and merge enforcement using
+the [verification guide](engineering-verification.md).
 
 Release acceptance must bind results to an exact source revision and distributed
 artifact. It must cover the declared operating systems and installation methods,
