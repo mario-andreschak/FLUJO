@@ -1250,7 +1250,11 @@ async function withModelCatalogPhysicalLease<T>(
   writer: boolean,
 ): Promise<T> {
   const inherited = modelCatalogLeaseScope.getStore();
-  if (inherited?.workspace === getCurrentWorkspace()) {
+  // Deferred callbacks keep their ALS store after the physical lease retires.
+  // Only a still-issued, non-closing lease can admit a nested operation; later
+  // work must acquire a fresh lease. Already admitted children still drain.
+  const issued = inherited && ISSUED_RUNTIME_LOCKS.get(inherited.lock);
+  if (inherited?.workspace === getCurrentWorkspace() && issued && !issued.closing) {
     // An agentic model call can synchronously start a child Process. It shares
     // the parent's lease rather than waiting on its own physical lock. Editing
     // the catalog inside that call would invalidate its admitted snapshot.
@@ -1324,7 +1328,8 @@ export function withModelCatalogFilesystemWriteLease<T>(task: () => Promise<T>):
 
 export async function assertModelCatalogFilesystemLeaseOwned(): Promise<void> {
   const inherited = modelCatalogLeaseScope.getStore();
-  if (!inherited || inherited.workspace !== getCurrentWorkspace()) {
+  if (!inherited || inherited.workspace !== getCurrentWorkspace()
+      || !ISSUED_RUNTIME_LOCKS.has(inherited.lock)) {
     throw new Error('Model catalog lease is missing.');
   }
   await inherited.lock.assertOwned();

@@ -222,6 +222,12 @@ that is not a compaction tree, is returned as a tool error so the model can
 correct its read. Transport failures, unclassified executor exceptions and
 revoked ownership still retain their existing holds and delivery fences.
 
+Model-catalog leases are shared only while the creating call is active. A
+deferred callback can inherit its async context after that call has returned;
+the callback must acquire a fresh lease before preparing another model call.
+Expired context does not assert ownership. Active nested calls still share
+their parent's lease, exclude catalog edits and fail if ownership is lost.
+
 The terminal-only fixture's private MCP grant explicitly supplies the selected
 Node installation, standard OS tool directories and a fixture-local home. It
 does not inherit the operator's ambient PATH or unrelated environment variables.
