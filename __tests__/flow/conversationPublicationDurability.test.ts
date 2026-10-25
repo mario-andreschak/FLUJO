@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { appendFromBus, appendRawForState, replaceConversationTranscript, flushConversationLog,
@@ -175,8 +175,13 @@ it('does not accept an equal-size inode witness whose bytes changed after an amb
   const rename = fs.rename.bind(fs);
   jest.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
     await rename(from, to);
-    const info = await fs.stat(to);
-    await fs.writeFile(to, 'x'.repeat(info.size));
+    const handle = await fs.open(to, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    try {
+      const info = await handle.stat();
+      expect(info.isFile()).toBe(true);
+      expect(info.size).toBeLessThan(1024 * 1024);
+      await handle.writeFile('x'.repeat(info.size));
+    } finally { await handle.close(); }
     throw new Error('ambiguous acknowledgement');
   });
   await expect(replaceConversationTranscript(value, [message('replacement')])).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
