@@ -7,6 +7,7 @@ import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotContr
 import { resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
 import { boundedJsonReader } from '@/backend/services/operations/boundedRead';
 import { collectOperationsSnapshot, getObservationProcessId } from '@/backend/services/operations/snapshot';
+import { getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
 
 export const runtime = 'nodejs';
 
@@ -44,7 +45,9 @@ const GET_handler = async (request: Request, admission: Admission) => {
     if (revoked) return revoked;
     const unavailable = assertWorkerRequestReady(request, workspace);
     if (unavailable) return unavailable;
-    return Response.json(snapshot, { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json({ ...snapshot, flowRunAdmission: getFlowRunAdmissionDiagnostics() }, {
+      headers: { 'Cache-Control': 'no-store' },
+    });
   } catch {
     // No prompt, provider message, command, credential or private filesystem error.
     return Response.json({ error: 'Operations observations are unavailable.', code: 'OPERATIONS_UNAVAILABLE' },

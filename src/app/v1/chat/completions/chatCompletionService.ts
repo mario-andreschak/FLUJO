@@ -8,6 +8,8 @@ import { TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, STAY_ON_NODE_ACTION } from '@/
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage from shared types
 import { StorageKey } from '@/shared/types/storage'; // Import StorageKey
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { acquireFlowRunAdmission, withFlowRunAdmission, isFlowRunPressureError,
+  type FlowRunAdmissionPermit, type FlowRunPressureError } from '@/backend/execution/flow/runAdmission';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { ExecutionEvent } from '@/shared/types/execution/events';
 import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
@@ -40,6 +42,13 @@ interface CompletionStreamAdmission {
 function completionStreamCapacityResponse() {
   return NextResponse.json({ error: { message: 'Execution stream capacity exhausted', type: 'api_error' } }, {
     status: 503, headers: { 'Retry-After': '3' },
+  });
+}
+
+export function flowRunPressureResponse(error: FlowRunPressureError) {
+  return NextResponse.json({ error: { message: error.message, type: 'api_error', code: error.code,
+    ...(error.status === 413 ? {} : { retry_after: error.retryAfterSeconds }) } }, {
+    status: error.status, headers: error.status === 413 ? {} : { 'Retry-After': String(error.retryAfterSeconds) },
   });
 }
 
@@ -612,14 +621,38 @@ export async function processChatCompletion(
     const snapshotReplayFrom = data.appendMessages || !userTurn
       ? FlowExecutor.conversationStates.get(effectiveConvId)?.messages.length : undefined;
     const streamFromSeq = executionEventBus.currentSeq(effectiveConvId);
-    const admission = reserveCompletionStream(effectiveConvId);
-    if (!admission) return completionStreamCapacityResponse();
+    let runAdmission: FlowRunAdmissionPermit;
     try {
+      runAdmission = acquireFlowRunAdmission({ modelName: data.model, messages: data.messages,
+        mcpAppContexts: data.mcpAppContexts, mcpSkillSelections: data.mcpSkillSelections,
+        processNodeId: data.processNodeId, conversationId: effectiveConvId });
+    } catch (error) {
+      if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
+      throw error;
+    }
+    let admission: CompletionStreamAdmission | undefined;
+    const submissionFailure = new AbortController();
+    let submitted = false;
+    try {
+      admission = reserveCompletionStream(effectiveConvId);
+      if (!admission) {
+        runAdmission.release();
+        return completionStreamCapacityResponse();
+      }
       log.info(`Streaming requested for conversation ${effectiveConvId}. Starting async processing.`);
       // Start processing asynchronously (don't await)
       // The reference in FlowExecutor.conversationStates will prevent garbage collection
-      processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId, continueDebug, userTurn)
+      submitted = true;
+      withFlowRunAdmission(runAdmission, () =>
+        processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId, continueDebug, userTurn))
         .catch(error => {
+          // Admission owns no execution state. A refused successor must not end
+          // the currently running, paused or recovery-owned conversation.
+          if (isFlowRunPressureError(error)) {
+            log.warn('Flow submission refused after preflight', { code: error.code });
+            submissionFailure.abort(error);
+            return;
+          }
           // Log any errors that occur during processing
           log.error(`Error in background processing for conversation ${effectiveConvId}:`, error);
 
@@ -659,14 +692,23 @@ export async function processChatCompletion(
         });
 
       // Return streaming response immediately
-      return createStreamingResponse(data.model, effectiveConvId, snapshotReplayFrom, streamFromSeq, admission);
+      return createStreamingResponse(data.model, effectiveConvId, snapshotReplayFrom, streamFromSeq, admission, submissionFailure.signal);
     } catch (error) {
-      admission.release();
+      // Response construction may fail after execution starts. The submitted
+      // scope owns the reservation until that execution actually settles.
+      if (!submitted) runAdmission.release();
+      admission?.release();
+      if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
       throw error;
     }
   } else {
     // Non-streaming path - use the internal function directly
-    return processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
+    try {
+      return await processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
+    } catch (error) {
+      if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
+      throw error;
+    }
   }
 }
 
@@ -808,14 +850,17 @@ export function createStreamingResponse(
   snapshotReplayFrom?: number,
   requestFromSeq?: number,
   ownedAdmission?: CompletionStreamAdmission,
+  submissionFailure?: AbortSignal,
 ) {
   const admission = ownedAdmission ?? reserveCompletionStream(conversationId);
   if (!admission) return completionStreamCapacityResponse();
   let closed = false;
   let unsubscribe: (() => void) | null = null;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let onSubmissionFailure: (() => void) | undefined;
   const cleanup = () => {
     closed = true;
+    if (onSubmissionFailure) submissionFailure?.removeEventListener('abort', onSubmissionFailure);
     const stop = unsubscribe;
     unsubscribe = null;
     try { stop?.(); } finally { admission.release(); }
@@ -835,6 +880,20 @@ export function createStreamingResponse(
       start(controller) {
         streamController = controller;
         try {
+          onSubmissionFailure = () => {
+            if (closed) return;
+            try {
+              const error = submissionFailure?.reason;
+              const body = isFlowRunPressureError(error)
+                ? { message: error.message, type: 'api_error', code: error.code,
+                  ...(error.status === 413 ? {} : { retry_after: error.retryAfterSeconds }) }
+                : { message: 'Flow submission could not start.', type: 'api_error', code: 'FLOW_RUN_SUBMISSION_FAILED' };
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: body })}\n\ndata: [DONE]\n\n`));
+              controller.close();
+            } finally { cleanup(); }
+          };
+          submissionFailure?.addEventListener('abort', onSubmissionFailure, { once: true });
+          if (submissionFailure?.aborted) { onSubmissionFailure(); return; }
           // Replay + live can both deliver an event; de-dupe on monotonic seq.
           const fromSeq = requestFromSeq ?? 0;
           let lastSeq = fromSeq - 1;

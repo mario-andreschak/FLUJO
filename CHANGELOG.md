@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Runtime admission
+
+- Bound simultaneous and waiting Flow submissions by process, workspace, conversation and retained input size. Refuse excess work with a retryable pressure error before cancellation registration or execution; preserve active, paused and recovery-owned conversations. Streaming clients receive admission errors before the stream starts, and operations status reports redacted pressure counters.
+
 ### Workspace startup
 
 - Flush runtime lock records before publishing them, report the damaged lock path when owner data is unreadable, and retain the original startup failure for later requests. Preserve the bundled MCP runtime build helper when migrating legacy workspace data.

@@ -16,6 +16,7 @@ jest.mock('@/backend/services/mcp/lifecycleCoordinator', () => ({ listRuntimes: 
 jest.mock('@/backend/services/scheduler/workerLocalRecovery', () => ({ inspectWorkerRecovery: async () => undefined }));
 jest.mock('@/backend/services/security/ownerAccess', () => ({ resolveOwnerRequest: (...args: unknown[]) => resolve(...args) }));
 import { GET } from '@/app/api/operations/status/route';
+import { acquireFlowRunAdmission } from '@/backend/execution/flow/runAdmission';
 import { setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 
 const keys = ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_OPERATIONS_RSS_BUDGET_BYTES'] as const;
@@ -44,6 +45,19 @@ it('uses worker control authority and never calls scheduler reconciliation/armin
   expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('no-store');
   expect(await response.json()).toMatchObject({ schemaVersion: 2, actor: { kind: 'worker-control' }, workspace: 'fixture-workspace' });
   expect(resolve).not.toHaveBeenCalled(); expect(inspect).toHaveBeenCalledTimes(1);
+});
+
+it('reports numeric submission pressure without exposing retained inputs or identities', async () => {
+  const permit = acquireFlowRunAdmission({ conversationId: 'PRIVATE_CONVERSATION', prompt: 'PRIVATE_PROMPT' });
+  try {
+    const response = await GET(request('fixture-control'));
+    const result = await response.json();
+    expect(result.flowRunAdmission).toMatchObject({ activeRuns: 1, workspaceActiveRuns: 1, workspaceConversations: 1 });
+    expect(result.flowRunAdmission.reservedBytes).toBeGreaterThan(0);
+    expect(Object.values(result.flowRunAdmission).every(value => typeof value === 'number')).toBe(true);
+    expect(JSON.stringify(result.flowRunAdmission)).not.toMatch(/PRIVATE_CONVERSATION|PRIVATE_PROMPT|fixture-workspace/);
+  } finally { permit.release(); }
+  expect((await (await GET(request('fixture-control'))).json()).flowRunAdmission).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
 });
 it('rechecks a rotated worker bearer after awaited reads', async () => {
   read.mockImplementationOnce(async () => { process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'rotated-fixture-control'; return undefined; });

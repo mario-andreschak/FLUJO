@@ -147,6 +147,11 @@ jest.mock('@/backend/services/statistics', () => {
   return { ...actual, recordStatisticsEvent: jest.fn() };
 });
 
+jest.mock('@/backend/execution/flow/cancellationCoordinator', () => {
+  const actual = jest.requireActual('@/backend/execution/flow/cancellationCoordinator');
+  return { ...actual, registerCancellableRun: jest.fn(actual.registerCancellableRun) };
+});
+
 import {
   runFlow as runFlowWithContext,
   type FlowRunInput,
@@ -159,6 +164,10 @@ import { getFlowRunEventBus, type FlowEvent } from '@/backend/services/scheduler
 import { recordStatisticsEvent } from '@/backend/services/statistics';
 import { loadConversationStateReadOnly } from '@/backend/execution/flow/loadConversationState';
 import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
+import { registerCancellableRun } from '@/backend/execution/flow/cancellationCoordinator';
+import { withConversationExecutionLock, isConversationExecutionLocked } from '@/backend/execution/flow/conversationExecutionLock';
+import { acquireFlowRunAdmission, getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
+import { saveItem } from '@/utils/storage/backend';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -173,6 +182,288 @@ beforeEach(() => {
   conversationStates.clear();
   (FlowExecutor.executeStep as jest.Mock).mockClear();
   (recordStatisticsEvent as jest.Mock).mockClear();
+});
+
+describe('Flow run admission at the public execution boundary', () => {
+  const admissionVariables = [
+    'FLUJO_RUN_ADMISSION_MAX_PROCESS_RUNS', 'FLUJO_RUN_ADMISSION_MAX_WORKSPACE_RUNS',
+    'FLUJO_RUN_ADMISSION_MAX_CONVERSATION_RUNS', 'FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES',
+    'FLUJO_RUN_ADMISSION_MAX_WORKSPACE_BYTES', 'FLUJO_RUN_ADMISSION_MAX_RSS_BYTES',
+  ];
+  let previousEnvironment: Array<string | undefined>;
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+  };
+  const drained = () => expect(getFlowRunAdmissionDiagnostics()).toMatchObject({
+    activeRuns: 0, reservedBytes: 0, activeWorkspaces: 0, workspaceConversations: 0,
+  });
+
+  beforeEach(() => {
+    previousEnvironment = admissionVariables.map(name => process.env[name]);
+    process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_RUNS = '8';
+    process.env.FLUJO_RUN_ADMISSION_MAX_WORKSPACE_RUNS = '8';
+    process.env.FLUJO_RUN_ADMISSION_MAX_CONVERSATION_RUNS = '1';
+    process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES = String(128 * 1024 * 1024);
+    process.env.FLUJO_RUN_ADMISSION_MAX_WORKSPACE_BYTES = String(128 * 1024 * 1024);
+    process.env.FLUJO_RUN_ADMISSION_MAX_RSS_BYTES = String(Number.MAX_SAFE_INTEGER);
+    (registerCancellableRun as jest.Mock).mockClear();
+    drained();
+  });
+
+  afterEach(() => {
+    admissionVariables.forEach((name, index) => {
+      const value = previousEnvironment[index];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    });
+    drained();
+  });
+
+  it.each([
+    ['running', 'running'], ['paused', 'paused_debug'], ['approval', 'awaiting_tool_approval'],
+    ['recovery', 'error'],
+  ])('preserves %s-owned state and refuses before registration, storage or execution', async (label, status) => {
+    const conversationId = `admission-preserved-${label}`;
+    const state = {
+      conversationId, flowId: FLOW_ID, status,
+      messages: [{ id: 'original', role: 'user', content: 'Retained complete history', timestamp: 1 }],
+      pendingToolCalls: [{ id: 'pending-tool', function: { name: 'effect', arguments: '{}' } }],
+      recovery: { version: 1, runId: 'original-run', phase: 'interrupted', effect: 'uncertain' },
+    } as unknown as SharedState;
+    const original = structuredClone(state);
+    conversationStates.set(conversationId, state);
+    const emit = jest.fn();
+    const lookups = (flowService.getFlow as jest.Mock).mock.calls.length;
+    const permit = acquireFlowRunAdmission({ conversationId });
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(runFlowWithContext({ flowId: FLOW_ID, conversationId, source: 'api',
+          prompt: 'Do not replace the owner', mode: 'conversation', emit }))
+          .rejects.toMatchObject({ code: 'FLOW_RUN_BUSY', status: 429 });
+      }
+      expect(conversationStates.get(conversationId)).toBe(state);
+      expect(state).toEqual(original);
+      expect(registerCancellableRun).not.toHaveBeenCalled();
+      expect(mockLoadItem).not.toHaveBeenCalled();
+      expect(flowService.getFlow).toHaveBeenCalledTimes(lookups);
+      expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+      expect(persistedStates).toHaveLength(0);
+      expect(emit).not.toHaveBeenCalled();
+      expect(isConversationExecutionLocked(conversationId)).toBe(false);
+      expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(1);
+    } finally { permit.release(); }
+  });
+
+  it('releases memory refusal without registering cancellation or adopting an existing conversation', async () => {
+    const conversationId = 'admission-memory-refusal';
+    const state = { conversationId, status: 'paused_debug', messages: [], recovery: { runId: 'owned-run' } } as unknown as SharedState;
+    conversationStates.set(conversationId, state);
+    process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES = '1';
+    await expect(runFlow({ flowId: FLOW_ID, conversationId, prompt: 'New turn', mode: 'conversation' }))
+      .rejects.toMatchObject({ code: 'FLOW_RUN_MEMORY', status: 503 });
+    expect(conversationStates.get(conversationId)).toBe(state);
+    expect(state).toEqual({ conversationId, status: 'paused_debug', messages: [], recovery: { runId: 'owned-run' } });
+    expect(registerCancellableRun).not.toHaveBeenCalled();
+    expect(mockLoadItem).not.toHaveBeenCalled();
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    expect(persistedStates).toHaveLength(0);
+    drained();
+  });
+
+  it.each(['conversation', 'ephemeral'] as const)('charges a %s run waiting on the real conversation lock and drains on completion', async mode => {
+    const conversationId = `admission-lock-${mode}`;
+    const lockEntered = deferred();
+    const unlock = deferred();
+    const registered = deferred();
+    const register = registerCancellableRun as jest.Mock;
+    const realRegister = jest.requireActual<typeof import('@/backend/execution/flow/cancellationCoordinator')>(
+      '@/backend/execution/flow/cancellationCoordinator').registerCancellableRun;
+    const previousRegister = register.getMockImplementation()!;
+    register.mockImplementationOnce(async (...args: Parameters<typeof realRegister>) => {
+      const registration = await realRegister(...args);
+      registered.resolve();
+      return registration;
+    });
+    const heldLock = withConversationExecutionLock(conversationId, async () => {
+      lockEntered.resolve(); await unlock.promise;
+    });
+    let queued: ReturnType<typeof runFlow> | undefined;
+    try {
+      await lockEntered.promise;
+      queued = runFlow({ flowId: FLOW_ID, conversationId, prompt: 'Run after the owner drains', mode });
+      await registered.promise;
+      expect(isConversationExecutionLocked(conversationId)).toBe(true);
+      expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 1, workspaceConversations: 1 });
+      expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+      expect(persistedStates).toHaveLength(0);
+      await expect(runFlow({ flowId: FLOW_ID, conversationId, prompt: 'Excess queued successor', mode }))
+        .rejects.toMatchObject({ code: 'FLOW_RUN_BUSY', status: 429 });
+      expect(register).toHaveBeenCalledTimes(1);
+      unlock.resolve();
+      await heldLock;
+      const result = await queued;
+      expect(result.status).toBe('completed');
+      expect(result.outputText).toBe('Hello from the process node');
+      expect(isConversationExecutionLocked(conversationId)).toBe(false);
+      if (mode === 'ephemeral') {
+        expect(persistedStates).toHaveLength(0);
+        expect(conversationStates.has(result.conversationId)).toBe(false);
+      } else expect(persistedStates.at(-1)?.status).toBe('completed');
+      drained();
+    } finally {
+      unlock.resolve();
+      await heldLock;
+      await queued?.catch(() => undefined);
+      register.mockImplementation(previousRegister);
+    }
+  });
+
+  it('rechecks shared input growth after lock waiting before touching the existing owner', async () => {
+    process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES = String(2 * 1024 * 1024);
+    const conversationId = 'admission-growing-lock-input';
+    const state = { conversationId, flowId: FLOW_ID, status: 'paused_debug',
+      messages: [{ id: 'retained', role: 'user', content: 'Original history', timestamp: 1 }],
+      recovery: { runId: 'original-owner', effect: 'uncertain' } } as unknown as SharedState;
+    const original = structuredClone(state);
+    conversationStates.set(conversationId, state);
+    const variables = { payload: 'small at admission' };
+    const entered = deferred();
+    const unlock = deferred();
+    const registered = deferred();
+    const register = registerCancellableRun as jest.Mock;
+    const realRegister = jest.requireActual<typeof import('@/backend/execution/flow/cancellationCoordinator')>(
+      '@/backend/execution/flow/cancellationCoordinator').registerCancellableRun;
+    const previousRegister = register.getMockImplementation()!;
+    register.mockImplementationOnce(async (...args: Parameters<typeof realRegister>) => {
+      const registration = await realRegister(...args);
+      registered.resolve();
+      return registration;
+    });
+    const held = withConversationExecutionLock(conversationId, async () => {
+      entered.resolve(); await unlock.promise;
+    });
+    let queued: ReturnType<typeof runFlow> | undefined;
+    try {
+      await entered.promise;
+      queued = runFlow({ flowId: FLOW_ID, conversationId, prompt: 'Queued successor', variables, mode: 'conversation' });
+      await registered.promise;
+      expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 1, reservedBytes: 1024 * 1024 });
+      // runFlow makes a shallow input copy: this same nested object can grow
+      // while its admitted call is waiting for an earlier conversation owner.
+      variables.payload = 'X'.repeat(300_000);
+      const refused = expect(queued).rejects.toMatchObject({ code: 'FLOW_RUN_MEMORY', status: 503 });
+      unlock.resolve();
+      await held;
+      await refused;
+      expect(conversationStates.get(conversationId)).toBe(state);
+      expect(state).toEqual(original);
+      expect(mockLoadItem).not.toHaveBeenCalled();
+      expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+      expect(persistedStates).toHaveLength(0);
+      expect(isConversationExecutionLocked(conversationId)).toBe(false);
+      drained();
+    } finally {
+      unlock.resolve();
+      await held;
+      await queued?.catch(() => undefined);
+      register.mockImplementation(previousRegister);
+    }
+  });
+
+  it('holds admission until the real terminal persistence retry settles', async () => {
+    const conversationId = 'admission-terminal-persist-retry';
+    const retryEntered = deferred();
+    const finishRetry = deferred();
+    const save = saveItem as jest.Mock;
+    const previousSave = save.getMockImplementation()!;
+    let terminalAttempts = 0;
+    let settled = false;
+    let recoveryReceipt: SharedState | undefined;
+    save.mockImplementation(async (key: string, value: SharedState) => {
+      if (key === `conversations/${conversationId}` && value.status === 'completed') {
+        terminalAttempts++;
+        if (terminalAttempts === 1) {
+          // commitRecoveryTransition persists completion before the final
+          // snapshot write whose failure triggers markTerminal's retry.
+          await previousSave(key, value);
+          recoveryReceipt = structuredClone(persistedStates.at(-1)!);
+          return;
+        }
+        if (terminalAttempts === 2) throw new Error('Final snapshot write failed after recovery completion');
+        retryEntered.resolve();
+        await finishRetry.promise;
+      }
+      return previousSave(key, value);
+    });
+    const running = runFlow({ flowId: FLOW_ID, conversationId, prompt: 'Preserve the final answer', mode: 'conversation' });
+    void running.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      await Promise.race([
+        retryEntered.promise,
+        running.then(() => { throw new Error('Run completed without entering terminal persistence retry'); }),
+      ]);
+      // Let detached work settle: the previous fire-and-forget terminal mark
+      // returned and released admission here while its retry still held state.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(terminalAttempts).toBe(3);
+      expect(settled).toBe(false);
+      expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 1, workspaceConversations: 1 });
+      expect(isConversationExecutionLocked(conversationId)).toBe(true);
+      expect(recoveryReceipt?.status).toBe('completed');
+      expect(persistedStates.filter(state => state.status === 'completed')).toEqual([recoveryReceipt]);
+      finishRetry.resolve();
+      const result = await running;
+      expect(result.status).toBe('completed');
+      expect(result.outputText).toBe('Hello from the process node');
+      expect(persistedStates.at(-1)?.status).toBe('completed');
+      expect(persistedStates.filter(state => state.status === 'completed')).toHaveLength(2);
+      expect(persistedStates.find(state => state.status === 'completed')).toEqual(recoveryReceipt);
+      expect(isConversationExecutionLocked(conversationId)).toBe(false);
+      drained();
+    } finally {
+      finishRetry.resolve();
+      await running.catch(() => undefined);
+      save.mockImplementation(previousSave);
+    }
+  });
+
+  it('refuses a nested child immediately at capacity and lets its parent complete', async () => {
+    process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_RUNS = '1';
+    const execute = FlowExecutor.executeStep as jest.Mock;
+    const previousExecute = execute.getMockImplementation()!;
+    execute.mockImplementationOnce(async (state: SharedState) => {
+      await expect(runFlowWithContext({ flowId: FLOW_ID, conversationId: 'admission-nested-child',
+        parentRunId: state.conversationId, source: 'subflow', depth: 1, prompt: 'Nested work', mode: 'ephemeral' }))
+        .rejects.toMatchObject({ code: 'FLOW_RUN_BUSY', status: 429 });
+      expect(registerCancellableRun).toHaveBeenCalledTimes(1);
+      expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(1);
+      return previousExecute(state);
+    });
+    try {
+      const result = await runFlow({ flowId: FLOW_ID, conversationId: 'admission-nested-parent',
+        prompt: 'Parent work', mode: 'ephemeral' });
+      expect(result.status).toBe('completed');
+      expect(conversationStates.has('admission-nested-child')).toBe(false);
+      expect(persistedStates).toHaveLength(0);
+      drained();
+    } finally { execute.mockImplementation(previousExecute); }
+  });
+
+  it('releases its permit when actual cancellation registration rejects an aborted request', async () => {
+    const controller = new AbortController();
+    const failure = new Error('Submission already cancelled');
+    controller.abort(failure);
+    await expect(runFlow({ flowId: FLOW_ID, conversationId: 'admission-aborted-before-lock',
+      prompt: 'Cancelled work', mode: 'ephemeral', abortSignal: controller.signal })).rejects.toBe(failure);
+    expect(registerCancellableRun).toHaveBeenCalledTimes(1);
+    expect(mockLoadItem).not.toHaveBeenCalled();
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    expect(persistedStates).toHaveLength(0);
+    expect(isConversationExecutionLocked('admission-aborted-before-lock')).toBe(false);
+    drained();
+  });
 });
 
 describe('saved execution definitions', () => {
