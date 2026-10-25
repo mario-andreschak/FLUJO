@@ -3,11 +3,13 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { Session } from 'node:inspector';
 import { randomBytes } from 'node:crypto';
+import { getHeapStatistics } from 'node:v8';
 import type { Flow } from '@/shared/types/flow';
 import type { SharedState } from '@/backend/execution/flow/types';
 import type { StorageKey } from '@/shared/types/storage';
@@ -54,22 +56,49 @@ jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: () => {}, ver
 
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { _setConversationLogDirForTests, flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
 import { loadItem, saveCollectionItem } from '@/utils/storage/backend';
 import { getArchiveWritePressure } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import { ensureWorkspaceDirs, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import { withWorkspaceRecoveryCapture } from '@/backend/services/workspace/workspaceMutationGate';
 import { modelService } from '@/backend/services/model';
+import { getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
+import { getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
+import { getAllocationReservationSnapshot } from '@/backend/execution/flow/allocationReservations';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { flushStatisticsEvents } from '@/backend/services/statistics';
 
 jest.setTimeout(90_000);
 let server: Server;
 let root: string;
+let logRoot: string, previousLogRoot: string, temporaryParent: string;
+let rootIdentity: BigIntStats;
 let previousEnvironment: Record<string, string | undefined>;
 let baseUrl = '';
 const requests = new Map<string, Array<{ monotonic: number; epoch: number }>>();
 const summaries: unknown[] = [];
 const output = process.env.FLUJO_DISPATCH_PROFILE_OUTPUT;
+const diagnosticOutput = process.env.FLUJO_DISPATCH_PROFILE_DIAGNOSTICS;
 const label = process.env.FLUJO_DISPATCH_PROFILE_LABEL ?? 'local';
+function assertFixtureStorage(): void {
+  const relative = path.relative(root, getWorkspaceDataDir());
+  expect(relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)).toBe(true);
+  expect(path.resolve(logRoot)).toBe(path.join(root, 'conversation-logs'));
+}
+function pressureSnapshot() {
+  return { publication: getConversationPublicationDiagnostics(), run: getFlowRunAdmissionDiagnostics(),
+    allocation: { ...getAllocationReservationSnapshot() }, memory: { ...process.memoryUsage(), heapLimit: getHeapStatistics().heap_size_limit } };
+}
+// Only bounded codes/statuses leave this fixture: never prompts, provider payloads,
+// credentials, stack traces, or arbitrary exception messages.
+function errorIdentity(error: unknown): { code?: string; status?: number } {
+  if (!error || typeof error !== 'object') return {};
+  const candidate = error as { code?: unknown; status?: unknown; statusCode?: unknown; details?: { code?: unknown } };
+  const code = candidate.details?.code ?? candidate.code;
+  const status = candidate.statusCode ?? candidate.status;
+  return { ...(typeof code === 'string' ? { code: code.slice(0, 96) } : {}),
+    ...(typeof status === 'number' && Number.isFinite(status) ? { status } : {}) };
+}
 function percentile(values: number[], fraction: number): number {
   const sorted = [...values].sort((a, b) => a - b);
   return Math.round((sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))] ?? 0) * 1000) / 1000;
@@ -82,9 +111,15 @@ beforeAll(async () => {
   previousEnvironment = Object.fromEntries(['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR',
     'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_WORKER_MODE', 'FLUJO_WORKER_SNAPSHOT_KEY']
     .map(key => [key, process.env[key]]));
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-dispatch-admission-'));
+  temporaryParent = await fs.realpath(os.tmpdir());
+  root = await fs.mkdtemp(path.join(temporaryParent, 'flujo-dispatch-admission-'));
+  rootIdentity = await fs.lstat(root, { bigint: true });
   process.env.FLUJO_DATA_DIR = path.join(root, 'data');
   for (const key of ['FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKER_MODE', 'FLUJO_WORKER_SNAPSHOT_KEY']) delete process.env[key];
+  logRoot = path.join(root, 'conversation-logs');
+  await fs.mkdir(logRoot);
+  previousLogRoot = _setConversationLogDirForTests(logRoot);
+  assertFixtureStorage();
   const secretFile = path.join(root, 'operator-secret');
   await fs.writeFile(secretFile, randomBytes(32).toString('base64url'), { mode: 0o600 });
   process.env.FLUJO_ENCRYPTION_SECRET_FILE = secretFile;
@@ -121,8 +156,18 @@ afterAll(async () => {
   mockMeasuring = false; jest.restoreAllMocks();
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  await flushStatisticsEvents();
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, terminalWaiters: 0, chains: 0, fences: 0 });
   FlowExecutor.conversationStates.clear(); FlowExecutor.clearFlowCache();
   if (output) { await fs.mkdir(output, { recursive: true }); await fs.writeFile(path.join(output, `${label}-summary.json`), JSON.stringify(summaries, null, 2)); }
+  const current = await fs.lstat(root, { bigint: true });
+  const relative = path.relative(temporaryParent, path.resolve(root));
+  if (relative !== path.basename(root) || !relative.startsWith('flujo-dispatch-admission-')
+    || current.isSymbolicLink() || !current.isDirectory() || await fs.realpath(root) !== root
+    || current.dev !== rootIdentity.dev || current.ino !== rootIdentity.ino || current.birthtimeNs !== rootIdentity.birthtimeNs) {
+    throw new Error('Preserving replaced or unowned dispatch profile fixture');
+  }
+  _setConversationLogDirForTests(previousLogRoot);
   for (const [key, value] of Object.entries(previousEnvironment)) {
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
@@ -130,6 +175,7 @@ afterAll(async () => {
 });
 it.each([[1, 0], [16, 1], [16, 2]])('profiles real saved-model dispatch (concurrency=%i, repetition=%i)', async (count, repetition) => {
   await runWithWorkspace(`queue-profile-${count}-${repetition}`, async () => {
+    assertFixtureStorage();
     requests.clear(); await ensureWorkspaceDirs();
     const saved = await modelService.addModel({ id: 'dispatch-model', name: 'dispatch-profile', displayName: 'Local dispatch profile', provider: 'openai', adapter: 'openai', ApiKey: 'local-loopback-marker', baseUrl });
     expect(saved.error).toBeUndefined(); expect(saved.success).toBe(true);
@@ -148,30 +194,75 @@ it.each([[1, 0], [16, 1], [16, 2]])('profiles real saved-model dispatch (concurr
     if (inspector) { inspector.connect(); await inspectorCall(inspector, 'Profiler.enable'); await inspectorCall(inspector, 'Profiler.start'); }
     const started = performance.now();
     const ids = Array.from({ length: count }, (_, index) => `queue-${count}-${repetition}-${index}`);
+    const liveDispatches = new Map<string, number>();
+    const unsubscribeDispatches = executionEventBus.subscribeGlobal(({ event }) => {
+      if (event.type === 'model:dispatch' && ids.includes(event.conversationId)) {
+        liveDispatches.set(event.conversationId, (liveDispatches.get(event.conversationId) ?? 0) + 1);
+      }
+    });
+    const initialPressure = pressureSnapshot();
+    const peakPressure = pressureSnapshot();
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(new Error('Bounded local dispatch deadline')), 60_000);
     const peak = { bytes: 0, writers: 0, waiters: 0 };
     const sampler = setInterval(() => {
+      const sample = pressureSnapshot();
+      for (const group of ['publication', 'run', 'allocation', 'memory'] as const) {
+        const current: Record<string, number> = sample[group], maximum: Record<string, number> = peakPressure[group];
+        for (const key of Object.keys(current)) maximum[key] = Math.max(maximum[key], current[key]);
+      }
       const pressure = getArchiveWritePressure();
       peak.bytes = Math.max(peak.bytes, pressure.bytes); peak.writers = Math.max(peak.writers, pressure.writers);
       peak.waiters = Math.max(peak.waiters, (globalThis as typeof globalThis & { __flujoArchiveWriteQueue?: unknown[] }).__flujoArchiveWriteQueue?.length ?? 0);
     }, 10);
-    let results: Awaited<ReturnType<typeof runFlow>>[];
+    let submissions: PromiseSettledResult<Awaited<ReturnType<typeof runFlow>>>[];
     try {
-      results = await Promise.all(ids.map(conversationId => mockContext.run(conversationId, () => runFlow({ conversationId, flowId: flow.id, prompt: `Return exactly ${conversationId}. ${'filler '.repeat(500)}`, source: 'api', mode: 'conversation', abortSignal: controller.signal }))));
+      submissions = await Promise.allSettled(ids.map(conversationId => mockContext.run(conversationId, () => runFlow({ conversationId, flowId: flow.id, prompt: `Return exactly ${conversationId}. ${'filler '.repeat(500)}`, source: 'api', mode: 'conversation', abortSignal: controller.signal }))));
     } finally {
-      clearTimeout(deadline); clearInterval(sampler); delay.disable(); mockMeasuring = false;
+      clearTimeout(deadline); clearInterval(sampler); delay.disable(); mockMeasuring = false; unsubscribeDispatches();
       if (inspector) {
         const { profile } = await inspectorCall<{ profile: unknown }>(inspector, 'Profiler.stop'); inspector.disconnect();
         await fs.mkdir(output!, { recursive: true }); await fs.writeFile(path.join(output!, `${label}-${count}-${repetition}.cpuprofile`), JSON.stringify(profile));
       }
     }
     const completeMs = performance.now() - started;
+    const settledPressure = pressureSnapshot();
+    const outcomes = [];
+    // The real reader has its own bounded concurrency. Read diagnostics serially
+    // so observation cannot manufacture unrelated log-read admission failures.
+    for (const [index, id] of ids.entries()) {
+      const submission = submissions[index];
+      let events: NonNullable<Awaited<ReturnType<typeof readConversationLog>>> = [];
+      let logError: ReturnType<typeof errorIdentity> | undefined;
+      try { await flushConversationLog(id); events = await readConversationLog(id) ?? []; }
+      catch (error) { logError = errorIdentity(error); }
+      outcomes.push({ id, status: submission.status === 'fulfilled' ? submission.value.status : 'rejected',
+        error: errorIdentity(submission.status === 'fulfilled' ? submission.value.error : submission.reason),
+        physicalHttpRequests: requests.get(id)?.length ?? 0, liveDispatches: liveDispatches.get(id) ?? 0,
+        durable: { starts: events.filter(event => event.type === 'run:start').length,
+          dispatches: events.filter(event => event.type === 'model:dispatch').length,
+          done: events.filter(event => event.type === 'run:done').length }, ...(logError ? { logError } : {}) });
+    }
+    const diagnostic = { label, count, repetition, node: process.version, platform: process.platform,
+      completedMs: completeMs, initialPressure, peakPressure, settledPressure, outcomes };
+    console.info('DISPATCH_ADMISSION_DIAGNOSTIC', JSON.stringify(diagnostic));
+    if (diagnosticOutput) {
+      await fs.mkdir(diagnosticOutput, { recursive: true });
+      await fs.writeFile(path.join(diagnosticOutput, `${label}-${count}-${repetition}-diagnostic.json`), JSON.stringify(diagnostic, null, 2));
+    }
+    // Capture every outcome before any assertion can hide a later refusal.
+    // Fulfilled error results and rejected submissions still fail strictly.
+    const results = submissions.map(submission => {
+      expect(submission.status).toBe('fulfilled');
+      if (submission.status === 'rejected') throw submission.reason;
+      return submission.value;
+    });
     const preDispatch: number[] = []; const afterStartToHttp: number[] = [];
     for (const [index, id] of ids.entries()) {
       expect(results[index].status).toBe('completed'); expect(results[index].outputText).toBe(`answer ${id}`); expect(requests.get(id)).toHaveLength(1);
       await flushConversationLog(id);
       const events = await readConversationLog(id) ?? [];
+      expect((await fs.stat(path.join(logRoot, `${id}.jsonl`))).isFile()).toBe(true);
       const start = events.find(event => event.type === 'run:start'); const dispatch = events.find(event => event.type === 'model:dispatch');
       expect(start).toBeDefined(); expect(dispatch).toBeDefined(); expect(events.filter(event => event.type === 'run:done')).toHaveLength(1);
       preDispatch.push(dispatch!.timestamp - start!.timestamp); afterStartToHttp.push(requests.get(id)![0].epoch - start!.timestamp);
@@ -190,6 +281,10 @@ it.each([[1, 0], [16, 1], [16, 2]])('profiles real saved-model dispatch (concurr
     };
     summaries.push(result); console.info('DISPATCH_ADMISSION_PROFILE', JSON.stringify(result));
     expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });
+    expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0, workspaceActiveRuns: 0 });
+    expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, allocationBytes: 0,
+      retainedBytes: 0, queuedWriters: 0, terminalWaiters: 0, chains: 0, fences: 0, receipts: 0, quarantinedWriterSlots: 0 });
+    expect(getAllocationReservationSnapshot().total).toBe(0);
     expect(globalThis.__flujo_workspace_writer_admission_chains?.size ?? 0).toBe(0);
     await expect(withWorkspaceRecoveryCapture(async () => 'drained')).resolves.toBe('drained');
   });
