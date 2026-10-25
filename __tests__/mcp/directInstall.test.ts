@@ -111,6 +111,54 @@ describe('specific MCP source resolution', () => {
     })).rejects.toThrow('Credential values must be passed only through env or headers');
   });
 
+  it.each([
+    [String.raw`node server.js C:\Users\Moe\Documents`, ['server.js', String.raw`C:\Users\Moe\Documents`]],
+    [String.raw`node server.js "C:\Users\Moe\My Documents"`, ['server.js', String.raw`C:\Users\Moe\My Documents`]],
+    [String.raw`node server.js "\\server\share\My Documents"`, ['server.js', String.raw`\\server\share\My Documents`]],
+    [String.raw`node server.js '\\server\share\folder'`, ['server.js', String.raw`\\server\share\folder`]],
+    [String.raw`node server.js "C:\\"`, ['server.js', 'C:\\']],
+    [String.raw`node server.js 'C:\'`, ['server.js', 'C:\\']],
+    [String.raw`node server.js "\\server\share\\"`, ['server.js', '\\\\server\\share\\']],
+    [String.raw`node server.js plain\ text "plain\ text"`, ['server.js', 'plain text', String.raw`plain\ text`]],
+    [String.raw`node server.js "say \"hello\"" don\'t`, ['server.js', 'say "hello"', "don't"]],
+    [String.raw`node server.js "a\\\"b"`, ['server.js', 'a\\"b']],
+    [String.raw`node server.js "a\q" a\\b`, ['server.js', String.raw`a\q`, String.raw`a\\b`]],
+    [String.raw`node server.js "" '' a""b`, ['server.js', '', '', 'ab']],
+    ['node server.js trailing\\ ', ['server.js', 'trailing ']],
+    ['node server.js C:\\', ['server.js', 'C:\\']],
+    [String.raw`node server.js "a;&|<>b" a\;b`, ['server.js', 'a;&|<>b', 'a;b']],
+  ])('preserves exact argv for %s', (source, args) => {
+    expect(parseMcpCommandLine(source)).toEqual({ command: 'node', args });
+  });
+
+  it.each([';', '&', '&&', '|', '||', '<', '>'])('refuses unquoted shell operator %s', operator => {
+    expect(() => parseMcpCommandLine(`node server.js left${operator}right`)).toThrow('Shell operators');
+  });
+
+  it('refuses an unfinished double-quoted path', () => {
+    expect(() => parseMcpCommandLine(String.raw`node server.js "C:\"`)).toThrow('unfinished');
+  });
+
+  it('does not discard an empty executable and shift arguments', () => {
+    expect(() => parseMcpCommandLine('"" node server.js')).toThrow('Unsupported direct MCP command');
+  });
+
+  it.each([
+    [String.raw`npx -y @modelcontextprotocol/server-filesystem "C:\Users\Moe\Documents"`, 'npx',
+      ['-y', '@modelcontextprotocol/server-filesystem', String.raw`C:\Users\Moe\Documents`]],
+    ['node server.js ""', 'node', ['server.js', '']],
+    ['node server.js trailing\\ ', 'node', ['server.js', 'trailing ']],
+    [String.raw`"C:\Program Files\nodejs\node.exe" server.js`, String.raw`C:\Program Files\nodejs\node.exe`, ['server.js']],
+  ])('keeps preview and saved argv identical for %s', async (source, command, args) => {
+    const input = { source, serverName: 'exact-argv' };
+    const resolved = await resolveDirectMcpInstall(input);
+    expect(resolved.plan).toEqual(expect.objectContaining({ command, args }));
+    expect(resolved.config).toEqual(expect.objectContaining({ command, args }));
+    const result = await installResolvedDirectMcp(resolved, input);
+    expect(result.installed).toBe(true);
+    expect(updateServerConfigMock).toHaveBeenCalledWith('exact-argv', expect.objectContaining({ transport: 'stdio', command, args }));
+  });
+
   it('accepts a hosted URL and a GitHub repository as distinct plans', async () => {
     const remote = await resolveDirectMcpInstall({
       source: 'https://mcp.example.com/v1',
