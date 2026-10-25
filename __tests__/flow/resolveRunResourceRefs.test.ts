@@ -9,9 +9,11 @@
 
 const findByNameMock = jest.fn();
 const readMock = jest.fn();
+const readBoundedMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   findRunResourceByName: (...args: unknown[]) => findByNameMock(...args),
   readRunResource: (...args: unknown[]) => readMock(...args),
+  readRunResourceBounded: (...args: unknown[]) => readBoundedMock(...args),
 }));
 
 import { resolveRunResourceRefs, hasRunResourceRef, RES_REF_SCAN } from '@/backend/execution/flow/resolveRunResourceRefs';
@@ -44,9 +46,33 @@ const blobEntry = {
 beforeEach(() => {
   findByNameMock.mockReset();
   readMock.mockReset();
+  readBoundedMock.mockReset();
 });
 
 describe('resolveRunResourceRefs', () => {
+  it('uses bounded payload reads without changing accepted resource content or lineage', async () => {
+    findByNameMock.mockResolvedValue(textEntry);
+    readBoundedMock.mockResolvedValue({ entry: textEntry, content: 'EXACT 😀 CONTENT', truncated: false });
+    const emit = jest.fn();
+    const out = await resolveRunResourceRefs('${res:report}', 'conv-1', emit, { nodeId: 'subflow' }, {}, { maxChars: 200_000 });
+    expect(out).toContain('\nEXACT 😀 CONTENT\n');
+    expect(readMock).not.toHaveBeenCalled();
+    expect(readBoundedMock).toHaveBeenCalledWith(textEntry.uri, {
+      maxChars: 200_000, access: expect.objectContaining({ source: 'res-ref', nodeId: 'subflow' }),
+    });
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'resource:read', uri: textEntry.uri }));
+  });
+
+  it('refuses a truncated bounded read instead of silently using a prefix or empty replacement', async () => {
+    findByNameMock.mockResolvedValue(textEntry);
+    readBoundedMock.mockResolvedValue({ entry: textEntry, content: 'PREFIX', truncated: true });
+    const emit = jest.fn();
+    await expect(resolveRunResourceRefs('${res:report}', 'conv-1', emit, undefined, {}, { maxChars: 200_000 }))
+      .rejects.toMatchObject({ code: 'SUBFLOW_PREPARATION_TOO_LARGE', status: 413 });
+    expect(readMock).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it('inlines a text resource as a delimited block and emits resource:read', async () => {
     findByNameMock.mockResolvedValue(textEntry);
     readMock.mockResolvedValue({
@@ -131,7 +157,7 @@ describe('resolveRunResourceRefs', () => {
     },
   );
 
-  it('does not read bytes or emit lineage when ownership is lost during name lookup', async () => {
+  it.each([undefined, { maxChars: 200_000 }])('does not read bytes or emit lineage when ownership is lost during name lookup (%p)', async bounded => {
     let current = true;
     const assertCurrent = jest.fn(async () => {
       if (!current) throw new Error('Activity lease lost');
@@ -148,8 +174,9 @@ describe('resolveRunResourceRefs', () => {
         assertCurrent,
         commitWhileCurrent: async task => { await assertCurrent(); return task(); },
       },
-    })).rejects.toMatchObject({ code: 'flow_execution_authority_lost' });
+    }, bounded)).rejects.toMatchObject({ code: 'flow_execution_authority_lost' });
     expect(readMock).not.toHaveBeenCalled();
+    expect(readBoundedMock).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalled();
   });
 });

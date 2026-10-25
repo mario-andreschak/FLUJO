@@ -116,6 +116,7 @@ jest.mock('@/backend/execution/flow/handlers/ModelHandler', () => ({
 import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { getSubflowPreparationDiagnostics } from '@/backend/execution/flow/subflowPreparationBudget';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -135,6 +136,69 @@ beforeEach(() => {
 });
 
 describe('runFlow handoff capture — queued Subflow jobs', () => {
+  it.each(['source', 'depth', 'count', 'workers'] as const)('refuses excessive handoff %s before acknowledging or replacing pending work', async boundary => {
+    targetType = 'subflow';
+    const argumentsText = boundary === 'source' ? JSON.stringify({ task: 'x'.repeat(4 * 1024 * 1024) })
+      : boundary === 'depth' ? '{"task":' + '['.repeat(65) + '0' + ']'.repeat(65) + '}'
+        : boundary === 'workers' ? '{"task":"keep me","concurrencyLimit":17}' : '{"task":"keep me"}';
+    assistantToolCalls = Array.from({ length: boundary === 'count' ? 4097 : 1 }, (_, index) => ({
+      id: `pending-${index}`, type: 'function', function: { name: 'handoff_to_worker', arguments: argumentsText },
+    }));
+    const pending = { targetNodeId: WORKER, prompt: 'original pending input', tasks: ['original job'] };
+    const originalStep = (FlowExecutor.executeStep as jest.Mock).getMockImplementation()!;
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState) => {
+      sharedState.handoffInput = pending;
+      return originalStep(sharedState);
+    });
+    const parse = jest.spyOn(JSON, 'parse');
+    try {
+      const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+      expect(result.status).toBe('error');
+      expect(result.error).toMatchObject({ statusCode: 413, details: { code: 'SUBFLOW_PREPARATION_TOO_LARGE' } });
+      expect(result.sharedState.handoffInput).toBe(pending);
+      expect(result.sharedState.currentNodeId).toBe(START);
+      expect(result.messages.filter(message => message.role === 'tool')).toHaveLength(0);
+      const assistant = result.messages.find(message => message.id === 'assistant-router');
+      expect(assistant?.tool_calls?.map(call => call.id)).toEqual(assistantToolCalls.map(call => call.id));
+      if (boundary !== 'workers') expect(parse.mock.calls.some(([value]) => value === argumentsText)).toBe(false);
+      expect(getSubflowPreparationDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+    } finally { parse.mockRestore(); }
+  });
+
+  it('captures every one of forty authored handoff jobs within admission limits', async () => {
+    targetType = 'subflow';
+    assistantToolCalls = Array.from({ length: 40 }, (_, index) => spawnCall(`job-${index}`, `task-${index}`));
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+    expect(result.status).toBe('completed');
+    expect(result.sharedState.handoffInput?.tasks).toHaveLength(40);
+    expect(result.messages.filter(message => message.role === 'tool')).toHaveLength(40);
+  });
+
+  it.each(['count', 'bytes'] as const)('admits losing handoff targets too and refuses excessive batch %s before any acknowledgement', async boundary => {
+    targetType = 'subflow';
+    const losingArguments = boundary === 'bytes' ? JSON.stringify({ task: 'L'.repeat(4 * 1024 * 1024) }) : '{"task":"losing job"}';
+    assistantToolCalls = [spawnCall('chosen', 'small winning task'),
+      ...Array.from({ length: boundary === 'count' ? 4096 : 1 }, (_, index) => ({
+        id: `losing-${index}`, type: 'function', function: { name: 'handoff_to_other', arguments: losingArguments },
+      })),
+    ];
+    const pending = { targetNodeId: WORKER, prompt: 'keep pending', tasks: ['keep original task'] };
+    const originalStep = (FlowExecutor.executeStep as jest.Mock).getMockImplementation()!;
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState) => {
+      sharedState.handoffInput = pending;
+      return originalStep(sharedState);
+    });
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+    expect(result.status).toBe('error');
+    expect(result.error).toMatchObject({ statusCode: 413, details: { code: 'SUBFLOW_PREPARATION_TOO_LARGE' } });
+    expect(result.sharedState.handoffInput).toBe(pending);
+    expect(result.sharedState.currentNodeId).toBe(START);
+    expect(result.messages.filter(message => message.role === 'tool')).toHaveLength(0);
+    expect(result.messages.find(message => message.id === 'assistant-router')?.tool_calls?.map(call => call.id))
+      .toEqual(assistantToolCalls.map(call => call.id));
+    expect(getSubflowPreparationDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+  });
+
   it.each(['subflow', 'signal'] as const)('does not answer or recapture a completed historical handoff on a later deterministic %s edge', async (caseTarget) => {
     (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState) => {
       sharedState.currentNodeId = START;

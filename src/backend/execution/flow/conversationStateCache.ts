@@ -25,6 +25,7 @@
  *    call.
  */
 import { createLogger } from '@/utils/logger';
+import { types } from 'node:util';
 import { FlowExecutor } from './FlowExecutor';
 import { SharedState } from './types';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
@@ -43,6 +44,38 @@ const SATURATED_ESTIMATE = Number.MAX_SAFE_INTEGER;
 const RUNTIME_STATE_FIELDS = new Set([
   'executionAuthority', 'abortSignal', 'executionExtensionContext', 'mcpContext',
 ]);
+const arrayBufferSize = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')!.get!;
+const sharedBufferSize = typeof SharedArrayBuffer === 'undefined' ? undefined
+  : Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength')!.get!;
+const typedArrayBuffer = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'buffer')!.get!;
+const dataViewBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer')!.get!;
+
+function isIntrinsicConstructorPrototype(prototype: object, intrinsic: ObjectConstructor | ArrayConstructor): boolean {
+  if (types.isProxy(prototype)) return false;
+  const constructor = Object.getOwnPropertyDescriptor(prototype, 'constructor');
+  if (!constructor || !('value' in constructor) || typeof constructor.value !== 'function' || types.isProxy(constructor.value)) return false;
+  return Object.getOwnPropertyDescriptor(constructor.value, 'prototype')?.value === prototype
+    && Function.prototype.toString.call(constructor.value) === Function.prototype.toString.call(intrinsic);
+}
+
+function isIntrinsicObjectPrototype(prototype: object | null): boolean {
+  return prototype !== null && !types.isProxy(prototype) && Object.getPrototypeOf(prototype) === null
+    && isIntrinsicConstructorPrototype(prototype, Object);
+}
+
+/** Native structuredClone/VM snapshots can carry another realm's Object/Array.
+ * Recognize their intrinsic ownership without reading constructor hooks; custom
+ * classes and proxy prototypes remain opaque runtime graphs.
+ */
+function hasDataPrototype(value: object, array: boolean): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype === null) return true;
+  if (types.isProxy(prototype)) return false;
+  return array
+    ? Array.isArray(prototype) && isIntrinsicConstructorPrototype(prototype, Array)
+      && isIntrinsicObjectPrototype(Object.getPrototypeOf(prototype))
+    : isIntrinsicObjectPrototype(prototype);
+}
 
 function numberFromEnv(name: string, fallback: number): number {
   const raw = Number(process.env[name]);
@@ -168,8 +201,15 @@ function isLiveOwned(state: SharedState | undefined): boolean {
   if (!state) return false;
   if (state.status && !TERMINAL_STATUSES.has(state.status)) return true;
   if (!state.status) return true; // unknown status: treat as live, never evict
-  const recovery = state.recovery as { currentCheckpoint?: unknown; owner?: unknown } | undefined;
-  if (recovery && recovery.owner) return true;
+  const recovery = state.recovery as (NonNullable<SharedState['recovery']> & { owner?: unknown }) | undefined;
+  // ownerId/heartbeat remain on persisted terminal records. Only an unresolved
+  // recovery boundary protects them; historical process identity alone must not
+  // prevent completed conversations from leaving the cache.
+  if (recovery?.owner || recovery?.manualActionRequired || recovery?.classification === 'interrupted') return true;
+  // Owner metadata is optional in older snapshots. An unfinished classification
+  // still owns recovery even when its process identity was never recorded.
+  if (recovery?.classification === 'running' || recovery?.classification === 'paused') return true;
+  if (recovery?.currentCheckpoint?.effectStatus === 'pending' || recovery?.currentCheckpoint?.effectStatus === 'unknown') return true;
   if (state.pendingToolCalls?.length || state.debugPendingToolCalls?.length || state.debugPendingAction) return true;
   for (const invocationId in state.subflowInvocations) {
     if (state.subflowInvocations[invocationId].status !== 'folded') return true;
@@ -207,18 +247,22 @@ export function estimateStateBytes(state: SharedState | undefined): number {
   while (pending.length) {
     const value = pending.pop()!;
     bytes += 64;
+    if (types.isProxy(value)) continue;
     if (ArrayBuffer.isView(value)) {
-      if (!seen.has(value.buffer)) {
-        seen.add(value.buffer);
-        bytes += value.buffer.byteLength;
+      const backing = (types.isDataView(value) ? dataViewBuffer : typedArrayBuffer).call(value) as ArrayBufferLike;
+      if (!seen.has(backing)) {
+        seen.add(backing);
+        bytes += (types.isSharedArrayBuffer(backing) ? sharedBufferSize! : arrayBufferSize).call(backing);
       }
       continue;
     }
-    if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && value instanceof SharedArrayBuffer)) {
-      bytes += value.byteLength;
+    if (types.isArrayBuffer(value) || types.isSharedArrayBuffer(value)) {
+      bytes += (types.isSharedArrayBuffer(value) ? sharedBufferSize! : arrayBufferSize).call(value);
       continue;
     }
-    if (Array.isArray(value)) {
+    const array = Array.isArray(value);
+    if (!hasDataPrototype(value, array)) continue;
+    if (array) {
       if (value.length > MAX_ESTIMATE_VALUES - inspected) return SATURATED_ESTIMATE;
       bytes += value.length * 8;
       for (let index = 0; index < value.length; index++) {
@@ -227,8 +271,6 @@ export function estimateStateBytes(state: SharedState | undefined): number {
       }
       continue;
     }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) continue;
     for (const key in value) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor?.enumerable || (value === state && RUNTIME_STATE_FIELDS.has(key))) continue;

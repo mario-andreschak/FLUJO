@@ -1,6 +1,7 @@
 import { createLogger } from '@/utils/logger';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
-import { findRunResourceByName, readRunResource } from '@/backend/services/runResources';
+import { findRunResourceByName, readRunResource, readRunResourceBounded } from '@/backend/services/runResources';
+import { isSubflowPreparationPressureError, SubflowPreparationPressureError } from './subflowPreparationBudget';
 import {
   commitFlowDurableMutation,
   rethrowFlowExecutionAuthorityError,
@@ -50,6 +51,7 @@ export async function resolveRunResourceRefs(
   emit?: EmitFn,
   node?: NodeRef,
   durableContext: FlowDurableMutationContext = {},
+  bounded?: { maxChars: number },
 ): Promise<string> {
   if (!text || !text.includes('${res:') || !conversationId) {
     // No refs, or no conversation to resolve against (design-time render,
@@ -73,11 +75,21 @@ export async function resolveRunResourceRefs(
         log.warn(`\${res:${name}} has no matching run resource; resolving to ''`, { conversationId });
       } else {
         const read = await commitFlowDurableMutation(durableContext, async () => {
-          const result = await readRunResource(entry.uri, {
+          const access = {
             at: Date.now(),
-            source: 'res-ref',
+            source: 'res-ref' as const,
             nodeId: node?.nodeId,
-          });
+          };
+          const boundedRead = bounded
+            ? await readRunResourceBounded(entry.uri, { maxChars: bounded.maxChars, access }) : undefined;
+          if (boundedRead?.truncated) {
+            throw new SubflowPreparationPressureError('SUBFLOW_PREPARATION_TOO_LARGE',
+              `resource text exceeds the ${Math.min(bounded!.maxChars, 200_000)} character inline limit; use the resource URI for larger content`);
+          }
+          const result = bounded
+            ? boundedRead && { entry: boundedRead.entry, contents: { contents: [{ uri: entry.uri,
+                ...(entry.encoding === 'utf8' ? { text: boundedRead.content } : {}) }] } }
+            : await readRunResource(entry.uri, access);
           if (result) {
             emit?.({
               type: 'resource:read',
@@ -107,6 +119,7 @@ export async function resolveRunResourceRefs(
       }
     } catch (error) {
       rethrowFlowExecutionAuthorityError(error);
+      if (isSubflowPreparationPressureError(error)) throw error;
       // Resolution must never break a run.
       log.error(`Failed to resolve \${res:${name}}; resolving to ''`, error);
     }

@@ -8,6 +8,7 @@ import { resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/s
 import { boundedJsonReader } from '@/backend/services/operations/boundedRead';
 import { collectOperationsSnapshot, getObservationProcessId } from '@/backend/services/operations/snapshot';
 import { getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
+import { getSubflowPreparationDiagnostics } from '@/backend/execution/flow/subflowPreparationBudget';
 
 export const runtime = 'nodejs';
 
@@ -45,7 +46,8 @@ const GET_handler = async (request: Request, admission: Admission) => {
     if (revoked) return revoked;
     const unavailable = assertWorkerRequestReady(request, workspace);
     if (unavailable) return unavailable;
-    return Response.json({ ...snapshot, flowRunAdmission: getFlowRunAdmissionDiagnostics() }, {
+    return Response.json({ ...snapshot, flowRunAdmission: getFlowRunAdmissionDiagnostics(),
+      subflowPreparation: getSubflowPreparationDiagnostics() }, {
       headers: { 'Cache-Control': 'no-store' },
     });
   } catch {

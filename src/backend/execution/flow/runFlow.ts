@@ -8,6 +8,7 @@ import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { claimFlowRunAdmission, recheckFlowRunAdmission, type FlowRunAdmissionPermit } from './runAdmission';
+import { assertSubflowLaneCount, preflightSubflowHandoffArguments, subflowWorkerLimit, withSubflowPreparationBudget, type SubflowPreparationBudget } from './subflowPreparationBudget';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { bindExecutionModelStepOrdinals } from '@/backend/execution/flow/modelStepOrdinals';
 import {
@@ -2933,13 +2934,22 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             // it from leaking to a later node or a REVISIT of the same node — a
             // process node reads it WITHOUT clearing (its tool loop re-runs prep
             // each iteration), so its lifecycle is managed here instead.
-            sharedState.handoffInput = undefined;
+            // Clear only after preparation admission succeeds, so a refusal
+            // preserves the canonical pending handoff and assistant call IDs.
 
             // Ordinary tool results may now sit after the assistant batch. Keep
             // the handoff bound to the turn that originally selected this edge.
             const lastAssistantMsg = sharedState.handoffRequested
               ? findStagedHandoffAssistant(sharedState)
               : [...sharedState.messages].reverse().find((message) => message.role === 'assistant');
+            const isSubflowHandoff = sharedState.handoffTargetTypes?.[nextNodeId] === 'subflow';
+            const prepareHandoff = async (budget?: SubflowPreparationBudget) => {
+            if (budget) {
+              // Losing targets also allocate acknowledgements. Admit the complete
+              // original batch before filtering it into winning/losing calls.
+              assertSubflowLaneCount(lastAssistantMsg?.tool_calls?.length ?? 0);
+              preflightSubflowHandoffArguments(requireFunctionToolCalls(lastAssistantMsg?.tool_calls), budget);
+            }
             // A later deterministic edge can follow a completed handoff turn,
             // for example when a user resumes after Finish. Its existing result
             // must not be duplicated or its old caller brief captured again.
@@ -2988,8 +2998,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               let signalBody = '';
               let callerFlows: string[] | undefined;
               let callerConcurrency: number | undefined;
-              const isSubflowHandoff = sharedState.handoffTargetTypes?.[nextNodeId] === 'subflow';
-              callsToAnswer.forEach((call, laneIdx) => {
+              // Reject excessive argument work before any JSON allocation or
+              // tool acknowledgement. The defensive parse catch below must
+              // never swallow a capacity refusal and silently discard jobs.
+              const captureHandoffCalls = () => callsToAnswer.forEach((call, laneIdx) => {
                 if (call.type === 'function') {
                   try {
                     const parsedArgs = JSON.parse(call.function.arguments || '{}');
@@ -3043,6 +3055,17 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   processNodeId: sharedState.currentNodeId,
                 });
               });
+              if (isSubflowHandoff) {
+                  for (const call of callsToAnswer) {
+                    let args: { concurrencyLimit?: unknown; parallelFlows?: unknown };
+                    try { args = JSON.parse(call.function.arguments || '{}'); }
+                    catch { continue; }
+                    if (typeof args?.concurrencyLimit === 'number') subflowWorkerLimit(args.concurrencyLimit);
+                    if (Array.isArray(args?.parallelFlows)) assertSubflowLaneCount(args.parallelFlows.length);
+                  }
+                  sharedState.handoffInput = undefined;
+                  captureHandoffCalls();
+              } else { sharedState.handoffInput = undefined; captureHandoffCalls(); }
               // Handoff calls that targeted a DIFFERENT node lost the route (one
               // successor wins per turn). Answer them too — a tool_call id
               // without a result corrupts the persisted transcript — with an
@@ -3125,8 +3148,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               // conversation ending on the real task and responds naturally.
               // See ~/.claude/plans/execution-core-v2.md.
             } else {
+              sharedState.handoffInput = undefined;
               log.warn(`Handoff action received for edge ${currentAction}, but the last message was not an assistant message with tool calls.`);
             }
+            return handoffCallsForBoundary;
+            };
+            const handoffCallsForBoundary = isSubflowHandoff
+              ? await withSubflowPreparationBudget(prepareHandoff) : await prepareHandoff();
 
             emitNewMessages();
             const fromNodeId = sharedState.currentNodeId;
