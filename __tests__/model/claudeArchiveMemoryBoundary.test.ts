@@ -1,3 +1,4 @@
+import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { createInterface } from 'node:readline';
@@ -157,6 +158,34 @@ const capture: NonNullable<CompletionInput['onSdkRequest']> = async snapshot => 
   });
   return entry.id;
 };
+
+it('refuses sequence safety before Claude query or physical HTTP dispatch', async () => {
+  const refused = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture');
+  await expect(new ClaudeSubscriptionAdapter().createCompletion(input({
+    onSdkRequest: async () => { throw refused; },
+  }))).rejects.toBe(refused);
+  expect(queryMock).not.toHaveBeenCalled();
+  expect(requests).toHaveLength(0);
+});
+
+it.each(['query', 'stream'] as const)('preserves a primary Claude %s failure and closes ownership when result sequencing refuses', async stage => {
+  const primary = new Error('Primary actual Claude failure');
+  const secondary = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'result marker');
+  const close = jest.fn();
+  queryMock.mockImplementationOnce(() => {
+    if (stage === 'query') throw primary;
+    return Object.assign((async function* () { yield await Promise.reject(primary); })(), { close });
+  });
+  const abort = new AbortController();
+  const remove = jest.spyOn(abort.signal, 'removeEventListener');
+  const outcome = jest.fn(async () => { throw secondary; });
+  await expect(new ClaudeSubscriptionAdapter().createCompletion(input({ signal: abort.signal,
+    onSdkRequest: async () => 'actual-dispatch', onSdkRequestResult: outcome,
+  }))).rejects.toBe(primary);
+  expect(outcome).toHaveBeenCalledTimes(1);
+  expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+  if (stage === 'stream') expect(close).toHaveBeenCalledTimes(1);
+});
 
 it('rejects actual archive pressure before Claude query/SDK/HTTP and removes the external abort listener', async () => {
   let release!: () => void;

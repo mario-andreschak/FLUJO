@@ -20,7 +20,8 @@ import {
   ownerScopeForRun,
   releaseRunOwnedBashSessions,
 } from '@/backend/services/mcp/ownerScope';
-import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
+import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState, prepareConversationSequence } from '@/backend/execution/flow/conversationLog';
+import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError } from './conversationLogSequence';
 import {
   steeringCount,
   takeSteeringMessages,
@@ -79,6 +80,7 @@ import {
   initializeRecovery,
   markDanglingToolEffectsUnknown,
   reconcileInterruptedRecovery,
+  setRecoveryTransition,
 } from '@/backend/execution/flow/recoveryCheckpoint';
 import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
 import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement';
@@ -774,6 +776,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
   // --- 1. Initialize or Retrieve State ---
   const effectiveConvId = input.conversationId || crypto.randomUUID();
+  prepareConversationSequence(effectiveConvId);
   const storageKey = `conversations/${effectiveConvId}` as StorageKey;
   let stateSource: 'storage' | 'memory' | 'new' = 'new';
   let loadedState: SharedState | undefined = undefined;
@@ -1683,7 +1686,25 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const nodeTurnCounts = new Map<string, number>();
 
   // --- Execution event emission (live progress + debugger) ---
-  const emit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
+  const underlyingEmit: EmitFn = input.emit ?? executionEventBus.emitterFor(effectiveConvId);
+  let sequenceFailure: ConversationSequenceSafetyError | undefined;
+  let sequenceErrorCleanup = false;
+  const emit: EmitFn = event => {
+    if (sequenceFailure) {
+      // A broken sequence cannot stamp another error about that same failure.
+      // Normal work still throws, so no later dispatch is silently permitted.
+      if (sequenceErrorCleanup || event.type === 'error') return;
+      throw sequenceFailure;
+    }
+    try { underlyingEmit(event); }
+    catch (error) {
+      if (isConversationSequenceSafetyError(error)) {
+        sequenceFailure = error;
+        if (sequenceErrorCleanup) return; // Preserve the original execution error.
+      }
+      throw error;
+    }
+  };
   // A custom emitter forwards child events onto the parent channel. Recovery
   // records for persisted children must instead append to the child's own log;
   // omitting the emitter selects that direct durable path.
@@ -1778,9 +1799,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       } as FlujoChatMessage);
     }
   };
-
-  emit({ type: 'run:start', flowId: sharedState.flowId });
-  await commitRecoveryTransition(storageKey, sharedState, 'running', {}, recoveryEmit);
 
   // --- Elicitation context: bind active run to each MCP server in this flow ---
   // The elicitation handler (registered at connect time) looks up the active
@@ -1878,8 +1896,20 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     args: Parameters<typeof ModelHandler.processToolCalls>[0],
   ): ReturnType<typeof ModelHandler.processToolCalls> => {
     await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'before', recoveryEmit);
+    const markUnknown = async () => {
+      try {
+        await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
+      } catch (error) {
+        if (!isConversationSequenceSafetyError(error)) throw error;
+        // The tool already failed. Keep that primary outcome; normal terminal
+        // persistence below saves this unknown-effect classification without
+        // recursively numbering it or masking the primary failure on a retry.
+        sequenceFailure ??= error;
+      }
+    };
+    let result: Awaited<ReturnType<typeof ModelHandler.processToolCalls>>;
     try {
-      const result = await ModelHandler.processToolCalls({
+      result = await ModelHandler.processToolCalls({
         ...args,
         signal: combineAbortSignals(args.signal, runtimeAbortSignal),
         beforeToolDispatch: input.executionAuthority?.assertCurrent,
@@ -1887,14 +1917,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         executionExtensionContext: sharedState.executionExtensionContext,
         personaAttribution: sharedState.personaAttribution,
       });
-      if (!result.success) {
-        await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
-      }
-      return result;
     } catch (error) {
-      await commitToolCheckpoint(storageKey, sharedState, args.toolCalls, 'unknown', recoveryEmit);
+      await markUnknown();
       throw error;
     }
+    if (!result.success) await markUnknown();
+    return result;
   };
 
   // --- Mid-run steering (user intervention while the run is in flight) --------
@@ -2168,6 +2196,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   };
 
   try {
+    // Initial owned-state emissions can exhaust too; they must reach the same
+    // terminal cleanup as execution failures before any provider dispatch.
+    emit({ type: 'run:start', flowId: sharedState.flowId });
+    await commitRecoveryTransition(storageKey, sharedState, 'running', {}, recoveryEmit);
     if (!preflightError) {
       while (true) {
         internalIterations++;
@@ -2445,6 +2477,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           message => message.role === 'assistant',
         )?.id;
         const stepResult = await FlowExecutor.executeStep(sharedState, emit);
+        if (sequenceFailure) throw sequenceFailure;
         sharedState = stepResult.sharedState;
         currentAction = stepResult.action;
         emitNewMessages();
@@ -3226,6 +3259,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     } // --- End execution block ---
 
   } catch (loopError) {
+    sequenceErrorCleanup = true;
     log.error(`Unhandled error during execution loop for conv ${effectiveConvId}`, { loopError });
     if (currentAction !== ERROR_ACTION && runCancelled()) {
       // A cancellation can surface as a thrown error (the model-call watch
@@ -3260,6 +3294,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       });
     }
   }
+  if (currentAction === ERROR_ACTION) sequenceErrorCleanup = true;
 
   // A cancellation that lands while the final step is completing (or one the
   // provider ignored) must not let the run report 'completed' — Stop means
@@ -3301,60 +3336,69 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   }
 
   const finalExecutionTime = Date.now() - startTime;
-  const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
+  let finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
+  const recordTerminalSequenceFailure = (error: unknown) => {
+    if (!isConversationSequenceSafetyError(error)) throw error;
+    sequenceFailure ??= error;
+    sequenceErrorCleanup = true;
+    if (finalStatus !== 'error') {
+      sharedState.lastResponse = { success: false, error: error.message, errorDetails: error.details };
+      sharedState.status = 'error';
+      currentAction = ERROR_ACTION;
+      finalStatus = 'error';
+      const classified = classifyRecoveryFailure(sharedState.lastResponse);
+      setRecoveryTransition(sharedState, classified.classification, { failure: classified.failure,
+        manualActionRequired: sharedState.recovery?.manualActionRequired });
+      emitErrorOnce(sharedState, emit, error, { nodeId: sharedState.currentNodeId });
+    }
+  };
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
-
-  // Debugging is run-scoped. Once this run is terminal, do not leave a hidden
-  // debugMode/breakpoint payload attached to the conversation for its next user
-  // turn (or paint the sidebar as though an old debug session were still live).
-  if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
-    sharedState.debugMode = false;
-    sharedState.debugPauseRequested = false;
-    sharedState.debugPendingAction = undefined;
-    sharedState.debugPendingToolCalls = undefined;
-    sharedState.debugBoundary = undefined;
-    sharedState.breakpoints = [];
-    sharedState.lastBreakNodeId = undefined;
-  }
 
   // Persist the precise recovery transition before the legacy terminal event.
   // Existing status values remain unchanged for backward compatibility.
-  if (sharedState.isCancelled) {
-    await commitRecoveryTransition(storageKey, sharedState, 'cancelled', {
-      failure: {
-        category: cancelledByAncestor ? 'ancestor_cancelled' : 'user_cancelled',
-        message: cancelledByAncestor
-          ? 'Execution was cancelled because an ancestor run was cancelled.'
-          : 'Execution was cancelled by the user.',
-        retryable: false,
-      },
-      cancellationRequestedAt: sharedState.recovery?.cancellationRequestedAt ?? Date.now(),
-    }, recoveryEmit);
-  } else if (finalStatus === 'completed') {
-    await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, recoveryEmit);
-  } else if (finalStatus === 'capped') {
-    await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, recoveryEmit);
-  } else if (finalStatus === 'awaiting_tool_approval' || finalStatus === 'paused_debug') {
-    await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, recoveryEmit);
-  } else if (finalStatus === 'error') {
-    const classified = classifyRecoveryFailure(sharedState.lastResponse);
-    await commitRecoveryTransition(storageKey, sharedState, classified.classification, {
-      failure: classified.failure,
-      retryAfterAt: classified.retryAfterAt,
-      manualActionRequired: classified.failure.category === 'tool_failure'
-        ? true
-        : sharedState.recovery?.manualActionRequired,
-    }, recoveryEmit);
+  try {
+    if (sharedState.isCancelled) {
+      await commitRecoveryTransition(storageKey, sharedState, 'cancelled', {
+        failure: {
+          category: cancelledByAncestor ? 'ancestor_cancelled' : 'user_cancelled',
+          message: cancelledByAncestor
+            ? 'Execution was cancelled because an ancestor run was cancelled.'
+            : 'Execution was cancelled by the user.',
+          retryable: false,
+        },
+        cancellationRequestedAt: sharedState.recovery?.cancellationRequestedAt ?? Date.now(),
+      }, recoveryEmit);
+    } else if (finalStatus === 'completed') {
+      await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, recoveryEmit);
+    } else if (finalStatus === 'capped') {
+      await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, recoveryEmit);
+    } else if (finalStatus === 'awaiting_tool_approval' || finalStatus === 'paused_debug') {
+      await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, recoveryEmit);
+    } else if (finalStatus === 'error') {
+      const classified = classifyRecoveryFailure(sharedState.lastResponse);
+      await commitRecoveryTransition(storageKey, sharedState, classified.classification, {
+        failure: classified.failure,
+        retryAfterAt: classified.retryAfterAt,
+        manualActionRequired: classified.failure.category === 'tool_failure'
+          ? true
+          : sharedState.recovery?.manualActionRequired,
+      }, recoveryEmit);
+    }
+  } catch (error) {
+    // Preserve an existing execution error, or report a late safety failure,
+    // then finish snapshot persistence/resource release without new sequences.
+    recordTerminalSequenceFailure(error);
   }
 
   // Flush any trailing messages and signal terminal completion to live consumers.
-  emitNewMessages();
+  try { emitNewMessages(); }
+  catch (error) { recordTerminalSequenceFailure(error); }
   if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
-    emit({
+    try { emit({
       type: 'run:done',
       status: finalStatus,
       ...(finalStatus === 'error' && sharedState.lastError ? { error: sharedState.lastError } : {}),
-    });
+    }); } catch (error) { recordTerminalSequenceFailure(error); }
     // Flow-run event bus (issue #116): announce terminal runs so `flow-event`
     // triggers can react to chat/API/manual runs. Scheduler-fired runs are
     // announced by SchedulerService.fire() instead (de-dup), and subflow stages
@@ -3375,6 +3419,19 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       // 'completed' to the flow-run bus.
       void publishRunFlowEvent(sharedState, finalStatus === 'capped' ? 'completed' : finalStatus, outputText);
     }
+  }
+
+  // Debugging is run-scoped. Once this run is terminal, do not leave a hidden
+  // debugMode/breakpoint payload attached to the conversation for its next user
+  // turn (or paint the sidebar as though an old debug session were still live).
+  if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
+    sharedState.debugMode = false;
+    sharedState.debugPauseRequested = false;
+    sharedState.debugPendingAction = undefined;
+    sharedState.debugPendingToolCalls = undefined;
+    sharedState.debugBoundary = undefined;
+    sharedState.breakpoints = [];
+    sharedState.lastBreakNodeId = undefined;
   }
 
   let finalSnapshotPersisted = false;

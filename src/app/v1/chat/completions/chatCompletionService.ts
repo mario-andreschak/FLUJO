@@ -11,6 +11,8 @@ import { runFlow } from '@/backend/execution/flow/runFlow';
 import { acquireFlowRunAdmission, withFlowRunAdmission, isFlowRunPressureError,
   type FlowRunAdmissionPermit, type FlowRunPressureError } from '@/backend/execution/flow/runAdmission';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { prepareConversationSequence } from '@/backend/execution/flow/conversationLog';
+import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { ExecutionEvent } from '@/shared/types/execution/events';
 import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
 import { modelService } from '@/backend/services/model';
@@ -50,6 +52,10 @@ export function flowRunPressureResponse(error: FlowRunPressureError) {
     ...(error.status === 413 ? {} : { retry_after: error.retryAfterSeconds }) } }, {
     status: error.status, headers: error.status === 413 ? {} : { 'Retry-After': String(error.retryAfterSeconds) },
   });
+}
+
+function sequenceSafetyResponse(error: ConversationSequenceSafetyError) {
+  return NextResponse.json({ error: { message: error.message, type: error.details.type, code: error.code } }, { status: error.status });
 }
 
 /** Reserve observation only; neither submit nor cancel an execution. */
@@ -623,10 +629,12 @@ export async function processChatCompletion(
     const streamFromSeq = executionEventBus.currentSeq(effectiveConvId);
     let runAdmission: FlowRunAdmissionPermit;
     try {
+      prepareConversationSequence(effectiveConvId);
       runAdmission = acquireFlowRunAdmission({ modelName: data.model, messages: data.messages,
         mcpAppContexts: data.mcpAppContexts, mcpSkillSelections: data.mcpSkillSelections,
         processNodeId: data.processNodeId, conversationId: effectiveConvId });
     } catch (error) {
+      if (isConversationSequenceSafetyError(error)) return sequenceSafetyResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
       throw error;
     }
@@ -648,7 +656,7 @@ export async function processChatCompletion(
         .catch(error => {
           // Admission owns no execution state. A refused successor must not end
           // the currently running, paused or recovery-owned conversation.
-          if (isFlowRunPressureError(error)) {
+          if (isFlowRunPressureError(error) || isConversationSequenceSafetyError(error)) {
             log.warn('Flow submission refused after preflight', { code: error.code });
             submissionFailure.abort(error);
             return;
@@ -698,6 +706,7 @@ export async function processChatCompletion(
       // scope owns the reservation until that execution actually settles.
       if (!submitted) runAdmission.release();
       admission?.release();
+      if (isConversationSequenceSafetyError(error)) return sequenceSafetyResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
       throw error;
     }
@@ -706,6 +715,7 @@ export async function processChatCompletion(
     try {
       return await processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
     } catch (error) {
+      if (isConversationSequenceSafetyError(error)) return sequenceSafetyResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
       throw error;
     }
@@ -887,7 +897,9 @@ export function createStreamingResponse(
               const body = isFlowRunPressureError(error)
                 ? { message: error.message, type: 'api_error', code: error.code,
                   ...(error.status === 413 ? {} : { retry_after: error.retryAfterSeconds }) }
-                : { message: 'Flow submission could not start.', type: 'api_error', code: 'FLOW_RUN_SUBMISSION_FAILED' };
+                : isConversationSequenceSafetyError(error)
+                  ? { message: error.message, type: error.details.type, code: error.code }
+                  : { message: 'Flow submission could not start.', type: 'api_error', code: 'FLOW_RUN_SUBMISSION_FAILED' };
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: body })}\n\ndata: [DONE]\n\n`));
               controller.close();
             } finally { cleanup(); }

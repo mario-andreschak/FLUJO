@@ -168,6 +168,12 @@ import { registerCancellableRun } from '@/backend/execution/flow/cancellationCoo
 import { withConversationExecutionLock, isConversationExecutionLocked } from '@/backend/execution/flow/conversationExecutionLock';
 import { acquireFlowRunAdmission, getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
 import { saveItem } from '@/utils/storage/backend';
+import { promises as sequenceFs } from 'node:fs';
+import sequencePath from 'node:path';
+import sequenceOs from 'node:os';
+import { _setConversationLogDirForTests, flushConversationLog, allocateSeq, getConversationSequenceDiagnostics } from '@/backend/execution/flow/conversationLog';
+import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -182,6 +188,151 @@ beforeEach(() => {
   conversationStates.clear();
   (FlowExecutor.executeStep as jest.Mock).mockClear();
   (recordStatisticsEvent as jest.Mock).mockClear();
+});
+
+describe('Conversation sequence safety before execution', () => {
+  let directory: string, previous: string;
+  const id = 'sequence-safety-owner';
+  beforeEach(async () => {
+    directory = await sequenceFs.mkdtemp(sequencePath.join(sequenceOs.tmpdir(), 'flujo-run-sequence-'));
+    previous = _setConversationLogDirForTests(directory);
+  });
+  afterEach(async () => {
+    await flushConversationLog(id);
+    _setConversationLogDirForTests(previous);
+    await sequenceFs.rm(directory, { recursive: true, force: true });
+  });
+
+  it('refuses an unsafe cold log before registering, mutating paused ownership, or executing a provider step', async () => {
+    const owner = { conversationId: id, status: 'paused_debug', messages: [{ id: 'original', role: 'user', content: 'keep me', timestamp: 1 }],
+      logicalRunId: 'original-run', flowId: FLOW_ID, title: 'Owner', createdAt: 1, updatedAt: 1,
+      trackingInfo: { executionId: 'original-execution', startTime: 1, nodeExecutionTracker: [] } } as SharedState;
+    conversationStates.set(id, owner);
+    await sequenceFs.writeFile(sequencePath.join(directory, `${id}.jsonl`), '{"seq":9007199254740992}\n');
+    await expect(runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'new input' }))
+      .rejects.toMatchObject({ code: 'CONVERSATION_SEQUENCE_EXHAUSTED', status: 503 });
+    expect(conversationStates.get(id)).toBe(owner);
+    expect(owner).toMatchObject({ status: 'paused_debug', logicalRunId: 'original-run', messages: [{ content: 'keep me' }] });
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    expect(persistedStates).toHaveLength(0);
+    expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+  });
+
+  it('refuses a new key at registry capacity while allowing an existing owner to continue', async () => {
+    allocateSeq(id);
+    for (let index = 1; index < getConversationSequenceDiagnostics().maxKeys; index++) allocateSeq(`retained-${index}`);
+    await expect(runFlow({ flowId: FLOW_ID, conversationId: 'new-refused-run', prompt: 'new input' }))
+      .rejects.toMatchObject({ code: 'CONVERSATION_SEQUENCE_REGISTRY_FULL', status: 429 });
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    expect(conversationStates.has('new-refused-run')).toBe(false);
+    expect((await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'continue existing' })).status).toBe('completed');
+    expect(getConversationSequenceDiagnostics().keys).toBe(getConversationSequenceDiagnostics().maxKeys);
+  });
+
+  it('finalizes an owned run when its initial running checkpoint exhausts after run:start', async () => {
+    await sequenceFs.writeFile(sequencePath.join(directory, `${id}.jsonl`), `{"seq":${Number.MAX_SAFE_INTEGER - 2}}\n`);
+    const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'Preserve startup input' });
+    expect(result.status).toBe('error');
+    expect(result.error).toMatchObject({ details: { code: 'CONVERSATION_SEQUENCE_EXHAUSTED' }, statusCode: 503 });
+    expect(FlowExecutor.executeStep).not.toHaveBeenCalled();
+    expect(result.messages.some(message => message.content === 'Preserve startup input')).toBe(true);
+    expect(persistedStates.at(-1)?.status).toBe('error');
+    expect(persistedStates.at(-1)?.recovery?.classification).not.toBe('running');
+    expect(isConversationExecutionLocked(id)).toBe(false);
+    expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+  });
+
+  it.each(['transition', 'done'] as const)('finalizes late %s exhaustion after a successful actual execution', async boundary => {
+    await sequenceFs.writeFile(sequencePath.join(directory, `${id}.jsonl`), `{"seq":${Number.MAX_SAFE_INTEGER - 30}}\n`);
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (state: SharedState) => {
+      while (true) {
+        try {
+          const seq = allocateSeq(id);
+          if (seq === Number.MAX_SAFE_INTEGER - (boundary === 'done' ? 3 : 2)) break;
+        } catch { break; }
+      }
+      // Retain the actual provider outcome independently of terminal logging.
+      state.lastResponse = 'Actual dispatched answer';
+      state.messages[0].content = 'Actual dispatched answer';
+      return { sharedState: state, action: 'FINAL_RESPONSE' };
+    });
+    const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'canonical input' });
+    expect(FlowExecutor.executeStep).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('error');
+    expect(result.error).toMatchObject({ details: { code: 'CONVERSATION_SEQUENCE_EXHAUSTED' }, statusCode: 503 });
+    expect(result.messages.some(message => message.content === 'Actual dispatched answer')).toBe(true);
+    expect(persistedStates.at(-1)?.status).toBe('error');
+    await flushConversationLog(id);
+    const lastEvent = JSON.parse((await sequenceFs.readFile(sequencePath.join(directory, `${id}.jsonl`), 'utf8')).trim().split('\n').at(-1)!);
+    if (boundary === 'done') expect(lastEvent).toMatchObject({ type: 'recovery:transition', recovery: { classification: 'completed' } });
+    else expect(lastEvent).toMatchObject({ type: 'recovery:checkpoint', checkpoint: { phase: 'node:after' } });
+    expect(isConversationExecutionLocked(id)).toBe(false);
+    expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+  });
+
+  it.each(['throw', 'result'] as const)('preserves a primary tool %s when the unknown-effect checkpoint exhausts', async outcome => {
+    await sequenceFs.writeFile(sequencePath.join(directory, `${id}.jsonl`), `{"seq":${Number.MAX_SAFE_INTEGER - 30}}\n`);
+    const call = { id: 'actual-write-call', type: 'function' as const, function: { name: 'write_external', arguments: '{}' } };
+    conversationStates.set(id, { conversationId: id, flowId: FLOW_ID, status: 'paused_debug', currentNodeId: PROCESS,
+      title: 'Tool owner', createdAt: 1, updatedAt: 1, messages: [{ id: 'canonical-tool-call', role: 'assistant', content: '', tool_calls: [call], timestamp: 1 }],
+      debugPendingToolCalls: [call], trackingInfo: { executionId: 'tool-owner', startTime: 1, nodeExecutionTracker: [] } } as SharedState);
+    const original = new Error('Original actual tool rejection');
+    const tool = jest.spyOn(ModelHandler, 'processToolCalls').mockImplementationOnce(async () => {
+      while (true) { try { allocateSeq(id); } catch { break; } }
+      if (outcome === 'throw') throw original;
+      return { success: false, error: { message: original.message, code: 'actual_tool_failure' } };
+    });
+    try {
+      const result = await runFlow({ flowId: FLOW_ID, conversationId: id, continueDebug: true });
+      expect(tool).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('error');
+      expect(JSON.stringify(result.error)).toContain(original.message);
+      expect(result.messages.some(message => message.id === 'canonical-tool-call')).toBe(true);
+      expect(persistedStates.some(state => state.recovery?.currentCheckpoint?.effectStatus === 'unknown')).toBe(true);
+      expect(persistedStates.at(-1)?.status).toBe('error');
+      expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+    } finally { tool.mockRestore(); }
+  });
+
+  it('keeps the first sequence failure and canonical history without recursively failing error/run:done emission', async () => {
+    const failure = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture exhaustion');
+    const physicalDispatch = jest.fn();
+    const emit = jest.fn(event => {
+      if (event.type === 'model:dispatch' || event.type === 'error' || event.type === 'run:done') throw failure;
+    });
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState, forward: (event: unknown) => void) => {
+      sharedState.messages.push({ id: 'canonical-before-refusal', role: 'assistant', content: 'Retain this existing history.', timestamp: 1 });
+      forward({ type: 'model:dispatch', dispatchId: 'blocked-dispatch' });
+      physicalDispatch();
+      return { sharedState, action: 'FINAL_RESPONSE' };
+    });
+    const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'original user input', emit });
+    expect(result.status).toBe('error');
+    expect(result.error).toMatchObject({ details: { code: failure.code }, statusCode: 503 });
+    expect(physicalDispatch).not.toHaveBeenCalled();
+    expect(result.messages.some(message => message.id === 'canonical-before-refusal')).toBe(true);
+    expect(emit.mock.calls.filter(([event]) => event.type === 'model:dispatch')).toHaveLength(1);
+    expect(emit.mock.calls.some(([event]) => event.type === 'error' || event.type === 'run:done')).toBe(false);
+    expect(persistedStates.at(-1)?.status).toBe('error');
+  });
+
+  it('preserves an original provider failure when a custom child recovery append subsequently exhausts', async () => {
+    await sequenceFs.writeFile(sequencePath.join(directory, `${id}.jsonl`), `{"seq":${Number.MAX_SAFE_INTEGER - 30}}\n`);
+    const original = new Error('Original provider rejection remains authoritative');
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState) => {
+      sharedState.messages.push({ id: 'real-dispatch-history', role: 'assistant', content: 'Previously recorded provider history', timestamp: 1 });
+      for (let count = 0; count < 40; count++) {
+        try { allocateSeq(id); }
+        catch (error) { expect(error).toMatchObject({ code: 'CONVERSATION_SEQUENCE_EXHAUSTED' }); break; }
+      }
+      throw original;
+    });
+    const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'original input', emit: () => undefined });
+    expect(result.status).toBe('error');
+    expect(result.error?.message).toBe(original.message);
+    expect(result.messages.some(message => message.id === 'real-dispatch-history')).toBe(true);
+    expect(persistedStates.at(-1)?.status).toBe('error');
+  });
 });
 
 describe('Flow run admission at the public execution boundary', () => {

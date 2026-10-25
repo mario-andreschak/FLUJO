@@ -1,3 +1,4 @@
+import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import OpenAI from 'openai';
 import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
@@ -433,14 +434,18 @@ export async function observeSdkRequest<T>(
   try {
     dispatchId = await input.onSdkRequest?.(snapshot);
   } catch (error) {
-    if (error instanceof ModelTurnArchiveMemoryError) throw error;
+    if (error instanceof ModelTurnArchiveMemoryError || isConversationSequenceSafetyError(error)) throw error;
     rethrowFlowExecutionAuthorityError(error);
     dispatchId = undefined;
   }
   const finalize = async (outcome: 'completed' | 'error' | 'cancelled'): Promise<void> => {
     if (!dispatchId || finalized) return;
     finalized = true;
-    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(rethrowFlowExecutionAuthorityError);
+    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(error => { if (isConversationSequenceSafetyError(error)) throw error; rethrowFlowExecutionAuthorityError(error); });
+  };
+  const finalizeAfterFailure = async () => {
+    try { await finalize(input.signal?.aborted ? 'cancelled' : 'error'); }
+    catch (error) { if (!isConversationSequenceSafetyError(error)) throw error; }
   };
   try {
     const result = await task();
@@ -451,7 +456,7 @@ export async function observeSdkRequest<T>(
         try {
           for await (const item of asyncIterable) yield item;
         } catch (error) {
-          await finalize(input.signal?.aborted ? 'cancelled' : 'error');
+          await finalizeAfterFailure();
           throw error;
         } finally {
           await finalize(input.signal?.aborted ? 'cancelled' : 'completed');
@@ -468,7 +473,7 @@ export async function observeSdkRequest<T>(
     await finalize('completed');
     return result;
   } catch (error) {
-    await finalize(input.signal?.aborted ? 'cancelled' : 'error');
+    await finalizeAfterFailure();
     throw error;
   }
 }

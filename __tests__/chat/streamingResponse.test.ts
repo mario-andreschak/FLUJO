@@ -33,6 +33,11 @@ import { runFlow } from '@/backend/execution/flow/runFlow';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { acquireFlowRunAdmission, FlowRunPressureError, getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
 import type { ExecutionEvent } from '@/shared/types/execution/events';
+import { promises as sequenceFs } from 'node:fs';
+import sequencePath from 'node:path';
+import sequenceOs from 'node:os';
+import { _setConversationLogDirForTests } from '@/backend/execution/flow/conversationLog';
+import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 
 // Fail loudly if the implementation ever reaches back out over HTTP.
 const fetchSpy = jest.spyOn(global, 'fetch' as any).mockImplementation(() => {
@@ -59,6 +64,61 @@ beforeEach(() => { (runFlow as jest.Mock).mockReset(); });
 
 const contentDeltas = (body: string): string => body.split('\n').filter(line => line.startsWith('data: {'))
   .map(line => JSON.parse(line.slice(6)).choices[0].delta.content ?? '').join('');
+
+describe('Conversation sequence refusal in completion responses', () => {
+  let directory: string, previous: string;
+  const request = { model: 'flow-Test', messages: [{ role: 'user', content: 'New request' }], stream: true };
+  beforeEach(async () => {
+    directory = await sequenceFs.mkdtemp(sequencePath.join(sequenceOs.tmpdir(), 'flujo-stream-sequence-'));
+    previous = _setConversationLogDirForTests(directory);
+    (persistConversationState as jest.Mock).mockClear();
+  });
+  afterEach(async () => {
+    _setConversationLogDirForTests(previous);
+    await sequenceFs.rm(directory, { recursive: true, force: true });
+  });
+
+  it('returns typed503 before opening a stream or submitting execution and preserves the paused owner', async () => {
+    const id = 'stream-sequence-refused';
+    const owner = { conversationId: id, status: 'paused_debug', logicalRunId: 'original-run', messages: [] } as any;
+    FlowExecutor.conversationStates.set(id, owner);
+    await sequenceFs.writeFile(sequencePath.join(directory, `${id}.jsonl`), '{"seq":1e309}\n');
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe');
+    try {
+      const response = await processChatCompletion(request as any, false, false, false, id);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: { code: 'CONVERSATION_SEQUENCE_EXHAUSTED' } });
+      expect(runFlow).not.toHaveBeenCalled();
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(persistConversationState).not.toHaveBeenCalled();
+      expect(FlowExecutor.conversationStates.get(id)).toBe(owner);
+      expect(owner.status).toBe('paused_debug');
+    } finally { subscribe.mockRestore(); }
+  });
+
+  it('reports late typed submission refusal in SSE without ending the existing owner', async () => {
+    const id = 'stream-sequence-late';
+    const owner = { conversationId: id, status: 'running', logicalRunId: 'original-run', messages: [] } as any;
+    FlowExecutor.conversationStates.set(id, owner);
+    (runFlow as jest.Mock).mockRejectedValue(new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_CHANGED', 'fixture snapshot race'));
+    const response = await processChatCompletion(request as any, false, false, false, id);
+    const body = await readAll(response);
+    expect(body).toContain('CONVERSATION_SEQUENCE_CHANGED');
+    expect(body).toContain('[DONE]');
+    expect(FlowExecutor.conversationStates.get(id)).toBe(owner);
+    expect(owner.status).toBe('running');
+    expect(persistConversationState).not.toHaveBeenCalled();
+    expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0 });
+  });
+
+  it('maps nonstreaming typed refusal to its actionable status without a false short retry hint', async () => {
+    (runFlow as jest.Mock).mockRejectedValue(new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_REGISTRY_FULL', 'fixture registry capacity'));
+    const response = await processChatCompletion({ ...request, stream: false } as any, false, false, false, 'sequence-nonstream');
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBeNull();
+    expect(await response.json()).toMatchObject({ error: { code: 'CONVERSATION_SEQUENCE_REGISTRY_FULL' } });
+  });
+});
 
 describe('Flow submission pressure in completion responses', () => {
   const request = { model: 'flow-Test', messages: [{ role: 'user', content: 'New request' }], stream: true };

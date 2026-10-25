@@ -1,3 +1,4 @@
+import { isConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
@@ -1160,6 +1161,10 @@ export class ModelHandler {
       };
     }
 
+    if (isConversationSequenceSafetyError(error)) {
+      return { success: false, error: createModelError(error.code, error.message, modelId,
+        undefined, { status: error.status }) };
+    }
     if (error instanceof ModelTurnArchiveMemoryError) {
       return { success: false, error: createModelError(error.code, error.message, modelId,
         undefined, { status: error.status, providerError: error.diagnostic }) };
@@ -3268,7 +3273,7 @@ export class ModelHandler {
                       }
                       return entry.id;
                     } catch (error) {
-                      if (error instanceof ModelTurnArchiveMemoryError) throw error;
+                      if (error instanceof ModelTurnArchiveMemoryError || isConversationSequenceSafetyError(error)) throw error;
                       if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
@@ -3300,7 +3305,7 @@ export class ModelHandler {
                         outcome,
                       });
                     } catch (error) {
-                      if (nativeReceipt) throw error;
+                      if (nativeReceipt || isConversationSequenceSafetyError(error)) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
                     }

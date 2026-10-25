@@ -3,6 +3,7 @@ import { OpenRouterAgentAdapter, mapOpenRouterEnvelopeKeys } from '@/backend/ser
 import { __resetReasoningStore } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import { ModelTurnArchiveMemoryError } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
+import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({
@@ -281,6 +282,23 @@ it('refuses archive memory pressure before the provider dispatch', async () => {
   await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(),
     onSdkRequest: async () => { throw refused; },
   })).rejects.toBe(refused);
+});
+
+it('propagates sequence safety refusal through the request hook', async () => {
+  const refused = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'fixture');
+  await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(),
+    onSdkRequest: async () => { throw refused; },
+  })).rejects.toBe(refused);
+});
+
+it('preserves a primary provider rejection when its result sequence also refuses', async () => {
+  failure = new Error('Primary provider rejection');
+  const secondary = new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_EXHAUSTED', 'result marker');
+  const outcome = jest.fn(async () => { throw secondary; });
+  await expect(new OpenRouterAgentAdapter().createCompletion({ ...input(),
+    onSdkRequest: async () => 'actual-dispatch', onSdkRequestResult: outcome,
+  })).rejects.toBe(failure);
+  expect(outcome).toHaveBeenCalledTimes(1);
 });
 
 it('preserves the actual upstream rejection and HTTP status without exposing credentials', async () => {

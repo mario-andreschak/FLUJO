@@ -72,6 +72,7 @@ jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
 // the fold-in is recorded, so capture the appends instead of writing files.
 const loggedMessages: FlujoChatMessage[] = [];
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
+  prepareConversationSequence: jest.fn(),
   reconcileConversationLog: jest.fn(async () => undefined),
   recoverMessagesFromLog: jest.fn(async () => undefined),
   repairDanglingToolCalls: jest.fn(() => []),
