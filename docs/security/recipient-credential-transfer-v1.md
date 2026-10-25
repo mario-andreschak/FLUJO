@@ -1,6 +1,6 @@
 # Recipient credential transfer v1
 
-Ordinary backups omit credentials. This separate, deliberate transfer exports model configuration, MCP configuration (including OAuth credentials and all environment/header values), global environment variables, and registry credentials. It excludes the source encryption key, owner credentials/browser sessions, snapshots, host files, flows, and chats. Authored configuration strings may contain manually embedded secrets; treat the whole transfer as sensitive.
+Ordinary backups omit recognized structured credentials; user-authored prose or code can still contain secrets. This separate, deliberate transfer exports model configuration, MCP configuration (including OAuth credentials and all environment/header values), global environment variables, and registry credentials. It excludes the source encryption key, owner credentials/browser sessions, snapshots, host files, flows, and chats. Authored configuration strings may contain manually embedded secrets; treat the whole transfer as sensitive.
 
 ## Settings workflow
 

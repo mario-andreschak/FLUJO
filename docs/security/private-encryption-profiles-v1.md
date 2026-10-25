@@ -79,7 +79,9 @@ rollback. Migrating a public-default wrapper generates a fresh active v2 data ke
 already private v2 profiles retain their key unless explicit retirement is selected.
 Legacy read keys and historical archives retain their documented compatibility.
 
-Ordinary backups omit credentials. Deliberate [recipient credential transfer](recipient-credential-transfer-v1.md)
+Ordinary backups omit recognized structured credentials; secrets embedded in
+user-authored prose or code can remain, so review and protect archives before
+sharing. Deliberate [recipient credential transfer](recipient-credential-transfer-v1.md)
 uses recipient protection and a fresh destination key. Historical snapshots and
 existing exports remain outside in-place migration; copied credentials may need
 provider-side revocation separately. Complete operator-secret rotation and worker
