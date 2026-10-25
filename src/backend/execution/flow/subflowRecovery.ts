@@ -106,17 +106,24 @@ export async function persistSubflowParent(state: SharedState, options?: { publi
   // a bounded publisher owner before retaining the closure; do not capture the
   // same large history once per concurrent lane while waiting for its writer.
   const pending = publishConversation(key, null, async () => {
-    do {
-      checkpoint.dirty = false;
-      if (state.conversationId !== conversationId || state.executionAuthority !== authority
-        || state.executionExtensionContext !== extension) {
-        throw new FlowExecutionAuthorityError('Parent checkpoint ownership changed.');
-      }
-      await persistConversationState(storageKey(conversationId), state);
-      // Every caller waits for the trailing checkpoint containing its progress
-      // or a later state of the same owned run. No caller is acknowledged after
-      // only the older snapshot; one dirty bit replaces a queue of histories.
-    } while (checkpoint.dirty);
+    try {
+      do {
+        checkpoint.dirty = false;
+        if (state.conversationId !== conversationId || state.executionAuthority !== authority
+          || state.executionExtensionContext !== extension) {
+          throw new FlowExecutionAuthorityError('Parent checkpoint ownership changed.');
+        }
+        await persistConversationState(storageKey(conversationId), state);
+        // Every caller waits for the trailing checkpoint containing its progress
+        // or a later state of the same owned run. No caller is acknowledged after
+        // only the older snapshot; one dirty bit replaces a queue of histories.
+      } while (checkpoint.dirty);
+    } finally {
+      // Close acceptance synchronously with the final dirty check. Publisher
+      // frame draining still awaits afterwards; progress arriving in that gap
+      // must start a new ordered cohort rather than join this completed loop.
+      if (parentCheckpoints.get(state) === checkpoint) parentCheckpoints.delete(state);
+    }
   });
   const checkpoint: ParentCheckpoint = { key, dirty: true, authority, extension, promise: pending.finally(() => {
     if (parentCheckpoints.get(state) === checkpoint) parentCheckpoints.delete(state);

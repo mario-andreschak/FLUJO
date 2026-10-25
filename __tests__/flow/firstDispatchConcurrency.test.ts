@@ -146,6 +146,7 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
         continue;
       }
       const result = submission.value;
+      if (count <= 16) expect(result.status).toBe('completed');
       if (result.status === 'completed') {
         expect(result.outputText).toBe(`answer ${id}`);
         expect(requests.get(id)).toHaveLength(1);
@@ -170,6 +171,7 @@ it.each([[false, 1], [false, 16], [false, 64], ...(process.env.FLUJO_FIRST_DISPA
       const summary = JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'conversation-summaries', `${id}.json`), 'utf8'));
       expect(summary).toMatchObject({ id, status: result.status });
     }
+    expect(results.filter(result => result.status === 'completed').length).toBeGreaterThan(0);
     expect(refused).toHaveLength(Math.max(0, count - getFlowRunAdmissionDiagnostics().maxWorkspaceRuns));
     expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0, workspaceActiveRuns: 0 });
     expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });

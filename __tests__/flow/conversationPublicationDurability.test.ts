@@ -6,6 +6,7 @@ import { appendFromBus, appendRawForState, replaceConversationTranscript, flushC
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { getConversationPublicationDiagnostics, publishConversation, CONVERSATION_PUBLICATION_LIMITS } from '@/backend/execution/flow/conversationPublication';
+import * as publication from '@/backend/execution/flow/conversationPublication';
 import type { SharedState, SubflowInvocation } from '@/backend/execution/flow/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { StorageKey } from '@/shared/types/storage';
@@ -19,6 +20,7 @@ import { runWithWorkspace } from '@/utils/workspace';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
 jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({ persistConversationSummary: jest.fn(async () => {}) }));
+jest.mock('@/backend/execution/flow/conversationPublication', () => ({ __esModule: true, ...jest.requireActual('@/backend/execution/flow/conversationPublication') }));
 jest.mock('@/backend/services/workspace/workspaceMutationGate', () => ({
   withWorkspaceMutation: async (task: () => Promise<unknown>) => task(), assertWorkspaceMutationOwned: async () => {},
 }));
@@ -72,7 +74,7 @@ it('coalesces four large live-parent checkpoints and acknowledges every lane out
   const invocation: SubflowInvocation = { version: 1, id: 'visit', parentConversationId: value.conversationId!, parentNodeId: 'parent',
     status: 'running', depth: 0, showSteps: false, concurrencyLimit: 4, joinSeparator: '\n', errorStrategy: 'collect-all',
     createdAt: 1, updatedAt: 1, lanes: Array.from({ length: 8 }, (_, index) => ({ id: `lane-${index}`, index, count: 8,
-      subflowId: 'child', conversationId: `child-${index}`, status: 'pending', attempt: 0, updatedAt: 1, prompt: laneInput })) };
+      subflowId: 'child', conversationId: `child-${index}`, status: 'pending', attempt: 0, updatedAt: 1, input: { prompt: laneInput } })) };
   value.subflowInvocations = { visit: invocation };
   value.executionAuthority = { signal: new AbortController().signal, assertCurrent: async () => { entered.release(); await blocked.promise; } };
   const checkpoints: Array<Array<{ status: string; outputText?: string }>> = [];
@@ -100,10 +102,49 @@ it('coalesces four large live-parent checkpoints and acknowledges every lane out
   expect(checkpoints.at(-1)!.slice(0, 4)).toEqual(Array.from({ length: 4 }, (_, index) => ({ status: 'completed', outputText: `owned-result-${index}` })));
   expect((await fs.stat(snapshotPath(value))).size).toBeGreaterThan(46_800_000);
   expect(FlowExecutor.conversationStates.get(value.conversationId!)).toBe(value);
-  expect(value.messages[0].content.length).toBe(2_000_000);
-  expect(invocation.lanes.every(lane => lane.prompt === laneInput)).toBe(true);
+  expect(typeof value.messages[0].content).toBe('string');
+  expect(value.messages[0].content!.length).toBe(2_000_000);
+  expect(invocation.lanes.every(lane => lane.input && 'prompt' in lane.input && lane.input.prompt === laneInput)).toBe(true);
   expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, writers: 0, retainedBytes: 0, allocationBytes: 0 });
 }, 30_000);
+
+it('writes a new cohort for progress arriving after the last dirty check but before publisher settlement', async () => {
+  const value = state(), finishedLoop = gate(), blockedSettlement = gate();
+  value.status = 'running';
+  const realPublish = jest.requireActual<typeof publication>('@/backend/execution/flow/conversationPublication').publishConversation;
+  let pauseFirstCohort = true;
+  const pauseAfterTask: typeof publishConversation = (key, payload, task, omitRootKeys, prepare) => realPublish(key, payload, async owned => {
+    const result = await task(owned);
+    // Pause only the first outer cohort after its loop returns. The actual
+    // publisher, snapshot captures and filesystem writes remain in use.
+    if (payload === null && pauseFirstCohort) {
+      pauseFirstCohort = false;
+      finishedLoop.release();
+      await blockedSettlement.promise;
+    }
+    return result;
+  }, omitRootKeys, prepare);
+  jest.spyOn(publication, 'publishConversation').mockImplementation(pauseAfterTask);
+  const before = getConversationPublicationDiagnostics();
+  const first = persistSubflowParent(value);
+  let late: Promise<void> | undefined, acknowledged = false;
+  try {
+    await finishedLoop.promise;
+    expect(JSON.parse(await fs.readFile(snapshotPath(value), 'utf8')).messages).toHaveLength(1);
+    value.messages.push(message('late-lane-outcome'));
+    late = persistSubflowParent(value);
+    void late.then(() => { acknowledged = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(acknowledged).toBe(false);
+  } finally {
+    blockedSettlement.release();
+    await Promise.all([first, late]);
+  }
+  expect(JSON.parse(await fs.readFile(snapshotPath(value), 'utf8')).messages.map((item: FlujoChatMessage) => item.id))
+    .toEqual(['old', 'late-lane-outcome']);
+  expect(persistConversationSummary).toHaveBeenCalledTimes(2);
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, writers: 0, retainedBytes: 0, allocationBytes: 0 });
+});
 
 it('releases a coalesced parent cohort on definite storage failure and retries its latest owned progress', async () => {
   const value = state(), entered = gate(), blocked = gate(), primary = Object.assign(new Error('checkpoint disk full'), { code: 'ENOSPC' });
