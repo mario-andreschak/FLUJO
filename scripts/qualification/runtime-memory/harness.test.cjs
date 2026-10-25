@@ -8,6 +8,7 @@ const { PROFILE, profileSha256, harnessDigest, MiB, GiB, validatePlan: validateP
   canonicalTextHash, sourceManifestHash, validateLaunchIdentity, readPilotEvidence, hash } = require('./profile.cjs');
 const { makePlan: makePlanBound } = require('./plan.cjs');
 const { BoundedJsonl, DrainWindows, directoryBytes } = require('./evidence.cjs');
+const { allocationWindowLabel, BatchAllocationSampler } = require('./inspector-evidence.cjs');
 const { history } = require('./fixtures.cjs');
 const { createProvider } = require('./provider.cjs');
 const { verifySourceManifest } = require('./source-loader.cjs');
@@ -48,6 +49,46 @@ test('fixed envelope and full elapsed duration are independent of number of batc
   assert.equal(PROFILE.budgets.cpus, 2); assert.equal(PROFILE.maxActiveChildren, 4);
   assert.equal(PROFILE.childCharacters.length, 8); assert.equal(PROFILE.parentCharacters, 2_000_000);
   assert.equal(estimateStorage(pilot(), 450_000).batches, 192);
+});
+test('exactly three allocation windows select real warmup, baseline and final batches', () => {
+  for (const mode of ['pilot', 'endurance']) for (const cadenceMs of [450_000, 900_000]) {
+    const durationMs = mode === 'pilot' ? PROFILE.pilotBatches * cadenceMs : PROFILE.enduranceMs;
+    const selected = []; let baselineTaken = false;
+    for (let number = -1; number >= -PROFILE.warmupBatches; number--) {
+      const label = allocationWindowLabel({ epoch: 'warmup', number });
+      if (label) selected.push({ label, number });
+    }
+    let number = 0;
+    for (let scheduledMs = 0; scheduledMs < durationMs; scheduledMs += cadenceMs) {
+      const label = allocationWindowLabel({ mode, epoch: 'measurement', number: ++number,
+        elapsedMs: scheduledMs, scheduledMs, durationMs, cadenceMs, baselineTaken, baselineStartMs: PROFILE.baselineStartMs });
+      if (label) selected.push({ label, number, scheduledMs });
+      if (label === 'hour-two') baselineTaken = true;
+    }
+    assert.deepEqual(selected.map(item => item.label), ['warmup', 'hour-two', 'final']);
+    assert.equal(selected[0].number, -1);
+    assert.equal(selected[1].scheduledMs, mode === 'pilot' ? 0 : PROFILE.baselineStartMs);
+    assert.equal(selected[2].number, Math.ceil(durationMs / cadenceMs));
+    assert.equal(selected[2].scheduledMs + cadenceMs, durationMs);
+  }
+});
+test('allocation capture awaits readiness, proves batch overlap and rejects concurrent or idle windows', async () => {
+  let ready, finish, now = 100, invoked = false; const records = [];
+  const sampler = new BatchAllocationSampler(() => new Promise(resolve => { ready = resolve; }), record => records.push(record), () => now);
+  const pending = sampler.run('warmup', 'warmup', -1, async () => { invoked = true; now = 110; return 'batch'; });
+  assert.equal(invoked, false);
+  await assert.rejects(sampler.run('final', 'measurement', 2, () => {}), /overlap/);
+  ready({ startedAtMs: 99, done: new Promise(resolve => { finish = resolve; }) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(invoked, true); assert.equal(records.length, 0);
+  finish({ endedAtMs: 15_099, summary: { top: [], samplingInterval: 131_072, windowMs: 15_000 } });
+  assert.equal(await pending, 'batch');
+  assert.equal(records[0].batchOverlapMs, 10); assert.equal(records[0].actualDurationMs, 15_000);
+  assert.equal(records[0].epoch, 'warmup'); assert.equal(records[0].batch, -1);
+  await assert.rejects(sampler.run('warmup', 'warmup', -1, () => {}), /repeated/);
+  const idle = new BatchAllocationSampler(async () => ({ startedAtMs: 0,
+    done: Promise.resolve({ endedAtMs: 50, summary: {} }) }), () => assert.fail('Idle capture published'), () => now++);
+  await assert.rejects(idle.run('final', 'measurement', 2, async () => {}), /did not overlap/);
 });
 test('plan binds pilot and supervisor completion, source revision, profile and two-platform reservation', () => {
   const p = pilot(), s = supervisor(); const plan = makePlan(p, s, 450_000);

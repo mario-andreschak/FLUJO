@@ -87,6 +87,14 @@ Runtime samples include heap, RSS, external, ArrayBuffers, CPU, GC, event-loop
 delay, resource counts, admissions, queues, cache/replay/sequence registries,
 archive read/write pressure and dispatch counts. Three short inspector allocation
 sampling windows produce bounded top-allocation summaries, not heap snapshots.
+They start after inventory/control I/O and immediately before materializing the
+first warmup batch, the first batch at or after hour two (first measured pilot
+batch), and the last scheduled measured batch. Sampling readiness is awaited
+before batch work; windows cannot overlap. Each summary records label, epoch,
+batch, monotonic start/end timestamps, actual duration and measured batch overlap.
+Fast batches may leave an idle remainder in the same 15-second window; this is
+reported explicitly and is not treated as whole-batch attribution. The three
+compact timing receipts and summary hashes are included in the final receipt.
 All evidence files and stdio are capped. Instrumentation failure, cap exhaustion,
 timeout, missing process exit, missing stdout/stderr EOF, source changes, or a
 quarantined descriptor prevents success. The supervisor never accepts a killed

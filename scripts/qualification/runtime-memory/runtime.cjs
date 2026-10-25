@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { PerformanceObserver, monitorEventLoopDelay } = require('node:perf_hooks');
 const { PROFILE, profileSha256, harnessDigest, hash, readJson, sourceManifestHash } = require('./profile.cjs');
 const { BoundedJsonl, directoryBytes, DrainWindows } = require('./evidence.cjs');
+const { allocationWindowLabel, BatchAllocationSampler } = require('./inspector-evidence.cjs');
 const { family, flow, history } = require('./fixtures.cjs');
 const { assertSettledDiagnostics, assertChildOutcome, foldIdentity, TERMINAL_CODE, TERMINAL_MARKER, RETRY_MARKER } = require('./checks.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -129,7 +130,7 @@ async function main(output) {
     for (const [id, owner] of parked) assert.equal(FlowExecutor.conversationStates.get(id), owner.state, 'Parked owner identity changed');
     assert.equal(d.cache.protectedEntries, parked.size, 'Only the exact parked controls may retain live/recovery ownership');
   }
-  async function inspectorWindow(label) {
+  async function beginInspectorWindow() {
     const Inspector = require('node:inspector');
     const connection = new Inspector.Session(); connection.connect();
     const post = (method, params = {}) => new Promise((resolve, reject) => connection.post(method, params,
@@ -137,23 +138,38 @@ async function main(output) {
     try {
       await post('HeapProfiler.startSampling', { samplingInterval: PROFILE.inspectorInterval,
         includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
-      await delay(PROFILE.inspectorWindowMs);
-      const { profile } = await post('HeapProfiler.stopSampling');
-      // Save a bounded summary, not the entire inspector graph/sample array.
-      let nodes = 0, totalSelfSize = 0; const top = [];
-      function visit(node, depth) {
-        assert(++nodes <= 100_000 && depth <= 512, 'Inspector profile exceeds traversal allowance');
-        totalSelfSize += node.selfSize;
-        if (node.selfSize) { top.push({ bytes: node.selfSize, functionName: node.callFrame.functionName.slice(0, 160),
-          url: node.callFrame.url.slice(0, 300), line: node.callFrame.lineNumber });
-          top.sort((a, b) => b.bytes - a.bytes); if (top.length > 100) top.pop(); }
-        for (const child of node.children ?? []) visit(child, depth + 1);
-      }
-      visit(profile.head, 0);
-      fs.writeFileSync(path.join(output, 'inspector-' + label + '.json'), JSON.stringify({ label, nodes, totalSelfSize, top,
-        samplingInterval: PROFILE.inspectorInterval, windowMs: PROFILE.inspectorWindowMs }), { flag: 'wx' });
-    } finally { connection.disconnect(); }
+    } catch (error) { connection.disconnect(); throw error; }
+    const startedAtMs = performance.now();
+    const done = (async () => {
+      try {
+        await delay(PROFILE.inspectorWindowMs);
+        const { profile } = await post('HeapProfiler.stopSampling');
+        const endedAtMs = performance.now();
+        // Save a bounded summary, not the entire inspector graph/sample array.
+        let nodes = 0, totalSelfSize = 0; const top = [];
+        function visit(node, depth) {
+          assert(++nodes <= 100_000 && depth <= 512, 'Inspector profile exceeds traversal allowance');
+          totalSelfSize += node.selfSize;
+          if (node.selfSize) { top.push({ bytes: node.selfSize, functionName: node.callFrame.functionName.slice(0, 160),
+            url: node.callFrame.url.slice(0, 300), line: node.callFrame.lineNumber });
+            top.sort((a, b) => b.bytes - a.bytes); if (top.length > 100) top.pop(); }
+          for (const child of node.children ?? []) visit(child, depth + 1);
+        }
+        visit(profile.head, 0);
+        return { endedAtMs, summary: { nodes, totalSelfSize, top,
+          samplingInterval: PROFILE.inspectorInterval, windowMs: PROFILE.inspectorWindowMs } };
+      } finally { connection.disconnect(); }
+    })();
+    return { startedAtMs, done };
   }
+  const inspectorReceipts = [];
+  const allocationSampler = new BatchAllocationSampler(beginInspectorWindow, record => {
+    const bytes = JSON.stringify(record);
+    assert(Buffer.byteLength(bytes) <= PROFILE.maxInspectorBytes, 'Inspector summary exceeds fixed allowance');
+    fs.writeFileSync(path.join(output, 'inspector-' + record.label + '.json'), bytes, { flag: 'wx' });
+    const { top, ...compact } = record;
+    inspectorReceipts.push({ ...compact, evidenceSha256: hash(bytes) });
+  }, () => performance.now());
   async function terminal(id, state) {
     await logs.flushConversationLog(id);
     assert(['completed', 'error', 'capped'].includes(state.status), 'Nonterminal state cannot be drained');
@@ -364,10 +380,15 @@ async function main(output) {
     assert.equal((await providerControl('status')).totalRequests, before, 'Fold replay redispatched a child');
     return { ...identity, staleResultsReplayed: 2, providerRequestsAdded: 0 };
   }
-  async function runBatch(number) {
+  async function runBatch(number, inspectorLabel) {
     const beforeDisk = await directoryBytes(process.env.FLUJO_DATA_DIR); const batchStart = performance.now();
     dispatches.clear(); // Harness scalar receipts only; never runtime maps/modules or retained event objects.
     await providerControl('next-batch', 'POST');
+    const run = () => runBatchWork(number, beforeDisk, batchStart);
+    // Start allocation capture after inventory/control I/O, immediately before materializing history.
+    return inspectorLabel ? allocationSampler.run(inspectorLabel, epoch, number, run) : run();
+  }
+  async function runBatchWork(number, beforeDisk, batchStart) {
     const prepared = family(number); const all = [prepared.parent, ...prepared.children.map(child => child.state)];
     const expected = new Map(all.map((state, index) => [state.conversationId,
       { id: state.messages[0].id, sha256: index === 0 ? prepared.parentSha256 : prepared.children[index - 1].sha256 }]));
@@ -446,11 +467,13 @@ async function main(output) {
     started = performance.now();
     timer = setInterval(() => { try { sample(); } catch (error) { fatal ??= error; } }, PROFILE.sampleMs);
     sample();
-    let inspector = inspectorWindow('warmup'); inspector.catch(error => { fatal ??= error; });
     await createParkedOwners();
     const parkedAt = performance.now();
     for (let warmup = 0; warmup < PROFILE.warmupBatches; warmup++) {
-      phases.write({ epoch: 'warmup', ...await runBatch(-warmup - 1) });
+      const number = -warmup - 1;
+      const label = allocationWindowLabel({ epoch: 'warmup', number });
+      const receipt = await runBatch(number, label);
+      phases.write({ epoch: 'warmup', ...receipt });
       await verifyParkedOwners();
     }
     phase = 'parked-real-ttl';
@@ -459,7 +482,7 @@ async function main(output) {
     }
     await verifyParkedOwners();
     phases.write({ epoch: 'warmup', parkedOwners: parked.size, heldMs: performance.now() - parkedAt, passed: true });
-    await resolveParkedOwners(); await inspector;
+    await resolveParkedOwners();
     epoch = 'measurement'; started = performance.now();
     let baselineInspector = false;
     const duration = contract.mode === 'pilot' ? PROFILE.pilotBatches * contract.cadenceMs : PROFILE.enduranceMs;
@@ -470,7 +493,12 @@ async function main(output) {
       batch++;
       const deadline = setTimeout(() => { fs.writeFileSync(path.join(output, 'runtime-timeout.json'), JSON.stringify({ batch, phase })); process.exit(2); }, PROFILE.batchDeadlineMs);
       try {
-        const receipt = await runBatch(batch); phases.write(receipt);
+        const label = allocationWindowLabel({ mode: contract.mode, epoch, number: batch,
+          elapsedMs: performance.now() - started, scheduledMs: next, durationMs: duration,
+          cadenceMs: contract.cadenceMs, baselineTaken: baselineInspector, baselineStartMs: PROFILE.baselineStartMs });
+        if (label === 'hour-two') baselineInspector = true;
+        const receipt = await runBatch(batch, label);
+        phases.write(receipt);
         // Full identities/outcomes stay in bounded batches.jsonl. Keep the final
         // plan receipt below its 1 MiB reader limit even for 192 batches.
         batches.push({ number: receipt.number, elapsedMs: receipt.elapsedMs, diskBytesAdded: receipt.diskBytesAdded,
@@ -480,23 +508,19 @@ async function main(output) {
       // runBatch's state graph is now out of scope before any low-water observation.
       await new Promise(resolve => setImmediate(resolve)); phase = 'drained';
       windows.add(performance.now() - started, sample());
-      if (!baselineInspector && performance.now() - started >= PROFILE.baselineStartMs) {
-        await inspector; inspector = inspectorWindow('hour-two'); inspector.catch(error => { fatal ??= error; }); baselineInspector = true;
-      }
       const free = await fs.promises.statfs(output);
       assert(free.bavail * free.bsize >= PROFILE.budgets.minimumFreeBytes, 'Free disk fell below 20 GiB');
     }
     while (performance.now() - started < duration) { if (fatal) throw fatal; await delay(1000); }
     const measuredElapsedMs = performance.now() - started;
     phase = 'final-natural-ttl-drain';
-    await inspector;
-    inspector = inspectorWindow('final'); inspector.catch(error => { fatal ??= error; });
+    assert.deepEqual(inspectorReceipts.map(receipt => receipt.label), ['warmup', 'hour-two', 'final']);
     const drainStart = performance.now();
     while (performance.now() - drainStart < PROFILE.drainMs) {
       if (fatal) throw fatal;
       cache.enforceBounds(); assertDrained(); await delay(1000);
     }
-    await inspector; cache.enforceBounds(); assertDrained();
+    cache.enforceBounds(); assertDrained();
     if (fatal) throw fatal;
     assert.equal(cache.getConversationCacheDiagnostics().entries, 0, 'Natural terminal TTL did not evict all states');
     if (contract.mode === 'endurance') assert(measuredElapsedMs >= PROFILE.enduranceMs);
@@ -507,7 +531,7 @@ async function main(output) {
     fs.writeFileSync(path.join(output, 'runtime-receipt.json'), JSON.stringify({ version: PROFILE.version, profileSha256,
       sourceHead: contract.sourceHead, harnessSha256: contract.harnessSha256, mode: contract.mode, completed: true, measuredElapsedMs,
       datasetFilesystem: contract.datasetFilesystem,
-      drainElapsedMs: performance.now() - drainStart, batches, peakRss, diagnostics: diagnostics(),
+      drainElapsedMs: performance.now() - drainStart, batches, inspectorWindows: inspectorReceipts, peakRss, diagnostics: diagnostics(),
       growth: windows.result(contract.mode === 'endurance'), disk: await directoryBytes(process.env.FLUJO_DATA_DIR),
       source, events: eventCounts, node: process.version, platform: process.platform, execArgv: process.execArgv,
       limitations: ['Synthetic materialized ASCII history lengths, not original transcript/tokenizer counts.',
