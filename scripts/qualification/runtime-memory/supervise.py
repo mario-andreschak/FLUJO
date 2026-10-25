@@ -12,6 +12,8 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
+import stat
 import shutil
 import subprocess
 import sys
@@ -47,10 +49,28 @@ def save(file, value):
 
 
 def bounded_json(file):
-    if file.stat().st_size > MIB:
-        raise RuntimeError('Receipt exceeds 1 MiB')
-    with file.open(encoding='utf8') as handle:
-        return json.load(handle)
+    descriptor = os.open(file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    with os.fdopen(descriptor, 'rb') as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > MIB:
+            raise RuntimeError('Receipt is not regular or exceeds 1 MiB')
+        data = handle.read(MIB + 1)
+        after = os.fstat(handle.fileno()); named = os.lstat(file)
+        version = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        if len(data) > MIB or len(data) != after.st_size or version(before) != version(after) or version(after) != version(named):
+            raise RuntimeError('Receipt changed or exceeds 1 MiB')
+        return json.loads(data)
+
+
+def owned_provider_environment(ready, pid, token):
+    if not isinstance(ready, dict) or set(ready) != {'pid', 'origin', 'tokenSha256'}:
+        raise RuntimeError('Provider ready record has unexpected fields')
+    if type(ready['pid']) is not int or ready['pid'] != pid:
+        raise RuntimeError('Provider ready PID differs from owned child')
+    match = re.fullmatch(r'http://127\.0\.0\.1:([1-9][0-9]{0,4})', ready['origin']) if isinstance(ready['origin'], str) else None
+    if not match or int(match[1]) > 65535 or ready['tokenSha256'] != hashlib.sha256(token.encode()).hexdigest():
+        raise RuntimeError('Provider endpoint or credential differs from owned launch')
+    return {'FLUJO_569_PROVIDER_PORT': str(int(match[1])), 'FLUJO_569_PROVIDER_PID': str(pid)}
 
 
 def parse_memory_events(text):
@@ -330,10 +350,12 @@ def supervise(args):
                 'cadenceMs': cadence, 'token': secrets.token_hex(24), 'envelope': envelope.receipt,
                 'combinedStorageReservationBytes': combined_reservation, 'source': qualification_source}
     contract['datasetFilesystem'] = dataset_filesystem
+    provider_token = contract['token']  # Original generated scalar; never reload a credential from disk.
     save(output / 'contract.json', contract)
     env = {key: os.environ[key] for key in ['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC'] if key in os.environ}
     env.update({'HOME': str(output / 'home'), 'USERPROFILE': str(output / 'home'), 'NODE_ENV': 'production',
-                'FLUJO_DATA_DIR': str(output / 'data'), 'CODEX_HOME': str(output / 'home' / '.codex')})
+                'FLUJO_DATA_DIR': str(output / 'data'), 'CODEX_HOME': str(output / 'home' / '.codex'),
+                'FLUJO_569_PROVIDER_TOKEN': provider_token})
     children = []; results = {}; failure = None; started = time.monotonic()
     try:
         admit_child()
@@ -343,8 +365,13 @@ def supervise(args):
             if provider.process.poll() is not None or provider.errors or time.monotonic() > until:
                 raise RuntimeError('Provider did not become ready')
             time.sleep(.05)
+        env.update(owned_provider_environment(bounded_json(output / 'provider-ready.json'), provider.process.pid, provider_token))
         admit_child()
+        if provider.process.poll() is not None:
+            raise RuntimeError('Owned provider exited before runtime admission')
         runtime = Child('runtime', envelope, [node, str(HERE / 'runtime.cjs'), str(output)], output, env); children.append(runtime)
+        for name in ['FLUJO_569_PROVIDER_TOKEN', 'FLUJO_569_PROVIDER_PORT', 'FLUJO_569_PROVIDER_PID']:
+            env.pop(name, None)
         duration = profile['enduranceMs'] if args.mode == 'endurance' else profile['pilotBatches'] * cadence
         deadline = time.monotonic() + (duration + profile['drainMs'] + profile['parkedHoldMs']
                      + (profile['warmupBatches'] + 2) * profile['batchDeadlineMs'] + 120_000) / 1000

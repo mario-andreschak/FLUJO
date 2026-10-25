@@ -7,6 +7,7 @@ const { PerformanceObserver, monitorEventLoopDelay } = require('node:perf_hooks'
 const { PROFILE, profileSha256, harnessDigest, hash, readJson, sourceManifestHash } = require('./profile.cjs');
 const { BoundedJsonl, directoryBytes, DrainWindows } = require('./evidence.cjs');
 const { allocationWindowLabel, BatchAllocationSampler } = require('./inspector-evidence.cjs');
+const { ownedProviderConfig, createProviderControl } = require('./provider-control.cjs');
 const { family, flow, history } = require('./fixtures.cjs');
 const { assertSettledDiagnostics, assertChildOutcome, foldIdentity, TERMINAL_CODE, TERMINAL_MARKER, RETRY_MARKER } = require('./checks.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -29,20 +30,20 @@ async function main(output) {
   delete process.env.FLUJO_PARENT_DATA_DIR;
   process.env.FLUJO_EXPOSURE_MODE = 'localhost';
   const provider = readJson(path.join(output, 'provider-ready.json'));
-  const providerUrl = new URL(provider.origin);
-  assert.equal(providerUrl.hostname, '127.0.0.1');
-  require('./network-guard.cjs').installLoopbackGuard(Number(providerUrl.port));
+  const providerConfig = ownedProviderConfig(contract, provider);
+  const providerControl = createProviderControl(providerConfig);
+  require('./network-guard.cjs').installLoopbackGuard(providerConfig.port);
   const loader = require('./source-loader.cjs').installSourceLoader(contract.root, contract.dependencies);
   const load = loader.load;
   await load('backend/services/workspace/migration.ts').migrateWorkspaceLayout();
   const secure = load('utils/encryption/secure.ts');
   const password = 'disposable-runtime-memory-v1';
   assert(await secure.initializeEncryption(password)); assert(await secure.authenticate(password));
-  const encrypted = await load('backend/services/model/encryption.ts').encryptApiKey(contract.token);
+  const encrypted = await load('backend/services/model/encryption.ts').encryptApiKey(providerConfig.token);
   const storage = load('utils/storage/backend.ts');
   const names = require('./provider.cjs').MODEL_NAMES;
   await storage.saveItem('models', names.map(name => ({ id: name, name, displayName: name,
-    provider: 'openai', adapter: 'openai', ApiKey: encrypted, baseUrl: provider.origin + '/v1',
+    provider: 'openai', adapter: 'openai', ApiKey: encrypted, baseUrl: providerConfig.origin + '/v1',
     inputModalities: ['text'], outputModalities: ['text'] })));
   const { flowService } = load('backend/services/flow/index.ts');
   for (const name of names) assert.equal((await flowService.saveFlow(flow(name))).success, true);
@@ -90,12 +91,6 @@ async function main(output) {
   });
   const batches = []; // At most 192 fixed-size receipts, never state/messages/events.
   const parked = new Map(); // Exactly three small ownership controls, only during warmup.
-  async function providerControl(action, method = 'GET') {
-    const response = await fetch(provider.origin + '/control/' + action, { method,
-      headers: { authorization: 'Bearer ' + contract.token }, signal: AbortSignal.timeout(10_000) });
-    assert(response.ok, 'Loopback control failed: ' + action);
-    return action === 'release' ? response.text() : response.json();
-  }
   function diagnostics() {
     let cancellable = 0;
     for (const registry of globalThis.__flujoCancellableRuns?.values() ?? []) cancellable += registry.size;

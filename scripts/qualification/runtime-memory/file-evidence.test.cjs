@@ -2,6 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const { execFileSync } = require('node:child_process');
 const { readBoundedFile } = require('./file-evidence.cjs');
 const root = () => fs.mkdtempSync(path.join(process.env.FLUJO_QUALIFICATION_TEST_EVIDENCE ?? os.tmpdir(), 'flujo-fd-read-'));
 function duringRead(action, read) {
@@ -32,4 +33,10 @@ test('descriptor reads reject actual growth, same-size mutation and name replace
     };
     assert.throws(() => duringRead(change, () => readBoundedFile(file, 8)), /grew|changed/);
   }
+});
+test('Linux FIFO is rejected without waiting for a writer', { skip: process.platform !== 'linux' }, () => {
+  const fifo = path.join(root(), 'unopened-fifo');
+  execFileSync('mkfifo', [fifo], { timeout: 2000 });
+  const script = "const assert=require('node:assert/strict');assert.throws(()=>require(process.argv[1]).readBoundedFile(process.argv[2],8),/not regular/);";
+  execFileSync(process.execPath, ['-e', script, path.join(__dirname, 'file-evidence.cjs'), fifo], { timeout: 2000 });
 });

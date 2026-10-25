@@ -3,10 +3,9 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { PROFILE, hash } = require('./profile.cjs');
+const { PROFILE, hash, readJson } = require('./profile.cjs');
 const { TERMINAL_MARKER, TERMINAL_CODE, RETRY_MARKER, completionMarker } = require('./checks.cjs');
-const MODEL_NAMES = ['parent', ...Array.from({ length: 8 }, (_, i) => 'child-' + i), 'retry-control', 'live-control', 'pause-control',
-  'approval-control', 'effect-control', 'retry-resume'];
+const { MODEL_NAMES, takeProviderToken } = require('./provider-control.cjs');
 function createProvider(token) {
   let active = 0, peakActive = 0, rejected = 0, totalRequests = 0, batch = 0;
   const counts = Object.fromEntries(MODEL_NAMES.map(name => [name, 0]));
@@ -91,12 +90,13 @@ function createProvider(token) {
   } };
 }
 async function main(output) {
-  const contract = JSON.parse(fs.readFileSync(path.join(output, 'contract.json'), 'utf8'));
-  const provider = createProvider(contract.token);
+  const contract = readJson(path.join(output, 'contract.json'));
+  const token = takeProviderToken(contract);
+  const provider = createProvider(token);
   await new Promise(resolve => provider.server.listen(0, '127.0.0.1', resolve));
   fs.writeFileSync(path.join(output, 'provider-ready.json'), JSON.stringify({
     pid: process.pid, origin: 'http://127.0.0.1:' + provider.server.address().port,
-    tokenSha256: hash(contract.token),
+    tokenSha256: hash(token),
   }), { flag: 'wx' });
   const timer = setInterval(() => {
     if (process.memoryUsage().rss > PROFILE.budgets.providerRss) { console.error('provider_rss_limit'); process.exitCode = 1; stop(); }

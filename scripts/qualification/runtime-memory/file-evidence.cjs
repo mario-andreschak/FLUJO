@@ -10,7 +10,7 @@ function sameVersion(left, right) {
 function readBoundedFile(file, maximum) {
   assert(Number.isSafeInteger(maximum) && maximum >= 0 && maximum <= 64 * 1024 ** 2, 'Invalid bounded-read allowance');
   const name = path.resolve(file);
-  const descriptor = fs.openSync(name, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  const descriptor = fs.openSync(name, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const before = fs.fstatSync(descriptor, { bigint: true });
     assert(before.isFile() && before.size <= BigInt(maximum), 'File is not regular or exceeds allowance');

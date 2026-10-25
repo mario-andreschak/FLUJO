@@ -37,6 +37,17 @@ class FakeProcess:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_provider_ready_requires_owned_pid_token_and_canonical_loopback_port(self):
+        token = 'a' * 48
+        ready = {'pid': 123, 'origin': 'http://127.0.0.1:45678', 'tokenSha256': supervisor.hashlib.sha256(token.encode()).hexdigest()}
+        self.assertEqual(supervisor.owned_provider_environment(ready, 123, token),
+                         {'FLUJO_569_PROVIDER_PORT': '45678', 'FLUJO_569_PROVIDER_PID': '123'})
+        for changed in [{**ready, 'pid': 124}, {**ready, 'tokenSha256': 'wrong'}, {**ready, 'extra': 1}] + [
+            {**ready, 'origin': origin} for origin in ['https://127.0.0.1:45678', 'http://localhost:45678',
+                'http://u@127.0.0.1:45678', 'http://127.0.0.1:0', 'http://127.0.0.1:65536',
+                'http://127.0.0.1:45678/path', 'http://127.0.0.1:45678?q=x', 'http://127.0.0.1:45678#x']]:
+            with self.assertRaises(RuntimeError): supervisor.owned_provider_environment(changed, 123, token)
+
     def test_dependency_preflight_rechecks_each_child_and_rejects_changed_target_or_helper(self):
         expected = {'importBridge': {'entries': {'core': {'sha256': 'initial'}}}}
         initial = {'harnessSha256': 'harness', 'dependencies': expected}

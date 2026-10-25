@@ -103,6 +103,17 @@ sequence scanner/append/commit counters and output reservations to reach zero;
 quarantined scanners fail. Durable sequence keys may remain within their fixed
 capacity, without admission refusals.
 
+Receipt and import-entry reads use one bounded regular-file descriptor, with
+nonblocking/no-follow opens where supported, exact EOF and unchanged identity
+checks. FIFOs, oversized files, changed contents and replaced names fail closed.
+The supervisor supplies the disposable provider credential and verifies the
+ready record against its actual child PID and token hash before runtime admission.
+Children consume and remove the credential environment variables; the runtime
+reconstructs the endpoint from a literal loopback host and validated owned port.
+Control requests reject redirects. Responses are capped at 64 KiB before parsing
+and projected into the exact counter/marker schema before fixed-FD JSONL writes;
+unknown fields, invalid counters or arbitrary marker text cannot become evidence.
+
 Publication owners, allocation/retained bytes, writer queues, chains, fences,
 recovery receipts and quarantined writer slots must all settle to zero. Ingress
 owners/parsers/reservations, all shared allocation slots, archive read allocation
@@ -284,6 +295,9 @@ as qualification and never stops an unrelated phase or the whole WSL service.
 
 ```text
 node --test scripts/qualification/runtime-memory/harness.test.cjs
+node --test scripts/qualification/runtime-memory/file-evidence.test.cjs
+node --test scripts/qualification/runtime-memory/provider-control.test.cjs
+node --test scripts/qualification/runtime-memory/source-loader.test.cjs
 python -B -m unittest discover -s scripts/qualification/runtime-memory -p test_supervise.py
 ```
 
