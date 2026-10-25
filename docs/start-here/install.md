@@ -26,7 +26,7 @@ The script installs prerequisites through your package manager, builds FLUJO, an
 
 ## Already have Node.js?
 
-Use **Node.js 22.19+ within 22.x, or 24.2+ within 24.x**, then run:
+Use **Node.js 22.23.4+ within 22.x, or 24.22.1+ within 24.x**, then run:
 
 ```bash
 npx flujo-ai@latest

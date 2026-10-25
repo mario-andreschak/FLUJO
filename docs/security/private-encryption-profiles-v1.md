@@ -71,16 +71,19 @@ an encrypted staged record for operator cleanup, but never exposes a partial
 committed key record or authorizes a credential write under an uncommitted key.
 
 Existing v1/v2 `default` metadata remains readable as **legacy compatibility**,
-not private protection. Explicit passphrase migration rewraps the existing
-keyring, retains legacy keys and atomically replaces metadata. It does not yet
-rewrite mixed legacy ciphertext or historical plaintext. Existing password
-profiles and recoverable backups retain their read compatibility.
+not private protection. The implemented [credential migration](credential-migration-v1.md)
+preflights recognized model, registry, global environment and MCP credential
+stores, writes an authenticated encrypted recovery journal, and rewrites supported
+plaintext/v1/v2 values under private protection. It supports verified resume and
+rollback. Migrating a public-default wrapper generates a fresh active v2 data key;
+already private v2 profiles retain their key unless explicit retirement is selected.
+Legacy read keys and historical archives retain their documented compatibility.
 
-Further #567 work includes complete credential inventory (model keys, registry
-accounts, secret environment values, OAuth/MCP auth, snapshot/bootstrap material),
-resumable bulk migration with preflight/backup/integrity verification, credential-
-free ordinary exports, encrypted recipient transfer, complete operator rotation,
-and worker restore under each declared profile. A restored operator profile
+Ordinary backups omit credentials. Deliberate [recipient credential transfer](recipient-credential-transfer-v1.md)
+uses recipient protection and a fresh destination key. Historical snapshots and
+existing exports remain outside in-place migration; copied credentials may need
+provider-side revocation separately. Complete operator-secret rotation and worker
+restore qualification retain their own requirements. A restored operator profile
 requires its independently provisioned matching mount; a snapshot alone supplies
 no replacement protection secret. Deliberate operator worker capture validates
 the matching independent mount against the captured metadata, as described below;

@@ -1,10 +1,10 @@
 # Flujo Architecture
 
-FLUJO is a single-user Next.js App Router application. The React frontend calls workspace-aware HTTP handlers; backend services manage models, MCP connections, flow execution, schedules, and persistence. Local MCP servers run in child processes. Persistent state lives under the selected workspace's data directory.
+FLUJO is a single-user Next.js App Router application. The React frontend calls workspace-aware HTTP handlers; backend services manage models, MCP connections, flow execution, schedules, and persistence. Local MCP servers use host processes or an approved container profile. Persistent state lives under the selected workspace's data directory.
 
 ## System Architecture
 
-The request proxy enforces Host/Origin exposure rules for internal API surfaces. Protocol-public endpoints have explicit exceptions; these are not user authentication. An explicitly configured owner policy adds scoped API bearers, with independent checks at the proxy and workspace route boundary. Anonymous localhost behavior remains the default when no policy is selected. Worker deployments use a separate bearer boundary. Handlers validate inputs and enter workspace context before accessing state. See the [owner access source contract](../security/owner-access-v1.md) for protocol exceptions, missing browser/session lifecycle and remaining coverage/release gates.
+The request proxy enforces Host/Origin exposure rules for internal API surfaces. Protocol-public endpoints have explicit exceptions; these are not user authentication. An explicitly configured owner policy adds scoped API bearers, with independent checks at the proxy and workspace route boundary. [Browser sessions](../security/owner-browser-session-v1.md) provide login/logout and durable session revocation, while [first-owner pairing](../security/first-owner-pairing-v1.md) enrolls an owner through a private loopback capability. Anonymous localhost behavior remains the default when no policy is selected. Worker deployments use a separate bearer boundary. Handlers validate inputs and enter workspace context before accessing state. The [initial owner access contract](../security/owner-access-v1.md) records protocol exceptions and its historical bearer-only slice; [project status](../project-status.md) describes current capabilities and release limits.
 
 ## Backend Architecture
 
@@ -18,11 +18,12 @@ Routes live under `src/app`; reusable components, hooks, services, contexts, and
 
 Cloud model adapters send selected context to configured providers. MCP integrations may execute local code or call remote services. Tool approvals mediate requested actions, while process/network permissions remain the host operator's responsibility. See [Connected Apps](../features/mcp/overview.md) and [project status](../project-status.md) for supported and experimental scope.
 
-The [MCP isolation source primitive](../security/mcp-isolation-v1-evidence.md)
-is not yet wired into the application's transport. Its controlled Docker probe
-does not establish isolation of currently connected MCP servers, installation
-scripts or an installed FLUJO artifact. Shared ownership/sharing and authenticated
-browser operation remain separate acceptance work.
+The [MCP container integration](../security/mcp-isolation-integration-v1.md)
+wires approved isolated stdio profiles into the application's transports.
+Protected host execution requires separate trusted-host consent; unconfigured
+localhost installations retain legacy direct host execution. Installation/build
+commands remain outside the container path. Source integration and controlled
+Docker probes do not qualify an installed FLUJO artifact or shared/team deployment.
 
 ## Decision Records
 
