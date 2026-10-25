@@ -20,7 +20,8 @@ export function assertFullDependencyResults(needs) {
   }
 }
 
-// Match the twelve genuine GitHub checks in the active main ruleset.
+// Twelve expected checks shared by the ruleset template and release verification.
+// Effective repository settings require separate administrator verification.
 export const REQUIRED_JOB_IDS = FULL_JOB_IDS;
 export const REQUIRED_CHECK_NAMES = Object.freeze(FULL_CHECK_NAMES.filter(name => name !== 'Production build (windows-latest)'));
 export const assertDependencyResults = assertFullDependencyResults;

@@ -1,4 +1,5 @@
-# Main integration verification: genuine checks required by active ruleset 24434701.
+# Main integration verification: genuine checks expected by the ruleset template.
+# Verify effective repository settings before claiming that merges require them.
 # Intermediate feature branches remain locally qualified; only main-target PRs run this gate.
 #
 # Before this workflow existed no CI job ran `npm test`, `tsc --noEmit` or
