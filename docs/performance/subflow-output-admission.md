@@ -44,10 +44,17 @@ already have completed useful work. Nothing truncates a task or child history.
 The lane engine owns the reservation while children and parent result-cache
 writes settle, and attaches it privately to the returned result. Graph `post`
 retains it through framing, promotion, captures and awaited fold persistence.
+The independent child-completion callback admits output before changing its
+parent lane and retains its own reservation through parent persistence. A
+refused callback leaves the dispatched lane intact for recovery from the
+completed child's durable history.
 Detached tools retain it through terminal task publication. Inline tool calls
 retain it through their ModelHandler consumer scope, including native provider
-adapter serialization and transcript projection. Failure drains all started
-workers before release. Numeric reservations do not appear in durable state.
+adapter serialization and transcript projection. The graph's outer consumer
+scope also covers tool-result append and checkpoint publication in normal,
+internal-tool and debug paths. A failed tool batch stops new dispatch and drains
+all started groups and workers before release, preserving its first failure.
+Numeric reservations do not appear in durable state.
 
 An external caller of `runSubflowLanes` must consume the result with graph
 `post`, or call `releaseSubflowOutput` after consumption. JavaScript objects

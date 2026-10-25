@@ -15,7 +15,7 @@ import type {
 } from './types';
 import { bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { isPersonaOwnedConversationState } from './personaConversationOwnership';
-import { latestSubflowAssistantText, type SubflowOutputBudget } from './subflowOutputBudget';
+import { latestSubflowAssistantText, SubflowOutputBudget } from './subflowOutputBudget';
 
 const log = createLogger('backend/execution/flow/subflowRecovery');
 
@@ -260,10 +260,20 @@ export async function reportSubflowRunOutcome(result: SubflowRunOutcome): Promis
   const lane = invocation.lanes.find((candidate) => candidate.id === laneRef.laneId);
   if (!lane || lane.conversationId !== result.conversationId) return;
 
-  applyOutcome(lane, result);
-  invocation.updatedAt = Date.now();
-  if (invocationReady(invocation)) invocation.status = 'ready';
-  await persistSubflowParent(parent);
+  // runFlow queues this callback before its caller receives the child result.
+  // It must admit its own new parent-checkpoint representations, independently
+  // of the lane engine. Refusal leaves the dispatched lane untouched so its
+  // completed child history remains the source for a later recovery attempt.
+  const outputBudget = new SubflowOutputBudget();
+  try {
+    outputBudget.lane(lane.id, laneStatusForOutcome(result) === 'completed'
+      ? { outputText: result.outputText, outputMedia: result.outputMedia }
+      : { error: result.error?.message || 'Subflow execution failed' });
+    applyOutcome(lane, result);
+    invocation.updatedAt = Date.now();
+    if (invocationReady(invocation)) invocation.status = 'ready';
+    await persistSubflowParent(parent);
+  } finally { outputBudget.release(); }
 
   if (invocation.status === 'ready') {
     await resumeReadyParent(parent, invocation);

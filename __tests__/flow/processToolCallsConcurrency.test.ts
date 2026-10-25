@@ -17,6 +17,11 @@ const callToolMock = jest.fn();
 const loadServerConfigsMock = jest.fn();
 const writeRunResourceMock = jest.fn();
 const getRunResourceSettingsMock = jest.fn();
+const executeSubflowToolCallMock = jest.fn();
+jest.mock('@/backend/execution/flow/handlers/subflowToolInvocation', () => ({
+  ...jest.requireActual('@/backend/execution/flow/handlers/subflowToolInvocation'),
+  executeSubflowToolCall: (...args: unknown[]) => executeSubflowToolCallMock(...args),
+}));
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: {
     callTool: (...args: unknown[]) => callToolMock(...args),
@@ -36,6 +41,8 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
+import { SubflowOutputBudget, holdSubflowOutput, retainConsumedSubflowOutput, getSubflowOutputDiagnostics } from '@/backend/execution/flow/subflowOutputBudget';
+import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
@@ -56,6 +63,7 @@ const toolNameMap: Record<string, { server: string; tool: string }> = {
 
 beforeEach(() => {
   callToolMock.mockReset();
+  executeSubflowToolCallMock.mockReset();
   loadServerConfigsMock.mockReset();
   loadServerConfigsMock.mockResolvedValue([]); // no per-server caps unless a test sets them
   writeRunResourceMock.mockReset().mockResolvedValue({ skipped: 'size-cap' });
@@ -71,6 +79,66 @@ beforeEach(() => {
 });
 
 describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
+  it.each(['same', 'other'] as const)('drains a delayed subflow in the %s group before closing output admission after authority failure', async group => {
+    const deferred = () => {
+      let resolve!: () => void;
+      const promise = new Promise<void>(done => { resolve = done; });
+      return { promise, resolve };
+    };
+    const entered = deferred(), failed = deferred(), finish = deferred();
+    const primary = new Error('primary authority failure');
+    loadServerConfigsMock.mockResolvedValue([{ name: 'A', maxConcurrency: 1 }]);
+    const resultData = { outputText: 'delayed child result' };
+    executeSubflowToolCallMock.mockImplementationOnce(async () => {
+      const budget = new SubflowOutputBudget();
+      budget.lane('child', resultData);
+      holdSubflowOutput(resultData, budget);
+      entered.resolve();
+      await finish.promise;
+      retainConsumedSubflowOutput(resultData);
+      return { success: true, data: resultData };
+    });
+    let checks = 0, settled = false, serialized = false;
+    const nativeStringify = JSON.stringify;
+    const stringify = jest.spyOn(JSON, 'stringify').mockImplementation((value, ...args) => {
+      if (value === resultData) {
+        serialized = true;
+        expect(getSubflowOutputDiagnostics().reservedBytes).toBeGreaterThan(0);
+      }
+      return nativeStringify(value, ...args);
+    });
+    const pending = ModelHandler.processToolCalls({
+      toolCalls: [toolCall('slow', 'call_subflow_slow', {}),
+        toolCall('fail', group === 'same' ? 'call_subflow_fail' : 'mcp_a_1', {}),
+        ...(group === 'other' ? [toolCall('queued', 'mcp_a_2', {})] : [])],
+      toolNameMap,
+      emit: event => {
+        if (event.type === 'tool:result') throw new FlowExecutionAuthorityError('secondary authority failure after delayed serialization');
+      },
+      beforeToolDispatch: async () => {
+        if (++checks === 1) return;
+        await entered.promise;
+        failed.resolve();
+        throw primary;
+      },
+    });
+    void pending.then(() => { settled = true; });
+    try {
+      await failed.promise;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(getSubflowOutputDiagnostics().active).toBe(1);
+      finish.resolve();
+      const result = await pending;
+      expect(result).toMatchObject({ success: false, error: { message: primary.message } });
+      expect(serialized).toBe(true);
+      expect(executeSubflowToolCallMock).toHaveBeenCalledTimes(1);
+      expect(callToolMock).not.toHaveBeenCalled();
+      expect(checks).toBe(2);
+      expect(getSubflowOutputDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+    } finally { finish.resolve(); await pending; stringify.mockRestore(); }
+  });
+
   it('returns tool-result messages in the model call order even when calls resolve out of order', async () => {
     // call #1 slowest, call #3 fastest — completion order is the reverse of call order.
     callToolMock.mockImplementation(async (_srv: string, tool: string) => {

@@ -4976,11 +4976,23 @@ export class ModelHandler {
         if (bucket) bucket.push(i);
         else groups.set(key, [i]);
       }
+      // A run-level authority failure must stop new dispatch without letting
+      // Promise.all close the output-consumption scope while sibling workers
+      // still serialize their results. Swallow only at this pool boundary,
+      // drain every started group/worker, then preserve the first failure.
+      let batchFailed = false, batchFailure: unknown;
       await Promise.all(
         Array.from(groups.entries()).map(([key, indices]) =>
-          runWithConcurrency(indices, limitForGroup(key), executeOneToolCall)
+          runWithConcurrency(indices, limitForGroup(key), async index => {
+            if (batchFailed) return;
+            try { await executeOneToolCall(index); }
+            catch (error) {
+              if (!batchFailed) { batchFailed = true; batchFailure = error; }
+            }
+          })
         )
       );
+      if (batchFailed) throw batchFailure;
 
       if (terminalSilentCallIndex >= 0) {
         const reason = 'Meeting turn ended silently before this tool call; it was not executed.';

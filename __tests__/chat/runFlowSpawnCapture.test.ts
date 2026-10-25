@@ -118,6 +118,9 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { getSubflowPreparationDiagnostics } from '@/backend/execution/flow/subflowPreparationBudget';
 import { saveItem } from '@/utils/storage/backend';
+import { SubflowOutputBudget, SubflowOutputPressureError, getSubflowOutputDiagnostics,
+  holdSubflowOutput, retainConsumedSubflowOutput, withSubflowOutputConsumption } from '@/backend/execution/flow/subflowOutputBudget';
+import { reportSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -137,6 +140,99 @@ beforeEach(() => {
 });
 
 describe('runFlow handoff capture — queued Subflow jobs', () => {
+  it('admits the real child-completion callback before mutating or persisting its dispatched parent lane', async () => {
+    const lane = { id: 'lane', index: 0, count: 1, subflowId: 'flow-1', conversationId: 'callback-child',
+      status: 'running', attempt: 1, updatedAt: 1 };
+    const parent = { conversationId: 'callback-parent', flowId: 'flow-parent', status: 'running', currentNodeId: START,
+      messages: [], trackingInfo: { executionId: 'parent-exec', startTime: 1, nodeExecutionTracker: [] },
+      subflowInvocations: { visit: { id: 'visit', status: 'running', parentNodeId: START, lanes: [lane] } },
+      activeSubflowInvocationByNode: { [START]: 'visit' } } as unknown as SharedState;
+    conversationStates.set('callback-parent', parent);
+    (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async shared => {
+      shared.lastResponse = 'completed child output';
+      shared.messages.push({ id: 'child-result', role: 'assistant', content: shared.lastResponse, timestamp: 1 });
+      return { sharedState: shared, action: 'FINAL_RESPONSE' };
+    });
+    const reserve = jest.spyOn(SubflowOutputBudget.prototype, 'reserve').mockImplementationOnce(() => {
+      throw new SubflowOutputPressureError('SUBFLOW_OUTPUT_MEMORY', 'fixture output capacity is busy');
+    });
+    try {
+      const result = await runFlow({ flowId: 'flow-1', conversationId: 'callback-child', prompt: 'work',
+        mode: 'conversation', parentRunId: 'callback-parent', depth: 1,
+        lane: { invocationId: 'visit', laneId: 'lane', conversationId: 'callback-child', parentNodeId: START, laneIndex: 0, laneCount: 1 } });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(result).toMatchObject({ status: 'completed', outputText: 'completed child output' });
+      expect(reserve).toHaveBeenCalledTimes(1);
+      expect(lane).toMatchObject({ id: 'lane', conversationId: 'callback-child', status: 'running', attempt: 1 });
+      expect(lane).not.toHaveProperty('outputText');
+      expect(jest.mocked(saveItem).mock.calls.some(([key]) => key === 'conversations/callback-parent')).toBe(false);
+      const childHistory = JSON.stringify(result.messages);
+      reserve.mockRestore();
+      let parentWrites = 0;
+      jest.mocked(saveItem).mockImplementation(async (key) => {
+        if (key === 'conversations/callback-parent') {
+          parentWrites++;
+          expect(getSubflowOutputDiagnostics().reservedBytes).toBeGreaterThan(0);
+          await Promise.resolve();
+          expect(getSubflowOutputDiagnostics().active).toBe(1);
+        }
+      });
+      await reportSubflowRunOutcome(result);
+      expect(parentWrites).toBe(1);
+      expect(lane).toMatchObject({ id: 'lane', conversationId: 'callback-child', status: 'completed', attempt: 1,
+        outputText: 'completed child output' });
+      expect(JSON.stringify(result.messages)).toBe(childHistory);
+      expect(FlowExecutor.executeStep).toHaveBeenCalledTimes(1);
+      expect(getSubflowOutputDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+    } finally { reserve.mockRestore(); jest.mocked(saveItem).mockImplementation(async () => undefined); }
+  });
+
+  it.each(['normal', 'internal', 'debug'] as const)('retains inline output through the %s tool-result checkpoint', async mode => {
+    const call = { id: 'output-call', type: 'function', function: { name: 'call_subflow_child', arguments: '{}' } };
+    const content = 'inline child output';
+    jest.mocked(ModelHandler.processToolCalls).mockImplementationOnce(async () => withSubflowOutputConsumption(async () => {
+      const output = { outputText: content }, budget = new SubflowOutputBudget();
+      budget.lane('child', output); holdSubflowOutput(output, budget); retainConsumedSubflowOutput(output);
+      return { success: true, value: { toolCallMessages: [{ role: 'tool', tool_call_id: call.id, content }] } } as any;
+    }));
+    let checkpointWrites = 0;
+    jest.mocked(saveItem).mockImplementation(async (_key, value) => {
+      const shared = value as SharedState;
+      if (shared.recovery?.currentCheckpoint?.phase === 'tool:after' && shared.messages.some(message => message.content === content)
+        && getSubflowOutputDiagnostics().active > 0) {
+        checkpointWrites++;
+        expect(getSubflowOutputDiagnostics().reservedBytes).toBeGreaterThan(0);
+        await Promise.resolve();
+        expect(getSubflowOutputDiagnostics().active).toBe(1);
+      }
+    });
+    const conversationId = `output-${mode}`;
+    if (mode === 'debug') {
+      conversationStates.set(conversationId, { conversationId, flowId: 'flow-1', currentNodeId: START,
+        status: 'paused_debug', debugMode: true, debugPendingToolCalls: [call],
+        messages: [{ id: 'call-message', role: 'assistant', content: '', tool_calls: [call], timestamp: 1 }],
+        trackingInfo: { executionId: 'debug-output', startTime: 1, nodeExecutionTracker: [] },
+        createdAt: 1, updatedAt: 1 } as unknown as SharedState);
+    } else {
+      (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async shared => {
+        shared.currentNodeId = START;
+        shared.messages.push({ id: 'call-message', role: 'assistant', content: '', tool_calls: [call], timestamp: 1 });
+        return { sharedState: shared, action: 'TOOL_CALL' };
+      }).mockImplementationOnce(async shared => {
+        shared.lastResponse = 'done';
+        return { sharedState: shared, action: 'FINAL_RESPONSE' };
+      });
+    }
+    try {
+      const result = await runFlow({ flowId: 'flow-1', conversationId, mode: 'conversation',
+        flujo: mode !== 'internal', debug: mode === 'debug', userTurn: false });
+      expect(result.status).toBe(mode === 'debug' ? 'paused_debug' : 'completed');
+      expect(checkpointWrites).toBeGreaterThanOrEqual(mode === 'debug' ? 2 : 1);
+      expect(result.messages.filter(message => message.tool_call_id === call.id)).toHaveLength(1);
+      expect(getSubflowOutputDiagnostics()).toMatchObject({ active: 0, reservedBytes: 0 });
+    } finally { jest.mocked(saveItem).mockImplementation(async () => undefined); }
+  });
+
   it('checkpoints the folded visit continuation with its next node before executing that node', async () => {
     const checkpoints: Array<{ node?: string; continued?: number; active?: string }> = [];
     jest.mocked(saveItem).mockImplementation(async (_key, value) => {
