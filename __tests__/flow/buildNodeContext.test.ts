@@ -457,12 +457,14 @@ describe('toApiMessages (provider boundary — OpenAI-spec fields only)', () => 
       toolResult('t-handoff', 'call-1', '{"status":"Handoff processed"}'),
     ];
 
-    const out = toApiMessages(messages);
+    const sourceIndexes: Array<number | undefined> = [];
+    const out = toApiMessages(messages, false, sourceIndexes);
 
     expect(out).toEqual([
       { role: 'system', content: 'NODE' },
       { role: 'user', content: 'q' },
     ]);
+    expect(sourceIndexes).toEqual([0, 1]);
   });
 
   it('does not mutate the threaded history', () => {
@@ -498,7 +500,8 @@ describe('toApiMessages (provider boundary — OpenAI-spec fields only)', () => 
       timestamp: 1,
     } as unknown as FlujoChatMessage;
 
-    expect(toApiMessages([generated])).toEqual([
+    const sourceIndexes: Array<number | undefined> = [];
+    expect(toApiMessages([generated], false, sourceIndexes)).toEqual([
       { role: 'assistant', content: 'Here it is.' },
       {
         role: 'user',
@@ -518,6 +521,7 @@ describe('toApiMessages (provider boundary — OpenAI-spec fields only)', () => 
     ]);
     expect(generated.media).toHaveLength(1);
     expect(Array.isArray(generated.content)).toBe(true);
+    expect(sourceIndexes).toEqual([0, undefined]);
   });
 
   it('moves tool-produced media through a synthetic user input before the reacting assistant', () => {

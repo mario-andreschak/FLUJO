@@ -308,7 +308,7 @@ function hasTextContent(m: FlujoChatMessage): boolean {
  * preserved — including real calls made in the same turn as a handoff.
  * System messages pass through. Never mutates the input messages.
  */
-export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMessage[] {
+export function stripHandoffPlumbing(messages: FlujoChatMessage[], sourceIndexes?: number[]): FlujoChatMessage[] {
   const handoffToolCallIds = new Set<string>();
   for (const m of messages) {
     if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
@@ -321,7 +321,8 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
   }
 
   const out: FlujoChatMessage[] = [];
-  for (const m of messages) {
+  for (let sourceIndex = 0; sourceIndex < messages.length; sourceIndex++) {
+    const m = messages[sourceIndex];
     if (m.role === 'user' && typeof m.content === 'string' && m.content.trim() === HANDOFF_CONTINUE_MESSAGE) {
       continue;
     }
@@ -338,16 +339,19 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
       );
       if (realToolCalls.length > 0) {
         out.push({ ...m, tool_calls: realToolCalls });
+        sourceIndexes?.push(sourceIndex);
       } else if (hasTextContent(m)) {
         // Keep the agent's prose as a plain assistant turn (the turn boundary);
         // omit tool_calls entirely so no provider sees a dangling call.
         const { tool_calls: _dropped, ...rest } = m;
         out.push(rest as FlujoChatMessage);
+        sourceIndexes?.push(sourceIndex);
       }
       // else: pure routing turn (no text, no real calls) — drop it.
       continue;
     }
     out.push(m);
+    sourceIndexes?.push(sourceIndex);
   }
   return out;
 }
@@ -473,22 +477,38 @@ function userContentWithMedia(
  * makes this idempotent: re-rendering the same history on a later turn puts the
  * media back in exactly the same slot, so the picture stays anchored to the tool
  * call that produced it and the prompt-cache prefix stays stable.
+ * When requested, sourceMessageIndexes receives one input index per emitted
+ * message, or undefined for an inserted media turn with no canonical message.
  */
-export function toApiMessages(messages: FlujoChatMessage[], preserveProviderMetadata = false): OpenAI.ChatCompletionMessageParam[] {
+export function toApiMessages(
+  messages: FlujoChatMessage[],
+  preserveProviderMetadata = false,
+  sourceMessageIndexes?: Array<number | undefined>,
+): OpenAI.ChatCompletionMessageParam[] {
   const out: OpenAI.ChatCompletionMessageParam[] = [];
   let pendingMedia: ModelMediaPart[] = [];
+  // Track the actual projection: handoff turns can disappear and generated
+  // media can insert a wire-only turn. Canonical positions are not wire positions.
+  const push = (message: OpenAI.ChatCompletionMessageParam, sourceIndex?: number) => {
+    out.push(message);
+    sourceMessageIndexes?.push(sourceIndex);
+  };
 
   /** Emit the buffered media as its own user turn (used before assistant turns). */
   const flushAsSyntheticUserTurn = (): void => {
     if (pendingMedia.length === 0) return;
-    out.push({
+    push({
       role: 'user',
       content: userContentWithMedia('[Media produced in the preceding turn]', pendingMedia),
     } as OpenAI.ChatCompletionMessageParam);
     pendingMedia = [];
   };
 
-  for (const message of stripHandoffPlumbing(messages)) {
+  const strippedIndexes: number[] | undefined = sourceMessageIndexes ? [] : undefined;
+  const stripped = stripHandoffPlumbing(messages, strippedIndexes);
+  for (let index = 0; index < stripped.length; index++) {
+    const message = stripped[index];
+    const sourceIndex = strippedIndexes?.[index];
     const { id, timestamp, disabled, processNodeId, depth, usage, contextUsage, injected, agentMessage, media, providerMetadata, ...wire } = message;
     const rest = preserveProviderMetadata && providerMetadata ? { ...wire, providerMetadata } : wire;
 
@@ -496,7 +516,7 @@ export function toApiMessages(messages: FlujoChatMessage[], preserveProviderMeta
       // Tool-produced media (captureToolResult) rides on the tool message but
       // cannot stay there — buffer it until the tool block is over.
       if (media?.length) pendingMedia.push(...media);
-      out.push(rest as OpenAI.ChatCompletionMessageParam);
+      push(rest as OpenAI.ChatCompletionMessageParam, sourceIndex);
       continue;
     }
 
@@ -512,27 +532,27 @@ export function toApiMessages(messages: FlujoChatMessage[], preserveProviderMeta
           )
           .map(part => part.text)
           .join('');
-        out.push({
+        push({
           ...rest,
           content: text || null,
-        } as OpenAI.ChatCompletionMessageParam);
+        } as OpenAI.ChatCompletionMessageParam, sourceIndex);
       } else {
-        out.push(rest as OpenAI.ChatCompletionMessageParam);
+        push(rest as OpenAI.ChatCompletionMessageParam, sourceIndex);
       }
       if (media?.length) pendingMedia.push(...media);
       continue;
     }
 
     if (rest.role === 'user' && pendingMedia.length > 0) {
-      out.push({
+      push({
         ...rest,
         content: userContentWithMedia(rest.content, pendingMedia),
-      } as OpenAI.ChatCompletionMessageParam);
+      } as OpenAI.ChatCompletionMessageParam, sourceIndex);
       pendingMedia = [];
       continue;
     }
 
-    out.push(rest as OpenAI.ChatCompletionMessageParam);
+    push(rest as OpenAI.ChatCompletionMessageParam, sourceIndex);
   }
 
   // A flow can hand an image/video-producing node directly to another model
