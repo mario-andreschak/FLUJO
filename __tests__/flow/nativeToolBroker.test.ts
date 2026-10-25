@@ -12,6 +12,13 @@ import {
   nativeToolInventoryDigest,
 } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { NATIVE_HANDOFF_PROTOCOL } from '@/backend/execution/flow/handlers/nativeHandoffProtocol';
+import * as runResources from '@/backend/services/runResources';
+import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
+
+jest.mock('@/backend/services/runResources', () => {
+  const actual = jest.requireActual('@/backend/services/runResources');
+  return { ...actual, getRunResourceSettings: jest.fn(actual.getRunResourceSettings), writeRunResource: jest.fn(actual.writeRunResource) };
+});
 
 const tool = (name: string): OpenAI.ChatCompletionFunctionTool => ({
   type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } },
@@ -21,6 +28,10 @@ const owner = (conversationId: string, inventoryDigest = 'inventory'): NativeInv
   leaseEpoch: 'lease-a', inventoryDigest, inputDigest: 'input-a',
   attemptOrdinal: 1,
 });
+const resourceText = (input: Parameters<typeof runResources.writeRunResource>[0]): string => {
+  if (!input.data || !('text' in input.data)) throw new Error('Expected a text run resource');
+  return input.data.text;
+};
 
 describe('native broker journal', () => {
   it('reconciles a permitted tool response whose durable receipt exceeds the small invocation-record limit', async () => {
@@ -91,6 +102,9 @@ describe('native broker journal', () => {
   });
   let directory: string;
   beforeEach(async () => {
+    const actual = jest.requireActual('@/backend/services/runResources');
+    jest.mocked(runResources.getRunResourceSettings).mockImplementation(actual.getRunResourceSettings);
+    jest.mocked(runResources.writeRunResource).mockImplementation(actual.writeRunResource);
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-native-broker-'));
     _setNativeToolJournalRootForTests(directory);
   });
@@ -496,9 +510,10 @@ describe('native broker journal', () => {
     expect(callTool).not.toHaveBeenCalled();
   });
 
-  it('holds an oversized effect result instead of replaying the executor', async () => {
+  it('preserves an oversized returned result and replays its bounded receipt without repeating the effect', async () => {
     const tools = [tool('large_result')];
-    const executor = jest.fn(async () => ({ data: 'x'.repeat(1024 * 1024 + 1) }));
+    const output = { data: 'head-' + 'x'.repeat(1100776) + '-tail' };
+    const executor = jest.fn(async () => output);
     const executors = { large_result: executor };
     const receipt = await prepareNativeInvocation(owner('large', nativeToolInventoryDigest(tools, undefined, executors)));
     await submitNativeInvocation(receipt);
@@ -507,9 +522,75 @@ describe('native broker journal', () => {
       authority: createNativeBrokerAuthority('lease-a', async () => undefined),
       signal: new AbortController().signal });
     const call = { toolInvocationId: 'sdk-large', name: 'large_result', args: {}, signal: new AbortController().signal };
-    await expect(port.dispatch(call)).rejects.toThrow(/exceeds the broker transport bound/);
-    await expect(port.dispatch(call)).rejects.toThrow(/unresolved/);
-    expect(executor).toHaveBeenCalledTimes(1);
+    const settings = jest.mocked(runResources.getRunResourceSettings).mockResolvedValue({
+      ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: false,
+    });
+    const write = jest.mocked(runResources.writeRunResource).mockImplementation(async input => ({
+      uri: 'flujo://run/large/saved-output', size: Buffer.byteLength(resourceText(input)),
+    }) as never);
+    try {
+      const result = await port.dispatch(call);
+      expect(result.transcriptText).toContain('head-');
+      expect(result.transcriptText).toContain('-tail');
+      expect(result.transcriptText).toContain('flujo://run/large/saved-output');
+      expect(Buffer.byteLength(result.transcriptText)).toBeLessThanOrEqual(64 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(result.result))).toBeLessThanOrEqual(1024 * 1024);
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(resourceText(write.mock.calls[0][0]))).toEqual({ content: [{ type: 'text', text: JSON.stringify(output) }] });
+      expect(write.mock.calls[0][0].producedBy).toMatchObject({ source: 'tool-result', toolCallId: 'sdk-large' });
+      expect(await port.dispatch(call)).toEqual(result);
+      expect(executor).toHaveBeenCalledTimes(1);
+      expect(write).toHaveBeenCalledTimes(1);
+      await finishNativeInvocation(receipt, 'completed', { assertCurrent: async () => undefined, signal: call.signal });
+      await expect(readNativeInvocationTerminalEvidence(receipt.invocationId, receipt.owner, 'default-workspace'))
+        .resolves.toMatchObject({ holdAbsent: true, effectsResolved: true });
+    } finally { settings.mockRestore(); write.mockRestore(); }
+  });
+
+  it('bounds large MCP structured data even when normal context truncation is disabled', async () => {
+    const tools = [tool('worker_mcp')];
+    const mapping = { worker_mcp: { server: 'worker-server', tool: 'read', clientGeneration: 7, schemaHash: 'schema-a' } };
+    const receipt = await prepareNativeInvocation(owner('large-mcp', nativeToolInventoryDigest(tools, mapping)));
+    await submitNativeInvocation(receipt);
+    const data = { isError: true, content: [{ type: 'text', text: 'returned failure detail' }], structuredContent: { payload: '\u0000'.repeat(200000) } };
+    const callTool = jest.fn(async () => ({ success: true, data }));
+    const service = { getClient: () => ({}), getClientGeneration: () => 7, getToolSchemaHash: () => 'schema-a', callTool } as unknown as Parameters<typeof createNativeToolPort>[0]['service'];
+    const port = createNativeToolPort({ receipt, tools, toolNameMap: mapping, service,
+      authority: createNativeBrokerAuthority('lease-a', async () => undefined), signal: new AbortController().signal });
+    const settings = jest.mocked(runResources.getRunResourceSettings).mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: false });
+    const write = jest.mocked(runResources.writeRunResource).mockRejectedValue(new Error('store unavailable'));
+    const call = { toolInvocationId: 'sdk-large-mcp', name: 'worker_mcp', args: {}, signal: new AbortController().signal };
+    try {
+      const result = await port.dispatch(call);
+      expect(result.result.isError).toBe(true);
+      expect(result.result).not.toHaveProperty('structuredContent');
+      expect(result.transcriptText).toContain('the full result could not be stored');
+      expect(Buffer.byteLength(result.transcriptText)).toBeLessThanOrEqual(64 * 1024);
+      expect(JSON.parse(resourceText(write.mock.calls[0][0]))).toEqual(data);
+      expect(await port.dispatch(call)).toEqual(result);
+      expect(callTool).toHaveBeenCalledTimes(1);
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally { settings.mockRestore(); write.mockRestore(); }
+  });
+
+  it('does not deliver or commit a bounded result after the owner is revoked during its spill', async () => {
+    const tools = [tool('large_result')];
+    const executor = jest.fn(async () => ({ data: 'x'.repeat(100000) }));
+    const receipt = await prepareNativeInvocation(owner('revoked-spill', nativeToolInventoryDigest(tools, undefined, { large_result: executor })));
+    await submitNativeInvocation(receipt);
+    let revoked = false;
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: { large_result: executor },
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-a', async () => { if (revoked) throw new Error('owner revoked'); }), signal: new AbortController().signal });
+    const settings = jest.mocked(runResources.getRunResourceSettings).mockResolvedValue(DEFAULT_RUN_RESOURCE_SETTINGS);
+    const write = jest.mocked(runResources.writeRunResource).mockImplementation(async () => { revoked = true; return { skipped: 'disabled' } as never; });
+    const call = { toolInvocationId: 'sdk-revoked-spill', name: 'large_result', args: {}, signal: new AbortController().signal };
+    try {
+      await expect(port.dispatch(call)).rejects.toThrow('owner revoked');
+      revoked = false;
+      await expect(port.dispatch(call)).rejects.toThrow(/unresolved/);
+      expect(executor).toHaveBeenCalledTimes(1);
+    } finally { settings.mockRestore(); write.mockRestore(); }
   });
 
   it('holds an MCP transport failure as an unknown effect', async () => {

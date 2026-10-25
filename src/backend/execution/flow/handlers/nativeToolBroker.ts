@@ -308,7 +308,32 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       // boundary is fixed and never forwards an unbounded text/media payload.
       if (Buffer.byteLength(transcriptText, 'utf8') > MAX_TRANSCRIPT_BYTES
         || Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_PORT_RESULT_BYTES) {
-        throw new Error('Native tool result exceeds the broker transport bound.');
+        // A returned response resolves the tool effect. Preserve that response
+        // privately and bound its representation instead of turning a large
+        // successful read/write into an unknown effect that kills the Original.
+        const bounded = await boundToolResult({
+          conversationId: input.receipt.owner.conversationId,
+          toolCallId: toolInvocationId,
+          server: kind === 'mcp' ? bound[name].server : undefined,
+          toolName: kind === 'mcp' ? bound[name].tool : name,
+          nodeId: kind === 'mcp' ? bound[name].nodeId : input.receipt.owner.nodeId,
+          content: JSON.stringify(result),
+          settings: {
+            ...await getRunResourceSettings(), toolResultTruncationEnabled: true,
+            // JSON control-character escaping can expand a preview sixfold.
+            // Leave room for that, the resource URI and the enclosing result.
+            toolResultMaxBytes: 8 * 1024, toolResultMaxLines: 200,
+          },
+        });
+        result = {
+          ...(result.isError === undefined ? {} : { isError: result.isError }),
+          content: [{ type: 'text', text: 'The tool returned a response. Native output limits require this preview; do not repeat a mutating tool just to retrieve its output.\n' + bounded.content }],
+        };
+        transcriptText = JSON.stringify(result);
+        if (Buffer.byteLength(transcriptText, 'utf8') > MAX_TRANSCRIPT_BYTES
+          || Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_PORT_RESULT_BYTES) {
+          throw new Error('Native tool preview exceeds the broker transport bound.');
+        }
       }
       await input.authority.assertCurrent();
       const terminal = { result, transcriptText, kind };
