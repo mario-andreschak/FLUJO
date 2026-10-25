@@ -230,7 +230,7 @@ export class FlowExecutor {
       }
 
       // --- Capture state BEFORE execution (slimmed; see slimStateSnapshot) ---
-      stateBefore = slimStateSnapshot(sharedState);
+      if (traceEnabled) stateBefore = slimStateSnapshot(sharedState);
 
       emit?.({ type: 'node:enter', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type } });
 
@@ -270,11 +270,9 @@ export class FlowExecutor {
 
       log.debug(`Node ${node.id} finished with action: ${action} for conversation ${conversationId}`);
 
-      // --- Capture state AFTER execution (slimmed; see slimStateSnapshot) ---
-      const stateAfter = slimStateSnapshot(sharedState);
-
       // --- Create and append DebugStep (only if debug mode is enabled) ---
-      if (traceEnabled && sharedState.executionTrace) {
+      if (traceEnabled && sharedState.executionTrace && stateBefore) {
+        const stateAfter = slimStateSnapshot(sharedState);
         const stepIndex = sharedState.executionTrace.length;
         const debugStep: DebugStep = {
           stepIndex,
