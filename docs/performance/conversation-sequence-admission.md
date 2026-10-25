@@ -31,6 +31,16 @@ retargeted pathname. Existing in-memory sequence ownership is not reset.
 Virtual bus channel IDs that are ineligible for persisted logs retain bounded
 in-memory sequences and never reach a filesystem pathname.
 
+Four process-wide cold-scan slots are admitted before opening descriptors.
+Successful closes and failed opens (including ENOENT) release their slot. An
+uncertain close quarantines its slot until a controlled process restart; the
+numeric descriptor is never retried because it may have been reused. Once the
+four slots are occupied, new cold scans refuse before opening another file.
+Existing in-memory sequence owners and virtual channels continue. A primary
+scan error remains authoritative if closing also fails, while numeric
+`scanActive`, `scanQuarantined`, `scanRefusals`, and `maxColdScans` diagnostics
+expose the retained ownership. The ledger survives server-bundle reloads.
+
 Numeric sequences must be safe integers. Negative legacy sentinels are ignored;
 fractions and unsafe/nonfinite numeric values refuse. Allocation also
 requires a safe integer successor, so it cannot emit a sequence for which
@@ -62,6 +72,7 @@ there is no misleading short `Retry-After` promise or silent ephemeral write.
 ## Failure propagation
 
 The typed codes are `CONVERSATION_SEQUENCE_SCAN_LIMIT`,
+`CONVERSATION_SEQUENCE_SCAN_BUSY`,
 `CONVERSATION_SEQUENCE_IO`, `CONVERSATION_SEQUENCE_CHANGED`,
 `CONVERSATION_SEQUENCE_EXHAUSTED` (HTTP 503), and
 `CONVERSATION_SEQUENCE_REGISTRY_FULL` (HTTP 429). A run preflights its effective

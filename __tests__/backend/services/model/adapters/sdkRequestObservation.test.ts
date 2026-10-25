@@ -32,7 +32,7 @@ describe('observeSdkRequest', () => {
       });
     if (streaming) {
       const stream = await observed;
-      const received = [];
+      const received: string[] = [];
       await expect((async () => { for await (const value of stream!) received.push(value); })()).rejects.toBe(primary);
       expect(received).toEqual(['retained partial result']);
     } else await expect(observed).rejects.toBe(primary);

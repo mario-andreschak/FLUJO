@@ -16,7 +16,7 @@ import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
-import { scanConversationLogSequence, requireAllocatableSequence } from './conversationLogSequence';
+import { scanConversationLogSequence, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
 import { CONVERSATION_SEQUENCE_REGISTRY_LIMITS, admitSequenceRegistryKey, insertSequenceRegistryKey, newSequenceRegistryAccounting, refuseNewSequenceRegistryKey, sequenceRegistryDiagnostics,
   type SequenceRegistryAccounting } from './conversationSequenceRegistry';
 
@@ -168,7 +168,7 @@ const sequenceAccounting = processLogState.sequenceAccounting ??= newSequenceReg
 export function getConversationSequenceDiagnostics() {
   let pendingCommitCount = 0;
   for (const commits of pendingCommits.values()) pendingCommitCount += commits.size;
-  return { ...sequenceRegistryDiagnostics(nextSeq, sequenceAccounting),
+  return { ...sequenceRegistryDiagnostics(nextSeq, sequenceAccounting), ...getConversationSequenceScanDiagnostics(),
     pendingAppendChains: appendChains.size, pendingCommitConversations: pendingCommits.size, pendingCommits: pendingCommitCount };
 }
 

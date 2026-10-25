@@ -2,6 +2,7 @@ import { constants, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 
 export type ConversationSequenceSafetyCode = 'CONVERSATION_SEQUENCE_SCAN_LIMIT'
+  | 'CONVERSATION_SEQUENCE_SCAN_BUSY'
   | 'CONVERSATION_SEQUENCE_IO' | 'CONVERSATION_SEQUENCE_CHANGED' | 'CONVERSATION_SEQUENCE_EXHAUSTED'
   | 'CONVERSATION_SEQUENCE_REGISTRY_FULL';
 
@@ -23,8 +24,33 @@ export function isConversationSequenceSafetyError(error: unknown): error is Conv
 
 export const CONVERSATION_SEQUENCE_SCAN_LIMITS = Object.freeze({
   bufferBytes: 64 * 1024, maxDepth: 128, maxTokensPerLine: 1_000_000,
-  maxSequenceNumberChars: 128, maxMilliseconds: 5_000,
+  maxSequenceNumberChars: 128, maxMilliseconds: 5_000, maxColdScans: 4,
 });
+
+type ScanAdmissionState = { active: number; quarantined: number; refusals: number };
+const scanGlobal = globalThis as typeof globalThis & { __flujoConversationSequenceScansV1?: ScanAdmissionState };
+const scanAdmission = scanGlobal.__flujoConversationSequenceScansV1 ??= { active: 0, quarantined: 0, refusals: 0 };
+
+export function getConversationSequenceScanDiagnostics() {
+  return { scanActive: scanAdmission.active, scanQuarantined: scanAdmission.quarantined,
+    scanRefusals: scanAdmission.refusals, maxColdScans: CONVERSATION_SEQUENCE_SCAN_LIMITS.maxColdScans };
+}
+
+function admitColdScan() {
+  if (scanAdmission.active + scanAdmission.quarantined >= CONVERSATION_SEQUENCE_SCAN_LIMITS.maxColdScans) {
+    scanAdmission.refusals++;
+    throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_SCAN_BUSY',
+      'cold-scan descriptor capacity is occupied; after uncertain descriptor closure, drain work and perform a controlled restart');
+  }
+  scanAdmission.active++;
+  let settled = false;
+  return (quarantined = false) => {
+    if (settled) return;
+    settled = true;
+    scanAdmission.active--;
+    if (quarantined) scanAdmission.quarantined++;
+  };
+}
 
 function limit(reason: string): never { throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_SCAN_LIMIT', reason); }
 export function requireAllocatableSequence(next: number): void {
@@ -212,9 +238,11 @@ export function scanConversationLogSequence(file: string, options: SequenceScanO
   if (settings.bufferBytes > CONVERSATION_SEQUENCE_SCAN_LIMITS.bufferBytes || settings.maxDepth > CONVERSATION_SEQUENCE_SCAN_LIMITS.maxDepth) limit('scanner allocation limits cannot be increased');
   const now = options.now ?? (() => performance.now());
   const started = now();
+  const settleScan = admitColdScan(); // Before open: uncertain closes retain this finite ownership slot.
   let descriptor: number;
   try { descriptor = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); }
   catch (error) {
+    settleScan(); // A failed open supplied no descriptor.
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return -1;
     throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log could not be opened; restore storage access before retrying', { cause: error });
   }
@@ -247,8 +275,11 @@ export function scanConversationLogSequence(file: string, options: SequenceScanO
       : new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log could not be read; restore storage access before retrying', { cause: error });
     throw failure;
   } finally {
-    try { closeSync(descriptor); }
+    try { closeSync(descriptor); settleScan(); }
     catch (error) {
+      // Never retry the numeric descriptor: close may have succeeded before
+      // reporting failure and that number may already identify another owner.
+      settleScan(true);
       if (!failure) throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log descriptor could not be closed safely', { cause: error });
     }
   }

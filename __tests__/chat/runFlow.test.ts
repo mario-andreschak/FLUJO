@@ -280,7 +280,8 @@ describe('Conversation sequence safety before execution', () => {
     const tool = jest.spyOn(ModelHandler, 'processToolCalls').mockImplementationOnce(async () => {
       while (true) { try { allocateSeq(id); } catch { break; } }
       if (outcome === 'throw') throw original;
-      return { success: false, error: { message: original.message, code: 'actual_tool_failure' } };
+      return { success: false, error: { type: 'mcp' as const, message: original.message,
+        code: 'actual_tool_failure', serverName: 'fixture-writer', operation: 'write_external' } };
     });
     try {
       const result = await runFlow({ flowId: FLOW_ID, conversationId: id, continueDebug: true });
