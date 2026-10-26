@@ -35,7 +35,7 @@ import { handleModernFlowsMcpRequest, isLegacyFlowsMcpRequest } from '@/backend/
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-flows/route');
-const SERVER_VERSION = '3.48.2';
+const SERVER_VERSION = '3.48.3';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
