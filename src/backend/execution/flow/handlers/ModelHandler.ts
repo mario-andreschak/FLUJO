@@ -2843,7 +2843,12 @@ export class ModelHandler {
       const canonicalSource = opts?.canonicalMessages ?? messages;
       const pagedCanonical = opts?.archiveModelTurns && opts.conversationId
         && (canonicalSource.length > 1000 || estimateArchiveSnapshotBytes(canonicalSource) > 8 * 1024 * 1024)
-        ? await preparePagedCanonicalArchive(opts.conversationId, canonicalSource, opts.durableContext)
+        ? await preparePagedCanonicalArchive(opts.conversationId, canonicalSource, opts.durableContext,
+          // Same opt-in as the dispatch archive below: page preparation of one
+          // large history must wait for concurrent writes rather than refuse.
+          !opts.nativeBrokerAuthority && !opts.durableContext?.executionAuthority
+            && !opts.durableContext?.executionExtensionContext && !opts.durableContext?.personaAttribution
+            ? { wait: true, signal: abortController.signal } : undefined)
         : undefined;
       if (opts?.archiveModelTurns) {
         archiveSnapshotReservation = reserveArchiveSnapshot(pagedCanonical ? [] : canonicalSource);

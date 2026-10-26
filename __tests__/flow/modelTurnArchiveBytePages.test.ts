@@ -80,6 +80,30 @@ describe('canonical archive byte pages', () => {
     expect((await snapshot('queued', entry.id)).canonicalMessages[0].content).toBe('at dispatch');
   });
 
+  it('lets opted-in page preparation wait for concurrent write capacity while fail-fast preparation refuses', async () => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let ready!: () => void;
+    const entered = new Promise<void>(resolve => { ready = resolve; });
+    let count = 0;
+    const occupiers = Array.from({ length: 4 }, () => withArchiveWriteMemory('small', async () => {
+      if (++count === 4) ready();
+      await held;
+    }));
+    await entered;
+    try {
+      await expect(preparePagedCanonicalArchive('fail-fast', [message('a', 'history')]))
+        .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' });
+      const waiting = preparePagedCanonicalArchive('waiting', [message('a', 'history')], {}, { wait: true });
+      await new Promise(resolve => setImmediate(resolve));
+      release();
+      await Promise.all(occupiers);
+      const canonical = await waiting;
+      const entry = await archiveModelDispatch(request('waiting', canonical));
+      expect((await snapshot('waiting', entry.id)).canonicalMessages).toEqual([message('a', 'history')]);
+    } finally { release(); await Promise.allSettled(occupiers); }
+  });
+
   it('rejects untrusted constructor metadata before reading a page', async () => {
     const forged = new PagedCanonicalArchive('forged', [{ sha256: 'a'.repeat(64), count: 1 }], 1, [], new Set(['a']));
     const open = jest.spyOn(fs, 'open');

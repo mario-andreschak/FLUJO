@@ -210,6 +210,51 @@ describe('ordinary archive writer waiting', () => {
     } finally { await active.release(); }
     expect(factory).not.toHaveBeenCalled(); expect(getArchiveWritePressure()).toMatchObject({ writers: 0, bytes: 0 });
   });
+  it('waits for process byte capacity instead of refusing an opted-in writer', async () => {
+    const held: ReturnType<typeof reserveArchiveSnapshot>[] = [];
+    const factory = jest.fn(async () => undefined);
+    try {
+      for (let index = 0; index < 8; index++) {
+        const before = getArchiveWritePressure().bytes;
+        const reservation = reserveArchiveSnapshot('small');
+        held.push(reservation);
+        reservation.grow(MODEL_TURN_ARCHIVE_WRITE_LIMITS.snapshotBytes - (getArchiveWritePressure().bytes - before));
+      }
+      expect(getArchiveWritePressure().bytes).toBe(MODEL_TURN_ARCHIVE_WRITE_LIMITS.processBytes);
+      // Fail-fast callers still refuse; an opted-in writer queues without a byte hold.
+      await expect(withArchiveWriteMemory('small', factory)).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' });
+      const waiting = withArchiveWriteMemory('small', factory, 'owned-only', { wait: true });
+      const later = withArchiveWriteMemory('small', factory, 'owned-only', { wait: true });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(factory).not.toHaveBeenCalled();
+      expect(getArchiveWritePressure().bytes).toBe(MODEL_TURN_ARCHIVE_WRITE_LIMITS.processBytes);
+      held.pop()!.release();
+      await Promise.all([waiting, later]);
+      expect(factory).toHaveBeenCalledTimes(2);
+    } finally { for (const reservation of held) reservation.release(); }
+    expect(getArchiveWritePressure()).toMatchObject({ writers: 0, bytes: 0 });
+  });
+  it('expires a byte-capacity waiter as busy and refuses an over-limit write before queueing', async () => {
+    const held: ReturnType<typeof reserveArchiveSnapshot>[] = [];
+    const factory = jest.fn(async () => undefined);
+    const queue = (globalThis as typeof globalThis & { __flujoArchiveWriteQueue: unknown[] }).__flujoArchiveWriteQueue;
+    try {
+      for (let index = 0; index < 8; index++) {
+        const before = getArchiveWritePressure().bytes;
+        const reservation = reserveArchiveSnapshot('small');
+        held.push(reservation);
+        reservation.grow(MODEL_TURN_ARCHIVE_WRITE_LIMITS.snapshotBytes - (getArchiveWritePressure().bytes - before));
+      }
+      await expect(withArchiveWriteMemory('small', factory, 'owned-only', { wait: true, timeoutMs: 1 }))
+        .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' });
+      expect(queue).toHaveLength(0);
+    } finally { for (const reservation of held) reservation.release(); }
+    await expect(withArchiveWriteMemory('small', factory, 'owned-only', { wait: true }, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes))
+      .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_LIMIT' });
+    expect(factory).not.toHaveBeenCalled();
+    expect(queue).toHaveLength(0);
+    expect(getArchiveWritePressure()).toMatchObject({ writers: 0, bytes: 0 });
+  });
   it('rechecks payload expansion after waiting before invoking its clone factory', async () => {
     const active = await occupy(); const payload: unknown[] = []; const factory = jest.fn(async () => {});
     const queued = withArchiveWriteMemory(payload, factory, 'owned-only', { wait: true });
