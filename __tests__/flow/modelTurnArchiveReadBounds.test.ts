@@ -177,6 +177,26 @@ describe('model-turn archive inspection bounds', () => {
     await expect(withModelTurnArchiveRead(async () => 'admitted')).resolves.toBe('admitted');
   });
 
+  it.each([['ASCII', 'x', 4], ['non-ASCII', '\u00e9', 6]] as const)('charges %s string bytes by their decoded representation', async (_label, unit, perByte) => {
+    const file = path.join(root, 'representation.gz');
+    const json = JSON.stringify({ content: unit.repeat(1_000_000) });
+    const expected = JSON.parse(json);
+    const compressed = gzipSync(json);
+    await fs.writeFile(file, compressed);
+    const decoded = Buffer.byteLength(json);
+    // {, ", :, " each add one structural charge; the string interior adds none.
+    const structural = 128 + 64 + 128 + 64;
+    let reserved = -1;
+    const parse = jest.spyOn(JSON, 'parse').mockImplementation(function (this: unknown, ...args: Parameters<typeof JSON.parse>) {
+      reserved = getModelTurnArchiveReadDiagnostics().reservedJsonAllocationBytes;
+      parse.mockRestore();
+      return JSON.parse(...args);
+    });
+    await expect(withModelTurnArchiveRead(() => readBoundedModelTurnJson(file))).resolves.toEqual(expected);
+    expect(reserved).toBe(compressed.length * 2 + decoded * perByte + structural);
+    expect(getModelTurnArchiveReadDiagnostics().reservedJsonAllocationBytes).toBe(0);
+  });
+
   it('refuses dense JSON object inflation before parsing and leaves the original archive unchanged', async () => {
     const file = path.join(root, 'dense.gz');
     const compressed = gzipSync(`[${'{"a":0},'.repeat(400_000)}{}]`);
@@ -211,7 +231,8 @@ describe('model-turn archive inspection bounds', () => {
   it('reports aggregate allocation pressure as retryable and admits the same valid input after release', async () => {
     const heldFile = path.join(root, 'held-large.gz');
     const nextFile = path.join(root, 'next.gz');
-    await fs.writeFile(heldFile, gzipSync(JSON.stringify({ content: 'a'.repeat(14 * 1024 * 1024) })));
+    // 30 MiB of ASCII reserves 120 MiB; the next 4 MiB read (16 MiB) exceeds 128 MiB.
+    await fs.writeFile(heldFile, gzipSync(JSON.stringify({ content: 'a'.repeat(30 * 1024 * 1024) })));
     await fs.writeFile(nextFile, gzipSync(JSON.stringify({ content: 'b'.repeat(4 * 1024 * 1024) })));
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
