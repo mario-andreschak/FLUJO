@@ -209,11 +209,14 @@ function reserve(bytes: number, limit: number, writer: boolean): ArchiveMemoryRe
     if (released || !Number.isSafeInteger(bytes) || bytes < 0 || bytes > held) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
     held -= bytes;
     ledger.bytes -= bytes;
+    drainArchiveWriteQueue();
   }, release: () => {
     if (released) return;
     released = true;
     ledger.bytes -= held;
-    if (writer) { ledger.writers--; drainArchiveWriteQueue(); }
+    if (writer) ledger.writers--;
+    // Any freed byte or writer capacity may admit the queue head.
+    drainArchiveWriteQueue();
   } };
 }
 
@@ -223,23 +226,35 @@ export interface ArchiveWriteAdmissionOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
 }
-interface ArchiveWriteWaiter { grant: () => void }
+interface ArchiveWriteWaiter { bytes: number; grant: () => void }
 const queueRuntime = globalThis as typeof globalThis & { __flujoArchiveWriteQueue?: ArchiveWriteWaiter[] };
 const writeQueue = queueRuntime.__flujoArchiveWriteQueue ??= [];
+let drainingArchiveWriteQueue = false;
 function drainArchiveWriteQueue(): void {
-  while (ledger.writers < MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites && writeQueue.length) {
-    writeQueue[0].grant();
-  }
+  if (drainingArchiveWriteQueue) return;
+  drainingArchiveWriteQueue = true;
+  try {
+    // FIFO: the head is admitted once a writer slot is free and its bytes fit.
+    // A waiter retains only its caller's existing objects, so its bytes are
+    // charged at grant; pre-charging would starve fail-fast reservations.
+    while (writeQueue.length && ledger.writers < MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites
+      && ledger.bytes + writeQueue[0].bytes <= MODEL_TURN_ARCHIVE_WRITE_LIMITS.processBytes) {
+      writeQueue[0].grant();
+    }
+  } finally { drainingArchiveWriteQueue = false; }
 }
 
 function admitArchiveWriter(bytes: number, options?: ArchiveWriteAdmissionOptions): Promise<ArchiveMemoryReservation> {
   options?.signal?.throwIfAborted();
-  if (!options?.wait || (!writeQueue.length && ledger.writers < MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites)) {
+  // A single write above its own limit can never be admitted: refuse before queueing.
+  if (!options?.wait || !Number.isSafeInteger(bytes) || bytes < 0 || bytes > MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes
+    || (!writeQueue.length && ledger.writers < MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites
+      && ledger.bytes + bytes <= MODEL_TURN_ARCHIVE_WRITE_LIMITS.processBytes)) {
     return Promise.resolve(reserve(bytes, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, true));
   }
   if (writeQueue.length >= MODEL_TURN_ARCHIVE_WRITE_LIMITS.queuedWrites) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
-  // Retained queued references count against the same byte ceiling before any archive clone.
-  const held = reserve(bytes, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, false);
+  // Opted-in waiters wait for byte capacity as well as a writer slot, within
+  // the same bounded queue and timeout. Fail-fast callers are unchanged.
   return new Promise((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
@@ -250,14 +265,13 @@ function admitArchiveWriter(bytes: number, options?: ArchiveWriteAdmissionOption
     };
     const fail = (error: unknown) => {
       if (settled) return;
-      settled = true; cleanup(); held.release(); reject(error);
+      settled = true; cleanup(); reject(error);
     };
     const abort = () => fail(options.signal?.reason ?? new DOMException('Archive admission cancelled.', 'AbortError'));
-    const waiter: ArchiveWriteWaiter = { grant: () => {
+    const waiter: ArchiveWriteWaiter = { bytes, grant: () => {
       if (settled) return;
       settled = true; cleanup();
-      // Transfer queued bytes to a writer atomically, without yielding or relaxing either bound.
-      held.release();
+      // Admit synchronously within the drain that checked both bounds.
       try { options.signal?.throwIfAborted(); resolve(reserve(bytes, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes, true)); }
       catch (error) { reject(error); }
     } };

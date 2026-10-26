@@ -549,6 +549,9 @@ function canonicalPagePath(conversationId: string, sha256: string): string {
 
 export async function preparePagedCanonicalArchive(
   conversationId: string, messages: readonly FlujoChatMessage[], durableContext: FlowDurableMutationContext = {},
+  // Ordinary dispatches opt in to waiting for archive capacity; protected and
+  // native callers omit this and keep fail-fast admission.
+  writeAdmission?: ArchiveWriteAdmissionOptions,
 ): Promise<PagedCanonicalArchive> {
   const pages: Array<{ sha256: string; count: number }> = [];
   const witnesses: CanonicalPageWitness[] = [];
@@ -599,7 +602,7 @@ export async function preparePagedCanonicalArchive(
         materializationBytes: estimateArchivePayload(sanitized) * 4,
         ids: Object.freeze((sanitized as FlujoChatMessage[]).map(message => message.id)) }));
       media.push(...ctx.media);
-    })));
+    })), 'legacy-unbounded', writeAdmission);
   }
   const archive = new PagedCanonicalArchive(conversationId, Object.freeze(pages.map(page => Object.freeze(page))), messages.length,
     media, new Set(messages.map(message => message.id)));
