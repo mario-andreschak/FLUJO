@@ -5,7 +5,7 @@ import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { parseReleaseArguments, releaseUsage } from './release-arguments.mjs';
 import { assertOfficialReleaseOrigin } from './release-verification.mjs';
-import { dispatchRelease, readReleaseWorkflow, RELEASE_REPOSITORY, resumeRelease, watchRelease } from './release-github.mjs';
+import { dispatchRelease, landVersionCommit, readReleaseWorkflow, RELEASE_REPOSITORY, resumeRelease, watchRelease } from './release-github.mjs';
 import { readReleaseState, writeReleaseState } from './release-state.mjs';
 
 const run = (command) => execSync(command, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -16,6 +16,12 @@ const gh = (command, args, options = {}) => {
   if (result.error || result.status !== 0) throw result.error ?? new Error(String(result.stderr || `GitHub command failed (${result.status}).`));
   return typeof result.stdout === 'string' ? result.stdout.trim() : '';
 };
+const git = (args) => {
+  const result = spawnSync('git', args, { encoding: 'utf8', windowsHide: true, timeout: 120_000 });
+  if (result.error || result.status !== 0) throw result.error ?? new Error(String(result.stderr || `git ${args[0]} failed (${result.status}).`));
+  return result.stdout.trim();
+};
+const SHA = /^[a-f0-9]{40}$/;
 const manifestVersion = () => JSON.parse(readFileSync('package.json', 'utf8')).version;
 
 async function main() {
@@ -28,7 +34,7 @@ async function main() {
   if (dryRun) {
     show('npm run build');
     show('npm run validate:mcp-release');
-    console.log(`\nDry run passed. Would version '${bump}', push its main commit for exact-revision verification, then publish five tested packages through GitHub OIDC before the version tag, image and installer.`);
+    console.log(`\nDry run passed. Would version '${bump}', land its version commit on main through a pull request for exact-revision verification, then publish five tested packages through GitHub OIDC before the version tag, image and installer.`);
     return;
   }
   if (spawnSync('gh', ['--version'], { shell: true, stdio: 'ignore' }).status !== 0) throw new Error('Install and authenticate GitHub CLI to run a release.');
@@ -43,10 +49,11 @@ async function main() {
     run('git fetch origin main "+refs/tags/v*:refs/tags/v*"');
     let state = readReleaseState(statePath);
     if (state) {
-      if (state.sha !== run('git rev-parse HEAD') || state.version !== manifestVersion()
-          || !/^[a-f0-9]{40}$/.test(state.sha ?? '') || !/^\d+\.\d+\.\d+$/.test(state.version ?? '')) {
-        throw new Error('A pending release record belongs to another revision. Resolve that release before creating another version.');
-      }
+      const pendingError = 'A pending release record belongs to another revision. Resolve that release before creating another version.';
+      if (!SHA.test(state.sha ?? '') || !/^\d+\.\d+\.\d+$/.test(state.version ?? '')) throw new Error(pendingError);
+      // Finish an interrupted landing: the record already names the merged main commit.
+      if (state.landed && SHA.test(state.localSha ?? '') && run('git rev-parse HEAD') === state.localSha) show(`git reset --hard ${state.sha}`);
+      if (state.sha !== run('git rev-parse HEAD') || state.version !== manifestVersion()) throw new Error(pendingError);
       console.log(`Continuing prepared version ${state.version} without another version bump.`);
     } else {
       if (run('git rev-parse main') !== run('git rev-parse origin/main')) throw new Error('main and origin/main differ; pull or push first.');
@@ -59,7 +66,15 @@ async function main() {
       state = { sha: run('git rev-parse HEAD'), version };
       writeReleaseState(statePath, state, { createOnly: true });
     }
-    show('git push origin main');
+    if (!state.landed) {
+      // main accepts changes only through pull requests; release the exact main
+      // commit that carries this version change.
+      const merged = await landVersionCommit({ git, gh: (args) => gh('gh', args), version: state.version,
+        localSha: state.sha, baseSha: git(['rev-parse', `${state.sha}^`]) });
+      state = { sha: merged, version: state.version, localSha: state.sha, landed: true };
+      writeReleaseState(statePath, state);
+      show(`git reset --hard ${merged}`);
+    }
     identity = await dispatchRelease({ run: gh, sha: state.sha, version: state.version });
     state.runId = identity.runId;
     writeReleaseState(statePath, state);
