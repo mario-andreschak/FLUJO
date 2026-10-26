@@ -9,6 +9,7 @@ import {
 } from '@/shared/types/execution/events';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { SharedState } from './types';
+import { getConversationStates } from './conversationStateRegistry';
 import { commitExecutionExtensionMutation, isExecutionProtectedState } from '@/backend/execution/extensions';
 import { persistConversationState } from './persistConversationState';
 import type { StorageKey } from '@/shared/types/storage';
@@ -254,11 +255,10 @@ function persistableState(conversationId: string): SharedState | undefined {
     // A deleted conversation's in-flight run keeps emitting until its next
     // cancellation check; those events must not re-create the just-deleted log.
     if (isConversationDeleted(conversationId)) return undefined;
-    // Lazy require to avoid a static import cycle (FlowExecutor → engine →
-    // nodes → handlers → executionEventBus → this module).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
-    const state: SharedState | undefined = FlowExecutor.conversationStates.get(conversationId);
+    // Static, dependency-free registry (no FlowExecutor import cycle). A lazy
+    // require of FlowExecutor resolved to undefined in the production bundle
+    // and silently dropped every bus event (issue #1319).
+    const state: SharedState | undefined = getConversationStates().get(conversationId);
     if (!state || state.ephemeral) return undefined;
     return state;
   } catch (err) {

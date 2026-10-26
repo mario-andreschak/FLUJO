@@ -34,7 +34,8 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const S = '077cfac0-start';
   const P = 'ef2a3c01-process';
   const EDGE = `${S}->${P}`;
-  const conversationStates = new Map();
+  // Live-state consumers read the shared registry (issue #1319).
+  const conversationStates = jest.requireActual('@/backend/execution/flow/conversationStateRegistry').getConversationStates();
   return {
     FlowExecutor: {
       conversationStates,

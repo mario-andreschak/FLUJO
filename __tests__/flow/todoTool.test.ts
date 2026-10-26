@@ -16,8 +16,8 @@
 
 import type { SharedState } from '@/backend/execution/flow/types';
 
-// The executor reads the LIVE SharedState via FlowExecutor.conversationStates
-// (a lazy require inside todoTool). Mock it with a Map we control.
+// The executor reads the LIVE SharedState via the conversation-state registry
+// (issue #1319). Mock it with a Map we control.
 const mockStates = new Map<string, Partial<SharedState>>();
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: {
@@ -25,6 +25,9 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
       return mockStates;
     },
   },
+}));
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => mockStates,
 }));
 
 import {

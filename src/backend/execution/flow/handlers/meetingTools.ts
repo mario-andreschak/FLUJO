@@ -1,4 +1,5 @@
 import { createLogger } from '@/utils/logger';
+import { getConversationStates } from '../conversationStateRegistry';
 import type { MeetingToolAction } from '@/shared/types/meeting';
 import type { ToolDefinition } from '../types';
 
@@ -370,9 +371,7 @@ export function normalizeMeetingToolAction(
 /** Lazy lookup avoids FlowExecutor -> ProcessNode -> ModelHandler import cycles. */
 function getLiveMeetingState(conversationId: string): LiveMeetingState | undefined {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
-    return FlowExecutor.conversationStates.get(conversationId) as LiveMeetingState | undefined;
+    return getConversationStates().get(conversationId) as LiveMeetingState | undefined;
   } catch (error) {
     log.warn('Could not resolve live SharedState for meeting action', { conversationId, error });
     return undefined;

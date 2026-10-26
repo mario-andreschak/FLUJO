@@ -1,4 +1,5 @@
 import { createLogger } from '@/utils/logger';
+import { getConversationStates } from '../conversationStateRegistry';
 import { ToolDefinition, TodoItem, TodoStatus } from '../types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 
@@ -155,9 +156,7 @@ export interface TodoToolOutcome {
  */
 function getLiveSharedState(conversationId: string): { todos?: TodoItem[] } | undefined {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
-    return FlowExecutor.conversationStates.get(conversationId);
+    return getConversationStates().get(conversationId);
   } catch (err) {
     log.warn('Could not resolve live SharedState for todo update', { conversationId, err });
     return undefined;

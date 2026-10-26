@@ -19,7 +19,7 @@ import type { ArchiveModelDispatchInput } from '@/backend/execution/flow/modelTu
 import { withArchiveWriteMemory, recheckArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
-  FlowExecutor: { conversationStates: new Map() },
+  FlowExecutor: { conversationStates: jest.requireActual('@/backend/execution/flow/conversationStateRegistry').getConversationStates() },
 }));
 
 const getModelMock = jest.fn();
