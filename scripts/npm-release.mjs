@@ -105,9 +105,11 @@ export function prepareCandidate({ run, directory, sha, version }) {
   return validateCandidate({ directory, sha, version });
 }
 
-async function confirmPublishedIntegrity({ run, item, version, wait, now }) {
+async function confirmPublishedIntegrity({ run, item, version, wait, now, halt }) {
   const deadline = now() + PUBLISHED_INTEGRITY_TIMEOUT_MS;
   for (let attempt = 0; attempt < PUBLISHED_INTEGRITY_ATTEMPTS; attempt++) {
+    // Another package of the same batch already failed; that error is reported.
+    if (halt?.stopped) return;
     const integrity = readPublishedIntegrity(run, item.name, version);
     if (integrity === item.integrity) return;
     if (integrity !== null) throw new Error(`Published ${item.name}@${version} did not confirm the tested tarball integrity.`);
@@ -120,6 +122,16 @@ async function confirmPublishedIntegrity({ run, item, version, wait, now }) {
   throw new Error(`Published ${item.name}@${version} remains missing after the bounded registry checks. Resume the original release run's failed jobs.`);
 }
 
+// Confirm one batch concurrently, so registry propagation is paid once per batch
+// instead of once per package. The first failure in manifest order is reported.
+async function confirmPublishedBatch({ run, items, version, wait, now }) {
+  const halt = { stopped: false };
+  const outcomes = await Promise.allSettled(items.map((item) => confirmPublishedIntegrity({ run, item, version, wait, now, halt })
+    .catch((error) => { halt.stopped = true; throw error; })));
+  const failure = outcomes.find(({ status }) => status === 'rejected');
+  if (failure) throw failure.reason;
+}
+
 export async function publishCandidate({ run, directory, sha, version, assertCurrent = () => assertCurrentMain(run, sha), wait = setTimeout, now = () => performance.now() }) {
   const manifest = validateCandidate({ directory, sha, version });
   // Check every existing version before making any new immutable publication.
@@ -128,18 +140,22 @@ export async function publishCandidate({ run, directory, sha, version, assertCur
     if (integrity !== null && integrity !== item.integrity) throw new Error(`Existing ${item.name}@${version} has different bytes; refusing to skip or overwrite it. Resume the original release run's failed jobs.`);
     return integrity;
   });
-  const results = [];
-  for (const [index, item] of manifest.packages.entries()) {
-    assertCurrent();
-    if (existing[index] !== null) {
-      results.push({ name: item.name, published: false });
-      continue;
+  // flujo-ai pins the exact MCP package versions, so it is written only after all
+  // four MCP packages are confirmed. The MCP packages do not depend on each other:
+  // write them back to back and wait for their registry propagation together.
+  const entries = [...manifest.packages.entries()];
+  const batches = [entries.filter(([, item]) => item.name !== 'flujo-ai'), entries.filter(([, item]) => item.name === 'flujo-ai')];
+  for (const batch of batches) {
+    const written = [];
+    for (const [index, item] of batch) {
+      assertCurrent();
+      if (existing[index] !== null) continue;
+      run('npm', ['publish', path.join(directory, item.filename), '--access', 'public', '--ignore-scripts', '--registry', REGISTRY], { stdio: 'inherit', timeout: 10 * 60_000 });
+      written.push(item);
     }
-    run('npm', ['publish', path.join(directory, item.filename), '--access', 'public', '--ignore-scripts', '--registry', REGISTRY], { stdio: 'inherit', timeout: 10 * 60_000 });
-    await confirmPublishedIntegrity({ run, item, version, wait, now });
-    results.push({ name: item.name, published: true });
+    await confirmPublishedBatch({ run, items: written, version, wait, now });
   }
-  return results;
+  return manifest.packages.map((item, index) => ({ name: item.name, published: existing[index] === null }));
 }
 
 export function assertOidcOnly(env) {

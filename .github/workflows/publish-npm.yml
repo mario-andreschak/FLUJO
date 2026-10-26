@@ -79,37 +79,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - run: npm install --global npm@11.21.0 --ignore-scripts
       - run: npm ci --include=dev
-      - name: Prepare real Linux MCP isolation image for release verification
-        shell: bash
-        timeout-minutes: 5
-        run: |
-          set -euo pipefail
-          docker_path="$(command -v docker)"
-          daemon='unix:///var/run/docker.sock'
-          test "$("$docker_path" --host "$daemon" info --format '{{.OSType}}/{{.CgroupVersion}}')" = 'linux/2'
-          # Both registries must provide the same pinned upstream manifest.
-          digest='sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392'
-          image_ref=''
-          for registry in node:22.23.4-bookworm-slim public.ecr.aws/docker/library/node:22.23.4-bookworm-slim; do
-            for attempt in 1 2; do
-              if "$docker_path" --host "$daemon" pull "$registry@$digest"; then
-                image_ref="$registry@$digest"
-                break 2
-              fi
-              sleep "$attempt"
-            done
-          done
-          test -n "$image_ref"
-          image="$("$docker_path" --host "$daemon" image inspect "$image_ref" --format '{{.Id}}')"
-          [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]
-          printf '%s\n' "FLUJO_TEST_ISOLATION_DOCKER=$docker_path" "FLUJO_TEST_ISOLATION_DAEMON=$daemon" "FLUJO_TEST_ISOLATION_IMAGE=$image" >> "$GITHUB_ENV"
       # This verification builds and packs the exact version commit and smoke
-      # tests those same tarballs. It overlaps the existing main-push CI run.
+      # tests those same tarballs. The Jest suites are not repeated: verify-main,
+      # attest, publish and finalize all require the exact-commit verify.yml run,
+      # including its test and test-isolated jobs.
       - run: node scripts/npm-release.mjs prepare
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
-          FLUJO_RUN_ISOLATION_SOURCE_PROBE: '1'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         id: artifact
         with:
