@@ -10,7 +10,7 @@
  * cancelled turn lost everything and switching conversations hid the running
  * turn. This suite reproduces that module shape and pins the fix.
  */
-import { promises as fs, readFileSync, readdirSync, statSync } from 'fs';
+import { promises as fs, readFileSync, readdirSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -92,10 +92,10 @@ describe('no lazy runtime require of FlowExecutor in application source', () => 
     const root = path.join(process.cwd(), 'src');
     const offenders: string[] = [];
     const walk = (directory: string) => {
-      for (const name of readdirSync(directory)) {
-        const file = path.join(directory, name);
-        if (statSync(file).isDirectory()) walk(file);
-        else if (/\.tsx?$/.test(name)
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) walk(file);
+        else if (entry.isFile() && /\.tsx?$/.test(entry.name)
           && /require\(\s*['"][^'"]*\/FlowExecutor['"]\s*\)/.test(readFileSync(file, 'utf8'))) {
           offenders.push(path.relative(root, file));
         }
