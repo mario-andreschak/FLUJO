@@ -62,7 +62,7 @@ function matchingPilotSource(pilot, peer) {
 const profileSha256 = hash(JSON.stringify(PROFILE));
 function harnessDigest() {
   const files = ['profile.cjs', 'provider.cjs', 'provider-control.cjs', 'source-loader.cjs', 'network-guard.cjs', 'fixtures.cjs',
-    'evidence.cjs', 'file-evidence.cjs', 'inspector-evidence.cjs', 'checks.cjs', 'runtime.cjs', 'plan.cjs', 'supervise.py', 'envelope_evidence.py', 'dataset_evidence.py', 'ownership.cjs'];
+    'evidence.cjs', 'file-evidence.cjs', 'inspector-evidence.cjs', 'runtime-bootstrap.cjs', 'checks.cjs', 'runtime.cjs', 'plan.cjs', 'supervise.py', 'windows_console.py', 'metadata_commands.py', 'envelope_evidence.py', 'dataset_evidence.py', 'ownership.cjs'];
   return hash(JSON.stringify(files.map(file => [file, hash(fs.readFileSync(path.join(__dirname, file), 'utf8').replaceAll('\r\n', '\n'))])));
 }
 function inside(root, file) {

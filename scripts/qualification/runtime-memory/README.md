@@ -294,11 +294,88 @@ as qualification and never stops an unrelated phase or the whole WSL service.
 
 ## Equipment tests
 
+The runtime starts before the provider. A permanent stateful process/network
+guard is installed before production source imports, including the runtime-lock
+module's captured promisifier. Bootstrap admits only the genuine own-PID Windows
+PowerShell birth query (at most three sequential attempts with the production
+ten-second timeout); Linux uses the production `/proc` identity reader. Windows
+first proves that the controller already owns a private hidden console and its
+host, both in the existing outer Job. The exact source call still requires
+`windowsHide: true`. The qualification transport uses captured native `spawn`
+with `detached: false`, `windowsHide: false` and explicit pipes to inherit that
+already hidden console. Stock Node22 `execFile` drops `detached`; effective
+detachment makes legacy PowerShell exit before executing its command. Neither
+failed transport qualifies. The adapter returns `{stdout, stderr}`, bounds stdout
+to 1024 bytes and stderr to 4096 bytes, and retains the production timeout.
+This measures the genuine OS identity query through the qualification transport,
+not the stock application's console launch behavior. Callers cannot request
+additional options, and the probe is never unreferenced. The gate seals
+irreversibly and waits for actual probe exit and stdout/stderr EOF. The
+supervisor independently checks the OS birth marker, source manifest and exact
+runtime-only Job/cgroup membership before the second fresh child admission.
+Windows launches runtime and provider suspended, assigns each to the existing
+two-process Job, obtains independently held outer identity acknowledgment, then
+resumes it. Public console membership is required after startup: suspended
+children have not yet initialized their inherited console. Held PID/birth/image/
+parent identities and exact Job membership bind the workload and native probe
+to the private console.
+
+Git/Node metadata helpers have a separate, explicit console-free transport:
+`DETACHED_PROCESS | CREATE_SUSPENDED`, with no breakaway, wrapper or debugger.
+Only the fixed read-only command registry and reviewed native executables are
+admitted. Operator paths, exact binary hashes and versions live in an external
+native-tool manifest included in the launcher digest. Both the client and outer
+guard compare launch configuration against that independently sealed manifest;
+repository code accepts no arbitrary role-supplied executable identity. The
+qualified operator manifest selects the direct native Git executable; a PATH
+wrapper is not qualified. Both executables are hashed through bounded 64 KiB descriptor reads,
+with size, EOF, version and named-file identity checks. The outer observer grants
+a kernel process-count permit before creation, independently holds the child
+before resume, then requires natural exit/EOF and exactly one additional kernel
+process before admitting the next helper. Final lifetime totals must equal all
+held identities. Console absence is checked at observed points; this does not
+claim continuous nonattachment. Metadata uses the free inner Job slot while the
+runtime awaits configuration and remains within its unchanged 1920 MiB shared
+memory allowance and the outer 2 GiB bound. Fast helpers cannot escape ownership
+between polls. The outer guard computes source/helper hashes without starting
+additional metadata processes.
+
+The existing `supervisor` OS record is explicitly the numeric sum of controller
+and private console host RSS, peak RSS and handles. Those two processes alone
+consume the existing 128 MiB reserve. An independent outer observer retains exact
+process handles and reads final kernel peaks after natural exit; the sum of final
+controller/host peaks must fit that reserve. Metadata peaks are retained separately
+within the child envelope. Exact identity and
+lifecycle records are separately bounded. The 1 Hz guard, 656-byte record bound,
+100,000-record allowance and 64 MiB file cap remain unchanged. Missing peaks,
+extra outer processes, foreign clients, visible windows, changed identities or
+forced cleanup cannot qualify.
+
+Only after provider readiness does the supervisor send its original credential,
+provider PID and canonical port through a 4096-byte, EOF-delimited stdin channel.
+The runtime inherits no provider credential during the native probe. Nonce,
+runtime PID, source/harness/profile identities and provider ownership must match
+before the guard permits that loopback port. No other child command is admitted,
+including calls through references captured before sealing. These bootstrap
+checks do not replace the real pilot's workload or natural-settlement checks.
+
+The explicit `--mode equipment-bootstrap` requires a matching outer launch with
+`equipmentOnly: true`. It exercises the real supervisor, both fresh admissions,
+all metadata helpers, the production identity initializer, parent stdin/EOF and
+final Git/profile validation. A separately labelled `equipment-peer` occupies
+the second slot and exits on stdin EOF; it is not an HTTP provider. The runtime
+keeps networking denied and returns before migration. Every final receipt marks
+`equipmentOnly: true` and `qualification: false`; plan validation rejects it.
+This mode does not cover migration, catalogues, flows, the SDK, provider behavior,
+retention or the full application lifecycle. It still requires clean matching
+source, unchanged dependencies/helpers and complete outer ownership proof.
+
 ```text
 node --test scripts/qualification/runtime-memory/harness.test.cjs
 node --test scripts/qualification/runtime-memory/file-evidence.test.cjs
 node --test scripts/qualification/runtime-memory/provider-control.test.cjs
 node --test scripts/qualification/runtime-memory/source-loader.test.cjs
+node --test scripts/qualification/runtime-memory/runtime-bootstrap.test.cjs
 python -B -m unittest discover -s scripts/qualification/runtime-memory -p test_supervise.py
 ```
 

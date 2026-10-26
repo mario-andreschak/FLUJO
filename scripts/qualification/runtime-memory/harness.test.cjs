@@ -28,10 +28,42 @@ const receiptNames = ['runtime-receipt.json','supervisor-receipt.json','runtime-
 const mirrorFixture = () => ({ complete:true, version:'ext4-receipt-mirror-v1', phase:'fixture', token:'fixture-token',
   datasetFilesystem:datasetFilesystem(), files:Object.fromEntries(receiptNames.map(name => [name,{bytes:1,sha256:'a'.repeat(64),
     sourcePath:datasetFilesystem().path+'/'+name}])) });
+const bootstrapFixture = () => ({ version:'runtime-bootstrap-v1', nonce:'b'.repeat(48), pid:123,
+  identity:{pid:123, processInstanceId:'11111111-1111-4111-8111-111111111111', processBirthMarkerV2:'win32-v2:12345'},
+  settlement:{sealed:true, probes:[{attempt:1,pid:126,closed:true,exitCode:0,signal:null,killed:false,stdoutEnded:true,stderrEnded:true}]},
+  sourceHead:'revision',profileSha256,harnessSha256:harnessDigest(),sourceManifestSha256:'c'.repeat(64) });
+const nativeToolsFixture=()=>({node:{path:'C:\\qualification\\node.exe',version:'v22.23.4',sha256:'d'.repeat(64)},
+  git:{path:'C:\\qualification\\native\\git.exe',version:'git version 2.47.1.windows.1',sha256:'e'.repeat(64)}});
+function consoleFixture() {
+  const identity={version:'owned-controller-console-v1',controller:{pid:122,creationFiletime:'100',affinity:3},
+    host:{pid:121,parentPid:122,creationFiletime:'101',affinity:3},initialConsole:{clients:[122],visible:false,hostCorroboration:{pid:121}}};
+  const roles={runtime:123,provider:124,'metadata-1':125,'native-probe-1':126};
+  const record=id=>({identity:id,maximumObservedPeakRss:10*MiB,final:{signaled:true,exitCode:0,freshJobAbsent:true,heldHandle:true,memory:{peakRss:10*MiB}}});
+  const windowsNativeTools=nativeToolsFixture(), nodePath=windowsNativeTools.node.path;
+  const children=Object.fromEntries(Object.values(roles).map(pid=>[pid,record({pid,image:nodePath})]));
+  const heldProcesses={121:record(identity.host),122:record(identity.controller),...structuredClone(children)};
+  const childAdmissions=Object.fromEntries(Object.entries(roles).filter(([role])=>!role.startsWith('native-probe-')).map(([role,pid],index)=>
+    [role,{token:'fixture',sequence:index+1,role,identity:children[pid].identity,stage:'assigned-before-resume',admitted:true,
+      consoleMode:role.startsWith('metadata-')?'detached-metadata':'inherited',creationFlags:role.startsWith('metadata-')?12:4}]));
+  const counts=(totalProcesses,activeProcesses=0)=>({totalProcesses,activeProcesses,terminatedProcesses:0});
+  const metadataPermits={'metadata-1':{token:'fixture',role:'metadata-1',sequence:1,admitted:true,innerBefore:counts(0),outerBefore:counts(2,2),
+    command:{operation:'node-version',commandSha256:'c'.repeat(64),tool:{...windowsNativeTools.node,bytes:1024}}}};
+  const metadataSettlements={'metadata-1':{token:'fixture',role:'metadata-1',sequence:1,pid:125,commandSha256:'c'.repeat(64),completed:true,
+    innerAfter:counts(1),outerAfter:counts(3,2),exitCode:0,stdoutEnded:true,stderrEnded:true,finalHeldPeakRss:10*MiB}};
+  const controller={identity,admission:{identity,admitted:true},roles,children,childAdmissions,metadataPermits,metadataSettlements,windowsNativeTools,
+    innerLifetimeCounts:counts(4),publiclyAttestedPids:[123,124,126],maximumControlPeakRss:20*MiB};
+  return {version:'owned-console-final-v1',completed:true,outerJobEmpty:true,rawErrors:[],reserveLimitBytes:128*MiB,identity,
+    finalReservePeakRss:20*MiB,finalControlPeakUpperBound:20*MiB,controller:{token:'fixture',...controller},heldProcesses,childAdmissions,
+    metadataPermits,metadataSettlements,outerLifetimeCounts:counts(6),windowsNativeTools};
+}
+function controllerConsoleFixture() { const {token,...value}=consoleFixture().controller; void token; return value; }
 const pilot = () => ({ mode: 'pilot', platform: 'win32', node: 'v22.23.4', completed: true, sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest(),
-  source: source(), datasetFilesystem: datasetFilesystem(),
+  equipmentOnly:false,qualification:true,
+  source: source(), datasetFilesystem: datasetFilesystem(), bootstrap:bootstrapFixture(),
   disk: { bytes: 240 * MiB }, batches: [{ diskBytesAdded: 100 * MiB, elapsedMs: 100_000 }, { diskBytesAdded: 120 * MiB, elapsedMs: 130_000 }] });
 const supervisor = () => ({ completed: true, sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest(),
+  equipmentOnly:false,qualification:true,windowsConsole:controllerConsoleFixture(),windowsNativeTools:nativeToolsFixture(),
+  bootstrap:bootstrapFixture(), bootstrapAdmission:{runtimeOnly:true,runtimePid:123,jobActiveProcesses:1,supervisorPid:122,workloadMembers:[122,123]},
   datasetFilesystem: datasetFilesystem(), guestDiskAdmissions:[1,2].map(() => ({ filesystem:datasetFilesystem(), freeBytes:100*GiB, requiredFreeBytes:22*GiB })),
   processes: { windowsJob: { activeProcessesBeforeCleanup: 0, forcedCleanup: false } },
   envelope: { path: '/aggregate', workloadPath: '/aggregate/workload', guardianIncluded: true },
@@ -40,13 +72,20 @@ const supervisor = () => ({ completed: true, sourceHead: 'revision', profileSha2
       sourceHead: 'revision', profileSha256, harnessSha256: harnessDigest(), node: 'v22.23.4', launcherSha256: 'a'.repeat(64) } })) });
 function ownership(p, s) { return { completed: true, equipmentOnly: false, launcherSha256: 'a'.repeat(64), platform: p?.platform, supervisor: s,
   mcp: { serverExited: true, serverExitCode: 0, serverExitSignal: null, stderrEnded: true, transportClosed: true, resultError: false },
-  guard: { datasetMirror:mirrorFixture(), completed: true, jobActiveProcesses: 0, forcedCleanup: false, childExitCode: 0, stdoutEnded: true, stderrEnded: true, copyThreadsStopped: true,
+  guard: { datasetMirror:mirrorFixture(), ownedProcessId:122,jobTotalProcesses:6,windowsConsole:consoleFixture(),windowsNativeTools:nativeToolsFixture(),completed: true, jobActiveProcesses: 0, forcedCleanup: false, childExitCode: 0, stdoutEnded: true, stderrEnded: true, copyThreadsStopped: true,
     errors: [], stoppedByGuard: null, hostBackingVolume: 'C:\\', diskFloorBytes: 20 * GiB,
     minimumHostDiskFreeBytes: 50 * GiB, diskAdmissions: s?.diskAdmissions },
   linux: { token:'fixture-token', datasetMirror:mirrorFixture(), reason: 'command completed', forcedCleanup: false, beforeCleanupMembers: [], cleanupErrors: [], childExitCode: 0, remainingWorkloadMembers: [],
     workloadCgroupEvents: 'populated 0\nfrozen 0', aggregateCgroup: '/aggregate', workloadCgroup: '/aggregate/workload' } }; }
-const makePlanRaw = (p, s, c, peer, ps) => makePlanBound(p, s, c, peer, ps, ownership(p, s), ownership(peer, ps));
-const validatePlanRaw = (plan, p, head, s, peer, ps) => validatePlanBound(plan, p, head, s, peer, ps, ownership(p, s), ownership(peer, ps));
+function platformFixtures(p, s) {
+  if (p?.platform !== 'linux') return [p,s];
+  const bootstrap = structuredClone(p.bootstrap);
+  bootstrap.identity.processBirthMarkerV2 = 'linux-v2:11111111-1111-4111-8111-111111111111:12345';
+  bootstrap.settlement.probes = [];
+  return [{...p,bootstrap},{...s,bootstrap}];
+}
+const makePlanRaw = (p, s, c, peer, ps) => { [peer,ps]=platformFixtures(peer,ps); return makePlanBound(p, s, c, peer, ps, ownership(p, s), ownership(peer, ps)); };
+const validatePlanRaw = (plan, p, head, s, peer, ps) => { [peer,ps]=platformFixtures(peer,ps); return validatePlanBound(plan, p, head, s, peer, ps, ownership(p, s), ownership(peer, ps)); };
 const makePlan = (p, s, cadence) => makePlanRaw(p, s, cadence, { ...p, platform: 'linux' }, s);
 const validatePlan = (plan, p, head, s) => validatePlanRaw(plan, p, head, s, { ...p, platform: 'linux' }, s);
 
@@ -340,9 +379,9 @@ test('durable fold identity rejects joined, duplicate, changed child identity an
 });
 
  test('plans require outer MCP, guard, guardian and physical disk settlement', () => {
-  const p = pilot(), peer = { ...p, platform: 'linux' }, s = supervisor();
-  const owner = ownership(p, s), other = ownership(peer, s);
-  const plan = makePlanBound(p, s, 450000, peer, s, owner, other);
+  const p = pilot(), s = supervisor(), [peer, ps] = platformFixtures({ ...p, platform: 'linux' }, s);
+  const owner = ownership(p, s), other = ownership(peer, ps);
+  const plan = makePlanBound(p, s, 450000, peer, ps, owner, other);
   for (const mutate of [o => { o.completed = false; }, o => { o.equipmentOnly = true; }, o => { o.mcp.serverExitCode = 1; }, o => { o.guard.jobActiveProcesses = 1; }, o => { o.mcp.stderrEnded = false; },
     o => { o.mcp.serverExited = false; }, o => { o.guard.stdoutEnded = false; },
     o => { o.guard.minimumHostDiskFreeBytes = 1; }, o => { o.guard.diskAdmissions = []; },
@@ -351,11 +390,11 @@ test('durable fold identity rejects joined, duplicate, changed child identity an
     o => { o.linux.beforeCleanupMembers = [{pid:123}]; }, o => { o.linux.remainingWorkloadMembers = [{ pid: 123 }]; },
     o => { o.linux.aggregateCgroup = '/unrelated'; }]) {
     const changed = structuredClone(other); mutate(changed);
-    assert.throws(() => makePlanBound(p, s, 450000, peer, s, owner, changed));
+    assert.throws(() => makePlanBound(p, s, 450000, peer, ps, owner, changed));
   }
   assert.throws(() => makePlanBound(p, s, 450000, peer, s));
   assert.throws(() => makePlanBound(p, s, 450000, peer, s, owner, { ...other, launcherSha256: 'b'.repeat(64) }));
-  assert.throws(() => validatePlanBound({ ...plan, pilotOwnershipSha256: 'wrong' }, p, 'revision', s, peer, s, owner, other));
+  assert.throws(() => validatePlanBound({ ...plan, pilotOwnershipSha256: 'wrong' }, p, 'revision', s, peer, ps, owner, other));
  });
 
 test('current executable and helper identity are bound to the concrete plan before launch', () => {
@@ -367,9 +406,55 @@ test('current executable and helper identity are bound to the concrete plan befo
   assert.throws(() => validatePlan({ ...plan, launcherSha256:'b'.repeat(64) },p,'revision',s));
 });
 
+test('plan rejects bootstrap mismatch, unsealed child gate and extra process at second admission', () => {
+  const { assertOwnership } = require('./ownership.cjs');
+  for (const mutate of [s => { s.bootstrap.identity.pid++; }, s => { s.bootstrap.settlement.sealed=false; },
+    s => { s.bootstrap.settlement.probes[0].stdoutEnded=false; }, s => { s.bootstrapAdmission.jobActiveProcesses=2; },
+    s => { s.bootstrapAdmission.runtimePid++; }, s => { s.bootstrap.sourceHead='changed'; }]) {
+    const p=pilot(),s=supervisor(); mutate(s);
+    // Match both receipts so each failure tests the bootstrap invariant itself.
+    p.bootstrap=structuredClone(s.bootstrap);
+    assert.throws(() => assertOwnership(ownership(p,s),p,s));
+  }
+  const p=pilot(),s=supervisor();s.bootstrapAdmission.jobActiveProcesses=2;p.bootstrap=structuredClone(s.bootstrap);
+  assert.throws(() => assertOwnership(ownership(p,s),p,s));
+  const other=supervisor();other.bootstrap.nonce='d'.repeat(48);
+  assert.throws(() => assertOwnership(ownership(p,other),p,other), /bootstrap evidence differ/);
+});
+
+test('console proof rejects missing/extra held identities, forged reserve, oversized peaks and failed exit evidence', () => {
+  const { assertWindowsConsoleProof } = require('./ownership.cjs');
+  assertWindowsConsoleProof({ownedProcessId:122,jobTotalProcesses:6,windowsConsole:consoleFixture(),windowsNativeTools:nativeToolsFixture()},
+    {bootstrap:bootstrapFixture(),windowsConsole:controllerConsoleFixture(),windowsNativeTools:nativeToolsFixture()},false);
+  for (const mutate of [p=>{p.heldProcesses={};},p=>{delete p.heldProcesses[121];},p=>{p.heldProcesses[999]=structuredClone(p.heldProcesses[123]);},
+    p=>{p.finalReservePeakRss++;},p=>{p.finalControlPeakUpperBound++;},p=>{p.heldProcesses[122].final.memory.peakRss=0;},
+    p=>{p.heldProcesses[123].final.exitCode=1;},p=>{p.heldProcesses[123].final.signaled=false;},p=>{p.heldProcesses[123].final.freshJobAbsent=false;},
+    p=>{p.heldProcesses[124].final.memory.peakRss=385*MiB;},p=>{p.controller.publiclyAttestedPids=[];},
+    p=>{p.identity.host.parentPid=999;},p=>{p.identity.initialConsole.clients.push(999);},p=>{p.identity.initialConsole.visible=true;},
+    p=>{p.controller.roles['equipment-peer']=p.controller.roles.provider;delete p.controller.roles.provider;},
+    p=>{p.controller.roles['metadata-25']=p.controller.roles['metadata-1'];delete p.controller.roles['metadata-1'];},
+    p=>{p.controller.roles['native-probe-2']=p.controller.roles['native-probe-1'];delete p.controller.roles['native-probe-1'];},
+    p=>{p.childAdmissions={};},p=>{p.childAdmissions.runtime.admitted=false;},p=>{p.childAdmissions.runtime.sequence=99;},
+    p=>{p.childAdmissions.runtime.stage='after-resume';},p=>{p.metadataPermits={};},p=>{p.metadataSettlements['metadata-1'].outerAfter.totalProcesses++;},
+    p=>{p.metadataSettlements['metadata-1'].stdoutEnded=false;},p=>{p.metadataPermits['metadata-1'].command.operation='arbitrary';},
+    p=>{p.outerLifetimeCounts.totalProcesses++;},p=>{p.controller.innerLifetimeCounts.totalProcesses++;},
+    p=>{p.metadataPermits['metadata-1'].command.tool.sha256='0'.repeat(64);},p=>{p.metadataPermits['metadata-1'].outerBefore.totalProcesses=0;}]) {
+    const proof=consoleFixture();mutate(proof);const {token,...controller}=proof.controller;void token;
+    assert.throws(()=>assertWindowsConsoleProof({ownedProcessId:122,jobTotalProcesses:6,windowsConsole:proof,windowsNativeTools:nativeToolsFixture()},
+      {bootstrap:bootstrapFixture(),windowsConsole:controller,windowsNativeTools:nativeToolsFixture()},false));
+  }
+});
+
+test('equipment receipts can never become pilot evidence even when marked completed', () => {
+  const p=pilot(),s=supervisor();
+  assert.throws(()=>makePlan({...p,mode:'equipment-bootstrap',equipmentOnly:true,qualification:false},s,450000));
+  assert.throws(()=>makePlan({...p,equipmentOnly:true,qualification:false},s,450000));
+  assert.throws(()=>makePlan(p,{...s,equipmentOnly:true,qualification:false},450000));
+});
+
 test('Linux plan inputs verify independently attested mirror bytes and ext4 provenance', () => {
   const directory=fs.mkdtempSync(path.join(process.env.FLUJO_QUALIFICATION_TEST_EVIDENCE??os.tmpdir(),'flujo-mirror-'));
-  const p={...pilot(),platform:'linux'}, s=supervisor(), owner=ownership(p,s);
+  const [p,s]=platformFixtures({...pilot(),platform:'linux'},supervisor()), owner=ownership(p,s);
   const values={'runtime-receipt.json':p,'supervisor-receipt.json':s,'runtime-settled.json':{completed:true},'provider-settled.json':{active:0}};
   for(const name of receiptNames){
     const bytes=Buffer.from(JSON.stringify(values[name])+'\n');fs.writeFileSync(path.join(directory,name),bytes);
