@@ -58,6 +58,58 @@ export function resumeRelease({ run, runId, checkoutSha, checkoutVersion }) {
   return identity;
 }
 
+const PR_MERGE_TIMEOUT_MS = 3 * 60 * 60_000;
+export const releaseBranch = (version) => `release/${version}`;
+
+// Raw diff of exact before/after blob IDs, modes and paths. Two commits with the
+// same output introduce exactly the same change, whatever their parents contain.
+const exactChange = (git, from, to) => git(['diff', '--raw', '--no-abbrev', '--no-renames', '-z', from, to]);
+
+/**
+ * main accepts changes only through pull requests. Land the local version commit
+ * through one and return the resulting main commit. Every step is idempotent, so
+ * rerunning the release after an interruption resumes the same pull request.
+ */
+export async function landVersionCommit({ git, gh, version, localSha, baseSha, wait = setTimeout, now = () => Date.now(), timeoutMs = PR_MERGE_TIMEOUT_MS }) {
+  if (!VERSION.test(version) || !SHA.test(localSha) || !SHA.test(baseSha)) throw new Error('Invalid version commit identity.');
+  const branch = releaseBranch(version);
+  const repo = ['--repo', RELEASE_REPOSITORY];
+  const find = () => JSON.parse(gh(['pr', 'list', ...repo, '--head', branch, '--base', 'main', '--state', 'all', '--limit', '20',
+    '--json', 'number,state,headRefOid,mergeCommit'])).filter((pr) => pr.headRefOid === localSha).sort((a, b) => b.number - a.number)[0];
+  let pr = find();
+  if (!pr || pr.state === 'CLOSED') {
+    // Never force: an unrelated commit on this branch stops the release here.
+    git(['push', 'origin', `${localSha}:refs/heads/${branch}`]);
+    gh(['pr', 'create', ...repo, '--base', 'main', '--head', branch, '--title', `Release ${version}`, '--body',
+      `Version bump only: synchronizes every package and embedded version string to ${version}. Created by \`npm run release\`, which publishes the exact resulting main commit.`]);
+    pr = find();
+    if (pr?.state !== 'OPEN') throw new Error(`The release pull request for ${branch} did not appear.`);
+  }
+  if (pr.state === 'OPEN') {
+    const merge = ['pr', 'merge', String(pr.number), ...repo, '--squash', '--subject', `Bump version to ${version} (#${pr.number})`];
+    try { gh(merge); } catch {
+      // Requirements are not met yet: let GitHub merge once they are.
+      gh([...merge, '--auto']);
+      console.log(`Release pull request #${pr.number} will merge when its requirements pass.`);
+    }
+  }
+  const deadline = now() + timeoutMs;
+  for (pr = find(); pr?.state !== 'MERGED'; pr = find()) {
+    if (pr?.state !== 'OPEN') throw new Error(`Release pull request for ${branch} was closed without merging.`);
+    if (now() >= deadline) throw new Error(`Release pull request #${pr.number} has not merged. Merge it, then rerun npm run release to continue.`);
+    await wait(15_000);
+  }
+  const merged = pr.mergeCommit?.oid;
+  if (!SHA.test(merged ?? '')) throw new Error(`Release pull request #${pr.number} has no merge commit.`);
+  git(['fetch', 'origin', 'main']);
+  const parent = git(['rev-parse', `${merged}^`]);
+  if (exactChange(git, parent, merged) !== exactChange(git, baseSha, localSha)) {
+    throw new Error(`Main commit ${merged} from #${pr.number} does not introduce exactly the local version change; nothing was published.`);
+  }
+  try { gh(['api', '--method', 'DELETE', `repos/${RELEASE_REPOSITORY}/git/refs/heads/${branch}`]); } catch { /* cleanup only */ }
+  return merged;
+}
+
 export function watchRelease({ run, identity }) {
   try {
     run('gh', ['run', 'watch', String(identity.runId), '--repo', RELEASE_REPOSITORY, '--exit-status', '--interval', '15'], { stdio: 'inherit', timeout: 6 * 60 * 60_000 });
