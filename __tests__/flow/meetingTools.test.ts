@@ -11,6 +11,9 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
     },
   },
 }));
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => liveStates,
+}));
 
 const renderPromptMock = jest.fn();
 jest.mock('@/backend/utils/PromptRenderer', () => ({

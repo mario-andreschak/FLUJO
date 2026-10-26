@@ -70,7 +70,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const P = 'ef2a3c01-process';
   const EDGE = `${S}->${P}`;
   const FINAL = 'FINAL_RESPONSE';
-  const conversationStates = new Map();
+  const conversationStates = jest.requireActual('@/backend/execution/flow/conversationStateRegistry').getConversationStates();
   return {
     FlowExecutor: {
       conversationStates,

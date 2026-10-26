@@ -18,7 +18,7 @@ import { persistConversationSummary } from '@/backend/execution/flow/conversatio
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { runWithWorkspace } from '@/utils/workspace';
 
-jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
+jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: jest.requireActual('@/backend/execution/flow/conversationStateRegistry').getConversationStates() } }));
 jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({ persistConversationSummary: jest.fn(async () => {}) }));
 jest.mock('@/backend/execution/flow/conversationPublication', () => ({ __esModule: true, ...jest.requireActual('@/backend/execution/flow/conversationPublication') }));
 jest.mock('@/backend/services/workspace/workspaceMutationGate', () => ({

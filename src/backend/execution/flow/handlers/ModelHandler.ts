@@ -1,4 +1,6 @@
 import { isConversationDurabilityError, isConversationDurabilityCode } from '@/backend/execution/flow/conversationPublicationError';
+import { getConversationStates } from '../conversationStateRegistry';
+import { isCancelledByAncestry } from '../cancellation';
 import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
@@ -463,11 +465,7 @@ export class ModelHandler {
    */
   private static isConversationCancelled(conversationId: string): boolean {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { isCancelledByAncestry } = require('@/backend/execution/flow/cancellation');
-      return isCancelledByAncestry(conversationId, FlowExecutor.conversationStates);
+      return isCancelledByAncestry(conversationId, getConversationStates());
     } catch (err) {
       log.warn(`Cancellation check failed for conversation ${conversationId}`, { err });
       return false;
@@ -861,11 +859,7 @@ export class ModelHandler {
    */
   private static persistStreamedMessage(conversationId: string, message: FlujoChatMessage): void {
     try {
-      // Lazy require to avoid a static import cycle
-      // (FlowExecutor -> ProcessNode -> ModelHandler).
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
-      const state = FlowExecutor.conversationStates.get(conversationId);
+      const state = getConversationStates().get(conversationId);
       if (!state || !Array.isArray(state.messages)) {
         // Conversation not tracked in memory yet; the normal end-of-run save covers it.
         return;

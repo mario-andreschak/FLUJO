@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Conversation persistence
+
+- Persist live run events to the conversation log again as they happen ([#1319](https://github.com/mario-andreschak/FLUJO/issues/1319)). In production builds the live event tap could not resolve the in-memory conversation state and silently discarded every event, so streamed messages, tool calls and token usage were saved only at the end of a successful turn. Switching conversations hid a running turn, usage was missing, and cancelling a long Agent SDK turn lost all of its work. The same defect hid live state from mid-call cancellation checks and the todo and meeting tools.
+
 ### Runtime admission
 
 - Bound chat request bodies, JSON work, concurrent parsing and retained input before Flow/provider dispatch. Keep input capacity charged until background producers and terminal error persistence settle; return safe actionable errors and expire bounded IP quotas without resetting active rate windows.
