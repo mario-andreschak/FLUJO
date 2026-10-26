@@ -85,9 +85,12 @@ jobs:
         shell: pwsh
         run: ./tests/installer-native.test.ps1
 
+  # The bootstrapper compiles from source and does not consume artifact-smoke
+  # output, so compilation and installed acceptance run alongside the Windows MCP
+  # artifact validation. Signing and publication still require all of them.
   installer-build:
     name: Compile flujo-setup.exe
-    needs: [powershell-tests, artifact-smoke, unix-installer-tests]
+    needs: [powershell-tests, unix-installer-tests]
     runs-on: windows-latest
     outputs:
       artifact_id: ${{ steps.installer-artifact.outputs.artifact-id }}
@@ -167,7 +170,7 @@ jobs:
 
   installer-attest:
     if: ${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [installer-build, installer-acceptance]
+    needs: [installer-build, artifact-smoke, installer-acceptance]
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:

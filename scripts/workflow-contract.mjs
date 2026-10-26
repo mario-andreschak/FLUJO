@@ -111,7 +111,7 @@ function assertInstallerProvenance(workflow) {
   if (!build || (build.permissions && Object.values(build.permissions).some((value) => value !== 'read' && value !== 'none'))
       || build.outputs?.artifact_id !== '${{ steps.installer-artifact.outputs.artifact-id }}'
       || build.outputs?.sha256 !== '${{ steps.installer-digest.outputs.sha256 }}'
-      || attest?.if !== tagOnly || JSON.stringify(attest.needs) !== JSON.stringify(['installer-build', 'installer-acceptance'])
+      || attest?.if !== tagOnly || JSON.stringify(attest.needs) !== JSON.stringify(['installer-build', 'artifact-smoke', 'installer-acceptance'])
       || publish?.if !== tagOnly || JSON.stringify(publish.needs) !== JSON.stringify(['installer-build', 'installer-attest'])
       || attest.permissions?.['id-token'] !== 'write' || attest.permissions?.attestations !== 'write'
       || attest.permissions?.['artifact-metadata'] !== 'write' || attest.permissions?.contents !== 'read'

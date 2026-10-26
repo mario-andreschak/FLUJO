@@ -184,6 +184,7 @@ for (const job of ['installer-attest', 'installer-publish']) {
 for (const [name, change] of [
   ['build publication authority', (jobs) => { jobs['installer-build'].permissions = { contents: 'write' }; }],
   ['signing without installed acceptance', (jobs) => { jobs['installer-attest'].needs.pop(); }],
+  ['signing without Windows MCP artifact validation', (jobs) => { jobs['installer-attest'].needs = jobs['installer-attest'].needs.filter((need) => need !== 'artifact-smoke'); }],
   ['optional installed acceptance', (jobs) => { jobs['installer-acceptance']['continue-on-error'] = true; }],
   ['reduced fresh Windows coverage', (jobs) => { jobs['installer-acceptance'].strategy.matrix.os = ['windows-2025']; }],
   ['skipped installed acceptance', (jobs) => { jobs['installer-acceptance'].if = 'false'; }],

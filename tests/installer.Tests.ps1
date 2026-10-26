@@ -295,7 +295,8 @@ Describe 'Windows installer entry-point contracts' {
 
     It 'gates tag publishing on Pester and package version consistency' {
         $source = Get-Content -LiteralPath $script:WorkflowPath -Raw
-        $source | Should -Match 'installer-build:[\s\S]+needs: \[powershell-tests, artifact-smoke, unix-installer-tests\]'
+        $source | Should -Match 'installer-build:[\s\S]+needs: \[powershell-tests, unix-installer-tests\]'
+        $source | Should -Match 'installer-attest:[\s\S]+needs: \[installer-build, artifact-smoke, installer-acceptance\]'
         $source | Should -Match '/DMyBranch=\$sourceRef'
         $source | Should -Match '/DMyRevision=\$sourceRevision'
         $source | Should -Match '\$expectedTag = "v\$packageVersion"'

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assertOfficialReleaseOrigin, assertVerifiedRevision, verifyReleaseRevision } from './release-verification.mjs';
+import { assertVerificationJobs, REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
 
 const sha = 'a'.repeat(40);
 function fixture({ fail = '', dirtyAfter = false, moveAfter = false } = {}) {
@@ -23,11 +24,11 @@ function fixture({ fail = '', dirtyAfter = false, moveAfter = false } = {}) {
   };
 }
 
-test('verifies exact version revision and fresh main/isolated evidence before returning publish authority', () => {
+test('verifies the exact version revision, build and packed artifacts without repeating the CI Jest suites', () => {
   const f = fixture();
   assert.equal(verifyReleaseRevision(f), sha);
-  assert.ok(f.commands.indexOf('remove jest-results.json') < f.commands.indexOf('npm run test:ci'));
-  assert.ok(f.commands.includes('npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json'));
+  assert.equal(f.commands.some((command) => /test:ci|test:isolated|verify:test-baseline|^remove /.test(command)), false,
+    'Jest evidence comes from the required exact-commit verify.yml run');
   assert.equal(f.commands.filter(command => command === 'npm run build').length, 1);
   assert.ok(f.commands.indexOf('npm run build') < f.commands.indexOf('npm run validate:mcp-release'));
   assert.equal(f.commands.at(-1), 'npm run smoke:mcp-artifacts');
@@ -41,8 +42,6 @@ for (const fail of [
   'node --test scripts/release-evidence.test.mjs',
   'node --test scripts/local-instance.test.mjs',
   'npm run test:dependency-glob', 'npm run lint:all', 'npm run build',
-  'npm run verify:test-baseline -- --stage=ci --results=jest-results.json',
-  'npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json',
   'npm run validate:mcp-release', 'npm run smoke:mcp-artifacts',
 ]) {
   test(`does not authorize publishing when ${fail} fails`, () => {
@@ -50,10 +49,13 @@ for (const fail of [
   });
 }
 
-test('a quarantined Jest exit still requires its fresh baseline gate', () => {
-  const f = fixture({ fail: 'npm run test:ci' });
-  assert.equal(verifyReleaseRevision(f), sha);
-  assert.ok(f.commands.includes('npm run verify:test-baseline -- --stage=ci --results=jest-results.json'));
+test('the Jest suites skipped by release preparation remain mandatory exact-commit release checks', () => {
+  for (const name of ['test', 'test-isolated']) assert.ok(REQUIRED_CHECK_NAMES.includes(name));
+  const passing = (names) => names.map((name) => ({ name, status: 'completed', conclusion: 'success' }));
+  assert.doesNotThrow(() => assertVerificationJobs(passing(REQUIRED_CHECK_NAMES)));
+  for (const name of ['test', 'test-isolated']) {
+    assert.throws(() => assertVerificationJobs(passing(REQUIRED_CHECK_NAMES.filter((check) => check !== name))), new RegExp(`check ${name} is missing`));
+  }
 });
 
 test('a failed image publication safety gate cannot return release authority', () => {

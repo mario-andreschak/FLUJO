@@ -102,6 +102,13 @@ function registryRunner(manifest, initial = new Map()) {
   return { run, commands, published };
 }
 
+// flujo-ai pins the MCP versions: a failed MCP batch may have written the other
+// MCP packages back to back, but never the app.
+function assertOnlyMcpWritten(registry, manifest) {
+  const written = registry.commands.filter(({ args }) => args[0] === 'publish').map(({ args }) => path.basename(args.find((argument) => argument.endsWith('.tgz'))));
+  assert.deepEqual(written, manifest.packages.filter(({ name }) => name !== 'flujo-ai').map(({ filename }) => filename));
+}
+
 test('only an exact main checkout in the official Actions repository can publish', () => {
   const commands = [];
   assertReleaseContext({
@@ -418,10 +425,10 @@ test('a successful publish command cannot advance the release without matching r
     run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
     wait: async () => assert.fail('a conflicting registry integrity must never be retried'),
   }));
-  assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
+  assertOnlyMcpWritten(registry, candidate.manifest);
 });
 
-test('a missing post-publish version becomes visible before any following package is published', async (t) => {
+test('a missing post-publish MCP version becomes visible before the app is published', async (t) => {
   const candidate = fixture(t);
   const registry = registryRunner(candidate.manifest);
   const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
@@ -441,7 +448,8 @@ test('a missing post-publish version becomes visible before any following packag
     run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
     now: () => elapsed,
     wait: async (delay) => {
-      assert.equal(registry.published.size, 1, 'later packages must wait for the first integrity confirmation');
+      assert.equal(registry.published.has(`flujo-ai@${VERSION}`), false, 'the app must wait for every MCP integrity confirmation');
+      assert.equal(registry.published.size, PUBLIC_PACKAGES.length - 1, 'MCP packages are written back to back before any propagation wait');
       elapsed += delay;
       waits.push(delay);
     },
@@ -473,10 +481,10 @@ test('persistent missing readback stops after fifteen minutes and resumes the or
   assert.equal(readbacks, 91);
   assert.equal(waits, 90);
   assert.equal(elapsed, 900_000);
-  assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
+  assertOnlyMcpWritten(registry, candidate.manifest);
   assert.deepEqual(await publishCandidate({
     run: registry.run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
-  }), PUBLIC_PACKAGES.map((name, index) => ({ name, published: index !== 0 })));
+  }), PUBLIC_PACKAGES.map((name) => ({ name, published: name === 'flujo-ai' })));
   assert.deepEqual(registry.commands.filter(({ args }) => args[0] === 'publish').map(({ args }) => path.basename(args[1])),
     candidate.manifest.packages.map(({ filename }) => filename));
 });
@@ -512,7 +520,7 @@ for (const [label, failure, response] of [
   ['malformed JSON', null, '{broken JSON'],
   ['missing integrity metadata', null, 'null'],
 ]) {
-  test(`post-publish ${label} errors fail immediately without retries or further writes`, async (t) => {
+  test(`post-publish ${label} errors fail immediately without retries or writing the app`, async (t) => {
     const candidate = fixture(t);
     const registry = registryRunner(candidate.manifest);
     const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
@@ -530,11 +538,38 @@ for (const [label, failure, response] of [
       wait: async () => assert.fail('only an explicit missing version can be retried'),
     }), (error) => failure ? error === failure : error instanceof Error);
     assert.equal(readbacks, 1);
-    assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
+    assertOnlyMcpWritten(registry, candidate.manifest);
   });
 }
 
-test('main moving during a readback delay prevents every remaining package write', async (t) => {
+test('MCP packages are written back to back and propagate together before the app is published', async (t) => {
+  const candidate = fixture(t);
+  const registry = registryRunner(candidate.manifest);
+  const misses = new Map(PUBLIC_PACKAGES.filter((name) => name !== 'flujo-ai').map((name) => [`${name}@${VERSION}`, 3]));
+  const missingReadbacks = [];
+  const app = candidate.manifest.packages.at(-1).filename;
+  const run = (command, args, options) => {
+    const key = args.find((argument) => misses.has(argument));
+    if (args[0] === 'view' && key && registry.published.has(key) && misses.get(key) > 0) {
+      misses.set(key, misses.get(key) - 1);
+      missingReadbacks.push(key);
+      throw missingPackage();
+    }
+    if (args[0] === 'publish' && args.some((argument) => path.basename(argument) === app)) {
+      assert.deepEqual([...misses.values()], [0, 0, 0, 0], 'the app must wait until every MCP package is visible');
+    }
+    return registry.run(command, args, options);
+  };
+  const result = await publishCandidate({
+    run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {}, now: () => 0,
+    wait: async () => assert.equal(registry.published.size, PUBLIC_PACKAGES.length - 1, 'all MCP packages are written before any propagation wait'),
+  });
+  // Concurrent confirmation interleaves the packages instead of serializing them.
+  assert.equal(new Set(missingReadbacks.slice(0, 4)).size, 4);
+  assert.deepEqual(result, PUBLIC_PACKAGES.map((name) => ({ name, published: true })));
+});
+
+test('main moving during the MCP readback delay prevents the app write', async (t) => {
   const candidate = fixture(t);
   const registry = registryRunner(candidate.manifest);
   const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
@@ -552,7 +587,7 @@ test('main moving during a readback delay prevents every remaining package write
     assertCurrent: () => { if (!current) throw new Error('main advanced during propagation'); },
     wait: async () => { current = false; },
   }), /main advanced during propagation/);
-  assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
+  assertOnlyMcpWritten(registry, candidate.manifest);
 });
 
 test('a main advance after the first package prevents publishing the remaining release', async (t) => {
@@ -752,15 +787,14 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   }
   const upload = prepare.steps.find(({ uses }) => uses?.startsWith('actions/upload-artifact@'));
   assert.equal(prepare.outputs.artifact_id, `\${{ steps.${upload.id}.outputs.artifact-id }}`);
-  const verification = YAML.parse(readFileSync(new URL('../.github/workflows/verify-full.yml', import.meta.url), 'utf8'));
-  const isolationSetup = verification.jobs.test.steps.find(({ name }) => name === 'Prepare real Linux MCP isolation image');
-  const releaseIsolationSetup = prepare.steps.find(({ name }) => name === 'Prepare real Linux MCP isolation image for release verification');
-  const releasePrepare = prepare.steps.find(({ run }) => run === 'node scripts/npm-release.mjs prepare');
-  assert.equal(releaseIsolationSetup?.run, isolationSetup?.run,
-    'release verification must use the same pinned real Linux MCP isolation image as main CI');
-  assert.ok(prepare.steps.indexOf(releaseIsolationSetup) < prepare.steps.indexOf(releasePrepare));
-  assert.equal(releasePrepare.env.FLUJO_RUN_ISOLATION_SOURCE_PROBE, '1',
-    'release baseline must execute the real MCP isolation tests instead of silently skipping them');
+  assert.ok(prepare.steps.some(({ run }) => run === 'node scripts/npm-release.mjs prepare'),
+    'prepare must build, pack and consumer-smoke the exact release artifacts');
+  // prepare does not repeat Jest: every later stage requires the exact-commit
+  // verify.yml run, whose required checks include test and test-isolated.
+  for (const job of [verifyMain, attest, publish, finalize]) {
+    assert.ok(job.steps.some(({ run }) => run === 'node scripts/require-release-verification.mjs npm'),
+      'every release stage must require successful exact-commit main CI');
+  }
   for (const job of [attest, publish, finalize]) {
     const download = job.steps.find(({ uses }) => uses?.startsWith('actions/download-artifact@'));
     assert.equal(download.with['artifact-ids'], '${{ needs.prepare.outputs.artifact_id }}');

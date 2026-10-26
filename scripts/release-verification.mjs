@@ -1,5 +1,3 @@
-import { rmSync } from 'node:fs';
-
 const OFFICIAL_ORIGIN = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)mario-andreschak\/flujo(?:\.git)?\/?$/i;
 
 export function assertOfficialReleaseOrigin(run) {
@@ -19,7 +17,7 @@ export function assertVerifiedRevision(run, revision) {
   assertOfficialReleaseOrigin(run);
 }
 
-export function verifyReleaseRevision({ run, show, removeResults = (file) => rmSync(file, { force: true }),
+export function verifyReleaseRevision({ run, show,
   consumerSmoke = ({ show: output }) => output('npm run smoke:mcp-artifacts') }) {
   const revision = run('git rev-parse HEAD');
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error('Cannot identify the exact release commit.');
@@ -36,18 +34,10 @@ export function verifyReleaseRevision({ run, show, removeResults = (file) => rmS
   show('node --test scripts/local-instance.test.mjs');
   show('node --test scripts/image-release.test.mjs');
   show('npm run build');
-  for (const [stage, script, result] of [
-    ['ci', 'test:ci', 'jest-results.json'],
-    ['isolated', 'test:isolated', 'jest-results-isolated.json'],
-  ]) {
-    // Never accept an old report if Jest crashes before producing new evidence.
-    removeResults(result);
-    try { show(`npm run ${script}`); } catch {
-      // Known failing assertions may be quarantined. Missing reports, parse
-      // failures, unapproved skips and incomplete runs still fail the gate.
-    }
-    show(`npm run verify:test-baseline -- --stage=${stage} --results=${result}`);
-  }
+  // The Jest suites are deliberately not repeated here. Signing, publication and
+  // tagging all require the successful exact-commit verify.yml run, including its
+  // test and test-isolated jobs (scripts/require-release-verification.mjs), so a
+  // second run on the same revision only added about 14 minutes to every release.
   show('npm run validate:mcp-release');
   consumerSmoke({ run, show, revision });
   assertVerifiedRevision(run, revision);
