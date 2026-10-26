@@ -1,9 +1,10 @@
 import type { FileHandle } from 'node:fs/promises';
+import { z } from 'zod';
 import { observeSdkRequest } from '@/backend/services/model/adapters/types';
 import { runWithWorkspace } from '@/utils/workspace';
 import { closeArchiveWriteHandle, estimateArchivePayload, getArchiveWritePressure,
   MODEL_TURN_ARCHIVE_WRITE_LIMITS, ModelTurnArchiveMemoryError, reserveArchiveSnapshot,
-  settleArchiveWrites, withArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
+  settleArchiveWrites, withArchiveWriteMemory, recheckArchiveWriteMemory } from '@/backend/execution/flow/modelTurnArchiveWriteBudget';
 
 function deferred() {
   let resolve!: () => void;
@@ -21,6 +22,27 @@ describe('archive write allocation ownership', () => {
     expect(estimateArchivePayload('\u0001')).toBeGreaterThan(estimateArchivePayload('a'));
     const buffer = new ArrayBuffer(4096);
     expect(estimateArchivePayload(new Uint8Array(buffer, 0, 1))).toBeGreaterThanOrEqual(4096);
+  });
+
+  it('keeps explicit byte scratch additive through payload rechecks', async () => {
+    const scratch = 4 * 1024 * 1024;
+    await withArchiveWriteMemory('small', async () => {
+      expect(getArchiveWritePressure().bytes).toBe(scratch + estimateArchivePayload('small', true) * 4);
+      recheckArchiveWriteMemory('larger payload');
+      expect(getArchiveWritePressure().bytes).toBe(scratch + estimateArchivePayload('larger payload', true) * 4);
+    }, 'owned-only', undefined, scratch);
+    const entered = jest.fn(async () => undefined);
+    await expect(withArchiveWriteMemory('small', entered, 'owned-only', undefined, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes))
+      .rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_LIMIT' });
+    expect(entered).not.toHaveBeenCalled();
+  });
+
+  it('includes scratch inside the existing full-cap legacy schema reservation', async () => {
+    await withArchiveWriteMemory({ schema: z.string() }, async () => {
+      expect(getArchiveWritePressure().bytes).toBe(MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes);
+      recheckArchiveWriteMemory({ schema: z.string() });
+      expect(getArchiveWritePressure().bytes).toBe(MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes);
+    }, 'legacy-unbounded', undefined, 1024);
   });
 
   it('refuses getters and proxies without running their callbacks', () => {

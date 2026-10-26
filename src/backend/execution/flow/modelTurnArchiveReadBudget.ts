@@ -209,10 +209,14 @@ export async function parseBoundedModelTurnJson<T>(
   if (compressed.length > limits.compressedBytes) throw allocationLimit();
   const inherited = allocationScope.getStore();
   const scope = inherited ?? { bytes: 0 };
-  // Account for retained chunks, concatenation, two-byte source/parsed strings,
-  // and rewrite serialization. Structural tokens receive additional charges;
-  // encoded bytes alone cannot bound dense JSON object allocation.
-  let inString = false, escaped = false, inScalar = false;
+  // Without assuming GC, parsing retains the gunzip chunks, their
+  // concatenation, the decoded source string and parsed value strings. Pure
+  // ASCII decodes to one-byte strings (one byte per decoded byte each); any
+  // non-ASCII byte may make the source and values two-byte, so that case is
+  // topped up before decoding. No caller re-serializes inside this admission:
+  // legacy outcome rewrites stream separately. Structural tokens receive
+  // additional charges; encoded bytes alone cannot bound dense JSON objects.
+  let inString = false, escaped = false, inScalar = false, nonAscii = false;
   let total = 0;
   const chunks: Buffer[] = [];
   const decoder = createGunzip({ chunkSize: READ_CHUNK_BYTES });
@@ -228,8 +232,9 @@ export async function parseBoundedModelTurnJson<T>(
         'MODEL_TURN_ARCHIVE_READ_LIMIT',
         `Model-turn snapshot exceeds the ${limits.decodedBytes}-byte decoded inspection limit. The persisted archive is unchanged.`,
       );
-      let allocation = bytes.length * 8;
+      let allocation = bytes.length * 4;
       for (const byte of bytes) {
+        if (byte > 127) nonAscii = true;
         if (inString) {
           if (escaped) escaped = false;
           else if (byte === 92) escaped = true;
@@ -247,6 +252,7 @@ export async function parseBoundedModelTurnJson<T>(
       chunks.push(bytes);
     }
     signal?.throwIfAborted();
+    if (nonAscii) reserveJsonAllocation(scope, total * 2);
     return JSON.parse(Buffer.concat(chunks, total).toString('utf8')) as T;
   } catch (error) {
     signal?.throwIfAborted();

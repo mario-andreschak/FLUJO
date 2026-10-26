@@ -274,6 +274,7 @@ function admitArchiveWriter(bytes: number, options?: ArchiveWriteAdmissionOption
 interface WriteScope {
   reservation: ArchiveMemoryReservation;
   reservedEstimate: number;
+  scratchBytes: number;
   pendingCloses: number;
   mediaOps: number;
   settled: boolean;
@@ -282,18 +283,21 @@ interface WriteScope {
 
 /** Callback evaluation/cloning must occur inside this admitted boundary. */
 export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Promise<T>,
-  schemaProjectionPolicy: ArchiveSchemaProjectionPolicy = 'legacy-unbounded', admissionOptions?: ArchiveWriteAdmissionOptions): Promise<T> {
+  schemaProjectionPolicy: ArchiveSchemaProjectionPolicy = 'legacy-unbounded', admissionOptions?: ArchiveWriteAdmissionOptions,
+  scratchBytes = 0): Promise<T> {
   // Re-entrant or escaped AsyncLocalStorage work cannot borrow a spent permit.
   if (scopes.getStore()) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
+  if (!Number.isSafeInteger(scratchBytes) || scratchBytes < 0) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
   // Covers copied object/string views, serialization, UTF8 and compression work.
   let legacy = false;
   const estimate = estimateArchivePayload(payload, true, () => {
     if (schemaProjectionPolicy === 'owned-only') refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
     legacy = true;
   }) * 4;
-  const reservedEstimate = legacy ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
+  const combined = estimate + scratchBytes;
+  const reservedEstimate = legacy ? Math.max(combined, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : combined;
   const reservation = await admitArchiveWriter(reservedEstimate, admissionOptions);
-  const scope: WriteScope = { reservation, reservedEstimate, pendingCloses: 0, mediaOps: 0, settled: false, schemaProjectionPolicy };
+  const scope: WriteScope = { reservation, reservedEstimate, scratchBytes, pendingCloses: 0, mediaOps: 0, settled: false, schemaProjectionPolicy };
   try {
     admissionOptions?.signal?.throwIfAborted();
     return await scopes.run(scope, async () => {
@@ -317,7 +321,8 @@ export function recheckArchiveWriteMemory(payload: unknown, serializedData = fal
     if (scope.schemaProjectionPolicy === 'owned-only') refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
     legacy = true;
   }) * 4;
-  const required = legacy ? Math.max(estimate, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : estimate;
+  const combined = estimate + scope.scratchBytes;
+  const required = legacy ? Math.max(combined, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : combined;
   if (required > scope.reservedEstimate) {
     scope.reservation.grow(required - scope.reservedEstimate);
     scope.reservedEstimate = required;
