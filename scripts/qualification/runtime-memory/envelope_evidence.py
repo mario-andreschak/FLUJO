@@ -5,21 +5,24 @@ from pathlib import Path
 import secrets
 import subprocess
 import time
+from metadata_commands import SCRIPTS
 
 GIB = 1024 ** 3
 
 
-def require_current_node(node, expected):
-    current = subprocess.check_output([node, '--version'], text=True).strip()
+def require_current_node(node, expected, runner=None):
+    current = (runner([node, '--version']).stdout.decode() if runner else subprocess.check_output([node, '--version'], text=True)).strip()
     if current != expected:
         raise RuntimeError('Current Node differs from the launch contract')
     return current
 
 
-def require_dependency_manifest(node, harness, root, dependencies, harness_hash, expected=None):
-    script = "const s=require(process.argv[1]),p=require(process.argv[2]);console.log(JSON.stringify({dependencies:s.dependencyManifest(process.argv[3],process.argv[4]),harnessSha256:p.harnessDigest()}))"
-    result = subprocess.run([node, '-e', script, str(harness / 'source-loader.cjs'), str(harness / 'profile.cjs'),
-                             str(root), str(dependencies)], capture_output=True, timeout=20, check=True)
+def require_dependency_manifest(node, harness, root, dependencies, harness_hash, expected=None, bootstrap=None, runner=None):
+    script = SCRIPTS['dependencies']
+    argv = [node, '-e', script, str(harness / 'source-loader.cjs'), str(harness / 'profile.cjs'), str(root), str(dependencies)]
+    if bootstrap:
+        argv.extend([str(bootstrap[0]), bootstrap[1]])
+    result = runner(argv) if runner else subprocess.run(argv, capture_output=True, timeout=20, check=True)
     if len(result.stdout) > 65536 or len(result.stderr) > 65536 or result.stderr:
         raise RuntimeError('Dependency preflight output exceeds its contract')
     record = json.loads(result.stdout)

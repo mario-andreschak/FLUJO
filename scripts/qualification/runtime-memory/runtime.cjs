@@ -7,7 +7,8 @@ const { PerformanceObserver, monitorEventLoopDelay } = require('node:perf_hooks'
 const { PROFILE, profileSha256, harnessDigest, hash, readJson, sourceManifestHash } = require('./profile.cjs');
 const { BoundedJsonl, directoryBytes, DrainWindows } = require('./evidence.cjs');
 const { allocationWindowLabel, BatchAllocationSampler } = require('./inspector-evidence.cjs');
-const { ownedProviderConfig, createProviderControl } = require('./provider-control.cjs');
+const { createProviderControl } = require('./provider-control.cjs');
+const { establishRuntimeIdentity, readParentConfiguration, providerFromParent, equipmentFromParent } = require('./runtime-bootstrap.cjs');
 const { family, flow, history } = require('./fixtures.cjs');
 const { assertSettledDiagnostics, assertChildOutcome, foldIdentity, TERMINAL_CODE, TERMINAL_MARKER, RETRY_MARKER } = require('./checks.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -16,6 +17,9 @@ async function main(output) {
   const contract = readJson(path.join(output, 'contract.json'));
   assert.equal(contract.profileSha256, profileSha256);
   assert.equal(contract.harnessSha256, harnessDigest());
+  assert(['pilot', 'endurance', 'equipment-bootstrap'].includes(contract.mode));
+  assert.equal(contract.equipmentOnly, contract.mode === 'equipment-bootstrap');
+  assert.equal(contract.qualification, contract.mode !== 'equipment-bootstrap');
   assert(!process.execArgv.some(arg => /expose-gc|max-old-space-size/.test(arg)) && !process.env.NODE_OPTIONS,
     'No forced-GC or heap overrides');
   process.env.FLUJO_DATA_DIR = path.join(output, 'data');
@@ -29,12 +33,37 @@ async function main(output) {
   }
   delete process.env.FLUJO_PARENT_DATA_DIR;
   process.env.FLUJO_EXPOSURE_MODE = 'localhost';
-  const provider = readJson(path.join(output, 'provider-ready.json'));
-  const providerConfig = ownedProviderConfig(contract, provider);
-  const providerControl = createProviderControl(providerConfig);
-  require('./network-guard.cjs').installLoopbackGuard(providerConfig.port);
+  if (process.platform === 'win32') assert.equal(contract.windowsConsole?.admitted, true, 'Private console must be independently admitted before source imports');
+  const guard = require('./network-guard.cjs').installRuntimeGuard();
   const loader = require('./source-loader.cjs').installSourceLoader(contract.root, contract.dependencies);
   const load = loader.load;
+  const bootstrapRecord = await establishRuntimeIdentity(loader, guard, contract);
+  const bootstrapBytes = JSON.stringify(bootstrapRecord);
+  assert(Buffer.byteLength(bootstrapBytes) <= 1024 ** 2, 'Bootstrap receipt exceeds allowance');
+  const preparedBootstrap = path.join(output, 'runtime-bootstrap-prepared.json');
+  fs.writeFileSync(preparedBootstrap, bootstrapBytes, { flag: 'wx' });
+  // Publish complete bytes atomically without replacement; retain the prepared proof.
+  fs.linkSync(preparedBootstrap, path.join(output, 'runtime-bootstrap-ready.json'));
+  const { source: bootstrapSource, ...bootstrap } = bootstrapRecord;
+  void bootstrapSource;
+  const message = await readParentConfiguration(process.stdin);
+  if (contract.mode === 'equipment-bootstrap') {
+    equipmentFromParent(message, contract);
+    const source = loader.verify();
+    assert.deepEqual(await load('backend/services/enduringAgents/runtimeLock.ts').getRuntimeProcessIdentity(), bootstrap.identity);
+    assert.equal(harnessDigest(), contract.harnessSha256);
+    const receipt = { completed: true, equipmentOnly: true, qualification: false, mode: contract.mode,
+      sourceHead: contract.sourceHead, harnessSha256: contract.harnessSha256, profileSha256,
+      datasetFilesystem: contract.datasetFilesystem, bootstrap, source, node: process.version, platform: process.platform,
+      networkNeverActivated: true, scope: 'Native identity and controller IPC only; no migration, catalogues, flows, SDK or provider',
+      shutdown: 'Equipment returns naturally after bootstrap; no application lifecycle qualification' };
+    fs.writeFileSync(path.join(output, 'runtime-receipt.json'), JSON.stringify(receipt), { flag: 'wx' });
+    fs.writeFileSync(path.join(output, 'runtime-settled.json'), JSON.stringify({ completed: true, equipmentOnly: true, qualification: false, mode: contract.mode }), { flag: 'wx' });
+    return;
+  }
+  const providerConfig = providerFromParent(message, contract, readJson(path.join(output, 'provider-ready.json')));
+  guard.activateProvider(providerConfig.port);
+  const providerControl = createProviderControl(providerConfig);
   await load('backend/services/workspace/migration.ts').migrateWorkspaceLayout();
   const secure = load('utils/encryption/secure.ts');
   const password = 'disposable-runtime-memory-v1';
@@ -520,12 +549,15 @@ async function main(output) {
     assert.equal(cache.getConversationCacheDiagnostics().entries, 0, 'Natural terminal TTL did not evict all states');
     if (contract.mode === 'endurance') assert(measuredElapsedMs >= PROFILE.enduranceMs);
     const source = loader.verify();
+    assert.deepEqual(await load('backend/services/enduringAgents/runtimeLock.ts').getRuntimeProcessIdentity(), bootstrap.identity,
+      'Runtime process identity changed after bootstrap');
     if (contract.source) assert.equal(sourceManifestHash(source), sourceManifestHash(contract.source),
       'Endurance loaded source differs from the two successful pilots');
     assert.equal(contract.harnessSha256, harnessDigest(), 'Harness changed during qualification');
     fs.writeFileSync(path.join(output, 'runtime-receipt.json'), JSON.stringify({ version: PROFILE.version, profileSha256,
       sourceHead: contract.sourceHead, harnessSha256: contract.harnessSha256, mode: contract.mode, completed: true, measuredElapsedMs,
-      datasetFilesystem: contract.datasetFilesystem,
+      equipmentOnly: false, qualification: true,
+      datasetFilesystem: contract.datasetFilesystem, bootstrap,
       drainElapsedMs: performance.now() - drainStart, batches, inspectorWindows: inspectorReceipts, peakRss, diagnostics: diagnostics(),
       growth: windows.result(contract.mode === 'endurance'), disk: await directoryBytes(process.env.FLUJO_DATA_DIR),
       source, events: eventCounts, node: process.version, platform: process.platform, execArgv: process.execArgv,

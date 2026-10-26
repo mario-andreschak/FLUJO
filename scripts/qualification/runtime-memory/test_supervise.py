@@ -10,6 +10,8 @@ from unittest.mock import patch
 import os
 import sys
 import subprocess
+import time
+from metadata_commands import classify_metadata, tool_identity, validate_tool_identity, validate_native_tools, streamed_executable, GIT_FLAGS, SCRIPTS
 from contextlib import contextmanager
 
 
@@ -29,6 +31,7 @@ spec.loader.exec_module(supervisor)
 
 class FakeProcess:
     def __init__(self):
+        self.stdin = None
         self.stdout = io.BytesIO(b'out\n')
         self.stderr = io.BytesIO(b'err\n')
 
@@ -37,6 +40,177 @@ class FakeProcess:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_fixed_metadata_registry_and_sealed_streamed_file_binding(self):
+        # Portable file fingerprints only. These fixtures are never executed.
+        with preserved_directory() as directory:
+            root = str(Path(__file__).resolve().parents[3]); harness = Path(__file__).parent; tools = {}
+            for kind in ['node', 'git']:
+                file = Path(directory) / (kind + '.exe'); file.write_bytes(('fixture-' + kind).encode())
+                record = streamed_executable(file)
+                tools[kind] = {'path': str(file), 'version': 'fixture-version', 'sha256': record['sha256']}
+            node, git_path = tools['node']['path'], tools['git']['path']
+            context = {'root': root, 'dependencies': root, 'node': node, 'sourceHead': 'a' * 40, 'windowsNativeTools': tools,
+                       'output': directory, 'plan': None, 'pilot': None, 'peerPilot': None, 'launcherSha256': 'b' * 64}
+            self.assertEqual(classify_metadata([node, '--version'], None, context)['operation'], 'node-version')
+            self.assertEqual(classify_metadata([git_path, *GIT_FLAGS, 'status', '--porcelain'], root, context)['operation'], 'git-clean')
+            actual = tool_identity(git_path, tools)
+            with self.assertRaises(RuntimeError): validate_tool_identity(git_path, {**actual, 'sha256': '0' * 64}, tools)
+            for argv in [[str(Path(directory) / 'wrapper.exe'), '--version'], [node, '-e', 'process.exit(0)'],
+                         [git_path, 'status', '--porcelain'], [node, '-e', SCRIPTS['profile'], str(harness / 'unknown.cjs')]]:
+                with self.assertRaises(RuntimeError): classify_metadata(argv, root, context)
+            with self.assertRaises(RuntimeError): tool_identity(str(harness / 'unknown.exe'), tools)
+            for changed in [{}, {**tools, 'extra': tools['node']}, {**tools, 'node': {**tools['node'], 'extra': True}}]:
+                with self.assertRaises(RuntimeError): validate_native_tools(changed)
+
+    def test_streamed_executable_rejects_same_length_mutation_with_restored_mtime(self):
+        with preserved_directory() as directory:
+            file = Path(directory) / 'fixture.exe'; file.write_bytes(b'a' * 131072)
+            before = file.stat(); read = os.read; changed = False
+            def mutate(fd, size):
+                nonlocal changed
+                data = read(fd, size)
+                if not changed:
+                    changed = True; file.write_bytes(b'b' * 131072); os.utime(file, ns=(before.st_atime_ns, before.st_mtime_ns))
+                return data
+            with patch.object(os, 'read', side_effect=mutate):
+                with self.assertRaises(RuntimeError): streamed_executable(file)
+
+    def test_private_console_refuses_foreign_parent_job_clients_visible_window_or_birth(self):
+        from windows_console import validate_private_console
+        import copy
+        with patch.dict(os.environ, {'SystemRoot': r'C:\Windows'}):
+            own={'pid':101,'creationFiletime':'100','affinity':3}
+            host={'pid':102,'parentPid':101,'creationFiletime':'101','affinity':3,
+                  'image':str(Path(os.environ['SystemRoot'])/'System32'/'conhost.exe')}
+            console={'clients':[101],'visible':False,'hostCorroboration':{'status':0,'pid':102}}
+            validate_private_console(own,host,console,[101,102],3)
+            for change in [{'parentPid':999},{'creationFiletime':'99'},{'image':'foreign.exe'},{'affinity':7}]:
+                with self.assertRaises(RuntimeError):validate_private_console(own,{**host,**change},console,[101,102],3)
+            for changed in [{**console,'visible':True},{**console,'clients':[101,999]},
+                            {**console,'hostCorroboration':{'status':0,'pid':999}}]:
+                with self.assertRaises(RuntimeError):validate_private_console(own,host,changed,[101,102],3)
+            with self.assertRaises(RuntimeError):validate_private_console(own,host,copy.deepcopy(console),[101],3)
+
+    @unittest.skipUnless(os.name == 'nt', 'Actual Windows inner Job metadata fixture')
+    def test_metadata_runner_bounds_natural_failure_and_drains_both_streams(self):
+        envelope=supervisor.WindowsEnvelope()
+        try:
+            with preserved_directory() as directory:
+                runner=supervisor.MetadataRunner(envelope,Path(directory));node=supervisor.shutil.which('node')
+                value=runner([node,'-e',"process.stdout.write('ok');process.stderr.write('diagnostic')"])
+                self.assertEqual(value.stdout,b'ok');self.assertEqual(value.stderr,b'diagnostic')
+                with self.assertRaisesRegex(RuntimeError,'Metadata command failed'):
+                    runner([node,'-e','process.exitCode=2'])
+                record=json.loads((Path(directory)/'metadata-2.json').read_text())
+                self.assertEqual(record['code'],2);self.assertEqual(record['ended'],{'stdout':True,'stderr':True})
+                self.assertTrue(record['threadsStopped']);self.assertFalse(envelope.settlement()['forcedCleanup'])
+        finally:envelope.close()
+
+    @unittest.skipUnless(os.name == 'nt', 'Actual Windows post-spawn cleanup fixture')
+    def test_drain_thread_start_failure_reaps_both_child_types(self):
+        for kind in ['metadata', 'child']:
+            envelope = supervisor.WindowsEnvelope(); children = []; original = envelope.spawn
+            def spawn(*args, **kwargs):
+                child = original(*args, **kwargs); children.append(child); return child
+            envelope.spawn = spawn
+            try:
+                with preserved_directory() as directory, patch.object(threading.Thread, 'start', side_effect=RuntimeError('thread start fixture')):
+                    argv = [supervisor.shutil.which('node'), '-e', 'setInterval(()=>{},1000)']
+                    with self.assertRaisesRegex(RuntimeError, 'thread start fixture'):
+                        if kind == 'metadata': supervisor.MetadataRunner(envelope, Path(directory))(argv)
+                        else: supervisor.Child('fixture', envelope, argv, Path(directory), os.environ.copy())
+                    self.assertEqual(len(children), 1); self.assertIsNotNone(children[0].poll())
+                    self.assertTrue(children[0].stdout.closed and children[0].stderr.closed)
+                    self.assertEqual(envelope.settlement()['activeProcessesBeforeCleanup'], 0)
+            finally:
+                envelope.close()
+
+    @unittest.skipUnless(os.name == 'nt', 'Actual Windows suspended-admission refusal')
+    def test_missing_outer_admission_never_resumes_native_child(self):
+        envelope = supervisor.WindowsEnvelope(); admitted = []
+        class RefuseAdmission:
+            def admit_suspended(self, pid, role):
+                admitted.append((pid, role))
+                raise RuntimeError('Missing independent outer acknowledgment')
+        envelope.console = RefuseAdmission()
+        try:
+            with preserved_directory() as directory:
+                marker = Path(directory) / 'must-not-run.json'
+                with self.assertRaisesRegex(RuntimeError, 'Missing independent'):
+                    envelope.spawn([supervisor.shutil.which('node'), '-e', "require('node:fs').writeFileSync(process.argv[1],'ran')", str(marker)],
+                        qualification_role='metadata-1', stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.assertEqual(len(admitted), 1); self.assertFalse(marker.exists())
+                self.assertEqual(envelope.settlement()['activeProcessesBeforeCleanup'], 0)
+        finally:
+            envelope.close()
+
+    def test_native_written_receipt_is_read_consistently_by_python_and_node(self):
+        with preserved_directory() as directory:
+            file = Path(directory) / 'native-record.json'
+            with file.open('wb') as stream:
+                stream.write(b'{"value":'); stream.flush(); time.sleep(.02); stream.write(b'123}')
+            self.assertEqual(supervisor.bounded_json(file), {'value': 123})
+            script = "const a=require('node:assert/strict');a.deepEqual(JSON.parse(require(process.argv[1]).readBoundedFile(process.argv[2],1024)),{value:123})"
+            subprocess.run([supervisor.shutil.which('node'), '-e', script, str(Path(__file__).with_name('file-evidence.cjs')), str(file)], check=True, timeout=5)
+
+    def test_descriptor_reader_rejects_real_mutation_or_name_replacement(self):
+        for kind in ['mutation', 'replacement']:
+            with preserved_directory() as directory:
+                file = Path(directory) / 'record.json'; file.write_bytes(b'{"a":1}')
+                initial = os.stat(file)
+                original_fstat = os.fstat; changed = False
+                def fstat_then_change(descriptor):
+                    nonlocal changed
+                    result = original_fstat(descriptor)
+                    if not changed:
+                        changed = True
+                        time.sleep(.02)
+                        if kind == 'replacement':
+                            # On Windows the open descriptor may itself deny rename.
+                            file.rename(Path(directory) / 'preserved-original.json')
+                        file.write_bytes(b'{"a":2}')
+                        os.utime(file, ns=(initial.st_atime_ns, initial.st_mtime_ns))
+                    return result
+                with patch.object(os, 'fstat', side_effect=fstat_then_change):
+                    with self.assertRaises((RuntimeError, PermissionError)):
+                        supervisor.bounded_json(file)
+
+    def test_bootstrap_binds_real_os_identity_and_refuses_forged_or_unsettled_records(self):
+        contract = {'bootstrapNonce': 'a' * 48, 'sourceHead': 'head', 'harnessSha256': 'harness', 'profileSha256': 'profile'}
+        identity = {'pid': os.getpid(), 'processInstanceId': '11111111-1111-4111-8111-111111111111',
+                    'processBirthMarkerV2': supervisor.native_process_birth_marker(os.getpid())}
+        record = {'version': 'runtime-bootstrap-v1', 'nonce': contract['bootstrapNonce'], 'pid': os.getpid(),
+                  'identity': identity, 'settlement': {'sealed': True, 'probes': [{'closed': True, 'exitCode': 0,
+                      'signal': None, 'killed': False, 'stdoutEnded': True, 'stderrEnded': True}]},
+                  'source': {}, 'sourceManifestSha256': 'a' * 64,
+                  **{key: contract[key] for key in ['sourceHead', 'harnessSha256', 'profileSha256']}}
+        self.assertEqual(supervisor.validate_runtime_bootstrap(record, contract, os.getpid())['identity'], identity)
+        changes = [{'nonce': 'wrong'}, {'pid': os.getpid()+1}, {'sourceHead': 'changed'}, {'harnessSha256': 'changed'},
+                   {'identity': {**identity, 'processBirthMarkerV2': identity['processBirthMarkerV2'] + '1'}},
+                   {'settlement': {'sealed': False, 'probes': []}},
+                   {'settlement': {'sealed': True, 'probes': [{**record['settlement']['probes'][0], 'stdoutEnded': False}]}}]
+        for change in changes:
+            with self.assertRaises(RuntimeError): supervisor.validate_runtime_bootstrap({**record, **change}, contract, os.getpid())
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires actual Windows Job accounting')
+    def test_bootstrap_job_refuses_extra_live_descendant_before_second_admission(self):
+        envelope = supervisor.WindowsEnvelope()
+        children = []
+        try:
+            for _ in range(2):
+                children.append(envelope.spawn([supervisor.shutil.which('node'), '-e', 'process.stdin.resume()'],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
+            with self.assertRaisesRegex(RuntimeError, 'retained descendants'):
+                supervisor.require_runtime_only(envelope, children[0].pid)
+            children[1].communicate(timeout=5)
+            self.assertEqual(supervisor.require_runtime_only(envelope, children[0].pid)['jobActiveProcesses'], 1)
+            children[0].communicate(timeout=5)
+            self.assertFalse(envelope.settlement()['forcedCleanup'])
+        finally:
+            envelope.close()
+            for child in children:
+                child.communicate(timeout=5)
+
     def test_provider_ready_requires_owned_pid_token_and_canonical_loopback_port(self):
         token = 'a' * 48
         ready = {'pid': 123, 'origin': 'http://127.0.0.1:45678', 'tokenSha256': supervisor.hashlib.sha256(token.encode()).hexdigest()}
@@ -197,7 +371,7 @@ class SupervisorTests(unittest.TestCase):
         with preserved_directory() as directory:
             child = supervisor.Child.__new__(supervisor.Child)
             child.name = 'fixture'; child.errors = []; child.ended = {}; child.byte_counts = {}
-            child.exit = None; child.process = FakeProcess(); child.threads = []
+            child.exit = None; child.process = FakeProcess(); child.threads = []; child.stdin_thread = None
             for stream in ['stdout', 'stderr']:
                 thread = threading.Thread(target=child.copy, args=(stream, Path(directory)))
                 thread.start(); child.threads.append(thread)

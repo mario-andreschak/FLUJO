@@ -91,13 +91,18 @@ function createProvider(token) {
 }
 async function main(output) {
   const contract = readJson(path.join(output, 'contract.json'));
+  if (!['pilot', 'endurance'].includes(contract.mode) || contract.equipmentOnly !== false || contract.qualification !== true) {
+    throw new Error('HTTP provider requires an actual qualification mode');
+  }
   const token = takeProviderToken(contract);
   const provider = createProvider(token);
   await new Promise(resolve => provider.server.listen(0, '127.0.0.1', resolve));
-  fs.writeFileSync(path.join(output, 'provider-ready.json'), JSON.stringify({
+  const preparedReady = path.join(output, 'provider-ready-prepared.json');
+  fs.writeFileSync(preparedReady, JSON.stringify({
     pid: process.pid, origin: 'http://127.0.0.1:' + provider.server.address().port,
     tokenSha256: hash(token),
   }), { flag: 'wx' });
+  fs.linkSync(preparedReady, path.join(output, 'provider-ready.json'));
   const timer = setInterval(() => {
     if (process.memoryUsage().rss > PROFILE.budgets.providerRss) { console.error('provider_rss_limit'); process.exitCode = 1; stop(); }
     if (fs.existsSync(path.join(output, 'stop-provider'))) stop();
