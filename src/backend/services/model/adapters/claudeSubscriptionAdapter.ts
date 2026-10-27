@@ -43,6 +43,7 @@ import { embedSchemaInDescription } from './jsonSchemaToZod';
 import { createOwnedToolSchemaBuilder } from './ownedArchiveSchema';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import { ClaudeUsageTracker } from './claudeUsageTracker';
+import { isContextOverflowText } from './contextOverflow';
 import { hasClaudeSessionTranscript, captureClaudeSessionTranscript, canonicalSessionValue, sessionValueHash, claudeSdkRuntimeIdentity } from './claudeSessionPersistence';
 import { ClaudeResultCorrelation } from './claudeResultCorrelation';
 import {
@@ -1505,6 +1506,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                 if (isHandoffName(bare)) turnHandoffUses++;
               }
             }
+          }
+          // The SDK represents a rejected prompt as a synthetic assistant
+          // error frame. It is diagnostic data, not generated prose. Recording
+          // it would persist "Prompt is too long" as an answer and mark the
+          // attempt observable, preventing the shared safe pre-output refit.
+          // Genuine earlier text/tool events still prohibit automatic replay.
+          if (message.error && isContextOverflowText(`${message.error} ${turnText}`)) {
+            const detail = apiKey ? turnText.split(apiKey).join('[credential redacted]') : turnText;
+            throw new Error(`Claude subscription run failed: ${detail || message.error}`);
           }
           // Spawning ended: the model produced a turn with no further handoff
           // call after spawning at least one worker. Stop BEFORE accumulating

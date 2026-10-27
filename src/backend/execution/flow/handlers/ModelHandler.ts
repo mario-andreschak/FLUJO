@@ -82,6 +82,8 @@ import {
 } from '@/backend/services/model/adapters/codexInputCompaction';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
+import { isContextOverflowText } from '@/backend/services/model/adapters/contextOverflow';
+import { archiveContextForRefit } from './archiveContextForRefit';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
 import { prepareOpenAiPromptCacheWire } from '@/backend/services/model/adapters/openaiPromptCaching';
 import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
@@ -1015,21 +1017,8 @@ export class ModelHandler {
     } catch {
       /* circular/huge body — the message + code below are enough to decide */
     }
-    const haystack =
-      `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`.toLowerCase();
-    return (
-      haystack.includes('context_length_exceeded') ||
-      haystack.includes('character transport budget') ||
-      haystack.includes('maximum context length') ||
-      haystack.includes('context length is') ||
-      haystack.includes('maximum context') ||
-      haystack.includes('reduce the length') ||
-      haystack.includes('too many tokens') ||
-      haystack.includes('exceeds the context') ||
-      haystack.includes('input_too_large') ||
-      haystack.includes('input exceeds the maximum length') ||
-      /(?:image|pixel|patch).{0,80}(?:too large|exceed|maximum|limit)/.test(haystack) ||
-      /(?:too many|maximum).{0,40}(?:pixels|patches)/.test(haystack)
+    return isContextOverflowText(
+      `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`,
     );
   }
 
@@ -1089,9 +1078,9 @@ export class ModelHandler {
    * store on the fly and added to a fresh (augmented) markers map — so it can be
    * read back with `read_resource` instead of being lossily discarded. This
    * covers results that auto-capture missed (disabled, or produced before the
-   * setting was on). Best-effort: any store failure just leaves that result
-   * unmarked (it will be lossily truncated). Returns the markers map to use for
-   * the refit.
+   * setting was on). Oversized arguments and their acknowledgements are also
+   * captured so completed write groups can become exact receipts. Store failure
+   * leaves payloads protected; an infeasible request then fails before dispatch.
    */
   private static async captureOversizedToolResultsForRefit(
     conversationId: string,
@@ -1101,9 +1090,33 @@ export class ModelHandler {
     durableContext: FlowDurableMutationContext = {},
   ): Promise<Map<string, ToolResourceMarker> | undefined> {
     let markers: Map<string, ToolResourceMarker> | undefined = existing ? new Map(existing) : undefined;
+    for (const message of apiMessages) {
+      if (message.role !== 'assistant') continue;
+      for (const call of message.tool_calls ?? []) {
+        // Hundreds of modest arguments can exceed a window through receipts
+        // alone. Keep small identifiers inline; archive larger exact payloads.
+        if (call.type !== 'function' || call.function.arguments.length <= 256) continue;
+        if (markers?.get(call.id)?.args?.uri) continue;
+        try {
+          const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
+            conversationId, mimeType: 'application/json', kind: 'text',
+            data: { text: call.function.arguments },
+            producedBy: { source: 'tool-args', nodeId, toolCallId: call.id },
+          }));
+          if ('skipped' in written) continue;
+          if (!markers) markers = new Map();
+          markers.set(call.id, { ...markers.get(call.id), args: written });
+        } catch (error) {
+          rethrowFlowExecutionAuthorityError(error);
+          log.warn('Emergency capture of oversized tool arguments failed; retaining exact arguments');
+        }
+      }
+    }
     for (const msg of apiMessages) {
       if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
-      if (msg.content.length <= ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS) continue;
+      // A growing collection of small results can overflow just as one large
+      // result can. Archive every observed result at this emergency boundary
+      // so completed groups can become compact exact-call receipts.
       const callId = msg.tool_call_id;
       if (markers?.get(callId)?.result?.uri) continue; // already recoverable
       const content = msg.content;
@@ -2571,12 +2584,13 @@ export class ModelHandler {
 
       // A known context window lets us prevent a bad first request rather than
       // waiting for the provider to reject it. Only wire messages are refitted;
-      // the persisted conversation remains unchanged. Models without usable
-      // context metadata keep the historical reactive-overflow behavior.
+      // the persisted conversation remains unchanged. Missing catalogue metadata
+      // must not disable the safety net when optional summarization fails. Use
+      // the same conservative fallback as the summary pipeline for ordinary runs.
       const inputBudget = ModelHandler.resolveOutgoingInputBudget(
         model.contextWindow,
         opts?.maxTokens
-      );
+      ) ?? (!opts?.nativeBrokerAuthority && !opts?.executionExtensionContext ? 96_000 : undefined);
       const hasImages = apiMessages.some(message => Array.isArray(message.content)
         && message.content.some(part => part.type === 'image_url'));
       if (hasImages && !opts?.executionExtensionContext) {
@@ -2685,13 +2699,20 @@ export class ModelHandler {
             sanitizedTools = refittedTools;
           } else {
             const priorSourceIds = apiSourceIds;
+            const sourceArchiveUri = await archiveContextForRefit(
+              apiMessages, apiSourceIds, opts?.conversationId, opts?.nodeId, opts?.durableContext,
+            );
+            const emergencyInputTools = sourceArchiveUri
+              ? ModelHandler.ensureReadResourceArmed([{ role: 'assistant', content: sourceArchiveUri }], refittedTools)
+              : refittedTools;
             let emergency = emergencyRefitMessages(refittedMessages, {
               target: inputBudget,
-              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools, model),
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, emergencyInputTools, model),
               keepRecentMessages,
               resourceMarkers: budgetMarkers,
+              sourceArchiveUri,
             });
-            let emergencyTools = refittedTools;
+            let emergencyTools = emergencyInputTools;
 
             // Shed bulky optional schemas while retaining the resource reader
             // needed to recover every archived observation on this wire.
@@ -2702,6 +2723,7 @@ export class ModelHandler {
                 measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, emergencyTools, model),
                 keepRecentMessages,
                 resourceMarkers: budgetMarkers,
+                sourceArchiveUri,
               });
             }
 
@@ -3877,19 +3899,28 @@ export class ModelHandler {
           ? Math.max(1, Math.floor(rejectedImageCosts.reduce((least, cost) => Math.min(least, cost), 16384) / 2)) : 8192;
         let retryMessages = await prepareImages(refitMessages, retryImageTokens);
         let retryTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
-        const retryTarget = inputBudget ?? Math.max(
-          1_024,
+        // Provider rejection overrides our estimate/catalogue: even a request
+        // below the advertised budget must become materially smaller.
+        const retryTarget = Math.min(inputBudget ?? Infinity, Math.max(
+          1,
           Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model) * 0.7),
-        );
+        ));
         let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools, model);
         const priorSourceIds = apiSourceIds;
         let retrySourceIds = apiSourceIds;
         if (retryEstimate > retryTarget) {
+          const sourceArchiveUri = await archiveContextForRefit(
+            apiMessages, apiSourceIds, opts?.conversationId, opts?.nodeId, opts?.durableContext,
+          );
+          if (sourceArchiveUri) retryTools = ModelHandler.ensureReadResourceArmed(
+            [{ role: 'assistant', content: sourceArchiveUri }], retryTools,
+          );
           let emergency = emergencyRefitMessages(retryMessages, {
             target: retryTarget,
             measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
             keepRecentMessages,
             resourceMarkers: refitMarkers,
+            sourceArchiveUri,
           });
           if (emergency.after > retryTarget && (retryTools?.length ?? 0) > 0) {
             retryTools = ModelHandler.ensureReadResourceArmed(emergency.messages, undefined);
@@ -3898,6 +3929,7 @@ export class ModelHandler {
               measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
               keepRecentMessages,
               resourceMarkers: refitMarkers,
+              sourceArchiveUri,
             });
           }
           if (emergency.after <= retryTarget) {

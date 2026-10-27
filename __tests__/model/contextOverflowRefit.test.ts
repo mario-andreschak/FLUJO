@@ -704,8 +704,9 @@ describe('context-length overflow refit', () => {
     writeRunResourceMock.mockRejectedValue(new Error('resource disk unavailable'));
     const result = await callModel('capture-failed');
     expect(result.success).toBe(false);
-    expect(createCompletionMock).toHaveBeenCalledTimes(1);
-    expect(toolContentOf(calls[0])).toBe(HUGE);
+    // The conservative unknown-window preflight now refuses before dispatch.
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    expect(writeRunResourceMock).toHaveBeenCalled();
   });
 
   it('retains the reader for captured small results introduced only by the emergency receipt', async () => {
@@ -745,6 +746,7 @@ describe('context-length overflow refit', () => {
   });
 
   it('retries once, shrinking the oversized recent tool result to a size-naming URI marker', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai', contextWindow: 262_144 });
     seedState('conv-of');
     const result = await callModel('conv-of');
 
@@ -790,6 +792,7 @@ describe('context-length overflow refit', () => {
   });
 
   it('does not retry on a non-overflow provider error', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai', contextWindow: 262_144 });
     // A generic 400 must NOT trigger the (lossy) refit path.
     createCompletionMock.mockImplementationOnce((input: { messages: OpenAI.ChatCompletionMessageParam[] }) => {
       calls.push(input.messages);
@@ -801,6 +804,84 @@ describe('context-length overflow refit', () => {
     expect(createCompletionMock).toHaveBeenCalledTimes(1);
     expect(writeRunResourceMock).not.toHaveBeenCalled();
     expect(result.success).toBe(false);
+  });
+
+  it('bounds an unknown-window continuation even when summarization is disabled', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: false } });
+    const result = await callModel('unknown-window');
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(toolContentOf(calls[0]).length).toBeLessThan(3000);
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({ data: { text: HUGE } }));
+    expect(JSON.stringify(calls[0])).toContain('flujo://run/');
+  });
+
+  it('archives large executed arguments and their small acknowledgement before refitting', async () => {
+    const args = JSON.stringify({ body: 'x'.repeat(500_000) });
+    const original = [
+      { id: 'u-old', role: 'user', content: 'Do not repeat completed writes.', timestamp: 1 },
+      { id: 'a-old', role: 'assistant', content: '', timestamp: 2,
+        tool_calls: [{ id: 'write-1', type: 'function', function: { name: 'write', arguments: args } }] },
+      { id: 't-old', role: 'tool', tool_call_id: 'write-1', content: 'write completed', timestamp: 3 },
+      ...Array.from({ length: 6 }, (_, index) => ({ id: 'tail-' + index, role: 'assistant', content: 'waiting', timestamp: 4 + index })),
+      { id: 'u-now', role: 'user', content: 'Continue with the next task.', timestamp: 20 },
+    ] as SharedState['messages'];
+    writeRunResourceMock.mockImplementation(async (request: { producedBy: { source: string; toolCallId: string } }) => ({
+      uri: 'flujo://run/argument-refit/' + request.producedBy.source,
+      producedBy: request.producedBy, size: args.length, kind: 'text', mimeType: 'text/plain',
+    }));
+    const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages: original,
+      conversationId: 'argument-refit', nodeId: 'node-1', nodeName: 'Node', iteration: 1, maxIterations: 1, compactionMode: 'off' });
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
+      data: { text: args }, producedBy: expect.objectContaining({ source: 'tool-args', toolCallId: 'write-1' }),
+    }));
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({ data: { text: 'write completed' } }));
+    expect(JSON.stringify(calls[0])).toContain('arguments_resource');
+    expect(JSON.stringify(calls[0])).toContain('result-observed');
+    expect(JSON.stringify(calls[0])).toContain('Do not repeat completed writes.');
+    expect(original[1].tool_calls?.[0].function.arguments).toBe(args);
+  });
+
+  it('archives cumulative small tool results and searchable source identities before automatic refit', async () => {
+    const messages = [
+      { id: 'rule', role: 'user', content: 'Never repeat completed actions.', timestamp: 1 },
+      ...Array.from({ length: 350 }, (_, index) => [
+        { id: 'call-message-' + index, role: 'assistant', content: '', timestamp: index + 2,
+          tool_calls: [{ id: 'call-' + index, type: 'function', function: { name: 'historical', arguments: '{}' } }] },
+        { id: 'result-message-' + index, role: 'tool', tool_call_id: 'call-' + index,
+          content: 'observation '.repeat(130), timestamp: index + 2 },
+      ]).flat(),
+      { id: 'current', role: 'user', content: 'Continue the next task.', timestamp: 1000 },
+    ] as SharedState['messages'];
+    const original = structuredClone(messages);
+    writeRunResourceMock.mockImplementation(async (request: { producedBy: { source: string; toolCallId?: string }; name?: string }) => ({
+      uri: 'flujo://run/small-history/' + (request.producedBy.toolCallId ?? 'source'),
+      producedBy: request.producedBy, name: request.name, size: 1500, kind: 'text', mimeType: 'application/json',
+    }));
+    const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages,
+      conversationId: 'small-history', nodeId: 'node-1', nodeName: 'Node', iteration: 1, maxIterations: 1, compactionMode: 'off' });
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(calls[0].length).toBeLessThan(messages.length);
+    expect(JSON.stringify(calls[0])).toContain('Exact pre-refit context is archived at flujo://run/small-history/source');
+    expect(createCompletionMock.mock.calls[0][0]).toEqual(expect.objectContaining({
+      tools: expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: 'read_resource' }) })]),
+    }));
+    const writes = writeRunResourceMock.mock.calls.map(([request]) => request);
+    expect(writes.filter(request => request.producedBy.source === 'tool-result')).toHaveLength(350);
+    const source = writes.find(request => request.producedBy.source === 'compaction-artifact');
+    const archivedMessages = JSON.parse(source.data.text);
+    expect(archivedMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'rule', role: 'user', content: 'Never repeat completed actions.' }),
+      expect.objectContaining({ id: 'result-message-0', role: 'tool' }),
+    ]));
+    expect(archivedMessages.every((message: { id?: string }) => typeof message.id === 'string')).toBe(true);
+    const retainedCalls = calls[0].flatMap(message => message.role === 'assistant' ? message.tool_calls ?? [] : []);
+    const retainedResults = calls[0].filter(message => message.role === 'tool');
+    expect(retainedResults.map(message => message.tool_call_id).sort()).toEqual(retainedCalls.map(call => call.id).sort());
+    expect(messages).toEqual(original);
   });
 
   it('recognizes Codex input_too_large and retries a self-orchestrating adapter with an emergency marker', async () => {

@@ -11,6 +11,22 @@ keep their original wording, roles and order. System and developer instructions 
 instructions, unresolved calls or unrecoverable observations cannot fit, the
 request fails with `context_budget_exceeded`; it does not shorten the contract.
 
+Ordinary calls without catalogue context-window metadata use a conservative
+96,000-token input-budget estimate, including when optional summarization is
+disabled or fails validation. Emergency capture covers accumulated small tool
+results and nontrivial arguments, so already-completed groups can become exact
+resource-backed receipts. Omitted prose and decisions remain in a searchable
+pre-refit source artifact with original message identities and roles. Archive
+failure prevents that omission. These estimates do not replace provider limits.
+
+Claude SDK synthetic assistant errors for `Prompt is too long` and terminal
+`prompt_too_long` rejections reach the shared overflow recovery without being
+published as assistant answers. One smaller retry is permitted only before any
+observable generated output or tool activity. A provider rejection forces a
+smaller retry even when the catalogue advertises a larger window. Native owned
+runs and existing execution-authority, cancellation and tool-replay guards retain
+their stricter boundaries.
+
 Completed tool groups can leave an emergency wire only when runtime-captured
 resource metadata is bound to each exact call ID. A URI mentioned in a tool
 result is insufficient. The retained receipt includes the call ID, tool name,
