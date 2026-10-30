@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Box,
+  Button,
   Chip,
   Container,
   Divider,
@@ -13,6 +14,8 @@ import {
   Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
+import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded';
+import { buildOpenApiDocument } from './openApi';
 import MenuBookRoundedIcon from '@mui/icons-material/MenuBookRounded';
 import {
   API_GROUPS,
@@ -94,6 +97,11 @@ function EndpointCard({ endpoint, workspace }: { endpoint: ApiEndpoint; workspac
       <Typography variant="body2" color="text.secondary" sx={{ mb: endpoint.params?.length ? 1.5 : 0 }}>
         {endpoint.summary}
       </Typography>
+      {endpoint.requestBody === 'none' && (
+        <Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontWeight: 700, textTransform: 'uppercase', color: 'text.secondary' }}>
+          {t('docs.noBody')}
+        </Typography>
+      )}
 
       {endpoint.params && endpoint.params.length > 0 && (
         <Box sx={{ mb: 1 }}>
@@ -176,6 +184,15 @@ export default function Docs() {
     }
   }, []);
 
+  const downloadOpenApi = () => {
+    const document_ = buildOpenApiDocument(API_GROUPS, origin || 'http://localhost:4200', 'current');
+    const url = URL.createObjectURL(new Blob([JSON.stringify(document_, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = 'flujo-openapi.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   const filteredGroups = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return API_GROUPS;
@@ -212,6 +229,13 @@ export default function Docs() {
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           {t('docs.baseHelp', { url: (origin || 'http://localhost:4200') + '/v1' })}
         </Typography>
+        {/* The industry-standard export of this same reference (#1278). */}
+        <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button size="small" variant="outlined" startIcon={<DownloadRoundedIcon />} onClick={downloadOpenApi}>
+            {t('docs.openApiDownload')}
+          </Button>
+          <Typography variant="caption" color="text.secondary">{t('docs.openApiHelp')}</Typography>
+        </Box>
         {workspaceHeader && (
           <Box sx={{ mt: 1.5 }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
