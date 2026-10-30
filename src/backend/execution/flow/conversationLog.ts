@@ -390,6 +390,13 @@ export async function flushConversationLog(conversationId: string): Promise<void
   if (failed?.status === 'rejected') throw failed.reason;
 }
 
+/** Read paths include in-flight appends when they can, but a past write failure
+ * belongs to the run that made it; it must never make the history unreadable. */
+export async function flushConversationLogForRead(conversationId: string): Promise<void> {
+  try { await flushConversationLog(conversationId); }
+  catch (err) { log.warn(`Reading ${conversationId} after an unacknowledged append`, { err }); }
+}
+
 /**
  * Authoritatively replace a persisted conversation transcript while preserving
  * the append-only audit log. The log receives removals for every prior projected
@@ -991,10 +998,7 @@ export async function recoverConversationTranscript(
     return { messages: snapshot, source: 'snapshot' };
   }
 
-  // A read includes in-flight appends when it can, but an earlier write failure
-  // belongs to the run that made it; it must never make the history unreadable.
-  try { await flushConversationLog(conversationId); }
-  catch (err) { log.warn(`Reading ${conversationId} after an unacknowledged append`, { err }); }
+  await flushConversationLogForRead(conversationId);
   await repairTruncatedConversationLog(state);
   return withConversationLogEvents(conversationId, async events => {
   const durable = events ? projectMessages(events) : [];
