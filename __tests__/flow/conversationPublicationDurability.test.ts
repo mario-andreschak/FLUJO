@@ -358,7 +358,7 @@ it('reclaims a crashed earlier process intent and isolates its torn record on it
   const text = await fs.readFile(logPath(value), 'utf8');
   expect(text.startsWith(`${partial}\n{`)).toBe(true);
   // The production reader skips the torn line and keeps the new event intact.
-  expect((await readConversationLog(value.conversationId))!.map(event => event.type === 'message' && event.message.id)).toEqual(['later']);
+  expect((await readConversationLog(value.conversationId!))!.map(event => event.type === 'message' && event.message.id)).toEqual(['later']);
   await expect(fs.access(intent)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 

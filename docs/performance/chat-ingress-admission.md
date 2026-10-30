@@ -19,10 +19,11 @@ already received by the HTTP stack are outside this allocation estimate.
 | Query parameters, all methods | 128 |
 | JSON nesting / lexical values including object keys | 64 / 100,000 |
 | Body chunks / body read deadline | 100,000 / 30 seconds |
-| Simultaneous input owners | 16 |
+| Simultaneous parses (admitted chats keep only their parsed byte charge) | 16 |
 | Initial decode/parse reservation | 96 MiB per request |
 | Process input reservations | 256 MiB |
-| Conservative application RSS admission ceiling | 2 GiB |
+| Application RSS admission ceiling | Shared with run admission: 75% of usable memory, at least 2 GiB |
+| Wait for parsing capacity or memory before answering busy | 10 seconds |
 | IP rate registry | 4,096 keys, 1 MiB estimated key storage |
 | Forwarded-IP header inspected | 1,024 characters |
 | Per-IP quota | 6,000 requests per minute |

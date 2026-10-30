@@ -72,10 +72,13 @@ release admission when they return the parsed snapshot; retained caller state is
 then outside this temporary-read reservation. Snapshot reads retain the existing
 no-follow file identity checks and close the descriptor before recovery writes.
 
-Admission refuses overload without truncating history or evicting live state.
-HTTP callers receive `CONVERSATION_LOG_READ_BUSY` (429) or
-`CONVERSATION_LOG_READ_MEMORY` (503), with `Retry-After: 5` and private/no-store
-caching. Loader failures of these types propagate instead of becoming a false
+Admission never truncates history or evicts live state. A read waits (up to 30
+seconds) for one of four slots and for other reads to free heap; it refuses for
+memory at once only when it cannot fit even with no other read running. The
+reservation is six times the log size plus 128 KiB. After the wait, HTTP callers
+receive `CONVERSATION_LOG_READ_BUSY` (429) or `CONVERSATION_LOG_READ_MEMORY`
+(503), with `Retry-After: 5` and private/no-store caching, and the chat UI
+retries those briefly before showing an error. Loader failures of these types propagate instead of becoming a false
 404. The compatibility `readConversationLog` API releases admission when it
 returns its events; callers retaining or projecting events should use
 `withConversationLogEvents` to keep the temporary allocation covered. Bulk

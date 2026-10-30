@@ -104,7 +104,7 @@ function recheckChatIngressMemory(): void {
 /** Admission with backpressure: a momentarily busy or memory-pressured server
  * makes the request wait briefly instead of failing it. Size errors still fail. */
 export async function acquireChatIngressWhenAvailable(request: Pick<Request, 'method' | 'url' | 'headers'> & { signal?: AbortSignal },
-  waitMs = CHAT_INGRESS_LIMITS.admissionWaitMs): Promise<ChatIngressPermit> {
+  waitMs: number = CHAT_INGRESS_LIMITS.admissionWaitMs): Promise<ChatIngressPermit> {
   const deadline = Date.now() + waitMs;
   for (let attempt = 0; ; attempt++) {
     try { return acquireChatIngress(request); }

@@ -25,7 +25,7 @@ Invalid values retain the defaults.
 | `MAX_PROCESS_BYTES` | 512 MiB | Combined conservative input reservations |
 | `MAX_WORKSPACE_BYTES` | 256 MiB | Reservations in one workspace |
 | `MAX_INPUT_BYTES` | 64 MiB | One estimated input before expansion |
-| `MAX_RSS_BYTES` | 2 GiB | Observed process RSS plus outstanding reservations |
+| `MAX_RSS_BYTES` | 75% of usable memory (RAM or a lower container limit), at least 2 GiB | Observed process RSS plus outstanding reservations; shared by publication and chat input |
 
 Each reservation is at least 1 MiB and four times the estimated input. The
 bounded data walk charges UTF-16 strings, keys, ordinary objects, array slots and
