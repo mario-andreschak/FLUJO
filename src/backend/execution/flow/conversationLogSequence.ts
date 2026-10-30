@@ -1,4 +1,5 @@
-import { constants, openSync, fstatSync, readSync, closeSync } from 'node:fs';
+import { constants, openSync, fstatSync, readSync, closeSync, promises as fsPromises } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 
 export type ConversationSequenceSafetyCode = 'CONVERSATION_SEQUENCE_SCAN_LIMIT'
@@ -22,9 +23,12 @@ export function isConversationSequenceSafetyError(error: unknown): error is Conv
   return error instanceof Error && error.name === 'ConversationSequenceSafetyError';
 }
 
+/** Memory bounds only. The scanner retains no strings and bounded container
+ * state, so time and per-line token work are not limited by default: a long or
+ * old conversation must stay continuable. Callers may still opt into a budget. */
 export const CONVERSATION_SEQUENCE_SCAN_LIMITS = Object.freeze({
-  bufferBytes: 64 * 1024, maxDepth: 128, maxTokensPerLine: 1_000_000,
-  maxSequenceNumberChars: 128, maxMilliseconds: 5_000, maxColdScans: 4,
+  bufferBytes: 64 * 1024, maxDepth: 128,
+  maxSequenceNumberChars: 128, maxColdScans: 4,
 });
 
 type ScanAdmissionState = { active: number; quarantined: number; refusals: number };
@@ -36,20 +40,28 @@ export function getConversationSequenceScanDiagnostics() {
     scanRefusals: scanAdmission.refusals, maxColdScans: CONVERSATION_SEQUENCE_SCAN_LIMITS.maxColdScans };
 }
 
-function admitColdScan() {
-  if (scanAdmission.active + scanAdmission.quarantined >= CONVERSATION_SEQUENCE_SCAN_LIMITS.maxColdScans) {
+/** A synchronous scan cannot wait and never overlaps another synchronous scan,
+ * so it is always admitted; asynchronous scans wait for one of four slots. */
+function admitColdScan(synchronous = false) {
+  if (!synchronous && scanAdmission.active >= CONVERSATION_SEQUENCE_SCAN_LIMITS.maxColdScans) {
     scanAdmission.refusals++;
-    throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_SCAN_BUSY',
-      'cold-scan descriptor capacity is occupied; after uncertain descriptor closure, drain work and perform a controlled restart');
+    throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_SCAN_BUSY', 'cold-scan capacity is occupied; retry shortly');
   }
   scanAdmission.active++;
   let settled = false;
-  return (quarantined = false) => {
+  // A failed close is not retried, but it no longer occupies a scan slot for
+  // the life of the process (four such failures used to refuse every scan).
+  return () => {
     if (settled) return;
     settled = true;
     scanAdmission.active--;
-    if (quarantined) scanAdmission.quarantined++;
   };
+}
+async function admitColdScanWhenAvailable(): Promise<() => void> {
+  for (;;) {
+    if (scanAdmission.active < CONVERSATION_SEQUENCE_SCAN_LIMITS.maxColdScans) return admitColdScan();
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
 }
 
 function limit(reason: string): never { throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_SCAN_LIMIT', reason); }
@@ -91,7 +103,7 @@ class SequenceLines {
 
   constructor(private readonly maxDepth: number, private readonly maxTokens: number) {}
 
-  private countToken(): void { if (++this.tokens > this.maxTokens) limit('JSON token work exceeds the per-line budget'); }
+  private countToken(): void { if (++this.tokens > this.maxTokens) limit('JSON token work exceeds the configured per-line budget'); }
   private keyUnit(unit: number): void {
     if (this.keyString) {
       if (this.keyLength >= 3 || unit !== 'seq'.charCodeAt(this.keyLength)) this.keyMatches = false;
@@ -225,20 +237,45 @@ class SequenceLines {
 
 export interface SequenceScanOptions { bufferBytes?: number; maxDepth?: number; maxTokensPerLine?: number; maxMilliseconds?: number; now?: () => number }
 
-/** Scan every line of one descriptor snapshot. No readFile/split/JSON.parse or
- * pathname reopen, including the final regular-file/snapshot validation. */
-export function scanConversationLogSequence(file: string, options: SequenceScanOptions = {}): number {
+type ScanSettings = { bufferBytes: number; maxDepth: number; maxTokensPerLine: number; maxMilliseconds: number; now: () => number };
+function scanSettings(options: SequenceScanOptions): ScanSettings {
   const configuredTime = process.env.FLUJO_CONVERSATION_SEQUENCE_SCAN_MAX_MS;
-  const settings = { ...CONVERSATION_SEQUENCE_SCAN_LIMITS,
-    maxMilliseconds: configuredTime === undefined ? CONVERSATION_SEQUENCE_SCAN_LIMITS.maxMilliseconds : Number(configuredTime),
-    ...options };
-  for (const value of [settings.bufferBytes, settings.maxDepth, settings.maxTokensPerLine, settings.maxMilliseconds]) {
+  const settings = { bufferBytes: CONVERSATION_SEQUENCE_SCAN_LIMITS.bufferBytes, maxDepth: CONVERSATION_SEQUENCE_SCAN_LIMITS.maxDepth,
+    maxTokensPerLine: Infinity, maxMilliseconds: configuredTime === undefined ? Infinity : Number(configuredTime), ...options };
+  for (const value of [settings.bufferBytes, settings.maxDepth]) {
     if (!Number.isSafeInteger(value) || value < 1) limit('scanner limits must be positive safe integers');
   }
+  for (const value of [settings.maxTokensPerLine, settings.maxMilliseconds]) {
+    if (value !== Infinity && (!Number.isSafeInteger(value) || value < 1)) limit('scanner limits must be positive safe integers');
+  }
   if (settings.bufferBytes > CONVERSATION_SEQUENCE_SCAN_LIMITS.bufferBytes || settings.maxDepth > CONVERSATION_SEQUENCE_SCAN_LIMITS.maxDepth) limit('scanner allocation limits cannot be increased');
-  const now = options.now ?? (() => performance.now());
-  const started = now();
-  const settleScan = admitColdScan(); // Before open: uncertain closes retain this finite ownership slot.
+  return { ...settings, now: options.now ?? (() => performance.now()) };
+}
+const overBudget = (settings: ScanSettings, started: number) => settings.maxMilliseconds !== Infinity && settings.now() - started > settings.maxMilliseconds;
+const budgetExceeded = () => limit('the full-history scan exceeded its configured time budget');
+function asScanFailure(error: unknown): ConversationSequenceSafetyError {
+  return isConversationSequenceSafetyError(error) ? error
+    : new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log could not be read; restore storage access before retrying', { cause: error });
+}
+function assertScannable(initial: { isFile(): boolean; size: bigint }): number {
+  if (!initial.isFile() || initial.size < BigInt(0) || initial.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the opened log is not a regular file with a safe snapshot size');
+  }
+  return Number(initial.size);
+}
+function assertUnchanged(initial: { size: bigint; mtimeNs: bigint; ctimeNs: bigint }, final: { isFile(): boolean; size: bigint; mtimeNs: bigint; ctimeNs: bigint }): void {
+  if (!final.isFile() || final.size !== initial.size || final.mtimeNs !== initial.mtimeNs || final.ctimeNs !== initial.ctimeNs) {
+    throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_CHANGED', 'the log changed during its sequence scan; retry against a stable history');
+  }
+}
+
+/** Scan every line of one descriptor snapshot. No readFile/split/JSON.parse or
+ * pathname reopen, including the final regular-file/snapshot validation.
+ * Synchronous for the bus's emit path; run paths warm it asynchronously first. */
+export function scanConversationLogSequence(file: string, options: SequenceScanOptions = {}): number {
+  const settings = scanSettings(options);
+  const started = settings.now();
+  const settleScan = admitColdScan(true);
   let descriptor: number;
   try { descriptor = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); }
   catch (error) {
@@ -246,41 +283,66 @@ export function scanConversationLogSequence(file: string, options: SequenceScanO
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return -1;
     throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log could not be opened; restore storage access before retrying', { cause: error });
   }
-  let failure: unknown;
   try {
     const initial = fstatSync(descriptor, { bigint: true });
-    if (!initial.isFile() || initial.size < BigInt(0) || initial.size > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the opened log is not a regular file with a safe snapshot size');
-    }
+    const size = assertScannable(initial);
     const parser = new SequenceLines(settings.maxDepth, settings.maxTokensPerLine);
     const buffer = Buffer.alloc(settings.bufferBytes);
-    const size = Number(initial.size);
     let offset = 0;
     while (offset < size) {
-      if (now() - started > settings.maxMilliseconds) limit('the full-history scan exceeded its time budget; provision a longer scan window before retrying');
+      if (overBudget(settings, started)) budgetExceeded();
       const count = readSync(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
       if (!count) throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_CHANGED', 'the log shrank during its sequence scan; retry against a stable history');
       offset += count;
       for (let index = 0; index < count; index++) parser.accept(buffer[index]);
     }
     parser.finishLine();
-    const final = fstatSync(descriptor, { bigint: true });
-    if (!final.isFile() || final.size !== initial.size || final.mtimeNs !== initial.mtimeNs || final.ctimeNs !== initial.ctimeNs) {
-      throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_CHANGED', 'the log changed during its sequence scan; retry against a stable history');
-    }
-    if (now() - started > settings.maxMilliseconds) limit('the full-history scan exceeded its time budget; provision a longer scan window before retrying');
+    assertUnchanged(initial, fstatSync(descriptor, { bigint: true }));
+    if (overBudget(settings, started)) budgetExceeded();
     return parser.maximum;
   } catch (error) {
-    failure = isConversationSequenceSafetyError(error) ? error
-      : new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log could not be read; restore storage access before retrying', { cause: error });
-    throw failure;
+    throw asScanFailure(error);
   } finally {
-    try { closeSync(descriptor); settleScan(); }
-    catch (error) {
-      // Never retry the numeric descriptor: close may have succeeded before
-      // reporting failure and that number may already identify another owner.
-      settleScan(true);
-      if (!failure) throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log descriptor could not be closed safely', { cause: error });
+    // Never retry the numeric descriptor: close may have succeeded before
+    // reporting failure. A completed scan result stays valid either way.
+    try { closeSync(descriptor); } catch { /* released with the process */ }
+    settleScan();
+  }
+}
+
+/** The same scan without blocking the event loop: each chunk read yields, so a
+ * very large history never stalls other chats or streams while it is read. */
+export async function scanConversationLogSequenceAsync(file: string, options: SequenceScanOptions = {}): Promise<number> {
+  const settings = scanSettings(options);
+  const settleScan = await admitColdScanWhenAvailable();
+  const started = settings.now();
+  let handle: FileHandle;
+  try { handle = await fsPromises.open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); }
+  catch (error) {
+    settleScan();
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return -1;
+    throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log could not be opened; restore storage access before retrying', { cause: error });
+  }
+  try {
+    const initial = await handle.stat({ bigint: true });
+    const size = assertScannable(initial);
+    const parser = new SequenceLines(settings.maxDepth, settings.maxTokensPerLine);
+    const buffer = Buffer.alloc(settings.bufferBytes);
+    let offset = 0;
+    while (offset < size) {
+      if (overBudget(settings, started)) budgetExceeded();
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, size - offset), offset);
+      if (!bytesRead) throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_CHANGED', 'the log shrank during its sequence scan; retry against a stable history');
+      offset += bytesRead;
+      for (let index = 0; index < bytesRead; index++) parser.accept(buffer[index]);
     }
+    parser.finishLine();
+    assertUnchanged(initial, await handle.stat({ bigint: true }));
+    return parser.maximum;
+  } catch (error) {
+    throw asScanFailure(error);
+  } finally {
+    try { await handle.close(); } catch { /* released with the process */ }
+    settleScan();
   }
 }

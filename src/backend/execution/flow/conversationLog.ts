@@ -17,7 +17,7 @@ import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
-import { scanConversationLogSequence, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
+import { scanConversationLogSequence, scanConversationLogSequenceAsync, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
 import { CONVERSATION_SEQUENCE_REGISTRY_LIMITS, admitSequenceRegistryKey, insertSequenceRegistryKey, newSequenceRegistryAccounting, refuseNewSequenceRegistryKey, sequenceRegistryDiagnostics,
   type SequenceRegistryAccounting } from './conversationSequenceRegistry';
 import { publishConversation, publishConversationBatch, flushConversationPublication, conversationPublicationSnapshotCommits, retryConversationPublication,
@@ -201,6 +201,25 @@ function initSeqIfNeeded(conversationId: string): string {
   return key;
 }
 
+/** Seed the cold-start counter off the event loop, so the first synchronous
+ * allocation for a large history does not stall every other chat and stream.
+ * Best effort: any failure leaves the synchronous path to decide. */
+export async function warmConversationSequence(conversationId: string): Promise<void> {
+  if (!SAFE_ID.test(conversationId) || conversationId.length * 2 > CONVERSATION_SEQUENCE_REGISTRY_LIMITS.maxKeyBytes) return;
+  const key = ck(conversationId);
+  if (nextSeq.has(key)) return;
+  let max: number;
+  try { max = await scanConversationLogSequenceAsync(logFilePath(conversationId)); }
+  catch { return; }
+  // A synchronous allocation may have seeded the counter while this scan ran.
+  if (nextSeq.has(key) || ck(conversationId) !== key) return;
+  try {
+    requireAllocatableSequence(max + 1);
+    admitSequenceRegistryKey(nextSeq, sequenceAccounting, key);
+    insertSequenceRegistryKey(nextSeq, sequenceAccounting, key, max + 1);
+  } catch { /* the synchronous path reports registry or arithmetic refusals */ }
+}
+
 /** Validate cold-start storage and arithmetic before a run may mutate/dispatch.
  * Does not consume a sequence or evict an existing process high-water mark. */
 export function prepareConversationSequence(conversationId: string): void {
@@ -229,6 +248,7 @@ export function allocateSeq(conversationId: string): number {
  */
 export async function latestSequence(conversationId: string): Promise<number> {
   if (!SAFE_ID.test(conversationId)) return -1;
+  await warmConversationSequence(conversationId);
   const key = initSeqIfNeeded(conversationId);
   return nextSeq.get(key)! - 1;
 }

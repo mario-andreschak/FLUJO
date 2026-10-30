@@ -7,7 +7,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conv
 import { openSync, readSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { scanConversationLogSequence, getConversationSequenceScanDiagnostics } from '@/backend/execution/flow/conversationLogSequence';
+import { scanConversationLogSequence, scanConversationLogSequenceAsync, getConversationSequenceScanDiagnostics } from '@/backend/execution/flow/conversationLogSequence';
 import { allocateSeq, _setConversationLogDirForTests, getConversationSequenceDiagnostics } from '@/backend/execution/flow/conversationLog';
 
 const disk = jest.requireActual<typeof import('node:fs')>('node:fs');
@@ -51,7 +51,7 @@ it('releases cold slots after success, ENOENT, failed open, and a read failure w
   expect(getConversationSequenceScanDiagnostics()).toEqual({ scanActive: 0, scanQuarantined: 0, scanRefusals: 0, maxColdScans: 4 });
 });
 
-it('quarantines uncertain closes before further opens, preserves primary failure and existing sequence owners', () => {
+it('never lets failed closes exhaust scans: later conversations still seed, existing owners are preserved', () => {
   expect(allocateSeq('known-owner')).toBe(0);
   expect(allocateSeq('virtual:before')).toBe(0);
   jest.mocked(openSync).mockClear();
@@ -60,29 +60,26 @@ it('quarantines uncertain closes before further opens, preserves primary failure
   jest.mocked(closeSync).mockImplementation(() => { throw closeFailure; });
   jest.mocked(readSync).mockImplementationOnce(() => { throw readFailure; });
   const maximum = getConversationSequenceScanDiagnostics().maxColdScans;
-  for (let index = 0; index < maximum; index++) {
+  disk.writeFileSync(path.join(directory, 'uncertain-0.jsonl'), '{"seq":7}\n');
+  // The primary read failure is still surfaced.
+  expect(() => allocateSeq('uncertain-0')).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_IO', cause: readFailure }));
+  for (let index = 1; index <= maximum * 2; index++) {
     const id = `uncertain-${index}`;
     disk.writeFileSync(path.join(directory, `${id}.jsonl`), '{"seq":7}\n');
-    expect(() => allocateSeq(id)).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_IO',
-      cause: index === 0 ? readFailure : closeFailure }));
-    expect(getConversationSequenceDiagnostics()).toMatchObject({ scanActive: 0, scanQuarantined: index + 1 });
+    // A failed close after a complete scan keeps its valid result.
+    expect(allocateSeq(id)).toBe(8);
+    expect(getConversationSequenceDiagnostics()).toMatchObject({ scanActive: 0, scanQuarantined: 0 });
   }
-  for (let index = 0; index < 8; index++) {
-    expect(() => allocateSeq(`refused-${index}`)).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_SCAN_BUSY', status: 503 }));
-  }
-  expect(openSync).toHaveBeenCalledTimes(maximum);
-  expect(closeSync).toHaveBeenCalledTimes(maximum);
-  expect(ownedDescriptors.size).toBe(maximum);
   expect(allocateSeq('known-owner')).toBe(1);
   expect(allocateSeq('virtual:before')).toBe(1);
   expect(allocateSeq('virtual:after')).toBe(0);
-  expect(getConversationSequenceDiagnostics()).toMatchObject({ scanActive: 0, scanQuarantined: maximum, scanRefusals: 8, keys: 3 });
-  // Reloading a server bundle cannot forget quarantined descriptor ownership.
-  jest.isolateModules(() => {
-    const reloaded = require('@/backend/execution/flow/conversationLogSequence') as typeof import('@/backend/execution/flow/conversationLogSequence');
-    expect(reloaded.getConversationSequenceScanDiagnostics().scanQuarantined).toBe(maximum);
-    expect(() => reloaded.scanConversationLogSequence(path.join(directory, 'absent.jsonl')))
-      .toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_SCAN_BUSY' }));
-  });
-  expect(openSync).toHaveBeenCalledTimes(maximum);
+  expect(getConversationSequenceDiagnostics()).toMatchObject({ scanActive: 0, scanQuarantined: 0, scanRefusals: 0 });
+});
+
+it('scans asynchronously with the same result and releases its slot', async () => {
+  const file = path.join(directory, 'async-history.jsonl');
+  disk.writeFileSync(file, '{"seq":3}\n{"seq":11}\n{"seq":9}\n{"torn":');
+  await expect(scanConversationLogSequenceAsync(file)).resolves.toBe(11);
+  await expect(scanConversationLogSequenceAsync(path.join(directory, 'absent-async.jsonl'))).resolves.toBe(-1);
+  expect(getConversationSequenceScanDiagnostics()).toMatchObject({ scanActive: 0 });
 });

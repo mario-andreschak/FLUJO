@@ -49,6 +49,7 @@ jest.mock('@/utils/storage/backend', () => ({
 }));
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   prepareConversationSequence: jest.fn(),
+  warmConversationSequence: jest.fn(async () => undefined),
   reconcileConversationLog: jest.fn(async () => {}),
   recoverMessagesFromLog: jest.fn(async () => {}),
   appendRawForState: jest.fn(async () => {}),

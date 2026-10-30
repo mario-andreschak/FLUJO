@@ -20,7 +20,7 @@ import {
   ownerScopeForRun,
   releaseRunOwnedBashSessions,
 } from '@/backend/services/mcp/ownerScope';
-import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState, prepareConversationSequence, flushConversationLog } from '@/backend/execution/flow/conversationLog';
+import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState, prepareConversationSequence, warmConversationSequence, flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError } from './conversationLogSequence';
 import { isConversationPublicationError, type ConversationPublicationError } from './conversationPublication';
 import {
@@ -778,6 +778,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
   // --- 1. Initialize or Retrieve State ---
   const effectiveConvId = input.conversationId || crypto.randomUUID();
+  await warmConversationSequence(effectiveConvId);
   prepareConversationSequence(effectiveConvId);
   const storageKey = `conversations/${effectiveConvId}` as StorageKey;
   let stateSource: 'storage' | 'memory' | 'new' = 'new';
