@@ -74,6 +74,13 @@ describe('workspace projects', () => {
     await expect(inWorkspace(() => getChatProject('chat-1'))).resolves.toEqual({ project: one, path: one });
   });
 
+  it('treats conversation ids that name Object members like any other id', async () => {
+    await inWorkspace(() => addProject(one));
+    await expect(inWorkspace(() => resolveConversationProjectDir('constructor'))).resolves.toBe(one);
+    await expect(inWorkspace(() => getChatProject('toString'))).resolves.toBeUndefined();
+    expect(Object.keys((await readWorkspaceMetadata('side')).chatProjects as object)).toEqual(['constructor']);
+  });
+
   it('keeps project fields when the workspace editor rewrites the roots', async () => {
     await inWorkspace(() => addProject(one));
     await inWorkspace(() => bindChatProject('chat-1', one));

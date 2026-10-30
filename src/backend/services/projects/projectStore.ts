@@ -56,26 +56,32 @@ function rootsOf(metadata: WorkspaceMetadata): string[] {
   return assertWorkspaceRoots(metadata.roots ?? []);
 }
 
-function bindingsOf(metadata: WorkspaceMetadata): Record<string, StoredBinding> {
+/**
+ * The stored bindings as a Map, so a conversation id is never looked up or
+ * written as a plain-object property (ids like `constructor` would otherwise
+ * read Object.prototype members).
+ */
+function bindingsOf(metadata: WorkspaceMetadata): Map<string, StoredBinding> {
+  const bindings = new Map<string, StoredBinding>();
   const raw = metadata.chatProjects;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  const bindings: Record<string, StoredBinding> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bindings;
   for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
     const entry = value as Partial<StoredBinding> | null;
     if (!isValidConversationId(id) || !entry || typeof entry.project !== 'string' || typeof entry.path !== 'string') continue;
     if (!path.isAbsolute(entry.project) || !path.isAbsolute(entry.path)) continue;
-    bindings[id] = { project: entry.project, path: entry.path, at: typeof entry.at === 'number' ? entry.at : 0 };
+    bindings.set(id, { project: entry.project, path: entry.path, at: typeof entry.at === 'number' ? entry.at : 0 });
   }
   return bindings;
 }
 
 /**
- * Cap the bindings, least recently used first. Bindings to a removed project
- * are kept on purpose: they mark the chat as bound, so it is never silently
- * re-pinned to another project (and they revive if the project is re-added).
+ * The bindings to store, capped least recently used first. Bindings to a
+ * removed project are kept on purpose: they mark the chat as bound, so it is
+ * never silently re-pinned to another project (and they revive if the project
+ * is re-added).
  */
-function prunedBindings(bindings: Record<string, StoredBinding>): Record<string, StoredBinding> {
-  const kept = Object.entries(bindings)
+function storedBindings(bindings: Map<string, StoredBinding>): Record<string, StoredBinding> {
+  const kept = [...bindings]
     .sort(([, a], [, b]) => b.at - a.at)
     .slice(0, MAX_CHAT_BINDINGS);
   return Object.fromEntries(kept);
@@ -171,7 +177,7 @@ export async function readChatBinding(conversationId: string): Promise<{
   if (!isValidConversationId(conversationId)) return { stored: undefined, binding: undefined };
   const metadata = await readWorkspaceMetadata();
   const roots = rootsOf(metadata);
-  const stored = bindingsOf(metadata)[conversationId];
+  const stored = bindingsOf(metadata).get(conversationId);
   if (!stored) return { stored, binding: undefined };
   const project = roots.find(root => sameFilesystemPath(root, stored.project));
   if (!project) return { stored, binding: undefined };
@@ -182,9 +188,10 @@ export async function readChatBinding(conversationId: string): Promise<{
 async function touchChatBinding(conversationId: string): Promise<void> {
   await updateWorkspaceMetadata(getCurrentWorkspace(), current => {
     const bindings = bindingsOf(current);
-    const binding = bindings[conversationId];
+    const binding = bindings.get(conversationId);
     if (!binding) return current;
-    return { ...current, chatProjects: { ...bindings, [conversationId]: { ...binding, at: Date.now() } } };
+    bindings.set(conversationId, { ...binding, at: Date.now() });
+    return { ...current, chatProjects: storedBindings(bindings) };
   });
 }
 
@@ -201,10 +208,9 @@ export async function bindChatProject(conversationId: string, project: unknown, 
     const roots = rootsOf(current);
     const match = requireProject(roots, project);
     bound = { project: match, path: folder ? path.resolve(folder) : match };
-    return {
-      ...current,
-      chatProjects: prunedBindings({ ...bindingsOf(current), [conversationId]: { ...bound, at: Date.now() } }),
-    };
+    const bindings = bindingsOf(current);
+    bindings.set(conversationId, { ...bound, at: Date.now() });
+    return { ...current, chatProjects: storedBindings(bindings) };
   });
   return bound!;
 }
