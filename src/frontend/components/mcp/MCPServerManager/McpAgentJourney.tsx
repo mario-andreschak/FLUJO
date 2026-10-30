@@ -16,10 +16,12 @@ interface McpAgentJourneyProps {
   servers: JourneyServer[];
   onConnect: () => void;
   onInspect: (serverName: string) => void;
+  /** Hide the guide for good (it stays reachable from Help → Tutorials). */
+  onDismiss?: () => void;
 }
 
 /** Navigation and instructions only; saving a connection is never a verified run. */
-export default function McpAgentJourney({ servers, onConnect, onInspect }: McpAgentJourneyProps) {
+export default function McpAgentJourney({ servers, onConnect, onInspect, onDismiss }: McpAgentJourneyProps) {
   const { t } = useI18n();
   const guideId = useId();
   const [selectedName, setSelectedName] = useState('');
@@ -68,7 +70,10 @@ export default function McpAgentJourney({ servers, onConnect, onInspect }: McpAg
           </Box>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>{t('mcp.journey.next')}</Typography>
-        <Button component={Link} href="/docs" size="small" sx={{ mt: 1 }}>{t('nav.help')}</Button>
+        <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+          <Button component={Link} href="/docs" size="small">{t('nav.help')}</Button>
+          {onDismiss && <Button size="small" color="inherit" onClick={onDismiss}>{t('mcp.journey.dismiss')}</Button>}
+        </Stack>
       </AccordionDetails>
     </Accordion>
   );

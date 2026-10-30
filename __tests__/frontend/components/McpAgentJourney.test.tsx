@@ -75,4 +75,12 @@ describe('first MCP-to-agent navigation', () => {
     expect(screen.getByRole('combobox', { name: translate(locale, 'mcp.journey.savedApp') })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(translate(locale, 'mcp.journey.unverified'));
   });
+
+  it('can be hidden for good when the page offers it (#1278)', () => {
+    const onDismiss = jest.fn();
+    render(<McpAgentJourney servers={[]} onConnect={jest.fn()} onInspect={jest.fn()} onDismiss={onDismiss} />);
+    openGuide();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide this guide' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
 });
