@@ -24,6 +24,7 @@ import { subflowExecutionAuthority } from '../executionAuthority';
 import { isExecutionProtectedState } from '@/backend/execution/extensions';
 import { normalizeSessionKey, normalizeSessionTurnCap } from '../sessionManagement';
 import { retainConsumedSubflowOutput, isSubflowOutputPressureError } from '../subflowOutputBudget';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 
 /**
  * Callable-subflow TOOL invocation (issue #385, deferred Part B of #359).
@@ -198,8 +199,7 @@ export async function executeSubflowToolCall(
     if (!conversationId) {
       return { success: false, error: 'No active conversation to run the subflow tool call in.' };
     }
-    const { FlowExecutor } = await import('../FlowExecutor');
-    const sharedState = FlowExecutor.conversationStates.get(conversationId);
+    const sharedState = getConversationStates().get(conversationId);
     if (!sharedState) {
       return { success: false, error: 'Live conversation state not found for the subflow tool call.' };
     }

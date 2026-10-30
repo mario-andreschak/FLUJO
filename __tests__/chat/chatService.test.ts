@@ -240,6 +240,21 @@ describe('chatService REST methods', () => {
     );
   });
 
+  it('getConversation: retries momentary 429/503 pressure before surfacing an error', async () => {
+    jest.useFakeTimers();
+    try {
+      const conv = { id: 'busy', title: 'T', messages: [], flowId: 'f', createdAt: 1, updatedAt: 2 };
+      fetchMock
+        .mockResolvedValueOnce(makeResponse(429, { error: 'Conversation history reads are busy.' }))
+        .mockResolvedValueOnce(makeResponse(503, { error: 'Insufficient memory.' }))
+        .mockResolvedValueOnce(makeResponse(200, conv));
+      const pending = chatService.getConversation('busy');
+      await jest.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toEqual(conv);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally { jest.useRealTimers(); }
+  });
+
   it('getConversation: maps a 404 to ChatApiError with status', async () => {
     fetchMock.mockResolvedValue(makeResponse(404, { error: 'Conversation not found' }));
 

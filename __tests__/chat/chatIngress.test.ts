@@ -1,5 +1,6 @@
+import { getHeapStatistics } from 'node:v8';
 import { NextRequest } from 'next/server';
-import { acquireChatIngress, CHAT_INGRESS_LIMITS, claimChatIngress, finishChatInputParsing,
+import { acquireChatIngress, acquireChatIngressWhenAvailable, CHAT_INGRESS_LIMITS, claimChatIngress, finishChatInputParsing,
   getChatIngressDiagnostics } from '@/utils/http/chatIngress';
 import { parseRequestParameters } from '@/app/v1/chat/completions/requestParser';
 import { getAllocationReservationSnapshot, pendingAllocationBytes, setAllocationReservation } from '@/backend/execution/flow/allocationReservations';
@@ -118,14 +119,40 @@ it('cancels a stalled body at the declared deadline', async () => {
   } finally { jest.useRealTimers(); }
 });
 
-it('enforces owner count independently of bytes and rejects forged permits', () => {
+it('keeps admitting input while many earlier chats hold their parsed charge, and rejects forged permits', () => {
   const permits = Array.from({ length: CHAT_INGRESS_LIMITS.owners }, () => {
     const permit = acquireChatIngress(request('{}')); finishChatInputParsing(permit, 2, 1); return permit;
   });
   try {
-    expect(() => acquireChatIngress(request('{}'))).toThrow('capacity');
+    // Long-running chats no longer exhaust a fixed number of input slots.
+    const next = acquireChatIngress(request('{}'));
+    next.release();
     expect(() => claimChatIngress({ release() {} })).toThrow('invalid');
   } finally { permits.forEach(permit => permit.release()); }
+});
+
+it('bounds concurrent parsing by its byte reservation', () => {
+  const parsing: ReturnType<typeof acquireChatIngress>[] = [];
+  try {
+    for (;;) parsing.push(acquireChatIngress(request('{}')));
+  } catch (error) {
+    expect(error).toMatchObject({ code: 'CHAT_INPUT_BUSY' });
+  } finally { parsing.forEach(permit => permit.release()); }
+  expect(parsing.length).toBeGreaterThan(0);
+  expect(parsing.length).toBeLessThanOrEqual(CHAT_INGRESS_LIMITS.owners);
+});
+
+it('waits for parsing capacity instead of refusing a momentarily busy server', async () => {
+  const parsing: ReturnType<typeof acquireChatIngress>[] = [];
+  try { for (;;) parsing.push(acquireChatIngress(request('{}'))); } catch { /* full */ }
+  const waiting = acquireChatIngressWhenAvailable(request('{}'), 5_000);
+  setTimeout(() => parsing.shift()?.release(), 50);
+  const permit = await waiting;
+  permit.release();
+  parsing.forEach(held => held.release());
+  // Size errors are never waited on.
+  await expect(acquireChatIngressWhenAvailable({ method: 'GET', url: 'x'.repeat(CHAT_INGRESS_LIMITS.urlCharacters + 1), headers: new Headers() }, 5_000))
+    .rejects.toMatchObject({ code: 'CHAT_INPUT_TOO_LARGE' });
 });
 
 it('bounds GET raw URL and parameter count before URL decoding while accepting the reference history', async () => {
@@ -136,7 +163,8 @@ it('bounds GET raw URL and parameter count before URL decoding while accepting t
 });
 
 it('observes fixed shared reservations before allocating and does not mutate failed observations', () => {
-  setAllocationReservation('output', 3 * 1024 ** 3);
+  // Larger than the whole heap: refused by heap headroom on any machine size.
+  setAllocationReservation('output', getHeapStatistics().heap_size_limit);
   try {
     const snapshot = getAllocationReservationSnapshot();
     expect(Object.isFrozen(snapshot)).toBe(true);

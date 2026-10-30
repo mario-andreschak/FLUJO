@@ -73,6 +73,7 @@ import {
   resolveBoundedSubflowTokens, subflowWorkerLimit, withSubflowPreparationBudget,
   type SubflowPreparationBudget, SubflowPreparationPressureError,
 } from '../subflowPreparationBudget';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 const nativePreparedSubflows = new WeakMap<
@@ -1704,8 +1705,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
         if (invocation && !invocation.captureKvReceipt) {
           invocation.captureKvReceipt = { key: captureKv, fingerprint, status: 'pending' };
           // Save only the effect intent, before any parent messages/variables.
-          const { FlowExecutor } = await import('../FlowExecutor');
-          const live = FlowExecutor.conversationStates.get(sharedState.conversationId!);
+          const live = getConversationStates().get(sharedState.conversationId!);
           if (!live) throw new Error('Subflow KV capture requires its live parent');
           const intent = { ...live, executionAuthority: live.executionAuthority, executionExtensionContext: live.executionExtensionContext,
             subflowInvocations: { ...live.subflowInvocations,
@@ -1824,9 +1824,8 @@ async function runSubflowLanesAdmitted(
     const concurrencyLimit = subflowWorkerLimit(prepResult.concurrencyLimit);
     const joinSeparator = prepResult.joinSeparator ?? '\n\n';
     const errorStrategy = prepResult.errorStrategy ?? 'collect-all';
-    const { FlowExecutor } = await import('../FlowExecutor');
     const parentState = prepResult.parentRunId
-      ? FlowExecutor.conversationStates.get(prepResult.parentRunId)
+      ? getConversationStates().get(prepResult.parentRunId)
       : undefined;
     const extensionContext = parentState?.executionExtensionContext;
     const nativeRoot = isNativeRootExecutionContext(extensionContext);
@@ -1917,7 +1916,7 @@ async function runSubflowLanesAdmitted(
     // waited for keyed ownership, so cancelled work never starts late.
     const parentChainCancelled = (): boolean =>
       Boolean(prepResult.abortSignal?.aborted)
-      || isCancelledByAncestry(prepResult.parentRunId, FlowExecutor.conversationStates);
+      || isCancelledByAncestry(prepResult.parentRunId, getConversationStates());
 
     const runLane = async (i: number): Promise<void> => {
       const lane = lanes[i];

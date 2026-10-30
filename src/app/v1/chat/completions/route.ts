@@ -1,4 +1,4 @@
-import { acquireChatIngress, isChatIngressError, type ChatIngressPermit } from '@/utils/http/chatIngress';
+import { acquireChatIngressWhenAvailable, isChatIngressError, type ChatIngressPermit } from '@/utils/http/chatIngress';
 import { checkChatRateLimit } from '@/utils/http/chatRateLimit';
 import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
@@ -300,7 +300,7 @@ function withChatIngress(handler: (request: NextRequest, ingress: ChatIngressPer
     try {
       // Workspace and authority adapters may decode the URL. Admission belongs
       // outside that wrapper, while its auth/isolation decisions stay intact.
-      ingress = acquireChatIngress(request);
+      ingress = await acquireChatIngressWhenAvailable(request);
     } catch (error) {
       if (!isChatIngressError(error)) throw error;
       return NextResponse.json({ error: { message: error.message,

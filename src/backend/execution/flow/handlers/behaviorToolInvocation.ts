@@ -7,6 +7,7 @@ import { isExecutionProtectedState } from '@/backend/execution/extensions';
 
 import type { ToolDefinition } from '../types';
 import type { BehaviorToolRegistry } from '@/shared/types/execution/behaviorTools';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 export type { BehaviorToolTarget, BehaviorToolRegistry } from '@/shared/types/execution/behaviorTools';
 
 const log = createLogger('backend/flow/execution/handlers/behaviorToolInvocation');
@@ -105,8 +106,7 @@ export async function executeBehaviorToolCall(
     if (!ctx.conversationId) {
       return { success: false, error: 'No active Persona conversation for this Behavior call.' };
     }
-    const { FlowExecutor } = await import('../FlowExecutor');
-    const sharedState = FlowExecutor.conversationStates.get(ctx.conversationId);
+    const sharedState = getConversationStates().get(ctx.conversationId);
     if (!sharedState) {
       return { success: false, error: 'Live Persona state not found for this Behavior call.' };
     }

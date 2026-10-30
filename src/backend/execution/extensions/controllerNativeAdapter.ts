@@ -7,6 +7,7 @@ import { applyExecutionRunInput, createExecutionExtensionContext, ExecutionExten
 import { createControllerNativeToolGateway, type ControllerNativeToolTransport } from './controllerNativeTools';
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
 import type { FlowRunInput } from '../flow/runFlow';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 
 type Claim = Readonly<{ runId: string; rootConversationId: string; goalId: string; workspace: string }>;
 type Plan = Readonly<{ flowId: string; flowDigest: string; modelId: string; modelDigest: string }>;
@@ -179,8 +180,7 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
       const plan=selected.children.find(value=>value.parentNodeId===input.lane?.parentNodeId&&value.flowId===input.flowId);
       if(!plan)throw denied();
       await validateChildOwnerInput(selected,input,plan);
-      const {FlowExecutor}=await import('../flow/FlowExecutor');
-      const parent=FlowExecutor.conversationStates.get(selected.claim.rootConversationId);
+      const parent=getConversationStates().get(selected.claim.rootConversationId);
       const invocation=parent?.subflowInvocations?.[input.lane.invocationId];
       const lane=invocation?.lanes.find(value=>value.id===input.lane!.laneId);
       const node=parent?.flowSnapshot?.nodes.find(value=>value.id===plan?.parentNodeId);
@@ -229,8 +229,7 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
     async authorizeHandoffs(context,names) {
       const selected=item(context),child=childContexts.get(context);
       await current(selected);
-      const {FlowExecutor}=await import('../flow/FlowExecutor');
-      const state=FlowExecutor.conversationStates.get(child?.conversationId??selected.claim.rootConversationId);
+      const state=getConversationStates().get(child?.conversationId??selected.claim.rootConversationId);
       const plan=child?.plan??selected.plan;
       if(!state?.flowSnapshot||digest(state.flowSnapshot)!==plan.flowDigest)throw denied();
       const allowed=names.filter(name=>{
@@ -263,9 +262,8 @@ export function createControllerNativeSourceAdapter(transport: ControllerNativeT
       if(!child||!selected.context||expected.conversationId!==child.conversationId||expected.runId!==child.logicalRunId
         ||expected.workspace!==selected.claim.workspace||expected.flowId!==child.plan.flowId
         ||expected.flowDigest!==child.plan.flowDigest||expected.modelId!==child.plan.modelId||expected.modelDigest!==child.plan.modelDigest)throw denied();
-      const {FlowExecutor}=await import('../flow/FlowExecutor');
       const assertParentCurrent=()=>{
-        const parent=FlowExecutor.conversationStates.get(selected.claim.rootConversationId);
+        const parent=getConversationStates().get(selected.claim.rootConversationId);
         const invocation=parent?.subflowInvocations?.[child.invocationId];
         const lane=invocation?.lanes.find(value=>value.id===child.laneId);
         const node=parent?.flowSnapshot?.nodes.find(value=>value.id===child.plan.parentNodeId);

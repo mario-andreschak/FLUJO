@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import os from 'node:os';
 import { types } from 'node:util';
 import { getHeapStatistics } from 'node:v8';
 import { pendingAllocationBytes, setAllocationReservation } from './allocationReservations';
@@ -78,6 +79,17 @@ function configured(name: string, fallback: number): number {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
+/** Default process RSS ceiling: three quarters of the memory this process may
+ * actually use (machine RAM, or a lower container limit), never below 2 GiB.
+ * A fixed 2 GiB stopped every chat on large machines once a long-running
+ * server grew past it, although most of the RAM was still free. */
+function defaultMaxRssBytes(): number {
+  let usable = os.totalmem();
+  const constrained = typeof process.constrainedMemory === 'function' ? process.constrainedMemory() : 0;
+  if (Number.isFinite(constrained) && constrained > 0 && constrained < usable) usable = constrained;
+  return Math.max(2048 * MiB, Math.floor(usable * 0.75));
+}
+
 function limits() {
   return {
     maxProcessRuns: configured('MAX_PROCESS_RUNS', 64),
@@ -86,8 +98,13 @@ function limits() {
     maxProcessBytes: configured('MAX_PROCESS_BYTES', 512 * MiB),
     maxWorkspaceBytes: configured('MAX_WORKSPACE_BYTES', 256 * MiB),
     maxInputBytes: configured('MAX_INPUT_BYTES', 64 * MiB),
-    maxRssBytes: configured('MAX_RSS_BYTES', 2048 * MiB),
+    maxRssBytes: configured('MAX_RSS_BYTES', defaultMaxRssBytes()),
   };
+}
+
+/** The process RSS ceiling shared by run, publication and chat-input admission. */
+export function getProcessRssLimitBytes(): number {
+  return limits().maxRssBytes;
 }
 
 function refuse(code: FlowRunPressureCode): never {

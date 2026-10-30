@@ -73,6 +73,7 @@ jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
 const loggedMessages: FlujoChatMessage[] = [];
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   prepareConversationSequence: jest.fn(),
+  warmConversationSequence: jest.fn(async () => undefined),
   reconcileConversationLog: jest.fn(async () => undefined),
   recoverMessagesFromLog: jest.fn(async () => undefined),
   repairDanglingToolCalls: jest.fn(() => []),

@@ -59,7 +59,12 @@ it('does not retain whole lines/keys/strings or invoke JSON.parse/readFileSync',
   expect(closeSync).toHaveBeenCalledWith(descriptor);
 });
 
-it('refuses depth/token/time work limits instead of returning a partial high-water mark', () => {
+it('scans a line with more than a million JSON tokens by default (no work limit unless configured)', () => {
+  disk.writeFileSync(filename, `{"seq":4}\n{"seq":5,"values":[${'0,'.repeat(1_100_000)}0]}\n`);
+  expect(scanConversationLogSequence(filename)).toBe(5);
+});
+
+it('refuses configured depth/token/time work limits instead of returning a partial high-water mark', () => {
   disk.writeFileSync(filename, '{"seq":7}\n{"seq":9,"nested":[[[[0]]]]}\n');
   expect(() => scanConversationLogSequence(filename, { maxDepth: 3 })).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_SCAN_LIMIT' }));
   disk.writeFileSync(filename, '{"seq":9,"values":[0,1,2,3]}');
@@ -106,7 +111,7 @@ it('accepts short reads but refuses early EOF or descriptor snapshot growth/shri
   expect(closeSync).toHaveBeenCalledTimes(4);
 });
 
-it('refuses nonregular descriptors and read failures, always closes, and surfaces close failure', () => {
+it('refuses nonregular descriptors and read failures, always closes, and keeps a completed scan despite a close failure', () => {
   disk.writeFileSync(filename, '{"seq":1}');
   jest.mocked(fstatSync).mockImplementationOnce(((fd: number) => {
     const stat = disk.fstatSync(fd, { bigint: true }); stat.isFile = () => false; return stat;
@@ -115,7 +120,7 @@ it('refuses nonregular descriptors and read failures, always closes, and surface
   jest.mocked(readSync).mockImplementationOnce(() => { throw Object.assign(new Error('disk read failed'), { code: 'EIO' }); });
   expect(() => scanConversationLogSequence(filename)).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_IO' }));
   jest.mocked(closeSync).mockImplementationOnce(fd => { disk.closeSync(fd); throw new Error('close failed'); });
-  expect(() => scanConversationLogSequence(filename)).toThrow(expect.objectContaining({ code: 'CONVERSATION_SEQUENCE_IO' }));
+  expect(scanConversationLogSequence(filename)).toBe(1);
   expect(closeSync).toHaveBeenCalledTimes(3);
 });
 

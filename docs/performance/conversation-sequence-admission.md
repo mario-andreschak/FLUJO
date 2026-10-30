@@ -16,12 +16,15 @@ the final duplicate property wins even when that final value is nonnumeric.
 
 The scanner checks every line in the original descriptor snapshot. It does not
 use a tail heuristic or a maximum file-size cutoff. Allocation is bounded by
-128 container levels; work is bounded by 1,000,000 tokens per line and a
-5,000-ms elapsed-time window checked between fixed-size reads and at completion.
-`FLUJO_CONVERSATION_SEQUENCE_SCAN_MAX_MS` can explicitly provision a longer
-positive-integer scan window for a large legacy log. A synchronous storage read
-itself cannot be interrupted by this deadline. These limits mean some valid
-legacy histories can be refused; refusal is not a partial successful scan.
+128 container levels and retains no strings. Work is not limited by default, so
+a long or old conversation is always continuable; callers (and
+`FLUJO_CONVERSATION_SEQUENCE_SCAN_MAX_MS`) may still opt into a token or time
+budget, whose refusal is never a partial successful scan.
+
+Run paths (`runFlow`, streaming chat completions) and `latestSequence` first
+seed the counter with an asynchronous scan that yields between fixed-size
+reads, so a large history does not stall other chats and streams. The
+synchronous scan remains the fallback for the bus's synchronous emit path.
 
 Only an absent pathname (`ENOENT` on open) seeds zero. Open/read/stat/close
 failures, nonregular files and descriptor snapshot changes fail explicitly.
@@ -31,11 +34,11 @@ retargeted pathname. Existing in-memory sequence ownership is not reset.
 Virtual bus channel IDs that are ineligible for persisted logs retain bounded
 in-memory sequences and never reach a filesystem pathname.
 
-Four process-wide cold-scan slots are admitted before opening descriptors.
-Successful closes and failed opens (including ENOENT) release their slot. An
-uncertain close quarantines its slot until a controlled process restart; the
-numeric descriptor is never retried because it may have been reused. Once the
-four slots are occupied, new cold scans refuse before opening another file.
+Four process-wide slots admit asynchronous cold scans, which wait for a free
+slot. A synchronous scan cannot wait and never overlaps another synchronous
+scan, so it is always admitted. Every scan releases its slot when it settles,
+including after an uncertain close; the numeric descriptor is never retried
+because it may have been reused, and a completed scan result stays valid.
 Existing in-memory sequence owners and virtual channels continue. A primary
 scan error remains authoritative if closing also fails, while numeric
 `scanActive`, `scanQuarantined`, `scanRefusals`, and `maxColdScans` diagnostics

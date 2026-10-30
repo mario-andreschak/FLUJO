@@ -1689,7 +1689,8 @@ async function readConversation(args: Record<string, unknown>): Promise<CallTool
     return textResult({ error: 'Persona conversations require the trusted local control plane.' }, true);
   }
   await assertBundledFlujoWorkloadEffectCurrent();
-  await flushConversationLog(id);
+  // Include in-flight appends; an earlier failed write must not hide the history.
+  try { await flushConversationLog(id); } catch { /* reported to the run that made it */ }
 
   return withConversationLogEvents(id, async events => {
   const projected = events ? projectMessages(events) : [];

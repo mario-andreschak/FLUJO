@@ -12,7 +12,7 @@ import { runFlow } from '@/backend/execution/flow/runFlow';
 import { acquireFlowRunAdmission, withFlowRunAdmission, isFlowRunPressureError,
   type FlowRunAdmissionPermit, type FlowRunPressureError } from '@/backend/execution/flow/runAdmission';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import { prepareConversationSequence } from '@/backend/execution/flow/conversationLog';
+import { prepareConversationSequence, warmConversationSequence } from '@/backend/execution/flow/conversationLog';
 import type { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { isConversationDurabilityError, type ConversationPublicationError } from '@/backend/execution/flow/conversationPublicationError';
 import { ExecutionEvent } from '@/shared/types/execution/events';
@@ -645,6 +645,7 @@ async function processAdmittedChatCompletion(
   if (data.stream === true) {
     // Generate a conversation ID if not provided
     const effectiveConvId = conversationId || crypto.randomUUID();
+    await warmConversationSequence(effectiveConvId);
     const snapshotReplayFrom = data.appendMessages || !userTurn
       ? FlowExecutor.conversationStates.get(effectiveConvId)?.messages.length : undefined;
     const streamFromSeq = executionEventBus.currentSeq(effectiveConvId);

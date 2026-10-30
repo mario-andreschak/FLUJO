@@ -109,9 +109,9 @@ describe('workspace route coverage', () => {
         expect(methods.sort()).toEqual(['GET', 'OPTIONS', 'POST']);
         expect(source).toContain("from '@/app/api/_workspace'");
         expect(source).toContain('const inWorkspace = withWorkspaceRoute(handler)');
-        expect(source).toContain('ingress = acquireChatIngress(request)');
+        expect(source).toContain('ingress = await acquireChatIngressWhenAvailable(request)');
         expect(source).toContain('return await inWorkspace(request, ingress)');
-        expect(source.indexOf('ingress = acquireChatIngress(request)'))
+        expect(source.indexOf('ingress = await acquireChatIngressWhenAvailable(request)'))
           .toBeLessThan(source.indexOf('return await inWorkspace(request, ingress)'));
         expect(source).toContain('finally { ingress.release(); }');
         for (const method of methods) {

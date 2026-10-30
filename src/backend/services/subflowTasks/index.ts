@@ -21,6 +21,7 @@ import {
 import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { getDetachedTaskLaunchOwner, isPriorLocalTaskOwner } from './ownership';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 
 const log = createLogger('backend/services/subflowTasks');
 const COLLECTION = 'subflow-tasks';
@@ -179,8 +180,7 @@ async function reconcileTaskInterruption(task: SubflowTaskRecord): Promise<Subfl
     return await runInWriteChain(`subflow-task:${task.taskId}`, async () => {
       const current = await loadCollectionItem<SubflowTaskRecord | null>(COLLECTION, task.taskId, null);
       if (!current || current.status !== 'working' || !await isPriorLocalTaskOwner(current.launchOwner)) return current ?? task;
-      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
-      const live = FlowExecutor.conversationStates.get(current.childConversationId);
+      const live = getConversationStates().get(current.childConversationId);
       if (live && ['running', 'paused_debug', 'awaiting_tool_approval'].includes(live.status ?? '')) return current;
       assertSafeCollectionId(current.childConversationId);
       const key = `conversations/${current.childConversationId}` as StorageKey;

@@ -19,7 +19,8 @@ async function GET_handler(
   const state = await loadConversationStateReadOnly(conversationId);
   if (!state) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
 
-  await flushConversationLog(conversationId);
+  // Include in-flight appends; an earlier failed write must not hide the history.
+  try { await flushConversationLog(conversationId); } catch { /* reported to the run that made it */ }
   return withConversationLogEvents(conversationId, async events => {
     const turns: ModelTurnIndexEntry[] = [];
     const indexById = new Map<string, number>();

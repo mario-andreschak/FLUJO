@@ -31,6 +31,7 @@ import { commitExecutionExtensionMutation, executionExtensionCodexProfile, execu
   executionExtensionSharesPersonaAuthority,
   type ExecutionNativeWorkerDescendant,
   type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 
 type Binding = { workspace: string; dispatchId: string;
   goalId: string; round: number; revisionId: string; leaseEpoch: string;
@@ -381,8 +382,7 @@ export async function createWorkerNativeOriginalHost(input: Omit<NativeOriginalH
   const model = await modelService.getModel(input.modelId);
   if (model?.adapter !== 'codex-cli') return undefined;
   if (!input.conversationId || !input.runId || !input.nodeId) return held();
-  const { FlowExecutor } = await import('../FlowExecutor');
-  const state = FlowExecutor.conversationStates.get(input.conversationId);
+  const state = getConversationStates().get(input.conversationId);
   if (!state?.flowSnapshot) return held();
   if (state.executionExtensionContext !== input.context || state.logicalRunId !== input.runId
     || (state.personaAttribution && !executionExtensionSharesPersonaAuthority(input.context,state.executionAuthority))
@@ -400,14 +400,14 @@ export async function createWorkerNativeOriginalHost(input: Omit<NativeOriginalH
   const signal = executionExtensionSignal(input.context);
   if (!signal) return held();
   const ownerDigest = nativeDigest(selected);
-  const parent=descendant?FlowExecutor.conversationStates.get(selected.rootConversationId):undefined;
+  const parent=descendant?getConversationStates().get(selected.rootConversationId):undefined;
   if(descendant&&(!parent?.flowSnapshot||!parent.executionExtensionContext
     ||!isExecutionChildContext(input.context,parent.executionExtensionContext)
     ||state.parentRunId!==parent.conversationId||state.subflowLane?.parentNodeId!==descendant.parentNodeId
     ||parent.logicalRunId!==selected.logicalRunId||nativeDigest(parent.flowSnapshot)!==selected.flowDigest))return held();
   const assertCurrent = async () => {
     signal.throwIfAborted();
-    if (getCurrentWorkspace() !== expected.workspace || FlowExecutor.conversationStates.get(expected.conversationId) !== state
+    if (getCurrentWorkspace() !== expected.workspace || getConversationStates().get(expected.conversationId) !== state
       || state.executionExtensionContext !== input.context || state.logicalRunId !== expected.runId || state.isCancelled
       || nativeDigest(state.flowSnapshot) !== expected.flowDigest
       || nativeDigest(modelPlan(await modelService.getModel(input.modelId))) !== expected.modelDigest) return held();

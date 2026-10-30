@@ -8,6 +8,10 @@ jest.mock('@/backend/execution/flow/resolveRunResourceRefs', () => ({
 }));
 jest.mock('@/backend/services/flow/index', () => ({ flowService: { getFlow: jest.fn(async (id: string) => ({ id, name: id })) } }));
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
+// Live state is read through the dependency-free registry; share this suite's map.
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => jest.requireMock<{ FlowExecutor: { conversationStates: Map<string, unknown> } }>('@/backend/execution/flow/FlowExecutor').FlowExecutor.conversationStates,
+}));
 jest.mock('@/backend/execution/flow/sessionTranscriptPolicy', () => ({
   prepareResumedSessionTranscript: jest.fn(async () => ({ kind: 'valid', summarized: false, trimmedTurns: 0 })),
 }));

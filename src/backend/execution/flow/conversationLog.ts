@@ -17,10 +17,10 @@ import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
-import { scanConversationLogSequence, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
+import { scanConversationLogSequence, scanConversationLogSequenceAsync, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
 import { CONVERSATION_SEQUENCE_REGISTRY_LIMITS, admitSequenceRegistryKey, insertSequenceRegistryKey, newSequenceRegistryAccounting, refuseNewSequenceRegistryKey, sequenceRegistryDiagnostics,
   type SequenceRegistryAccounting } from './conversationSequenceRegistry';
-import { publishConversation, publishConversationBatch, flushConversationPublication, conversationPublicationSnapshotCommits,
+import { publishConversation, publishConversationBatch, flushConversationPublication, conversationPublicationSnapshotCommits, retryConversationPublication,
   fenceConversationPublication, conversationPublicationIsFenced, ConversationPublicationError } from './conversationPublication';
 import { withConversationLogWriter, withConversationPublicationIntent } from './conversationPublicationIO';
 
@@ -201,6 +201,25 @@ function initSeqIfNeeded(conversationId: string): string {
   return key;
 }
 
+/** Seed the cold-start counter off the event loop, so the first synchronous
+ * allocation for a large history does not stall every other chat and stream.
+ * Best effort: any failure leaves the synchronous path to decide. */
+export async function warmConversationSequence(conversationId: string): Promise<void> {
+  if (!SAFE_ID.test(conversationId) || conversationId.length * 2 > CONVERSATION_SEQUENCE_REGISTRY_LIMITS.maxKeyBytes) return;
+  const key = ck(conversationId);
+  if (nextSeq.has(key)) return;
+  let max: number;
+  try { max = await scanConversationLogSequenceAsync(logFilePath(conversationId)); }
+  catch { return; }
+  // A synchronous allocation may have seeded the counter while this scan ran.
+  if (nextSeq.has(key) || ck(conversationId) !== key) return;
+  try {
+    requireAllocatableSequence(max + 1);
+    admitSequenceRegistryKey(nextSeq, sequenceAccounting, key);
+    insertSequenceRegistryKey(nextSeq, sequenceAccounting, key, max + 1);
+  } catch { /* the synchronous path reports registry or arithmetic refusals */ }
+}
+
 /** Validate cold-start storage and arithmetic before a run may mutate/dispatch.
  * Does not consume a sequence or evict an existing process high-water mark. */
 export function prepareConversationSequence(conversationId: string): void {
@@ -229,6 +248,7 @@ export function allocateSeq(conversationId: string): number {
  */
 export async function latestSequence(conversationId: string): Promise<number> {
   if (!SAFE_ID.test(conversationId)) return -1;
+  await warmConversationSequence(conversationId);
   const key = initSeqIfNeeded(conversationId);
   return nextSeq.get(key)! - 1;
 }
@@ -306,9 +326,9 @@ export function appendFromBus(event: ExecutionEvent): void {
   // required event. Async failures leave a finite fence that flush must surface.
   const pending = publishConversationBatch(publicationKey(conversationId), event, async owned => {
     try {
-      await commitConversationWrite(state, () => withWorkspaceMutation(() =>
+      await retryConversationPublication(() => commitConversationWrite(state, () => withWorkspaceMutation(() =>
         withConversationPublicationIntent(conversationId, () =>
-          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned)))));
+          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned))))));
     } catch (error) {
       fenceConversationPublication('required bus event was not acknowledged durably', error);
       throw error;
@@ -336,9 +356,9 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
   if (isConversationDeleted(conversationId)) return;
   try {
     const pending = publishConversation(publicationKey(conversationId), raws,
-      owned => commitConversationWrite(state, () => withWorkspaceMutation(() =>
+      owned => retryConversationPublication(() => commitConversationWrite(state, () => withWorkspaceMutation(() =>
         withConversationPublicationIntent(conversationId, () =>
-          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned))))),
+          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned)))))),
       undefined, owned => {
         for (const raw of owned) Object.assign(raw, { conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() });
       });
@@ -368,6 +388,13 @@ export async function flushConversationLog(conversationId: string): Promise<void
   await flushConversationPublication(publicationKey(conversationId));
   const failed = results.find(result => result.status === 'rejected');
   if (failed?.status === 'rejected') throw failed.reason;
+}
+
+/** Read paths include in-flight appends when they can, but a past write failure
+ * belongs to the run that made it; it must never make the history unreadable. */
+export async function flushConversationLogForRead(conversationId: string): Promise<void> {
+  try { await flushConversationLog(conversationId); }
+  catch (err) { log.warn(`Reading ${conversationId} after an unacknowledged append`, { err }); }
 }
 
 /**
@@ -971,7 +998,7 @@ export async function recoverConversationTranscript(
     return { messages: snapshot, source: 'snapshot' };
   }
 
-  await flushConversationLog(conversationId);
+  await flushConversationLogForRead(conversationId);
   await repairTruncatedConversationLog(state);
   return withConversationLogEvents(conversationId, async events => {
   const durable = events ? projectMessages(events) : [];

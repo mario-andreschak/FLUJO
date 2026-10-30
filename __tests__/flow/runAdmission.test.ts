@@ -1,5 +1,6 @@
 jest.mock('node:v8', () => ({ getHeapStatistics: jest.fn() }));
 
+import os from 'node:os';
 import { getHeapStatistics } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import {
@@ -203,7 +204,7 @@ it('still refuses unknown classes, forged intrinsic prototypes and prototype hoo
 
 it.each(['heap', 'rss'] as const)('refuses measured %s pressure and can retry after pressure subsides', kind => {
   if (kind === 'heap') heap(3300 * MiB);
-  else jest.mocked(process.memoryUsage).mockReturnValue({ ...process.memoryUsage(), rss: 2048 * MiB });
+  else jest.mocked(process.memoryUsage).mockReturnValue({ ...process.memoryUsage(), rss: getFlowRunAdmissionDiagnostics().maxRssBytes });
   expect(() => acquire()).toThrow(expect.objectContaining({ code: 'FLOW_RUN_MEMORY' }));
   heap();
   jest.mocked(process.memoryUsage).mockReturnValue({ ...process.memoryUsage(), rss: 256 * MiB });
@@ -215,8 +216,20 @@ it('falls back to defaults for unsafe, zero, fractional and invalid configuratio
   process.env.FLUJO_RUN_ADMISSION_MAX_WORKSPACE_RUNS = '1.5';
   process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES = 'Infinity';
   process.env.FLUJO_RUN_ADMISSION_MAX_RSS_BYTES = '-1';
+  const usable = Math.min(os.totalmem(), process.constrainedMemory?.() || Infinity);
   expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ maxProcessRuns: 64, maxWorkspaceRuns: 32,
-    maxProcessBytes: 512 * MiB, maxRssBytes: 2048 * MiB });
+    maxProcessBytes: 512 * MiB, maxRssBytes: Math.max(2048 * MiB, Math.floor(usable * 0.75)) });
+});
+
+it('scales the default RSS ceiling with usable machine memory instead of a fixed 2 GiB', () => {
+  const total = jest.spyOn(os, 'totalmem').mockReturnValue(32 * 1024 * MiB);
+  try {
+    const limit = getFlowRunAdmissionDiagnostics().maxRssBytes;
+    expect(limit).toBeGreaterThan(2048 * MiB);
+    expect(limit).toBeLessThanOrEqual(24 * 1024 * MiB);
+    total.mockReturnValue(1024 * MiB);
+    expect(getFlowRunAdmissionDiagnostics().maxRssBytes).toBe(2048 * MiB);
+  } finally { total.mockRestore(); }
 });
 
 it('holds a preflight during setup/queued execution and releases only after actual settlement', async () => {

@@ -1,6 +1,7 @@
 import vm from 'node:vm';
 import { publishConversation, publishConversationBatch, conversationJsonChunks, getConversationPublicationDiagnostics,
-  CONVERSATION_PUBLICATION_LIMITS, fenceConversationPublication, freezeConversationSnapshot } from '@/backend/execution/flow/conversationPublication';
+  CONVERSATION_PUBLICATION_LIMITS, fenceConversationPublication, freezeConversationSnapshot, flushConversationPublication,
+  retryConversationPublication, ConversationPublicationError } from '@/backend/execution/flow/conversationPublication';
 import { getAllocationReservationSnapshot } from '@/backend/execution/flow/allocationReservations';
 
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
@@ -148,13 +149,32 @@ it('borrows only a live immutable captured snapshot, keeping its original charge
   });
 });
 
-it('releases captures but keeps a finite fence after uncertain publication', async () => {
+it('reports an uncertain publication once, without blocking or leaking, and heals on the next success', async () => {
   const before = getConversationPublicationDiagnostics().owners;
   await expect(publishConversation('uncertain', { content: 'x'.repeat(100_000) }, async () => {
     throw fenceConversationPublication('test unknown commit');
   })).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
-  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before + 1, fences: 1, allocationBytes: 0, retainedBytes: 0 });
-  expect(() => publishConversation('uncertain', {}, async () => undefined)).toThrow(expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' }));
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before, fences: 1, allocationBytes: 0, retainedBytes: 0 });
+  await expect(flushConversationPublication('uncertain')).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
+  // The next write is admitted; its success clears the fence.
+  await expect(publishConversation('uncertain', {}, async () => 'written')).resolves.toBe('written');
+  await expect(flushConversationPublication('uncertain')).resolves.toBeUndefined();
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before, fences: 0 });
+});
+
+it('retries a transient failure and gives up on data errors', async () => {
+  let attempts = 0;
+  await expect(publishConversation('transient', {}, () => retryConversationPublication(async () => {
+    if (++attempts < 3) throw Object.assign(new Error('scanner holds the file'), { code: 'EBUSY' });
+    return 'ok';
+  }))).resolves.toBe('ok');
+  expect(attempts).toBe(3);
+  attempts = 0;
+  await expect(publishConversation('permanent', {}, () => retryConversationPublication(async () => {
+    attempts++;
+    throw new ConversationPublicationError('CONVERSATION_PUBLICATION_DATA', 'not JSON');
+  }))).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_DATA' });
+  expect(attempts).toBe(1);
 });
 
 it('charges a frozen capture handed from a live child to a queued sibling', async () => {
@@ -211,7 +231,7 @@ it('serializes nested siblings, permits grandchildren, and holds the outer write
   expect(trace).toEqual(['first', 'grandchild', 'second', 'later root']);
 });
 
-it('wakes every queued owner when all descriptor slots become quarantined', async () => {
+it('releases quarantined descriptor slots so later writers still run', async () => {
   const blocked = gate();
   const operations = Array.from({ length: 12 }, (_, index) => publishConversation(`close-${index}`, {}, async () => {
     await blocked.promise;
@@ -222,5 +242,6 @@ it('wakes every queued owner when all descriptor slots become quarantined', asyn
   expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 4, queuedWriters: 8 });
   blocked.release();
   expect((await settled).every(result => result.status === 'rejected')).toBe(true);
-  expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 0, queuedWriters: 0, quarantinedWriterSlots: 4 });
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 0, queuedWriters: 0, quarantinedWriterSlots: 0 });
+  await expect(publishConversation('close-after', {}, async () => 'written')).resolves.toBe('written');
 });

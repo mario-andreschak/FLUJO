@@ -14,6 +14,7 @@ import {
   TicketPatchSchema,
   TicketPersonaAttributionSchema,
 } from './schema';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 
 const log = createLogger('backend/services/ticket');
 const TICKETS_COLLECTION = StorageKey.TICKETS;
@@ -32,8 +33,7 @@ async function trustedConversationAttribution(conversationId?: string) {
 
   let state: unknown;
   try {
-    const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
-    state = FlowExecutor.conversationStates.get(conversationId);
+    state = getConversationStates().get(conversationId);
   } catch (error) {
     log.warn('Failed to inspect live conversation attribution; falling back to storage', error);
   }

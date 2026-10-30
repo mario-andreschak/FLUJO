@@ -31,6 +31,7 @@ import { pinnedSubflowDefinition } from '../subflowDependencies';
 import { isCancelledByAncestry } from '../cancellation';
 import { publishSubflowCompletion } from '../subflowCommunication';
 import { isExecutionProtectedState } from '@/backend/execution/extensions';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 
 const log = createLogger('backend/flow/execution/handlers/subflowDetachedInvocation');
 export const SUBFLOW_DETACHED_TOOL_PREFIX = 'start_subflow_';
@@ -124,9 +125,8 @@ async function runDetachedJob(
     }
   };
   const cancelled = async (): Promise<boolean> => {
-    const { FlowExecutor } = await import('../FlowExecutor');
     return controller.signal.aborted || Boolean(prep.executionAuthority?.signal.aborted)
-      || isCancelledByAncestry(task.originConversationId, FlowExecutor.conversationStates);
+      || isCancelledByAncestry(task.originConversationId, getConversationStates());
   };
   const finishCancellation = async (): Promise<void> => {
     const timedOut = controller.signal.reason === TASK_TIMEOUT;
@@ -186,8 +186,7 @@ async function startDetachedSubflow(
   const originConversationId = ctx.conversationId;
   if (!originConversationId) return { success: false, error: 'No active conversation to start a detached subflow.' };
   try {
-    const { FlowExecutor } = await import('../FlowExecutor');
-    const shared = FlowExecutor.conversationStates.get(originConversationId);
+    const shared = getConversationStates().get(originConversationId);
     // A detached start persists a task before it fabricates SubflowNode prep.
     // Protected parents have no owner-issued child authority yet, so stop before
     // either the task mutation or prompt projection, including stale tool maps.
@@ -285,8 +284,7 @@ async function startDetachedSubflow(
 
 async function canAccessTask(task: SubflowTaskRecord, ctx: { conversationId?: string }, allowChild: boolean): Promise<boolean> {
   if (!ctx.conversationId) return false;
-  const { FlowExecutor } = await import('../FlowExecutor');
-  const caller = FlowExecutor.conversationStates.get(ctx.conversationId);
+  const caller = getConversationStates().get(ctx.conversationId);
   if (!caller) return false;
   await assertFlowExecutionCurrent(caller);
   if (caller.isCancelled || caller.executionAuthority?.signal.aborted) return false;

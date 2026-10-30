@@ -8,6 +8,10 @@ import type { SharedState } from '@/backend/execution/flow/types';
 const conversationStates = new Map<string, SharedState>();
 const runFlowMock = jest.fn();
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates } }));
+// Live state is read through the dependency-free registry; share this suite's map.
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => jest.requireMock<{ FlowExecutor: { conversationStates: Map<string, unknown> } }>('@/backend/execution/flow/FlowExecutor').FlowExecutor.conversationStates,
+}));
 jest.mock('@/backend/execution/flow/runFlow', () => ({ runFlow: (...args: unknown[]) => runFlowMock(...args) }));
 
 beforeEach(() => {

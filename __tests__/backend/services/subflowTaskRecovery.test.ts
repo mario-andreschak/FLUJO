@@ -35,6 +35,10 @@ jest.mock('@/backend/services/subflowTasks/ownership', () => ({
       && candidate.workspace === getCurrentWorkspace() && priorOwners.has(candidate.recoveryOwnerId))),
 }));
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { get conversationStates() { return states; } } }));
+// Live state is read through the dependency-free registry; share this suite's map.
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => jest.requireMock<{ FlowExecutor: { conversationStates: Map<string, unknown> } }>('@/backend/execution/flow/FlowExecutor').FlowExecutor.conversationStates,
+}));
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   appendRawForState: jest.fn(async () => undefined), flushConversationLog: jest.fn(async () => undefined),
 }));

@@ -7,9 +7,10 @@ publication boundary, not a whole-runtime or endurance qualification.
 
 ## Admission and capture
 
-The fixed policy is 64 admitted owners (including nested snapshots), four active
-writers, 256 MiB of aggregate retained string/metadata accounting, and 128 MiB
-per capture. A capture visits at most 262,144 JSON slots and 128 nesting levels.
+The fixed policy is four active writers (further publications wait their turn),
+256 MiB of aggregate retained string/metadata accounting, and 128 MiB per
+capture. There is no count cap on queued publications; bus events emitted while
+an earlier one waits join its batch and are written in one append. A capture visits at most 262,144 JSON slots and 128 nesting levels.
 The publisher also observes the existing allocation reservations, heap headroom,
 and runtime RSS limit. It does not increase any runtime memory limit.
 
@@ -71,10 +72,14 @@ transaction. The snapshot fallback uses the same bounded ID walk.
 Only a definitely uncommitted snapshot permits truncation back to the original
 length. The open descriptor, named file, suffix version, parent, workspace, and
 execution authority must still match. A successful rename is a commit even if
-its acknowledgement or a later ownership check fails. Unknown rename, append,
-rollback, or close outcomes retain the new log/live transcript for reconciliation;
-they never trigger a guessed rollback. A rollback failure preserves the primary
-snapshot error.
+its acknowledgement or a later ownership check fails. Unknown rename or rollback
+outcomes retain the new log/live transcript; they never trigger a guessed
+transcript rollback. A rollback failure preserves the primary snapshot error.
+
+A failed append is different: its own descriptor knows exactly where the append
+began, so it truncates that suffix (not a guess) and the write is retried. Only
+when that truncation itself fails is the suffix kept, and the next writer starts
+on a fresh line so the torn record stays an isolated, skipped line.
 
 Bus events receive sequence numbers synchronously. A synchronous publication
 refusal precedes live delivery and replay retention, leaves only a sequence gap,
@@ -88,52 +93,43 @@ than contiguous arithmetic. Capture
 admission failure precedes interval reservation. No IDs, dispatch markers, or
 canonical history are truncated to satisfy a memory limit.
 
-## Uncertain outcomes and restart
+## Failures, crashes and restart (self-healing)
 
-Before mutating either durable file, publication creates and syncs a small
-exclusive intent at `db/conversation-publications/<conversationId>.json`. It
-contains version, conversation ID, token, and start time, never a transcript.
-The intent spans a complete replacement transaction and is removed only after
-settled I/O and verified ownership. Unknown outcomes retain it. A later process
-refuses publication when this intent exists, so it cannot concatenate a new
-event onto an ambiguous partial record after restart.
+A conversation never becomes unwritable because of an earlier failure.
 
-The live process retains bounded path/inode/offset receipts and a finite owner
-slot for reconciliation, releasing large captures once I/O settles. Uncertain
-descriptor closure also retains its writer-capacity slot (at most two data-file
-descriptors per writer during replacement). Once all four slots
-are quarantined, every queued waiter is refused and drained. Restart does not
-clear the on-disk conversation fence: recovery must reconcile the intent against
-the snapshot, log, and surviving temporary files before removing it. This slice
-does not guess an automatic winner or provide an operator action that discards
-an unresolved intent.
+Before mutating either durable file, publication creates a small exclusive
+intent at `db/conversation-publications/<conversationId>.json`. It is the
+cross-process marker that keeps two processes from appending to one log at the
+same offset. It contains version, conversation ID, token, start time, process
+ID and a per-process token, never a transcript, and is not synced: the log
+writer repairs a torn tail itself, so each save pays one fsync (the log append),
+not two. It is removed after the transaction. A
+leftover intent (crash, update, OOM kill, or a failed attempt) is reclaimed by
+the next writer once it is abandoned: written by a failed attempt in this
+process, by a process that has exited, or older than any transaction (10
+minutes). A legacy intent without an owner is abandoned when it predates the
+current process. An intent held by another live FLUJO process is waited for (up
+to 15 s), then refused as busy, never fenced.
 
-Required publication failures use typed busy, memory, data, I/O, or uncertain
-errors. An asynchronous bus failure becomes a fence observed by the durability
-flush. Terminal cleanup recognizes these errors, preserves a preceding execution failure, and
-does not report successful persistence after the final snapshot retry fails.
-An already admitted run may wait for a definitely refused owner admission while
-publishing its terminal records. At most 64 terminal waiters share one capacity
-signal and retain their existing run ownership without another history capture.
-An active publisher frame cannot enter that wait. Each event and snapshot is
-admitted separately; an accepted recovery transition is never replayed because
-its later snapshot was busy. Uncertain I/O, exhausted sequences, and provider
-dispatch are never retried by this cleanup path. Numeric diagnostics include
-the terminal waiter count, which must return to zero after settlement.
-Retries require the publisher's private refusal identity. Bus event retries also
-require its admission receipt to show that the outer event was not accepted;
-a reentrant listener's refusal cannot replay an accepted outer event. Opaque
-custom emitters have no such receipt and are never automatically retried.
-The default event emitter and HTTP/SSE submission path preserve these typed
-errors. Model dispatch waits for its required marker; a result-marker failure
-does not trigger provider fallback or an automatic retry. A completed inference
+Transient write failures (Windows scanner locks, busy workspace locks, brief
+memory or disk pressure) are retried three times (100/300/900 ms) for bus
+events, raw appends and conversation snapshots. A failure that outlasts the
+retries is recorded as a fence: the next flush reports it to the run that lost
+the write, and the next successful transaction for the conversation clears it.
+A fence never refuses new writes, and history reads tolerate it. Owner and
+descriptor slots are always released when their owner settles, and a failed
+close after a synced append does not fail the append.
+
+Model dispatch waits for its required marker; a result-marker failure does not
+trigger provider fallback or an automatic provider retry. A completed inference
 receipt already acknowledged by the archive remains completed if its later
-conversation marker fails. This does not establish exactly-once inference or
-resolve an uncertain durable outcome automatically.
+conversation marker fails. This does not establish exactly-once inference.
 
 Focused tests cover bounded queued ownership, blocked-authority capture,
 foreign JSON, large shared strings, partial writes, nested transaction lifetime,
 SSE resume across sequence gaps, precommit rollback, committed-but-rejected
-rename acknowledgements, restart fences, rollback/close failures, prior fold
-reconciliation, and preservation of the original execution error. They do not
+rename acknowledgements, reclaiming crashed and dead-process intents with a
+torn tail, healing after an uncertain outcome, transient retries, slot release,
+rollback/close failures, prior fold reconciliation, and preservation of the
+original execution error. They do not
 establish whole-runtime, native-provider, or 24-hour endurance behavior.
