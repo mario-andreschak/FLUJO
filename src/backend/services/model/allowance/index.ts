@@ -87,8 +87,10 @@ export async function refreshWorkspaceAllowance(signal?: AbortSignal, modelIds?:
     for (let task = queue.shift(); task; task = queue.shift()) {
       if (signal?.aborted) break;
       const [key, collect] = task;
-      const retryAt = allowanceRefreshFailure(key)?.retryAt;
-      if (retryAt && Date.parse(retryAt) > Date.now()) continue;
+      // Only a provider's own rate-limit deadline blocks a check; a usage-permission
+      // recheck time paces automatic checks in the UI, never an explicit one.
+      const failure = allowanceRefreshFailure(key);
+      if (failure?.reason === 'rate-limited' && failure.retryAt && Date.parse(failure.retryAt) > Date.now()) continue;
       let pending = refreshes.get(key);
       if (!pending) {
         pending = collect().catch(error => {

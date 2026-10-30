@@ -70,6 +70,16 @@ test.each(['setup-token-without-usage', 'negative-local-login-token'])('no plan 
   expect(usage).toHaveBeenCalledTimes(1);
 });
 
+test('an expired access token (401) is a retryable failure, not a permanent usage refusal', async () => {
+  usage.mockResolvedValue({ rate_limits_available: false, rate_limits: null });
+  fetchMock.mockResolvedValue(new Response('{}', { status: 401 }));
+  const collection = collectClaudeAccountAllowance('rotating-login-token');
+  const rejected = expect(collection).rejects.toMatchObject({ reason: 'collection-failed' });
+  await new Promise(resolve => setImmediate(resolve));
+  releaseChild();
+  await rejected;
+});
+
 test('an already cancelled check cannot create a native process', async () => {
   const controller = new AbortController(); controller.abort();
   await expect(collectClaudeAccountAllowance('selected', { signal: controller.signal })).rejects.toBeInstanceOf(ClaudeAllowanceError);

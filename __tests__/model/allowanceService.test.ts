@@ -86,6 +86,18 @@ test('checking a Claude connection does not collect an unrelated Codex account',
   expect(collectCodexAllowance).not.toHaveBeenCalled();
 });
 
+test('a usage-permission refusal schedules a recheck instead of hiding usage forever, and an explicit refresh still checks', async () => {
+  jest.mocked(modelService.listModels).mockResolvedValue({ success: true, models: [{ id: 'refused', name: 'opus', ApiKey: 'encrypted-refused', adapter: 'claude-cli' }] });
+  jest.mocked(resolveAndDecryptApiKey).mockResolvedValue('refused-token');
+  jest.mocked(collectClaudeAccountAllowance).mockRejectedValue(new ClaudeAllowanceError('usage-permission'));
+  const first = await refreshWorkspaceAllowance();
+  expect(first.models[0].reason).toBe('usage-permission');
+  const recheck = Date.parse(first.models[0].retryAt!);
+  expect(recheck - Date.now()).toBeGreaterThan(5 * 60 * 60 * 1000);
+  await refreshWorkspaceAllowance();
+  expect(collectClaudeAccountAllowance).toHaveBeenCalledTimes(2);
+});
+
 test('even an explicit refresh honors a live provider retry deadline', async () => {
   jest.mocked(modelService.listModels).mockResolvedValue({ success: true, models: [{ id: 'paused', name: 'sonnet', ApiKey: 'encrypted-paused', adapter: 'claude-cli' }] });
   jest.mocked(resolveAndDecryptApiKey).mockResolvedValue('paused-token');

@@ -8,6 +8,9 @@ import { useAllowance } from '@/frontend/contexts/AllowanceContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { ALLOWANCE_MAX_AGE_MS, isSubscriptionAllowance, modelAllowancePercent, type ModelAllowance } from '@/shared/types/model/allowance';
 
+/** Accounts shown in the page overview before "Show all". */
+const OVERVIEW_ACCOUNTS = 4;
+
 /** Account groups are alternatives, not additive balances. Never average their percentages. */
 export function groupAllowances(rows: ModelAllowance[], now = Date.now()): ModelAllowance[] {
   const groups = new Map<string, ModelAllowance>();
@@ -47,6 +50,7 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
   const { snapshot, loading, failed, now, refresh, observe, ensureFresh } = useAllowance();
   const { t, formatNumber, formatDate, locale } = useI18n();
   const [expanded, setExpanded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const detailsId = useId();
   const catalogue = snapshot?.models ?? [];
   const selectedIds = (entity ? snapshot?.entities?.[entity.kind]?.[entity.id] : undefined) ?? modelIds ?? (entity ? [] : undefined);
@@ -55,7 +59,8 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
   const detailRows = overview ? rows.filter(isSubscriptionAllowance) : rows;
   const accounts = groupAllowances(rows.filter(isSubscriptionAllowance), now);
   const hasAccounts = accounts.length > 0;
-  const paused = hasAccounts && accounts.every(row => row.retryAt && Date.parse(row.retryAt) > now);
+  const rateLimited = (row: ModelAllowance) => row.reason === 'rate-limited' && !!row.retryAt && Date.parse(row.retryAt) > now;
+  const paused = hasAccounts && accounts.every(rateLimited);
   useEffect(() => observe(), [observe]);
   useEffect(() => { if (hasAccounts) void ensureFresh(rows.map(row => row.modelId)); }, [hasAccounts, rows, snapshot, now, ensureFresh]);
   if (!hasAccounts && !(overview && failed)) return null;
@@ -94,8 +99,12 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
         <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>{t(loading ? 'models.allowance.checking' : 'models.allowance.refresh')}</Box>
       </Button>
     </Stack>}
-    <Box sx={{ display: 'flex', flexWrap: 'wrap' }} aria-label={t('models.allowance.accounts')}>
-      {accounts.map(row => {
+    {/* Overview: a dense grid that shows the first few accounts; many
+        subscriptions no longer stretch into pages of large columns (#1278). */}
+    <Box sx={overview
+      ? { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', columnGap: 1, rowGap: 0.5 }
+      : { display: 'flex', flexWrap: 'wrap' }} aria-label={t('models.allowance.accounts')}>
+      {(overview && !showAll ? accounts.slice(0, OVERVIEW_ACCOUNTS) : accounts).map(row => {
         const incomplete = row.windows.some(window => window.remainingPercent === null);
         const percent = incomplete ? null : modelAllowancePercent(row);
         const limiting = percent === null ? undefined : row.windows.find(window => window.remainingPercent === percent);
@@ -105,13 +114,13 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
           : row.refreshFailed && percent === null ? t('models.allowance.checkFailed')
           : incomplete && row.status === 'available' ? t('models.allowance.partialSummary')
           : t(row.status === 'stale' ? 'models.allowance.stale' : 'models.allowance.unknown');
-        return <Box key={accountKey(row)} sx={{ flex: '1 1 240px', minWidth: 0, ...(overview ? { px: 2, pb: 1.5 } : {}) }}>
+        return <Box key={accountKey(row)} sx={{ minWidth: 0, ...(overview ? { px: 2, pb: 1 } : { flex: '1 1 240px' }) }}>
           <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
             <Button onClick={toggle} aria-expanded={expanded} aria-controls={detailsId} aria-label={accountName(row) + ' · ' + t('models.allowance.title')}
               sx={{ flex: 1, minWidth: 0, p: 0, justifyContent: 'space-between', color: 'text.primary', textTransform: 'none', gap: 1, '&:hover': { bgcolor: 'action.hover' } }}>
               <Typography variant="body2" sx={{ textAlign: 'left', fontWeight: 700 }}>{accountName(row)}</Typography>
               <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-                <Typography component="span" sx={{ fontSize: overview ? '1.3rem' : '0.875rem', fontWeight: percent === null ? 500 : 750 }}>
+                <Typography component="span" sx={{ fontSize: overview ? '1rem' : '0.875rem', fontWeight: percent === null ? 500 : 750 }}>
                   {percent === null ? (loading ? t('models.allowance.checking') : state) : t('models.allowance.remaining', { percent: formatNumber(percent, { maximumFractionDigits: 0 }) })}
                 </Typography>
                 <ExpandMoreRoundedIcon fontSize="small" sx={{ transform: expanded ? 'rotate(180deg)' : undefined }} />
@@ -124,11 +133,16 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
             sx={{ height: overview ? 8 : 6, borderRadius: 4, my: 0.75, bgcolor: 'action.hover', '& .MuiLinearProgress-bar': { backgroundImage: 'none', bgcolor: percent <= 10 ? 'error.main' : percent <= 25 ? 'warning.main' : 'success.main' } }} />}
           {limiting && <Typography variant="caption" component="div" color="text.secondary">{windowName(limiting.label)}{limiting.resetAt ? ' · ' + t('models.allowance.resetIn', { time: relativeTime(limiting.resetAt) }) : ''}</Typography>}
           {sharing > 1 && <Typography variant="caption" component="div" color="text.secondary">{t('models.allowance.shared', { count: sharing })}</Typography>}
-          {row.retryAt && Date.parse(row.retryAt) > now && <Typography variant="caption" component="div" color="text.secondary">{t('models.allowance.retryIn', { time: relativeTime(row.retryAt) })}</Typography>}
+          {rateLimited(row) && <Typography variant="caption" component="div" color="text.secondary">{t('models.allowance.retryIn', { time: relativeTime(row.retryAt!) })}</Typography>}
           {(row.reason === 'usage-permission' || row.reason === 'rate-limited') && <Button component="a" href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer" size="small" endIcon={<OpenInNewRoundedIcon fontSize="small" />} sx={{ p: 0, mt: 0.5, textTransform: 'none' }}>{t('models.allowance.providerUsage')}</Button>}
         </Box>;
       })}
     </Box>
+    {overview && accounts.length > OVERVIEW_ACCOUNTS && (
+      <Button size="small" onClick={() => setShowAll(value => !value)} aria-expanded={showAll} sx={{ mx: 1.5, mb: 1, textTransform: 'none' }}>
+        {showAll ? t('models.allowance.showFewer') : t('models.allowance.showAll', { count: formatNumber(accounts.length) })}
+      </Button>
+    )}
     {failed && <Typography role="status" color="error" variant="body2" sx={{ px: overview ? 2 : 0, pb: 1 }}>{t('models.allowance.failed')}</Typography>}
     <Collapse in={expanded} id={detailsId} unmountOnExit>
       <Stack spacing={1.5} sx={{ p: overview ? 2 : 0, pt: 1.5, mt: 1, borderTop: 1, borderColor: 'divider' }}>

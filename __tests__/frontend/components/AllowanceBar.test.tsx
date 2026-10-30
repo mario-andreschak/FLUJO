@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import AllowanceBar, { expandAllowanceIds, groupAllowances } from '@/frontend/components/shared/AllowanceBar';
-import { AllowanceProvider } from '@/frontend/contexts/AllowanceContext';
+import { AllowanceProvider, ALLOWANCE_REREAD_INTERVAL_MS } from '@/frontend/contexts/AllowanceContext';
 import ModelCard from '@/frontend/components/models/list/ModelCard';
 import { modelAllowancePercent, type ModelAllowance, type WorkspaceAllowance } from '@/shared/types/model/allowance';
 import { translate } from '@/frontend/i18n/core';
@@ -20,6 +20,8 @@ jest.mock('@/frontend/utils/theme', () => ({ useThemeUtils: () => ({ visualStyle
 jest.mock('@/frontend/components/models/list/ModelTestDialog', () => ({ __esModule: true, default: () => null }));
 
 const now = Date.now();
+/** The backend schedules a usage-permission recheck six hours out. */
+const permissionRecheck = () => new Date(now + 6 * 60 * 60 * 1000).toISOString();
 function row(id = 'one', overrides: Partial<ModelAllowance> = {}): ModelAllowance {
   return { modelId: id, provider: 'codex', accountGroup: 'shared', status: 'available', observedAt: new Date(now).toISOString(), source: 'codex-app-server',
     windows: [{ id: 'short', label: 'Five hours', remainingPercent: 70, resetAt: new Date(now + 60_000).toISOString() },
@@ -36,7 +38,7 @@ const respond = (data: WorkspaceAllowance) => ({ ok: true, json: async () => dat
 
 test.each(['codex', 'claude'] as const)('saving the first %s subscription reveals its allowance without a page reload', async provider => {
   const model: Model = { id: 'first', name: 'first', provider: provider === 'claude' ? 'claude-subscription' : 'codex', adapter: provider === 'claude' ? 'claude-cli' : 'codex-cli', ApiKey: '' };
-  const first = row('first', provider === 'claude' ? { provider, status: 'unknown', reason: 'usage-permission', observedAt: null, windows: [] } : {});
+  const first = row('first', provider === 'claude' ? { provider, status: 'unknown', reason: 'usage-permission', retryAt: permissionRecheck(), observedAt: null, windows: [] } : {});
   let saved = false;
   fetchMock.mockImplementation(async (url: string) => {
     if (url.startsWith('/api/model/allowance')) return respond(snapshot(saved ? [first] : []));
@@ -134,14 +136,19 @@ test('a throttled reading shows its retry time and disables refresh without fabr
 
 test('one cached observer catches new run observations while the display is open', async () => {
   jest.useFakeTimers(); jest.setSystemTime(now);
-  fetchMock.mockResolvedValueOnce(respond(snapshot([row('claude', { provider: 'claude', reason: 'usage-permission', status: 'unknown', observedAt: null, windows: [] })])))
+  fetchMock.mockResolvedValueOnce(respond(snapshot([row('claude', { provider: 'claude', reason: 'usage-permission', retryAt: permissionRecheck(), status: 'unknown', observedAt: null, windows: [] })])))
     .mockResolvedValueOnce(respond(snapshot([row('claude', { provider: 'claude', windows: [{ id: 'weekly', label: 'Weekly', remainingPercent: 55, resetAt: null }] })])));
   render(<AllowanceProvider><AllowanceBar modelIds={['claude']} /></AllowanceProvider>);
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
-  await act(async () => { jest.advanceTimersByTime(30_000); await Promise.resolve(); await Promise.resolve(); });
+  // A focus right after loading does not re-read (#1278); the slow interval does.
+  await act(async () => { window.dispatchEvent(new Event('focus')); await Promise.resolve(); });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await act(async () => { jest.advanceTimersByTime(ALLOWANCE_REREAD_INTERVAL_MS); await Promise.resolve(); await Promise.resolve(); });
   expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '55');
   expect(fetchMock.mock.calls.map(call => call[1].method)).toEqual(['GET', 'GET']);
+  // The silent background re-read never replaced the bar with "Checking…".
+  expect(screen.queryByText('Checking…')).not.toBeInTheDocument();
 });
 
 test('deduplicates shared accounts and chooses most constrained window without averaging', () => {
@@ -164,7 +171,7 @@ test('recursive policies preserve primary/fallback order and deduplicate shared 
 });
 
 test('partly observed and denied accounts never invent a numeric summary', async () => {
-  fetchMock.mockResolvedValue(respond(snapshot([row('one', { provider: 'claude', reason: 'usage-permission', source: null, status: 'unknown', windows: [] }), row('two', { windows: [{ id: 'unknown', label: 'Unknown window', remainingPercent: null, resetAt: null }] })])));
+  fetchMock.mockResolvedValue(respond(snapshot([row('one', { provider: 'claude', reason: 'usage-permission', retryAt: permissionRecheck(), source: null, status: 'unknown', windows: [] }), row('two', { windows: [{ id: 'unknown', label: 'Unknown window', remainingPercent: null, resetAt: null }] })])));
   render(<AllowanceProvider><AllowanceBar modelIds={['missing', 'one', 'two']} /></AllowanceProvider>);
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   await screen.findByText('Partial reading');
@@ -190,7 +197,7 @@ test('one workspace GET serves model, agent, Persona and provider bars; expansio
 
 test('aborts old workspace request and refuses its late result', async () => {
   let resolveOld!: (value: unknown) => void;
-  fetchMock.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; })).mockResolvedValueOnce(respond(snapshot([row('other', { provider: 'claude', status: 'unknown', reason: 'usage-permission', windows: [] })])));
+  fetchMock.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; })).mockResolvedValueOnce(respond(snapshot([row('other', { provider: 'claude', status: 'unknown', reason: 'usage-permission', retryAt: permissionRecheck(), windows: [] })])));
   render(<AllowanceProvider><AllowanceBar overview /></AllowanceProvider>);
   const oldSignal = fetchMock.mock.calls[0][1].signal as AbortSignal;
   act(() => { window.localStorage.setItem('flujo-ui:workspace', 'second'); window.dispatchEvent(new CustomEvent(WORKSPACE_CHANGED_EVENT, { detail: { workspace: 'second' } })); });
@@ -268,4 +275,24 @@ test('renders an offline expanded policy fixture with shared, unknown and stale 
     await fs.mkdir(path.dirname(output), { recursive: true });
     await fs.writeFile(output, `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Offline allowance component fixture</title><style>${css}</style></head><body>${fixture.container.innerHTML}</body></html>`, 'utf8');
   }
+});
+
+test('a page overview of many subscriptions shows four compact accounts until expanded (#1278)', async () => {
+  const accounts = Array.from({ length: 7 }, (_, index) => row(`account-${index}`, { accountGroup: `group-${index}` }));
+  fetchMock.mockResolvedValue(respond(snapshot(accounts)));
+  render(<AllowanceProvider><AllowanceBar overview /></AllowanceProvider>);
+  await screen.findByText('Subscription allowance');
+  await waitFor(() => expect(screen.getAllByRole('progressbar')).toHaveLength(4));
+  fireEvent.click(screen.getByRole('button', { name: 'Show all 7 accounts' }));
+  expect(screen.getAllByRole('progressbar')).toHaveLength(7);
+  fireEvent.click(screen.getByRole('button', { name: 'Show fewer accounts' }));
+  expect(screen.getAllByRole('progressbar')).toHaveLength(4);
+});
+
+test('a usage-permission refusal keeps Refresh available and is not shown as a provider pause', async () => {
+  fetchMock.mockResolvedValue(respond(snapshot([row('claude', { provider: 'claude', reason: 'usage-permission', retryAt: permissionRecheck(), status: 'unknown', observedAt: null, windows: [] })])));
+  render(<AllowanceProvider><AllowanceBar modelIds={['claude']} /></AllowanceProvider>);
+  await screen.findByText('Usage not exposed');
+  expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+  expect(screen.queryByText(/Try again/)).not.toBeInTheDocument();
 });

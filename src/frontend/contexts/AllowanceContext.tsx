@@ -5,6 +5,12 @@ import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/fr
 import { ENCRYPTION_UNLOCKED_EVENT } from '@/frontend/utils/encryptionLock';
 import { MODEL_CATALOG_CHANGED_EVENT } from '@/frontend/services/model';
 
+/** How often an open allowance display re-reads the cached snapshot; well
+ * inside ALLOWANCE_MAX_AGE_MS so a shown reading never silently expires. */
+export const ALLOWANCE_REREAD_INTERVAL_MS = 2 * 60_000;
+/** Minimum gap before focusing the window triggers another re-read. */
+const ALLOWANCE_FOCUS_REREAD_MS = 60_000;
+
 type Snapshot = WorkspaceAllowance & { entities?: { flows: Record<string, string[]>; personas: Record<string, string[]> } };
 interface AllowanceContextValue {
   snapshot: Snapshot | null; loading: boolean; failed: boolean; now: number;
@@ -23,7 +29,8 @@ export function AllowanceProvider({ children }: { children: ReactNode }) {
   const observers = useRef(0);
   const lastCollection = useRef(new Map<string, number>());
   const current = useRef<{ workspace: string; controller: AbortController; pending: Promise<void>; refresh: boolean; modelIds?: string[] } | null>(null);
-  const load = useCallback(function request(workspace: string, refresh = false, modelIds?: string[]): Promise<void> {
+  const lastLoadAt = useRef(0);
+  const load = useCallback(function request(workspace: string, refresh = false, modelIds?: string[], silent = false): Promise<void> {
     if (current.current?.workspace === workspace && !current.current.controller.signal.aborted) {
       // A click during the initial cached GET must still perform its requested check.
       const active = current.current;
@@ -35,7 +42,8 @@ export function AllowanceProvider({ children }: { children: ReactNode }) {
     }
     current.current?.controller.abort();
     const controller = new AbortController();
-    setLoading(true); setFailed(false);
+    lastLoadAt.current = Date.now();
+    if (!silent) { setLoading(true); setFailed(false); }
     const pending = (async () => {
       try {
         const response = await fetch(withWorkspaceUrl('/api/model/allowance', workspace), {
@@ -46,7 +54,8 @@ export function AllowanceProvider({ children }: { children: ReactNode }) {
         const data = await response.json() as Snapshot;
         if (!controller.signal.aborted && current.current?.controller === controller) { setNow(Date.now()); setSnapshot(data); }
       } catch {
-        if (!controller.signal.aborted && current.current?.controller === controller) setFailed(true);
+        // A failed background re-read keeps the last good snapshot on screen.
+        if (!silent && !controller.signal.aborted && current.current?.controller === controller) setFailed(true);
       } finally {
         if (!controller.signal.aborted && current.current?.controller === controller) { current.current = null; setLoading(false); }
       }
@@ -81,10 +90,13 @@ export function AllowanceProvider({ children }: { children: ReactNode }) {
     return () => { observers.current -= 1; };
   }, []);
   useEffect(() => {
+    // Background re-reads of the cached snapshot are silent and spaced out: the
+    // bars used to flash "Checking…" every 30 s and on every window focus (#1278).
     const cached = () => {
-      if (observers.current > 0 && document.visibilityState !== 'hidden') void load(getSelectedWorkspace());
+      if (observers.current > 0 && document.visibilityState !== 'hidden'
+        && Date.now() - lastLoadAt.current >= ALLOWANCE_FOCUS_REREAD_MS) void load(getSelectedWorkspace(), false, undefined, true);
     };
-    const timer = setInterval(cached, 30_000);
+    const timer = setInterval(cached, ALLOWANCE_REREAD_INTERVAL_MS);
     window.addEventListener('focus', cached);
     document.addEventListener('visibilitychange', cached);
     return () => { clearInterval(timer); window.removeEventListener('focus', cached); document.removeEventListener('visibilitychange', cached); };
@@ -106,7 +118,8 @@ export function AllowanceProvider({ children }: { children: ReactNode }) {
   }, [load, snapshot, accountKey]);
   const ensureFresh = useCallback(async (modelIds?: string[]) => {
     const workspace = getSelectedWorkspace();
-    const missing = snapshot?.models.filter(row => isSubscriptionAllowance(row) && row.reason !== 'usage-permission'
+    // A usage-permission refusal is rechecked automatically once its retryAt passes.
+    const missing = snapshot?.models.filter(row => isSubscriptionAllowance(row)
       && (!row.retryAt || Date.parse(row.retryAt) <= now)
       && (!modelIds || modelIds.includes(row.modelId))
       && Date.now() - (lastCollection.current.get(accountKey(workspace, row)) ?? 0) >= ALLOWANCE_MAX_AGE_MS
