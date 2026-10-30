@@ -15,7 +15,7 @@ function assertSettledDiagnostics(d) {
     archiveRead: ['activeReads', 'quarantinedReads', 'reservedJsonAllocationBytes', 'cleanupFailures'],
     cache: ['inFlightLoads'],
     publication: ['owners', 'writers', 'allocationBytes', 'retainedBytes', 'queuedWriters', 'chains', 'fences',
-      'receipts', 'quarantinedWriterSlots', 'terminalWaiters'],
+      'receipts', 'quarantinedWriterSlots', 'openBatches'],
     ingress: ['active', 'parsing', 'reservedBytes'],
     allocation: ['run', 'preparation', 'output', 'ingress', 'publication', 'total'],
     streams: ['active', 'replayReads', 'workspaces', 'conversations'], gate: ['activeMutations'],

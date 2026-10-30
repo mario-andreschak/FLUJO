@@ -24,7 +24,7 @@ import { publishConversation } from '@/backend/execution/flow/conversationPublic
 import { acquireChatIngress, claimChatIngress, finishChatInputParsing } from '@/utils/http/chatIngress';
 import { checkChatRateLimit } from '@/utils/http/chatRateLimit';
 
-const keys = ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_OPERATIONS_RSS_BUDGET_BYTES'] as const;
+const keys = ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_OPERATIONS_RSS_BUDGET_BYTES', 'FLUJO_OWNER_AUTH_FILE', 'FLUJO_EXPOSURE_MODE'] as const;
 const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
 const request = (token?: string) => new NextRequest('http://localhost/api/operations/status?workspace=fixture-workspace', {
   headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -158,13 +158,13 @@ it('refuses a profile switch during awaited observation without returning cached
   expect(response.status).toBe(409); expect(response.headers.get('cache-control')).toBe('no-store');
   expect(await response.json()).not.toHaveProperty('schedules');
 });
-it('requires the existing scoped owner resolver without anonymous fallback', async () => {
-  process.env.FLUJO_WORKER_MODE = '0'; resolve.mockReturnValueOnce({ ok: false, response: Response.json({ error: 'refused' }, { status: 503 }) });
+it('requires the scoped owner resolver without anonymous fallback once an owner policy is configured', async () => {
+  process.env.FLUJO_WORKER_MODE = '0'; process.env.FLUJO_OWNER_AUTH_FILE = 'PRIVATE_POLICY'; resolve.mockReturnValueOnce({ ok: false, response: Response.json({ error: 'refused' }, { status: 503 }) });
   expect((await GET(request())).status).toBe(503); expect(read).not.toHaveBeenCalled();
   expect(resolve).toHaveBeenCalledWith(expect.any(Request), ['control:admin', 'secrets:read']);
 });
 it('retains owner attribution and fences a revoked policy after observation', async () => {
-  process.env.FLUJO_WORKER_MODE = '0';
+  process.env.FLUJO_WORKER_MODE = '0'; process.env.FLUJO_OWNER_AUTH_FILE = 'PRIVATE_POLICY';
   const response = await GET(request('owner-fixture'));
   expect(await response.json()).toMatchObject({ actor: { kind: 'owner', ownerId: 'owner-a', credentialId: 'credential-a' } });
   recheck.mockReturnValueOnce(Response.json({ error: 'refused' }, { status: 401 }));
@@ -198,4 +198,36 @@ it('returns stable process correlation and explicit process-wide memory scope ac
   expect(second.observationProcessId).toBe(first.observationProcessId);
   expect(first.scope).toMatchObject({ memory: 'this-process-all-workspaces',
     observationProcessId: 'self-reported-process-correlation-only' });
+});
+
+describe('localhost install without an owner policy', () => {
+  const local = (headers: Record<string, string>) => new NextRequest('http://localhost:4200/api/operations/status', { headers });
+  beforeEach(() => {
+    delete process.env.FLUJO_WORKER_MODE; delete process.env.FLUJO_OWNER_AUTH_FILE; process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    global.__flujo_worker_bootstrap_status = undefined;
+  });
+  it('admits a loopback caller without a login, like every other local API route', async () => {
+    const response = await GET(local({ host: 'localhost:4200' }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ actor: { kind: 'local' }, conversationPublication: { owners: expect.any(Number) } });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+  it('still refuses cross-origin and DNS-rebinding callers', async () => {
+    expect((await GET(local({ host: 'localhost:4200', origin: 'https://evil.example' }))).status).toBe(403);
+    expect((await GET(local({ host: 'evil.example' }))).status).toBe(403);
+    expect(read).not.toHaveBeenCalled();
+  });
+  it.each(['network', 'public'])('keeps owner authentication when exposure is %s', async mode => {
+    process.env.FLUJO_EXPOSURE_MODE = mode;
+    resolve.mockReturnValue({ ok: false, response: Response.json({ error: 'Unauthorized' }, { status: 401 }) });
+    expect((await GET(local({ host: 'localhost:4200' }))).status).toBe(401);
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+  it('keeps owner authentication when an owner policy is configured', async () => {
+    process.env.FLUJO_OWNER_AUTH_FILE = 'PRIVATE_POLICY';
+    const response = await GET(local({ host: 'localhost:4200' }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ actor: { kind: 'owner', ownerId: 'owner-a' } });
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
 });
