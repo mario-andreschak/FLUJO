@@ -198,7 +198,63 @@ function Write-InstallerStage {
     if ($State -eq 'started') { Write-Step $Name } else { Write-Host "    $marker" }
 }
 
+function Stop-FlujoInstallProcesses {
+    param([Parameter(Mandatory)] [string]$InstallDir)
+
+    if (-not (Test-Path -LiteralPath $InstallDir)) { return }
+    try {
+        $own = @($PID)
+        $parent = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop).ParentProcessId
+        if ($parent) { $own += [int]$parent }
+        $running = Select-FlujoInstallProcesses -InstallDir $InstallDir -ExcludeProcessIds $own `
+            -Processes @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, ExecutablePath, CommandLine)
+    } catch {
+        Write-Warn2 "Could not list running FLUJO processes: $($_.Exception.Message)"
+        return
+    }
+    if ($running.Count -eq 0) { return }
+    # A running FLUJO and the MCP servers it started hold files in node_modules
+    # and .next open; Windows then refuses to replace them (issue #1283).
+    Write-Step "Stopping $($running.Count) running FLUJO process(es) so their files can be updated"
+    foreach ($process in $running) {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline -and @($running | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count -gt 0) {
+        Start-Sleep -Milliseconds 250
+    }
+}
+
 function Invoke-InstallerCommand {
+    param(
+        [Parameter(Mandatory)] [string]$Stage,
+        [Parameter(Mandatory)] [string]$Command,
+        [string[]]$Arguments = @(),
+        [hashtable]$Environment = @{},
+        # Extra attempts when the failure is a transient Windows file lock.
+        [int]$LockRetries = 0
+    )
+
+    for ($attempt = 0; ; $attempt++) {
+        $result = Invoke-InstallerCommandOnce -Stage $Stage -Command $Command -Arguments $Arguments -Environment $Environment
+        if (-not $result.Failure -and $result.ExitCode -eq 0) { break }
+        if ($attempt -ge $LockRetries -or -not $result.TransientLock) {
+            Write-InstallerStage -Name $Stage -State failed -ExitCode $result.ExitCode
+            $detail = if ($result.Failure) {
+                Protect-InstallerDiagnostic -Text $result.Failure.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
+            } else {
+                "exit code $($result.ExitCode)`n$($result.RecentOutput -join "`n")"
+            }
+            Stop-Installer -Message "Installer stage '$Stage' failed ($detail). Sanitized log: $script:InstallerLogPath" -ExitCode $result.ExitCode
+        }
+        Write-Warn2 "Stage '$Stage' hit a locked file; stopping FLUJO processes and retrying ($($attempt + 1)/$LockRetries)."
+        Stop-FlujoInstallProcesses -InstallDir $InstallDir
+        Start-Sleep -Seconds 3
+    }
+    Write-InstallerStage -Name $Stage -State completed -ExitCode 0
+}
+
+function Invoke-InstallerCommandOnce {
     param(
         [Parameter(Mandatory)] [string]$Stage,
         [Parameter(Mandatory)] [string]$Command,
@@ -224,7 +280,7 @@ function Invoke-InstallerCommand {
     $exitCode = 1
     $failure = $null
     $recentOutput = New-Object 'System.Collections.Generic.Queue[string]'
-    $commandResult = @{ ExitCode = $null }
+    $commandResult = @{ ExitCode = $null; TransientLock = $false }
     try {
         # Resolve the native executable before relaxing stderr handling. This
         # also selects npm.cmd instead of the execution-policy-dependent npm.ps1.
@@ -246,6 +302,7 @@ function Invoke-InstallerCommand {
             if (-not [string]::IsNullOrWhiteSpace($safeLine)) {
                 $recentOutput.Enqueue($safeLine)
                 if ($recentOutput.Count -gt 8) { $null = $recentOutput.Dequeue() }
+                if (Test-InstallerTransientLockFailure -Output $safeLine) { $commandResult.TransientLock = $true }
             }
         }
         if ($null -eq $commandResult.ExitCode) { throw "Could not obtain the exit code from $Command." }
@@ -267,16 +324,12 @@ function Invoke-InstallerCommand {
         }
     }
 
-    if ($failure -or $exitCode -ne 0) {
-        Write-InstallerStage -Name $Stage -State failed -ExitCode $exitCode
-        $detail = if ($failure) {
-            Protect-InstallerDiagnostic -Text $failure.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
-        } else {
-            "exit code $exitCode`n$($recentOutput -join "`n")"
-        }
-        Stop-Installer -Message "Installer stage '$Stage' failed ($detail). Sanitized log: $script:InstallerLogPath" -ExitCode $exitCode
+    return [PSCustomObject]@{
+        ExitCode = $exitCode
+        Failure = $failure
+        RecentOutput = @($recentOutput)
+        TransientLock = [bool]$commandResult.TransientLock
     }
-    Write-InstallerStage -Name $Stage -State completed -ExitCode 0
 }
 
 function Test-NodeSystemCaSupport {
@@ -830,14 +883,17 @@ try {
     # workspace's managed download so it can be diagnosed and retried separately.
     $dependencyEnvironment = $installerEnvironment.Clone()
     $dependencyEnvironment['FLUJO_SKIP_PATCHRIGHT_DOWNLOAD'] = '1'
-    Invoke-InstallerCommand -Stage 'npm-dependencies' -Command 'npm' -Arguments @('ci', '--include=dev') -Environment $dependencyEnvironment
+    # An update over a running FLUJO used to fail here on files it held open
+    # (issue #1283). Stop it first, and retry a transient lock twice.
+    Stop-FlujoInstallProcesses -InstallDir $InstallDir
+    Invoke-InstallerCommand -Stage 'npm-dependencies' -Command 'npm' -Arguments @('ci', '--include=dev') -Environment $dependencyEnvironment -LockRetries 2
 
     $browserEnvironment = $installerEnvironment.Clone()
     $browserEnvironment['FLUJO_SKIP_PATCHRIGHT_DOWNLOAD'] = '0'
     $browserEnvironment['FLUJO_INSTALL_RESULT_FILE'] = $script:InstallerResultPath
     Invoke-InstallerCommand -Stage 'patchright-chromium' -Command 'node' -Arguments @('mcp-servers/browser/scripts/install-browser.mjs') -Environment $browserEnvironment
 
-    Invoke-InstallerCommand -Stage 'build' -Command 'npm' -Arguments @('run', 'build') -Environment $installerEnvironment
+    Invoke-InstallerCommand -Stage 'build' -Command 'npm' -Arguments @('run', 'build') -Environment $installerEnvironment -LockRetries 1
     Invoke-InstallerCommand -Stage 'validation' -Command 'npm' -Arguments @('run', 'validate:mcp-release') -Environment $installerEnvironment
     Write-Ok "Build complete."
 

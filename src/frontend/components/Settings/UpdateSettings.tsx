@@ -35,6 +35,7 @@ export default function UpdateSettings() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [source, setSource] = useState<{ ref: string; revision: string } | null>(null);
   const canSelfUpdate = updateMode === 'git' && updateAvailable;
+  const selfUpdateUnavailable = updateMode !== null && ['pinned', 'container', 'npm', 'none'].includes(updateMode);
 
   const handleToggle = (event: React.ChangeEvent<HTMLInputElement>) => {
     updateSettings({
@@ -170,12 +171,16 @@ export default function UpdateSettings() {
           {checking ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
           {t('settings.update.checkNow')}
         </Button>
-        <Button variant="contained" onClick={handleApply} disabled={checking || applying || !canSelfUpdate}>
-          {applying ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
-          {t('home.updateNow')}
-        </Button>
+        {/* Only an install that can update itself offers the action; a pinned,
+            container or package install would show a button that never works (#1283). */}
+        {!selfUpdateUnavailable && (
+          <Button variant="contained" onClick={handleApply} disabled={checking || applying || !canSelfUpdate}>
+            {applying ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
+            {t('home.updateNow')}
+          </Button>
+        )}
         {updateMode === 'pinned' && (
-          <Button component="a" href="https://github.com/mario-andreschak/FLUJO/releases/latest" target="_blank" rel="noreferrer" variant="outlined">
+          <Button component="a" href="https://github.com/mario-andreschak/FLUJO/releases/latest" target="_blank" rel="noreferrer" variant="contained">
             {t('settings.update.downloadInstaller')}
           </Button>
         )}
