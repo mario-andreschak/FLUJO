@@ -28,7 +28,7 @@ it('rejects memory pressure from descriptor metadata before allocation/read and 
   await expect(readConversationLog('pressure')).rejects.toMatchObject({ code: 'CONVERSATION_LOG_READ_MEMORY', status: 503 });
   expect(read).not.toHaveBeenCalled(); expect(close).toHaveBeenCalledTimes(1);
 });
-it('holds admission through asynchronous projection and bounds distinct simultaneous histories', async () => {
+it('holds admission through asynchronous projection and queues a fifth history instead of refusing it', async () => {
   await Promise.all([0, 1, 2, 3, 4].map(i => write(`parallel${i}`, JSON.stringify(entry(i)) + '\n')));
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
   let entered = 0; let ready!: () => void; const enteredAll = new Promise<void>(resolve => { ready = resolve; });
@@ -37,11 +37,14 @@ it('holds admission through asynchronous projection and bounds distinct simultan
     expect(getConversationLogReadAdmission().active).toBeGreaterThan(0); return events?.[0].seq;
   }));
   await enteredAll; expect(getConversationLogReadAdmission().active).toBe(4);
-  try {
-    await expect(readConversationLog('parallel4')).rejects.toMatchObject({ code: 'CONVERSATION_LOG_READ_BUSY', status: 429 });
-    expect(await fs.readFile(path.join(directory, 'parallel4.jsonl'), 'utf8')).toBe(JSON.stringify(entry(4)) + '\n');
-  } finally { release(); }
+  let fifthDone = false;
+  const fifth = readConversationLog('parallel4').then(events => { fifthDone = true; return events; });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect(fifthDone).toBe(false);
+  expect(getConversationLogReadAdmission().active).toBe(4);
+  release();
   expect(await Promise.all(reads)).toEqual([0, 1, 2, 3]);
+  expect(await fifth).toEqual([entry(4)]);
 });
 it('releases on projection failure without swallowing consumer errno codes', async () => {
   await write('failure', JSON.stringify(entry(1)));

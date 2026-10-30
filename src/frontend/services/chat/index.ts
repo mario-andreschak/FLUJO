@@ -18,6 +18,27 @@ import { readModelTurnInspection, type ModelTurnInspection } from './modelTurnIn
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
 
+const PRESSURE_RETRY_DELAYS_MS = [250, 1000, 3000];
+
+/** GET with a short retry when the server reports momentary pressure (429/503),
+ * so a busy moment does not surface as a chat that failed to load. */
+async function getWithPressureRetry(url: string, signal?: AbortSignal): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const response = signal ? await fetch(url, { signal }) : await fetch(url);
+    const delay = PRESSURE_RETRY_DELAYS_MS[attempt];
+    if ((response.status !== 429 && response.status !== 503) || delay === undefined || signal?.aborted) return response;
+    const retryAfter = Number(response.headers?.get?.('Retry-After'));
+    const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 5000) : delay;
+    log.debug('Retrying a pressured read', { status: response.status, attempt: attempt + 1 });
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(done, wait);
+      function done() { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); }
+      signal?.addEventListener('abort', done, { once: true });
+    });
+    if (signal?.aborted) return response;
+  }
+}
+
 /**
  * Error thrown by chatService when the backend responds with a non-2xx status.
  * Carries the HTTP status and parsed body so callers can branch on e.g. 404
@@ -214,7 +235,7 @@ class ChatService {
   /** GET /v1/chat/conversations — list summaries (unsorted; caller sorts). */
   async listConversations(): Promise<ConversationListItem[]> {
     log.debug('listConversations: Entering method');
-    const response = await fetch(BASE);
+    const response = await getWithPressureRetry(BASE);
     return parse<ConversationListItem[]>(response);
   }
 
@@ -232,9 +253,7 @@ class ChatService {
       params.set('messageLimit', String(options.messageLimit));
     }
     const url = `${BASE}/${encodeURIComponent(id)}?${params.toString()}`;
-    const response = options.signal
-      ? await fetch(url, { signal: options.signal })
-      : await fetch(url);
+    const response = await getWithPressureRetry(url, options.signal);
     return parse<Conversation>(response);
   }
 

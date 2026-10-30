@@ -1,11 +1,13 @@
 import { getHeapStatistics } from 'node:v8';
 import { pendingAllocationBytes, setAllocationReservation } from '@/backend/execution/flow/allocationReservations';
+import { getProcessRssLimitBytes } from '@/backend/execution/flow/runAdmission';
 
 const MiB = 1024 * 1024;
+/** `owners` bounds concurrent parses; admitted chats keep only their parsed byte charge. */
 export const CHAT_INGRESS_LIMITS = Object.freeze({
   bodyBytes: 8 * MiB, urlCharacters: 8 * MiB, queryParameters: 128,
   depth: 64, values: 100_000, chunks: 100_000, bodyTimeoutMs: 30_000,
-  owners: 16, parsingBytes: 96 * MiB, processBytes: 256 * MiB, maxRssBytes: 2 * 1024 * MiB,
+  owners: 16, parsingBytes: 96 * MiB, processBytes: 256 * MiB, admissionWaitMs: 10_000,
 });
 type Code = 'CHAT_INPUT_TOO_LARGE' | 'CHAT_INPUT_BUSY' | 'CHAT_INPUT_MEMORY' | 'CHAT_INPUT_INVALID' | 'CHAT_INPUT_ABORTED';
 export class ChatIngressError extends Error {
@@ -68,14 +70,16 @@ export function acquireChatIngress(request: Pick<Request, 'method' | 'url' | 'he
   if (length !== null && (length.length > 16 || !/^\d+$/.test(length) || Number(length) > CHAT_INGRESS_LIMITS.bodyBytes)) {
     refuseChatInput('CHAT_INPUT_TOO_LARGE');
   }
-  if (runtime.active >= CHAT_INGRESS_LIMITS.owners || runtime.bytes + CHAT_INGRESS_LIMITS.parsingBytes > CHAT_INGRESS_LIMITS.processBytes) {
+  // Long-running chats keep their small parsed charge, not a parsing slot, so
+  // the number of concurrent conversations is bounded by bytes, not by 16.
+  if (runtime.parsing >= CHAT_INGRESS_LIMITS.owners || runtime.bytes + CHAT_INGRESS_LIMITS.parsingBytes > CHAT_INGRESS_LIMITS.processBytes) {
     refuseChatInput('CHAT_INPUT_BUSY');
   }
   const heap = getHeapStatistics();
   const rss = process.memoryUsage().rss;
   const pending = pendingAllocationBytes('ingress', runtime.bytes + CHAT_INGRESS_LIMITS.parsingBytes);
   const available = heap.heap_size_limit * 0.8 - heap.used_heap_size - 64 * MiB;
-  if (!Number.isFinite(rss) || rss + pending > CHAT_INGRESS_LIMITS.maxRssBytes
+  if (!Number.isFinite(rss) || rss + pending > getProcessRssLimitBytes()
     || !Number.isFinite(available) || pending > available) refuseChatInput('CHAT_INPUT_MEMORY');
   const record: Reservation = { bytes: CHAT_INGRESS_LIMITS.parsingBytes, owners: 1, claimed: false, parsed: false };
   const permit = Object.freeze({ release: releaseOwner(record) });
@@ -94,8 +98,22 @@ function recheckChatIngressMemory(): void {
   const rss = process.memoryUsage().rss;
   const pending = pendingAllocationBytes('ingress', runtime.bytes);
   const available = heap.heap_size_limit * 0.8 - heap.used_heap_size - 64 * MiB;
-  if (!Number.isFinite(rss) || rss + pending > CHAT_INGRESS_LIMITS.maxRssBytes
+  if (!Number.isFinite(rss) || rss + pending > getProcessRssLimitBytes()
     || !Number.isFinite(available) || pending > available) refuseChatInput('CHAT_INPUT_MEMORY');
+}
+/** Admission with backpressure: a momentarily busy or memory-pressured server
+ * makes the request wait briefly instead of failing it. Size errors still fail. */
+export async function acquireChatIngressWhenAvailable(request: Pick<Request, 'method' | 'url' | 'headers'> & { signal?: AbortSignal },
+  waitMs = CHAT_INGRESS_LIMITS.admissionWaitMs): Promise<ChatIngressPermit> {
+  const deadline = Date.now() + waitMs;
+  for (let attempt = 0; ; attempt++) {
+    try { return acquireChatIngress(request); }
+    catch (error) {
+      if (!isChatIngressError(error) || (error.code !== 'CHAT_INPUT_BUSY' && error.code !== 'CHAT_INPUT_MEMORY')
+        || Date.now() >= deadline || request.signal?.aborted) throw error;
+      await new Promise(resolve => setTimeout(resolve, Math.min(500, 25 * 2 ** attempt)));
+    }
+  }
 }
 /** One service claim; the route keeps its independent construction lifetime. */
 export function claimChatIngress(permit: ChatIngressPermit): { release: () => void; retain: () => () => void } {
@@ -125,7 +143,7 @@ export function finishChatInputParsing(permit: ChatIngressPermit, characters: nu
 export function getChatIngressDiagnostics() {
   return Object.freeze({ active: runtime.active, parsing: runtime.parsing, reservedBytes: runtime.bytes,
     rejectedSize: runtime.rejectedSize, rejectedBusy: runtime.rejectedBusy, rejectedMemory: runtime.rejectedMemory,
-    ...CHAT_INGRESS_LIMITS });
+    ...CHAT_INGRESS_LIMITS, maxRssBytes: getProcessRssLimitBytes() });
 }
 
 /** Allocation preflight over bytes: no decoded strings, token arrays, or recursion.
