@@ -19,7 +19,7 @@ import {
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ScienceIcon from '@mui/icons-material/Science';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
+import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import { providerMark, providerGroupOf, PROVIDER_GROUP_COLORS } from '@/shared/types/model/providerGroups';
 import UsedByChip from '@/frontend/components/shared/UsedByChip';
@@ -515,20 +515,8 @@ export const ModelCard = ({
             </Tooltip>
           )}
 
+          {/* Same vocabulary and order as agent cards: copy, move, link, edit, delete (#1278). */}
           <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 0.15 }}>
-            {onSetFolder && (
-              <Tooltip title={t('models.card.moveTooltip')} arrow>
-                <IconButton
-                  size="small"
-                  aria-label={t('models.card.moveAria')}
-                  onClick={(e) => setFolderAnchorEl(e.currentTarget)}
-                  sx={{ color: folder ? 'primary.main' : 'text.secondary', '&:hover': { color: 'primary.main' } }}
-                >
-                  <MoreVertIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            )}
-            <CopyLinkButton target={{ kind: 'model', id: model.id }} size="small" sx={{ color: 'text.secondary' }} />
             {onDuplicate && (
               <Tooltip title={t('models.card.duplicate')} arrow>
                 <IconButton
@@ -541,6 +529,19 @@ export const ModelCard = ({
                 </IconButton>
               </Tooltip>
             )}
+            {onSetFolder && (
+              <Tooltip title={t('models.card.moveTooltip')} arrow>
+                <IconButton
+                  size="small"
+                  aria-label={t('models.card.moveAria')}
+                  onClick={(e) => setFolderAnchorEl(e.currentTarget)}
+                  sx={{ color: folder ? 'primary.main' : 'text.secondary', '&:hover': { color: 'primary.main' } }}
+                >
+                  <DriveFileMoveOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            <CopyLinkButton target={{ kind: 'model', id: model.id }} size="small" sx={{ color: 'text.secondary' }} />
             <Tooltip title={t('models.card.editAria')} arrow>
               <IconButton
                 size="small"
@@ -554,15 +555,10 @@ export const ModelCard = ({
             <Tooltip title={t('models.card.deleteAria')} arrow>
               <IconButton
                 size="small"
+                color="error"
                 aria-label={t('models.card.deleteAria')}
                 onClick={onDelete}
-                sx={{
-                  color: 'text.secondary',
-                  '&:hover': {
-                    color: 'error.main',
-                    bgcolor: alpha(theme.palette.error.main, 0.08),
-                  },
-                }}
+                sx={{ '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.08) } }}
               >
                 <DeleteIcon fontSize="small" />
               </IconButton>
@@ -586,29 +582,30 @@ export const ModelCard = ({
               </IconButton>
             </Tooltip>
           )}
+          <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center' }}>
           {onDuplicate && (
             <IconButton aria-label={t('models.card.duplicate')} onClick={onDuplicate}>
               <ContentCopyRoundedIcon />
             </IconButton>
           )}
-          <IconButton aria-label={t('models.card.editAria')} onClick={onEdit}>
-            <EditIcon />
-          </IconButton>
-          <IconButton aria-label={t('models.card.deleteAria')} onClick={onDelete}>
-            <DeleteIcon />
-          </IconButton>
-          <CopyLinkButton target={{ kind: 'model', id: model.id }} />
           {onSetFolder && (
             <Tooltip title={t('models.card.moveTooltip')} arrow>
               <IconButton
                 aria-label={t('models.card.moveAria')}
                 onClick={(e) => setFolderAnchorEl(e.currentTarget)}
-                sx={{ ml: 'auto' }}
               >
-                <MoreVertIcon />
+                <DriveFileMoveOutlinedIcon />
               </IconButton>
             </Tooltip>
           )}
+          <CopyLinkButton target={{ kind: 'model', id: model.id }} />
+          <IconButton aria-label={t('models.card.editAria')} onClick={onEdit}>
+            <EditIcon />
+          </IconButton>
+          <IconButton color="error" aria-label={t('models.card.deleteAria')} onClick={onDelete}>
+            <DeleteIcon />
+          </IconButton>
+          </Box>
         </CardActions>
       )}
 
