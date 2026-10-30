@@ -84,6 +84,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 import { chatService } from '@/frontend/services/chat';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import ProjectsPanel from '@/frontend/components/Projects/ProjectsPanel';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 
 interface ChatHistoryProps {
@@ -1250,6 +1251,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       </Box>
 
       <Divider />
+
+      {/* The workspace's projects: the folder new chats start in. */}
+      <ProjectsPanel />
 
       {/* Search + filter + group controls (issue #147). */}
       <Box

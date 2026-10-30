@@ -145,6 +145,7 @@ export async function callTool(
   executionExtensionContext?: ExecutionExtensionContext,
   verifyProtectedRecipient?: () => Promise<void>,
   trustedConversationId?: string,
+  projectDir?: string,
 ): Promise<MCPServiceResponse> {
   const originatingInputContext = trustedConversationId ? getElicitationContext(serverName) : undefined;
   log.debug("Entering callTool method");
@@ -270,12 +271,15 @@ export async function callTool(
       arguments: normalizedArgs,
       ...(taskDecision.request && taskDecision.negotiation.generation !== '2026-07-28'
         ? buildTaskAugmentation(taskDecision.ttlMs) : {}),
-      ...(privateMeta ? { _meta: privateMeta } : callerNodeId || ownerScope
+      ...(privateMeta ? { _meta: privateMeta } : callerNodeId || ownerScope || projectDir
         ? {
             _meta: {
               flujo: {
                 ...(callerNodeId ? { callerNodeId } : {}),
                 ...(ownerScope ? { ownerScope } : {}),
+                // The calling chat's project folder: the shipped bash and
+                // filesystem servers use it as their default/relative base.
+                ...(projectDir && !isolated && !trustedHost ? { cwd: projectDir } : {}),
               },
             },
           }

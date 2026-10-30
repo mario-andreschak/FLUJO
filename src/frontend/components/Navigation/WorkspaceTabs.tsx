@@ -66,6 +66,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [roots, setRoots] = useState<string[]>([]);
+  const [activeProject, setActiveProject] = useState<string | undefined>();
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -89,11 +90,12 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
     setOperationError(null);
   };
 
-  const openEdit = (workspace: string, isDefault: boolean, workspaceRoots: string[]) => {
+  const openEdit = (workspace: string, isDefault: boolean, workspaceRoots: string[], workspaceActiveProject?: string) => {
     setAnchorEl(null);
     setEditor({ mode: 'edit', workspace, isDefault });
     setName(workspace);
     setRoots(workspaceRoots);
+    setActiveProject(workspaceActiveProject);
     setNameTouched(false);
     setOperationError(null);
   };
@@ -271,7 +273,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
                       aria-label={t('nav.workspaces.edit', { workspace: workspace.name })}
                       onClick={event => {
                         event.stopPropagation();
-                        openEdit(workspace.name, isDefault, workspace.roots ?? []);
+                        openEdit(workspace.name, isDefault, workspace.roots ?? [], workspace.activeProject);
                       }}
                     >
                       <DriveFileRenameOutlineRounded fontSize="small" />
@@ -345,7 +347,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
                     <Box key={root} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1 }}>
                       <FolderOutlined fontSize="small" color="action" />
                       <Typography variant="body2" noWrap title={root} sx={{ flex: 1 }}>{root}</Typography>
-                      {index === 0 && <Chip size="small" variant="outlined" label={t('nav.workspaces.primaryFolder')} />}
+                      {root === activeProject && <Chip size="small" variant="outlined" label={t('nav.workspaces.primaryFolder')} />}
                       <Tooltip title={t('nav.workspaces.removeFolder')}>
                         <IconButton size="small" aria-label={t('nav.workspaces.removeFolder')} onClick={() => setRoots(current => current.filter((_, i) => i !== index))}>
                           <DeleteOutlineRounded fontSize="small" />
