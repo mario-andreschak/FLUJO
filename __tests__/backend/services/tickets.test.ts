@@ -62,6 +62,10 @@ jest.mock('@/utils/logger', () => ({
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map<string, unknown>() },
 }));
+// Live state is read through the dependency-free registry; share this suite's map.
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => jest.requireMock<{ FlowExecutor: { conversationStates: Map<string, unknown> } }>('@/backend/execution/flow/FlowExecutor').FlowExecutor.conversationStates,
+}));
 
 import { ticketService } from '@/backend/services/ticket';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';

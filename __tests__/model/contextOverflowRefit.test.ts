@@ -27,6 +27,10 @@ jest.mock('@/backend/execution/flow/persistConversationState', () => ({ persistC
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map() },
 }));
+// Live state is read through the dependency-free registry; share this suite's map.
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => jest.requireMock<{ FlowExecutor: { conversationStates: Map<string, unknown> } }>('@/backend/execution/flow/FlowExecutor').FlowExecutor.conversationStates,
+}));
 
 const getModelMock = jest.fn();
 const resolveKeyMock = jest.fn();

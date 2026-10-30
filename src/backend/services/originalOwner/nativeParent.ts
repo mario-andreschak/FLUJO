@@ -23,6 +23,7 @@ import { readOriginalOwnerBook, mutateOriginalOwnerBook, flushOriginalOwnerBook 
 import { nativeModelPlan, ownerDigest, bytesDigest, refuse, type OriginalOwnerBook,
 } from './types';
 import { prepareNativeToolEffect, NativeToolTeardownError } from './nativeToolEffects';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 
 const id = z.string().min(1).max(160).refine(value => !/[\r\n\0]/.test(value));
 const ClaimSchema = z.object({ runId: id, rootConversationId: id, goalId: id, workspace: id }).strict();
@@ -325,11 +326,10 @@ export function createOriginalOwnerNativeParent(options: Options): OriginalOwner
       const item = get(context); await current(item);
       const binding = item.captured.authority.binding;
       if (input.source === 'subflow') {
-        const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
         const verify = () => {
           const child = item.children.find(value => value.parentNodeId === input.lane?.parentNodeId
             && value.flowId === input.flowId);
-          const parent = FlowExecutor.conversationStates.get(binding.conversationId);
+          const parent = getConversationStates().get(binding.conversationId);
           const invocation = input.lane?.invocationId && parent?.subflowInvocations?.[input.lane.invocationId];
           const lane = invocation && invocation.lanes.find(value => value.id === input.lane?.laneId);
           if (!child || !input.executionAuthority || input.executionAuthority === item.captured.personaAuthority
@@ -386,8 +386,7 @@ export function createOriginalOwnerNativeParent(options: Options): OriginalOwner
       const item = get(context);
       await assertExecutionExtensionCurrent(sourceContext,{ conversationId: item.claim.rootConversationId,runId: item.boundRun });
       await commit(item,async book => {
-        const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
-        const state = FlowExecutor.conversationStates.get(item.claim.rootConversationId);
+        const state = getConversationStates().get(item.claim.rootConversationId);
         if (!state || state.executionExtensionContext !== sourceContext || state.logicalRunId !== item.boundRun
           || (state.runDepth ?? 0) !== 0 || state.isCancelled || !['completed','capped'].includes(state.status ?? '')
           || nativeDigest(state.flowSnapshot) !== item.plan.flowDigest) return;

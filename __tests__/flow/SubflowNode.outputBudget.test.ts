@@ -7,6 +7,10 @@ const captureMock = jest.fn(async (..._args: any[]): Promise<any> => undefined);
 const kvMock = jest.fn(async (..._args: any[]): Promise<any> => undefined);
 jest.mock('@/backend/execution/flow/runFlow', () => ({ runFlow: (...args: any[]) => runMock(...args) }));
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
+// Live state is read through the dependency-free registry; share this suite's map.
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => jest.requireMock<{ FlowExecutor: { conversationStates: Map<string, unknown> } }>('@/backend/execution/flow/FlowExecutor').FlowExecutor.conversationStates,
+}));
 jest.mock('@/backend/execution/flow/subflowRecovery', () => ({
   persistSubflowParent: (...args: any[]) => persistMock(...args),
   readPersistedSubflowParent: (...args: any[]) => readMock(...args), syncLaneFromPersistedChild: jest.fn(async () => false),

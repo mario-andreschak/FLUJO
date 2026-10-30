@@ -2,6 +2,10 @@ import type { SharedState, SubflowNodeProperties } from '@/backend/execution/flo
 
 const conversationStates = new Map<string, SharedState>();
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates } }));
+// Live state is read through the dependency-free registry; share this suite's map.
+jest.mock('@/backend/execution/flow/conversationStateRegistry', () => ({
+  getConversationStates: () => jest.requireMock<{ FlowExecutor: { conversationStates: Map<string, unknown> } }>('@/backend/execution/flow/FlowExecutor').FlowExecutor.conversationStates,
+}));
 const getFlow = jest.fn();
 jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: (...args: unknown[]) => getFlow(...args) } }));
 const runFlow = jest.fn(async (options: Record<string, unknown>) => ({ status: 'completed', outputText: 'done', messages: [], sharedState: { conversationId: options.conversationId } }));

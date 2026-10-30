@@ -604,8 +604,7 @@ export class ModelHandler {
       const fullSourceDigest = digestProjectedMessages(source);
       const projectionDigest = digestProjectionIdentity(projection);
 
-      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
-      const state = FlowExecutor.conversationStates.get(conversationId);
+      const state = getConversationStates().get(conversationId);
       const reusableArtifact = state?.compactionState?.artifacts.find(artifact =>
         artifact.schemaVersion === COMPACTION_ARTIFACT_SCHEMA_VERSION &&
         artifact.conversationId === conversationId &&
@@ -893,10 +892,9 @@ export class ModelHandler {
   ): Promise<void> {
     if (!conversationId || messageIds.size === 0) return;
     try {
-      // Lazy require keeps the existing FlowExecutor -> ProcessNode ->
-      // ModelHandler cycle broken.
-      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
-      const state = FlowExecutor.conversationStates.get(conversationId);
+      // The dependency-free registry avoids the FlowExecutor -> ProcessNode ->
+      // ModelHandler import cycle (a lazy require failed in production, #1319).
+      const state = getConversationStates().get(conversationId);
       if (!state || !Array.isArray(state.messages)) return;
 
       // Only compensate messages still present. This makes repeated failure
