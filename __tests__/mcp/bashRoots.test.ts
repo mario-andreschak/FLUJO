@@ -18,6 +18,7 @@ jest.mock('@/backend/services/mcp/config', () => ({
 }));
 
 import { loadServerRoots } from '@/backend/services/mcp/config';
+import { runWithProjectDir } from '@flujo-ai/mcp-shared';
 import {
   bashCallTool as uncheckedBashCallTool,
   _resetBashSessionsForTests,
@@ -105,6 +106,38 @@ describe('bash cwd confinement (issue #175)', () => {
     process.env.FLUJO_FS_ROOTS = dir;
     mockedRoots.mockResolvedValue([]);
     const r = await bashCallTool('run', { command: 'echo nope', cwd: os.tmpdir() });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/outside/i);
+  });
+});
+
+describe('bash per-chat project folder', () => {
+  let dir: string;
+  const PRINT_CWD = process.platform === 'win32' ? '(Get-Location).Path' : 'pwd';
+  const normalize = async (value: string) => (await fsp.realpath(value.trim())).toLowerCase();
+
+  beforeEach(async () => {
+    mockedRoots.mockReset();
+    dir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-bashproject-')));
+    await fsp.mkdir(path.join(dir, 'project', 'src'), { recursive: true });
+    mockedRoots.mockResolvedValue([dir]);
+  });
+  afterEach(async () => {
+    await _resetBashSessionsForTests();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  itWithRealShell('starts in the chat project folder and resolves relative cwd from it', async () => {
+    const project = path.join(dir, 'project');
+    const plain = await runWithProjectDir(project, () => bashCallTool('run', { command: PRINT_CWD }));
+    expect(await normalize((JSON.parse(text(plain)) as { output: string }).output)).toBe(await normalize(project));
+
+    const relative = await runWithProjectDir(project, () => bashCallTool('run', { command: PRINT_CWD, cwd: 'src' }));
+    expect(await normalize((JSON.parse(text(relative)) as { output: string }).output)).toBe(await normalize(path.join(project, 'src')));
+  });
+
+  it('ignores a project folder outside the roots instead of widening them', async () => {
+    const r = await runWithProjectDir(os.tmpdir(), () => bashCallTool('run', { command: 'echo nope' }));
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/outside/i);
   });

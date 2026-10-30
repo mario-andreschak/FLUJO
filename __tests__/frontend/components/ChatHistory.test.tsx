@@ -8,6 +8,9 @@ import { readWorkspaceUiPreference, writeWorkspaceUiPreference } from '@/fronten
 jest.mock('@/frontend/contexts/ThemeContext', () => ({
   useTheme: () => ({ visualStyle: 'modern' }),
 }));
+// The Projects panel fetches /api/projects on its own; these tests count the
+// conversation-list requests only.
+jest.mock('@/frontend/components/Projects/ProjectsPanel', () => ({ __esModule: true, default: () => null }));
 
 describe('ChatHistory', () => {
   beforeEach(() => window.localStorage.clear());

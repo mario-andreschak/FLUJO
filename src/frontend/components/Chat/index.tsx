@@ -31,6 +31,7 @@ import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './Ch
 import type { CapturedToolResource } from './toolCallPairing';
 import { buildSplitMessages, type SplitHalf } from './conversationSplit';
 import ChatInput from './ChatInput';
+import ChatProjectChip from '@/frontend/components/Projects/ChatProjectChip';
 import { buildApiContent, type Attachment, type ChatMessage } from './chatApiContent';
 export { buildApiContent, type Attachment, type ChatMessage } from './chatApiContent';
 import ApprovedMcpSkillsContext from './ApprovedMcpSkillsContext';
@@ -6135,6 +6136,8 @@ const Chat: React.FC = () => {
             onEditingNodeChange={handleEditingNodeChange}
             onSaveEdit={handleSaveEditingMessage}
             onCancelEdit={handleCancelEditingMessage}
+            // Per-chat working folder: project, branch and worktree.
+            projectControl={<ChatProjectChip conversationId={currentConversationId} />}
           />
         </Box>}
         </Box> {/* End Chat Area */}
