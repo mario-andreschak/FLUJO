@@ -21,6 +21,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import ScienceIcon from '@mui/icons-material/Science';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
+import { providerMark, providerGroupOf, PROVIDER_GROUP_COLORS } from '@/shared/types/model/providerGroups';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
 import StarIcon from '@mui/icons-material/Star';
@@ -98,11 +99,8 @@ export const ModelCard = ({
   const { visualStyle } = useThemeUtils();
   const modern = visualStyle === 'modern';
   const providerProfile = getProviderProfile(model.provider, model.adapter);
-  const providerMark = ((model.fallbackPolicy ? 'Fallback Policy' : providerProfile.label).match(/[a-z0-9]+/gi) ?? [])
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join('')
-    .toUpperCase();
+  const providerInitials = providerMark(model.fallbackPolicy ? 'Fallback Policy' : providerProfile.label);
+  const providerColor = model.fallbackPolicy ? theme.palette.primary.main : PROVIDER_GROUP_COLORS[providerGroupOf(providerProfile.id)];
   const [testOpen, setTestOpen] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
@@ -184,14 +182,15 @@ export const ModelCard = ({
             display: 'grid',
             placeItems: 'center',
             borderRadius: 3,
-            color: 'primary.main',
-            background: `linear-gradient(145deg, ${alpha(theme.palette.primary.main, 0.18)}, ${alpha(theme.palette.secondary.main, 0.11)})`,
-            border: `1px solid ${alpha(theme.palette.primary.main, 0.18)}`,
+            // The same vendor accent as the provider picker (#1278).
+            color: providerColor,
+            background: `linear-gradient(145deg, ${alpha(providerColor, 0.18)}, ${alpha(theme.palette.secondary.main, 0.11)})`,
+            border: `1px solid ${alpha(providerColor, 0.24)}`,
             boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === 'dark' ? 0.08 : 0.55)}`,
           }}
         >
           <Typography variant="subtitle2" sx={{ fontWeight: 800, letterSpacing: '-0.02em' }}>
-            {providerMark}
+            {providerInitials}
           </Typography>
         </Box>
 

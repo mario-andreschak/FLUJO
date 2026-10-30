@@ -20,9 +20,12 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  ListSubheader,
+  Avatar,
   useMediaQuery,
   useTheme,
 } from '@mui/material';
+import { groupProviderProfiles, providerMark, PROVIDER_GROUP_COLORS } from '@/shared/types/model/providerGroups';
 import { Link as LinkIcon, Cancel as CancelIcon } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
@@ -667,11 +670,23 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     value={currentProfile.id}
                     onChange={(e) => handleSelectProfile(e.target.value)}
                   >
-                    {PROVIDER_PROFILES.map(profile => (
-                      <MenuItem key={profile.id} value={profile.id}>
-                        {profile.label}
-                      </MenuItem>
-                    ))}
+                    {/* Grouped by vendor with a mark per provider (#1278). */}
+                    {groupProviderProfiles(PROVIDER_PROFILES).flatMap(({ group, profiles }) => [
+                      <ListSubheader key={`group-${group}`} sx={{ lineHeight: 2.4, fontWeight: 700 }}>
+                        {t(`models.providerGroup.${group}`)}
+                      </ListSubheader>,
+                      ...profiles.map(profile => (
+                        <MenuItem key={profile.id} value={profile.id} sx={{ gap: 1.25 }}>
+                          <Avatar
+                            aria-hidden
+                            sx={{ width: 24, height: 24, fontSize: '0.65rem', fontWeight: 800, bgcolor: PROVIDER_GROUP_COLORS[group] }}
+                          >
+                            {providerMark(profile.label)}
+                          </Avatar>
+                          {profile.label}
+                        </MenuItem>
+                      )),
+                    ])}
                   </Select>
                 </FormControl>
 
