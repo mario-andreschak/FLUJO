@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, render, screen } from '@testing-library/react';
-import LiveRunIndicator from '@/frontend/components/Chat/LiveRunIndicator';
+import LiveRunIndicator, { toolProgressStatus } from '@/frontend/components/Chat/LiveRunIndicator';
 import {
   getWorkingMessage,
   MAX_WORKING_MESSAGE_LENGTH,
@@ -172,5 +172,27 @@ describe('working chat messages', () => {
     expect(screen.getByText(/Reply/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
     expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+  });
+});
+
+describe('running tool status (#1321)', () => {
+  it('shows only the latest output line of a progress message, bounded to one line', () => {
+    const raw = `${'{"type":"message","message":{"role":"assistant","content":""}}\n'.repeat(40)}  final   line  \n\n`;
+    expect(toolProgressStatus('bash__run', raw)).toBe('bash__run — final line');
+    const long = toolProgressStatus('bash__run', 'x'.repeat(5_000));
+    expect(long.length).toBeLessThanOrEqual('bash__run — '.length + 160);
+    expect(long.endsWith('…')).toBe(true);
+    expect(toolProgressStatus('bash__run', '   \n  ')).toBe('bash__run');
+    expect(toolProgressStatus('bash__run')).toBe('bash__run');
+  });
+
+  it('renders a long desktop status on one clipped line', () => {
+    render(
+      <LiveRunIndicator
+        liveStats={{ totalTokens: 0, activeNode: `bash__run — ${'y'.repeat(2_000)}`, startedAt: Date.now(), lastEventAt: Date.now() }}
+        onStop={() => {}}
+      />,
+    );
+    expect(screen.getByTestId('run-status').className).toMatch(/noWrap/);
   });
 });

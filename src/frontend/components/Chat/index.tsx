@@ -66,7 +66,7 @@ import {
   canDrain as canDrainQueue,
   drainHoldReason,
 } from './chatQueue';
-import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
+import LiveRunIndicator, { LiveRunStats, toolProgressStatus } from './LiveRunIndicator';
 import TodoDock from './TodoDock';
 import ConversationStats from './ConversationStats';
 import ChatTargetSelector from './ChatTargetSelector';
@@ -2059,7 +2059,7 @@ const Chat: React.FC = () => {
     }
     setLiveStats(prev => ({
       totalTokens: prev?.totalTokens ?? 0,
-      activeNode: event.message ? `${event.name} — ${event.message}` : event.name,
+      activeNode: toolProgressStatus(event.name, event.message),
       startedAt: prev?.startedAt ?? Date.now(),
       lastEventAt: Date.now(),
     }));
