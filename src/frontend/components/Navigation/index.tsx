@@ -657,7 +657,10 @@ export default function Navigation() {
           data-app-subnav
           sx={{
             display: { xs: 'none', md: 'flex' },
-            justifyContent: 'center',
+            // 'safe' centering: a group wider than the window must never push its
+            // first sections off-screen where they cannot be reached (#1320).
+            justifyContent: 'safe center',
+            minWidth: 0,
             minHeight: 'var(--subnav-height)',
             borderTop: 1,
             borderColor: 'divider',
@@ -666,8 +669,10 @@ export default function Navigation() {
         >
           <Tabs
             value={activeSubtab}
+            variant="scrollable"
+            scrollButtons="auto"
             aria-label={t('nav.groupSections', { group: t(activeNavGroup.label) })}
-            sx={{ minHeight: 'var(--subnav-height)' }}
+            sx={{ minHeight: 'var(--subnav-height)', minWidth: 0, maxWidth: '100%' }}
           >
             {activeNavGroup.children.map((child) => {
               const Icon = child.icon;

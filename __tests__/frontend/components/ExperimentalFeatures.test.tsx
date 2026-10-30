@@ -207,6 +207,8 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     const chainChat = within(moreSections).getByRole('tab', { name: 'Chain Chat' });
     expect(chainChat).toHaveAttribute('href', '/chain-chat');
     expect(chainChat).toHaveAttribute('aria-selected', 'true');
+    // A group wider than the window scrolls instead of hiding its first sections (#1320).
+    expect(moreSections.closest('.MuiTabs-root')?.querySelector('.MuiTabs-scrollableX')).not.toBeNull();
   });
 
   it('puts experimental Personas and stable Roles in More when experiments are enabled', () => {
