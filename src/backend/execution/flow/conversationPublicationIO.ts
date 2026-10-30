@@ -12,12 +12,51 @@ import { conversationJsonChunks, fenceConversationPublication, ConversationPubli
   isConversationPublicationError } from './conversationPublication';
 
 type Intent = { filename: string; live: boolean };
-const intentHost = globalThis as typeof globalThis & { __flujoPublicationIntentContextV1?: AsyncLocalStorage<Intent> };
+type IntentProcess = { token: string; startedAt: number; live: Set<string> };
+const intentHost = globalThis as typeof globalThis & { __flujoPublicationIntentContextV1?: AsyncLocalStorage<Intent>;
+  __flujoPublicationIntentProcessV1?: IntentProcess };
 const intentContext = intentHost.__flujoPublicationIntentContextV1 ??= new AsyncLocalStorage<Intent>();
+// One identity per process (shared by every Next bundle) and the intents it holds right now.
+const intentProcess = intentHost.__flujoPublicationIntentProcessV1 ??= {
+  token: randomUUID(), startedAt: Date.now() - Math.round(process.uptime() * 1000), live: new Set() };
 
-/** A crash or unknown commit must remain fenced after process restart. This
- * small, durable intent contains no transcript; its exclusive filename is the
- * restart fence until reconciliation has verified the snapshot and log. */
+/** No publication transaction lasts this long; an older intent is abandoned. */
+export const ABANDONED_INTENT_AGE_MS = 10 * 60_000;
+/** How long to wait for another live FLUJO process to finish the same conversation. */
+const FOREIGN_INTENT_WAIT_MS = 15_000;
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/** An intent whose transaction can never finish: left by a failed attempt in
+ * this process, by a process that has exited (crash, update, OOM), or one that
+ * is older than any transaction. Only a live writer's intent is respected. */
+async function intentIsAbandoned(filename: string): Promise<boolean> {
+  if (intentProcess.live.has(filename)) return false;
+  let record: { process?: unknown; pid?: unknown; startedAt?: unknown } = {};
+  let modifiedAt = 0;
+  try {
+    modifiedAt = (await fs.stat(filename)).mtimeMs;
+    record = JSON.parse(await fs.readFile(filename, 'utf8')) ?? {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    // A torn intent (crash between create and write): judge it by its age.
+  }
+  if (record.process === intentProcess.token) return true;
+  const startedAt = typeof record.startedAt === 'number' ? record.startedAt : modifiedAt;
+  if (Date.now() - startedAt > ABANDONED_INTENT_AGE_MS) return true;
+  // A different token with our pid is a previous instance (containers reuse pids).
+  if (typeof record.pid === 'number') return record.pid === process.pid || !processAlive(record.pid);
+  // Legacy intents carry no owner: anything older than this process is abandoned.
+  return startedAt < intentProcess.startedAt;
+}
+
+/** Durable marker spanning one publication transaction. It contains no
+ * transcript. A crash leaves it behind; the next writer reclaims it once its
+ * owner is gone, and the log writer terminates any torn tail before appending,
+ * so a crash never blocks the conversation. */
 export async function withConversationPublicationIntent<T>(conversationId: string, task: () => Promise<T>): Promise<T> {
   const filename = path.join(getWorkspaceDataDir(), 'db', 'conversation-publications', `${conversationId}.json`);
   const inherited = intentContext.getStore();
@@ -26,18 +65,36 @@ export async function withConversationPublicationIntent<T>(conversationId: strin
   await conversationPublicationIO(() => fs.mkdir(path.dirname(filename), { recursive: true }));
   const parent = await conversationPublicationIO(() => fs.lstat(path.dirname(filename), { bigint: true }));
   if (!parent.isDirectory() || parent.isSymbolicLink()) throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'publication intent directory is unsafe');
-  let handle: FileHandle;
-  try { handle = await fs.open(filename, 'wx', 0o600); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw fenceConversationPublication('an unfinished durable publication requires reconciliation', error, false, { intent: filename });
+  let handle: FileHandle | undefined;
+  const waitUntil = Date.now() + FOREIGN_INTENT_WAIT_MS;
+  for (let attempt = 0; !handle; attempt++) {
+    try { handle = await fs.open(filename, 'wx', 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'could not create a publication intent', { cause: error });
+      }
+      if (attempt < 3 && await intentIsAbandoned(filename)) {
+        await fs.rm(filename, { force: true }).catch(() => undefined);
+        continue;
+      }
+      if (Date.now() >= waitUntil) {
+        throw new ConversationPublicationError('CONVERSATION_PUBLICATION_BUSY', 'another FLUJO process is still writing this conversation');
+      }
+      await new Promise(resolve => setTimeout(resolve, Math.min(1000, 50 * 2 ** attempt)));
     }
-    throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'could not create a publication intent', { cause: error });
   }
+  intentProcess.live.add(filename);
+  try { return await underIntent(handle, filename, parent, conversationId, task); }
+  finally { intentProcess.live.delete(filename); }
+}
+
+async function underIntent<T>(handle: FileHandle, filename: string, parent: BigIntStats, conversationId: string,
+  task: () => Promise<T>): Promise<T> {
   let owned: BigIntStats | undefined;
   try {
     owned = await handle.stat({ bigint: true });
-    await handle.writeFile(JSON.stringify({ version: 1, conversationId, token: randomUUID(), startedAt: Date.now() }));
+    await handle.writeFile(JSON.stringify({ version: 2, conversationId, token: randomUUID(), startedAt: Date.now(),
+      pid: process.pid, process: intentProcess.token }));
     await handle.sync();
   } catch (error) {
     try { await handle.close(); } catch { fenceConversationPublication('intent descriptor closure is uncertain', undefined, true, { intent: filename }); }
@@ -63,9 +120,9 @@ export async function withConversationPublicationIntent<T>(conversationId: strin
         if (!owned || !sameFile(current, owned) || !currentParent.isDirectory() || currentParent.isSymbolicLink()
           || currentParent.dev !== parent.dev || currentParent.ino !== parent.ino) throw new Error('Publication intent identity changed');
         await fs.unlink(filename);
-      } catch (error) {
-        const uncertain = fenceConversationPublication('publication intent cleanup requires reconciliation', error, false, { intent: filename });
-        if (primary === undefined) throw uncertain;
+      } catch {
+        // The transaction's data is already durable; failing it here would make
+        // a retry duplicate it. A leftover intent is reclaimed by the next writer.
       }
     }
     // A detached nested failure is part of this transaction too.
@@ -99,8 +156,7 @@ export interface ConversationLogWriter {
 }
 
 /** One owned descriptor from inspection through append, snapshot, and optional
- * rollback. No old-log string or copy is retained. Close uncertainty occupies
- * the publisher's finite descriptor slot before another writer may open. */
+ * rollback. No old-log string or copy is retained. */
 export async function withConversationLogWriter<T>(filename: string, task: (writer: ConversationLogWriter) => Promise<T>): Promise<T> {
   await assertCurrent();
   const directory = path.dirname(filename);
@@ -108,7 +164,6 @@ export async function withConversationLogWriter<T>(filename: string, task: (writ
   const parent = await conversationPublicationIO(() => fs.lstat(directory, { bigint: true }));
   if (!parent.isDirectory() || parent.isSymbolicLink()) throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'conversation log directory is unsafe');
   const handle = await conversationPublicationIO(() => fs.open(filename, constants.O_RDWR | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o600));
-  let primary: unknown;
   let receipt: Record<string, string> = { filename };
   try {
     const original = await conversationPublicationIO(() => handle.stat({ bigint: true }));
@@ -130,28 +185,55 @@ export async function withConversationLogWriter<T>(filename: string, task: (writ
       await assertCurrent();
     };
     await verify();
+    // A crash can leave a torn final record. Start on a fresh line so it stays
+    // one isolated, skipped line instead of swallowing the first new event.
+    let separator = false;
+    if (position > 0) {
+      const tail = Buffer.alloc(1);
+      const { bytesRead } = await conversationPublicationIO(() => handle.read(tail, 0, 1, position - 1));
+      separator = bytesRead === 1 && tail[0] !== 0x0a;
+    }
+    const tornTail = separator;
+    const writeAll = async (bytes: Uint8Array) => {
+      let offset = 0;
+      while (offset < bytes.length) {
+        const result = await handle.write(bytes, offset, bytes.length - offset, position);
+        if (!result.bytesWritten) throw new Error('Conversation log made no write progress');
+        offset += result.bytesWritten; position += result.bytesWritten;
+      }
+    };
+    // This descriptor knows exactly where its own append began, so removing a
+    // failed suffix is not a guess. A rolled-back append can simply be retried.
+    const rollbackAppend = async (to: number): Promise<boolean> => {
+      try {
+        const current = await handle.stat({ bigint: true });
+        if (!sameFile(current, original) || current.size < BigInt(to)) return false;
+        if (current.size !== BigInt(to)) { await handle.truncate(to); await handle.sync(); }
+        witness = await handle.stat({ bigint: true });
+        position = to;
+        return witness.size === BigInt(to);
+      } catch { return false; }
+    };
     const writer: ConversationLogWriter = {
       activeMessageIds: () => conversationPublicationIO(() => readActiveMessageIds(handle, Number(original.size))),
       append: async events => {
         await verify();
+        const appendStart = position;
         try {
-          for (const bytes of conversationJsonChunks(events, true)) {
-            let offset = 0;
-            while (offset < bytes.length) {
-              const result = await handle.write(bytes, offset, bytes.length - offset, position);
-              if (!result.bytesWritten) throw new Error('Conversation log made no write progress');
-              offset += result.bytesWritten; position += result.bytesWritten;
-            }
-          }
+          if (separator) await writeAll(Buffer.from('\n'));
+          for (const bytes of conversationJsonChunks(events, true)) await writeAll(bytes);
           await handle.sync();
           witness = await handle.stat({ bigint: true });
           if (!sameFile(witness, original) || witness.size !== BigInt(position)) {
             throw fenceConversationPublication('conversation append completion has no owned suffix witness', undefined, false, receipt);
           }
           await verify();
+          separator = false;
         } catch (error) {
-          // A rejected write can have written bytes. Keep the suffix for
-          // reconciliation instead of guessing an offset and deleting it.
+          if (await rollbackAppend(appendStart)) {
+            throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'conversation append did not finish and was rolled back', { cause: error });
+          }
+          // Keep an unremovable suffix; the next writer starts on a fresh line.
           throw fenceConversationPublication('conversation append outcome requires reconciliation', error, false, { ...receipt, acknowledgedEnd: String(position) });
         }
       },
@@ -162,19 +244,16 @@ export async function withConversationLogWriter<T>(filename: string, task: (writ
           await handle.sync();
           witness = await handle.stat({ bigint: true });
           if (!sameFile(witness, original) || witness.size !== original.size) throw new Error('Rollback size changed');
-          position = Number(original.size);
+          position = Number(original.size); separator = tornTail;
           await verify();
         } catch (error) { throw fenceConversationPublication('conversation rollback requires reconciliation', error, false, receipt); }
       },
     };
     return await task(writer);
-  } catch (error) { primary = error; throw error; }
-  finally {
-    try { await handle.close(); }
-    catch (error) {
-      const uncertain = fenceConversationPublication('conversation log descriptor closure is uncertain', error, true, receipt);
-      if (primary === undefined) throw uncertain;
-    }
+  } finally {
+    // Appends are synced before this point; a failed close cannot undo them, and
+    // failing here would make a retry duplicate a durable append.
+    try { await handle.close(); } catch { /* descriptor is released with the process */ }
   }
 }
 

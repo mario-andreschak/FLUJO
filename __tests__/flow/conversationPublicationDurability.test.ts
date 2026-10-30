@@ -2,7 +2,7 @@ import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { appendFromBus, appendRawForState, replaceConversationTranscript, flushConversationLog,
-  _setConversationLogDirForTests, latestSequence, readConversationLogForReplay } from '@/backend/execution/flow/conversationLog';
+  _setConversationLogDirForTests, latestSequence, readConversationLogForReplay, readConversationLog } from '@/backend/execution/flow/conversationLog';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { getConversationPublicationDiagnostics, publishConversation } from '@/backend/execution/flow/conversationPublication';
@@ -151,7 +151,8 @@ it('releases a coalesced parent cohort on definite storage failure and retries i
   value.status = 'running';
   value.executionAuthority = { signal: new AbortController().signal, assertCurrent: async () => { entered.release(); await blocked.promise; } };
   const before = getConversationPublicationDiagnostics();
-  jest.spyOn(fs, 'rename').mockRejectedValueOnce(primary);
+  // A persistent failure outlasts the transient retries.
+  const rename = jest.spyOn(fs, 'rename').mockRejectedValue(primary);
   const first = persistSubflowParent(value); await entered.promise;
   value.messages.push(message('later-outcome'));
   const second = persistSubflowParent(value);
@@ -160,6 +161,7 @@ it('releases a coalesced parent cohort on definite storage failure and retries i
   expect(settled).toEqual([expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_IO', cause: primary }) }),
     expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_IO', cause: primary }) })]);
   expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, allocationBytes: 0 });
+  rename.mockRestore();
   jest.mocked(persistConversationSummary).mockImplementation(async () => {});
   await persistSubflowParent(value);
   expect(JSON.parse(await fs.readFile(snapshotPath(value), 'utf8')).messages.map((item: FlujoChatMessage) => item.id)).toEqual(['old', 'later-outcome']);
@@ -327,26 +329,44 @@ it('does not accept an equal-size inode witness whose bytes changed after an amb
   expect(value.messages[0].id).toBe('replacement');
 });
 
-it('fences unknown rename outcomes without truncating the log or overwriting the new live transcript', async () => {
+it('reports unknown rename outcomes without truncating the log, then lets the next append heal the conversation', async () => {
   const value = state(); await appendRawForState(value, [{ type: 'message', message: value.messages[0] }]);
   const rename = fs.rename.bind(fs);
   jest.spyOn(fs, 'rename').mockImplementation(async from => { await rename(from, `${from}.unknown`); throw new Error('unknown commit'); });
   await expect(replaceConversationTranscript(value, [message('replacement')])).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
   expect(value.messages[0].id).toBe('replacement');
   expect((await events(value)).map(event => event.type)).toEqual(['message', 'message:removed', 'message']);
-  await expect(appendRawForState(value, [{ type: 'message', message: message('must-not-write') }])).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
-  expect(JSON.parse(await fs.readFile(path.join(directory, 'db', 'conversation-publications', `${value.conversationId}.json`), 'utf8'))).toMatchObject({ version: 1, conversationId: value.conversationId });
+  // The conversation is not blocked: the retained intent is reclaimed.
+  await appendRawForState(value, [{ type: 'message', message: message('after-uncertain') }]);
+  expect((await events(value)).map(event => event.type)).toEqual(['message', 'message:removed', 'message', 'message']);
+  await expect(fs.access(path.join(directory, 'db', 'conversation-publications', `${value.conversationId}.json`))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('refuses an unfinished intent from an earlier process before appending to its partial record', async () => {
-  const value = state(), partial = '{"type":"model:dispatch","seq":0';
-  await fs.writeFile(logPath(value), partial);
+async function leaveCrashedIntent(value: SharedState, record: object, ageMs = 0): Promise<string> {
   const intent = path.join(directory, 'db', 'conversation-publications', `${value.conversationId}.json`);
   await fs.mkdir(path.dirname(intent), { recursive: true });
-  await fs.writeFile(intent, '{"version":1,"token":"prior-process"}');
-  await expect(appendRawForState(value, [{ type: 'message', message: message('later') }])).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
-  expect(await fs.readFile(logPath(value), 'utf8')).toBe(partial);
-  expect(await fs.readFile(intent, 'utf8')).toContain('prior-process');
+  await fs.writeFile(intent, JSON.stringify(record));
+  if (ageMs) { const at = new Date(Date.now() - ageMs); await fs.utimes(intent, at, at); }
+  return intent;
+}
+
+it('reclaims a crashed earlier process intent and isolates its torn record on its own line', async () => {
+  const value = state(), partial = '{"type":"model:dispatch","seq":0';
+  await fs.writeFile(logPath(value), partial);
+  const intent = await leaveCrashedIntent(value, { version: 1, token: 'prior-process' }, 60 * 60_000);
+  await appendRawForState(value, [{ type: 'message', message: message('later') }]);
+  const text = await fs.readFile(logPath(value), 'utf8');
+  expect(text.startsWith(`${partial}\n{`)).toBe(true);
+  // The production reader skips the torn line and keeps the new event intact.
+  expect((await readConversationLog(value.conversationId))!.map(event => event.type === 'message' && event.message.id)).toEqual(['later']);
+  await expect(fs.access(intent)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('reclaims a recent intent whose writer process has exited', async () => {
+  const value = state();
+  await leaveCrashedIntent(value, { version: 2, token: 'dead', startedAt: Date.now(), pid: 2_147_483_646, process: 'gone' });
+  await appendRawForState(value, [{ type: 'message', message: message('after-crash') }]);
+  expect((await events(value)).map(event => event.type === 'message' && event.message.id)).toEqual(['after-crash']);
 });
 
 it('reconciles the existing fold owner before inspecting an invalid stale capture', async () => {
@@ -388,7 +408,7 @@ it('preserves the primary snapshot failure when rollback also fails', async () =
   expect((await events(value)).map(event => event.type)).toEqual(['message', 'message:removed', 'message']);
 });
 
-it('quarantines a snapshot close uncertainty and never rolls back its log', async () => {
+it('releases a snapshot close uncertainty slot and never rolls back its log', async () => {
   const value = state(); await appendRawForState(value, [{ type: 'message', message: value.messages[0] }]);
   const open = fs.open.bind(fs);
   jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
@@ -402,5 +422,5 @@ it('quarantines a snapshot close uncertainty and never rolls back its log', asyn
   await expect(replaceConversationTranscript(value, [message('replacement')])).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
   expect((await events(value)).map(event => event.type)).toEqual(['message', 'message:removed', 'message']);
   expect(value.messages[0].id).toBe('replacement');
-  expect(getConversationPublicationDiagnostics().quarantinedWriterSlots).toBe(1);
+  expect(getConversationPublicationDiagnostics().quarantinedWriterSlots).toBe(0);
 });

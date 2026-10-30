@@ -13,7 +13,7 @@ import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { withWorkspaceMutation, assertWorkspaceMutationOwned } from '@/backend/services/workspace/workspaceMutationGate';
 import { publishConversation, conversationJsonChunks, recordConversationSnapshotCommit,
-  fenceConversationPublication } from '@/backend/execution/flow/conversationPublication';
+  fenceConversationPublication, retryConversationPublication } from '@/backend/execution/flow/conversationPublication';
 import { withConversationPublicationIntent, conversationPublicationIO } from '@/backend/execution/flow/conversationPublicationIO';
 
 const log = createLogger('utils/storage/backend');
@@ -344,9 +344,11 @@ export async function saveItem<T>(key: StorageKey, value: T, assertCurrent?: () 
   if (key.startsWith('conversations/')) {
     const id = key.slice('conversations/'.length);
     assertSafeCollectionId(id);
+    // An atomic snapshot replacement is idempotent, so a transient failure
+    // (e.g. a Windows rename blocked by a scanner) is simply retried.
     return publishConversation(workspaceCacheKey('conversation-publication', id), value,
-      owned => withWorkspaceMutation(() => withConversationPublicationIntent(id,
-        () => writeFileAtomic(filePath, { conversation: true, value: owned }, assertCurrent))));
+      owned => retryConversationPublication(() => withWorkspaceMutation(() => withConversationPublicationIntent(id,
+        () => writeFileAtomic(filePath, { conversation: true, value: owned }, assertCurrent)))));
   }
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
@@ -991,8 +993,8 @@ export async function saveCollectionItem<T>(collection: string, id: string, valu
   const filePath = getCollectionItemPath(collection, id);
   if (collection === 'conversations') {
     return publishConversation(workspaceCacheKey('conversation-publication', id), value,
-      owned => withWorkspaceMutation(() => withConversationPublicationIntent(id,
-        () => writeFileAtomic(filePath, { conversation: true, value: owned }))));
+      owned => retryConversationPublication(() => withWorkspaceMutation(() => withConversationPublicationIntent(id,
+        () => writeFileAtomic(filePath, { conversation: true, value: owned })))));
   }
   try {
     await runInWriteChain(`${collection}/${id}`, () =>

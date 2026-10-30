@@ -147,10 +147,9 @@ function capture<T>(key: string, value: T, omitRootKeys?: ReadonlySet<string>): 
 }
 
 async function writer<T>(task: () => Promise<T>): Promise<T> {
+  // Wait for capacity; never refuse. Quarantined slots are released when their
+  // owner settles, which also wakes the next waiter.
   while (ledger.writers + ledger.quarantined >= CONVERSATION_PUBLICATION_LIMITS.writers) {
-    if (ledger.quarantined >= CONVERSATION_PUBLICATION_LIMITS.writers) {
-      refuse('CONVERSATION_PUBLICATION_UNCERTAIN', 'descriptor capacity requires reconciliation and a controlled restart');
-    }
     await new Promise<void>(resolve => ledger.waiters.push(resolve));
   }
   ledger.writers++;
@@ -162,8 +161,8 @@ async function writer<T>(task: () => Promise<T>): Promise<T> {
  * wait. A nested snapshot borrows its live transaction's writer, never queues
  * behind itself. Its own capture remains charged until the nested write ends. */
 export function publishConversation<T, R>(key: string, value: T, task: (owned: T) => Promise<R>, omitRootKeys?: ReadonlySet<string>, prepare?: (owned: T) => void): Promise<R> {
-  const fence = ledger.fences.get(key);
-  if (fence) throw fence;
+  // An earlier failure never blocks new writes: the log writer repairs a torn
+  // tail and abandoned intents are reclaimed, so each transaction starts clean.
   if (key.length > 4096) refuse('CONVERSATION_PUBLICATION_DATA', 'publication key is too long');
   const inherited = ledger.context.getStore();
   const nested = inherited?.live && inherited.owner.live && inherited.owner.key === key;
@@ -180,8 +179,6 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
   if (!owned.borrowed && owned.value !== null && typeof owned.value === 'object') ledger.captures.set(owned.value, frame);
   ledger.owners++;
   const invoke = async () => {
-    const fence = ledger.fences.get(key);
-    if (fence) throw fence;
     let primary: unknown;
     try { return await task(owned.value); }
     catch (error) {
@@ -194,6 +191,11 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
       const failed = children.find(result => result.status === 'rejected');
       if (primary === undefined && frame.failure !== undefined) throw frame.failure;
       if (primary === undefined && failed?.status === 'rejected') throw failed.reason;
+      // A completed transaction (possibly after a retry) proves the conversation
+      // is writable again; an earlier failure was reported to its own caller.
+      if (primary === undefined && !nested) {
+        ledger.fences.delete(key); ledger.receipts.delete(key);
+      }
     }
   };
   const previous = nested ? inherited.tail : ledger.chains.get(key) ?? Promise.resolve();
@@ -203,7 +205,13 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
     if (nested) ledger.owners--;
     else {
       owner.live = false;
-      if (!owner.quarantined) ledger.owners--;
+      ledger.owners--;
+      // A failed close no longer holds writer capacity once its owner settles;
+      // otherwise four such failures would refuse every write until restart.
+      if (owner.descriptorUncertain) {
+        owner.descriptorUncertain = false; ledger.quarantined = Math.max(0, ledger.quarantined - 1);
+        ledger.waiters.shift()?.();
+      }
       ledger.bytes -= owner.bytes;
       if (ledger.chains.get(key) === settled) ledger.chains.delete(key);
     }
@@ -248,9 +256,9 @@ export async function drainConversationPublicationChildren(): Promise<void> {
   if (frame.failure !== undefined) throw frame.failure;
   if (failed?.status === 'rejected') throw failed.reason;
 }
+/** Whether the current transaction (not an earlier one) recorded an uncertain outcome. */
 export function conversationPublicationIsFenced(): boolean {
-  const owner = ledger.context.getStore()?.owner;
-  return !!owner && ledger.fences.has(owner.key);
+  return !!ledger.context.getStore()?.owner.quarantined;
 }
 export function reserveConversationPublicationScratch(bytes: number): void {
   const owner = ledger.context.getStore()?.owner;
@@ -271,8 +279,9 @@ export function recordConversationSnapshotCommit(): void {
   if (!owner?.live) throw new Error('No live conversation publication owner');
   owner.snapshotCommits++;
 }
-/** Retains a finite owner/descriptor slot, never a transcript. Recovery must
- * resolve the on-disk receipt before a controlled restart admits more writes. */
+/** Records an uncertain outcome for the current transaction, never a transcript.
+ * The fence is reported by the next flush and cleared by the next complete
+ * transaction for the conversation; it never blocks later writes. */
 export function fenceConversationPublication(reason: string, cause?: unknown, descriptorUncertain = false,
   receipt?: Readonly<Record<string, string>>): ConversationPublicationError {
   const owner = ledger.context.getStore()?.owner;
@@ -282,9 +291,6 @@ export function fenceConversationPublication(reason: string, cause?: unknown, de
     cause instanceof Error ? { cause: new Error('Publication operation failed') } : undefined);
   if (!owner.quarantined) { owner.quarantined = true; }
   if (descriptorUncertain && !owner.descriptorUncertain) { owner.descriptorUncertain = true; ledger.quarantined++; }
-  if (ledger.quarantined >= CONVERSATION_PUBLICATION_LIMITS.writers) {
-    for (const wake of ledger.waiters.splice(0)) wake();
-  }
   if (receipt) {
     const entries = Object.entries(receipt);
     if (entries.length > 8 || entries.some(([key, value]) => key.length > 64 || value.length > 4096)) throw new Error('Publication receipt exceeded its bound');
@@ -298,6 +304,34 @@ export async function flushConversationPublication(key: string): Promise<void> {
   const fence = ledger.fences.get(key);
   if (fence) throw fence;
 }
+
+const TRANSIENT_ERRNO = new Set(['EBUSY', 'EPERM', 'EACCES', 'EAGAIN', 'EMFILE', 'ENFILE', 'ETIMEDOUT', 'EIO', 'ENOSPC']);
+const TRANSIENT_NAMES = new Set(['PersonaRuntimeLockTimeoutError', 'WorkspaceSnapshotTimeoutError']);
+export const CONVERSATION_PUBLICATION_RETRY_DELAYS_MS: readonly number[] = Object.freeze([100, 300, 900]);
+
+function transientPublicationFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (TRANSIENT_NAMES.has(error.name)) return true;
+  if (isConversationPublicationError(error)) return error.code !== 'CONVERSATION_PUBLICATION_DATA';
+  return TRANSIENT_ERRNO.has((error as NodeJS.ErrnoException).code ?? '');
+}
+
+/**
+ * Retry one durable write a few times when its failure is plausibly transient
+ * (a Windows file lock, a busy workspace lock, brief memory or disk pressure).
+ * Each attempt starts as a clean transaction: the log writer rolls back or
+ * newline-terminates a partial append, so a retry never concatenates onto it.
+ */
+export async function retryConversationPublication<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let tries = 0; ; tries++) {
+    try { return await attempt(); }
+    catch (error) {
+      const delay = CONVERSATION_PUBLICATION_RETRY_DELAYS_MS[tries];
+      if (delay === undefined || !transientPublicationFailure(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
 /**
  * Group commit: append one item to the conversation's newest still-unstarted
  * batch, or open a new batch publication. Bursts (an agent turn flushing dozens
@@ -310,8 +344,6 @@ export async function flushConversationPublication(key: string): Promise<void> {
  * batch's settlement.
  */
 export function publishConversationBatch<E>(key: string, item: E, task: (owned: E[]) => Promise<void>, owner?: unknown): Promise<void> {
-  const fence = ledger.fences.get(key);
-  if (fence) throw fence;
   const inherited = ledger.context.getStore();
   const parent = inherited?.live && inherited.owner.live && inherited.owner.key === key ? inherited : undefined;
   const open = ledger.batches.get(key);

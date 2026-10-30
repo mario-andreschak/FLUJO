@@ -20,7 +20,7 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { scanConversationLogSequence, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
 import { CONVERSATION_SEQUENCE_REGISTRY_LIMITS, admitSequenceRegistryKey, insertSequenceRegistryKey, newSequenceRegistryAccounting, refuseNewSequenceRegistryKey, sequenceRegistryDiagnostics,
   type SequenceRegistryAccounting } from './conversationSequenceRegistry';
-import { publishConversation, publishConversationBatch, flushConversationPublication, conversationPublicationSnapshotCommits,
+import { publishConversation, publishConversationBatch, flushConversationPublication, conversationPublicationSnapshotCommits, retryConversationPublication,
   fenceConversationPublication, conversationPublicationIsFenced, ConversationPublicationError } from './conversationPublication';
 import { withConversationLogWriter, withConversationPublicationIntent } from './conversationPublicationIO';
 
@@ -306,9 +306,9 @@ export function appendFromBus(event: ExecutionEvent): void {
   // required event. Async failures leave a finite fence that flush must surface.
   const pending = publishConversationBatch(publicationKey(conversationId), event, async owned => {
     try {
-      await commitConversationWrite(state, () => withWorkspaceMutation(() =>
+      await retryConversationPublication(() => commitConversationWrite(state, () => withWorkspaceMutation(() =>
         withConversationPublicationIntent(conversationId, () =>
-          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned)))));
+          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned))))));
     } catch (error) {
       fenceConversationPublication('required bus event was not acknowledged durably', error);
       throw error;
@@ -336,9 +336,9 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
   if (isConversationDeleted(conversationId)) return;
   try {
     const pending = publishConversation(publicationKey(conversationId), raws,
-      owned => commitConversationWrite(state, () => withWorkspaceMutation(() =>
+      owned => retryConversationPublication(() => commitConversationWrite(state, () => withWorkspaceMutation(() =>
         withConversationPublicationIntent(conversationId, () =>
-          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned))))),
+          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned)))))),
       undefined, owned => {
         for (const raw of owned) Object.assign(raw, { conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() });
       });
@@ -971,7 +971,10 @@ export async function recoverConversationTranscript(
     return { messages: snapshot, source: 'snapshot' };
   }
 
-  await flushConversationLog(conversationId);
+  // A read includes in-flight appends when it can, but an earlier write failure
+  // belongs to the run that made it; it must never make the history unreadable.
+  try { await flushConversationLog(conversationId); }
+  catch (err) { log.warn(`Reading ${conversationId} after an unacknowledged append`, { err }); }
   await repairTruncatedConversationLog(state);
   return withConversationLogEvents(conversationId, async events => {
   const durable = events ? projectMessages(events) : [];
