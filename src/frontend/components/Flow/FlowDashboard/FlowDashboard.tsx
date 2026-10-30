@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { subflowUsage } from '@/utils/shared/whereUsed';
 import { validateFlow, FlowValidationResult, type VFlow } from '@/utils/shared/flowValidation';
 import { 
   Box, 
@@ -190,6 +191,9 @@ const FlowDashboard = ({
     });
   }, [flows]);
 
+  // Where-used (#1278): which agents call each flow as a subflow.
+  const subflowUsedBy = useMemo(() => subflowUsage(flows), [flows]);
+
   const validationByFlow = useMemo(() => {
     const map: Record<string, FlowValidationResult> = {};
     for (const flow of flows) {
@@ -351,6 +355,7 @@ const FlowDashboard = ({
             onToggleFavorite={onToggleFavorite}
             folders={folders}
             validation={validationByFlow[flow.id]}
+            subflowUsedBy={subflowUsedBy[flow.id] ?? []}
             selectionMode={modelSelectionMode}
           />
         </Grid>

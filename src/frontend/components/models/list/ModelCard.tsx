@@ -22,6 +22,8 @@ import ScienceIcon from '@mui/icons-material/Science';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import { providerMark, providerGroupOf, PROVIDER_GROUP_COLORS } from '@/shared/types/model/providerGroups';
+import UsedByChip from '@/frontend/components/shared/UsedByChip';
+import type { WhereUsedRef } from '@/utils/shared/whereUsed';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
 import StarIcon from '@mui/icons-material/Star';
@@ -50,6 +52,8 @@ export interface ModelCardProps {
   onDelete?: () => void;
   /** Start a new model from this one's settings (and stored credential). */
   onDuplicate?: () => void;
+  /** Agents and fallback policies that use this model (management page only). */
+  usedBy?: readonly WhereUsedRef[];
   /** Convert this model into a saved Start → Process → Finish agent. */
   onConvertToAgent?: (modelId: string) => void;
   /** The model's current organizing folder (#80 / shared with #71). */
@@ -83,6 +87,7 @@ export const ModelCard = ({
   onEdit,
   onDelete,
   onDuplicate,
+  usedBy,
   onConvertToAgent,
   folder,
   folders = [],
@@ -304,6 +309,7 @@ export const ModelCard = ({
           sx={{ mt: 1, maxWidth: '100%', height: 24, color: 'text.secondary' }}
         />
       )}
+      {usedBy && <Box sx={{ mt: 1 }}><UsedByChip refs={usedBy} label="model" /></Box>}
     </CardContent>
   ) : (
     <>
@@ -376,6 +382,7 @@ export const ModelCard = ({
             sx={{ mt: 1, maxWidth: '100%' }}
           />
         )}
+        {usedBy && <Box sx={{ mt: 1 }}><UsedByChip refs={usedBy} label="model" /></Box>}
       </CardContent>
     </>
   );

@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import type { Flow } from '@/shared/types/flow';
+import { modelUsage } from '@/utils/shared/whereUsed';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Alert,
@@ -169,6 +171,18 @@ export default function ModelClient() {
       cancelled = true;
     };
   }, [serviceReady, t]);
+
+  // Where-used (#1278): which agents and fallback policies use each model.
+  // Best effort — without flows the cards simply omit the "Used by" chip.
+  const [usageFlows, setUsageFlows] = useState<Flow[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve().then(() => flowService.loadFlows())
+      .then(loaded => { if (!cancelled) setUsageFlows(loaded); })
+      .catch(loadError => log.warn('Could not load agents for where-used', loadError));
+    return () => { cancelled = true; };
+  }, [models.length]);
+  const usage = useMemo(() => usageFlows ? modelUsage(usageFlows, models) : undefined, [usageFlows, models]);
 
   // Show loading spinner if service is not ready
   if (!serviceReady || !modelsLoaded) {
@@ -585,6 +599,7 @@ export default function ModelClient() {
         onUpdate={handleEdit}
         onDelete={handleDelete}
         onDuplicate={handleDuplicate}
+        usage={usage}
         onConvertToAgent={handleOpenConversion}
         folders={collectFolders(models, (m) => m.folder)}
         onSetFolder={handleSetFolder}
