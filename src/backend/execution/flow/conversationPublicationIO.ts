@@ -32,25 +32,40 @@ function processAlive(pid: number): boolean {
 
 /** An intent whose transaction can never finish: left by a failed attempt in
  * this process, by a process that has exited (crash, update, OOM), or one that
- * is older than any transaction. Only a live writer's intent is respected. */
-async function intentIsAbandoned(filename: string): Promise<boolean> {
-  if (intentProcess.live.has(filename)) return false;
+ * is older than any transaction. Only a live writer's intent is respected.
+ * Returns the abandoned file's identity, 'gone' when nothing is left to
+ * reclaim, or undefined while its writer may still be alive. Age and owner are
+ * read through one descriptor, so both describe the same file. */
+async function abandonedIntent(filename: string): Promise<BigIntStats | 'gone' | undefined> {
+  if (intentProcess.live.has(filename)) return undefined;
+  let handle: FileHandle;
+  try { handle = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'gone' : undefined; }
+  let identity: BigIntStats;
   let record: { process?: unknown; pid?: unknown; startedAt?: unknown } = {};
-  let modifiedAt = 0;
   try {
-    modifiedAt = (await fs.stat(filename)).mtimeMs;
-    record = JSON.parse(await fs.readFile(filename, 'utf8')) ?? {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-    // A torn intent (crash between create and write): judge it by its age.
-  }
-  if (record.process === intentProcess.token) return true;
-  const startedAt = typeof record.startedAt === 'number' ? record.startedAt : modifiedAt;
-  if (Date.now() - startedAt > ABANDONED_INTENT_AGE_MS) return true;
+    identity = await handle.stat({ bigint: true });
+    // A torn intent (crash between create and write) is judged by its age.
+    try { record = JSON.parse(await handle.readFile('utf8')) ?? {}; } catch { /* torn */ }
+  } catch { return undefined; }
+  finally { await handle.close().catch(() => undefined); }
+  if (!identity.isFile()) return undefined;
+  if (record.process === intentProcess.token) return identity;
+  const startedAt = typeof record.startedAt === 'number' ? record.startedAt : Number(identity.mtimeMs);
+  if (Date.now() - startedAt > ABANDONED_INTENT_AGE_MS) return identity;
   // A different token with our pid is a previous instance (containers reuse pids).
-  if (typeof record.pid === 'number') return record.pid === process.pid || !processAlive(record.pid);
+  if (typeof record.pid === 'number') return record.pid === process.pid || !processAlive(record.pid) ? identity : undefined;
   // Legacy intents carry no owner: anything older than this process is abandoned.
-  return startedAt < intentProcess.startedAt;
+  return startedAt < intentProcess.startedAt ? identity : undefined;
+}
+
+/** Removes the abandoned intent only while its name still holds that same
+ * file, so a reclaimer never deletes the fresh intent of a faster reclaimer. */
+async function reclaimIntent(filename: string, abandoned: BigIntStats): Promise<void> {
+  try {
+    const current = await fs.lstat(filename, { bigint: true });
+    if (sameVersion(current, abandoned)) await fs.unlink(filename);
+  } catch { /* already reclaimed, or changed: the next attempt re-inspects it */ }
 }
 
 /** Durable marker spanning one publication transaction. It contains no
@@ -73,8 +88,9 @@ export async function withConversationPublicationIntent<T>(conversationId: strin
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
         throw new ConversationPublicationError('CONVERSATION_PUBLICATION_IO', 'could not create a publication intent', { cause: error });
       }
-      if (attempt < 3 && await intentIsAbandoned(filename)) {
-        await fs.rm(filename, { force: true }).catch(() => undefined);
+      const abandoned = attempt < 3 ? await abandonedIntent(filename) : undefined;
+      if (abandoned) {
+        if (abandoned !== 'gone') await reclaimIntent(filename, abandoned);
         continue;
       }
       if (Date.now() >= waitUntil) {

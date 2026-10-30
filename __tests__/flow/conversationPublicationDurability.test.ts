@@ -369,6 +369,30 @@ it('reclaims a recent intent whose writer process has exited', async () => {
   expect((await events(value)).map(event => event.type === 'message' && event.message.id)).toEqual(['after-crash']);
 });
 
+it('never removes a fresh intent that replaced the abandoned one it inspected', async () => {
+  const value = state();
+  const intent = await leaveCrashedIntent(value, { version: 2, token: 'dead', startedAt: Date.now(), pid: 2_147_483_646, process: 'gone' });
+  const lstat = fs.lstat.bind(fs);
+  let swapped = false, foreignSurvived = false;
+  jest.spyOn(fs, 'lstat').mockImplementation((async (...args: Parameters<typeof fs.lstat>) => {
+    if (!swapped && String(args[0]) === intent) {
+      swapped = true;
+      // A faster reclaimer removed the abandoned intent and holds its own.
+      await fs.unlink(intent);
+      await fs.writeFile(intent, JSON.stringify({ version: 2, token: 'live', startedAt: Date.now(), pid: process.ppid, process: 'other' }));
+      setTimeout(() => void fs.readFile(intent, 'utf8').then(text => {
+        foreignSurvived = JSON.parse(text).process === 'other';
+        return fs.unlink(intent);
+      }), 200);
+    }
+    return lstat(...args);
+  }) as typeof fs.lstat);
+  await appendRawForState(value, [{ type: 'message', message: message('after-race') }]);
+  expect(swapped).toBe(true);
+  expect(foreignSurvived).toBe(true);
+  expect((await events(value)).map(event => event.type === 'message' && event.message.id)).toEqual(['after-race']);
+});
+
 it('reconciles the existing fold owner before inspecting an invalid stale capture', async () => {
   const value = state();
   (value.messages[0] as unknown as { cycle: unknown }).cycle = value.messages;
