@@ -20,6 +20,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ScienceIcon from '@mui/icons-material/Science';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
 import StarIcon from '@mui/icons-material/Star';
@@ -46,6 +47,8 @@ export interface ModelCardProps {
   /** Optional in selectable/picker mode; required on the management page. */
   onEdit?: () => void;
   onDelete?: () => void;
+  /** Start a new model from this one's settings (and stored credential). */
+  onDuplicate?: () => void;
   /** Convert this model into a saved Start → Process → Finish agent. */
   onConvertToAgent?: (modelId: string) => void;
   /** The model's current organizing folder (#80 / shared with #71). */
@@ -78,6 +81,7 @@ export const ModelCard = ({
   model,
   onEdit,
   onDelete,
+  onDuplicate,
   onConvertToAgent,
   folder,
   folders = [],
@@ -519,6 +523,18 @@ export const ModelCard = ({
               </Tooltip>
             )}
             <CopyLinkButton target={{ kind: 'model', id: model.id }} size="small" sx={{ color: 'text.secondary' }} />
+            {onDuplicate && (
+              <Tooltip title={t('models.card.duplicate')} arrow>
+                <IconButton
+                  size="small"
+                  aria-label={t('models.card.duplicate')}
+                  onClick={onDuplicate}
+                  sx={{ color: 'text.secondary', '&:hover': { color: 'primary.main' } }}
+                >
+                  <ContentCopyRoundedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             <Tooltip title={t('models.card.editAria')} arrow>
               <IconButton
                 size="small"
@@ -563,6 +579,11 @@ export const ModelCard = ({
                 <AccountTreeRoundedIcon />
               </IconButton>
             </Tooltip>
+          )}
+          {onDuplicate && (
+            <IconButton aria-label={t('models.card.duplicate')} onClick={onDuplicate}>
+              <ContentCopyRoundedIcon />
+            </IconButton>
           )}
           <IconButton aria-label={t('models.card.editAria')} onClick={onEdit}>
             <EditIcon />

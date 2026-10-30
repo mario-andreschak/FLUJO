@@ -50,6 +50,8 @@ interface ModelListProps {
   onAdd: () => void;
   onUpdate: (model: Model) => Promise<ModelResult>;
   onDelete: (id: string) => Promise<void>;
+  /** Start a new model from an existing one's settings. */
+  onDuplicate?: (model: Model) => void;
   /** Open the saved-agent conversion dialog for this model. */
   onConvertToAgent?: (modelId: string) => void;
   /** Existing folders on the Models surface, for the "Move to folder…" picker. */
@@ -69,6 +71,7 @@ export const ModelList = ({
     onAdd,
     onUpdate,
     onDelete,
+    onDuplicate,
     onConvertToAgent,
     folders = [],
     onSetFolder,
@@ -160,6 +163,7 @@ export const ModelList = ({
                         model={model}
                         onEdit={() => handleUpdate(model)}
                         onDelete={() => onDelete(model.id)}
+                        onDuplicate={onDuplicate && !model.fallbackPolicy ? () => onDuplicate(model) : undefined}
                         onConvertToAgent={onConvertToAgent}
                         folder={model.folder}
                         folders={folders}

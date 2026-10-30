@@ -96,6 +96,8 @@ export const modelsMessageRows = {
   'models.card.baseUrl': ['Base URL', 'URL base', 'Basis-URL', 'URL de base', 'URL di base', 'URL base', '基础 URL'],
   'models.card.testTooltip': ['Test model (direct SDK call, no flow)', 'Probar modelo (llamada directa al SDK, sin flujo)', 'Modell testen (direkter SDK-Aufruf, kein Flow)', 'Tester le modèle (appel SDK direct, sans flux)', 'Testa modello (chiamata SDK diretta, senza flusso)', 'Testar modelo (chamada direta ao SDK, sem fluxo)', '测试模型（直接调用 SDK，无流程）'],
   'models.card.testAria': ['Test model', 'Probar modelo', 'Modell testen', 'Tester le modèle', 'Testa modello', 'Testar modelo', '测试模型'],
+  'models.card.duplicate': ['Duplicate model', 'Duplicar modelo', 'Modell duplizieren', 'Dupliquer le modèle', 'Duplica modello', 'Duplicar modelo', '复制模型'],
+  'models.duplicateName': ['{name} (copy)', '{name} (copia)', '{name} (Kopie)', '{name} (copie)', '{name} (copia)', '{name} (cópia)', '{name}（副本）'],
   'models.card.editAria': ['Edit model', 'Editar modelo', 'Modell bearbeiten', 'Modifier le modèle', 'Modifica modello', 'Editar modelo', '编辑模型'],
   'models.card.deleteAria': ['Delete model', 'Eliminar modelo', 'Modell löschen', 'Supprimer le modèle', 'Elimina modello', 'Excluir modelo', '删除模型'],
   'models.card.moveTooltip': ['Move to folder…', 'Mover a carpeta…', 'In Ordner verschieben…', 'Déplacer vers un dossier…', 'Sposta nella cartella…', 'Mover para pasta…', '移到文件夹…'],
