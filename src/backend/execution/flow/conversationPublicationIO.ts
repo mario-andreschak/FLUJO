@@ -93,9 +93,12 @@ async function underIntent<T>(handle: FileHandle, filename: string, parent: BigI
   let owned: BigIntStats | undefined;
   try {
     owned = await handle.stat({ bigint: true });
+    // The intent is an exclusive cross-process marker, not crash evidence: a
+    // torn log tail is repaired by the writer itself, and an intent lost or
+    // left empty by a crash is reclaimed by age or owner. So it needs no fsync,
+    // which halves the syncs each save pays.
     await handle.writeFile(JSON.stringify({ version: 2, conversationId, token: randomUUID(), startedAt: Date.now(),
       pid: process.pid, process: intentProcess.token }));
-    await handle.sync();
   } catch (error) {
     try { await handle.close(); } catch { fenceConversationPublication('intent descriptor closure is uncertain', undefined, true, { intent: filename }); }
     throw fenceConversationPublication('publication intent did not finish', error, false, { intent: filename });

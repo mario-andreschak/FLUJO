@@ -97,10 +97,13 @@ canonical history are truncated to satisfy a memory limit.
 
 A conversation never becomes unwritable because of an earlier failure.
 
-Before mutating either durable file, publication creates and syncs a small
-exclusive intent at `db/conversation-publications/<conversationId>.json`. It
-contains version, conversation ID, token, start time, process ID and a
-per-process token, never a transcript. It is removed after the transaction. A
+Before mutating either durable file, publication creates a small exclusive
+intent at `db/conversation-publications/<conversationId>.json`. It is the
+cross-process marker that keeps two processes from appending to one log at the
+same offset. It contains version, conversation ID, token, start time, process
+ID and a per-process token, never a transcript, and is not synced: the log
+writer repairs a torn tail itself, so each save pays one fsync (the log append),
+not two. It is removed after the transaction. A
 leftover intent (crash, update, OOM kill, or a failed attempt) is reclaimed by
 the next writer once it is abandoned: written by a failed attempt in this
 process, by a process that has exited, or older than any transaction (10
