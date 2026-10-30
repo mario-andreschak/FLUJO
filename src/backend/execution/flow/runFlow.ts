@@ -22,7 +22,7 @@ import {
 } from '@/backend/services/mcp/ownerScope';
 import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState, prepareConversationSequence, flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError } from './conversationLogSequence';
-import { isConversationPublicationError, retryOwnedConversationPublicationBusy, type ConversationPublicationError } from './conversationPublication';
+import { isConversationPublicationError, type ConversationPublicationError } from './conversationPublication';
 import {
   steeringCount,
   takeSteeringMessages,
@@ -3339,7 +3339,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   let finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   const recordTerminalSequenceFailure = (error: unknown) => {
     if (!isConversationDurabilityFailure(error)) throw error;
-    if (!sequenceFailure || sequenceFailure.code === 'CONVERSATION_PUBLICATION_BUSY') sequenceFailure = error;
+    sequenceFailure ??= error;
     sequenceErrorCleanup = true;
     if (finalStatus !== 'error') {
       sharedState.lastResponse = { success: false, error: error.message, errorDetails: error.details };
@@ -3354,23 +3354,15 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   };
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
 
-  // Execution remains fail-fast after an admission refusal. Terminal cleanup
-  // alone may wait for that definitely unstarted write; a broken sequence or
-  // uncertain I/O still suppresses further events and retains its fence.
+  // A broken sequence or uncertain I/O suppresses further terminal events and
+  // retains its fence.
   const publishTerminalEvent = async (event: Parameters<EmitFn>[0]) => {
-    // Each outer event owns its receipt; a reentrant emission cannot overwrite
-    // it. Opaque emitters have no receipt and are attempted exactly once.
-    let admitted = false;
+    // Opaque emitters have no receipt and are attempted exactly once.
     const terminalEmit = input.emit ?? executionEventBus.emitterFor(effectiveConvId, accepted => {
-      admitted = true;
       if (accepted.type === 'error') errorEventAdmitted = true;
       if (accepted.type === 'message' && accepted.message.id) emittedMessageIds.add(accepted.message.id);
     });
-    await retryOwnedConversationPublicationBusy(() => {
-      admitted = false;
-      if (sequenceFailure && sequenceFailure.code !== 'CONVERSATION_PUBLICATION_BUSY') return;
-      terminalEmit(event);
-    }, () => !input.emit && !admitted);
+    if (!sequenceFailure) terminalEmit(event);
     if (!ephemeral) await flushConversationLog(effectiveConvId);
   };
   const terminalRecoveryEmit = input.emit ? undefined : publishTerminalEvent;
@@ -3394,13 +3386,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           retryable: false,
         },
         cancellationRequestedAt: sharedState.recovery?.cancellationRequestedAt ?? Date.now(),
-      }, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
+      }, terminalRecoveryEmit);
     } else if (finalStatus === 'completed') {
-      await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
+      await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, terminalRecoveryEmit);
     } else if (finalStatus === 'capped') {
-      await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
+      await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, terminalRecoveryEmit);
     } else if (finalStatus === 'awaiting_tool_approval' || finalStatus === 'paused_debug') {
-      await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
+      await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, terminalRecoveryEmit);
     } else if (finalStatus === 'error') {
       const classified = classifyRecoveryFailure(sharedState.lastResponse);
       await commitRecoveryTransition(storageKey, sharedState, classified.classification, {
@@ -3409,7 +3401,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         manualActionRequired: classified.failure.category === 'tool_failure'
           ? true
           : sharedState.recovery?.manualActionRequired,
-      }, terminalRecoveryEmit, retryOwnedConversationPublicationBusy);
+      }, terminalRecoveryEmit);
     }
   } catch (error) {
     // Preserve an existing execution error, or report a late safety failure,
@@ -3485,7 +3477,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`);
       }
     }
-    await retryOwnedConversationPublicationBusy(() => persistState(storageKey, sharedState)); // chokepoint refuses ephemeral + deleted states
+    await persistState(storageKey, sharedState); // chokepoint refuses ephemeral + deleted states
     finalSnapshotPersisted = true;
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
   } catch (error) {
@@ -3537,7 +3529,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         // The snapshot above already succeeded in the normal case; only retry it
         // when that write failed, so persist-before-evict still holds.
         if (!finalSnapshotPersisted) {
-          await retryOwnedConversationPublicationBusy(() => persistState(storageKey, sharedState));
+          await persistState(storageKey, sharedState);
           finalSnapshotPersisted = true;
         }
       });

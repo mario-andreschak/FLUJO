@@ -20,7 +20,7 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { scanConversationLogSequence, requireAllocatableSequence, getConversationSequenceScanDiagnostics } from './conversationLogSequence';
 import { CONVERSATION_SEQUENCE_REGISTRY_LIMITS, admitSequenceRegistryKey, insertSequenceRegistryKey, newSequenceRegistryAccounting, refuseNewSequenceRegistryKey, sequenceRegistryDiagnostics,
   type SequenceRegistryAccounting } from './conversationSequenceRegistry';
-import { publishConversation, flushConversationPublication, conversationPublicationSnapshotCommits,
+import { publishConversation, publishConversationBatch, flushConversationPublication, conversationPublicationSnapshotCommits,
   fenceConversationPublication, conversationPublicationIsFenced, ConversationPublicationError } from './conversationPublication';
 import { withConversationLogWriter, withConversationPublicationIntent } from './conversationPublicationIO';
 
@@ -288,8 +288,10 @@ async function commitConversationWrite<T>(
 
 /**
  * Bus tap: persist a just-emitted (stamped) event to its conversation's log.
- * Capture/admission rejects synchronously; asynchronous failures fence the
- * conversation and are surfaced by the required durability flush.
+ * Events emitted while an earlier one is still waiting to be written join the
+ * same pending batch (group commit), so a burst costs one durable append, not
+ * one queued write per event. Capture rejects synchronously; asynchronous
+ * failures fence the conversation and are surfaced by the durability flush.
  */
 export function appendFromBus(event: ExecutionEvent): void {
   if (!PERSISTED_EVENT_TYPES.has(event.type)) return;
@@ -302,16 +304,16 @@ export function appendFromBus(event: ExecutionEvent): void {
   const conversationId = event.conversationId;
   // Synchronous capture/admission can reject the emit before it acknowledges a
   // required event. Async failures leave a finite fence that flush must surface.
-  const pending = publishConversation(publicationKey(conversationId), event, async owned => {
+  const pending = publishConversationBatch(publicationKey(conversationId), event, async owned => {
     try {
       await commitConversationWrite(state, () => withWorkspaceMutation(() =>
         withConversationPublicationIntent(conversationId, () =>
-          withConversationLogWriter(logFilePath(conversationId), writer => writer.append([owned])))));
+          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned)))));
     } catch (error) {
       fenceConversationPublication('required bus event was not acknowledged durably', error);
       throw error;
     }
-  });
+  }, state);
   void trackCommit(conversationId, pending).catch((err) =>
     log.warn(`Failed to append event to conversation log ${event.conversationId}`, { err })
   );

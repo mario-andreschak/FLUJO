@@ -174,7 +174,7 @@ import sequenceOs from 'node:os';
 import { _setConversationLogDirForTests, flushConversationLog, allocateSeq, getConversationSequenceDiagnostics } from '@/backend/execution/flow/conversationLog';
 import { ConversationSequenceSafetyError } from '@/backend/execution/flow/conversationLogSequence';
 import { ConversationPublicationError, publishConversation, getConversationPublicationDiagnostics,
-  CONVERSATION_PUBLICATION_LIMITS } from '@/backend/execution/flow/conversationPublication';
+} from '@/backend/execution/flow/conversationPublication';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -431,13 +431,13 @@ describe('Conversation sequence safety before execution', () => {
     expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(0);
   });
 
-  it('propagates actual owner refusal through the default event-bus emitter before physical dispatch', async () => {
+  it('does not fail a run because many publications are queued ahead of its events', async () => {
     const physicalDispatch = jest.fn();
     (FlowExecutor.executeStep as jest.Mock).mockImplementationOnce(async (sharedState: SharedState, forward: (event: unknown) => void) => {
       let release!: () => void;
       const blocked = new Promise<void>(resolve => { release = resolve; });
       const pending: Promise<void>[] = [];
-      while (getConversationPublicationDiagnostics().owners < CONVERSATION_PUBLICATION_LIMITS.owners) {
+      for (let index = 0; index < 200; index++) {
         pending.push(publishConversation('default-emitter-capacity', null, async () => blocked));
       }
       sharedState.messages.push({ id: 'default-publication-owner', role: 'assistant', content: 'Retain canonical history', timestamp: 1 });
@@ -448,9 +448,9 @@ describe('Conversation sequence safety before execution', () => {
       } finally { release(); await Promise.all(pending); }
     });
     const result = await runFlow({ flowId: FLOW_ID, conversationId: id, prompt: 'input' });
-    expect(result.status).toBe('error');
-    expect(result.error).toMatchObject({ details: { code: 'CONVERSATION_PUBLICATION_BUSY' }, statusCode: 429 });
-    expect(physicalDispatch).not.toHaveBeenCalled();
+    expect(result.status).toBe('completed');
+    expect(result.error).toBeUndefined();
+    expect(physicalDispatch).toHaveBeenCalledTimes(1);
     expect(result.messages.some(message => message.id === 'default-publication-owner')).toBe(true);
     expect(getFlowRunAdmissionDiagnostics().activeRuns).toBe(0);
   });

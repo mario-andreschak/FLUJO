@@ -43,7 +43,7 @@ export interface OperationsSources {
   workspace: string;
   compatibility: WorkerCompatibility;
   worker: WorkerBootstrapStatus;
-  actor: { kind: 'owner'; ownerId: string; credentialId: string } | { kind: 'worker-control' };
+  actor: { kind: 'owner'; ownerId: string; credentialId: string } | { kind: 'worker-control' } | { kind: 'local' };
   read: (relative: string) => Promise<unknown | undefined>;
   scheduler: (executions: readonly PlannedExecution[]) => SchedulerObservation;
   workerRecovery: (execution: PlannedExecution, paused: boolean, owned: ReadonlySet<string>) => Promise<WorkerRecoveryStatus | undefined>;

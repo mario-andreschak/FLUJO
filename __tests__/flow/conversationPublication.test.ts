@@ -1,12 +1,11 @@
 import vm from 'node:vm';
-import { publishConversation, conversationJsonChunks, getConversationPublicationDiagnostics,
-  CONVERSATION_PUBLICATION_LIMITS, fenceConversationPublication, freezeConversationSnapshot, retryOwnedConversationPublicationBusy,
-  ConversationPublicationError } from '@/backend/execution/flow/conversationPublication';
+import { publishConversation, publishConversationBatch, conversationJsonChunks, getConversationPublicationDiagnostics,
+  CONVERSATION_PUBLICATION_LIMITS, fenceConversationPublication, freezeConversationSnapshot } from '@/backend/execution/flow/conversationPublication';
 import { getAllocationReservationSnapshot } from '@/backend/execution/flow/allocationReservations';
 
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 afterEach(() => {
-  expect(getConversationPublicationDiagnostics()).toMatchObject({ allocationBytes: 0, retainedBytes: 0, writers: 0, queuedWriters: 0, terminalWaiters: 0, chains: 0 });
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ allocationBytes: 0, retainedBytes: 0, writers: 0, queuedWriters: 0, openBatches: 0, chains: 0 });
   expect(getAllocationReservationSnapshot().publication).toBe(0);
 });
 
@@ -25,15 +24,58 @@ it('captures containers before a blocked predecessor and shares owned strings', 
   expect(result!.nested).not.toBe(value.nested);
 });
 
-it('bounds queued owners and simultaneous writers without dropping accepted work', async () => {
+it('queues any number of publications without a count cap and bounds simultaneous writers', async () => {
   const blocked = gate(); let completed = 0;
-  const pending = Array.from({ length: CONVERSATION_PUBLICATION_LIMITS.owners }, (_, index) =>
+  const pending = Array.from({ length: 200 }, (_, index) =>
     publishConversation(`queue-${index}`, { index }, async () => { await blocked.promise; completed++; }));
-  expect(() => publishConversation('overflow', {}, async () => undefined)).toThrow(expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_BUSY' }));
   await new Promise(resolve => setImmediate(resolve));
-  expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 4, queuedWriters: 60, owners: 64 });
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: CONVERSATION_PUBLICATION_LIMITS.writers, queuedWriters: 196, owners: 200 });
   blocked.release(); await Promise.all(pending);
-  expect(completed).toBe(64);
+  expect(completed).toBe(200);
+  expect(getConversationPublicationDiagnostics().owners).toBe(0);
+});
+
+it('group-commits a burst of events into one ordered write', async () => {
+  const blocked = gate();
+  const head = publishConversation('burst', null, async () => blocked.promise);
+  const writes: number[][] = [];
+  const pending = Array.from({ length: 150 }, (_, index) =>
+    publishConversationBatch('burst', { index }, async owned => { writes.push(owned.map(item => item.index)); }));
+  expect(new Set(pending).size).toBe(1);
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 2, openBatches: 1 });
+  blocked.release(); await Promise.all([head, ...pending]);
+  expect(writes).toEqual([Array.from({ length: 150 }, (_, index) => index)]);
+});
+
+it('never lets a batch overtake a later publication or join a write already in progress', async () => {
+  const blocked = gate(); const order: string[] = [];
+  const head = publishConversation('order', null, async () => blocked.promise);
+  const first = publishConversationBatch('order', 'a', async owned => { order.push(...owned); });
+  const between = publishConversation('order', null, async () => { order.push('snapshot'); });
+  const second = publishConversationBatch('order', 'b', async owned => { order.push(...owned); });
+  expect(second).not.toBe(first);
+  blocked.release(); await Promise.all([head, first, between, second]);
+  expect(order).toEqual(['a', 'snapshot', 'b']);
+
+  const writing = gate(); const writes: string[][] = [];
+  const started = publishConversationBatch('started', 'x', async owned => { writes.push([...owned]); await writing.promise; });
+  await new Promise(resolve => setImmediate(resolve));
+  const later = publishConversationBatch('started', 'y', async owned => { writes.push([...owned]); });
+  expect(later).not.toBe(started);
+  writing.release(); await Promise.all([started, later]);
+  expect(writes).toEqual([['x'], ['y']]);
+});
+
+it('only batches items committed by the same owner', async () => {
+  const blocked = gate(); const writes: string[][] = [];
+  const head = publishConversation('owners', null, async () => blocked.promise);
+  const runA = {}, runB = {};
+  const a = publishConversationBatch('owners', 'a1', async owned => { writes.push([...owned]); }, runA);
+  expect(publishConversationBatch('owners', 'a2', async owned => { writes.push([...owned]); }, runA)).toBe(a);
+  const b = publishConversationBatch('owners', 'b1', async owned => { writes.push([...owned]); }, runB);
+  expect(b).not.toBe(a);
+  blocked.release(); await Promise.all([head, a, b]);
+  expect(writes).toEqual([['a1', 'a2'], ['b1']]);
 });
 
 it('preserves JSON semantics, foreign plain records, aliases, Unicode, and omitted values', async () => {
@@ -45,42 +87,6 @@ it('preserves JSON semantics, foreign plain records, aliases, Unicode, and omitt
     const chunks = [...conversationJsonChunks([owned], false)].map(chunk => Buffer.from(chunk));
     expect(Buffer.concat(chunks).toString('utf8')).toBe(expected);
   });
-});
-
-it('bounds already-owned terminal admission waiters and drains every accepted waiter after capacity settles', async () => {
-  const blocked = gate();
-  const holders = Array.from({ length: CONVERSATION_PUBLICATION_LIMITS.owners }, () => publishConversation('terminal-capacity', null, async () => blocked.promise));
-  const waiting = Array.from({ length: CONVERSATION_PUBLICATION_LIMITS.owners }, (_, index) =>
-    retryOwnedConversationPublicationBusy(() => publishConversation(`terminal-${index}`, null, async () => index)));
-  await new Promise(resolve => setImmediate(resolve));
-  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 64, terminalWaiters: 64 });
-  try {
-    await expect(retryOwnedConversationPublicationBusy(() => publishConversation('terminal-overflow', null, async () => undefined)))
-      .rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_BUSY' });
-  } finally { blocked.release(); await Promise.all(holders); }
-  expect(await Promise.all(waiting)).toEqual(Array.from({ length: 64 }, (_, index) => index));
-});
-
-it('never waits for its own active publisher frame or retries an uncertain write', async () => {
-  const blocked = gate();
-  const holders = Array.from({ length: 64 }, () => publishConversation('self-wait-holder', null, async () => blocked.promise));
-  let busy: unknown;
-  try { publishConversation('self-wait-overflow', null, async () => undefined); }
-  catch (error) { busy = error; }
-  finally { blocked.release(); await Promise.all(holders); }
-  expect(busy).toMatchObject({ code: 'CONVERSATION_PUBLICATION_BUSY' });
-  await publishConversation('terminal-self-wait', null, async () => {
-    const operation = jest.fn(() => { throw busy; });
-    await expect(retryOwnedConversationPublicationBusy(operation)).rejects.toBe(busy);
-    expect(operation).toHaveBeenCalledTimes(1);
-  });
-  const uncertain = new ConversationPublicationError('CONVERSATION_PUBLICATION_UNCERTAIN', 'unknown write');
-  const operation = jest.fn(() => { throw uncertain; });
-  await expect(retryOwnedConversationPublicationBusy(operation)).rejects.toBe(uncertain);
-  expect(operation).toHaveBeenCalledTimes(1);
-  const untrusted = jest.fn(() => { throw new ConversationPublicationError('CONVERSATION_PUBLICATION_BUSY', 'opaque callback'); });
-  await expect(retryOwnedConversationPublicationBusy(untrusted)).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_BUSY' });
-  expect(untrusted).toHaveBeenCalledTimes(1);
 });
 
 it('refuses proxies, accessors, and custom serialization before invoking any hook', () => {

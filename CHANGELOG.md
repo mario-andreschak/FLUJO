@@ -5,6 +5,8 @@
 ### Conversation persistence
 
 - Persist live run events to the conversation log again as they happen ([#1319](https://github.com/mario-andreschak/FLUJO/issues/1319)). In production builds the live event tap could not resolve the in-memory conversation state and silently discarded every event, so streamed messages, tool calls and token usage were saved only at the end of a successful turn. Switching conversations hid a running turn, usage was missing, and cancelling a long Agent SDK turn lost all of its work. The same defect hid live state from mid-call cancellation checks and the todo and meeting tools.
+- Stop failing finished runs with "Conversation publication refused: publication owner capacity is occupied". Every chat event was saved as its own queued write, and a fixed limit of 64 queued writes refused the rest, so a long agent turn that flushed many messages at once ended as an error after its work had completed. Events that arrive while an earlier one is still waiting are now saved together in one write, and the count limit is gone; queued writes remain bounded by their memory size.
+- Let `/api/operations/status` answer on a localhost-only install without an owner login, like the rest of the local API. Network and Public exposure, and installs with an owner policy, still require owner authentication.
 
 ### Runtime admission
 

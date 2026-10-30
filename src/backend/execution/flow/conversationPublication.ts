@@ -8,7 +8,7 @@ export { ConversationPublicationError, isConversationPublicationError } from './
 
 const MiB = 1024 * 1024;
 export const CONVERSATION_PUBLICATION_LIMITS = Object.freeze({
-  owners: 64, writers: 4, retainedBytes: 256 * MiB, ownerBytes: 128 * MiB,
+  writers: 4, retainedBytes: 256 * MiB, ownerBytes: 128 * MiB,
   slots: 262_144, depth: 128, bufferBytes: 64 * 1024, stringChars: 8192,
 });
 type PublicationCode = ConversationPublicationError['code'];
@@ -18,25 +18,24 @@ type Frame = { owner: Owner; live: boolean; tail: Promise<unknown>; pending: Set
 type Ledger = { bytes: number; retained: number; owners: number; writers: number; quarantined: number;
   rejected: number; chains: Map<string, Promise<unknown>>; fences: Map<string, ConversationPublicationError>;
   receipts: Map<string, Readonly<Record<string, string>>>; waiters: Array<() => void>; context: AsyncLocalStorage<Frame>;
-  terminalWaiters: number; capacityChange?: { promise: Promise<void>; resolve: () => void };
-  ownerRefusals: WeakSet<Error>;
+  batches: Map<string, Batch>;
   captures: WeakMap<object, Frame>; immutableSnapshots: WeakSet<object> };
+/** An appendable, not-yet-started batch publication (group commit). */
+type Batch = { items: unknown[]; started: boolean; settled?: Promise<unknown>; parent: Frame | undefined;
+  owner: unknown; bytes: number; retained: number };
 const host = globalThis as typeof globalThis & { __flujoConversationPublicationV1?: Ledger };
 const ledger: Ledger = host.__flujoConversationPublicationV1 ??= { bytes: 0, retained: 0, owners: 0, writers: 0,
-  quarantined: 0, rejected: 0, chains: new Map(), fences: new Map(), receipts: new Map(), waiters: [], terminalWaiters: 0, context: new AsyncLocalStorage(),
-  captures: new WeakMap(), immutableSnapshots: new WeakSet(), ownerRefusals: new WeakSet() };
+  quarantined: 0, rejected: 0, chains: new Map(), fences: new Map(), receipts: new Map(), waiters: [], context: new AsyncLocalStorage(),
+  batches: new Map(), captures: new WeakMap(), immutableSnapshots: new WeakSet() };
 // Keep a live development process compatible when an earlier module instance
 // initialized the shared ledger before immutable snapshot reuse was loaded.
 ledger.captures ??= new WeakMap();
 ledger.immutableSnapshots ??= new WeakSet();
-ledger.terminalWaiters ??= 0;
-ledger.ownerRefusals ??= new WeakSet();
+ledger.batches ??= new Map();
 setAllocationReservation('publication', ledger.bytes);
 function refuse(code: PublicationCode, reason: string): never {
   ledger.rejected++;
-  const error = new ConversationPublicationError(code, reason);
-  if (code === 'CONVERSATION_PUBLICATION_BUSY') ledger.ownerRefusals.add(error);
-  throw error;
+  throw new ConversationPublicationError(code, reason);
 }
 
 /** Accept genuine plain objects/arrays from another VM without executing its code. */
@@ -168,7 +167,8 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
   if (key.length > 4096) refuse('CONVERSATION_PUBLICATION_DATA', 'publication key is too long');
   const inherited = ledger.context.getStore();
   const nested = inherited?.live && inherited.owner.live && inherited.owner.key === key;
-  if (ledger.owners >= CONVERSATION_PUBLICATION_LIMITS.owners) refuse('CONVERSATION_PUBLICATION_BUSY', 'publication owner capacity is occupied');
+  // No count cap: a queued publication is bounded by its byte charge (see
+  // capture), not by how many events a burst happens to contain.
   const owned = capture(key, value, omitRootKeys);
   try { prepare?.(owned.value); } catch (error) {
     ledger.bytes -= owned.bytes; ledger.retained -= owned.retained;
@@ -211,9 +211,6 @@ export function publishConversation<T, R>(key: string, value: T, task: (owned: T
     owned.value = undefined as T;
     ledger.bytes -= owned.bytes; ledger.retained -= owned.retained;
     setAllocationReservation('publication', ledger.bytes);
-    const changed = ledger.capacityChange;
-    ledger.capacityChange = undefined;
-    changed?.resolve();
   });
   if (!nested) ledger.chains.set(key, settled);
   else {
@@ -301,48 +298,51 @@ export async function flushConversationPublication(key: string): Promise<void> {
   const fence = ledger.fences.get(key);
   if (fence) throw fence;
 }
-/** Terminal cleanup only: its existing admitted run owns the canonical state.
- * Retry one definitely refused admission, never a provider call or event group.
- * Waiters retain no capture and share one settlement signal, with no per-chain
- * listeners accumulating across retries. An active publisher cannot wait on
- * capacity that its own frame may be preventing from settling. */
-export async function retryOwnedConversationPublicationBusy<T>(operation: () => T | Promise<T>, ownsRefusal: () => boolean = () => true): Promise<T> {
-  let waiting = false;
-  let retryAvailableCapacity = true;
-  try {
-    while (true) {
-      try { return await operation(); }
-      catch (error) {
-        if (!isConversationPublicationError(error) || error.code !== 'CONVERSATION_PUBLICATION_BUSY'
-          || !ledger.ownerRefusals.has(error) || !ownsRefusal()) throw error;
-        const frame = ledger.context.getStore();
-        if (frame?.live && frame.owner.live) throw error;
-        // A different owner can settle between rejection and this catch. Try
-        // available capacity once before sleeping, without spinning when a
-        // snapshot still needs more than one free nested owner slot.
-        if (ledger.owners < CONVERSATION_PUBLICATION_LIMITS.owners && retryAvailableCapacity) {
-          retryAvailableCapacity = false;
-          continue;
-        }
-        if (!ledger.chains.size) throw error;
-        if (!waiting) {
-          if (ledger.terminalWaiters >= CONVERSATION_PUBLICATION_LIMITS.owners) throw error;
-          ledger.terminalWaiters++; waiting = true;
-        }
-        if (!ledger.capacityChange) {
-          let resolve!: () => void;
-          const promise = new Promise<void>(done => { resolve = done; });
-          ledger.capacityChange = { promise, resolve };
-        }
-        await ledger.capacityChange.promise;
-        retryAvailableCapacity = true;
-      }
-    }
-  } finally { if (waiting) ledger.terminalWaiters--; }
+/**
+ * Group commit: append one item to the conversation's newest still-unstarted
+ * batch, or open a new batch publication. Bursts (an agent turn flushing dozens
+ * of messages at once) become one durable write instead of one queued write per
+ * event. An item joins a batch only while that batch is still the tail of the
+ * key's order and has not begun writing, so cross-publication order is kept.
+ * Items join only a batch opened for the same `owner` (e.g. the run state whose
+ * authority commits the write). Every item is captured and byte-charged
+ * individually; the batch releases all charges when it settles. Returns the
+ * batch's settlement.
+ */
+export function publishConversationBatch<E>(key: string, item: E, task: (owned: E[]) => Promise<void>, owner?: unknown): Promise<void> {
+  const fence = ledger.fences.get(key);
+  if (fence) throw fence;
+  const inherited = ledger.context.getStore();
+  const parent = inherited?.live && inherited.owner.live && inherited.owner.key === key ? inherited : undefined;
+  const open = ledger.batches.get(key);
+  if (open && !open.started && open.settled && open.parent === parent && open.owner === owner
+    && open.settled === (parent ? parent.tail : ledger.chains.get(key))) {
+    const owned = capture(key, item);
+    open.items.push(owned.value);
+    open.bytes += owned.bytes; open.retained += owned.retained;
+    return open.settled as Promise<void>;
+  }
+  const batch: Batch = { items: [], started: false, parent, owner, bytes: 0, retained: 0 };
+  const settled = publishConversation(key, [item], async owned => {
+    batch.started = true;
+    if (ledger.batches.get(key) === batch) ledger.batches.delete(key);
+    await task(owned);
+  }, undefined, owned => { batch.items = owned; });
+  batch.settled = settled;
+  ledger.batches.set(key, batch);
+  const release = () => {
+    if (ledger.batches.get(key) === batch) ledger.batches.delete(key);
+    batch.items = [];
+    ledger.bytes -= batch.bytes; ledger.retained -= batch.retained;
+    batch.bytes = 0; batch.retained = 0;
+    setAllocationReservation('publication', ledger.bytes);
+  };
+  void settled.then(release, release);
+  return settled;
 }
 export function getConversationPublicationDiagnostics() {
   return { owners: ledger.owners, writers: ledger.writers, allocationBytes: ledger.bytes,
-    retainedBytes: ledger.retained, queuedWriters: ledger.waiters.length, terminalWaiters: ledger.terminalWaiters, chains: ledger.chains.size,
+    retainedBytes: ledger.retained, queuedWriters: ledger.waiters.length, openBatches: ledger.batches.size, chains: ledger.chains.size,
     fences: ledger.fences.size, receipts: ledger.receipts.size, quarantinedWriterSlots: ledger.quarantined, rejected: ledger.rejected };
 }
 

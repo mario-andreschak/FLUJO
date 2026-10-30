@@ -25,6 +25,8 @@ jest.mock('fs', () => {
     },
   } };
 });
+// Re-export the real module as plain properties so tests can inject a refusal.
+jest.mock('@/backend/execution/flow/conversationPublication', () => ({ __esModule: true, ...jest.requireActual('@/backend/execution/flow/conversationPublication') }));
 jest.mock('@/backend/services/model', () => ({ modelService: {
   getModel: (...args: unknown[]) => getModelMock(...args),
   resolveAndDecryptApiKey: async () => 'offline-not-a-secret',
@@ -43,7 +45,8 @@ import { getArchiveWritePressure, MODEL_TURN_ARCHIVE_WRITE_LIMITS, withArchiveWr
 import { _setConversationLogDirForTests, allocateSeq, flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
-import { publishConversation, CONVERSATION_PUBLICATION_LIMITS, getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
+import { ConversationPublicationError, getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
+import * as publicationModule from '@/backend/execution/flow/conversationPublication';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
 // One application observation is one actual HTTP request in this offline fixture.
@@ -225,8 +228,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     const before = getConversationPublicationDiagnostics();
     const delivered: string[] = [];
     const unsubscribe = executionEventBus.subscribe(conversationId, event => { delivered.push(event.type); });
-    const release = deferred();
-    const pending: Promise<void>[] = [];
+    const refusals: jest.SpyInstance[] = [];
     const open = fs.open.bind(fs);
     const writer = jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
       const handle = await open(...args);
@@ -238,14 +240,17 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
       } });
     });
     sdkRequestObserved = () => {
-      if (failurePoint === 'capture') for (let index = 0; index < CONVERSATION_PUBLICATION_LIMITS.owners; index++) {
-        pending.push(publishConversation(`sdk-blocked-${index}`, null, async () => release.promise));
+      // A synchronous capture refusal (allocation pressure) on the next required publication.
+      if (failurePoint === 'capture') for (const name of ['publishConversation', 'publishConversationBatch'] as const) {
+        refusals.push(jest.spyOn(publicationModule, name).mockImplementation(() => {
+          throw new ConversationPublicationError('CONVERSATION_PUBLICATION_MEMORY', 'publication allocation capacity is occupied');
+        }));
       }
     };
     try {
       const result = await invoke(canonical, canonical, { conversationId });
       expect(result).toMatchObject({ success: false, error: {
-        code: failurePoint === 'capture' ? 'CONVERSATION_PUBLICATION_BUSY' : 'CONVERSATION_PUBLICATION_UNCERTAIN',
+        code: failurePoint === 'capture' ? 'CONVERSATION_PUBLICATION_MEMORY' : 'CONVERSATION_PUBLICATION_UNCERTAIN',
       } });
       expect(requests).toHaveLength(0);
       if (failurePoint === 'capture') {
@@ -261,7 +266,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
         await expect(flushConversationLog(conversationId)).rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_UNCERTAIN' });
       }
     } finally {
-      release.resolve(); await Promise.all(pending);
+      for (const refusal of refusals) refusal.mockRestore();
       await flushConversationLog(conversationId).catch(() => {});
       unsubscribe();
       writer.mockRestore(); sdkRequestObserved = undefined;

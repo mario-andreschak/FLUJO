@@ -5,7 +5,7 @@ import { appendFromBus, appendRawForState, replaceConversationTranscript, flushC
   _setConversationLogDirForTests, latestSequence, readConversationLogForReplay } from '@/backend/execution/flow/conversationLog';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { getConversationPublicationDiagnostics, publishConversation, CONVERSATION_PUBLICATION_LIMITS, retryOwnedConversationPublicationBusy } from '@/backend/execution/flow/conversationPublication';
+import { getConversationPublicationDiagnostics, publishConversation } from '@/backend/execution/flow/conversationPublication';
 import * as publication from '@/backend/execution/flow/conversationPublication';
 import type { SharedState, SubflowInvocation } from '@/backend/execution/flow/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
@@ -182,23 +182,17 @@ it('rejects a coalesced parent from another workspace before publishing cache or
   } finally { blocked.release(); await first; }
 });
 
-it('refuses a bus marker before live delivery or filesystem I/O without retaining an uncertain owner', async () => {
+it('accepts a bus marker behind any number of queued publications and persists it once they drain', async () => {
   const value = state(), blocked = gate(), before = getConversationPublicationDiagnostics();
   FlowExecutor.conversationStates.set(value.conversationId!, value);
-  const pending: Promise<void>[] = [];
-  while (getConversationPublicationDiagnostics().owners < CONVERSATION_PUBLICATION_LIMITS.owners) {
-    pending.push(publishConversation('refused-bus-capacity', null, async () => blocked.promise));
-  }
+  const pending = Array.from({ length: 200 }, () => publishConversation('queued-bus-capacity', null, async () => blocked.promise));
   const listener = jest.fn(), unsubscribe = executionEventBus.subscribe(value.conversationId!, listener);
-  const open = jest.spyOn(fs, 'open');
   try {
-    expect(() => executionEventBus.emitterFor(value.conversationId!)({ type: 'model:dispatch', turn: {} } as never))
-      .toThrow(expect.objectContaining({ code: 'CONVERSATION_PUBLICATION_BUSY' }));
-    expect(listener).not.toHaveBeenCalled();
-    expect(executionEventBus.getBufferedSince(value.conversationId!, 0)).toEqual([]);
-    expect(open).not.toHaveBeenCalled();
+    expect(() => executionEventBus.emitterFor(value.conversationId!)({ type: 'model:dispatch', turn: {} } as never)).not.toThrow();
+    expect(listener).toHaveBeenCalledTimes(1);
   } finally { unsubscribe(); blocked.release(); await Promise.all(pending); }
   await flushConversationLog(value.conversationId!);
+  expect((await events(value)).map(event => event.type)).toEqual(['model:dispatch']);
   expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, writers: 0, retainedBytes: 0, allocationBytes: 0 });
 });
 
@@ -213,30 +207,6 @@ it('refuses a replacement capture before reserving sequence space or changing du
   expect(value.messages[0].id).toBe('old');
 });
 
-it('does not replay an admitted bus event when its reentrant listener receives an owner refusal', async () => {
-  const value = state(), blocked = gate(), before = getConversationPublicationDiagnostics();
-  FlowExecutor.conversationStates.set(value.conversationId!, value);
-  const holders: Promise<void>[] = [];
-  while (getConversationPublicationDiagnostics().owners < CONVERSATION_PUBLICATION_LIMITS.owners - 1) {
-    holders.push(publishConversation('reentrant-bus-holder', null, async () => blocked.promise));
-  }
-  let admitted = false;
-  const emit = executionEventBus.emitterFor(value.conversationId!, () => { admitted = true; });
-  const listener = jest.fn(() => executionEventBus.emit(value.conversationId!, { type: 'run:start', flowId: 'nested-refused' }));
-  const unsubscribe = executionEventBus.subscribe(value.conversationId!, listener);
-  const operation = jest.fn(() => { admitted = false; emit({ type: 'run:done', status: 'error' }); });
-  try {
-    await expect(retryOwnedConversationPublicationBusy(operation, () => !admitted))
-      .rejects.toMatchObject({ code: 'CONVERSATION_PUBLICATION_BUSY' });
-    expect(admitted).toBe(true);
-    expect(operation).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledTimes(1);
-  } finally { unsubscribe(); blocked.release(); await Promise.all(holders); }
-  await flushConversationLog(value.conversationId!);
-  expect((await events(value)).map(event => event.type)).toEqual(['run:done']);
-  expect(executionEventBus.getBufferedSince(value.conversationId!, 0).map(event => event.type)).toEqual(['run:done']);
-  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: before.owners, fences: before.fences, terminalWaiters: 0 });
-});
 
 it('preserves exact authority errors raised inside the rewrite intent and atomic snapshot writer', async () => {
   const value = state(); await appendRawForState(value, [{ type: 'message', message: value.messages[0] }]);

@@ -157,7 +157,7 @@ afterAll(async () => {
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   await flushStatisticsEvents();
-  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, terminalWaiters: 0, chains: 0, fences: 0 });
+  expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, openBatches: 0, chains: 0, fences: 0 });
   FlowExecutor.conversationStates.clear(); FlowExecutor.clearFlowCache();
   if (output) { await fs.mkdir(output, { recursive: true }); await fs.writeFile(path.join(output, `${label}-summary.json`), JSON.stringify(summaries, null, 2)); }
   const current = await fs.lstat(root, { bigint: true });
@@ -283,7 +283,7 @@ it.each([[1, 0], [16, 1], [16, 2]])('profiles real saved-model dispatch (concurr
     expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0, quarantined: 0 });
     expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, reservedBytes: 0, workspaceActiveRuns: 0 });
     expect(getConversationPublicationDiagnostics()).toMatchObject({ owners: 0, writers: 0, allocationBytes: 0,
-      retainedBytes: 0, queuedWriters: 0, terminalWaiters: 0, chains: 0, fences: 0, receipts: 0, quarantinedWriterSlots: 0 });
+      retainedBytes: 0, queuedWriters: 0, openBatches: 0, chains: 0, fences: 0, receipts: 0, quarantinedWriterSlots: 0 });
     expect(getAllocationReservationSnapshot().total).toBe(0);
     expect(globalThis.__flujo_workspace_writer_admission_chains?.size ?? 0).toBe(0);
     await expect(withWorkspaceRecoveryCapture(async () => 'drained')).resolves.toBe('drained');

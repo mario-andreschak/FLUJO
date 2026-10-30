@@ -6,6 +6,8 @@ import { isWorkerMode, getWorkerBootstrapStatus, assertWorkerRequestReady } from
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
 import { boundedJsonReader } from '@/backend/services/operations/boundedRead';
+import { getExposureMode } from '@/utils/http/exposureMode';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { collectOperationsSnapshot, getObservationProcessId } from '@/backend/services/operations/snapshot';
 import { getFlowRunAdmissionDiagnostics } from '@/backend/execution/flow/runAdmission';
 import { getSubflowPreparationDiagnostics } from '@/backend/execution/flow/subflowPreparationBudget';
@@ -17,11 +19,24 @@ import { getChatRateDiagnostics } from '@/utils/http/chatRateLimit';
 
 export const runtime = 'nodejs';
 
-type Admission = { worker: true } | { worker: false; authorization: OwnerRequestAuthorization };
+type Admission = { worker: true } | { worker: false; local: true }
+  | { worker: false; local?: false; authorization: OwnerRequestAuthorization };
+
+/** Same rule as every other API route (assertOwnerRequest): a localhost-only
+ * install without an owner policy has no login, so admit loopback callers. */
+function localWithoutOwnerPolicy(): boolean {
+  return process.env.FLUJO_OWNER_AUTH_FILE === undefined && getExposureMode() === 'localhost';
+}
+function recheckAdmission(request: Request, admission: Admission): Response | null {
+  if (admission.worker) return assertSnapshotBearer(request);
+  if (admission.local) return localWithoutOwnerPolicy() ? assertLocalRequest(request, { strictLoopback: true }) : Response.json(
+    { error: 'Unauthorized' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
+  return admission.authorization.recheck();
+}
 
 const GET_handler = async (request: Request, admission: Admission) => {
   const workspace = getCurrentWorkspace();
-  if (!admission.worker && admission.authorization.principal.workspaceId
+  if (!admission.worker && !admission.local && admission.authorization.principal.workspaceId
       && admission.authorization.principal.workspaceId !== workspace) {
     return Response.json({ error: 'Forbidden' }, { status: 403, headers: { 'Cache-Control': 'no-store' } });
   }
@@ -38,7 +53,7 @@ const GET_handler = async (request: Request, admission: Admission) => {
     const snapshot = await collectOperationsSnapshot({
       observationProcessId: getObservationProcessId(),
       workspace, compatibility: getWorkerCompatibility(), worker: getWorkerBootstrapStatus(),
-      actor: admission.worker ? { kind: 'worker-control' } : { kind: 'owner',
+      actor: admission.worker ? { kind: 'worker-control' } : admission.local ? { kind: 'local' } : { kind: 'owner',
         ownerId: admission.authorization.principal.ownerId, credentialId: admission.authorization.principal.credentialId },
       read: boundedJsonReader(getWorkspaceDataDir()), scheduler: plans => scheduler.inspectOperations(plans),
       workerRecovery: inspectWorkerRecovery, active: FlowExecutor.conversationStates.values(), mcp: listRuntimes(),
@@ -48,7 +63,7 @@ const GET_handler = async (request: Request, admission: Admission) => {
     if (relocked) return relocked;
     if (isWorkerMode() !== admission.worker || getCurrentWorkspace() !== workspace) return Response.json({ error: 'Operations profile changed.' },
       { status: 409, headers: { 'Cache-Control': 'no-store' } });
-    const revoked = admission.worker ? assertSnapshotBearer(request) : admission.authorization.recheck();
+    const revoked = recheckAdmission(request, admission);
     if (revoked) return revoked;
     const unavailable = assertWorkerRequestReady(request, workspace);
     if (unavailable) return unavailable;
@@ -74,6 +89,11 @@ export function GET(request: Request) {
     const unauthorized = assertSnapshotBearer(request);
     if (unauthorized) return unauthorized;
     return wrapped(request, { worker: true });
+  }
+  if (localWithoutOwnerPolicy()) {
+    const notLocal = assertLocalRequest(request, { strictLoopback: true });
+    if (notLocal) return notLocal;
+    return wrapped(request, { worker: false, local: true });
   }
   const resolved = resolveOwnerRequest(request, ['control:admin', 'secrets:read']);
   if (!resolved.ok) return resolved.response;
