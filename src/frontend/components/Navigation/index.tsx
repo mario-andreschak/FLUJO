@@ -11,6 +11,8 @@ import {
   ListItemIcon,
   ListItemText,
   ListSubheader,
+  Menu,
+  MenuItem,
   Stack,
   Tab,
   Tabs,
@@ -36,7 +38,9 @@ import {
   MemoryRounded,
   MenuBookRounded,
   MenuRounded,
+  OpenInNewRounded,
   PeopleAltRounded,
+  SchoolRounded,
   SettingsRounded,
   ScienceRounded,
   WavesRounded,
@@ -55,6 +59,7 @@ import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
+import { useTour } from '@/frontend/contexts/TourContext';
 import type { TranslationKey } from '@/frontend/i18n';
 import { interceptNavigation } from '@/frontend/utils/navigationGuard';
 import { createLogger } from '@/utils/logger';
@@ -69,6 +74,10 @@ interface NavLink {
   icon: ElementType;
   aliases?: string[];
   experimental?: boolean;
+  /** An experimental entry with its own switch stays hidden until that switch is on. */
+  experimentalFlag?: 'harnessLabEnabled';
+  /** Shown nested under this sibling's path (Roles under Personas). */
+  parent?: string;
 }
 
 interface NavGroup {
@@ -89,8 +98,9 @@ const navItems: NavItem[] = [
     type: 'group',
     label: 'nav.more',
     icon: MenuRounded,
+    // Stable sections first (More opens on Automations); experimental ones are
+    // grouped under one "Experimental" menu in the subnav and drawer (#1278).
     children: [
-      { type: 'link', label: 'harness.title', path: '/harness', tour: 'nav-harness', icon: ScienceRounded, experimental: true },
       {
         type: 'link',
         label: 'nav.automations',
@@ -106,6 +116,9 @@ const navItems: NavItem[] = [
         tour: 'nav-meetings',
         icon: GroupsRounded,
       },
+      { type: 'link', label: 'nav.help', path: '/docs', tour: 'nav-docs', icon: MenuBookRounded },
+      { type: 'link', label: 'nav.settings', path: '/settings', tour: 'nav-settings', icon: SettingsRounded },
+      { type: 'link', label: 'harness.title', path: '/harness', tour: 'nav-harness', icon: ScienceRounded, experimental: true, experimentalFlag: 'harnessLabEnabled' },
       {
         type: 'link',
         label: 'nav.personas',
@@ -120,7 +133,8 @@ const navItems: NavItem[] = [
         path: '/roles',
         tour: 'nav-roles',
         icon: AutoStoriesRounded,
-        experimental: true,        
+        experimental: true,
+        parent: '/personas',
       },
       {
         type: 'link',
@@ -154,11 +168,22 @@ const navItems: NavItem[] = [
         tour: 'nav-waves',
         icon: WavesRounded,
         experimental: true,
-      },      
-      { type: 'link', label: 'nav.help', path: '/docs', tour: 'nav-docs', icon: MenuBookRounded },
-      { type: 'link', label: 'nav.settings', path: '/settings', tour: 'nav-settings', icon: SettingsRounded },
+      },
     ],
   },
+];
+
+const HELP_PATH = '/docs';
+const EXPERIMENTAL_TAB = '__experimental';
+const DOCS_BASE = 'https://github.com/mario-andreschak/FLUJO/blob/main/';
+/** Per-page guides offered under Help → FLUJO help. */
+const PAGE_HELP: Array<{ label: TranslationKey; doc: string }> = [
+  { label: 'nav.aiSetup', doc: 'docs/features/models' },
+  { label: 'nav.connectedApps', doc: 'docs/features/mcp' },
+  { label: 'nav.agents', doc: 'docs/features/flows' },
+  { label: 'nav.talk', doc: 'docs/getting-started/README.md' },
+  { label: 'nav.automations', doc: 'docs/features/scheduled-occurrences.md' },
+  { label: 'harness.title', doc: 'docs/features/harness-lab.md' },
 ];
 
 const isActive = (item: NavLink, pathname: string) =>
@@ -169,9 +194,24 @@ interface NavigationEntriesProps {
   pathname: string;
   mobile?: boolean;
   onNavigate: (href: string) => (event: React.MouseEvent) => void;
+  /** Mobile drawer only: start the guided tour from Help. */
+  onStartTour?: () => void;
 }
 
-function NavigationEntries({ items, pathname, mobile = false, onNavigate }: NavigationEntriesProps) {
+const drawerSubheaderSx = {
+  mt: 1.5,
+  mb: 0.5,
+  px: 2.5,
+  color: 'text.secondary',
+  bgcolor: 'transparent',
+  fontSize: '0.68rem',
+  fontWeight: 760,
+  letterSpacing: '0.13em',
+  lineHeight: 2.8,
+  textTransform: 'uppercase',
+} as const;
+
+function NavigationEntries({ items, pathname, mobile = false, onNavigate, onStartTour }: NavigationEntriesProps) {
   const theme = useMuiTheme();
   const { t } = useI18n();
 
@@ -193,7 +233,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
           sx={{
             mx: 1,
             mb: 0.5,
-            pl: nested ? 3 : 1.5,
+            pl: item.parent ? 5 : nested ? 3 : 1.5,
             minHeight: 48,
             '&.Mui-selected': {
               boxShadow: `inset 0 0 0 1px ${alpha(theme.palette.primary.main, 0.22)}`,
@@ -279,27 +319,31 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
         if (item.type === 'link') return renderLink(item);
 
         if (mobile) {
+          const experimental = item.children.filter((child) => child.experimental);
           return (
             <Fragment key={item.label}>
-              <ListSubheader
-                component="div"
-                disableSticky
-                sx={{
-                  mt: 1.5,
-                  mb: 0.5,
-                  px: 2.5,
-                  color: 'text.secondary',
-                  bgcolor: 'transparent',
-                  fontSize: '0.68rem',
-                  fontWeight: 760,
-                  letterSpacing: '0.13em',
-                  lineHeight: 2.8,
-                  textTransform: 'uppercase',
-                }}
-              >
+              <ListSubheader component="div" disableSticky sx={drawerSubheaderSx}>
                 {t(item.label)}
               </ListSubheader>
-              {item.children.map((child) => renderLink(child, true))}
+              {item.children.filter((child) => !child.experimental).map((child) => (
+                <Fragment key={child.path}>
+                  {renderLink(child, true)}
+                  {child.path === HELP_PATH && onStartTour && (
+                    <ListItemButton onClick={onStartTour} sx={{ mx: 1, mb: 0.5, pl: 5, minHeight: 40 }}>
+                      <ListItemIcon sx={{ minWidth: 38, color: 'text.secondary' }}><SchoolRounded fontSize="small" /></ListItemIcon>
+                      <ListItemText primary={t('nav.helpTutorials')} />
+                    </ListItemButton>
+                  )}
+                </Fragment>
+              ))}
+              {experimental.length > 0 && (
+                <>
+                  <ListSubheader component="div" disableSticky sx={drawerSubheaderSx}>
+                    {t('nav.experimental')}
+                  </ListSubheader>
+                  {experimental.map((child) => renderLink(child, true))}
+                </>
+              )}
             </Fragment>
           );
         }
@@ -414,13 +458,17 @@ export default function Navigation() {
   log.debug(`Rendering Navigation component with pathname: ${pathname}`);
 
   const experimentalEnabled = settingsHydrated && (settings?.experimental?.enabled ?? false);
+  // Harness Lab has its own switch; showing it while that switch is off led to
+  // a page that only says "enable it in Settings" (#1320).
+  const linkVisible = (link: NavLink) => !link.experimental
+    || (experimentalEnabled && (!link.experimentalFlag || settings?.experimental?.[link.experimentalFlag] === true));
   const visibleNavItems = navItems.reduce<NavItem[]>((visible, item) => {
     if (item.type === 'link') {
-      if (!item.experimental || experimentalEnabled) visible.push(item);
+      if (linkVisible(item)) visible.push(item);
       return visible;
     }
 
-    const children = item.children.filter((child) => !child.experimental || experimentalEnabled);
+    const children = item.children.filter(linkVisible);
     if (children.length > 0) visible.push({ ...item, children });
     return visible;
   }, []);
@@ -432,6 +480,18 @@ export default function Navigation() {
   const activeSubtab =
     activeNavGroup?.children.find((child) => isActive(child, pathname))?.path ?? false;
   const hasActiveNavGroup = Boolean(activeNavGroup);
+  // Subnav order: stable sections, the Experimental menu before Help, then the rest.
+  const experimentalChildren = activeNavGroup?.children.filter((child) => child.experimental) ?? [];
+  const activeExperimental = experimentalChildren.find((child) => isActive(child, pathname));
+  const subnavTabs: Array<NavLink | typeof EXPERIMENTAL_TAB> = [];
+  for (const child of activeNavGroup?.children.filter((entry) => !entry.experimental) ?? []) {
+    if (child.path === HELP_PATH && experimentalChildren.length > 0) subnavTabs.push(EXPERIMENTAL_TAB);
+    subnavTabs.push(child);
+  }
+  if (experimentalChildren.length > 0 && !subnavTabs.includes(EXPERIMENTAL_TAB)) subnavTabs.push(EXPERIMENTAL_TAB);
+  const [experimentalAnchor, setExperimentalAnchor] = useState<HTMLElement | null>(null);
+  const [helpAnchor, setHelpAnchor] = useState<HTMLElement | null>(null);
+  const { startTour } = useTour();
 
   useEffect(() => {
     document.documentElement.classList.toggle('has-app-subnav', hasActiveNavGroup);
@@ -657,7 +717,10 @@ export default function Navigation() {
           data-app-subnav
           sx={{
             display: { xs: 'none', md: 'flex' },
-            justifyContent: 'center',
+            // 'safe' centering: a group wider than the window must never push its
+            // first sections off-screen where they cannot be reached (#1320).
+            justifyContent: 'safe center',
+            minWidth: 0,
             minHeight: 'var(--subnav-height)',
             borderTop: 1,
             borderColor: 'divider',
@@ -665,12 +728,45 @@ export default function Navigation() {
           }}
         >
           <Tabs
-            value={activeSubtab}
+            value={activeExperimental ? EXPERIMENTAL_TAB : activeSubtab}
+            variant="scrollable"
+            scrollButtons="auto"
             aria-label={t('nav.groupSections', { group: t(activeNavGroup.label) })}
-            sx={{ minHeight: 'var(--subnav-height)' }}
+            sx={{ minHeight: 'var(--subnav-height)', minWidth: 0, maxWidth: '100%' }}
           >
-            {activeNavGroup.children.map((child) => {
+            {subnavTabs.map((child) => {
+              if (child === EXPERIMENTAL_TAB) {
+                return (
+                  <Tab
+                    key={EXPERIMENTAL_TAB}
+                    value={EXPERIMENTAL_TAB}
+                    icon={<ScienceRounded sx={{ fontSize: 16 }} />}
+                    iconPosition="start"
+                    label={activeExperimental ? `${t('nav.experimental')} · ${t(activeExperimental.label)}` : t('nav.experimental')}
+                    aria-haspopup="menu"
+                    aria-expanded={Boolean(experimentalAnchor)}
+                    onClick={(event) => setExperimentalAnchor(event.currentTarget)}
+                    sx={{ minHeight: 'var(--subnav-height)', py: 0 }}
+                  />
+                );
+              }
               const Icon = child.icon;
+              if (child.path === HELP_PATH) {
+                return (
+                  <Tab
+                    key={child.path}
+                    value={child.path}
+                    icon={<Icon sx={{ fontSize: 16 }} />}
+                    iconPosition="start"
+                    label={t(child.label)}
+                    data-tour={child.tour}
+                    aria-haspopup="menu"
+                    aria-expanded={Boolean(helpAnchor)}
+                    onClick={(event) => setHelpAnchor(event.currentTarget)}
+                    sx={{ minHeight: 'var(--subnav-height)', py: 0 }}
+                  />
+                );
+              }
               return (
                 <Tab
                   key={child.path}
@@ -688,6 +784,65 @@ export default function Navigation() {
               );
             })}
           </Tabs>
+          <Menu
+            anchorEl={experimentalAnchor}
+            open={Boolean(experimentalAnchor)}
+            onClose={() => setExperimentalAnchor(null)}
+            slotProps={{ list: { 'aria-label': t('nav.experimental') } }}
+          >
+            {experimentalChildren.map((child) => {
+              const Icon = child.icon;
+              return (
+                <MenuItem
+                  key={child.path}
+                  component={Link}
+                  href={child.path}
+                  selected={isActive(child, pathname)}
+                  data-tour={child.tour}
+                  onClick={(event: React.MouseEvent) => { setExperimentalAnchor(null); handleNavClick(child.path)(event); }}
+                  sx={{ pl: child.parent ? 5 : 2 }}
+                >
+                  <ListItemIcon><Icon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary={t(child.label)} />
+                </MenuItem>
+              );
+            })}
+          </Menu>
+          <Menu
+            anchorEl={helpAnchor}
+            open={Boolean(helpAnchor)}
+            onClose={() => setHelpAnchor(null)}
+            slotProps={{ list: { 'aria-label': t('nav.help') } }}
+          >
+            <MenuItem
+              component={Link}
+              href={HELP_PATH}
+              selected={pathname === HELP_PATH}
+              onClick={(event: React.MouseEvent) => { setHelpAnchor(null); handleNavClick(HELP_PATH)(event); }}
+            >
+              <ListItemIcon><MenuBookRounded fontSize="small" /></ListItemIcon>
+              <ListItemText primary={t('nav.helpApi')} />
+            </MenuItem>
+            <MenuItem onClick={() => { setHelpAnchor(null); startTour(); }}>
+              <ListItemIcon><SchoolRounded fontSize="small" /></ListItemIcon>
+              <ListItemText primary={t('nav.helpTutorials')} />
+            </MenuItem>
+            <ListSubheader>{t('nav.helpPages')}</ListSubheader>
+            {PAGE_HELP.map((page) => (
+              <MenuItem
+                key={page.doc}
+                component="a"
+                href={`${DOCS_BASE}${page.doc}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setHelpAnchor(null)}
+                sx={{ pl: 4 }}
+              >
+                <ListItemText primary={t(page.label)} />
+                <OpenInNewRounded fontSize="inherit" sx={{ ml: 1, color: 'text.secondary' }} />
+              </MenuItem>
+            ))}
+          </Menu>
         </Box>
       )}
 
@@ -775,6 +930,7 @@ export default function Navigation() {
             pathname={pathname}
             mobile
             onNavigate={handleDrawerNavClick}
+            onStartTour={() => { setDrawerOpen(false); startTour(); }}
           />
         </List>
 

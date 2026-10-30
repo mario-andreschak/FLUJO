@@ -28,7 +28,9 @@ export async function readClaudeOAuthAllowance(credential: string, signal: Abort
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => {});
-    throw new ClaudeAllowanceError(response.status === 401 || response.status === 403 ? 'usage-permission' : 'collection-failed');
+    // 401 usually means an access token that is being refreshed: an ordinary,
+    // retryable failure. Only 403 says this credential cannot read usage.
+    throw new ClaudeAllowanceError(response.status === 403 ? 'usage-permission' : 'collection-failed');
   }
   if (!response.body) throw new ClaudeAllowanceError('collection-failed');
   const reader = response.body.getReader();

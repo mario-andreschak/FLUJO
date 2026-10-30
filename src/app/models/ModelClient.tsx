@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import type { Flow } from '@/shared/types/flow';
+import { modelUsage } from '@/utils/shared/whereUsed';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Alert,
@@ -170,6 +172,18 @@ export default function ModelClient() {
     };
   }, [serviceReady, t]);
 
+  // Where-used (#1278): which agents and fallback policies use each model.
+  // Best effort — without flows the cards simply omit the "Used by" chip.
+  const [usageFlows, setUsageFlows] = useState<Flow[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve().then(() => flowService.loadFlows())
+      .then(loaded => { if (!cancelled) setUsageFlows(loaded); })
+      .catch(loadError => log.warn('Could not load agents for where-used', loadError));
+    return () => { cancelled = true; };
+  }, [models.length]);
+  const usage = useMemo(() => usageFlows ? modelUsage(usageFlows, models) : undefined, [usageFlows, models]);
+
   // Show loading spinner if service is not ready
   if (!serviceReady || !modelsLoaded) {
     log.debug('Waiting for model service to be ready...');
@@ -190,7 +204,11 @@ export default function ModelClient() {
     try {
       const service = getModelService();
       // First-time save of a new model creates it; otherwise update the existing record.
-      const result = isManualAddMode ? await service.addModel(model) : await service.updateModel(model);
+      // A duplicate keeps its source's stored credential (the modal only sees the mask).
+      const credentialSourceId = (newModelDraft as (Model & { credentialSourceId?: string }) | null)?.credentialSourceId;
+      const result = isManualAddMode
+        ? await service.addModel(credentialSourceId ? { ...model, credentialSourceId } as Model : model)
+        : await service.updateModel(model);
       if (result.success) {
         // Refresh models list
         const updatedModels = await service.loadModels();
@@ -226,6 +244,20 @@ export default function ModelClient() {
     setAddMenuAnchor(null);
     modalPushedByUsRef.current = true;
     router.push('/models?add=1');
+  };
+
+  /** Open the add modal pre-filled from an existing model (#1278). Its stored
+   * credential is copied by the server, never sent to the browser. */
+  const handleDuplicate = (source: Model) => {
+    log.info('Duplicating model', { modelId: source.id });
+    const { favorite: _favorite, ...settings } = source;
+    const taken = new Set(models.map(item => (item.displayName || '').toLowerCase()));
+    const base = t('models.duplicateName', { name: source.displayName || source.name });
+    let displayName = base;
+    for (let index = 2; taken.has(displayName.toLowerCase()); index++) displayName = `${base} ${index}`;
+    setNewModelDraft({ ...settings, id: uuidv4(), displayName, credentialSourceId: source.id } as Model);
+    modalPushedByUsRef.current = true;
+    router.push('/models?add=manual');
   };
 
   const handleManualAdd = () => {
@@ -566,6 +598,8 @@ export default function ModelClient() {
         onAdd={handleAdd}
         onUpdate={handleEdit}
         onDelete={handleDelete}
+        onDuplicate={handleDuplicate}
+        usage={usage}
         onConvertToAgent={handleOpenConversion}
         folders={collectFolders(models, (m) => m.folder)}
         onSetFolder={handleSetFolder}

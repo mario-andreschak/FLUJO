@@ -30,7 +30,8 @@ describe('update eligibility', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('newer versioned FLUJO installer');
     expect(screen.getByText(/Installed source:/)).toHaveTextContent('v3.45.2 · abcdef123456');
-    expect(screen.getByRole('button', { name: 'Update now' })).toBeDisabled();
+    // A pinned install never offers an in-app update it cannot perform (#1283).
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Get a newer installer' })).toHaveAttribute('href', 'https://github.com/mario-andreschak/FLUJO/releases/latest');
   });
 

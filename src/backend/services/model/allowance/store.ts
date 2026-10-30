@@ -34,17 +34,20 @@ export function recordAllowanceSnapshot(accountKey: string, snapshot: AllowanceS
   while (observations.size > MAX_OBSERVATIONS) observations.delete(observations.keys().next().value!);
 }
 
+/** A credential refused usage access is checked again after this long, not never:
+ * a refreshed login or plan change can grant it (the weekly limit stayed hidden). */
+export const USAGE_PERMISSION_RECHECK_MS = 6 * 60 * 60 * 1000;
+
 export function recordAllowanceFailure(accountKey: string, reason: AllowanceFailureReason = 'collection-failed', retryAt?: string): void {
   failures.delete(accountKey);
-  failures.set(accountKey, { at: Date.now(), reason, retryAt });
+  const recheckAt = retryAt ?? (reason === 'usage-permission' ? new Date(Date.now() + USAGE_PERMISSION_RECHECK_MS).toISOString() : undefined);
+  failures.set(accountKey, { at: Date.now(), reason, retryAt: recheckAt });
   while (failures.size > MAX_OBSERVATIONS) failures.delete(failures.keys().next().value!);
 }
 
 export function allowanceRefreshFailure(accountKey: string): AllowanceFailure | undefined {
   const attempted = failures.get(accountKey);
-  // A credential without usage access will not acquire that access after five
-  // minutes. Keep the negative result until an explicit check or identity change.
-  return attempted && (attempted.reason === 'usage-permission' || (attempted.retryAt && Date.parse(attempted.retryAt) > Date.now()) || Date.now() - attempted.at < 5 * 60 * 1000) ? attempted : undefined;
+  return attempted && ((attempted.retryAt && Date.parse(attempted.retryAt) > Date.now()) || Date.now() - attempted.at < 5 * 60 * 1000) ? attempted : undefined;
 }
 
 export function readAllowanceSnapshot(accountKey: string): AllowanceSnapshot | undefined {

@@ -18,7 +18,7 @@ if ($Probe) {
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($InstallScript, [ref]$tokens, [ref]$parseErrors)
     if ($parseErrors.Count) { throw 'Installer script does not parse.' }
-    $definitions = foreach ($name in @('Write-Step', 'Stop-Installer', 'Write-InstallerStage', 'Invoke-InstallerCommand')) {
+    $definitions = foreach ($name in @('Write-Step', 'Stop-Installer', 'Write-InstallerStage', 'Invoke-InstallerCommand', 'Invoke-InstallerCommandOnce')) {
         $definition = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name

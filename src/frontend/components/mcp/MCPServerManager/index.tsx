@@ -85,6 +85,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
+const MCP_JOURNEY_DISMISSED_KEY = 'flujo.mcpAgentJourney.dismissed';
 
 type FilterOption = 'all' | 'connected' | 'disconnected' | 'error' | 'enabled' | 'disabled' | 'stdio' | 'websocket' | 'sse' | 'streamable';
 /** How server cards are folded into collapsible sections: off, by user folder (#71), or by the active sort key (#73). */
@@ -115,6 +116,15 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showConnectionWizard, setShowConnectionWizard] = useState(false);
+  // A per-viewer convenience: unavailable storage simply shows the guide again.
+  const [journeyDismissed, setJourneyDismissed] = useState(false);
+  useEffect(() => {
+    try { setJourneyDismissed(window.localStorage.getItem(MCP_JOURNEY_DISMISSED_KEY) === '1'); } catch { /* storage unavailable */ }
+  }, []);
+  const dismissJourney = useCallback(() => {
+    setJourneyDismissed(true);
+    try { window.localStorage.setItem(MCP_JOURNEY_DISMISSED_KEY, '1'); } catch { /* storage unavailable */ }
+  }, []);
   const connectionWizardEpoch = useRef(0);
   const connectionWizardId = useId();
   const connectionWizardOpen = useRef(false);
@@ -889,7 +899,10 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         )}
       />
 
-      <McpAgentJourney servers={servers} onConnect={handleConnectApp} onInspect={handleOpenDetails} />
+      {/* A first-run guide: shown until an app is connected, unless hidden (#1278). */}
+      {!journeyDismissed && !servers.some((server) => server.status === 'connected' && !server.disabled) && (
+        <McpAgentJourney servers={servers} onConnect={handleConnectApp} onInspect={handleOpenDetails} onDismiss={dismissJourney} />
+      )}
 
       {/* Toolbar with search, sort, and bulk actions */}
       {/* #372: the outer spacing lives on the sticky wrapper (as padding rather

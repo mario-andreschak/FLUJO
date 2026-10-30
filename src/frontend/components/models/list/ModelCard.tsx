@@ -19,7 +19,11 @@ import {
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ScienceIcon from '@mui/icons-material/Science';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
+import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
+import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
+import { providerMark, providerGroupOf, PROVIDER_GROUP_COLORS } from '@/shared/types/model/providerGroups';
+import UsedByChip from '@/frontend/components/shared/UsedByChip';
+import type { WhereUsedRef } from '@/utils/shared/whereUsed';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
 import StarIcon from '@mui/icons-material/Star';
@@ -46,6 +50,10 @@ export interface ModelCardProps {
   /** Optional in selectable/picker mode; required on the management page. */
   onEdit?: () => void;
   onDelete?: () => void;
+  /** Start a new model from this one's settings (and stored credential). */
+  onDuplicate?: () => void;
+  /** Agents and fallback policies that use this model (management page only). */
+  usedBy?: readonly WhereUsedRef[];
   /** Convert this model into a saved Start → Process → Finish agent. */
   onConvertToAgent?: (modelId: string) => void;
   /** The model's current organizing folder (#80 / shared with #71). */
@@ -78,6 +86,8 @@ export const ModelCard = ({
   model,
   onEdit,
   onDelete,
+  onDuplicate,
+  usedBy,
   onConvertToAgent,
   folder,
   folders = [],
@@ -94,11 +104,8 @@ export const ModelCard = ({
   const { visualStyle } = useThemeUtils();
   const modern = visualStyle === 'modern';
   const providerProfile = getProviderProfile(model.provider, model.adapter);
-  const providerMark = ((model.fallbackPolicy ? 'Fallback Policy' : providerProfile.label).match(/[a-z0-9]+/gi) ?? [])
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join('')
-    .toUpperCase();
+  const providerInitials = providerMark(model.fallbackPolicy ? 'Fallback Policy' : providerProfile.label);
+  const providerColor = model.fallbackPolicy ? theme.palette.primary.main : PROVIDER_GROUP_COLORS[providerGroupOf(providerProfile.id)];
   const [testOpen, setTestOpen] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
@@ -180,14 +187,15 @@ export const ModelCard = ({
             display: 'grid',
             placeItems: 'center',
             borderRadius: 3,
-            color: 'primary.main',
-            background: `linear-gradient(145deg, ${alpha(theme.palette.primary.main, 0.18)}, ${alpha(theme.palette.secondary.main, 0.11)})`,
-            border: `1px solid ${alpha(theme.palette.primary.main, 0.18)}`,
+            // The same vendor accent as the provider picker (#1278).
+            color: providerColor,
+            background: `linear-gradient(145deg, ${alpha(providerColor, 0.18)}, ${alpha(theme.palette.secondary.main, 0.11)})`,
+            border: `1px solid ${alpha(providerColor, 0.24)}`,
             boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === 'dark' ? 0.08 : 0.55)}`,
           }}
         >
           <Typography variant="subtitle2" sx={{ fontWeight: 800, letterSpacing: '-0.02em' }}>
-            {providerMark}
+            {providerInitials}
           </Typography>
         </Box>
 
@@ -301,6 +309,7 @@ export const ModelCard = ({
           sx={{ mt: 1, maxWidth: '100%', height: 24, color: 'text.secondary' }}
         />
       )}
+      {usedBy && <Box sx={{ mt: 1 }}><UsedByChip refs={usedBy} label="model" /></Box>}
     </CardContent>
   ) : (
     <>
@@ -373,6 +382,7 @@ export const ModelCard = ({
             sx={{ mt: 1, maxWidth: '100%' }}
           />
         )}
+        {usedBy && <Box sx={{ mt: 1 }}><UsedByChip refs={usedBy} label="model" /></Box>}
       </CardContent>
     </>
   );
@@ -505,7 +515,20 @@ export const ModelCard = ({
             </Tooltip>
           )}
 
+          {/* Same vocabulary and order as agent cards: copy, move, link, edit, delete (#1278). */}
           <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 0.15 }}>
+            {onDuplicate && (
+              <Tooltip title={t('models.card.duplicate')} arrow>
+                <IconButton
+                  size="small"
+                  aria-label={t('models.card.duplicate')}
+                  onClick={onDuplicate}
+                  sx={{ color: 'text.secondary', '&:hover': { color: 'primary.main' } }}
+                >
+                  <ContentCopyRoundedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             {onSetFolder && (
               <Tooltip title={t('models.card.moveTooltip')} arrow>
                 <IconButton
@@ -514,7 +537,7 @@ export const ModelCard = ({
                   onClick={(e) => setFolderAnchorEl(e.currentTarget)}
                   sx={{ color: folder ? 'primary.main' : 'text.secondary', '&:hover': { color: 'primary.main' } }}
                 >
-                  <MoreVertIcon fontSize="small" />
+                  <DriveFileMoveOutlinedIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
@@ -532,15 +555,10 @@ export const ModelCard = ({
             <Tooltip title={t('models.card.deleteAria')} arrow>
               <IconButton
                 size="small"
+                color="error"
                 aria-label={t('models.card.deleteAria')}
                 onClick={onDelete}
-                sx={{
-                  color: 'text.secondary',
-                  '&:hover': {
-                    color: 'error.main',
-                    bgcolor: alpha(theme.palette.error.main, 0.08),
-                  },
-                }}
+                sx={{ '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.08) } }}
               >
                 <DeleteIcon fontSize="small" />
               </IconButton>
@@ -564,24 +582,30 @@ export const ModelCard = ({
               </IconButton>
             </Tooltip>
           )}
-          <IconButton aria-label={t('models.card.editAria')} onClick={onEdit}>
-            <EditIcon />
-          </IconButton>
-          <IconButton aria-label={t('models.card.deleteAria')} onClick={onDelete}>
-            <DeleteIcon />
-          </IconButton>
-          <CopyLinkButton target={{ kind: 'model', id: model.id }} />
+          <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center' }}>
+          {onDuplicate && (
+            <IconButton aria-label={t('models.card.duplicate')} onClick={onDuplicate}>
+              <ContentCopyRoundedIcon />
+            </IconButton>
+          )}
           {onSetFolder && (
             <Tooltip title={t('models.card.moveTooltip')} arrow>
               <IconButton
                 aria-label={t('models.card.moveAria')}
                 onClick={(e) => setFolderAnchorEl(e.currentTarget)}
-                sx={{ ml: 'auto' }}
               >
-                <MoreVertIcon />
+                <DriveFileMoveOutlinedIcon />
               </IconButton>
             </Tooltip>
           )}
+          <CopyLinkButton target={{ kind: 'model', id: model.id }} />
+          <IconButton aria-label={t('models.card.editAria')} onClick={onEdit}>
+            <EditIcon />
+          </IconButton>
+          <IconButton color="error" aria-label={t('models.card.deleteAria')} onClick={onDelete}>
+            <DeleteIcon />
+          </IconButton>
+          </Box>
         </CardActions>
       )}
 

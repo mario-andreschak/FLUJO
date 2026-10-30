@@ -561,3 +561,37 @@ function Protect-InstallerDiagnostic {
     }
     return $safe
 }
+
+# A Windows file lock held by a still-running FLUJO (or an antivirus scan)
+# makes npm fail with EBUSY/EPERM or libuv's UNKNOWN (errno -4094) on lstat,
+# unlink or rename (issue #1283). These are worth stopping FLUJO and retrying.
+function Test-InstallerTransientLockFailure {
+    param([AllowEmptyString()] [string]$Output)
+
+    if ([string]::IsNullOrEmpty($Output)) { return $false }
+    return [regex]::IsMatch($Output, '(?im)\b(EBUSY|EPERM|EACCES)\b|errno\s+-4094|resource busy or locked|UNKNOWN: unknown error, (lstat|unlink|rename|open|scandir)')
+}
+
+# Processes started from this install directory: the FLUJO server, its build or
+# dev tooling, and the MCP servers it launched from node_modules. Matching is a
+# case-insensitive prefix match on the executable path or a path inside the
+# command line, so unrelated Node processes are never selected.
+function Select-FlujoInstallProcesses {
+    param(
+        [object[]]$Processes = @(),
+        [Parameter(Mandatory)] [string]$InstallDir,
+        [int[]]$ExcludeProcessIds = @()
+    )
+
+    $root = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/') + '\'
+    $selected = @()
+    foreach ($process in $Processes) {
+        if ($null -eq $process -or $ExcludeProcessIds -contains [int]$process.ProcessId) { continue }
+        $executable = [string]$process.ExecutablePath
+        $commandLine = [string]$process.CommandLine
+        $inside = ($executable -and $executable.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) -or
+            ($commandLine -and $commandLine.IndexOf($root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        if ($inside) { $selected += $process }
+    }
+    return ,$selected
+}

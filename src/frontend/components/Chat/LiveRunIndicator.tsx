@@ -13,6 +13,23 @@ import { getWorkingMessage, WORKING_MESSAGE_INTERVAL_MS } from './workingMessage
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 
+const TOOL_PROGRESS_PREVIEW_CHARS = 160;
+
+/**
+ * A one-line status for a running tool. Progress messages can carry a tool's
+ * whole streamed output or raw JSON arguments (issue #1321); show only its
+ * latest non-empty line, whitespace-collapsed and bounded.
+ */
+export function toolProgressStatus(name: string, message?: string | null): string {
+  if (!message) return name;
+  const lines = message.split(/\r?\n/).map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const latest = lines.at(-1);
+  if (!latest) return name;
+  const preview = latest.length > TOOL_PROGRESS_PREVIEW_CHARS
+    ? `${latest.slice(0, TOOL_PROGRESS_PREVIEW_CHARS - 1)}…` : latest;
+  return `${name} — ${preview}`;
+}
+
 /** Live execution stats, driven by the SSE event stream while a run is active. */
 export interface LiveRunStats {
   totalTokens: number;
@@ -306,30 +323,37 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
     );
   }
 
+  const statusText = retryMessage ?? (awaitingApproval
+    ? t('chat.live.waitingApproval')
+    : liveStats?.activeNode ? t('chat.live.running', { node: liveStats.activeNode }) : t('chat.live.working'));
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5, minWidth: 0, maxWidth: '100%' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%', px: 1 }}>
         {awaitingApproval ? (
           <PauseCircleOutlineIcon fontSize="small" color="warning" />
         ) : (
-          <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
+          <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} sx={{ flexShrink: 0 }} />
         )}
         {/* The component's single live region: run status, approval wait, or
           * the #400 retry countdown. Queries for the announced text should
           * target role="status" (or data-testid run-status / retry-wait), never
-          * "the first [aria-live] node". */}
-        <Typography
-          variant="body2"
-          color={retryMessage ? 'warning.main' : 'textSecondary'}
-          data-testid={retryMessage ? 'retry-wait' : 'run-status'}
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {retryMessage ?? (awaitingApproval
-            ? t('chat.live.waitingApproval')
-            : liveStats?.activeNode ? t('chat.live.running', { node: liveStats.activeNode }) : t('chat.live.working'))}
-        </Typography>
+          * "the first [aria-live] node". One line: a long tool status must not
+          * cover the conversation (#1321); the full text is in the tooltip. */}
+        <Tooltip title={statusText} placement="top">
+          <Typography
+            variant="body2"
+            noWrap
+            color={retryMessage ? 'warning.main' : 'textSecondary'}
+            data-testid={retryMessage ? 'retry-wait' : 'run-status'}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            sx={{ minWidth: 0, maxWidth: { xs: '60vw', md: 640 } }}
+          >
+            {statusText}
+          </Typography>
+        </Tooltip>
         <Button
           variant="outlined"
           color="secondary"

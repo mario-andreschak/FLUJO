@@ -123,11 +123,12 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       'href',
       '/automation/triggers',
     );
-    expect(within(moreSections).getByRole('tab', { name: 'Help' })).toHaveAttribute('href', '/docs');
+    expect(within(moreSections).getByRole('tab', { name: 'Help' })).toHaveAttribute('aria-haspopup', 'menu');
     expect(within(moreSections).getByRole('tab', { name: 'Settings' })).toHaveAttribute('href', '/settings');
     expect(within(moreSections).getByRole('tab', { name: 'Meetings' })).toHaveAttribute('href', '/meetings');
     // Roles, Extensions, and Activity are experimental too, so they stay hidden
     // until settings hydrate and confirm experiments are on.
+    expect(within(moreSections).queryByRole('tab', { name: /Experimental/ })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Roles' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Extensions' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Activity' })).toBeNull();
@@ -143,12 +144,8 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
 
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
     const tabs = within(moreSections).getAllByRole('tab');
-    expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
-      '/automation/triggers',
-      '/meetings',
-      '/docs',
-      '/settings',
-    ]);
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['Automations', 'Meetings', 'Help', 'Settings']);
+    expect(within(moreSections).queryByRole('tab', { name: /Experimental/ })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Personas' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Roles' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Extensions' })).toBeNull();
@@ -169,9 +166,8 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       render(<Navigation />);
 
       const moreSections = screen.getByRole('tablist', { name: 'More sections' });
-      const waves = within(moreSections).getByRole('tab', { name: 'Waves' });
-      expect(waves).toHaveAttribute('href', '/automation/waves');
-      expect(waves).toHaveAttribute('aria-selected', 'true');
+      const experimental = within(moreSections).getByRole('tab', { name: 'Experimental · Waves' });
+      expect(experimental).toHaveAttribute('aria-selected', 'true');
       expect(within(moreSections).getByRole('tab', { name: 'Automations' })).toHaveAttribute(
         'aria-selected',
         'false',
@@ -189,9 +185,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     render(<Navigation />);
 
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
-    const personas = within(moreSections).getByRole('tab', { name: 'Personas' });
-    expect(personas).toHaveAttribute('href', '/personas');
-    expect(personas).toHaveAttribute('aria-selected', 'true');
+    expect(within(moreSections).getByRole('tab', { name: 'Experimental · Personas' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('selects Chain Chat in More when its experimental route is open', () => {
@@ -204,9 +198,9 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     render(<Navigation />);
 
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
-    const chainChat = within(moreSections).getByRole('tab', { name: 'Chain Chat' });
-    expect(chainChat).toHaveAttribute('href', '/chain-chat');
-    expect(chainChat).toHaveAttribute('aria-selected', 'true');
+    expect(within(moreSections).getByRole('tab', { name: 'Experimental · Chain Chat' })).toHaveAttribute('aria-selected', 'true');
+    // A group wider than the window scrolls instead of hiding its first sections (#1320).
+    expect(moreSections.closest('.MuiTabs-root')?.querySelector('.MuiTabs-scrollableX')).not.toBeNull();
   });
 
   it('puts experimental Personas and stable Roles in More when experiments are enabled', () => {
@@ -220,35 +214,45 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
 
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
     const tabs = within(moreSections).getAllByRole('tab');
-    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
-      'Harness Lab',
-      'Automations',
-      'Meetings',
-      'Personas',
-      'Roles',
-      'Extensions',
-      'Activity',
-      'Chain Chat',
-      'Waves',
-      'Help',
-      'Settings',
-    ]);
-    expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
-      '/harness',
-      '/automation/triggers',
-      '/meetings',
-      '/personas',
-      '/roles',
-      '/packages',
-      '/statistics',
-      '/chain-chat',
-      '/automation/waves',
-      '/docs',
-      '/settings',
-    ]);
+    // Experimental sections share one menu (#1278); Harness Lab waits for its own switch (#1320).
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['Automations', 'Meetings', 'Experimental', 'Help', 'Settings']);
     expect(within(moreSections).getByRole('tab', { name: 'Automations' })).toHaveAttribute(
       'aria-selected',
       'true',
+    );
+
+    fireEvent.click(within(moreSections).getByRole('tab', { name: 'Experimental' }));
+    const menu = screen.getByRole('menu', { name: 'Experimental' });
+    const items = within(menu).getAllByRole('menuitem');
+    expect(items.map((item) => item.textContent?.trim())).toEqual(['Personas', 'Roles', 'Extensions', 'Activity', 'Chain Chat', 'Waves']);
+    expect(items.map((item) => item.getAttribute('href'))).toEqual([
+      '/personas', '/roles', '/packages', '/statistics', '/chain-chat', '/automation/waves',
+    ]);
+  });
+
+  it('shows Harness Lab only once its own switch is on', () => {
+    mockPathname = '/automation/triggers';
+    mockStorageValue = {
+      settings: { experimental: { enabled: true, harnessLabEnabled: true } },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<Navigation />);
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'More sections' })).getByRole('tab', { name: 'Experimental' }));
+    expect(within(screen.getByRole('menu', { name: 'Experimental' })).getByRole('menuitem', { name: 'Harness Lab' }))
+      .toHaveAttribute('href', '/harness');
+  });
+
+  it('offers API reference, tutorials and per-page help from the Help menu', () => {
+    mockPathname = '/settings';
+    mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
+    render(<Navigation />);
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'More sections' })).getByRole('tab', { name: 'Help' }));
+    const menu = screen.getByRole('menu', { name: 'Help' });
+    expect(within(menu).getByRole('menuitem', { name: 'API reference' })).toHaveAttribute('href', '/docs');
+    expect(within(menu).getByRole('menuitem', { name: 'Tutorials' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'Connected Apps' })).toHaveAttribute(
+      'href', 'https://github.com/mario-andreschak/FLUJO/blob/main/docs/features/mcp',
     );
   });
 

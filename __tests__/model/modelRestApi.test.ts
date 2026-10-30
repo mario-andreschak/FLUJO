@@ -78,6 +78,23 @@ describe('Model REST API', () => {
     expect(created.ApiKey).toBe(MASKED_API_KEY);
   });
 
+  it('a duplicate created from the masked key copies its source credential server-side (#1278)', async () => {
+    await createModel(req(modelFixture()));
+    const res = await createModel(req({
+      ...modelFixture({ id: 'm2', displayName: 'GPT Test (copy)', name: 'gpt-other' }),
+      ApiKey: MASKED_API_KEY,
+      credentialSourceId: 'm1',
+    }));
+    expect(res.status).toBe(201);
+    const stored = store['models'] as Array<Model & { credentialSourceId?: string }>;
+    const copy = stored.find(model => model.id === 'm2')!;
+    expect(copy.ApiKey).toBe('encrypted:sk-secret-123');
+    expect(copy.credentialSourceId).toBeUndefined();
+    // Without a source, the mask never becomes a key.
+    await createModel(req({ ...modelFixture({ id: 'm3', displayName: 'No source' }), ApiKey: MASKED_API_KEY }));
+    expect((store['models'] as Model[]).find(model => model.id === 'm3')!.ApiKey).toBe('');
+  });
+
   it('allows two models sharing a technical name when display names differ', async () => {
     // The technical name is the provider's model id and may legitimately repeat
     // (e.g. two "openrouter/auto" entries with different keys); only the display

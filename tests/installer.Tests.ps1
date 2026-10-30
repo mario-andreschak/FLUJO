@@ -141,6 +141,39 @@ Describe 'Installer checkout safety decisions' {
     }
 }
 
+Describe 'Updating over a running FLUJO (#1283)' {
+    It 'recognizes Windows file-lock failures from npm' {
+        Test-InstallerTransientLockFailure -Output 'npm error errno -4094' | Should -BeTrue
+        Test-InstallerTransientLockFailure -Output "npm error UNKNOWN: unknown error, lstat 'C:\x\node_modules\@mario.andreschak\mcp-bash\dist\index.js'" | Should -BeTrue
+        Test-InstallerTransientLockFailure -Output 'npm error code EBUSY' | Should -BeTrue
+        Test-InstallerTransientLockFailure -Output 'npm error code EPERM' | Should -BeTrue
+        Test-InstallerTransientLockFailure -Output 'npm error 404 Not Found - GET https://registry.npmjs.org/x' | Should -BeFalse
+        Test-InstallerTransientLockFailure -Output '' | Should -BeFalse
+    }
+
+    It 'selects only processes running from the install directory' {
+        $processes = @(
+            [PSCustomObject]@{ ProcessId = 10; ExecutablePath = 'C:\Program Files\nodejs\node.exe'; CommandLine = '"node" "C:\Users\a\AppData\Local\FLUJO\node_modules\next\dist\bin\next" start' }
+            [PSCustomObject]@{ ProcessId = 11; ExecutablePath = 'C:\Program Files\nodejs\node.exe'; CommandLine = 'node C:\Users\a\AppData\Local\flujo\node_modules\@mario.andreschak\mcp-bash\dist\index.js' }
+            [PSCustomObject]@{ ProcessId = 12; ExecutablePath = 'C:\Program Files\nodejs\node.exe'; CommandLine = 'node C:\Users\a\AppData\Local\FLUJO-cli\other.js' }
+            [PSCustomObject]@{ ProcessId = 13; ExecutablePath = 'C:\Program Files\nodejs\node.exe'; CommandLine = 'node C:\work\unrelated\server.js' }
+            [PSCustomObject]@{ ProcessId = 14; ExecutablePath = 'C:\Users\a\AppData\Local\FLUJO\node_modules\.bin\esbuild.exe'; CommandLine = $null }
+            [PSCustomObject]@{ ProcessId = 15; ExecutablePath = 'C:\Program Files\nodejs\node.exe'; CommandLine = 'node C:\Users\a\AppData\Local\FLUJO\scripts\launch-next.mjs' }
+        )
+        $selected = Select-FlujoInstallProcesses -Processes $processes -InstallDir 'C:\Users\a\AppData\Local\FLUJO\' -ExcludeProcessIds @(15)
+        @($selected | ForEach-Object { $_.ProcessId }) | Should -Be @(10, 11, 14)
+    }
+
+    It 'stops a running FLUJO before installing dependencies and retries a locked npm ci' {
+        $source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\scripts\install.ps1') -Raw
+        $stop = $source.IndexOf('Stop-FlujoInstallProcesses -InstallDir $InstallDir', $source.IndexOf('# 4. Install dependencies and build.'))
+        $npm = $source.IndexOf("-Stage 'npm-dependencies'")
+        $stop | Should -BeGreaterThan 0
+        $stop | Should -BeLessThan $npm
+        $source | Should -Match "-Stage 'npm-dependencies'[^\r\n]+-LockRetries 2"
+    }
+}
+
 Describe 'Windows installer generated payloads' {
     It 'builds the complete uninstall manifest in memory' {
         $prerequisite = New-PrerequisiteRecord -CommandName 'git' -WingetId 'Git.Git' -DisplayName 'Git' -Preexisting $false
@@ -596,7 +629,7 @@ Describe 'Corporate-network installer source contracts' {
         )
         $errors | Should -HaveCount 0
 
-        $definitions = foreach ($name in @('Stop-Installer', 'Invoke-InstallerCommand')) {
+        $definitions = foreach ($name in @('Stop-Installer', 'Invoke-InstallerCommand', 'Invoke-InstallerCommandOnce')) {
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -611,6 +644,7 @@ Describe 'Corporate-network installer source contracts' {
         $probeSource = @(
             'function Write-InstallerStage { param([string]$Name, [string]$State = ''started'', [int]$ExitCode = 0) }'
             'function Protect-InstallerDiagnostic { param([string]$Text, [string[]]$SensitiveValues = @()); $Text }'
+            'function Test-InstallerTransientLockFailure { param([string]$Output) $false }'
             $definitions
             '$script:InstallerSensitiveValues = @()'
             "`$script:InstallerLogPath = '$($logPath.Replace("'", "''"))'"

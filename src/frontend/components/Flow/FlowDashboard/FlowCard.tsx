@@ -35,6 +35,8 @@ import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
+import UsedByChip from '@/frontend/components/shared/UsedByChip';
+import type { WhereUsedRef } from '@/utils/shared/whereUsed';
 import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
@@ -57,6 +59,8 @@ interface FlowCardProps {
   folders?: string[];
   /** Consistency-check result; drives the problem badge. */
   validation?: FlowValidationResult;
+  /** Agents that call this flow as a subflow (management dashboard only). */
+  subflowUsedBy?: readonly WhereUsedRef[];
   /**
    * When true, the card is used purely to *select* a flow (#92): all
    * management actions (edit/copy/folder/delete) are hidden so the picker and
@@ -147,6 +151,7 @@ const FlowCard = ({
   onToggleFavorite,
   folders = [],
   validation,
+  subflowUsedBy,
   pickerMode = false,
   selectionManaged = false,
   disabled = false,
@@ -498,7 +503,12 @@ const FlowCard = ({
       
       {!pickerMode && !selectionMode && (
         <>
-          <CardActions sx={{ gridArea: 'primary', gap: 0.75, px: 1.25, pb: 1, pt: 0 }}>
+          {/* Outside the card's action area so the chip is not a button inside a button. */}
+          <Box sx={{ gridArea: 'primary', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', minWidth: 0 }}>
+          {subflowUsedBy && subflowUsedBy.length > 0 && (
+            <Box sx={{ px: 1.25, pb: 0.75 }}><UsedByChip refs={subflowUsedBy} label="subflow" /></Box>
+          )}
+          <CardActions sx={{ gap: 0.75, px: 1.25, pb: 1, pt: 0 }}>
             {onOpenInChat && (
               <Button
                 size="small"
@@ -522,6 +532,7 @@ const FlowCard = ({
               {t('flows.card.edit')}
             </Button>
           </CardActions>
+          </Box>
 
           <CardActions
             sx={{

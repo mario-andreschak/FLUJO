@@ -174,10 +174,14 @@ class ModelService {
 
       // Encrypt the API key before persisting. A brand-new model's first save arrives here
       // with the plaintext key the user typed (or a "${global:VAR}" binding), so this is the
-      // point that prevents an unencrypted key from being written to disk.
+      // point that prevents an unencrypted key from being written to disk. A duplicate
+      // arrives with the masked placeholder and names its source: its stored key is
+      // copied server-side, so the browser never holds it (#1278).
+      const { credentialSourceId, ...incoming } = model as Model & { credentialSourceId?: unknown };
+      const credentialSource = typeof credentialSourceId === 'string' ? models.find(item => item.id === credentialSourceId) : undefined;
       const modelToSave: Model = {
-        ...model,
-        ApiKey: await this.resolveApiKeyForSave(model.ApiKey, undefined)
+        ...incoming,
+        ApiKey: await this.resolveApiKeyForSave(incoming.ApiKey, credentialSource?.ApiKey)
       };
 
       // Add the new model

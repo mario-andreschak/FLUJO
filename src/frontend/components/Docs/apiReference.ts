@@ -27,6 +27,8 @@ export interface ApiEndpoint {
   /** Label for the `params` list, e.g. "Body" or "Query". */
   paramsLabel?: 'Body' | 'Query' | 'Form data';
   params?: ApiParam[];
+  /** A write that takes no request body states it explicitly (#1278). */
+  requestBody?: 'none';
   /** Short description of the success response shape. */
   response?: string;
   /** Caveats — especially secret-handling notes. */
@@ -67,7 +69,7 @@ export function workspaceHeaderForReference(workspace: string): string | null {
     : `x-flujo-workspace: ${workspace}`;
 }
 
-export const API_GROUPS: ApiGroup[] = [
+const CURATED_GROUPS: ApiGroup[] = [
   {
     id: 'workspaces',
     name: 'Workspaces',
@@ -640,3 +642,73 @@ export const API_GROUPS: ApiGroup[] = [
     ],
   },
 ];
+
+const p = (name: string, type: string, description: string, required = false): ApiParam => ({ name, type, required, description });
+
+/**
+ * Request and response details for endpoints whose curated entry lacked them
+ * (#1278: some writes only said "POST"). Read from each route handler. Fields
+ * here only fill gaps; a curated entry's own values always win.
+ */
+const REFERENCE_DETAILS: Record<string, Partial<ApiEndpoint>> = {
+  'PATCH /api/workspaces': { paramsLabel: 'Body', params: [p('name', 'string', 'Current workspace name.', true), p('newName', 'string', 'New name; send the same value as name to change only roots.', true), p('roots', 'string[]', 'Unique absolute folder paths (max 64); replaces the workspace roots.')], response: '{ workspace, workspaces } · 400 invalid name/roots · 403 default workspace · 404 · 409 name exists · 503 layout unavailable' },
+  'DELETE /api/workspaces': { paramsLabel: 'Body', params: [p('name', 'string', 'Workspace to delete.', true)], response: '{ deleted, workspaces } · 400 · 403 default workspace · 404 · 409 · 503' },
+  'GET /api/tickets': { paramsLabel: 'Query', params: [p('status', "'open' | 'done'", 'Filter by status.'), p('label', 'string', 'Filter by label.'), p('search', 'string', 'Text search.'), p('limit', 'integer', 'Page size (default 20).'), p('offset', 'integer', 'Page offset (default 0).'), p('presence', 'string', '1 returns only a count.')], response: '{ items: Ticket[], total, hasMore } · with presence=1: { count }' },
+  'POST /api/tickets': { paramsLabel: 'Body', params: [p('message', 'string', '1–4000 characters.', true), p('labels', 'string[]', 'Up to 12 labels (a single string is accepted).'), p('title', 'string', 'Up to 120 characters.'), p('conversationId', 'string', 'Originating conversation.'), p('messageId', 'string', 'Originating message.'), p('flowId', 'string', 'Originating agent.'), p('nodeId', 'string', 'Originating node (max 128).'), p('source', "'agent' | 'host'", 'Who created the ticket.')] },
+  'DELETE /api/tickets': { paramsLabel: 'Body', params: [p('ids', 'string[]', 'Ticket ids to delete (at most 500).', true)], response: '{ deleted, errors } · 400 invalid ids' },
+  'GET /v1/personas': { response: 'Persona[]' },
+  'POST /v1/personas': { paramsLabel: 'Body', params: [p('name', 'string', '1–160 characters.', true), p('roleVersionId', 'string', 'Role version to create the Persona from.', true), p('id', 'string', 'Optional explicit id.'), p('coreFlowRef', 'string', 'Core agent reference.'), p('behaviorFlowRefs', 'string[]', 'Behavior agent references (max 64).'), p('appRefs', 'string[]', 'Connected app (MCP server) names (max 128).'), p('mission', 'string', 'Up to 20000 characters.'), p('presentation', 'object', '{ avatarUrl?, language? }'), p('autonomyLevel', "'locked' | 'learn_hints' | 'propose_overrides' | 'auto_apply_validated'", 'How the Persona may adapt.'), p('interruptionPolicy', "'queue' | 'related_only' | 'allow_urgent'", 'How new work interrupts.'), p('idempotencyKey', 'string', 'Deduplicates retries.'), p('initialMemories', 'object[]', 'Up to 100 { content, kind?, scope?, confidence?, importance?, sourceRefs? }.')], response: '201 PersonaBundle { persona, roleVersion, behaviorBindings, behaviorRevisions, appGrants, memoryItems, workItems, activities, mailboxItems, lease } · 400 · 404 role version · 409 conflict' },
+  'GET /v1/roles': { paramsLabel: 'Query', params: [p('includeArchived', 'boolean', 'Include archived definitions.')], response: '{ roleDefinitions, roleVersions, roles: PublicRole[] }' },
+  'POST /v1/roles': { paramsLabel: 'Body', params: [p('name', 'string', '1–160 characters.', true), p('prompt', 'string', '1–20000 characters.', true), p('id', 'string', 'Optional explicit id.'), p('suggestedApps', 'object[]', 'Up to 64 { mcpServerName }.')], response: '201 PublicRole { id, name, prompt, suggestedApps, behaviors, archived, currentVersionId, createdAt, updatedAt } · 400 · 409 exists' },
+  'POST /v1/chat/conversations': { paramsLabel: 'Body', params: [p('id', 'string', 'Conversation id.', true), p('flowId', 'string', 'Agent id; exactly null for a Persona chat.', true), p('title', 'string', 'Title (a default is used when omitted).'), p('createdAt', 'number', 'Epoch ms (defaults to now).'), p('updatedAt', 'number', 'Epoch ms (defaults to now).'), p('flowSnapshot', 'object', 'Inline agent for a Quick Chat.'), p('personaTargetId', 'string', 'Persona to talk to.'), p('personaBehaviorSlotKey', 'string', "Persona role or Behavior (default 'primary').")], response: '201 { id, title, flowId, createdAt, updatedAt, status, source, personaId?, personaBehaviorSlotKey? } · 400 · 404 Persona · 409' },
+  'POST /v1/chat/conversations/{conversationId}/respond': { paramsLabel: 'Body', params: [p('action', "'approve' | 'reject' | 'elicitation-submit' | 'elicitation-cancel' | 'question-answer' | 'question-decline' | 'cancelToolCall'", 'What to answer.', true), p('toolCallId', 'string', 'Required for approve, reject and cancelToolCall.'), p('elicitationId', 'string', 'Required for elicitation-*.'), p('content', 'object', 'Form values for elicitation-submit.'), p('questionId', 'string', 'Required for question-*.'), p('answers', 'string[][]', 'Required for question-answer.')], response: '{ status, conversation_id, pendingToolCalls? } or, once every pending call is handled, the chat-completion result · 400 · 404 nothing pending · 409' },
+  'POST /v1/chat/conversations/{conversationId}/cancel': { requestBody: 'none', response: '{ success, message } (an unknown conversation is treated as already cancelled) · Persona: 200/202 { success, message, dispatch_id, dispatch_state } · 409 · 500' },
+  'PUT /v1/chat/conversations/{conversationId}/breakpoints': { paramsLabel: 'Body', params: [p('breakpoints', 'string[]', 'Node ids to pause before.', true)], response: '{ success, breakpoints } · 400 · 404 · 409' },
+  'POST /v1/chat/conversations/{conversationId}/debug/step': { requestBody: 'none', response: "{ status: 'paused_debug', conversation_id, debugState } or the chat-completion result · 404 · 409 not paused · 500" },
+  'POST /v1/chat/conversations/{conversationId}/debug/continue': { requestBody: 'none', response: 'Same shapes as debug/step; runs to the next natural stop · 404 · 409 not paused · 500' },
+  'PATCH /v1/chat/conversations/{conversationId}/edit-state': { paramsLabel: 'Body', params: [p('messageId', 'string', 'Message to edit (send with content).'), p('content', 'string', 'New message text.'), p('currentNodeId', 'string', 'Node to run next.')], response: '{ success, debugState } · 400 nothing to apply · 404 · 409 not paused' },
+  'GET /api/model': { response: 'Model[] (credentials masked)' },
+  'GET /api/model/{id}': { response: 'Model (credentials masked) · 404' },
+  'POST /api/model/provider': { paramsLabel: 'Body', params: [p('baseUrl', 'string', 'Provider URL (not needed for native CLI/SDK profiles).'), p('modelId', 'string', 'Saved model whose stored key should be used.'), p('searchTerm', 'string', 'Filter (max 200).'), p('apiKey', 'string', 'Key for a model that is not saved yet; never echoed back.'), p('profileId', 'string', 'Provider profile id.')], response: '{ models: [{ id, name, description?, contextWindow?, maxTokens?, reasoningEfforts? }] } · 400 · 500' },
+  'GET /api/flow': { response: 'Flow[]' },
+  'GET /api/flow/{id}': { response: 'Flow · 404' },
+  'POST /api/flow/prompt-renderer': { paramsLabel: 'Body', params: [p('flowId', 'string', 'Agent id.', true), p('nodeId', 'string', 'Node to render.', true), p('options', 'object', '{ renderMode?, includeConversationHistory?, excludeModelPrompt?, excludeStartNodePrompt?, excludeSystemPrompt? }')], response: '{ prompt } · 400 · 500' },
+  'GET /api/planned-executions/{id}': { response: 'PlannedExecution · 404' },
+  'GET /api/planned-executions/{id}/runs': { response: '{ runs: RunRecord[] } (newest 100, oldest first) · 404' },
+  'POST /api/planned-executions/{id}/run': { requestBody: 'none', response: '{ record: RunRecord } after the run finishes · 404 · 500' },
+  'POST /api/webhooks/{id}': { paramsLabel: 'Body', params: [p('(payload)', 'object', 'Any JSON (or text) up to 256 KB, handed to the agent as trigger context.')], response: '202 { accepted: true, runId } · 400 · 401 token · 403 · 404 · 409 busy/disabled · 413 · 423 · 428 · 503' },
+  'GET /api/mcp/servers': { response: 'MCPServerConfig[] (secret headers and client secrets masked)' },
+  'GET /api/mcp/servers/{name}': { response: 'MCPServerConfig · 404 · 500' },
+  'POST /api/mcp/servers/{name}/tools/{toolName}': { paramsLabel: 'Body', params: [p('args', 'object', 'Tool arguments.', true), p('timeout', 'number', 'Milliseconds.'), p('source', "'app'", 'Route through MCP App visibility checks.'), p('ownerScope', 'string', "Only with source 'app'.")], response: '{ success, data?, error? } with the tool result status (e.g. 408 on timeout) · 400' },
+  'POST /api/mcp/test-connection': { paramsLabel: 'Body', params: [p('transport', 'string', 'The server configuration to test (an MCPServerConfig).', true), p('storedName', 'string', 'Name before editing, used to fill in masked secrets.')], response: 'Always 200 { success, data?, error? } · 400 missing transport · 500' },
+  'POST /api/mcp/cancel': { paramsLabel: 'Body', params: [p('reason', 'string', "Defaults to 'User cancelled operation'; send {} for no reason.")], response: '{ success } · 400 missing serverName query · 403 · 404 not connected' },
+  'POST /api/oauth/initiate': { paramsLabel: 'Body', params: [p('serverName', 'string', 'A streamable-HTTP MCP server.', true)], response: '{ authorizationUrl, serverName } or { alreadyAuthorized: true, serverName } · 400 · 404 · 409 in progress' },
+  'GET /api/oauth/callback': { paramsLabel: 'Query', params: [p('code', 'string', 'Authorization code.'), p('state', 'string', 'OAuth state.'), p('error', 'string', 'Provider error.'), p('iss', 'string', 'Issuer.')], response: 'Redirect to /mcp with oauth_success=<server> or oauth_error=<reason>' },
+  'POST /api/oauth/reset': { paramsLabel: 'Body', params: [p('serverName', 'string', 'Server whose stored OAuth tokens are removed.', true)], response: '{ success, message } · 400 · 404' },
+  'GET /api/env': { paramsLabel: 'Query', params: [p('key', 'string', 'One variable.'), p('includeSecrets', 'boolean', 'Unmask secret values (local owner only).')], response: '{ variables: { [name]: { value, metadata } } } or { value, metadata } for one key; secrets masked by default' },
+  'POST /api/encryption/secure': { paramsLabel: 'Body', params: [p('action', "'status' | 'initialize' | 'initialize_default' | 'change_password' | 'authenticate' | 'logout' | 'encrypt' | 'verify_password' | 'check_initialized' | 'check_user_encryption' | 'get_encryption_type'", 'Operation; password-bearing actions take their password fields in the body.', true)], response: 'Depends on action, e.g. { initialized, locked, protection } for status, { success, token } for authenticate · 400 · 401 · 409 · 423' },
+  'GET /api/storage': { paramsLabel: 'Query', params: [p('key', 'string', 'Storage key (reserved keys are rejected).', true), p('defaultValue', 'string', 'JSON value returned when the key is unset.')], response: '{ value } · 400 · 500' },
+  'POST /api/backup': { paramsLabel: 'Body', params: [p('selections', 'string[]', "Any of 'models', 'mcpServers', 'flows', 'chatHistory', 'settings', 'globalEnvVars'.", true)], response: 'application/zip (flujo-backup.zip), X-Flujo-Backup-Status: complete | partial; credentials omitted · 400 · 403' },
+  'POST /api/restore': { paramsLabel: 'Form data', params: [p('file', 'file', 'The backup zip.', true), p('selections', 'string', 'JSON array of sections to restore.', true)], response: "{ success, status: 'complete' | 'partial' | 'failed' | 'empty', selectionResults } · 400 · 409 · 500" },
+  'GET /api/init': { response: '{ success, message } · 500 { success: false, error }' },
+  'GET /api/cwd': { response: '{ success, cwd, mcpServersDir } · 500' },
+  'POST /api/git': { paramsLabel: 'Body', params: [p('action', "'exists' | 'run' | 'install' | 'installStream' | 'clone' | 'build' | 'buildStream' | 'readFile' | 'listDir' | 'list' | 'checkUpdates' | 'checkUpdatesBatch' | 'pullUpdates'", 'Operation.', true), p('savePath', 'string', 'Repository folder (all actions except list and checkUpdatesBatch).'), p('repoUrl', 'string', 'Required for clone.'), p('branch', 'string', 'Clone branch.'), p('installCommand', 'string', 'For install.'), p('buildCommand', 'string', 'For build.'), p('runCommand', 'string', 'For run.'), p('args', 'string[]', 'For run.'), p('paths', 'string[]', 'Required for checkUpdatesBatch.')], response: 'Depends on action, e.g. { success, exists } · { success, path, relativePath, commandOutput } · NDJSON stream for *Stream · 400 · 403 · 500' },
+  'POST /mcp-proxy/{server}': { paramsLabel: 'Body', params: [p('jsonrpc', "'2.0'", 'MCP JSON-RPC message.', true), p('id', 'string', 'Request id (omit for notifications).'), p('method', 'string', 'initialize, tools/list, tools/call, resources/*', true), p('params', 'object', 'Method parameters.')], response: 'JSON-RPC response, or 202 for notifications · requires Accept: application/json, text/event-stream · 403 · 404 · 406 · 415' },
+  'POST /mcp-flows': { paramsLabel: 'Body', params: [p('jsonrpc', "'2.0'", 'MCP JSON-RPC message.', true), p('id', 'string', 'Request id (omit for notifications).'), p('method', 'string', 'initialize, tools/list, tools/call', true), p('params', 'object', 'Method parameters.')], response: 'JSON-RPC response, or 202 for notifications · 403 · 413 · 500' },
+};
+
+/** The curated reference with every endpoint's request and response filled in. */
+export const API_GROUPS: ApiGroup[] = CURATED_GROUPS.map(group => ({
+  ...group,
+  endpoints: group.endpoints.map(endpoint => {
+    const details = REFERENCE_DETAILS[`${endpoint.method} ${endpoint.path}`];
+    if (!details) return endpoint;
+    const hasParams = Boolean(endpoint.params?.length);
+    return {
+      ...endpoint,
+      ...(hasParams || !details.params ? {} : { params: details.params, paramsLabel: details.paramsLabel ?? endpoint.paramsLabel }),
+      ...(endpoint.requestBody || hasParams || !details.requestBody ? {} : { requestBody: details.requestBody }),
+      response: endpoint.response ?? details.response,
+    };
+  }),
+}));

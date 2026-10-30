@@ -38,6 +38,7 @@ import {
 } from '@/utils/shared/modelGrouping';
 import { Model } from '@/shared/types';
 import { ModelResult } from '@/frontend/services/model';
+import type { WhereUsedRef } from '@/utils/shared/whereUsed';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
@@ -50,6 +51,10 @@ interface ModelListProps {
   onAdd: () => void;
   onUpdate: (model: Model) => Promise<ModelResult>;
   onDelete: (id: string) => Promise<void>;
+  /** Start a new model from an existing one's settings. */
+  onDuplicate?: (model: Model) => void;
+  /** Model id -> agents and policies that use it; omitted until loaded. */
+  usage?: Record<string, WhereUsedRef[]>;
   /** Open the saved-agent conversion dialog for this model. */
   onConvertToAgent?: (modelId: string) => void;
   /** Existing folders on the Models surface, for the "Move to folder…" picker. */
@@ -69,6 +74,8 @@ export const ModelList = ({
     onAdd,
     onUpdate,
     onDelete,
+    onDuplicate,
+    usage,
     onConvertToAgent,
     folders = [],
     onSetFolder,
@@ -160,6 +167,8 @@ export const ModelList = ({
                         model={model}
                         onEdit={() => handleUpdate(model)}
                         onDelete={() => onDelete(model.id)}
+                        onDuplicate={onDuplicate && !model.fallbackPolicy ? () => onDuplicate(model) : undefined}
+                        usedBy={usage ? usage[model.id] ?? [] : undefined}
                         onConvertToAgent={onConvertToAgent}
                         folder={model.folder}
                         folders={folders}
