@@ -18,7 +18,7 @@ import {
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { prepareModelInputMaterialization, finalizeModelInputMaterialization } from '../materializeModelInput';
-import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
+import { resolveFrozenSystemPrompt } from '../systemPromptFreeze';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 import { buildSubflowTool } from '../handlers/subflowToolInvocation';
@@ -846,11 +846,11 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
     // per (conversation, node) on first render and re-send it byte-identically
     // thereafter, so it forms a stable provider cache prefix (mirrors the #89
-    // tool-block freeze). Drift in `${resource:}` / `${kv:}` pills (or a future
-    // date injection) must NOT mutate the frozen prefix — that would invalidate
-    // the provider's prefix cache — so it is surfaced to the model as a synthetic
-    // `[System update]` tail message instead. Re-frozen only at a compaction
-    // boundary (where the prefix is rebuilt anyway).
+    // tool-block freeze). Drift in `${resource:}` / `${kv:}` pills (or a date
+    // injection) must NOT mutate the frozen prefix — that would invalidate the
+    // provider's prefix cache — and adds no message to the conversation (#1333):
+    // live values come from tools, and `per-turn` steps re-render every turn.
+    // Re-frozen only at a compaction boundary (where the prefix is rebuilt anyway).
     const requestedPromptPolicy = node_params?.properties?.systemPromptPolicy;
     if (requestedPromptPolicy !== undefined && requestedPromptPolicy !== 'stable' && requestedPromptPolicy !== 'per-turn') {
       throw new Error('Choose stable or per-turn system instructions for this step.');
@@ -858,12 +858,11 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     const systemPromptPolicy = requestedPromptPolicy ?? 'stable';
     prepResult.systemPromptPolicy = systemPromptPolicy;
     const freeze = systemPromptPolicy === 'per-turn'
-      ? { content: completePrompt, frozenSystemPrompts: sharedState.frozenSystemPrompts ?? {}, frozeNow: false, driftUpdate: undefined }
+      ? { content: completePrompt, frozenSystemPrompts: sharedState.frozenSystemPrompts ?? {}, frozeNow: false }
       : resolveFrozenSystemPrompt(
       nodeId,
       completePrompt,
-      sharedState.frozenSystemPrompts,
-      sharedState.messages
+      sharedState.frozenSystemPrompts
     );
     sharedState.frozenSystemPrompts = freeze.frozenSystemPrompts;
     const systemPromptContent = freeze.content;
@@ -871,20 +870,6 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       log.info('Froze system prompt for node (first render)', {
         nodeId,
         length: completePrompt.length,
-      });
-    }
-    if (freeze.driftUpdate !== undefined) {
-      // Surface the drift to the model as a synthetic `[System update]` tail
-      // message instead of mutating the frozen prefix (which would bust the
-      // provider prefix cache). Dedupe is handled inside resolveFrozenSystemPrompt.
-      sharedState.messages.push({
-        id: uuidv4(),
-        role: 'user',
-        content: freeze.driftUpdate,
-        timestamp: Date.now(),
-      });
-      log.info('System prompt drifted from frozen prefix; appended [System update]', {
-        nodeId,
       });
     }
     // Keep prepResult.currentPrompt consistent with the (possibly frozen) content
