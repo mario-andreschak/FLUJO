@@ -1,5 +1,6 @@
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
-jest.mock('@/backend/execution/flow/conversationLog', () => ({ recoverConversationTranscript: jest.fn() }));
+jest.mock('@/backend/execution/flow/conversationLog', () => ({ recoverConversationTranscript: jest.fn(), flushConversationLogForRead: jest.fn(async () => {}), readConversationLog: jest.fn(async () => []) }));
+jest.mock('@/backend/execution/flow/toolApprovalRegistry', () => ({ listPendingToolCalls: jest.fn(() => []) }));
 jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn() }));
 jest.mock('@/utils/workspace', () => ({ getCurrentWorkspace: jest.fn(() => 'default-workspace') }));
 jest.mock('@/backend/services/model', () => ({ modelService: { loadModels: jest.fn(async () => []) } }));

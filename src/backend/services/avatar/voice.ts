@@ -6,7 +6,7 @@ import { synthesizePocket, validatePocketSpeech, POCKET_MAX_TEXT } from '@/vendo
 import { createHash } from 'node:crypto';
 import { assertExecutionConversationAccess, assertExecutionStateAccess } from '@/backend/execution/extensions';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { recoverConversationTranscript, flushConversationLog, readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { recoverConversationTranscript, flushConversationLogForRead, readConversationLog } from '@/backend/execution/flow/conversationLog';
 import { listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { completedForegroundDispatch } from './foreground-reply.mjs';
 import { streamWaitingAudio } from './waiting-audio.mjs';
@@ -124,7 +124,7 @@ export async function canonicalVoiceResult(conversationId: string, messageId: st
   if (latest?.id !== messageId || latest.role !== 'assistant') throw new PublicError(409, 'result_not_current', 'That reply is no longer current.');
   if (latest.tool_calls?.length) throw new PublicError(409, 'result_not_ready', 'A tool call is not a spoken reply.');
   if (open) {
-    await flushConversationLog(conversationId);
+    await flushConversationLogForRead(conversationId);
     const events = await readConversationLog(conversationId) ?? [];
     if (listPendingToolCalls(conversationId).length || !completedForegroundDispatch(conversationId, latest, events)) throw new PublicError(409, 'result_not_ready', 'The foreground reply is not finished.');
   }
