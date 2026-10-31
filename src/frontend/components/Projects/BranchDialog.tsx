@@ -43,15 +43,24 @@ export function BranchDialog({ open, mode, git, folder, onClose, onSubmit }: Bra
     setSaving(false);
   }, [open, mode]);
 
+  const allBranches = useMemo(() => switchableBranches(git), [git]);
+  // Git refuses to check out a branch that another worktree (or this folder)
+  // already has, so those are never offered for a switch or a new worktree.
   const options = useMemo(() => {
-    const all = switchableBranches(git);
-    return mode === 'switch' ? all.filter(name => name !== git?.branch) : all;
-  }, [git, mode]);
+    if (mode === 'create') return allBranches;
+    const checkedOut = new Set(git?.worktrees.map(worktree => worktree.branch).filter(Boolean));
+    if (git?.branch) checkedOut.add(git.branch);
+    return allBranches.filter(name => !checkedOut.has(name));
+  }, [allBranches, git, mode]);
 
   const trimmed = branch.trim();
-  const exists = options.includes(trimmed) || trimmed === git?.branch;
+  // The list is capped on the server, so an unlisted name may still exist:
+  // switching accepts any typed name and Git reports a missing branch.
+  const exists = allBranches.includes(trimmed) || trimmed === git?.branch;
   const create = mode === 'create' || (mode === 'worktree' && !exists);
-  const canSubmit = Boolean(trimmed) && !saving && (mode !== 'switch' || exists) && !(mode === 'create' && exists);
+  const canSubmit = Boolean(trimmed) && !saving
+    && (mode !== 'switch' || trimmed !== git?.branch)
+    && !(mode === 'create' && exists);
   const mainCheckout = git?.worktrees.find(worktree => worktree.main)?.path ?? folder;
 
   const submit = async (event: React.FormEvent) => {
@@ -100,7 +109,7 @@ export function BranchDialog({ open, mode, git, folder, onClose, onSubmit }: Bra
             />
           ) : (
             <Autocomplete
-              freeSolo={mode === 'worktree'}
+              freeSolo
               options={options}
               inputValue={branch}
               onInputChange={(_event, value) => setBranch(value)}

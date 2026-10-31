@@ -29,6 +29,7 @@ import {
 } from '@/utils/workspace';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import { shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServers';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 import { worktreeContainerFor } from './projectGit';
 
 /** Bindings kept per workspace; the least recently used are dropped first. */
@@ -216,25 +217,68 @@ export async function bindChatProject(conversationId: string, project: unknown, 
 }
 
 /**
+ * The chat a conversation works for. Subflow lanes and other child runs get
+ * their own conversation ids, but their agents work in the folder of the chat
+ * that started them (the chain's root), not in whatever the sidebar selects.
+ */
+function ownerConversationOf(conversationId: string): string {
+  const root = getConversationStates().get(conversationId)?.rootConversationId;
+  return root && root !== conversationId && isValidConversationId(root) ? root : conversationId;
+}
+
+/**
+ * The binding a conversation uses: its own when it has one (also a gone
+ * project's, which means "no folder"), else its root chat's. `owner` is the
+ * conversation that holds (or will hold) the binding.
+ */
+export async function readEffectiveChatBinding(conversationId: string): Promise<{
+  owner: string;
+  stored: StoredBinding | undefined;
+  binding: ChatProjectBinding | undefined;
+}> {
+  const own = await readChatBinding(conversationId);
+  const owner = own.stored ? conversationId : ownerConversationOf(conversationId);
+  if (owner === conversationId) return { owner, ...own };
+  return { owner, ...await readChatBinding(owner) };
+}
+
+/**
+ * Pin an unbound chat to `project`. The check runs inside the serialized write,
+ * so a binding the user chose meanwhile is never overwritten by a first use.
+ */
+async function pinChatProject(conversationId: string, project: string): Promise<void> {
+  await updateWorkspaceMetadata(getCurrentWorkspace(), current => {
+    const bindings = bindingsOf(current);
+    if (bindings.has(conversationId)) return current;
+    const match = requireProject(rootsOf(current), project);
+    bindings.set(conversationId, { project: match, path: match, at: Date.now() });
+    return { ...current, chatProjects: storedBindings(bindings) };
+  });
+}
+
+/**
  * The folder a chat's agents work in: its binding, else the active project —
  * which is then pinned to the chat so later sidebar changes do not move it.
  * A chat whose bound project was removed is never re-pinned elsewhere; it gets
  * no project folder (the data directory) until the user picks one. Undefined
- * when there is no project to use.
+ * when there is no project to use. Child runs (subflow lanes) use their root
+ * chat's folder unless they were bound themselves.
  */
 export async function resolveConversationProjectDir(conversationId: string): Promise<string | undefined> {
-  const { stored, binding } = await readChatBinding(conversationId);
+  const { owner, stored, binding } = await readEffectiveChatBinding(conversationId);
   if (binding) {
     if (Date.now() - stored!.at > BINDING_TOUCH_INTERVAL_MS) {
-      await touchChatBinding(conversationId).catch(() => undefined);
+      await touchChatBinding(owner).catch(() => undefined);
     }
     return binding.path;
   }
   if (stored) return undefined;
   const { activeProject } = await loadProjectState();
-  if (!activeProject || !isValidConversationId(conversationId)) return activeProject;
+  if (!activeProject || !isValidConversationId(owner)) return activeProject;
   try {
-    return (await bindChatProject(conversationId, activeProject)).path;
+    await pinChatProject(owner, activeProject);
+    const pinned = await readChatBinding(owner);
+    return pinned.binding?.path ?? (pinned.stored ? undefined : activeProject);
   } catch {
     return activeProject;
   }

@@ -6,6 +6,7 @@ import {
   addProjectWorktree,
   createProjectBranch,
   isProjectCheckout,
+  parseStatusV2,
   parseWorktreeList,
   readProjectGit,
   removeProjectWorktree,
@@ -107,5 +108,32 @@ describe('project Git integration', () => {
       { path: path.resolve('/elsewhere/y'), branch: 'y', head: '111111111111', main: false, managed: false },
     ]);
     expect(worktreeSlug('feat/login page')).toBe('feat-login-page');
+  });
+
+  it('parses porcelain v2 status headers and counts entries', () => {
+    expect(parseStatusV2([
+      '# branch.oid 0123456789abcdef0123456789abcdef01234567',
+      '# branch.head feat/x',
+      '# branch.upstream origin/feat/x',
+      '# branch.ab +2 -1',
+      '1 .M N... 100644 100644 100644 aaa bbb README.md',
+      '2 R. N... 100644 100644 100644 aaa bbb R100 new.md\told.md',
+      '? untracked.txt',
+      '',
+    ].join('\n'))).toEqual({ branch: 'feat/x', head: '0123456', upstream: 'origin/feat/x', ahead: 2, behind: 1, changes: 3 });
+    expect(parseStatusV2('# branch.oid (initial)\n# branch.head main\n')).toMatchObject({ branch: 'main', head: null, changes: 0 });
+    expect(parseStatusV2('# branch.oid abcdef0123\n# branch.head (detached)\n')).toMatchObject({ branch: null, head: 'abcdef0' });
+  });
+
+  it('polls status without rewriting the index (agents may hold its lock)', async () => {
+    // Same content, newer timestamp: a plain `git status` refreshes and rewrites
+    // the index under `.git/index.lock`, racing the agents' own Git commands.
+    const future = new Date(Date.now() + 60_000);
+    await fs.utimes(path.join(repo, 'README.md'), future, future);
+    const index = path.join(repo, '.git', 'index');
+    const past = new Date(Date.now() - 3_600_000);
+    await fs.utimes(index, past, past);
+    await expect(readProjectGit(repo)).resolves.toMatchObject({ branch: 'main', changes: 0 });
+    expect(Math.abs((await fs.stat(index)).mtimeMs - past.getTime())).toBeLessThan(1000);
   });
 });

@@ -428,12 +428,48 @@ const metadataHost = globalThis as typeof globalThis & {
 };
 const metadataWrites = metadataHost.__flujoWorkspaceMetadataWritesV1 ??= new Map();
 
+// Windows refuses to replace a file while any reader holds it open (EPERM/
+// EBUSY/EACCES). `.workspace.json` is read on every roots/list and project
+// tool call, so such a conflict is routine and clears within milliseconds.
+// The attempts bound only one write: nothing is fenced, the next write starts
+// fresh.
+const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const MAX_RENAME_ATTEMPTS = 15;
+
+async function replaceFile(temporary: string, target: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(temporary, target);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= MAX_RENAME_ATTEMPTS || !code || !RETRYABLE_RENAME_CODES.has(code)) throw error;
+      await new Promise(resolve => setTimeout(resolve, Math.min(100, 5 * 2 ** (attempt - 1)) + Math.random() * 10));
+    }
+  }
+}
+
+/**
+ * The current record for a write. An unreadable (corrupt) file starts over
+ * from an empty record, as the roots editor always did, so saving the
+ * workspace repairs it instead of every write failing forever.
+ */
+async function readWorkspaceMetadataForWrite(dir: string): Promise<WorkspaceMetadata> {
+  try {
+    return await readWorkspaceMetadataFile(dir);
+  } catch (error) {
+    if (error instanceof SyntaxError) return {};
+    throw error;
+  }
+}
+
 /**
  * Serialized read-modify-write of a workspace's metadata. Writes are atomic
  * (temporary file + rename), queued per workspace so the roots editor and
  * project bindings never overwrite each other's concurrent changes, and
  * admitted through the workspace mutation gate so a snapshot export never
- * observes the file mid-replacement.
+ * observes the file mid-replacement. A `mutate` that returns `current`
+ * unchanged writes nothing.
  */
 export async function updateWorkspaceMetadata(
   workspace: string,
@@ -445,12 +481,14 @@ export async function updateWorkspaceMetadata(
     const { withWorkspaceMutation } = await import('@/backend/services/workspace/workspaceMutationGate');
     return withWorkspaceMutation(async () => {
       const dir = await resolveManagedWorkspace(name);
-      const next = mutate(await readWorkspaceMetadataFile(dir));
+      const current = await readWorkspaceMetadataForWrite(dir);
+      const next = mutate(current);
+      if (next === current) return current;
       const target = path.join(dir, WORKSPACE_METADATA_FILE);
       const temporary = path.join(dir, `${WORKSPACE_METADATA_FILE}.${process.pid}.${randomUUID()}.tmp`);
       await fs.writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
       try {
-        await fs.rename(temporary, target);
+        await replaceFile(temporary, target);
       } catch (error) {
         await fs.rm(temporary, { force: true });
         throw error;
