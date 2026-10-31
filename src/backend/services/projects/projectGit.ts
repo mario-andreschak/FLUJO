@@ -14,7 +14,17 @@ import { simpleGit, type SimpleGit } from 'simple-git';
 import { isSafeBranchName } from '@/utils/git/validation';
 import { sameFilesystemPath } from '@/utils/workspace';
 
-const GIT_TIMEOUT_MS = 15_000;
+/**
+ * Inactivity limit for read-only Git queries. A query that hits it is simply
+ * reported as "no Git state" for that refresh and retried on the next poll.
+ * Mutations never get this limit: killing `switch` or `worktree add/remove`
+ * half-way would leave a half-updated working tree behind.
+ */
+const GIT_READ_TIMEOUT_MS = 15_000;
+/**
+ * Branch names offered as suggestions. The cap only shortens the pick list:
+ * any branch, listed or not, can still be typed and Git validates it.
+ */
 const MAX_LISTED_BRANCHES = 300;
 
 export type ProjectGitErrorCode =
@@ -59,8 +69,54 @@ export interface ProjectGitStatus {
   worktrees: ProjectWorktree[];
 }
 
-function git(baseDir: string): SimpleGit {
-  return simpleGit({ baseDir, timeout: { block: GIT_TIMEOUT_MS } });
+/** Git for read-only queries (bounded) or, with `mutation`, for changes (never killed mid-way). */
+function git(baseDir: string, mutation = false): SimpleGit {
+  return mutation ? simpleGit({ baseDir }) : simpleGit({ baseDir, timeout: { block: GIT_READ_TIMEOUT_MS } });
+}
+
+interface WorkingTreeStatus {
+  branch: string | null;
+  head: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  changes: number;
+}
+
+/** Parse `git status --porcelain=v2 --branch` (one entry per line). */
+export function parseStatusV2(output: string): WorkingTreeStatus {
+  const status: WorkingTreeStatus = { branch: null, head: null, upstream: null, ahead: 0, behind: 0, changes: 0 };
+  for (const line of output.split(/\r?\n/)) {
+    if (!line) continue;
+    if (!line.startsWith('# ')) {
+      status.changes += 1;
+      continue;
+    }
+    const [key, ...rest] = line.slice(2).split(' ');
+    const value = rest.join(' ');
+    if (key === 'branch.oid') status.head = value === '(initial)' ? null : value.slice(0, 7) || null;
+    else if (key === 'branch.head') status.branch = value === '(detached)' ? null : value || null;
+    else if (key === 'branch.upstream') status.upstream = value || null;
+    else if (key === 'branch.ab') {
+      const counts = /^\+(\d+) -(\d+)$/.exec(value);
+      if (counts) {
+        status.ahead = Number(counts[1]);
+        status.behind = Number(counts[2]);
+      }
+    }
+  }
+  return status;
+}
+
+/**
+ * Working-tree state without taking `.git/index.lock`. FLUJO polls this while
+ * agents run Git in the same folder; a plain `git status` refreshes the index
+ * and would make their `git add`/`commit` fail with "index.lock exists".
+ */
+async function readWorkingTreeStatus(repo: SimpleGit): Promise<WorkingTreeStatus> {
+  return parseStatusV2(await repo.raw([
+    '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=all',
+  ]));
 }
 
 function gitFailure(error: unknown): ProjectGitError {
@@ -126,18 +182,17 @@ export async function readProjectGit(dir: string): Promise<ProjectGitStatus | nu
   const repo = git(repoRoot);
   try {
     const [status, branches, remotes, worktreeOutput] = await Promise.all([
-      repo.status(),
+      readWorkingTreeStatus(repo),
       listRefs(repo, 'refs/heads'),
       listRefs(repo, 'refs/remotes'),
       repo.raw(['worktree', 'list', '--porcelain']),
     ]);
-    const head = (await repo.revparse(['--short', 'HEAD']).catch(() => '')).trim() || null;
     return {
       repoRoot,
-      branch: status.detached ? null : status.current || null,
-      head,
-      changes: status.files.length,
-      upstream: status.tracking || null,
+      branch: status.branch,
+      head: status.head,
+      changes: status.changes,
+      upstream: status.upstream,
       ahead: status.ahead,
       behind: status.behind,
       branches,
@@ -149,10 +204,10 @@ export async function readProjectGit(dir: string): Promise<ProjectGitStatus | nu
   }
 }
 
-async function requireRepo(dir: string): Promise<{ repoRoot: string; repo: SimpleGit }> {
+async function requireRepo(dir: string): Promise<{ repoRoot: string; repo: SimpleGit; mutate: SimpleGit }> {
   const repoRoot = await resolveRepoRoot(dir);
   if (!repoRoot) throw new ProjectGitError('NOT_A_REPOSITORY', `${dir} is not inside a Git repository.`);
-  return { repoRoot, repo: git(repoRoot) };
+  return { repoRoot, repo: git(repoRoot), mutate: git(repoRoot, true) };
 }
 
 /** Validate a branch name with Git's own rules; never lets an option through. */
@@ -173,17 +228,17 @@ async function assertBranchName(repo: SimpleGit, branch: unknown): Promise<strin
  * Refuses a dirty tree so uncommitted work never silently follows the switch.
  */
 export async function switchProjectBranch(dir: string, branch: unknown): Promise<void> {
-  const { repo } = await requireRepo(dir);
+  const { repo, mutate } = await requireRepo(dir);
   const name = await assertBranchName(repo, branch);
-  const status = await repo.status().catch(error => { throw gitFailure(error); });
-  if (status.files.length > 0) {
+  const status = await readWorkingTreeStatus(repo).catch(error => { throw gitFailure(error); });
+  if (status.changes > 0) {
     throw new ProjectGitError(
       'DIRTY_WORKTREE',
-      `This folder has ${status.files.length} uncommitted change(s). Commit or stash them first, or open "${name}" in a new worktree.`,
+      `This folder has ${status.changes} uncommitted change(s). Commit or stash them first, or open "${name}" in a new worktree.`,
     );
   }
   try {
-    await repo.raw(['switch', name]);
+    await mutate.raw(['switch', name]);
   } catch (error) {
     throw gitFailure(error);
   }
@@ -191,10 +246,10 @@ export async function switchProjectBranch(dir: string, branch: unknown): Promise
 
 /** Create a branch from the current HEAD and switch to it; changes carry over. */
 export async function createProjectBranch(dir: string, branch: unknown): Promise<void> {
-  const { repo } = await requireRepo(dir);
+  const { repo, mutate } = await requireRepo(dir);
   const name = await assertBranchName(repo, branch);
   try {
-    await repo.raw(['switch', '-c', name]);
+    await mutate.raw(['switch', '-c', name]);
   } catch (error) {
     throw gitFailure(error);
   }
@@ -224,7 +279,7 @@ export async function addProjectWorktree(
   branch: unknown,
   createBranch: boolean,
 ): Promise<string> {
-  const { repoRoot, repo } = await requireRepo(dir);
+  const { repoRoot, repo, mutate } = await requireRepo(dir);
   const name = await assertBranchName(repo, branch);
   let worktrees: ProjectWorktree[];
   try {
@@ -242,7 +297,7 @@ export async function addProjectWorktree(
   }
   await fs.mkdir(path.dirname(target), { recursive: true });
   try {
-    await repo.raw(createBranch
+    await mutate.raw(createBranch
       ? ['worktree', 'add', '-b', name, target]
       : ['worktree', 'add', target, name]);
   } catch (error) {
@@ -253,7 +308,7 @@ export async function addProjectWorktree(
 
 /** Remove a linked worktree. Never forces: Git refuses when it has changes. */
 export async function removeProjectWorktree(dir: string, worktreePath: string): Promise<void> {
-  const { repo } = await requireRepo(dir);
+  const { repo, mutate } = await requireRepo(dir);
   let worktrees: ProjectWorktree[];
   try {
     worktrees = parseWorktreeList(await repo.raw(['worktree', 'list', '--porcelain']));
@@ -266,7 +321,7 @@ export async function removeProjectWorktree(dir: string, worktreePath: string): 
     throw new ProjectGitError('NOT_A_WORKTREE', `${worktreePath} is not a worktree FLUJO created for this repository.`);
   }
   try {
-    await repo.raw(['worktree', 'remove', target.path]);
+    await mutate.raw(['worktree', 'remove', target.path]);
   } catch (error) {
     throw gitFailure(error);
   }

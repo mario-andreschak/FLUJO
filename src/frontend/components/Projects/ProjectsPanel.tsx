@@ -94,8 +94,9 @@ export function ProjectsPanel() {
         </Tooltip>
       </Box>
 
+      {/* Outside the collapse: adding a project works while the list is hidden. */}
+      {error && <Alert severity="error" onClose={() => setError(null)} sx={{ my: 0.8, wordBreak: 'break-word' }}>{error}</Alert>}
       <Collapse in={!collapsed}>
-        {error && <Alert severity="error" onClose={() => setError(null)} sx={{ my: 0.8, wordBreak: 'break-word' }}>{error}</Alert>}
         {state && projects.length === 0 && (
           <Typography variant="caption" color="text.secondary" component="p" sx={{ px: 1, pb: 0.8 }}>
             {t('projects.empty')}
