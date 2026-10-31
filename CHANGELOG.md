@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### System instructions
+
+- Stop adding "[System update] The system context changed…" messages to chats ([#1333](https://github.com/mario-andreschak/FLUJO/issues/1333)). When a step's instructions contained a live value (a `${resource:}` or `${kv:}` pill, or a date), every turn appended a copy of the entire instructions as a user message, which made chats slower and more expensive and showed fake user messages. A chat now keeps the instructions it started with until it is compacted; read live information through tools such as FLUJO MCP's conversation tools, or set the step to `per-turn` to render its instructions fresh every turn.
+
 ### Conversation persistence
 
 - Persist live run events to the conversation log again as they happen ([#1319](https://github.com/mario-andreschak/FLUJO/issues/1319)). In production builds the live event tap could not resolve the in-memory conversation state and silently discarded every event, so streamed messages, tool calls and token usage were saved only at the end of a successful turn. Switching conversations hid a running turn, usage was missing, and cancelling a long Agent SDK turn lost all of its work. The same defect hid live state from mid-call cancellation checks and the todo and meeting tools.
