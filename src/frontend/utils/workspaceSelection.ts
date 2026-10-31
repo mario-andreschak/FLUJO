@@ -391,5 +391,8 @@ export interface WorkspaceInfo {
   name: string;
   color: string;
   isDefault: boolean;
+  /** The workspace's projects (folders exposed to every MCP server). */
   roots: string[];
+  /** The project new chats start in. */
+  activeProject?: string;
 }

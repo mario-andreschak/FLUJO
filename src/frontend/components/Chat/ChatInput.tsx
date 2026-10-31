@@ -93,6 +93,11 @@ interface ChatInputProps {
   onEditingNodeChange?: (nodeId: string | null) => void;
   onSaveEdit?: () => void;
   onCancelEdit?: () => void;
+  /**
+   * The chat's project control (folder · branch · worktree). Rendered at the
+   * start of the run options row, or in the phone run-options sheet.
+   */
+  projectControl?: React.ReactNode;
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
@@ -114,7 +119,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onEditingContentChange,
   onEditingNodeChange,
   onSaveEdit,
-  onCancelEdit
+  onCancelEdit,
+  projectControl,
 }) => {
   const { t } = useI18n();
   const theme = useTheme();
@@ -262,7 +268,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
     availableNodes.find(n => n.id === id)?.label
     || (id ? `${id.substring(0, 6)}...` : t('chat.input.startNode'));
   const currentNodeLabel = nodeLabelFor(pickerSelectedId);
-  const hasRunOptions = !!onRequireApprovalChange || !!onToggleDebugger || ((!!onSelectNode || isEditing) && availableNodes.length > 0);
+  const hasRunOptions = !!projectControl || !!onRequireApprovalChange || !!onToggleDebugger || ((!!onSelectNode || isEditing) && availableNodes.length > 0);
   const hasActiveRunOption = requireApproval || debuggerOpen || nodeOverrideActive;
   const handlePickNode = (nodeId: string | null) => {
     if (isEditing) onEditingNodeChange?.(nodeId);
@@ -1297,6 +1303,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
               borderColor: 'divider',
             }}
           >
+            {/* Where this chat's agents work: project folder, branch, worktree. */}
+            {projectControl}
             {/* Node picker: shows the node this turn runs on; click to open the
                 visual picker and choose a node from the pre-rendered flow. */}
             {(onSelectNode || isEditing) && availableNodes.length > 0 && (
@@ -1386,6 +1394,13 @@ const ChatInput: React.FC<ChatInputProps> = ({
             <CloseIcon />
           </IconButton>
         </Box>
+
+        {projectControl && (
+          <>
+            <Typography variant="overline" color="text.secondary">{t('projects.menu.project')}</Typography>
+            <Box sx={{ mb: 1 }}>{projectControl}</Box>
+          </>
+        )}
 
         {(onSelectNode || isEditing) && availableNodes.length > 0 && (
           <>

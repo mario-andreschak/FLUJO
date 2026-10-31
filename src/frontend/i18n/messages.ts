@@ -17,6 +17,7 @@ import { meetingsMessageRows } from './catalogs/meetings';
 import { personasMessageRows } from './catalogs/personas';
 import { rolesMessageRows } from './catalogs/roles';
 import { harnessMessageRows } from './catalogs/harness';
+import { projectsMessageRows } from './catalogs/projects';
 import type { MessageRow } from './schema';
 
 /**
@@ -75,11 +76,11 @@ const messageRows = {
   'nav.workspaces.nameExists': ['A workspace with that name already exists.', 'Ya existe un espacio con ese nombre.', 'Ein Arbeitsbereich mit diesem Namen existiert bereits.', 'Un espace portant ce nom existe déjà.', 'Esiste già uno spazio con questo nome.', 'Já existe um espaço com esse nome.', '已存在同名工作区。'],
   'nav.workspaces.createTitle': ['Create workspace', 'Crear espacio de trabajo', 'Arbeitsbereich erstellen', 'Créer un espace de travail', 'Crea spazio di lavoro', 'Criar espaço de trabalho', '创建工作区'],
   'nav.workspaces.editTitle': ['Edit workspace', 'Editar espacio de trabajo', 'Arbeitsbereich bearbeiten', 'Modifier l’espace de travail', 'Modifica spazio di lavoro', 'Editar espaço de trabalho', '编辑工作区'],
-  'nav.workspaces.folders': ['Workspace folders', 'Carpetas del espacio', 'Arbeitsbereichsordner', 'Dossiers de l’espace', 'Cartelle dello spazio', 'Pastas do espaço', '工作区文件夹'],
-  'nav.workspaces.foldersHelp': ['Every MCP server receives these folders as roots while it runs.', 'Cada servidor MCP recibe estas carpetas como raíces durante la ejecución.', 'Jeder MCP-Server erhält diese Ordner zur Laufzeit als Roots.', 'Chaque serveur MCP reçoit ces dossiers comme racines pendant son exécution.', 'Ogni server MCP riceve queste cartelle come radici durante l’esecuzione.', 'Cada servidor MCP recebe estas pastas como raízes durante a execução.', '每个 MCP 服务器运行时都会将这些文件夹作为根目录。'],
+  'nav.workspaces.folders': ['Projects', 'Proyectos', 'Projekte', 'Projets', 'Progetti', 'Projetos', '项目'],
+  'nav.workspaces.foldersHelp': ['Folders your agents work in, anywhere on disk. Every MCP server receives them as roots.', 'Carpetas en las que trabajan tus agentes, en cualquier lugar del disco. Cada servidor MCP las recibe como raíces.', 'Ordner, in denen deine Agenten arbeiten, beliebig auf der Festplatte. Jeder MCP-Server erhält sie als Roots.', 'Dossiers où travaillent vos agents, n’importe où sur le disque. Chaque serveur MCP les reçoit comme racines.', 'Cartelle in cui lavorano i tuoi agenti, ovunque sul disco. Ogni server MCP le riceve come radici.', 'Pastas onde seus agentes trabalham, em qualquer lugar do disco. Cada servidor MCP as recebe como raízes.', '智能体工作的文件夹，可位于磁盘任意位置。每个 MCP 服务器都会将其作为根目录。'],
   'nav.workspaces.addFolder': ['Add folder', 'Añadir carpeta', 'Ordner hinzufügen', 'Ajouter un dossier', 'Aggiungi cartella', 'Adicionar pasta', '添加文件夹'],
   'nav.workspaces.removeFolder': ['Remove folder', 'Quitar carpeta', 'Ordner entfernen', 'Retirer le dossier', 'Rimuovi cartella', 'Remover pasta', '移除文件夹'],
-  'nav.workspaces.primaryFolder': ['Primary', 'Principal', 'Primär', 'Principal', 'Principale', 'Principal', '主要'],
+  'nav.workspaces.primaryFolder': ['New chats', 'Chats nuevos', 'Neue Chats', 'Nouvelles discussions', 'Nuove chat', 'Novos chats', '新聊天'],
   'nav.workspaces.chooseFolder': ['Choose workspace folder', 'Elegir carpeta del espacio', 'Arbeitsbereichsordner auswählen', 'Choisir un dossier de l’espace', 'Scegli cartella dello spazio', 'Escolher pasta do espaço', '选择工作区文件夹'],
   'nav.workspaces.deleteTitle': ['Delete workspace?', '¿Eliminar espacio de trabajo?', 'Arbeitsbereich löschen?', 'Supprimer l’espace de travail ?', 'Eliminare lo spazio di lavoro?', 'Excluir espaço de trabalho?', '删除工作区？'],
   'nav.workspaces.deleteBody': ['This permanently deletes “{workspace}” and all of its flows, chats, files, and settings.', 'Esto elimina permanentemente «{workspace}» y todos sus flujos, chats, archivos y configuraciones.', 'Dadurch werden „{workspace}“ und alle zugehörigen Abläufe, Chats, Dateien und Einstellungen dauerhaft gelöscht.', 'Cette action supprime définitivement « {workspace} » ainsi que tous ses flux, discussions, fichiers et paramètres.', 'Questa azione elimina definitivamente “{workspace}” e tutti i relativi flussi, chat, file e impostazioni.', 'Isso exclui permanentemente “{workspace}” e todos os seus fluxos, chats, arquivos e configurações.', '这将永久删除“{workspace}”及其中的所有流程、聊天、文件和设置。'],
@@ -220,6 +221,7 @@ const messageRows = {
   ...personasMessageRows,
   ...rolesMessageRows,
   ...harnessMessageRows,
+  ...projectsMessageRows,
 } satisfies Record<string, MessageRow>;
 
 export type TranslationKey = keyof typeof messageRows;
