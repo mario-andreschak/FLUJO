@@ -66,7 +66,7 @@ import { entryConditionStartNodeId } from '@/utils/shared/edgeConditions';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import { isQuickChatEnabled, QUICK_CHAT_DISABLED_CODE, QUICK_CHAT_DISABLED_MESSAGE } from '@/backend/services/workspace/modelAccess';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
-import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
+import { decodeToolName, isToolOfferedInStep } from '@/backend/execution/flow/handlers/toolNamespace';
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
 import { isMeetingTurnSilent } from '@/backend/execution/flow/handlers/meetingTools';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
@@ -2145,6 +2145,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       toolCalls,
       (name) => decodeToolName(name, sharedState.toolNameMap),
     );
+  /** The current step requires a person for this call, whatever the run's setting.
+   *  A call the step did not offer is left out: dispatch refuses it, so asking a
+   *  person first would only offer a choice with no effect. */
+  const stepRequiresApproval = (call: OpenAI.ChatCompletionMessageFunctionToolCall): boolean =>
+    isToolOfferedInStep(call.function.name, sharedState.offeredToolNames, sharedState.toolNameMap)
+    && decodeToolName(call.function.name, sharedState.toolNameMap)?.requiresApproval === true;
   const hasAttachRequest = () =>
     !!sharedState.debugPauseRequested
     || !!sharedState.breakpoints?.includes(ATTACH_BREAKPOINT);
@@ -2624,7 +2630,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           // the action instead so resuming still passes through the approval
           // approval gate rather than accidentally bypassing it.
           if (!transparentControlHandoff) {
-            if (pendingCalls?.length && !requireApproval) {
+            if (pendingCalls?.length && !requireApproval && !pendingCalls.some(stepRequiresApproval)) {
               sharedState.debugPendingToolCalls = pendingCalls;
             } else {
               sharedState.debugPendingAction = {
@@ -2781,6 +2787,74 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             ? unansweredOrdinaryCalls(sharedState, lastAssistantMsg)
             : [];
 
+          // Stops the run for a person's decision on `heldCalls`. Other calls in the
+          // batch run first: a batch has no order guarantee (#252), and this is what
+          // lets a read-only call go ahead without a click while a change waits.
+          const holdForApproval = async (
+            heldCalls: OpenAI.ChatCompletionMessageFunctionToolCall[],
+            batch: OpenAI.ChatCompletionMessageFunctionToolCall[],
+          ): Promise<void> => {
+            // A saved run can wait for a person. A transient one has nothing to come
+            // back to, so a step's requirement fails there rather than being skipped.
+            const noApprover = sharedState.onApprovalRequired === 'fail' || (!requireApproval && sharedState.ephemeral);
+            if (noApprover) {
+              // Headless fail-fast (#115): approval is required, but this run has
+              // no interactive approver. Execute nothing.
+              const toolName = heldCalls[0]?.function.name ?? 'unknown';
+              const reason = sharedState.onApprovalRequired === 'fail' ? 'approvalPolicy: fail' : 'this run is not saved';
+              const message = `Headless run requires approval for tool "${toolName}" but no approver is available (${reason}).`;
+              log.info(`[approval] Failing fast for tool "${toolName}" (conv ${effectiveConvId}): ${reason}`);
+              sharedState.status = 'error';
+              sharedState.pendingToolCalls = heldCalls;
+              sharedState.lastResponse = {
+                success: false,
+                error: message,
+                errorDetails: { message, type: 'approval_required', name: toolName },
+              };
+              currentAction = ERROR_ACTION;
+              return;
+            }
+
+            const freeCalls = batch.filter((call) => !heldCalls.includes(call));
+            if (freeCalls.length > 0) {
+              const freeResult = await processToolCallsRecoverably({
+                toolCalls: freeCalls, toolNameMap: sharedState.toolNameMap, offeredToolNames: sharedState.offeredToolNames, emit,
+                conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+                runId: logicalRunId,
+                node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+                shouldAbort: runCancelled,
+                mcpNodes: sharedState.currentMCPNodes,
+              });
+              if (!freeResult.success) {
+                log.error(`Tool processing before an approval pause failed for conv ${effectiveConvId}`, { error: freeResult.error });
+                sharedState.lastResponse = { success: false, error: 'Tool processing failed', errorDetails: freeResult.error };
+                currentAction = ERROR_ACTION;
+                return;
+              }
+            }
+
+            log.info(`[approval] Pausing execution for tool approval for conv ${effectiveConvId}`);
+            sharedState.status = 'awaiting_tool_approval';
+            sharedState.pendingToolCalls = heldCalls;
+            sharedState.lastResponse = undefined;
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            try {
+              sharedState.updatedAt = Date.now();
+              if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
+                const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
+                if (firstUserMessage && typeof firstUserMessage.content === 'string') {
+                  sharedState.title = buildConversationTitle(firstUserMessage.content);
+                  log.verbose(`Updated conversation title for ${effectiveConvId} before pausing to: ${sharedState.title}`);
+                }
+              }
+              await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
+              log.verbose(`Saved state before pausing for approval for conv ${effectiveConvId}`);
+            } catch (error) {
+              log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
+            }
+            emit({ type: 'run:awaiting_approval', pendingToolCalls: heldCalls });
+          };
+
           if (lastAssistantMsg?.role === 'assistant' && ordinaryToolCalls.length > 0) {
             if (flujo) {
               // --- Graceful landing at the agentic-turn cap (issue #253) ---
@@ -2836,48 +2910,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 }
               }
               // --- Flujo=true: Handle optional approval ---
-              if (requireApproval) {
-                if (sharedState.onApprovalRequired === 'fail') {
-                  // Headless fail-fast (#115): approval was explicitly required,
-                  // but this run has no interactive approver. Execute nothing.
-                  const firstCall = ordinaryToolCalls[0];
-                  const toolName = firstCall?.function.name ?? 'unknown';
-                  log.info(`[flujo=true, onApprovalRequired=fail] Failing fast for tool "${toolName}" (conv ${effectiveConvId})`);
-                  sharedState.status = 'error';
-                  sharedState.pendingToolCalls = ordinaryToolCalls;
-                  sharedState.lastResponse = {
-                    success: false,
-                    error: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
-                    errorDetails: {
-                      message: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
-                      type: 'approval_required',
-                      name: toolName,
-                    },
-                  };
-                  currentAction = ERROR_ACTION;
-                  break;
-                }
-
-                log.info(`[flujo=true, requireApproval=true] Pausing execution for tool approval for conv ${effectiveConvId}`);
-                sharedState.status = 'awaiting_tool_approval';
-                sharedState.pendingToolCalls = ordinaryToolCalls;
-                sharedState.lastResponse = undefined;
-                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-                try {
-                  sharedState.updatedAt = Date.now();
-                  if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
-                    const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
-                    if (firstUserMessage && typeof firstUserMessage.content === 'string') {
-                      sharedState.title = buildConversationTitle(firstUserMessage.content);
-                      log.verbose(`Updated conversation title for ${effectiveConvId} before pausing to: ${sharedState.title}`);
-                    }
-                  }
-                  await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
-                  log.verbose(`Saved state before pausing for approval for conv ${effectiveConvId}`);
-                } catch (error) {
-                  log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
-                }
-                emit({ type: 'run:awaiting_approval', pendingToolCalls: ordinaryToolCalls });
+              const heldCalls = requireApproval ? ordinaryToolCalls : ordinaryToolCalls.filter(stepRequiresApproval);
+              if (requireApproval || heldCalls.length > 0) {
+                await holdForApproval(heldCalls, ordinaryToolCalls);
                 break;
               } else {
                 log.info(`[flujo=true, requireApproval=false] Processing ${ordinaryToolCalls.length} tools internally for conv ${effectiveConvId}`);
@@ -2939,6 +2974,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   externalTools.push(tc);
                 }
               });
+
+              const heldInternalCalls = internalTools.filter(stepRequiresApproval);
+              if (heldInternalCalls.length > 0) {
+                await holdForApproval(heldInternalCalls, internalTools);
+                break;
+              }
 
               if (internalTools.length > 0) {
                 log.info(`[flujo=false] Processing ${internalTools.length} internal tools for conv ${effectiveConvId}. External tools (${externalTools.length}) will be ignored this step.`);

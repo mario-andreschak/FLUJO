@@ -49,6 +49,17 @@ jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: jest.fn(async () => false),
 }));
 
+let mockFlowForApproval: unknown = null;
+let mockFlowReadFails = false;
+jest.mock('@/backend/services/flow', () => ({
+  flowService: {
+    getFlow: jest.fn(async () => {
+      if (mockFlowReadFails) throw new Error('flow store is busy');
+      return mockFlowForApproval;
+    }),
+  },
+}));
+
 const completedResult = {
   status: 'completed',
   outputText: 'All done',
@@ -100,7 +111,53 @@ describe('headless approval policy (#115) — scheduler', () => {
   beforeEach(() => {
     store.clear();
     runFlowMock.mockReset();
+    mockFlowForApproval = null;
+    mockFlowReadFails = false;
     scheduler = new SchedulerService();
+  });
+
+  describe('a step requires approval for some tools', () => {
+    const gatedFlow = {
+      id: 'flow',
+      name: 'Gated',
+      nodes: [{ id: 'step', type: 'process', data: { type: 'process', properties: { requireApprovalFor: ['write_it'] } } }],
+      edges: [],
+    };
+
+    it("parks such a call under 'auto' instead of running it, and saves the run for that", async () => {
+      mockFlowForApproval = gatedFlow;
+      runFlowMock.mockResolvedValue(completedResult);
+      const { execution } = await scheduler.create(input());
+
+      await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+
+      const args = runFlowMock.mock.calls[0][0];
+      expect(args.requireApproval).toBe(false);
+      expect(args.onApprovalRequired).toBe('pause');
+      expect(args.mode).toBe('conversation');
+    });
+
+    it("keeps 'fail' failing, so nothing waits for an approver who is not there", async () => {
+      mockFlowForApproval = gatedFlow;
+      runFlowMock.mockResolvedValue(completedResult);
+      const { execution } = await scheduler.create(input({ approvalPolicy: 'fail' }));
+
+      await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+
+      expect(runFlowMock.mock.calls[0][0].onApprovalRequired).toBe('fail');
+    });
+
+    it('treats an unreadable flow as requiring approval, because the other answer could run a tool unasked', async () => {
+      mockFlowReadFails = true;
+      runFlowMock.mockResolvedValue(completedResult);
+      const { execution } = await scheduler.create(input());
+
+      await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+
+      const args = runFlowMock.mock.calls[0][0];
+      expect(args.onApprovalRequired).toBe('pause');
+      expect(args.mode).toBe('conversation');
+    });
   });
 
   it("policy 'auto' (default) runs tools without a gate (legacy behavior)", async () => {

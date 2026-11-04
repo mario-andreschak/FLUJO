@@ -92,6 +92,8 @@ export interface DecodedTool {
   schemaHash?: string;
   /** MCP safety hints captured with the advertised tool definition. */
   annotations?: ToolAnnotations;
+  /** The step that offered this tool requires a person to approve each call. */
+  requiresApproval?: boolean;
   /**
    * MCP Apps UI resource declared by the advertised tool definition. Carried
    * with the identity map so a cancelled/failed invocation can still notify

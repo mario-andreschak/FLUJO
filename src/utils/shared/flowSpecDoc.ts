@@ -38,6 +38,8 @@ NODE TYPES:
     "outputMode": "full-conversation" | "latest-message",              // optional, default full-conversation; latest-message hides this step's tool calls/results from later steps (they see only its final response)
     "maxTurns": 20,                                                     // optional; per-step cap on agentic tool-loop turns (retry-until-done in ONE node). Unset = model/system default (255)
     "terminalRouting": "tool-free",                                   // optional; sole unconditioned Process -> Finish only. No FLUJO graph tools; engine routes the answer. Native CLI capabilities remain governed by its existing adapter/profile. Absent preserves model-selected handoffs
+    "requireApprovalFor": ["tool_a"],                                  // optional; calls to these tools in this step always wait for a person, even if the run did not ask for approval
+    "requireApprovalForWrites": true,                                  // optional; the same for every tool in this step that its server does not mark read-only
     "allowedTools": ["tool_a"],                                        // optional; step-level tool allowlist (independent of servers[].tools)
     "captureVariable": "NAME",                                         // optional; save this step's output into a run variable other steps inject with \${var:NAME}
     "captureKv": "NAME",                                               // optional; ALSO save this step's output to a PERSISTENT cross-run key other steps inject with \${kv:NAME} (see rule 9d)

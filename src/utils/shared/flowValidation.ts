@@ -367,6 +367,22 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   // would be noise the user can't meaningfully act on.
   for (const node of processNodes) {
     const props = node.data?.properties ?? {};
+    if (Array.isArray(props.requireApprovalFor)) {
+      const enabled = new Set(
+        edges
+          .filter((edge) => isMcpEdge(edge) && (edge.source === node.id || edge.target === node.id))
+          .flatMap((edge) => {
+            const other = nodes.find((candidate) => candidate.id === (edge.source === node.id ? edge.target : edge.source));
+            const tools = other?.data?.properties?.enabledTools;
+            return Array.isArray(tools) ? tools : [];
+          }),
+      );
+      for (const name of props.requireApprovalFor) {
+        if (!enabled.has(name)) {
+          add('warning', 'require-approval-unknown-tool', `Process node "${getNodeLabel(node)}" requires approval for "${String(name)}", but this step does not offer a tool with that name.`, node);
+        }
+      }
+    }
     if (props.terminalRouting !== undefined) {
       if (props.terminalRouting !== 'tool-free') {
         add('error', 'invalid-terminal-routing', 'terminalRouting must be "tool-free" or absent.', node);

@@ -150,6 +150,11 @@ export interface ProcessNodeProperties {
     /** Explicit engine-owned routing to a sole, unconditioned Finish successor.
      * No model tools are advertised or dispatched. Absent keeps model handoffs. */
     terminalRouting?: 'tool-free';
+    /** MCP tool names whose calls in this step always wait for a person, whatever
+     *  the run's own approval setting. The run setting can add to this, never remove. */
+    requireApprovalFor?: string[];
+    /** Same, for every MCP tool in this step that its server does not mark read-only. */
+    requireApprovalForWrites?: boolean;
     name?: string;
     /** True once the user edits the node's label by hand; suppresses auto-naming
      *  the node after its bound model on (re)binding (issue #38, Item C). */
@@ -1249,7 +1254,7 @@ export interface SharedState extends DebuggerStateView {
      * `timeout` is the source MCP node's per-call timeout in seconds (-1 = none;
      * unset = 5-minute default).
      */
-    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
+    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; requiresApproval?: boolean; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
 
     /**
      * Maps each handoff tool's model-facing name (`handoff_to_<slug>`, see
@@ -1433,6 +1438,8 @@ export interface HandoffToolInfo {
 // Tool definition
 export interface ToolDefinition {
     name: string;
+    /** The step offering this tool requires a person to approve each call. */
+    requiresApproval?: boolean;
     originalName?: string;
     /** Source MCP server, used to decode the model-facing name back to (server, tool). */
     server?: string;

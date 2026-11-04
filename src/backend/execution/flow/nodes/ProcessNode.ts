@@ -745,8 +745,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       if(permitted)availableTools=availableTools.filter(tool=>tool.server===server||permitted.includes(tool.name));
     }
     sharedState.toolNameMap = sharedState.toolNameMap || {};
+    const approvalNames = node_params?.properties?.requireApprovalFor;
+    const approveWrites = node_params?.properties?.requireApprovalForWrites === true;
     for (const tool of availableTools) {
       if (tool.server && tool.originalName) {
+        // Anything other than an explicit read-only hint counts as a change, so a
+        // server that says nothing about a tool still gets a person to look at it.
+        tool.requiresApproval = approvalNames?.includes(tool.originalName)
+          || (approveWrites && tool.annotations?.readOnlyHint !== true)
+          || undefined;
         tool.context = {
           conversationId: sharedState.conversationId,
           flowId,
@@ -764,6 +771,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           clientGeneration: tool.clientGeneration,
           schemaHash: tool.schemaHash,
           annotations: tool.annotations,
+          requiresApproval: tool.requiresApproval,
           uiResourceUri: tool.uiResourceUri,
           presetArgs: tool.presetArgs,
           context: tool.context,
@@ -1274,6 +1282,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             clientGeneration: t.clientGeneration,
             schemaHash: t.schemaHash,
             annotations: t.annotations,
+            requiresApproval: t.requiresApproval,
             uiResourceUri: t.uiResourceUri,
             presetArgs: t.presetArgs,
             context: t.context,

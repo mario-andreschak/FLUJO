@@ -139,6 +139,10 @@ export interface FlowSpecNode {
   maxTurns?: number;
   /** process only: require tool-free engine routing to a sole bare Finish edge. */
   terminalRouting?: 'tool-free';
+  /** process only: MCP tool names whose calls in this step always wait for a person. */
+  requireApprovalFor?: string[];
+  /** process only: every MCP tool in this step not marked read-only waits for a person. */
+  requireApprovalForWrites?: boolean;
   /** process only: drop the bound model's base/system prompt from the rendered prompt. */
   excludeModelPrompt?: boolean;
   /** process only: drop the start node's prompt from this step's rendered prompt. */
@@ -770,6 +774,22 @@ export function compileFlowSpec(
         if (specNode.terminalRouting !== undefined) {
           if (specNode.terminalRouting === 'tool-free') properties.terminalRouting = 'tool-free';
           else error('invalid-terminal-routing', `Node "${key}": terminalRouting must be "tool-free" or absent.`, key);
+        }
+        // Dropping a safety requirement silently would be the wrong failure, so a
+        // malformed value stops the compile instead of only warning.
+        if (specNode.requireApprovalFor !== undefined) {
+          if (Array.isArray(specNode.requireApprovalFor) && specNode.requireApprovalFor.every((name) => typeof name === 'string')) {
+            if (specNode.requireApprovalFor.length > 0) properties.requireApprovalFor = specNode.requireApprovalFor;
+          } else {
+            error('invalid-require-approval-for', `Node "${key}": requireApprovalFor must be a list of tool names.`, key);
+          }
+        }
+        if (specNode.requireApprovalForWrites !== undefined) {
+          if (typeof specNode.requireApprovalForWrites === 'boolean') {
+            if (specNode.requireApprovalForWrites) properties.requireApprovalForWrites = true;
+          } else {
+            error('invalid-require-approval-for-writes', `Node "${key}": requireApprovalForWrites must be true or false.`, key);
+          }
         }
         // maxTurns (1b): per-node agentic-turn cap. Clamp to a sane range; absent ⇒ inherit.
         if (specNode.maxTurns !== undefined) {
@@ -1584,6 +1604,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.outputMode === 'string') specNode.outputMode = props.outputMode as FlowSpecNode['outputMode'];
       if (typeof props.maxTurns === 'number' && props.maxTurns > 0) specNode.maxTurns = props.maxTurns;
       if (props.terminalRouting === 'tool-free') specNode.terminalRouting = 'tool-free';
+      if (Array.isArray(props.requireApprovalFor) && props.requireApprovalFor.length > 0) specNode.requireApprovalFor = props.requireApprovalFor as string[];
+      if (props.requireApprovalForWrites === true) specNode.requireApprovalForWrites = true;
       if (props.excludeModelPrompt === true) specNode.excludeModelPrompt = true;
       if (props.excludeStartNodePrompt === true) specNode.excludeStartNodePrompt = true;
       if (props.excludeSystemPrompt === true) specNode.excludeSystemPrompt = true;
