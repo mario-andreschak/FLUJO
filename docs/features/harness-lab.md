@@ -16,6 +16,51 @@ After four new distinct tasks, the durable worker waits the configured cooldown,
 
 Normal conversations and completed, durably pinned Persona behavior calls supply observations. Evaluation runs, arbitrary ephemeral children and repeated normalized tasks do not supply new evidence. The queue holds at most 128 pending observations per target. Each generation consumes a fresh batch, including when it fails; it does not recycle a failed generation’s held-out tasks.
 
+## Compare models or flows
+
+An experiment improves one instruction on one fixed model, and it needs a model to propose and to judge. A comparison answers a different question: which of these models or flows gets my examples right? It changes nothing and asks no model for an opinion, so it costs only the runs themselves.
+
+`POST /api/harness/comparisons` starts one and returns at once. It also needs Harness Lab to be enabled. Read the result with `GET /api/harness/comparisons/{id}`:
+
+```json
+{
+  "id": "2f0c1a5e-8a53-4a1c-9d37-0d0e1f7c2a11",
+  "input": {
+    "name": "Smallest model that holds up",
+    "variants": [
+      { "flowId": "assistant", "modelId": "small-model" },
+      { "flowId": "assistant", "modelId": "large-model" }
+    ],
+    "cases": [
+      {
+        "input": "When do you open tomorrow?",
+        "required": ["8"],
+        "forbidden": ["I think"],
+        "expectedTools": ["opening_hours"],
+        "toolResults": { "opening_hours": "Open from 8 to 18." }
+      }
+    ]
+  }
+}
+```
+
+A variant is a flow, optionally with every Process step moved to another model. It can run up to 200 examples across up to 8 variants. Each case is checked by fixed rules only:
+
+| Check | Passes when |
+|---|---|
+| `required` | The output contains every phrase, ignoring case. |
+| `forbidden` | The output contains none of the phrases, ignoring case. |
+| `expectedTools` | The run called every named tool. |
+| `forbiddenTools` | The run called none of the named tools. |
+
+A case that passes these is `passed`, and one that misses any is `failed`. If the run itself did not finish, the case is `error`, and its checks say nothing. `summary` totals passes, model calls, tokens and time per variant.
+
+**Tools do not run.** Like an experiment, a comparison goes through the real engine with no real effects. A called tool answers with the case's `toolResults` for that tool, or with a fixed note. A flow's own limits still apply, including conditions before the model and allowed models. A wait for a person is skipped, because there is nobody to ask, so a comparison says nothing about what a person would decide.
+
+A comparison stops being able to continue after a restart. It then reads as `interrupted` and keeps the results so far. `DELETE /api/harness/comparisons/{id}` stops a running one, and otherwise removes its record. There is no page for comparisons yet.
+
+Fixed checks only see words and tool names. A passing comparison does not show that an answer is correct, and a small set of examples proves little. Use experiments to refine an instruction once you have chosen a model.
+
 ## Versions, activation and rollback
 
 Each profile retains a baseline and every validated version, with parent identity, content hash, experiment reference and activation history. Full graph/dependency snapshots live in separate immutable version blobs; profile lists and worker scans read metadata. Version data is independent of routine Flow edit-history pruning. Restoring a version restores its authored graph and pinned child graphs; it does not roll back workspace model configuration, global values, Persona Role state or Persona memory. The current surrounding runtime context remains in effect.

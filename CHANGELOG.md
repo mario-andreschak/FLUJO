@@ -6,6 +6,10 @@
 
 - Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.
 
+### Harness Lab
+
+- Compare models or flows on the same examples with fixed checks. A comparison run needs no proposing or judging model, takes up to 200 examples, and can check which tools were called. Tools do not run during it. There is an API for it, and no page yet.
+
 ### Flow steps
 
 - Show and limit which models a flow can reach. `GET /api/flow/{id}/models` lists the models a flow can send data to, including subflows and fallback policy members. A flow can name its `allowedModels`, and any other model ends the run before a request goes out, even if a step's model is changed later. Responses to `/v1/chat/completions` now include `flujo_models`, the models a turn used.

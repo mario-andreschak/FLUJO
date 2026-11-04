@@ -2185,7 +2185,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
    *  A call the step did not offer is left out: dispatch refuses it, so asking a
    *  person first would only offer a choice with no effect. */
   const stepRequiresApproval = (call: OpenAI.ChatCompletionMessageFunctionToolCall): boolean =>
-    isToolOfferedInStep(call.function.name, sharedState.offeredToolNames, sharedState.toolNameMap)
+    !getHarnessExecution()
+    && isToolOfferedInStep(call.function.name, sharedState.offeredToolNames, sharedState.toolNameMap)
     && decodeToolName(call.function.name, sharedState.toolNameMap)?.requiresApproval === true;
   // Stops the run for a person's decision on `heldCalls`. Other calls in the
   // batch run first: a batch has no order guarantee (#252), and this is what
