@@ -42,6 +42,7 @@ import {
   killProcessTree,
   killProcessTreeAndWait,
   loadEffectiveRoots,
+  workingBaseDir,
   type ProcessTreeTerminationResult,
 } from '@flujo-ai/mcp-shared';
 
@@ -876,9 +877,10 @@ const BASH_ROOT_ENV_VARS = ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'];
  * confinement violation so callers surface a precise error (issue #175).
  */
 async function resolveCwd(input: unknown, roots: string[]): Promise<string> {
-  const dataDir = getDataDir();
+  // The chat's project folder when FLUJO sent one inside the roots, else the data dir.
+  const base = workingBaseDir(roots);
   const raw = typeof input === 'string' ? input.trim() : '';
-  const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw)) : dataDir;
+  const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(base, raw)) : base;
 
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`cwd "${resolved}" is outside the configured bash roots.`);
@@ -1732,7 +1734,7 @@ export function bashToolDefinitions(): Tool[] {
     enum: ['default', 'pwsh', 'powershell', 'bash', 'cmd'],
     description: 'Command parser. "default" uses PowerShell on Windows and /bin/sh elsewhere. Explicit "bash" launches FLUJO\'s absolute resolved Git Bash path on Windows (WSL relay launchers are rejected). Explicit "pwsh" may report a compatibility substitution to Windows PowerShell 5.1; other unavailable explicit shells return an error.',
   };
-  const cwdProp = { type: 'string', description: 'Working directory. Relative paths resolve from the FLUJO data directory; configured roots still apply.' };
+  const cwdProp = { type: 'string', description: 'Working directory. Defaults to the chat project folder (else the FLUJO data directory), which relative paths also resolve from; configured roots still apply.' };
   const envProp = {
     type: 'object',
     additionalProperties: { type: 'string' },

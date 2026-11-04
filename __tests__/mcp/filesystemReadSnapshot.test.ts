@@ -13,6 +13,7 @@ jest.mock('@flujo-ai/mcp-shared', () => ({
   createLogger: () => ({ warn: jest.fn(), debug: jest.fn() }),
   getDataDir: () => '/synthetic',
   loadEffectiveRoots: jest.fn(async () => ['/synthetic']),
+  workingBaseDir: () => '/synthetic',
 }));
 jest.mock('../../mcp-servers/filesystem/src/pathConfinement', () => ({
   confineFilesystemPath: jest.fn(async (file: string) => file),

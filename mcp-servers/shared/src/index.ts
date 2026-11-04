@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -37,6 +38,41 @@ export function createLogger(scope: string): DiagnosticLogger {
 
 export function getDataDir(): string {
   return path.resolve(process.env.FLUJO_DATA_DIR?.trim() || process.cwd());
+}
+
+const projectDirContext = new AsyncLocalStorage<string | undefined>();
+
+/**
+ * The calling chat's project folder, sent by FLUJO as `_meta.flujo.cwd`. Only
+ * absolute paths are accepted; anything else means "no project".
+ */
+export function projectDirOf(meta: unknown): string | undefined {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const flujo = (meta as Record<string, unknown>).flujo;
+  if (!flujo || typeof flujo !== 'object') return undefined;
+  const cwd = (flujo as Record<string, unknown>).cwd;
+  return typeof cwd === 'string' && cwd.trim() && path.isAbsolute(cwd.trim()) ? path.resolve(cwd.trim()) : undefined;
+}
+
+/** Run one tool call with the chat's project folder as its working base. */
+export function runWithProjectDir<T>(projectDir: string | undefined, fn: () => T): T {
+  return projectDirContext.run(projectDir, fn);
+}
+
+/** The project folder of the tool call in progress, if FLUJO sent one. */
+export function currentProjectDir(): string | undefined {
+  return projectDirContext.getStore();
+}
+
+/**
+ * Where a tool call starts and resolves relative paths: the calling chat's
+ * project folder when it lies inside the effective roots, else the data dir.
+ * Confinement is unchanged — this only picks the base inside it.
+ */
+export function workingBaseDir(roots: readonly string[]): string {
+  const projectDir = currentProjectDir();
+  if (projectDir && roots.some((root) => isInside(root, projectDir))) return projectDir;
+  return getDataDir();
 }
 
 export function isInside(root: string, candidate: string): boolean {

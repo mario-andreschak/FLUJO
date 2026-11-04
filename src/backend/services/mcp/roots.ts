@@ -16,9 +16,9 @@ import {
   DEFAULT_WORKSPACE,
   getCurrentWorkspace,
   getWorkspaceDataDir,
-  loadWorkspaceRoots,
   workspaceCacheKey,
 } from '@/utils/workspace';
+import { loadWorkspaceProjectRoots } from '@/backend/services/projects/projectStore';
 
 const log = createLogger('backend/services/mcp/roots');
 
@@ -245,7 +245,7 @@ export async function resolveServerRoots(
   config: MCPServerConfig,
   inheritedWorkspaceRoots?: string[],
 ): Promise<Root[]> {
-  const workspaceRoots = inheritedWorkspaceRoots ?? await loadWorkspaceRoots();
+  const workspaceRoots = inheritedWorkspaceRoots ?? await loadWorkspaceProjectRoots();
   const raw = (config as { roots?: unknown }).roots;
   const serverRoots = Array.isArray(raw) ? raw : [];
   const entries = [...workspaceRoots, ...serverRoots, ...getNodeRoots(config.name)];
@@ -340,7 +340,7 @@ export function createRootsListHandler(config: MCPServerConfig,
     }
     const [restricted, workspaceRoots] = await Promise.all([
       loadMcpRootsRestriction(),
-      loadWorkspaceRoots(),
+      loadWorkspaceProjectRoots(),
     ]);
     // Workspace folders describe the project context. They become an access
     // boundary only when the user explicitly enables roots confinement.

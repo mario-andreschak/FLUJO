@@ -28,8 +28,8 @@ import readline from 'node:readline';
 import type { Tool, CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import {
   createLogger,
-  getDataDir,
   loadEffectiveRoots,
+  workingBaseDir,
 } from '@flujo-ai/mcp-shared';
 import { confineFilesystemPath } from './pathConfinement.js';
 import { recordTouchedFile } from './resources.js';
@@ -239,7 +239,8 @@ export function _normalizeSlashDrivePathForTests(
 }
 
 /**
- * Resolve a user-supplied path against the data dir (for relative paths) and
+ * Resolve a user-supplied path against the chat's project folder or the data
+ * dir (for relative paths) and
  * enforce the effective confinement roots. An empty roots array blocks all access.
  * Throws on a confinement violation so callers surface a precise error.
  */
@@ -247,16 +248,17 @@ async function resolvePath(input: unknown, roots: string[]): Promise<string> {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new Error('Provide "path".');
   const normalized = _normalizeSlashDrivePathForTests(raw);
-  const dataDir = getDataDir();
+  // The chat's project folder when FLUJO sent one inside the roots, else the data dir.
+  const base = workingBaseDir(roots);
   const resolved = path.isAbsolute(normalized)
     ? path.resolve(normalized)
-    : path.resolve(dataDir, normalized);
+    : path.resolve(base, normalized);
 
   return confineFilesystemPath(resolved, roots);
 }
 
 export function filesystemToolDefinitions(): Tool[] {
-  const pathProp = { type: 'string', description: 'File or directory path. Relative paths start at the FLUJO data directory.' };
+  const pathProp = { type: 'string', description: 'File or directory path. Relative paths start at the chat project folder (else the FLUJO data directory).' };
   return [
     {
       name: 'read_file',

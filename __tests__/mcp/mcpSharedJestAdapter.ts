@@ -1,8 +1,12 @@
 // Jest-only compatibility adapter for tests that exercise the historical backend
 // module paths. Standalone subprocess tests load @flujo-ai/mcp-shared from its
 // compiled workspace package and therefore do not pass through this adapter.
+import { getDataDir } from '@/utils/paths';
+import { isInside } from '@/backend/services/mcp/internal/confinement';
+import { currentProjectDir } from '../../mcp-servers/shared/src/index';
+
 export { createLogger } from '@/utils/logger';
-export { getDataDir } from '@/utils/paths';
+export { getDataDir };
 export {
   envRoots,
   isInside,
@@ -15,6 +19,15 @@ export {
   killProcessTreeAndWait,
   type ProcessTreeTerminationResult,
 } from '../../mcp-servers/shared/src/index';
+
+export { currentProjectDir, projectDirOf, runWithProjectDir } from '../../mcp-servers/shared/src/index';
+
+// Same choice as the package helper, with the backend data dir used above.
+export function workingBaseDir(roots: readonly string[]): string {
+  const projectDir = currentProjectDir();
+  if (projectDir && roots.some(root => isInside(root, projectDir))) return projectDir;
+  return getDataDir();
+}
 
 export type RootsProvider = () => Promise<Array<{ uri: string }>>;
 

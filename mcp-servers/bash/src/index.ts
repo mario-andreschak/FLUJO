@@ -9,7 +9,7 @@ import {
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { configureRootsProvider } from '@flujo-ai/mcp-shared';
+import { configureRootsProvider, projectDirOf, runWithProjectDir } from '@flujo-ai/mcp-shared';
 import { bashCallTool, bashToolDefinitions, shutdownBashSessions } from './tools.js';
 import { bashListResources, bashReadResource, isBashAppUri } from './resources.js';
 
@@ -51,7 +51,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: bashToolD
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const meta = flujoMetaOf(request.params._meta);
   const progressToken = request.params._meta?.progressToken;
-  const result = await bashCallTool(
+  // The calling chat's project folder is the base for this call only.
+  const result = await runWithProjectDir(projectDirOf(request.params._meta), () => bashCallTool(
     request.params.name,
     request.params.arguments ?? {},
     meta.callerNodeId,
@@ -72,7 +73,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           }
         : {}),
     },
-  );
+  ));
   if (progressToken !== undefined) {
     await server.ping();
   }

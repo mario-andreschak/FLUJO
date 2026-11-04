@@ -26,6 +26,7 @@ import { assertMcpIsolationDispatch } from './isolation';
 import { McpIsolationError } from '../security/isolatedMcp';
 import { ExecutionExtensionError } from '@/backend/execution/extensions';
 import { shippedDescriptorForConfig } from './shippedServers';
+import { projectDirForToolCall } from '@/backend/services/projects/projectStore';
 import { isMcpTransport, MCP_TRANSPORT_INVALID } from './transportAdmission';
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
@@ -2399,6 +2400,15 @@ export class MCPService {
       try { return { success: true, data: JSON.parse(output) }; }
       catch { return { success: true, data: { content: [{ type: 'text', text: output }] } }; }
     }
+    // The calling chat's project folder (shipped bash/filesystem only). Resolved
+    // up front because it reads — and on a chat's first call writes — workspace
+    // metadata, which must not sit between the dispatch checks and the dispatch.
+    const projectDir = protectedDispatch || !trustedContext?.conversationId
+      ? undefined
+      : await projectDirForToolCall(
+          await this.getServerConfig(serverName).catch(() => null),
+          trustedContext.conversationId,
+        );
     // Customer authority is checked before config side effects, connections or leases.
     // Testers, Apps, proxy, scheduler and missing-context resumes cannot mint assertions.
     try {
@@ -2559,6 +2569,7 @@ export class MCPService {
         executionExtensionContext,
         protectedDispatch ? verifyProtectedRecipient : undefined,
         trustedContext?.conversationId,
+        projectDir,
       );
       if (result.success && trustedTicketConversationId) {
         const ticketId = createdTicketIdFromMcpResult(result.data);

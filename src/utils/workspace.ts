@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { lstatSync, readdirSync } from 'fs';
 import { AsyncLocalStorage } from 'async_hooks';
+import { randomUUID } from 'crypto';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { getDataDir } from './paths';
 
@@ -336,8 +337,13 @@ export interface WorkspaceInfo {
   name: string;
   color: string;
   isDefault: boolean;
-  /** Backend filesystem folders automatically exposed to every MCP server. */
+  /**
+   * The workspace's projects: backend filesystem folders automatically exposed
+   * to every MCP server.
+   */
   roots: string[];
+  /** The project new chats start in (one of `roots`), if any. */
+  activeProject?: string;
 }
 
 const WORKSPACE_METADATA_FILE = '.workspace.json';
@@ -392,26 +398,107 @@ export function assertWorkspaceRoots(value: unknown): string[] {
   return normalized;
 }
 
-/** Read the workspace-level folders inherited by every MCP server at runtime. */
-export async function loadWorkspaceRoots(workspace?: string): Promise<string[]> {
-  const name = normalizeWorkspaceName(workspace ?? getCurrentWorkspace());
+/**
+ * The raw `.workspace.json` record. This module owns `roots`; the project service
+ * (backend/services/projects) keeps its own fields beside it, so every writer
+ * must preserve fields it does not understand.
+ */
+export type WorkspaceMetadata = Record<string, unknown>;
+
+async function readWorkspaceMetadataFile(dir: string): Promise<WorkspaceMetadata> {
   try {
-    const raw = await fs.readFile(path.join(getWorkspaceDir(name), WORKSPACE_METADATA_FILE), 'utf8');
-    const metadata = JSON.parse(raw) as { roots?: unknown };
-    return assertWorkspaceRoots(metadata?.roots ?? []);
+    const parsed = JSON.parse(await fs.readFile(path.join(dir, WORKSPACE_METADATA_FILE), 'utf8')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as WorkspaceMetadata : {};
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return [];
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw error;
   }
 }
 
+/** Read the whole metadata record of a workspace (the current one by default). */
+export async function readWorkspaceMetadata(workspace?: string): Promise<WorkspaceMetadata> {
+  const name = normalizeWorkspaceName(workspace ?? getCurrentWorkspace());
+  return readWorkspaceMetadataFile(getWorkspaceDir(name));
+}
+
+// Process-global like the mutation gates: Next request and execution bundles
+// each evaluate this module, and every copy must share one queue per workspace.
+const metadataHost = globalThis as typeof globalThis & {
+  __flujoWorkspaceMetadataWritesV1?: Map<string, Promise<unknown>>;
+};
+const metadataWrites = metadataHost.__flujoWorkspaceMetadataWritesV1 ??= new Map();
+
+/**
+ * Serialized read-modify-write of a workspace's metadata. Writes are atomic
+ * (temporary file + rename), queued per workspace so the roots editor and
+ * project bindings never overwrite each other's concurrent changes, and
+ * admitted through the workspace mutation gate so a snapshot export never
+ * observes the file mid-replacement.
+ */
+export async function updateWorkspaceMetadata(
+  workspace: string,
+  mutate: (current: WorkspaceMetadata) => WorkspaceMetadata,
+): Promise<WorkspaceMetadata> {
+  const name = assertValidWorkspaceName(workspace);
+  const previous = metadataWrites.get(name) ?? Promise.resolve();
+  const write = previous.catch(() => undefined).then(async () => {
+    const { withWorkspaceMutation } = await import('@/backend/services/workspace/workspaceMutationGate');
+    return withWorkspaceMutation(async () => {
+      const dir = await resolveManagedWorkspace(name);
+      const next = mutate(await readWorkspaceMetadataFile(dir));
+      const target = path.join(dir, WORKSPACE_METADATA_FILE);
+      const temporary = path.join(dir, `${WORKSPACE_METADATA_FILE}.${process.pid}.${randomUUID()}.tmp`);
+      await fs.writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+      try {
+        await fs.rename(temporary, target);
+      } catch (error) {
+        await fs.rm(temporary, { force: true });
+        throw error;
+      }
+      return next;
+    }, name);
+  });
+  metadataWrites.set(name, write);
+  try {
+    return await write;
+  } finally {
+    if (metadataWrites.get(name) === write) metadataWrites.delete(name);
+  }
+}
+
+/** Read the workspace-level folders inherited by every MCP server at runtime. */
+export async function loadWorkspaceRoots(workspace?: string): Promise<string[]> {
+  const metadata = await readWorkspaceMetadata(workspace);
+  return assertWorkspaceRoots(metadata.roots ?? []);
+}
+
+/**
+ * The project new chats start in, only when one was explicitly chosen and is
+ * still a root. There is deliberately no fallback to the first root: existing
+ * workspaces keep the data directory as the default working folder until the
+ * user picks a project.
+ */
+export function activeProjectOf(metadata: WorkspaceMetadata, roots: string[]): string | undefined {
+  const stored = typeof metadata.activeProject === 'string' ? metadata.activeProject : undefined;
+  return stored === undefined ? undefined : roots.find(root => sameFilesystemPath(root, stored));
+}
+
+/** Path equality with Windows' case-insensitive filesystem semantics. */
+export function sameFilesystemPath(a: string, b: string): boolean {
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
 async function workspaceInfo(name: string): Promise<WorkspaceInfo> {
+  const metadata = await readWorkspaceMetadata(name);
+  const roots = assertWorkspaceRoots(metadata.roots ?? []);
   return {
     name,
     color: workspaceColor(name),
     isDefault: name === DEFAULT_WORKSPACE,
-    roots: await loadWorkspaceRoots(name),
+    roots,
+    activeProject: activeProjectOf(metadata, roots),
   };
 }
 
@@ -697,19 +784,7 @@ export async function updateWorkspaceRoots(
 ): Promise<WorkspaceInfo> {
   const name = assertValidWorkspaceName(workspace);
   const normalized = assertWorkspaceRoots(roots);
-  const dir = await resolveManagedWorkspace(name);
-  const target = path.join(dir, WORKSPACE_METADATA_FILE);
-  const temporary = path.join(dir, `${WORKSPACE_METADATA_FILE}.${process.pid}.${Date.now()}.tmp`);
-  await fs.writeFile(temporary, `${JSON.stringify({ roots: normalized }, null, 2)}\n`, {
-    encoding: 'utf8',
-    flag: 'wx',
-  });
-  try {
-    await fs.rename(temporary, target);
-  } catch (error) {
-    await fs.rm(temporary, { force: true });
-    throw error;
-  }
+  await updateWorkspaceMetadata(name, current => ({ ...current, roots: normalized }));
   return workspaceInfo(name);
 }
 

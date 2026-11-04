@@ -9,7 +9,7 @@ import {
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { configureRootsProvider } from '@flujo-ai/mcp-shared';
+import { configureRootsProvider, projectDirOf, runWithProjectDir } from '@flujo-ai/mcp-shared';
 import {
   filesystemCallTool,
   filesystemToolDefinitions,
@@ -49,7 +49,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const progressToken = request.params._meta?.progressToken;
-  const result = await filesystemCallTool(
+  // The calling chat's project folder is the base for this call only.
+  const result = await runWithProjectDir(projectDirOf(request.params._meta), () => filesystemCallTool(
     request.params.name,
     request.params.arguments ?? {},
     callerNodeIdOf(request.params._meta),
@@ -69,7 +70,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           }
         : {}),
     },
-  );
+  ));
   if (progressToken !== undefined) await server.ping();
   return result;
 });
