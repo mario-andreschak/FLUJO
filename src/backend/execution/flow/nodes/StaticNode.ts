@@ -16,6 +16,7 @@ import { applyPresetArguments, resolvePromptDynamicReferences } from '@/backend/
 import { mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
 import { redactErrorDetails } from '../normalizeError';
 import { combineAbortSignals } from '../combineAbortSignals';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { defaultConditionTarget, selectConditionedEdge } from '@/utils/shared/edgeConditions';
 import { HUMAN_GATE_APPROVED_RESULT, HUMAN_GATE_REJECTED_RESULT, HUMAN_GATE_TOOL_NAME } from '@/utils/shared/flowApproval';
 import {
@@ -186,6 +187,8 @@ export class StaticNode extends BaseNode<
 
         if (entry.kind === 'humanGate') {
           validateRejectOptions(entry);
+          // An evaluation has nobody to ask, and nothing it does has a real effect.
+          if (getHarnessExecution()) continue;
           if (!heldHere) {
             const text = (await resolve(entry.text ?? '')).trim();
             if (!text) throw new Error(`Static node ${nodeId}: a human gate entry requires text.`);
@@ -287,7 +290,7 @@ export class StaticNode extends BaseNode<
           if (entry.resultFormat !== undefined && entry.resultFormat !== 'text' && entry.resultFormat !== 'json') {
             throw new Error(`Static node ${nodeId}: resultFormat must be text or json.`);
           }
-          if (entry.requireApproval === true) {
+          if (entry.requireApproval === true && !getHarnessExecution()) {
             if (!heldHere) {
               return holdForPerson(entryIndex, toolCall, serverName ? { serverName, toolName } : undefined);
             }

@@ -21,6 +21,12 @@ export interface HarnessExecutionScope {
   afterCall: (tokens: number | null, completedCalls?: number) => Promise<void>;
   authorize: (model: Model) => Promise<void>;
   signal: AbortSignal;
+  /**
+   * Set for a comparison run. There is no recording to replay and no real effect:
+   * every tool answers from the case. A provider may also report a more specific
+   * name than the one requested, which a comparison records rather than refuses.
+   */
+  comparison?: { toolResult: (name: string) => string; reportedModels: Set<string> };
 }
 const root = globalThis as typeof globalThis & { __flujoHarnessExecution?: AsyncLocalStorage<HarnessExecutionScope> };
 const scope = root.__flujoHarnessExecution ??= new AsyncLocalStorage<HarnessExecutionScope>();
@@ -46,6 +52,11 @@ export function replayHarnessTool(name: string, args: Record<string, unknown>): 
   const current = getHarnessExecution();
   if (!current) throw new Error('Harness replay is not active.');
   current.signal.throwIfAborted();
+  if (current.comparison) {
+    current.trace.push({ name, arguments: args, matched: true });
+    current.replayed++;
+    return current.comparison.toolResult(name);
+  }
   const index = current.tools.findIndex(item => item.name === name
     && canonicalHarnessJson(item.arguments) === canonicalHarnessJson(args));
   current.trace.push({ name, arguments: args, matched: index >= 0 });
@@ -129,7 +140,9 @@ export function guardHarnessAdapter(adapter: CompletionAdapter): CompletionAdapt
       const content = result.completion.choices[0]?.message?.content;
       if ((typeof content === 'string' && content.length > 32000) || result.completion.choices[0]?.finish_reason === 'length'
         || JSON.stringify(result.transcript ?? []).length > 256000) throw new Error('The evaluation response exceeded its limit.');
-      if (result.completion.model.replace(/:free$/, '') !== input.model.name.replace(/:free$/, '')) {
+      if (current.comparison) {
+        if (result.completion.model) current.comparison.reportedModels.add(result.completion.model);
+      } else if (result.completion.model.replace(/:free$/, '') !== input.model.name.replace(/:free$/, '')) {
         current.failed = 'The evaluation provider changed model identity.';
         throw new Error(current.failed);
       }
