@@ -56,6 +56,11 @@ export interface FlowDecision {
   outcome: string;
   reason?: string;
   allowTools?: string[];
+  /** For a model's answer: how likely it is, and which model gave it. */
+  probability?: number;
+  model?: string;
+  /** For a model's answer: no usable answer came back. */
+  failed?: true;
   at: string;
   runId?: string;
 }

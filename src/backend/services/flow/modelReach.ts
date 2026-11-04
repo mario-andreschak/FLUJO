@@ -11,7 +11,7 @@ import type { Flow } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
-import { modelsOutsideBoundary } from '@/utils/shared/flowModelBoundary';
+import { modelsOutsideBoundary, stepModelIds } from '@/utils/shared/flowModelBoundary';
 
 export interface FlowModelDestination {
   id: string;
@@ -82,10 +82,10 @@ export async function describeFlowModelReach(rootFlowId: string): Promise<FlowMo
     for (const node of (flow.nodes ?? []) as unknown as FlowModelNode[]) {
       const type = node.data?.type ?? node.type;
       const properties = node.data?.properties ?? {};
-      if (type === 'process' && typeof properties.boundModel === 'string' && properties.boundModel) {
-        const bound = byId.get(properties.boundModel);
+      for (const modelId of stepModelIds(type, properties)) {
+        const bound = byId.get(modelId);
         if (!bound) {
-          unresolved.push({ kind: 'model', id: properties.boundModel, flowId: flow.id, nodeId: node.id });
+          unresolved.push({ kind: 'model', id: modelId, flowId: flow.id, nodeId: node.id });
         } else if (bound.fallbackPolicy) {
           for (const memberId of bound.fallbackPolicy.modelIds) {
             const member = byId.get(memberId);

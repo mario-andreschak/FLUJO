@@ -69,6 +69,7 @@ NODE TYPES:
 - { "key": "...", "type": "static", "label": "...",                // OPTIONAL/advanced (rule 13): injects pre-authored
     "entries": [                                                    //   messages / few-shot examples, then passes through unchanged
       { "kind": "message", "role": "system|user|assistant", "content": "..." },
+      { "kind": "modelDecision", "model": "small-model", "captureVariable": "check", "target": "last-user", "question": { "type": "choice|noul|score", "instructions": "what to decide", "criteria": "what counts", "options": { "a": "what a means", "b": "what b means" } }, "onFailure": "fail|continue", "failureValue": "a" },   // a model answers one typed question on the side; the answer goes into a variable as JSON (value, probability, reason, failed) and never into the conversation. noul has no options, score lists its answers lowest first
       { "kind": "humanGate", "text": "what the person decides", "onReject": "stop|continue", "rejectedText": "..." },   // the run waits for a person with no tool involved; rejection stops the run unless onReject is "continue". Route on the result with a condition on this node's edge: "approved" or "tool denied"
       { "kind": "toolCall", "executionMode": "mock|real", "serverName": "...", "toolName": "...", "argumentsJson": "{...}", "result": "...", "captureVariable": "NAME", "resultFormat": "text|json", "onError": "continue|fail", "requireApproval": true, "onReject": "stop|continue", "rejectedText": "..." }
     ],

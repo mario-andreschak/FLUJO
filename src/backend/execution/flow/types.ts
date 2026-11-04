@@ -1,5 +1,6 @@
 import type { DecisionRule, FlowDecision } from '@/utils/shared/decisionRules';
-import type { RecordedVariableSource } from '@/utils/shared/edgeConditions';
+import type { EdgeConditionTarget, RecordedVariableSource } from '@/utils/shared/edgeConditions';
+import type { DecisionQuestion } from '@/utils/shared/modelDecision';
 import type { ModelInputSnapshot } from '@/shared/types/execution/modelInput';
 import type { DebuggerStateView } from '@/shared/types/execution/debuggerState';
 export type {
@@ -720,6 +721,23 @@ export type StaticEntry =
         onReject?: 'stop' | 'continue';
         /** With onReject 'stop': the run's final text. Default "Not approved." */
         rejectedText?: string;
+      }
+    | {
+        /** A model answers one typed question, on the side of the conversation. */
+        kind: 'modelDecision';
+        /** The model that decides, often a small, cheap one. */
+        boundModel: string;
+        /** Run variable that receives the answer as JSON, marked as coming from a model. */
+        captureVariable: string;
+        question: DecisionQuestion;
+        /** What to judge. Defaults to the last user message. */
+        target?: EdgeConditionTarget;
+        /** With target 'variable': the run variable to judge. */
+        variable?: string;
+        /** When the model gives no usable answer: end the run (default) or carry on. */
+        onFailure?: 'fail' | 'continue';
+        /** With onFailure 'continue': the answer to assume. It is marked as failed. */
+        failureValue?: string;
       }
     | {
         /** The run waits here until a person decides, with no tool involved. */

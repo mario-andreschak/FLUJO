@@ -227,6 +227,10 @@ A Static node can run a tool and choose the next step from its result, with no m
 
 The first edge that matches wins, and an edge without a condition is the fallback. A tool that answers with text inside MCP's `content` block is read as `stock.content.0.text`.
 
+## Check with a model
+
+A Static node can have a model answer one typed question, on the side of the conversation, see [Model decisions](./model-decisions.md).
+
 ## Decide by fixed rules
 
 A Static node can decide what happens next with no model, see [Decision rules](./decision-rules.md).

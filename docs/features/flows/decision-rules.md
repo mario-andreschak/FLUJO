@@ -67,6 +67,10 @@ The note is tied to the value. If anything changes the variable afterwards, the 
 
 A tool result is only as trustworthy as what went in. A tool that repeats a model's text back gives you that text, marked `tool`.
 
+## Asking a model
+
+Fixed rules cannot tell what a message means. For that, a Static node can ask a model one typed question, and rules then decide what follows from the answer. See [Model decisions](./model-decisions.md).
+
 ## Limiting tools
 
 `allowTools` limits what later model steps are offered, and FLUJO refuses a call to anything else. An empty list means no connected tools. Each decision replaces the list from the one before, and a rule with no list sets no limit. The limit stays across turns until another decision replaces it, and a subflow stays inside its parent's limit.

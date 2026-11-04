@@ -17,6 +17,7 @@ import { mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
 import { redactErrorDetails } from '../normalizeError';
 import { combineAbortSignals } from '../combineAbortSignals';
 import { getHarnessExecution } from '@/backend/services/harness/executionScope';
+import { runModelDecision } from '../decisionModel';
 import { defaultConditionTarget, recordVariableSource, selectConditionedEdge } from '@/utils/shared/edgeConditions';
 import {
   DEFAULT_DECISION_VARIABLE,
@@ -119,6 +120,8 @@ async function deliverResult(call: () => Promise<MCPServiceResponse>): Promise<M
  *    reject the history — invalid `argumentsJson` therefore fails loudly. With
  *    `requireApproval`, a person decides on the call before it runs.
  *  - `humanGate` → the run waits for a person's decision, with no tool involved.
+ *  - `modelDecision` → a model answers one typed question on the side. The answer goes
+ *    into a run variable and never into the conversation.
  *
  * After the entries, a node can decide by fixed `rules`: the first that applies sets
  * the outcome, its variables and the tools later model steps may use. See
@@ -253,6 +256,27 @@ export class StaticNode extends BaseNode<
       for (let entryIndex = decided?.entryIndex ?? 0; entryIndex < prepResult.entries.length; entryIndex++) {
         const entry = prepResult.entries[entryIndex];
         const heldHere = decided?.entryIndex === entryIndex ? decided : undefined;
+
+        if (entry.kind === 'modelDecision') {
+          if (!entry.boundModel || !entry.captureVariable || !isValidRunVarName(entry.captureVariable)) {
+            throw new Error(`Static node ${nodeId}: a model decision needs a model and a valid capture variable.`);
+          }
+          const failure = await runModelDecision(entry, sharedState, nodeId, [...sharedState.messages, ...messages]);
+          if (failure || sharedState.isCancelled || sharedState.abortSignal?.aborted) {
+            // Carrying on would treat an unchecked message as a checked one.
+            const message = failure
+              ? `The check "${entry.captureVariable}" in this flow gave no usable answer (${failure}).`
+              : 'Execution cancelled.';
+            sharedState.messages.push(...messages);
+            sharedState.lastResponse = {
+              success: false,
+              error: message,
+              errorDetails: { message, type: 'flow_error', code: failure ? 'decision_model_failed' : 'static_tool_cancelled' },
+            };
+            return ERROR_ACTION;
+          }
+          continue;
+        }
 
         if (entry.kind === 'humanGate') {
           validateRejectOptions(entry);

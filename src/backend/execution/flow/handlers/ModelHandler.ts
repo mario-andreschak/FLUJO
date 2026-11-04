@@ -515,6 +515,43 @@ export class ModelHandler {
   }
 
   /**
+   * One reply to one question, with no tools, no history and no record in the
+   * conversation, for a model that judges something on the side. A strict reply format
+   * goes only to adapters that can hold to one.
+   */
+  static async askOnce(
+    admission: ModelCatalogAdmission,
+    input: {
+      system: string;
+      user: string;
+      outputSchema?: Record<string, unknown>;
+      maxTokens?: number;
+      shouldAbort?: () => boolean;
+      onModelRouted?: (modelId: string) => void;
+      durableContext?: FlowDurableMutationContext;
+    },
+  ): Promise<Result<ModelCallResult>> {
+    const { model } = admission;
+    const supportsSchema = model.adapter === 'codex-cli'
+      || ((!model.adapter || model.adapter === 'openai' || model.adapter === 'openai-responses')
+        && !!model.supportedParameters?.includes('structured_outputs'));
+    const callMessages: FlujoChatMessage[] = [
+      { id: uuidv4(), role: 'system', content: input.system, timestamp: Date.now() } as FlujoChatMessage,
+      { id: uuidv4(), role: 'user', content: input.user, timestamp: Date.now() } as FlujoChatMessage,
+    ];
+    return ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
+      modelCatalogAdmission: admission,
+      maxTokens: input.maxTokens,
+      temperatureOverride: 0,
+      ...(supportsSchema && input.outputSchema ? { outputSchema: input.outputSchema } : {}),
+      shouldAbort: input.shouldAbort,
+      onModelRouted: input.onModelRouted,
+      beforeModelDispatch: input.durableContext?.executionAuthority?.assertCurrent,
+      durableContext: input.durableContext,
+    });
+  }
+
+  /**
    * Read the experimental summarizing-compaction settings (issue #248) from the
    * persisted Settings blob. Best-effort: any failure reads as disabled, so the
    * completion path keeps its existing (wire-only) behaviour.
