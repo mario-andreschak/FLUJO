@@ -74,6 +74,8 @@ NODE TYPES:
     ],
     "injectOnce": true, "outputTemplate": "\${var:NAME}" }            // optional output selection; omission preserves context-only injection
 
+TOP LEVEL (optional): "allowedModels": ["model id or name"] limits this flow and its subflows to these models, checked before every model turn. Only set it when asked to.
+
 EDGES: { "from": "<node key>", "to": "<node key>", "bidirectional": true|false,
          "condition": { "kind": "contains"|"regex"|"equals", "value": "...",
                         "target": "last-assistant"|"last-message",  // optional, default last-assistant

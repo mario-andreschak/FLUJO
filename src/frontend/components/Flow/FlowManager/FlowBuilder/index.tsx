@@ -694,6 +694,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         nodes: flowNodes,
         edges,
         folder: initialFlow?.folder,    // Preserve folder assignment
+        ...(initialFlow?.allowedModels ? { allowedModels: initialFlow.allowedModels } : {}),
         favorite: initialFlow?.favorite, // Preserve favorite status
       };
 
@@ -856,6 +857,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       edges,
       folder: initialFlow?.folder,
       favorite: initialFlow?.favorite,
+      ...(initialFlow?.allowedModels ? { allowedModels: initialFlow.allowedModels } : {}),
     };
     const { flow: repaired, changes } = autoRepairFlow(currentFlow);
     if (changes.length === 0) {
@@ -897,6 +899,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       description: flowToCopy.description,
       nodes: flowToCopy.nodes,
       edges: flowToCopy.edges,
+      ...(flowToCopy.allowedModels ? { allowedModels: flowToCopy.allowedModels } : {}),
       folder: flowToCopy.folder,    // Preserve folder assignment
       favorite: flowToCopy.favorite, // Preserve favorite status
     };
@@ -948,6 +951,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         edges,
         folder: initialFlow?.folder,
         favorite: initialFlow?.favorite,
+        ...(initialFlow?.allowedModels ? { allowedModels: initialFlow.allowedModels } : {}),
       };
       const saved = (await onSave(flow)) !== false;
       if (!saved) {

@@ -65,6 +65,7 @@ import { isCancelledByAncestry, isConversationDeleted } from '@/backend/executio
 import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { entryConditionStartNodeId } from '@/utils/shared/edgeConditions';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
+import { intersectAllowedModels } from '@/utils/shared/flowModelBoundary';
 import { isQuickChatEnabled, QUICK_CHAT_DISABLED_CODE, QUICK_CHAT_DISABLED_MESSAGE } from '@/backend/services/workspace/modelAccess';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
 import { decodeToolName, isToolOfferedInStep } from '@/backend/execution/flow/handlers/toolNamespace';
@@ -495,6 +496,8 @@ export interface FlowRunResult {
   /** Aggregated token/cost totals for the run. */
   usage?: UsageTotals;
   pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
+  /** Every model this user turn sent a request to, or tried to, by model id. */
+  modelsUsed?: string[];
   error?: { message: string; details?: ErrorDetails; statusCode: number };
   /** Set when flow resolution failed (the adapter maps this to a 400). */
   flowNotFound?: { name: string };
@@ -1071,6 +1074,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   if (userTurn && !resumingPausedLogicalRun && !input.parentRunId && (input.depth ?? 0) === 0) {
     sharedState.staticInjected = undefined;
   }
+  if (userTurn) sharedState.modelsUsed = undefined;
   if (userTurn && sharedState.staticHold) {
     // A new message replaces an open wait. The dangling-call repair below answers the
     // waiting call, and the node asks again if the run reaches it again.
@@ -1893,6 +1897,28 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     } catch (validationError) {
       // A failure to RUN the check must not block the user — log and proceed.
       log.warn(`Pre-run validation could not complete for ${sharedState.flowId}; proceeding`, validationError);
+    }
+  }
+
+  // --- Allowed models ---
+  // Read on every entry, because a resumed run must keep the same limit. The list can
+  // only narrow within a conversation, and a subflow may not widen its parent's.
+  if (sharedState.flowId && !preflightError) {
+    try {
+      const flowAllowed = (sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId))?.allowedModels;
+      const parentAllowed = input.parentRunId ? FlowExecutor.conversationStates.get(input.parentRunId)?.allowedModels : undefined;
+      sharedState.allowedModels = intersectAllowedModels(intersectAllowedModels(flowAllowed, parentAllowed), sharedState.allowedModels);
+    } catch (allowedModelsError) {
+      // Skipping this could send data to a model the flow rules out. Only this turn fails.
+      log.warn(`Could not read allowed models for ${sharedState.flowId}; ending this turn`, allowedModelsError);
+      const message = 'FLUJO could not read which models this flow may use. Please send the message again.';
+      sharedState.lastResponse = {
+        success: false,
+        error: message,
+        errorDetails: { message, type: 'api_error', code: 'flow_allowed_models_unreadable', status: 503 },
+      };
+      currentAction = ERROR_ACTION;
+      preflightError = true;
     }
   }
 
@@ -3678,6 +3704,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       status: 'paused_debug',
       outputText: '',
       pendingToolCalls: sharedState.pendingToolCalls,
+    modelsUsed: sharedState.modelsUsed,
     });
   }
 
@@ -3790,5 +3817,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     ...(outputMedia ? { outputMedia } : {}),
     toolCalls,
     pendingToolCalls: sharedState.pendingToolCalls,
+    modelsUsed: sharedState.modelsUsed,
   });
 }

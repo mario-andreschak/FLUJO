@@ -58,6 +58,12 @@ export interface Flow {
    */
   createdAt?: number;
   /**
+   * The only models this flow, and any subflow it starts, may send data to. Checked
+   * before every model turn. A fallback policy counts by its members. Absent means no
+   * restriction, and an empty list means no model at all.
+   */
+  allowedModels?: string[];
+  /**
    * Server-managed last-modified time in epoch milliseconds (#108). Refreshed
    * on every save. Used by the dashboard/card-picker "Newest/Oldest" sort
    * (falls back to createdAt). Optional for the same reasons as createdAt.

@@ -19,6 +19,7 @@
 import { findBindings } from './mcpBinding';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 import { CONDITION_SOURCE_NODE_TYPES, EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
+import { modelsOutsideBoundary } from './flowModelBoundary';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
 import {
@@ -66,7 +67,7 @@ export type FileAccessMcpSnapshot = Record<string, FileAccessMcpServerSnapshot>;
 
 export interface FlowValidationContext {
   /** Known models, for detecting a deleted/renamed bound model. Omit to skip those checks. */
-  models?: Array<{ id: string; name?: string; displayName?: string }>;
+  models?: Array<{ id: string; name?: string; displayName?: string; fallbackPolicy?: { modelIds: string[] } }>;
   /** Known MCP servers, for detecting a deleted/renamed bound server. Omit to skip. */
   servers?: Array<{ name: string; status?: string }>;
   /**
@@ -102,6 +103,7 @@ export interface VEdge {
 export interface VFlow {
   id?: string;
   name?: string;
+  allowedModels?: string[];
   nodes: VNode[];
   edges: VEdge[];
 }
@@ -915,6 +917,24 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         `Subflow node "${getNodeLabel(node)}" has a concurrencyLimit of ${limit}; it must be at least 1 (the runtime default will be used).`,
         node
       );
+    }
+  }
+
+  // --- Allowed models ---
+  // The runtime check is the authority. This reports the problem before a run starts.
+  // Without a model list there is nothing to compare a fallback policy's members with.
+  if (flow?.allowedModels && context.models) {
+    for (const node of nodes) {
+      if (getNodeType(node) !== 'process') continue;
+      const bound = node.data?.properties?.boundModel;
+      if (typeof bound !== 'string' || !bound) continue;
+      const outside = modelsOutsideBoundary(
+        context.models.find((model) => model.id === bound) ?? { id: bound },
+        flow.allowedModels,
+      );
+      if (outside.length > 0) {
+        add('error', 'model-outside-allowed', `Process node "${getNodeLabel(node)}" uses a model this flow's allowed list does not include: ${outside.join(', ')}.`, node);
+      }
     }
   }
 

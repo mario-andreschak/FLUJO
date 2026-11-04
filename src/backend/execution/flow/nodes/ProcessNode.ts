@@ -50,6 +50,7 @@ import {
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import { selectConditionedEdge } from '@/utils/shared/edgeConditions';
+import { MODEL_NOT_ALLOWED_CODE, modelsOutsideBoundary } from '@/utils/shared/flowModelBoundary';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
@@ -406,6 +407,21 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     const nodeId = node_params?.id;
     const flowId = sharedState.flowId;
     const boundModel = admission.model.id;
+
+    // Checked on every turn and before any prompt is rendered, so nothing is sent or
+    // prepared for a model this run may not use. This also covers a model changed
+    // after the flow was saved, and each member of a fallback policy.
+    const outsideBoundary = modelsOutsideBoundary(admission.model, sharedState.allowedModels);
+    if (outsideBoundary.length > 0) {
+      const message = `This flow may not use model "${outsideBoundary.join('", "')}". Only the models on its allowed list can be used.`;
+      throw Object.assign(new Error(message), { details: { code: MODEL_NOT_ALLOWED_CODE, status: 403, type: 'invalid_request_error' } });
+    }
+    const recordModelUsed = (modelId: string) => {
+      if (sharedState.modelsUsed?.includes(modelId)) return;
+      sharedState.modelsUsed = [...(sharedState.modelsUsed ?? []), modelId];
+    };
+    // A policy is recorded by the members it actually tries, which are not known yet.
+    if (!admission.model.fallbackPolicy) recordModelUsed(boundModel);
     const excludeModelPrompt = node_params?.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
     const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
@@ -832,6 +848,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
   // The cursor lives on SharedState so another visit to this Process node and
   // a saved-state resume continue the same run-wide sequence. Keep this live
   // reference out of debugger snapshots and persisted prep results.
+  Object.defineProperty(prepResult, 'recordModelUsed', {
+    value: recordModelUsed,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
   Object.defineProperty(prepResult, 'takeModelStepOrdinal', {
     value: () => takeExecutionModelStepOrdinal(sharedState, nodeId, prepResult.runId),
     enumerable: false,
@@ -1396,6 +1418,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
               if (node_params?.properties?.terminalRouting === 'tool-free') throw new Error('Tool-free terminal routing denies tool dispatch');
             },
             beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
+            onModelRouted: prepResult.recordModelUsed,
             nativeOriginalHost: await createProcessNativeOriginalHost({
               context: prepResult.executionExtensionContext,
               authority: prepResult.executionAuthority, conversationId: prepResult.conversationId,

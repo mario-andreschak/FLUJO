@@ -277,6 +277,8 @@ async function processChatCompletionInternal(
     conversation_id: result.conversationId,
     status: result.sharedState.status || (result.finalAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'),
     pendingToolCalls: result.sharedState.pendingToolCalls,
+    // The caller named a flow, so `model` above cannot say which models answered.
+    ...(result.modelsUsed?.length ? { flujo_models: result.modelsUsed } : {}),
   };
 
   log.info(`Returning success response for conv ${result.conversationId}`, { action: result.finalAction, status: responseData.status, flujo, requireApproval, flujodebug, finish_reason });
