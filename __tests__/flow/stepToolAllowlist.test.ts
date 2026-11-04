@@ -68,6 +68,10 @@ describe('isToolOfferedInStep', () => {
     expect(isToolOfferedInStep('_-_-_srv_-_-_summarise', [SECOND_STEP_TOOL], toolNameMap)).toBe(true);
     expect(isToolOfferedInStep('_-_-_srv_-_-_read_deadlines', [SECOND_STEP_TOOL], toolNameMap)).toBe(false);
   });
+
+  it('keeps read_resource callable, because the model handler can add it after the offer is recorded', () => {
+    expect(isToolOfferedInStep('read_resource', [], toolNameMap)).toBe(true);
+  });
 });
 
 describe('dispatch enforces the current step offer', () => {
@@ -105,7 +109,7 @@ describe('dispatch enforces the current step offer', () => {
     expect(String(result.value.toolCallMessages[1].content)).not.toContain('not available in this step');
   });
 
-  it.each(['read_resource', 'list_mcp_resources', 'todo', 'question'])(
+  it.each(['write_resource', 'list_mcp_resources', 'todo', 'question'])(
     'also rejects the by-name tool %s when the step did not offer it',
     async (name) => {
       const result = await ModelHandler.processToolCalls({

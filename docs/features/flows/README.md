@@ -48,7 +48,7 @@ Anyone who points a client at FLUJO's address only sees FLUJO, not the model beh
 { "name": "Handles personal data", "allowedModels": ["Checked model"], "nodes": [], "edges": [] }
 ```
 
-Before every model turn, FLUJO checks the model against this list. Anything else ends the run with `model_not_allowed` before a request goes out. This still holds if someone changes a step's model later.
+FLUJO checks the model against this list before a run starts and again before every model turn. No request goes out for anything else. A run that FLUJO can see will break does not start, and ends with `flow_invalid`. A model that only turns up later, for example because someone changes a step while a conversation is open, ends the run with `model_not_allowed`.
 
 - A fallback policy is allowed only if every member is on the list.
 - A subflow is held to its own list and its parent's. It cannot widen the limit.
@@ -63,4 +63,4 @@ The list limits which FLUJO models are used. It cannot see past a model entry: a
 
 A Process step offers the model the tools of its connected apps, its routes to other steps, and any built-in tools switched on for that step. FLUJO checks that same list again when the model calls a tool. A call to anything else returns an error to the model and does not run, including a tool that an earlier step of the same run was allowed to use.
 
-Once a step has offered tools, later steps of the conversation also offer `read_resource` and `list_mcp_resources`, so they can read results the run has already produced. These two tools are part of the offered list and can be called.
+Once a step has offered tools, later steps of the conversation also offer `read_resource` and `list_mcp_resources`, so they can read results the run has already produced. These two tools are part of the offered list and can be called. `read_resource` can be called in any step, because FLUJO can offer it at the last moment when a conversation refers to a stored result.
