@@ -318,6 +318,8 @@ export interface FlowSpecEdge {
 export interface FlowSpec {
   name?: string;
   description?: string;
+  /** The only models this flow and its subflows may send data to, by id or name. */
+  allowedModels?: string[];
   nodes: FlowSpecNode[];
   edges: FlowSpecEdge[];
 }
@@ -1290,10 +1292,26 @@ export function compileFlowSpec(
     // Positions are honoured only at the root level (they key off root node ids).
     layout(flowNodes, nodesByKey, edges, mcpAttachments, depth === 0 ? options.positions : undefined);
 
+    // Dropping an entry would change what the list means, and dropping the list would
+    // lift the limit, so an unknown model or a malformed list stops the compile.
+    const allowedModels: string[] = [];
+    if (levelSpec?.allowedModels !== undefined) {
+      if (!Array.isArray(levelSpec.allowedModels) || levelSpec.allowedModels.some((ref) => typeof ref !== 'string')) {
+        issues.push({ severity: 'error', code: 'invalid-allowed-models', message: 'allowedModels must be a list of model ids or names.' });
+      } else {
+        for (const ref of levelSpec.allowedModels) {
+          const resolved = resolveModel(ref, context.models ?? []);
+          if (resolved) allowedModels.push(resolved);
+          else issues.push({ severity: 'error', code: 'allowed-model-unknown', message: `allowedModels names "${ref}", which is not a known model.` });
+        }
+      }
+    }
+
     const flow: Flow = {
       id: flowId,
       name: flowName,
       ...(levelSpec?.description ? { description: levelSpec.description } : {}),
+      ...(levelSpec?.allowedModels !== undefined ? { allowedModels } : {}),
       nodes: flowNodes,
       edges,
     };
@@ -1746,6 +1764,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
   return {
     ...(flow?.name ? { name: flow.name } : {}),
     ...(flow?.description ? { description: flow.description } : {}),
+    ...(flow?.allowedModels ? { allowedModels: flow.allowedModels } : {}),
     nodes: specNodes,
     edges: specEdges,
   };

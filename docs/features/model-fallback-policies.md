@@ -50,6 +50,10 @@ Successful responses include the provider model actually used in `model`, plus a
 
 The receipt is also included in the direct endpoint's emulated SSE chunks. When all eligible members fail or are cooling down, the endpoint returns HTTP 503 with `fallback_exhausted` and a receipt. Direct API completions keep client-owned tool execution: subscription agents with client tool definitions are skipped. Process execution retains FLUJO's existing tool loop, approval gates and execution fences. Its provider statistics and model-turn inspector attribute dispatches to the actual member.
 
+## Limit a flow to certain models
+
+A policy can send a request to any of its members. To keep a flow's data with models you have checked, list them on the flow. See [Allowed models](./flows/README.md#limit-a-flow-to-certain-models). A policy is only usable by such a flow if every member is on the list.
+
 ## Failure boundaries
 
 - Limits: HTTP 429 and explicit rate/session/usage/quota exhaustion signatures.

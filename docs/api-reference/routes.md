@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 230.
+Route files: 231.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -43,6 +43,7 @@ Route files: 230.
 | `/api/flow/repair` | POST | [source](../../src/app/api/flow/repair/route.ts) |
 | `/api/flow/{id}` | DELETE, GET, PUT | [source](../../src/app/api/flow/[id]/route.ts) |
 | `/api/flow/{id}/convert-process-to-subflow` | POST | [source](../../src/app/api/flow/[id]/convert-process-to-subflow/route.ts) |
+| `/api/flow/{id}/models` | GET | [source](../../src/app/api/flow/[id]/models/route.ts) |
 | `/api/flow/{id}/versions` | GET | [source](../../src/app/api/flow/[id]/versions/route.ts) |
 | `/api/flow/{id}/versions/{versionId}` | GET | [source](../../src/app/api/flow/[id]/versions/[versionId]/route.ts) |
 | `/api/git` | POST | [source](../../src/app/api/git/route.ts) |

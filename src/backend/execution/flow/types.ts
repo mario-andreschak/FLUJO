@@ -1094,6 +1094,10 @@ export interface SharedState extends DebuggerStateView {
      * toolNameMap, which keeps earlier steps' tools decodable, this holds one step.
      */
     offeredToolNames?: string[];
+    /** The models this run may use: its flow's list narrowed by its parent run's. */
+    allowedModels?: string[];
+    /** Every model this user turn sent a request to, or tried to, by model id. */
+    modelsUsed?: string[];
     /**
      * A Static node waiting for a person, and where it continues. Saved with the
      * conversation, so the wait survives a restart. The arguments are kept because
@@ -1604,6 +1608,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
     /** Runtime-only reservation against SharedState's run-bound ordinal cursor. */
     takeModelStepOrdinal?: () => number;
+    /** Records a fallback policy member as it is tried. Not enumerable, like the ordinal. */
+    recordModelUsed?: (modelId: string) => void;
     /** Runtime-only run cancellation forwarded to the in-flight model call. */
     abortSignal?: AbortSignal;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */

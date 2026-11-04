@@ -107,6 +107,8 @@ export interface ModelCallInput {
   personaAttribution?: PersonaAttribution;
   /** Final authority checks immediately before external side effects. */
   beforeModelDispatch?: () => Promise<void>;
+  /** Called with each fallback policy member as it is tried. */
+  onModelRouted?: (modelId: string) => void;
   beforeToolDispatch?: () => Promise<void>;
 }
 

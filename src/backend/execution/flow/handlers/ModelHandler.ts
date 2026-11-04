@@ -1850,6 +1850,7 @@ export class ModelHandler {
       beforeToolDispatch: input.beforeToolDispatch,
       executionExtensionContext: input.executionExtensionContext,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
+      onModelRouted: input.onModelRouted,
       beforeModelDispatch: input.beforeModelDispatch ?? (() => assertFlowExecutionCurrent(durableContext)),
       durableContext,
       flushTranscriptProjection: flushLiveProjection,
@@ -2185,6 +2186,8 @@ export class ModelHandler {
       authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
       beforeModelDispatch?: () => Promise<void>;
+      /** Called with each fallback policy member as it is tried. */
+      onModelRouted?: (modelId: string) => void;
       /** Authority context for resource/lineage writes performed in this call. */
       durableContext?: FlowDurableMutationContext;
       /** Drain authority-gated self-orchestrating transcript callbacks. */
@@ -3163,6 +3166,7 @@ export class ModelHandler {
                 : undefined,
               onRoutingModel: async (member: Model) => {
                 routingModel = member;
+                opts?.onModelRouted?.(member.id);
                 const key = await modelService.resolveAndDecryptApiKey(member.ApiKey);
                 opaqueCredentialId = await credentialFingerprint(key ?? '').catch(() => undefined);
               },

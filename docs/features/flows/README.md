@@ -36,6 +36,29 @@ Keep these limits in mind:
 - An earlier message stays in the conversation history. If a question was blocked, a later "answer my last question" passes the check and the model can still see the old text. Set the Process step to receive only the latest message if the model must never see earlier turns.
 - A regular expression that does not compile never matches. The flow check warns about this. If a blocking condition relies on such a pattern, messages take the fallback route.
 
+## Limit a flow to certain models
+
+Anyone who points a client at FLUJO's address only sees FLUJO, not the model behind it. FLUJO offers three things for this.
+
+**See what a flow can reach.** `GET /api/flow/{id}/models` lists the models a flow can send data to, through its steps, its subflows and the members of fallback policies. Each entry names the provider and the host of the base URL, with no credentials. If `complete` is `false`, a model or subflow could not be found, so the list may be too short.
+
+**Limit a flow.** `allowedModels` is a list on the flow, in FlowSpec or through `PUT /api/flow/{id}`:
+
+```json
+{ "name": "Handles personal data", "allowedModels": ["Checked model"], "nodes": [], "edges": [] }
+```
+
+Before every model turn, FLUJO checks the model against this list. Anything else ends the run with `model_not_allowed` before a request goes out. This still holds if someone changes a step's model later.
+
+- A fallback policy is allowed only if every member is on the list.
+- A subflow is held to its own list and its parent's. It cannot widen the limit.
+- An empty list allows no model at all. A flow without the list has no limit.
+- There is no editor for the list yet. The Flow Builder keeps it when it saves.
+
+**See what a run used.** A `/v1/chat/completions` response for a flow includes `flujo_models`, the ids of every model this turn sent a request to or tried to. The streamed form does not include it.
+
+The list limits which FLUJO models are used. It cannot see past a model entry: a router such as `openrouter/auto` picks a provider itself, so do not list one if the destination matters.
+
 ## A step can only use the tools it offers
 
 A Process step offers the model the tools of its connected apps, its routes to other steps, and any built-in tools switched on for that step. FLUJO checks that same list again when the model calls a tool. A call to anything else returns an error to the model and does not run, including a tool that an earlier step of the same run was allowed to use.
