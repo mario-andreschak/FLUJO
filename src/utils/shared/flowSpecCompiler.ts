@@ -150,9 +150,9 @@ export interface FlowSpecNode {
   maxTurns?: number;
   /** process only: require tool-free engine routing to a sole bare Finish edge. */
   terminalRouting?: 'tool-free';
-  /** process only: MCP tool names whose calls in this step always wait for a person. */
+  /** process and static: MCP tool names whose calls in this step always wait for a person. */
   requireApprovalFor?: string[];
-  /** process only: every MCP tool in this step not marked read-only waits for a person. */
+  /** process and static: every MCP tool in this step not marked read-only waits for a person. */
   requireApprovalForWrites?: boolean;
   /** process only: drop the bound model's base/system prompt from the rendered prompt. */
   excludeModelPrompt?: boolean;
@@ -788,22 +788,6 @@ export function compileFlowSpec(
           if (specNode.terminalRouting === 'tool-free') properties.terminalRouting = 'tool-free';
           else error('invalid-terminal-routing', `Node "${key}": terminalRouting must be "tool-free" or absent.`, key);
         }
-        // Dropping a safety requirement silently would be the wrong failure, so a
-        // malformed value stops the compile instead of only warning.
-        if (specNode.requireApprovalFor !== undefined) {
-          if (Array.isArray(specNode.requireApprovalFor) && specNode.requireApprovalFor.every((name) => typeof name === 'string')) {
-            if (specNode.requireApprovalFor.length > 0) properties.requireApprovalFor = specNode.requireApprovalFor;
-          } else {
-            error('invalid-require-approval-for', `Node "${key}": requireApprovalFor must be a list of tool names.`, key);
-          }
-        }
-        if (specNode.requireApprovalForWrites !== undefined) {
-          if (typeof specNode.requireApprovalForWrites === 'boolean') {
-            if (specNode.requireApprovalForWrites) properties.requireApprovalForWrites = true;
-          } else {
-            error('invalid-require-approval-for-writes', `Node "${key}": requireApprovalForWrites must be true or false.`, key);
-          }
-        }
         // maxTurns (1b): per-node agentic-turn cap. Clamp to a sane range; absent ⇒ inherit.
         if (specNode.maxTurns !== undefined) {
           if (typeof specNode.maxTurns === 'number' && !Number.isNaN(specNode.maxTurns)) {
@@ -936,7 +920,26 @@ export function compileFlowSpec(
             warn('server-unknown', `Node "${key}": MCP server "${server}" is not configured in FLUJO.`, key);
           }
         }
-      } else if (type === 'signal') {
+      }
+      // Dropping a safety requirement silently would be the wrong failure, so a
+      // malformed value stops the compile instead of only warning.
+      if (type === 'process' || type === 'static') {
+        if (specNode.requireApprovalFor !== undefined) {
+          if (Array.isArray(specNode.requireApprovalFor) && specNode.requireApprovalFor.every((name) => typeof name === 'string')) {
+            if (specNode.requireApprovalFor.length > 0) properties.requireApprovalFor = specNode.requireApprovalFor;
+          } else {
+            error('invalid-require-approval-for', `Node "${key}": requireApprovalFor must be a list of tool names.`, key);
+          }
+        }
+        if (specNode.requireApprovalForWrites !== undefined) {
+          if (typeof specNode.requireApprovalForWrites === 'boolean') {
+            if (specNode.requireApprovalForWrites) properties.requireApprovalForWrites = true;
+          } else {
+            error('invalid-require-approval-for-writes', `Node "${key}": requireApprovalForWrites must be true or false.`, key);
+          }
+        }
+      }
+      if (type === 'signal') {
         // Signal node (issue #117): a pass-through that emits {topic, payload}.
         const topic = typeof specNode.topic === 'string' ? specNode.topic.trim() : '';
         if (topic) {
@@ -1238,7 +1241,13 @@ export function compileFlowSpec(
           && (EDGE_CONDITION_TARGETS as readonly string[]).includes(rawCond.target)
           ? { target: rawCond.target }
           : {};
-        if (!CONDITION_SOURCE_NODE_TYPES.includes(source.type ?? 'unknown')) {
+        const variableProp = rawCond.target === 'variable' && typeof rawCond.variable === 'string' && rawCond.variable.trim()
+          ? { variable: rawCond.variable.trim() }
+          : {};
+        if (rawCond.target === 'variable' && !('variable' in variableProp)) {
+          // Dropping this condition would turn a checked route into an open one.
+          error('edge-condition-variable', `Edge "${fromKey}" -> "${toKey}" tests a variable but does not name one.`);
+        } else if (!CONDITION_SOURCE_NODE_TYPES.includes(source.type ?? 'unknown')) {
           warn(
             'edge-condition-non-process',
             `Edge "${fromKey}" -> "${toKey}" has a condition but leaves a ${source.type} node; conditions only route from process, start and static nodes and were dropped.`
@@ -1248,6 +1257,13 @@ export function compileFlowSpec(
             'edge-condition-kind',
             `Edge "${fromKey}" -> "${toKey}" has an unknown condition kind "${String(rawCond.kind)}"; the condition was dropped.`
           );
+        } else if (rawCond.kind === 'exists') {
+          condition = {
+            kind: 'exists',
+            ...targetProp,
+            ...variableProp,
+            ...(rawCond.negate === true ? { negate: true } : {}),
+          };
         } else if (rawCond.kind === 'always') {
           // Tier 2b (issue #111): explicit always-true fallback predicate. It
           // routes on ANY reply and legitimately carries no "value", so it must
@@ -1273,6 +1289,7 @@ export function compileFlowSpec(
             kind: rawCond.kind,
             value: rawCond.value,
             ...targetProp,
+            ...variableProp,
             ...(rawCond.ignoreCase === true ? { ignoreCase: true } : {}),
             ...(rawCond.negate === true ? { negate: true } : {}),
           };
@@ -1738,6 +1755,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (Array.isArray(props.entries) && props.entries.length > 0) specNode.entries = props.entries;
       if (props.injectOnce === true) specNode.injectOnce = true;
       if (typeof props.outputTemplate === 'string') specNode.outputTemplate = props.outputTemplate;
+      if (Array.isArray(props.requireApprovalFor) && props.requireApprovalFor.length > 0) specNode.requireApprovalFor = props.requireApprovalFor as string[];
+      if (props.requireApprovalForWrites === true) specNode.requireApprovalForWrites = true;
       const servers = serversByConsumer.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     }

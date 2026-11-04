@@ -1990,7 +1990,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     if (edgeConditions && Object.keys(edgeConditions).length > 0) {
       // First matching predicate wins, in author order; otherwise the first BARE
       // (predicate-less) edge is the default/fallback, if any.
-      const routed = selectConditionedEdge(this.orderedControlEdges(node_params), edgeConditions, sharedState.messages);
+      const routed = selectConditionedEdge(this.orderedControlEdges(node_params), edgeConditions, sharedState.messages, undefined, sharedState.variables);
       if (routed) {
         log.info('Deterministic edge condition routed the step', { edgeId: routed, conditioned: !!edgeConditions[routed] });
         return routed;

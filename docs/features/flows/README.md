@@ -28,6 +28,8 @@ To answer certain questions with a fixed text, connect Start to a Static node th
 | Static | The last message, which is this node's own result if it produced one |
 | Process | The step's last reply |
 
+A condition can also test a run variable rather than a message. Choose **Run variable** and name it, with a dotted path to read into a captured JSON result, such as `status.items.0.code`. The comparisons **Greater than**, **At least**, **Less than**, **At most** and **Exists** are there for this. A variable that is missing never matches a comparison, even a negated one. See [branching on a tool result](./static-node.md#branch-on-a-tool-result).
+
 A flow with a condition before its first Process step goes back to Start on every user turn, including follow-ups, edited messages and retries. This restarts the flow at its first step each turn, so use it for flows where that is what you want.
 
 Keep these limits in mind:

@@ -6,7 +6,7 @@
  * expands it into the existing FlowSpec and the normal compiler remains the
  * single source of truth for ReactFlow output.
  */
-import type { EdgeCondition } from './edgeConditions';
+import type { EdgeCondition, EdgeConditionKind } from './edgeConditions';
 import {
   compileFlowSpec,
   type CompileContext,
@@ -40,7 +40,7 @@ export interface SimpleFlowRoute {
   from: string;
   to: string;
   /** Optional deterministic condition. Omit for the fallback route. */
-  when?: Pick<EdgeCondition, 'kind' | 'value' | 'ignoreCase' | 'negate'>;
+  when?: Pick<EdgeCondition, 'value' | 'ignoreCase' | 'negate'> & { kind: Exclude<EdgeConditionKind, 'exists' | 'gt' | 'gte' | 'lt' | 'lte'> };
 }
 
 export interface SimpleFlowSpec {

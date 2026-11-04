@@ -88,6 +88,7 @@ export class StartNode extends BaseNode<StartNodeParams, SharedState, StartNodeP
           edgeConditions,
           sharedState.messages,
           defaultConditionTarget('start'),
+          sharedState.variables,
         )
       : null;
 
