@@ -165,6 +165,10 @@ export function decodeToolName(name: string, map?: ToolNameMap): DecodedTool | n
  * direct callers and runs paused before this field existed keep their behaviour.
  * A legacy `_-_-_SERVER_-_-_TOOL` spelling counts only as an alias of an offered
  * (server, tool) pair, so it cannot reach a tool bound by an earlier step.
+ *
+ * `read_resource` always counts. ModelHandler can add it after prep, when the wire
+ * refers to a stored run result (ensureReadResourceArmed), so a recorded offer can
+ * lag behind what the model was really shown. It only reads this run's own results.
  */
 export function isToolOfferedInStep(
   name: string,
@@ -172,7 +176,7 @@ export function isToolOfferedInStep(
   map?: ToolNameMap,
 ): boolean {
   if (!offered) return true;
-  if (offered.includes(name)) return true;
+  if (offered.includes(name) || name === 'read_resource') return true;
   if (!name.includes(LEGACY_SEP)) return false;
   const decoded = decodeToolName(name, map);
   return !!decoded && offered.includes(encodeToolName(decoded.server, decoded.tool));
