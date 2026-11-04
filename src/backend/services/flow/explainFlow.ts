@@ -159,6 +159,9 @@ function stepDetails(flow: Flow, node: FlowNode, flowsById: Map<string, Flow>): 
     lines.push(`Emits signal topic \`${topic}\` immediately when execution reaches this node; this is a mid-run event, not flow completion.`);
     if (oneLine(props.payloadTemplate)) lines.push(`Its payload is rendered from: “${oneLine(props.payloadTemplate)}”`);
     lines.push('Any enabled planned execution with a matching flow-event topic can start at this point, while this flow continues along its own outgoing edge(s).');
+  } else if (type === 'static' && Array.isArray(props.rules) && props.rules.length > 0) {
+    const rules = props.rules as Array<{ id?: unknown; outcome?: unknown }>;
+    lines.push(`Decides by ${rules.length} fixed rule(s), first match wins, with no model: ${rules.map((rule) => `\`${text(rule.id)}\` → ${text(rule.outcome)}`).join('; ')}.`);
   } else if (type === 'trigger') {
     lines.push('Represents an internal trigger/routing point in the graph.');
   } else if (type === 'finish') {

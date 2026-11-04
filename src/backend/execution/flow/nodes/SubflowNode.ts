@@ -1,3 +1,4 @@
+import { recordVariableSource } from '@/utils/shared/edgeConditions';
 import { BaseNode } from '../pocketflow';
 import { createHash } from 'node:crypto';
 import { fenceSubflowFold, clearSubflowFoldFence, reconcileSubflowFold } from '../subflowFoldFence';
@@ -1637,6 +1638,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     if (captureVariable) {
       sharedState.variables = sharedState.variables ?? {};
       sharedState.variables[captureVariable] = resultText;
+      recordVariableSource(sharedState, captureVariable, 'model');
       log.info('Captured subflow output into run variable', { captureVariable, nodeId: node_params?.id });
     }
 

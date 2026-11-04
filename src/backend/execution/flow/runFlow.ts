@@ -1,3 +1,5 @@
+import { effectiveAllowedToolNames, type FlowDecision } from '@/utils/shared/decisionRules';
+import { recordVariableSource } from '@/utils/shared/edgeConditions';
 import { applyExecutionRunInput, applyOriginalOwnerRunInput, prepareExecutionSubflowInput, runWithExecutionInput,
   validateExecutionExtensionRun, validateExecutionLoadedState, installExecutionExtensionContext,
   assertExecutionStateAccess, ExecutionExtensionError, executionExtensionSharesPersonaAuthority,
@@ -480,6 +482,12 @@ export type FlowRunMessageInput = OpenAI.ChatCompletionMessageParam
   & Partial<Pick<FlujoChatMessage, 'id' | 'timestamp' | 'processNodeId'>>
   & { depth?: number };
 
+/** Resuming after an approval starts a new logical run, so each response reports only its own stretch. */
+function decisionsOfThisRun(sharedState: SharedState): FlowDecision[] | undefined {
+  const decisions = sharedState.decisionLog?.filter((entry) => entry.runId === sharedState.logicalRunId);
+  return decisions?.length ? decisions : undefined;
+}
+
 export interface FlowRunResult {
   status: FlowRunStatus;
   conversationId: string;
@@ -498,6 +506,8 @@ export interface FlowRunResult {
   pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
   /** Every model this user turn sent a request to, or tried to, by model id. */
   modelsUsed?: string[];
+  /** What the flow's rules decided in this stretch of the run, and why. */
+  decisions?: FlowDecision[];
   error?: { message: string; details?: ErrorDetails; statusCode: number };
   /** Set when flow resolution failed (the adapter maps this to a 400). */
   flowNotFound?: { name: string };
@@ -626,6 +636,8 @@ function installPersonaActivitySnapshot(
   sharedState.armedSyntheticTools = undefined;
   sharedState.toolNameMap = undefined;
   sharedState.offeredToolNames = undefined;
+  sharedState.allowedToolNames = undefined;
+  sharedState.inheritedAllowedToolNames = undefined;
   // The successor Activity starts from the immutable Behavior policy, never
   // from stale graph-derived rules or an unguarded empty policy.
   sharedState.behaviorRules = structuredClone(canonicalFlow.behaviorRules ?? []);
@@ -667,6 +679,7 @@ function installPersonaActivitySnapshot(
 
   // Activity/run-scoped scratchpads and lifecycle projections.
   sharedState.variables = {};
+  sharedState.variableSources = undefined;
   sharedState.todos = undefined;
   sharedState.usage = undefined;
   sharedState.logicalRunId = undefined;
@@ -1095,6 +1108,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     for (const [key, value] of Object.entries(input.variables)) {
       if (value === undefined || value === null) continue;
       sharedState.variables[key] = typeof value === 'string' ? value : String(value);
+      recordVariableSource(sharedState, key, 'input');
     }
   }
   const harnessInitialVariables = structuredClone(sharedState.variables ?? {});
@@ -1906,7 +1920,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   if (sharedState.flowId && !preflightError) {
     try {
       const flowAllowed = (sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId))?.allowedModels;
-      const parentAllowed = input.parentRunId ? FlowExecutor.conversationStates.get(input.parentRunId)?.allowedModels : undefined;
+      const parentState = input.parentRunId ? FlowExecutor.conversationStates.get(input.parentRunId) : undefined;
+      const parentAllowed = parentState?.allowedModels;
+      // A subflow's model steps stay inside the tools its parent's decision allows.
+      sharedState.inheritedAllowedToolNames = parentState ? effectiveAllowedToolNames(parentState) : undefined;
       sharedState.allowedModels = intersectAllowedModels(intersectAllowedModels(flowAllowed, parentAllowed), sharedState.allowedModels);
     } catch (allowedModelsError) {
       // Skipping this could send data to a model the flow rules out. Only this turn fails.
@@ -3706,6 +3723,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       outputText: '',
       pendingToolCalls: sharedState.pendingToolCalls,
     modelsUsed: sharedState.modelsUsed,
+    decisions: decisionsOfThisRun(sharedState),
     });
   }
 
@@ -3819,5 +3837,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     toolCalls,
     pendingToolCalls: sharedState.pendingToolCalls,
     modelsUsed: sharedState.modelsUsed,
+    decisions: decisionsOfThisRun(sharedState),
   });
 }

@@ -49,7 +49,8 @@ import {
   ToolCallInfo
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
-import { selectConditionedEdge } from '@/utils/shared/edgeConditions';
+import { selectConditionedEdge, recordVariableSource } from '@/utils/shared/edgeConditions';
+import { effectiveAllowedToolNames } from '@/utils/shared/decisionRules';
 import { MODEL_NOT_ALLOWED_CODE, modelsOutsideBoundary } from '@/utils/shared/flowModelBoundary';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
@@ -759,6 +760,13 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       sharedState.toolNameMap = {};
       const permitted=await authorizeExecutionExtensionHandoffs(executionExtensionContext, handoffTools.map(tool => tool.name));
       if(permitted)availableTools=availableTools.filter(tool=>tool.server===server||permitted.includes(tool.name));
+    }
+    // A decision limits connected tools only. Handoffs follow edges the flow drew, and
+    // FLUJO's own helpers such as `todo` act on nothing outside the run.
+    const allowedByDecision = effectiveAllowedToolNames(sharedState);
+    if (allowedByDecision) {
+      availableTools = availableTools.filter((tool) => !tool.server
+        || allowedByDecision.includes(tool.originalName ?? tool.name));
     }
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     const approvalNames = node_params?.properties?.requireApprovalFor;
@@ -1867,6 +1875,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     if (execResult.success && captureVariable) {
       sharedState.variables = sharedState.variables ?? {};
       sharedState.variables[captureVariable] = execResult.content ?? '';
+      recordVariableSource(sharedState, captureVariable, 'model');
       log.info('Captured node output into run variable', { captureVariable, nodeId: node_params?.id });
     }
 
@@ -1990,7 +1999,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     if (edgeConditions && Object.keys(edgeConditions).length > 0) {
       // First matching predicate wins, in author order; otherwise the first BARE
       // (predicate-less) edge is the default/fallback, if any.
-      const routed = selectConditionedEdge(this.orderedControlEdges(node_params), edgeConditions, sharedState.messages, undefined, sharedState.variables);
+      const routed = selectConditionedEdge(this.orderedControlEdges(node_params), edgeConditions, sharedState.messages, undefined, sharedState);
       if (routed) {
         log.info('Deterministic edge condition routed the step', { edgeId: routed, conditioned: !!edgeConditions[routed] });
         return routed;

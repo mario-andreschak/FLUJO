@@ -28,6 +28,23 @@
 export type EdgeConditionKind = 'contains' | 'regex' | 'equals' | 'always' | 'exists' | 'gt' | 'gte' | 'lt' | 'lte';
 export type EdgeConditionTarget = 'last-assistant' | 'last-message' | 'last-user' | 'variable';
 
+/** Who put a value into a run variable. */
+export type VariableSource = 'model' | 'tool' | 'person' | 'rule' | 'input';
+export const VARIABLE_SOURCES: readonly VariableSource[] = ['model', 'tool', 'person', 'rule', 'input'];
+
+/** Where a run variable's value came from. The value is kept so that anything
+ *  changing the variable afterwards no longer counts as that source. */
+export interface RecordedVariableSource {
+  from: VariableSource;
+  value: string;
+}
+
+/** The part of a run a condition can read. */
+export interface ConditionState {
+  variables?: Readonly<Record<string, unknown>> | null;
+  variableSources?: Readonly<Record<string, RecordedVariableSource>> | null;
+}
+
 export interface EdgeCondition {
   /** How `value` is matched against the selected message. */
   kind: EdgeConditionKind;
@@ -44,6 +61,9 @@ export interface EdgeCondition {
   /** With target 'variable': the run variable, optionally with a dotted path into
    *  its JSON value, such as `status` or `status.items.0.code`. */
   variable?: string;
+  /** With target 'variable': where the value must come from. A value from anywhere
+   *  else counts as missing, so a model's text cannot stand in for a person's answer. */
+  from?: VariableSource | VariableSource[];
   /** Case-insensitive matching. For contains/equals it lowercases both sides;
    *  for regex it adds the `i` flag (JS regex has no `(?i)` inline flags). Default false. */
   ignoreCase?: boolean;
@@ -83,6 +103,7 @@ export function isEdgeCondition(value: unknown): value is EdgeCondition {
       || (typeof candidate.target === 'string'
         && (EDGE_CONDITION_TARGETS as readonly string[]).includes(candidate.target)))
     && (candidate.variable === undefined || typeof candidate.variable === 'string')
+    && (candidate.from === undefined || typeof candidate.from === 'string' || Array.isArray(candidate.from))
     && (candidate.ignoreCase === undefined || typeof candidate.ignoreCase === 'boolean')
     && (candidate.negate === undefined || typeof candidate.negate === 'boolean');
 }
@@ -181,6 +202,33 @@ export function readConditionVariable(
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
 }
 
+/** Note who wrote a run variable, right after it was written. */
+export function recordVariableSource(
+  state: { variables?: Record<string, string>; variableSources?: Record<string, RecordedVariableSource> },
+  name: string,
+  from: VariableSource,
+): void {
+  state.variableSources ??= {};
+  Object.defineProperty(state.variableSources, name, {
+    value: { from, value: String(state.variables?.[name] ?? '') },
+    configurable: true, enumerable: true, writable: true,
+  });
+}
+
+/** True only if a variable still holds the value the given source put there. */
+export function variableCameFrom(
+  variable: string | undefined,
+  from: VariableSource | VariableSource[],
+  state: ConditionState | null | undefined,
+): boolean {
+  const name = variable?.split('.')[0];
+  if (!name || !state?.variables || !state.variableSources) return false;
+  if (!Object.hasOwn(state.variables, name) || !Object.hasOwn(state.variableSources, name)) return false;
+  const recorded = state.variableSources[name];
+  if (recorded?.value !== state.variables[name]) return false;
+  return (Array.isArray(from) ? from : [from]).includes(recorded.from);
+}
+
 /**
  * Pick the text a condition tests, per its `target`:
  *   - 'last-assistant' (default): the most recent assistant message's text —
@@ -275,6 +323,27 @@ export function evaluateCondition(
 }
 
 /**
+ * Whether a condition holds for a run. A variable that is missing, or that did not come
+ * from where the condition demands, proves nothing, even negated. Only 'exists' asks
+ * about absence, and 'always' does not read the value at all.
+ */
+export function conditionMatches(
+  cond: EdgeCondition,
+  messages: SelectableMessage[] | undefined | null,
+  defaultTarget: EdgeConditionTarget,
+  state: ConditionState | null | undefined,
+): boolean {
+  if (cond.target !== 'variable') {
+    return evaluateCondition(cond, selectConditionText(messages, cond.target ?? defaultTarget));
+  }
+  const text = cond.from !== undefined && !variableCameFrom(cond.variable, cond.from, state)
+    ? null
+    : readConditionVariable(cond.variable, state?.variables);
+  if (text === null && cond.kind !== 'exists' && cond.kind !== 'always') return false;
+  return evaluateCondition(cond, text);
+}
+
+/**
  * Pick the outgoing edge for a node that has conditions: the first edge in author
  * order whose predicate matches, otherwise the first edge without one. Returns
  * null when nothing matches and no such edge exists; the caller ends the run.
@@ -284,21 +353,17 @@ export function selectConditionedEdge(
   conditions: Readonly<Record<string, EdgeCondition>>,
   messages: SelectableMessage[] | undefined | null,
   defaultTarget: EdgeConditionTarget = 'last-assistant',
-  variables?: Readonly<Record<string, unknown>> | null,
+  state?: ConditionState | null,
 ): string | null {
   for (const edgeId of orderedEdges) {
     const cond = conditions[edgeId];
-    if (!cond) continue;
-    const text = cond.target === 'variable'
-      ? readConditionVariable(cond.variable, variables)
-      : selectConditionText(messages, cond.target ?? defaultTarget);
-    if (evaluateCondition(cond, text)) return edgeId;
+    if (cond && conditionMatches(cond, messages, defaultTarget, state)) return edgeId;
   }
   return orderedEdges.find((edgeId) => !conditions[edgeId]) ?? null;
 }
 
 interface EntryConditionFlow {
-  nodes?: ReadonlyArray<{ id: string; type?: string; data?: { type?: string } | null }> | null;
+  nodes?: ReadonlyArray<{ id: string; type?: string; data?: { type?: string; properties?: unknown } | null }> | null;
   edges?: ReadonlyArray<{
     source: string;
     target: string;
@@ -332,6 +397,10 @@ export function entryConditionStartNodeId(flow: EntryConditionFlow | null | unde
       if (edge.data?.condition) return start.id;
       const targetType = typeOf(edge.target);
       if ((targetType === 'static' || targetType === 'signal') && !seen.has(edge.target)) {
+        // Decision rules before the first model step decide per turn, like a condition.
+        const target = nodes.find((candidate) => candidate.id === edge.target);
+        const rules = (target?.data?.properties as { rules?: unknown } | null | undefined)?.rules;
+        if (Array.isArray(rules) && rules.length > 0) return start.id;
         seen.add(edge.target);
         queue.push(edge.target);
       }

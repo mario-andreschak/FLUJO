@@ -27,6 +27,8 @@ import {
   EdgeConditionTarget,
   EDGE_CONDITION_KINDS,
   EDGE_CONDITION_TARGETS,
+  VARIABLE_SOURCES,
+  VariableSource,
   defaultConditionTarget,
   isRegexCompilable,
 } from '@/utils/shared/edgeConditions';
@@ -68,11 +70,19 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
     'last-user': t('flows.edgeModal.lastUser'),
     variable: t('flows.edgeModal.targetVariable'),
   };
+  const sourceLabels: Record<VariableSource, string> = {
+    model: t('flows.edgeModal.sourceModel'),
+    tool: t('flows.edgeModal.sourceTool'),
+    person: t('flows.edgeModal.sourcePerson'),
+    rule: t('flows.edgeModal.sourceRule'),
+    input: t('flows.edgeModal.sourceInput'),
+  };
   const defaultTarget = defaultConditionTarget(sourceNodeType);
   const [conditional, setConditional] = useState(false);
   const [kind, setKind] = useState<EdgeConditionKind>('contains');
   const [value, setValue] = useState('');
   const [variable, setVariable] = useState('');
+  const [source, setSource] = useState<VariableSource | ''>('');
   const [target, setTarget] = useState<EdgeConditionTarget>(defaultTarget);
   const [ignoreCase, setIgnoreCase] = useState(false);
   const [negate, setNegate] = useState(false);
@@ -85,6 +95,7 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
       setKind(cond.kind);
       setValue(typeof cond.value === 'string' ? cond.value : '');
       setVariable(typeof cond.variable === 'string' ? cond.variable : '');
+      setSource(typeof cond.from === 'string' ? cond.from : '');
       setTarget(cond.target ?? defaultTarget);
       setIgnoreCase(!!cond.ignoreCase);
       setNegate(!!cond.negate);
@@ -93,6 +104,7 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
       setKind('contains');
       setValue('');
       setVariable('');
+      setSource('');
       setTarget(defaultTarget);
       setIgnoreCase(false);
       setNegate(false);
@@ -120,7 +132,10 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
       if (ignoreCase) condition.ignoreCase = true;
     }
     if (target !== defaultTarget) condition.target = target;
-    if (target === 'variable') condition.variable = variable.trim();
+    if (target === 'variable') {
+      condition.variable = variable.trim();
+      if (source) condition.from = source;
+    }
     if (negate) condition.negate = true;
     onSave(edge.id, condition);
     onClose();
@@ -224,6 +239,23 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
                 helperText={t('flows.edgeModal.variableHelp')}
                 placeholder="status.items.0.code"
               />
+            )}
+
+            {target === 'variable' && (
+              <FormControl fullWidth size="small">
+                <InputLabel id="edge-condition-source-label">{t('flows.edgeModal.source')}</InputLabel>
+                <Select
+                  labelId="edge-condition-source-label"
+                  label={t('flows.edgeModal.source')}
+                  value={source}
+                  onChange={(e) => setSource(e.target.value as VariableSource | '')}
+                >
+                  <MenuItem value="">{t('flows.edgeModal.sourceAny')}</MenuItem>
+                  {VARIABLE_SOURCES.map((option) => (
+                    <MenuItem key={option} value={option}>{sourceLabels[option]}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             )}
 
             <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>

@@ -12,6 +12,7 @@
 
 ### Flow steps
 
+- Add decision rules. A Static node can hold an ordered list of rules, and the first that applies decides the outcome, sets variables and limits which connected tools later model steps may use. No model takes part, and a condition can demand that a value came from a person, a tool or a rule rather than a model. A human gate can save its answer for this. `/v1/chat/completions` reports the decisions in `flujo_decisions`. If no rule applies, the run stops with an error.
 - Make Static nodes follow the same approval as model steps. A real tool call in a Static node now waits when Require Tool Approval is on or when the node's rules cover it, where it used to run at once. Static nodes can also branch on a tool result with no model: an edge condition can test a run variable, read into its JSON, and compare numbers.
 - Show and limit which models a flow can reach. `GET /api/flow/{id}/models` lists the models a flow can send data to, including subflows and fallback policy members. A flow can name its `allowedModels`, and any other model stops the run before a request goes out, even if a step's model is changed later. Responses to `/v1/chat/completions` now include `flujo_models`, the models a turn used.
 - Let a flow wait for a person. A Static node can stop a run until someone approves or rejects, with no tool involved or right before a real tool call. Such a run appears in the chat and the approval inbox like any tool approval, can be continued from outside, and survives a restart. A rejection stops the run unless the flow says to go on.

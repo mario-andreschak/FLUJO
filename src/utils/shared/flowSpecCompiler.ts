@@ -38,6 +38,8 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Edge } from '@xyflow/react';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
+import { decisionRuleIssues, type DecisionRule } from './decisionRules';
+import { isValidRunVarName } from './resolveRunVars';
 import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TARGETS, EdgeCondition, EdgeConditionTarget, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 
@@ -150,6 +152,10 @@ export interface FlowSpecNode {
   maxTurns?: number;
   /** process only: require tool-free engine routing to a sole bare Finish edge. */
   terminalRouting?: 'tool-free';
+  /** static: ordered decision rules, read after the entries. */
+  rules?: DecisionRule[];
+  /** static: the run variable that receives a decision. Defaults to `decision`. */
+  decisionVariable?: string;
   /** process and static: MCP tool names whose calls in this step always wait for a person. */
   requireApprovalFor?: string[];
   /** process and static: every MCP tool in this step not marked read-only waits for a person. */
@@ -957,6 +963,17 @@ export function compileFlowSpec(
         // Static node (issue #358/#380): pre-authored conversation injection; a pass-through
         // control node whose payload is fully declarative. Sanitise field-by-field — `entries`
         // is untrusted spec input and must never be spread verbatim into node properties.
+        if (specNode.rules !== undefined) {
+          const ruleIssues = decisionRuleIssues(specNode.rules, `Node "${key}"`);
+          for (const issue of ruleIssues) issues.push({ ...issue, nodeKey: key });
+          if (Array.isArray(specNode.rules) && specNode.rules.length > 0 && !ruleIssues.some((issue) => issue.severity === 'error')) {
+            properties.rules = specNode.rules;
+          }
+        }
+        if (specNode.decisionVariable !== undefined) {
+          if (isValidRunVarName(specNode.decisionVariable)) properties.decisionVariable = specNode.decisionVariable;
+          else error('decision-variable-invalid', `Node "${key}": decisionVariable is not a valid variable name.`, key);
+        }
         const rawEntries = Array.isArray(specNode.entries) ? specNode.entries : [];
         const clean: FlowSpecStaticEntry[] = [];
         for (let i = 0; i < rawEntries.length && clean.length < MAX_STATIC_ENTRIES; i++) {
@@ -976,7 +993,15 @@ export function compileFlowSpec(
           }
           if (entry.kind === 'humanGate') {
             if (typeof entry.text === 'string' && entry.text.trim()) {
-              clean.push({ kind: 'humanGate', text: entry.text, ...rejectOptions });
+              if (entry.captureVariable !== undefined && !isValidRunVarName(entry.captureVariable)) {
+                error('static-invalid-capture', `Node "${key}": human gate entry #${i + 1} has an invalid capture variable.`, key);
+              }
+              clean.push({
+                kind: 'humanGate',
+                text: entry.text,
+                ...(typeof entry.captureVariable === 'string' && isValidRunVarName(entry.captureVariable) ? { captureVariable: entry.captureVariable } : {}),
+                ...rejectOptions,
+              });
             } else {
               issues.push({ severity: 'error', code: 'static-human-gate-text', message: `Node "${key}": human gate entry #${i + 1} needs text that tells the person what to decide.`, nodeKey: key });
             }
@@ -1242,7 +1267,7 @@ export function compileFlowSpec(
           ? { target: rawCond.target }
           : {};
         const variableProp = rawCond.target === 'variable' && typeof rawCond.variable === 'string' && rawCond.variable.trim()
-          ? { variable: rawCond.variable.trim() }
+          ? { variable: rawCond.variable.trim(), ...(rawCond.from !== undefined ? { from: rawCond.from } : {}) }
           : {};
         if (rawCond.target === 'variable' && !('variable' in variableProp)) {
           // Dropping this condition would turn a checked route into an open one.
@@ -1757,6 +1782,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.outputTemplate === 'string') specNode.outputTemplate = props.outputTemplate;
       if (Array.isArray(props.requireApprovalFor) && props.requireApprovalFor.length > 0) specNode.requireApprovalFor = props.requireApprovalFor as string[];
       if (props.requireApprovalForWrites === true) specNode.requireApprovalForWrites = true;
+      if (Array.isArray(props.rules) && props.rules.length > 0) specNode.rules = props.rules as DecisionRule[];
+      if (typeof props.decisionVariable === 'string' && props.decisionVariable) specNode.decisionVariable = props.decisionVariable;
       const servers = serversByConsumer.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     }

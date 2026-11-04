@@ -1,5 +1,6 @@
 "use client";
 
+import { decisionRuleIssues, type DecisionRule } from '@/utils/shared/decisionRules';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Accordion,
@@ -123,11 +124,55 @@ type StaticEntry =
   | {
       kind: 'humanGate';
       text: string;
+      captureVariable?: string;
       onReject?: 'stop' | 'continue';
       rejectedText?: string;
     };
 
 const EMPTY_STATIC_ENTRIES: StaticEntry[] = [];
+
+/** The rules as text. An unfinished edit stays here and blocks saving, so a rule is
+ *  never saved half-written. */
+function DecisionRulesEditor({ rules, onChange, onValidity }: {
+  rules: DecisionRule[] | undefined;
+  onChange: (rules: DecisionRule[] | undefined) => void;
+  onValidity: (invalid: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const [text, setText] = useState(() => (rules?.length ? JSON.stringify(rules, null, 2) : ''));
+  const [problem, setProblem] = useState<string | null>(null);
+  const update = (next: string) => {
+    setText(next);
+    let parsed: unknown = [];
+    let found: string | null = null;
+    if (next.trim()) {
+      try {
+        parsed = JSON.parse(next);
+      } catch {
+        found = t('flows.static.decisionRulesInvalid');
+      }
+    }
+    if (!found) found = decisionRuleIssues(parsed, t('flows.static.decisionRules')).find((issue) => issue.severity === 'error')?.message ?? null;
+    setProblem(found);
+    onValidity(!!found);
+    if (!found) onChange(Array.isArray(parsed) && parsed.length > 0 ? parsed as DecisionRule[] : undefined);
+  };
+  useEffect(() => () => onValidity(false), [onValidity]);
+  return (
+    <TextField
+      label={t('flows.static.decisionRules')}
+      value={text}
+      onChange={(event) => update(event.target.value)}
+      error={!!problem}
+      helperText={problem ?? t('flows.static.decisionRulesHelp')}
+      placeholder={'[{ "id": "default", "outcome": "continue" }]'}
+      fullWidth
+      multiline
+      minRows={3}
+      slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
+    />
+  );
+}
 
 const roleMeta = {
   system: { color: '#7c3aed', icon: <SettingsRoundedIcon fontSize="small" /> },
@@ -568,6 +613,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     .map(([name]) => name)
     .sort((a, b) => a.localeCompare(b)), [globalEnvVars]);
   const [nodeData, setNodeData] = useState<FlowNode['data'] | null>(null);
+  const [rulesInvalid, setRulesInvalid] = useState(false);
   const [expandedEntries, setExpandedEntries] = useState<Set<number>>(new Set());
   const [serverPickerEntry, setServerPickerEntry] = useState<number | null>(null);
   const [toolReferenceSuggestions, setToolReferenceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
@@ -665,7 +711,11 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
       (!!entry.captureVariable && !isValidRunVarName(entry.captureVariable.trim()))
       || (entry.onError === 'fail' && entry.executionMode !== 'real')
     ))
-    || entries.some((entry) => entry.kind === 'humanGate' && !entry.text.trim());
+    || entries.some((entry) => entry.kind === 'humanGate' && (
+      !entry.text.trim() || (!!entry.captureVariable && !isValidRunVarName(entry.captureVariable.trim()))
+    ))
+    || rulesInvalid
+    || (!!nodeData?.properties?.decisionVariable && !isValidRunVarName(nodeData.properties.decisionVariable));
 
   if (!node || !nodeData) return null;
 
@@ -769,6 +819,28 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                     fullWidth
                     multiline
                   />
+                  <DecisionRulesEditor
+                    key={node?.id}
+                    rules={nodeData.properties?.rules as DecisionRule[] | undefined}
+                    onValidity={setRulesInvalid}
+                    onChange={(rules) => setNodeData((previous) => previous ? {
+                      ...previous,
+                      properties: { ...previous.properties, rules },
+                    } : previous)}
+                  />
+                  <TextField
+                    label={t('flows.static.decisionVariable')}
+                    value={nodeData.properties?.decisionVariable ?? ''}
+                    onChange={(event) => setNodeData((previous) => previous ? {
+                      ...previous,
+                      properties: { ...previous.properties, decisionVariable: event.target.value.trim() || undefined },
+                    } : previous)}
+                    error={!!nodeData.properties?.decisionVariable && !isValidRunVarName(nodeData.properties.decisionVariable)}
+                    helperText={t('flows.static.decisionVariableHelp')}
+                    placeholder="decision"
+                    fullWidth
+                    size="small"
+                  />
                 </Stack>
               </AccordionDetails>
             </Accordion>
@@ -855,6 +927,15 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                                 error={!entry.text.trim()}
                                 fullWidth
                                 multiline
+                                size="small"
+                              />
+                              <TextField
+                                label={t('flows.static.humanGateCapture')}
+                                value={entry.captureVariable ?? ''}
+                                onChange={(event) => updateEntry(index, { captureVariable: event.target.value || undefined })}
+                                helperText={t('flows.static.humanGateCaptureHelp')}
+                                error={!!entry.captureVariable && !isValidRunVarName(entry.captureVariable.trim())}
+                                fullWidth
                                 size="small"
                               />
                               <RejectChoice value={entry.onReject} onChange={(onReject) => updateEntry(index, { onReject })} />
