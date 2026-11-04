@@ -48,7 +48,7 @@ Anyone who points a client at FLUJO's address only sees FLUJO, not the model beh
 { "name": "Handles personal data", "allowedModels": ["Checked model"], "nodes": [], "edges": [] }
 ```
 
-Before every model turn, FLUJO checks the model against this list. Anything else ends the run with `model_not_allowed` before a request goes out. This still holds if someone changes a step's model later.
+FLUJO checks the model against this list before a run starts and again before every model turn. No request goes out for anything else. A run that FLUJO can see will break does not start, and ends with `flow_invalid`. A model that only turns up later, for example because someone changes a step while a conversation is open, ends the run with `model_not_allowed`.
 
 - A fallback policy is allowed only if every member is on the list.
 - A subflow is held to its own list and its parent's. It cannot widen the limit.
