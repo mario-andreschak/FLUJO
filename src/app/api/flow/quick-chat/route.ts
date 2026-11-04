@@ -3,6 +3,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { buildQuickChatFlow } from '@/backend/services/flow/quickChat';
+import { isQuickChatEnabled, QUICK_CHAT_DISABLED_CODE, QUICK_CHAT_DISABLED_MESSAGE } from '@/backend/services/workspace/modelAccess';
 import { json } from '../_helpers';
 
 const log = createLogger('app/api/flow/quick-chat/route');
@@ -36,6 +37,9 @@ async function POST_handler(request: NextRequest) {
   if (_lock) return _lock;
 
   try {
+    if (!(await isQuickChatEnabled())) {
+      return json({ error: QUICK_CHAT_DISABLED_MESSAGE, code: QUICK_CHAT_DISABLED_CODE }, 403);
+    }
     const body = (await request.json().catch(() => null)) as {
       modelId?: string;
       servers?: Array<{ name?: string; enabledTools?: string[] }>;

@@ -18,6 +18,7 @@ import { isConversationDurabilityError, type ConversationPublicationError } from
 import { ExecutionEvent } from '@/shared/types/execution/events';
 import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
 import { modelService } from '@/backend/services/model';
+import { DIRECT_MODEL_CALLS_DISABLED_CODE, DIRECT_MODEL_CALLS_DISABLED_MESSAGE, isDirectModelCallsEnabled } from '@/backend/services/workspace/modelAccess';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
@@ -637,6 +638,17 @@ async function processAdmittedChatCompletion(
         flujodebug,
         hasConversationId: Boolean(conversationId),
       });
+    }
+
+    if (!(await isDirectModelCallsEnabled())) {
+      return NextResponse.json({
+        error: {
+          message: DIRECT_MODEL_CALLS_DISABLED_MESSAGE,
+          type: 'invalid_request_error',
+          code: DIRECT_MODEL_CALLS_DISABLED_CODE,
+          param: 'model',
+        },
+      }, { status: 403 });
     }
     return processDirectModelCompletion(data);
   }

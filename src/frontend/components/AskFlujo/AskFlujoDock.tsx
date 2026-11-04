@@ -35,6 +35,7 @@ import remarkGfm from 'remark-gfm';
 import { v4 as uuidv4 } from 'uuid';
 
 import { useAskFlujo } from '@/frontend/contexts/AskFlujoContext';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 import { ToolCallTimeline } from '@/frontend/components/Chat/ChatMessages';
 import type { ChatMessage } from '@/frontend/components/Chat';
 import type { ToolCallPair } from '@/frontend/components/Chat/toolCallPairing';
@@ -147,6 +148,12 @@ function buildContextTurn(context: AskFlujoPageContext, request: string) {
 }
 
 export default function AskFlujoDock() {
+  const { settings } = useStorage();
+  // Ask FLUJO runs on Quick Chat, so it would only fail once a workspace turns that off.
+  return settings?.modelAccess?.quickChat === false ? null : <AskFlujoDockContent />;
+}
+
+function AskFlujoDockContent() {
   const theme = useTheme();
   const { open, closeDock, getPageContext, applyPageAction } = useAskFlujo();
   const [models, setModels] = useState<Model[]>([]);

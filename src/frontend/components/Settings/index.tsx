@@ -43,6 +43,7 @@ import UpdateSettings from './UpdateSettings';
 import OnboardingSettings from './OnboardingSettings';
 import ExperimentalFeaturesSettings from './ExperimentalFeaturesSettings';
 import PrivacySettings from './PrivacySettings';
+import ModelAccessSettings from './ModelAccessSettings';
 import LanguageSettings from './LanguageSettings';
 import NetworkExposureSettings from './NetworkExposureSettings';
 import RuntimeEnvironmentSettings from './RuntimeEnvironmentSettings';
@@ -51,6 +52,7 @@ import type { TranslationKey } from '@/frontend/i18n';
 
 type SettingsSectionId =
   | 'network'
+  | 'modelAccess'
   | 'runtimeEnv'
   | 'globalEnv'
   | 'encryption'
@@ -150,6 +152,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     component: UpdateSettings,
   },
   {
+    id: 'modelAccess',
+    titleKey: 'settings.section.modelAccess',
+    descriptionKey: 'settings.section.modelAccessDescription',
+    icon: LockRoundedIcon,
+    component: ModelAccessSettings,
+  },
+  {
     id: 'privacy',
     titleKey: 'settings.section.privacy',
     descriptionKey: 'settings.section.privacyDescription',
@@ -170,7 +179,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: 'security',
     titleKey: 'settings.category.security',
     descriptionKey: 'settings.category.securityDescription',
-    sectionIds: ['network', 'runtimeEnv', 'globalEnv', 'encryption', 'backup'],
+    sectionIds: ['network', 'modelAccess', 'runtimeEnv', 'globalEnv', 'encryption', 'backup'],
   },
   {
     id: 'experience',

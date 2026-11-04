@@ -6,6 +6,19 @@ This section provides detailed documentation for Flujo's features.
 
 - **[Chat commands and dynamic tool parameters](./dynamic-references.md)**: Current context, entity pickers, tool/resource references, and hidden parameter presets
 
+## Reach a model without a flow
+
+Direct model calls on the `/v1` API and Quick Chat let a person talk to a model without a saved flow, so a flow's checks do not apply to them. A workspace can switch off either one under **Settings > Model access**. Both are on by default.
+
+| Switch | When it is off |
+|---|---|
+| Allow direct model calls | `/v1/chat/completions` answers `model-<name>` and `policy/<name>` with status 403 (`direct_model_calls_disabled`), and `/v1/models` lists flows only. |
+| Allow Quick Chat | New and existing Quick Chat conversations stop with status 403 (`quick_chat_disabled`). Ask FLUJO and the Flow Generator are built on Quick Chat and stop too. |
+
+These switches keep people on flows. They do not stop someone who can open the Settings page or edit flows, because that person can change the switch or build a flow. To rule that out, do not give them access to the FLUJO interface.
+
+Saved flows, automations and FLUJO's own internal model use, such as the bug report helper, are not affected.
+
 ## Quick Chat
 
 Choose a model and describe your request. Quick Chat automatically exposes

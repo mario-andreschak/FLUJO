@@ -63,6 +63,8 @@ import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { entryConditionStartNodeId } from '@/utils/shared/edgeConditions';
+import { isQuickChatFlowId } from '@/utils/shared/quickChat';
+import { isQuickChatEnabled, QUICK_CHAT_DISABLED_CODE, QUICK_CHAT_DISABLED_MESSAGE } from '@/backend/services/workspace/modelAccess';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
@@ -1881,6 +1883,27 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     } catch (validationError) {
       // A failure to RUN the check must not block the user — log and proceed.
       log.warn(`Pre-run validation could not complete for ${sharedState.flowId}; proceeding`, validationError);
+    }
+  }
+
+  // --- Quick Chat switch ---
+  // A conversation created before the switch was turned off must stop too, and it
+  // would otherwise keep reaching its model. This covers every path into a run.
+  if ((userTurn || stateSource === 'new') && !preflightError && isQuickChatFlowId(sharedState.flowId)) {
+    let allowed = false;
+    try {
+      allowed = await isQuickChatEnabled();
+    } catch (settingsError) {
+      log.warn(`Could not read the Quick Chat switch for ${effectiveConvId}; ending this turn`, settingsError);
+    }
+    if (!allowed) {
+      sharedState.lastResponse = {
+        success: false,
+        error: QUICK_CHAT_DISABLED_MESSAGE,
+        errorDetails: { message: QUICK_CHAT_DISABLED_MESSAGE, type: 'invalid_request_error', code: QUICK_CHAT_DISABLED_CODE, status: 403 },
+      };
+      currentAction = ERROR_ACTION;
+      preflightError = true;
     }
   }
 

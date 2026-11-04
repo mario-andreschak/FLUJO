@@ -3,6 +3,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextResponse } from 'next/server';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
+import { isDirectModelCallsEnabled } from '@/backend/services/workspace/modelAccess';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/v1/models/route');
@@ -39,7 +40,9 @@ async function GET_handler(_request: Request) {
     // matching resolution logic on /v1/chat/completions.
     let modelEntries: { id: string; object: string }[] = [];
     try {
-      const models = await modelService.loadModels();
+      // A switched-off workspace does not advertise what it would refuse. An
+      // unreadable setting takes the catch below, which lists flows only.
+      const models = await isDirectModelCallsEnabled() ? await modelService.loadModels() : [];
       const seen = new Set<string>();
       for (const m of models) {
         const identifier = (m.fallbackPolicy ? m.name : m.displayName?.trim() || m.name || '').trim();
