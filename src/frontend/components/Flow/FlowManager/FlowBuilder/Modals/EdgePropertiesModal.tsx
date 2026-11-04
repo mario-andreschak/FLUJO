@@ -56,16 +56,23 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
     regex: t('flows.edgeModal.regex'),
     equals: t('flows.edgeModal.equals'),
     always: t('flows.edgeModal.always'),
+    exists: t('flows.edgeModal.exists'),
+    gt: t('flows.edgeModal.gt'),
+    gte: t('flows.edgeModal.gte'),
+    lt: t('flows.edgeModal.lt'),
+    lte: t('flows.edgeModal.lte'),
   };
   const targetLabels: Record<EdgeConditionTarget, string> = {
     'last-assistant': t('flows.edgeModal.lastAgent'),
     'last-message': t('flows.edgeModal.lastMessage'),
     'last-user': t('flows.edgeModal.lastUser'),
+    variable: t('flows.edgeModal.targetVariable'),
   };
   const defaultTarget = defaultConditionTarget(sourceNodeType);
   const [conditional, setConditional] = useState(false);
   const [kind, setKind] = useState<EdgeConditionKind>('contains');
   const [value, setValue] = useState('');
+  const [variable, setVariable] = useState('');
   const [target, setTarget] = useState<EdgeConditionTarget>(defaultTarget);
   const [ignoreCase, setIgnoreCase] = useState(false);
   const [negate, setNegate] = useState(false);
@@ -77,6 +84,7 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
       setConditional(true);
       setKind(cond.kind);
       setValue(typeof cond.value === 'string' ? cond.value : '');
+      setVariable(typeof cond.variable === 'string' ? cond.variable : '');
       setTarget(cond.target ?? defaultTarget);
       setIgnoreCase(!!cond.ignoreCase);
       setNegate(!!cond.negate);
@@ -84,6 +92,7 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
       setConditional(false);
       setKind('contains');
       setValue('');
+      setVariable('');
       setTarget(defaultTarget);
       setIgnoreCase(false);
       setNegate(false);
@@ -111,6 +120,7 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
       if (ignoreCase) condition.ignoreCase = true;
     }
     if (target !== defaultTarget) condition.target = target;
+    if (target === 'variable') condition.variable = variable.trim();
     if (negate) condition.negate = true;
     onSave(edge.id, condition);
     onClose();
@@ -202,6 +212,19 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
                 ))}
               </Select>
             </FormControl>
+
+            {target === 'variable' && (
+              <TextField
+                fullWidth
+                size="small"
+                label={t('flows.edgeModal.variableName')}
+                value={variable}
+                onChange={(e) => setVariable(e.target.value)}
+                error={!variable.trim()}
+                helperText={t('flows.edgeModal.variableHelp')}
+                placeholder="status.items.0.code"
+              />
+            )}
 
             <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
               {needsValue && (

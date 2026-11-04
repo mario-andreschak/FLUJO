@@ -25,8 +25,8 @@
  * match" so a typo in a predicate can never crash a run.
  */
 
-export type EdgeConditionKind = 'contains' | 'regex' | 'equals' | 'always';
-export type EdgeConditionTarget = 'last-assistant' | 'last-message' | 'last-user';
+export type EdgeConditionKind = 'contains' | 'regex' | 'equals' | 'always' | 'exists' | 'gt' | 'gte' | 'lt' | 'lte';
+export type EdgeConditionTarget = 'last-assistant' | 'last-message' | 'last-user' | 'variable';
 
 export interface EdgeCondition {
   /** How `value` is matched against the selected message. */
@@ -38,8 +38,12 @@ export interface EdgeCondition {
   value?: string;
   /** Which message to test. The default depends on the node the edge leaves:
    *  'last-assistant' after a Process node (the step's own output), 'last-user'
-   *  after a Start node, 'last-message' after a Static node. */
+   *  after a Start node, 'last-message' after a Static node. 'variable' tests a
+   *  run variable instead of a message, see `variable`. */
   target?: EdgeConditionTarget;
+  /** With target 'variable': the run variable, optionally with a dotted path into
+   *  its JSON value, such as `status` or `status.items.0.code`. */
+  variable?: string;
   /** Case-insensitive matching. For contains/equals it lowercases both sides;
    *  for regex it adds the `i` flag (JS regex has no `(?i)` inline flags). Default false. */
   ignoreCase?: boolean;
@@ -48,8 +52,11 @@ export interface EdgeCondition {
   negate?: boolean;
 }
 
-export const EDGE_CONDITION_KINDS: readonly EdgeConditionKind[] = ['contains', 'regex', 'equals', 'always'];
-export const EDGE_CONDITION_TARGETS: readonly EdgeConditionTarget[] = ['last-assistant', 'last-message', 'last-user'];
+export const EDGE_CONDITION_KINDS: readonly EdgeConditionKind[] = ['contains', 'regex', 'equals', 'always', 'exists', 'gt', 'gte', 'lt', 'lte'];
+
+/** Kinds that test only whether something is there, so they need no `value`. */
+export const VALUELESS_CONDITION_KINDS: readonly EdgeConditionKind[] = ['always', 'exists'];
+export const EDGE_CONDITION_TARGETS: readonly EdgeConditionTarget[] = ['last-assistant', 'last-message', 'last-user', 'variable'];
 
 /** Node types whose outgoing edges may carry a routing condition. */
 export const CONDITION_SOURCE_NODE_TYPES: readonly string[] = ['process', 'start', 'static'];
@@ -75,6 +82,7 @@ export function isEdgeCondition(value: unknown): value is EdgeCondition {
     && (candidate.target === undefined
       || (typeof candidate.target === 'string'
         && (EDGE_CONDITION_TARGETS as readonly string[]).includes(candidate.target)))
+    && (candidate.variable === undefined || typeof candidate.variable === 'string')
     && (candidate.ignoreCase === undefined || typeof candidate.ignoreCase === 'boolean')
     && (candidate.negate === undefined || typeof candidate.negate === 'boolean');
 }
@@ -109,12 +117,14 @@ export function formatConditionLabel(
   const prefix = cond.negate ? '!' : '';
   const kindLabel = labels?.[cond.kind] ?? cond.kind;
   if (cond.kind === 'always') return `${prefix}${kindLabel}`;
+  if (cond.kind === 'exists') return `${prefix}${kindLabel}${cond.variable ? `:${cond.variable}` : ''}`;
   const ci = cond.ignoreCase ? ' i' : '';
   const raw = typeof cond.value === 'string' ? cond.value : '';
   const MAX = 8;
   const shown = raw.length > MAX ? `${raw.slice(0, MAX)}…` : raw;
   const body = cond.kind === 'regex' ? `/${shown}/` : `"${shown}"`;
-  return `${prefix}${kindLabel}:${body}${ci}`;
+  const subject = cond.target === 'variable' && cond.variable ? `${cond.variable} ` : '';
+  return `${prefix}${subject}${kindLabel}:${body}${ci}`;
 }
 
 /**
@@ -142,6 +152,33 @@ export function messageText(content: unknown): string {
 interface SelectableMessage {
   role?: string;
   content?: unknown;
+}
+
+/**
+ * Read a run variable for a condition. A dotted path reads into the variable's JSON
+ * value, which is how a captured tool result is reached without a model. Returns null
+ * for anything missing, so a condition cannot match on a value that is not there.
+ * Numbers and booleans come back as text, because conditions compare text.
+ */
+export function readConditionVariable(
+  variable: string | undefined,
+  variables: Readonly<Record<string, unknown>> | undefined | null,
+): string | null {
+  if (!variable || !variables) return null;
+  const [name, ...path] = variable.split('.');
+  if (!Object.hasOwn(variables, name)) return null;
+  let value: unknown = variables[name];
+  if (path.length > 0) {
+    if (typeof value === 'string') {
+      try { value = JSON.parse(value); } catch { return null; }
+    }
+    for (const key of path) {
+      if (!value || typeof value !== 'object' || !Object.hasOwn(value as object, key)) return null;
+      value = (value as Record<string, unknown>)[key];
+    }
+  }
+  if (value === null || value === undefined) return null;
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
 }
 
 /**
@@ -183,6 +220,24 @@ export function evaluateCondition(
 
   let matched: boolean;
   switch (cond.kind) {
+    case 'exists':
+      matched = typeof message === 'string';
+      break;
+    case 'gt':
+    case 'gte':
+    case 'lt':
+    case 'lte': {
+      // Like a broken regex, a value that is not a number never routes, whatever
+      // `negate` says, so "not above 5" cannot match a missing or unreadable value.
+      const left = text.trim() === '' ? Number.NaN : Number(text);
+      const right = value.trim() === '' ? Number.NaN : Number(value);
+      if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+      matched = cond.kind === 'gt' ? left > right
+        : cond.kind === 'gte' ? left >= right
+          : cond.kind === 'lt' ? left < right
+            : left <= right;
+      break;
+    }
     case 'contains':
       matched = cond.ignoreCase
         ? text.toLowerCase().includes(value.toLowerCase())
@@ -229,12 +284,15 @@ export function selectConditionedEdge(
   conditions: Readonly<Record<string, EdgeCondition>>,
   messages: SelectableMessage[] | undefined | null,
   defaultTarget: EdgeConditionTarget = 'last-assistant',
+  variables?: Readonly<Record<string, unknown>> | null,
 ): string | null {
   for (const edgeId of orderedEdges) {
     const cond = conditions[edgeId];
-    if (cond && evaluateCondition(cond, selectConditionText(messages, cond.target ?? defaultTarget))) {
-      return edgeId;
-    }
+    if (!cond) continue;
+    const text = cond.target === 'variable'
+      ? readConditionVariable(cond.variable, variables)
+      : selectConditionText(messages, cond.target ?? defaultTarget);
+    if (evaluateCondition(cond, text)) return edgeId;
   }
   return orderedEdges.find((edgeId) => !conditions[edgeId]) ?? null;
 }

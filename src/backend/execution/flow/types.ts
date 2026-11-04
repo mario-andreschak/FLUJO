@@ -734,6 +734,10 @@ export interface StaticNodeProperties {
     entries?: StaticEntry[];
     /** Explicit deterministic output, resolved after entries (e.g. ${var:health}). */
     outputTemplate?: string;
+    /** Real tool calls of this node that always wait for a person, as on a Process node. */
+    requireApprovalFor?: string[];
+    /** Same, for every real tool call its server does not mark read-only. */
+    requireApprovalForWrites?: boolean;
     /** MCP attachments derived from static↔MCP graph edges at conversion time. */
     mcpNodes?: MCPNodeReference[];
     /**

@@ -26,6 +26,33 @@ import {
 
 const log = createLogger('backend/flow/execution/nodes/StaticNode');
 
+/**
+ * A real call follows the same approval rules as a call a model makes: the run's own
+ * setting, the node's rule and the entry's flag. FLUJO's internal memory commit is not
+ * a connected tool and has its own authority, so it is not asked about. A server that
+ * cannot say a tool is read-only is treated as if it could change data.
+ */
+async function callNeedsPerson(
+  entry: { requireApproval?: boolean },
+  toolName: string,
+  serverName: string,
+  sharedState: SharedState,
+  node_params: StaticNodeParams | undefined,
+): Promise<boolean> {
+  if (serverName === PERSONA_MEMORY_GATEWAY_SERVER) return false;
+  const properties = node_params?.properties;
+  if (entry.requireApproval === true || sharedState.requireApproval === true
+    || properties?.requireApprovalFor?.includes(toolName)) return true;
+  if (properties?.requireApprovalForWrites !== true) return false;
+  try {
+    const listed = await mcpService.listServerTools(serverName);
+    return listed.tools?.find((tool) => tool.name === toolName)?.annotations?.readOnlyHint !== true;
+  } catch (error) {
+    log.warn('Could not read tool hints; asking a person to be safe', { serverName, toolName, error });
+    return true;
+  }
+}
+
 async function deliverResult(call: () => Promise<MCPServiceResponse>): Promise<MCPServiceResponse> {
   try {
     return await call();
@@ -290,7 +317,8 @@ export class StaticNode extends BaseNode<
           if (entry.resultFormat !== undefined && entry.resultFormat !== 'text' && entry.resultFormat !== 'json') {
             throw new Error(`Static node ${nodeId}: resultFormat must be text or json.`);
           }
-          if (entry.requireApproval === true && !getHarnessExecution()) {
+          if (heldHere || (executionMode === 'real' && !getHarnessExecution()
+            && await callNeedsPerson(entry, toolName, serverName, sharedState, node_params))) {
             if (!heldHere) {
               return holdForPerson(entryIndex, toolCall, serverName ? { serverName, toolName } : undefined);
             }
@@ -476,6 +504,7 @@ export class StaticNode extends BaseNode<
         edgeConditions,
         sharedState.messages,
         defaultConditionTarget('static'),
+        sharedState.variables,
       );
       log.info('Static node routing by edge condition', { nodeId, edgeId: routed });
       return routed ?? FINAL_RESPONSE_ACTION;

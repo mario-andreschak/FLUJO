@@ -974,9 +974,11 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           `${sourceLabel} has an outgoing edge whose condition kind "${String(condition.kind)}" is unknown; it will never match.`,
           sourceNode!
         );
-      } else if (condition.kind === 'always') {
-        // 'always' is a valid value-less always-true predicate (issue #111) —
-        // it is the deterministic default route, so no "missing value" warning.
+      } else if (condition.target === 'variable' && !condition.variable?.trim()) {
+        add('error', 'edge-condition-variable', `${sourceLabel} has an outgoing edge that tests a variable but does not name one.`, sourceNode!);
+      } else if (condition.kind === 'always' || condition.kind === 'exists') {
+        // Value-less predicates. 'always' is the deterministic default route (issue
+        // #111), and 'exists' only asks whether something is there.
       } else if (typeof condition.value !== 'string' || condition.value.length === 0) {
         add(
           'warning',

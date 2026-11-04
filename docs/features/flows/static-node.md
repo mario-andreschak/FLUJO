@@ -207,12 +207,34 @@ provides correlation and does not authenticate the customer. See the
 [complete command reference](../dynamic-references.md) for current context,
 entity pickers, aliases, and available fields.
 
+## Branch on a tool result
+
+A Static node can run a tool and choose the next step from its result, with no model involved. Capture the result as JSON, then test it on the outgoing edges:
+
+```json
+{
+  "nodes": [
+    { "key": "check", "type": "static", "entries": [
+      { "kind": "toolCall", "executionMode": "real", "serverName": "shop", "toolName": "stock", "argumentsJson": "{}", "result": "", "captureVariable": "stock", "resultFormat": "json" }
+    ] }
+  ],
+  "edges": [
+    { "from": "check", "to": "reorder", "condition": { "kind": "lt", "value": "5", "target": "variable", "variable": "stock.count" } },
+    { "from": "check", "to": "done" }
+  ]
+}
+```
+
+The first edge that matches wins, and an edge without a condition is the fallback. A tool that answers with text inside MCP's `content` block is read as `stock.content.0.text`.
+
 ## Wait for a person
 
 A Static node can stop a run until a person decides, in two ways:
 
 - **A wait with no tool.** Add a **Wait for a person** entry (`{ "kind": "humanGate", "text": "Send this reminder?" }`).
 - **Before a real tool call.** Turn on **Ask a person before this call** (`"requireApproval": true`). The person sees the exact arguments, and those exact arguments run after an approval.
+
+A real call also waits when the run asks for approval on every tool, or when the node names it in `requireApprovalFor` or covers it with `requireApprovalForWrites`, the same rules a Process step has. A mock call has no effect, so it never waits.
 
 A waiting run uses the same approval path as any tool call. It appears in the chat and, for automations, in the approval inbox, and you can continue it from outside with `POST /v1/chat/conversations/{id}/respond` or `POST /api/approvals/{id}`. The run is saved while it waits, so it survives a restart.
 
