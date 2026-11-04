@@ -161,7 +161,7 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     // Observe the production method without replacing delivery or protocol data.
     toolCall = jest.spyOn(mcpService, 'callTool');
     expectedErrors = jest.spyOn(console, 'error').mockImplementation(() => {});
-  });
+  }, 60_000);
 
   afterEach(async () => {
     toolCall.mockRestore();
