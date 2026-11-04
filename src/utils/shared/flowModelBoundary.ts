@@ -9,6 +9,23 @@
 
 export const MODEL_NOT_ALLOWED_CODE = 'model_not_allowed';
 
+/**
+ * The models a step sends data to by itself. A Process step has its bound model, and a
+ * Static step can hold model decisions. Keep every list of a flow's models on this, so
+ * an allowed list cannot miss a step.
+ */
+export function stepModelIds(type: string | undefined, properties: Record<string, unknown> | undefined): string[] {
+  if (type === 'process') {
+    return typeof properties?.boundModel === 'string' && properties.boundModel ? [properties.boundModel] : [];
+  }
+  if (type === 'static' && Array.isArray(properties?.entries)) {
+    return (properties.entries as Array<{ kind?: unknown; boundModel?: unknown }>).flatMap((entry) => (
+      entry?.kind === 'modelDecision' && typeof entry.boundModel === 'string' && entry.boundModel ? [entry.boundModel] : []
+    ));
+  }
+  return [];
+}
+
 /** Both lists must allow a model, because a subflow may not widen what its parent allows. */
 export function intersectAllowedModels(
   first: readonly string[] | undefined,

@@ -39,6 +39,7 @@ import type { Edge } from '@xyflow/react';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
 import { decisionRuleIssues, type DecisionRule } from './decisionRules';
+import { modelDecisionIssues, type DecisionQuestion } from './modelDecision';
 import { isValidRunVarName } from './resolveRunVars';
 import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TARGETS, EdgeCondition, EdgeConditionTarget, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
@@ -72,6 +73,18 @@ function clamp(value: number | undefined, min: number, max: number, fallback: nu
  * `src/backend/**`. Keep the two definitions in sync if the runtime shape changes.
  */
 export type FlowSpecStaticEntry =
+  | {
+      kind: 'modelDecision';
+      /** In a spec, `model` names it by id, display name or name, as on a process node. */
+      model?: string;
+      boundModel?: string;
+      captureVariable: string;
+      question: DecisionQuestion;
+      target?: EdgeConditionTarget;
+      variable?: string;
+      onFailure?: 'fail' | 'continue';
+      failureValue?: string;
+    }
   | {
       kind: 'message';
       role: 'system' | 'user' | 'assistant';
@@ -991,7 +1004,29 @@ export function compileFlowSpec(
           if (entry.onReject !== undefined && entry.onReject !== 'stop' && entry.onReject !== 'continue') {
             issues.push({ severity: 'error', code: 'static-invalid-onreject', message: `Node "${key}": onReject must be stop or continue.`, nodeKey: key });
           }
-          if (entry.kind === 'humanGate') {
+          if (entry.kind === 'modelDecision') {
+            // A check that drops out would let everything through, so problems stop the compile.
+            const label = `Node "${key}", entry #${i + 1}`;
+            const decisionIssues = modelDecisionIssues(entry, label);
+            for (const issue of decisionIssues) issues.push({ ...issue, nodeKey: key });
+            const ref = typeof entry.model === 'string' && entry.model ? entry.model : entry.boundModel;
+            if (typeof ref !== 'string' || !ref) {
+              error('model-decision-no-model', `${label}: a model decision needs a model.`, key);
+            } else if (!decisionIssues.some((issue) => issue.severity === 'error')) {
+              const resolved = resolveModel(ref, models);
+              if (!resolved) warn('model-unresolved', `${label}: model "${ref}" does not match any configured model (by id, display name, or name).`, key);
+              clean.push({
+                kind: 'modelDecision',
+                boundModel: resolved ?? ref,
+                captureVariable: entry.captureVariable as string,
+                question: entry.question as DecisionQuestion,
+                ...(typeof entry.target === 'string' ? { target: entry.target as EdgeConditionTarget } : {}),
+                ...(typeof entry.variable === 'string' ? { variable: entry.variable } : {}),
+                ...(entry.onFailure === 'continue' ? { onFailure: 'continue' as const } : {}),
+                ...(typeof entry.failureValue === 'string' ? { failureValue: entry.failureValue } : {}),
+              });
+            }
+          } else if (entry.kind === 'humanGate') {
             if (typeof entry.text === 'string' && entry.text.trim()) {
               if (entry.captureVariable !== undefined && !isValidRunVarName(entry.captureVariable)) {
                 error('static-invalid-capture', `Node "${key}": human gate entry #${i + 1} has an invalid capture variable.`, key);

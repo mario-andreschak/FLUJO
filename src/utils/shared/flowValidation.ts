@@ -20,7 +20,8 @@ import { decisionRuleIssues } from './decisionRules';
 import { findBindings } from './mcpBinding';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 import { CONDITION_SOURCE_NODE_TYPES, EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
-import { modelsOutsideBoundary } from './flowModelBoundary';
+import { modelsOutsideBoundary, stepModelIds } from './flowModelBoundary';
+import { modelDecisionIssues } from './modelDecision';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
 import {
@@ -647,6 +648,17 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       continue;
     }
     entries.forEach((entry: unknown, index: number) => {
+      if (entry && typeof entry === 'object' && 'kind' in entry && entry.kind === 'modelDecision') {
+        for (const issue of modelDecisionIssues(entry as unknown as Record<string, unknown>, `Static node "${getNodeLabel(node)}"`)) {
+          add(issue.severity, issue.code, issue.message, node);
+        }
+        const bound = (entry as { boundModel?: unknown }).boundModel;
+        if (typeof bound !== 'string' || !bound) {
+          add('error', 'model-decision-no-model', `Static node "${getNodeLabel(node)}" has a model decision with no model.`, node);
+        } else if (haveModels && !modelById.has(bound)) {
+          add('error', 'model-decision-unknown-model', `Static node "${getNodeLabel(node)}" has a model decision with a model that no longer exists.`, node);
+        }
+      }
       if (entry && typeof entry === 'object' && 'kind' in entry && entry.kind === 'humanGate') {
         const gate = entry as { text?: unknown };
         if (typeof gate.text !== 'string' || !gate.text.trim()) {
@@ -932,15 +944,14 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   // Without a model list there is nothing to compare a fallback policy's members with.
   if (flow?.allowedModels && context.models) {
     for (const node of nodes) {
-      if (getNodeType(node) !== 'process') continue;
-      const bound = node.data?.properties?.boundModel;
-      if (typeof bound !== 'string' || !bound) continue;
+      for (const bound of stepModelIds(getNodeType(node), node.data?.properties ?? undefined)) {
       const outside = modelsOutsideBoundary(
         context.models.find((model) => model.id === bound) ?? { id: bound },
         flow.allowedModels,
       );
       if (outside.length > 0) {
-        add('error', 'model-outside-allowed', `Process node "${getNodeLabel(node)}" uses a model this flow's allowed list does not include: ${outside.join(', ')}.`, node);
+        add('error', 'model-outside-allowed', `Step "${getNodeLabel(node)}" uses a model this flow's allowed list does not include: ${outside.join(', ')}.`, node);
+      }
       }
     }
   }

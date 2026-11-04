@@ -1,6 +1,10 @@
 "use client";
 
 import { decisionRuleIssues, type DecisionRule } from '@/utils/shared/decisionRules';
+import type { Model } from '@/shared/types/model';
+import { modelService } from '@/frontend/services/model';
+import type { EdgeConditionTarget } from '@/utils/shared/edgeConditions';
+import { decisionAnswerNames, modelDecisionIssues, type DecisionQuestion } from '@/utils/shared/modelDecision';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Accordion,
@@ -100,6 +104,17 @@ interface StaticAttachment {
   transcript?: string;
 }
 
+type ModelDecisionEntry = {
+  kind: 'modelDecision';
+  boundModel: string;
+  captureVariable: string;
+  question: DecisionQuestion;
+  target?: EdgeConditionTarget;
+  variable?: string;
+  onFailure?: 'fail' | 'continue';
+  failureValue?: string;
+};
+
 type StaticEntry =
   | {
       kind: 'message';
@@ -121,6 +136,7 @@ type StaticEntry =
       onReject?: 'stop' | 'continue';
       rejectedText?: string;
     }
+  | ModelDecisionEntry
   | {
       kind: 'humanGate';
       text: string;
@@ -130,6 +146,167 @@ type StaticEntry =
     };
 
 const EMPTY_STATIC_ENTRIES: StaticEntry[] = [];
+
+/** The answer choices as text, one `name: meaning` per line. */
+function optionsToText(question: DecisionQuestion): string {
+  if (Array.isArray(question.options)) return question.options.join('\n');
+  return Object.entries(question.options ?? {}).map(([name, meaning]) => `${name}: ${meaning}`).join('\n');
+}
+
+function optionsFromText(type: DecisionQuestion['type'], text: string): DecisionQuestion['options'] {
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (type === 'noul') return undefined;
+  if (type === 'score') return lines;
+  return Object.fromEntries(lines.map((line) => {
+    const colon = line.indexOf(':');
+    return colon < 0 ? [line, line] : [line.slice(0, colon).trim(), line.slice(colon + 1).trim()];
+  }));
+}
+
+function ModelDecisionEditor({ entry, onChange }: {
+  entry: ModelDecisionEntry;
+  onChange: (patch: Partial<ModelDecisionEntry>) => void;
+}) {
+  const { t } = useI18n();
+  const [models, setModels] = useState<Model[]>([]);
+  const [optionsText, setOptionsText] = useState(() => optionsToText(entry.question));
+  useEffect(() => {
+    let active = true;
+    void modelService.loadModels().then((loaded) => {
+      if (active) setModels(loaded);
+    });
+    return () => { active = false; };
+  }, []);
+  const question = entry.question;
+  const setQuestion = (patch: Partial<DecisionQuestion>) => onChange({ question: { ...question, ...patch } });
+  const problems = modelDecisionIssues(entry as unknown as Record<string, unknown>, '').map((issue) => issue.message.replace(/^: /, ''));
+  return (
+    <Stack spacing={2}>
+      <TextField
+        select
+        label={t('flows.static.decisionModel')}
+        value={entry.boundModel}
+        onChange={(event) => onChange({ boundModel: event.target.value })}
+        error={!entry.boundModel}
+        helperText={t('flows.static.decisionModelHelp')}
+        fullWidth
+        size="small"
+      >
+        {entry.boundModel && !models.some((model) => model.id === entry.boundModel) && (
+          <MenuItem value={entry.boundModel}>{entry.boundModel}</MenuItem>
+        )}
+        {models.map((model) => <MenuItem key={model.id} value={model.id}>{model.displayName || model.name}</MenuItem>)}
+      </TextField>
+      <TextField
+        select
+        label={t('flows.static.decisionType')}
+        value={question.type}
+        onChange={(event) => {
+          const type = event.target.value as DecisionQuestion['type'];
+          setQuestion({ type, options: optionsFromText(type, optionsText) });
+        }}
+        fullWidth
+        size="small"
+      >
+        <MenuItem value="choice">{t('flows.static.decisionChoice')}</MenuItem>
+        <MenuItem value="noul">{t('flows.static.decisionNoul')}</MenuItem>
+        <MenuItem value="score">{t('flows.static.decisionScore')}</MenuItem>
+      </TextField>
+      <TextField
+        label={t('flows.static.decisionInstructions')}
+        value={question.instructions}
+        onChange={(event) => setQuestion({ instructions: event.target.value })}
+        error={!question.instructions.trim()}
+        fullWidth
+        multiline
+        size="small"
+      />
+      <TextField
+        label={t('flows.static.decisionCriteria')}
+        value={question.criteria ?? ''}
+        onChange={(event) => setQuestion({ criteria: event.target.value || undefined })}
+        fullWidth
+        multiline
+        size="small"
+      />
+      {question.type !== 'noul' && (
+        <TextField
+          label={t('flows.static.decisionOptions')}
+          value={optionsText}
+          onChange={(event) => {
+            setOptionsText(event.target.value);
+            setQuestion({ options: optionsFromText(question.type, event.target.value) });
+          }}
+          helperText={t(question.type === 'score' ? 'flows.static.decisionOptionsScoreHelp' : 'flows.static.decisionOptionsChoiceHelp')}
+          fullWidth
+          multiline
+          minRows={2}
+          size="small"
+        />
+      )}
+      <TextField
+        select
+        label={t('flows.static.decisionTarget')}
+        value={entry.target ?? 'last-user'}
+        onChange={(event) => onChange({ target: event.target.value as EdgeConditionTarget })}
+        fullWidth
+        size="small"
+      >
+        <MenuItem value="last-user">{t('flows.edgeModal.lastUser')}</MenuItem>
+        <MenuItem value="last-assistant">{t('flows.edgeModal.lastAgent')}</MenuItem>
+        <MenuItem value="last-message">{t('flows.edgeModal.lastMessage')}</MenuItem>
+        <MenuItem value="variable">{t('flows.edgeModal.targetVariable')}</MenuItem>
+      </TextField>
+      {entry.target === 'variable' && (
+        <TextField
+          label={t('flows.edgeModal.variableName')}
+          value={entry.variable ?? ''}
+          onChange={(event) => onChange({ variable: event.target.value })}
+          fullWidth
+          size="small"
+        />
+      )}
+      <TextField
+        label={t('flows.static.captureVariable')}
+        value={entry.captureVariable}
+        onChange={(event) => onChange({ captureVariable: event.target.value.trim() })}
+        helperText={t('flows.static.decisionCaptureHelp')}
+        error={!isValidRunVarName(entry.captureVariable)}
+        fullWidth
+        size="small"
+      />
+      <TextField
+        select
+        label={t('flows.static.decisionOnFailure')}
+        value={entry.onFailure ?? 'fail'}
+        onChange={(event) => {
+          const onFailure = event.target.value as 'fail' | 'continue';
+          onChange({ onFailure, ...(onFailure === 'fail' ? { failureValue: undefined } : {}) });
+        }}
+        helperText={t('flows.static.decisionOnFailureHelp')}
+        fullWidth
+        size="small"
+      >
+        <MenuItem value="fail">{t('flows.static.decisionFailStop')}</MenuItem>
+        <MenuItem value="continue">{t('flows.static.decisionFailContinue')}</MenuItem>
+      </TextField>
+      {entry.onFailure === 'continue' && (
+        <TextField
+          select
+          label={t('flows.static.decisionFailureValue')}
+          value={entry.failureValue ?? ''}
+          onChange={(event) => onChange({ failureValue: event.target.value || undefined })}
+          fullWidth
+          size="small"
+        >
+          <MenuItem value=""><em>{t('flows.static.decisionFailureNone')}</em></MenuItem>
+          {decisionAnswerNames(question).map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
+        </TextField>
+      )}
+      {problems.length > 0 && <FormHelperText error>{problems[0]}</FormHelperText>}
+    </Stack>
+  );
+}
 
 /** The rules as text. An unfinished edit stays here and blocks saving, so a rule is
  *  never saved half-written. */
@@ -625,7 +802,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     const initialEntries = Array.isArray(node.data.properties?.entries)
       ? node.data.properties.entries.map((entry: StaticEntry) => entry.kind === 'toolCall'
         ? { executionMode: 'mock' as const, ...entry }
-        : entry.kind === 'humanGate'
+        : entry.kind === 'humanGate' || entry.kind === 'modelDecision'
           ? { ...entry }
           : { ...entry, attachments: [...(entry.attachments ?? [])] })
       : [];
@@ -713,6 +890,9 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     ))
     || entries.some((entry) => entry.kind === 'humanGate' && (
       !entry.text.trim() || (!!entry.captureVariable && !isValidRunVarName(entry.captureVariable.trim()))
+    ))
+    || entries.some((entry) => entry.kind === 'modelDecision' && (
+      !entry.boundModel || modelDecisionIssues(entry as unknown as Record<string, unknown>, '').some((issue) => issue.severity === 'error')
     ))
     || rulesInvalid
     || (!!nodeData?.properties?.decisionVariable && !isValidRunVarName(nodeData.properties.decisionVariable));
@@ -855,6 +1035,18 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                   <Button startIcon={<ForumRoundedIcon />} variant="outlined" onClick={() => appendEntry({ kind: 'message', role: 'user', content: '', attachments: [] })} sx={{ textTransform: 'none' }}>
                     {t('flows.static.addMessage')}
                   </Button>
+                  <Button
+                    startIcon={<AutoAwesomeRoundedIcon />}
+                    variant="outlined"
+                    onClick={() => appendEntry({
+                      kind: 'modelDecision',
+                      boundModel: '',
+                      captureVariable: 'check',
+                      question: { type: 'noul', instructions: '' },
+                    })}
+                  >
+                    {t('flows.static.addModelDecision')}
+                  </Button>
                   <Button startIcon={<PersonRoundedIcon />} variant="outlined" onClick={() => appendEntry({ kind: 'humanGate', text: '' })}>
                     {t('flows.static.addHumanGate')}
                   </Button>
@@ -877,7 +1069,9 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                     const mode = entry.kind === 'toolCall' && entry.executionMode === 'real'
                       ? t('flows.static.realLabel')
                       : t('flows.static.mockLabel');
-                    const title = entry.kind === 'humanGate'
+                    const title = entry.kind === 'modelDecision'
+                      ? t('flows.static.modelDecisionTitle')
+                      : entry.kind === 'humanGate'
                       ? t('flows.static.humanGateTitle')
                       : entry.kind === 'message'
                         ? t('flows.static.messageTitle', { role: t(roleTranslationKey[entry.role]) })
@@ -902,8 +1096,8 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                         <Stack direction="row" sx={{ alignItems: "center" }}>
                           <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ pl: 2, pr: 1, flex: 1, minWidth: 0 }}>
                             <Stack direction="row" spacing={1.25} sx={{ alignItems: "center",  width: '100%', minWidth: 0 }}>
-                              <Avatar sx={{ width: 30, height: 30, bgcolor: entry.kind === 'humanGate' ? 'warning.main' : entry.kind === 'toolCall' ? 'info.main' : roleMeta[entry.role].color }}>
-                                {entry.kind === 'humanGate' ? <PersonRoundedIcon sx={{ fontSize: 17 }} /> : entry.kind === 'toolCall' ? <BuildRoundedIcon sx={{ fontSize: 17 }} /> : roleMeta[entry.role].icon}
+                              <Avatar sx={{ width: 30, height: 30, bgcolor: entry.kind === 'humanGate' ? 'warning.main' : entry.kind === 'modelDecision' ? 'secondary.main' : entry.kind === 'toolCall' ? 'info.main' : roleMeta[entry.role].color }}>
+                                {entry.kind === 'humanGate' ? <PersonRoundedIcon sx={{ fontSize: 17 }} /> : entry.kind === 'modelDecision' ? <AutoAwesomeRoundedIcon sx={{ fontSize: 17 }} /> : entry.kind === 'toolCall' ? <BuildRoundedIcon sx={{ fontSize: 17 }} /> : roleMeta[entry.role].icon}
                               </Avatar>
                               <Chip size="small" label={index + 1} />
                               <Typography noWrap sx={{ fontWeight: 700,  flex: 1 }}>{title}</Typography>
@@ -917,7 +1111,9 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                           </Stack>
                         </Stack>
                         <AccordionDetails sx={{ p: { xs: 1.5, sm: 2.5 }, pt: 0.5 }}>
-                          {entry.kind === 'humanGate' ? (
+                          {entry.kind === 'modelDecision' ? (
+                            <ModelDecisionEditor entry={entry} onChange={(patch) => updateEntry(index, patch)} />
+                          ) : entry.kind === 'humanGate' ? (
                             <Stack spacing={2}>
                               <TextField
                                 label={t('flows.static.humanGateText')}
