@@ -1061,6 +1061,13 @@ export interface SharedState extends DebuggerStateView {
      *  the correct server context. Cleared / overwritten on each node transition. */
     currentMCPNodes?: MCPNodeReference[];
     /**
+     * Every tool name the current Process node offered on its latest turn, including
+     * handoff and other by-name tools. Rewritten by ProcessNode.prep() and enforced
+     * at dispatch. Persisted so an approval resume checks the same offer. Unlike
+     * toolNameMap, which keeps earlier steps' tools decodable, this holds one step.
+     */
+    offeredToolNames?: string[];
+    /**
      * Synthetic tools (`read_resource`, `list_mcp_resources`) that have been
      * armed at any point in this conversation.
      *

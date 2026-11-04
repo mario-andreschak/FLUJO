@@ -82,6 +82,7 @@ export async function applyApprovalDecision(
     const toolProcessingResult = await ModelHandler.processToolCalls({
       toolCalls: [toolCallToProcess],
       toolNameMap: sharedState.toolNameMap,
+      offeredToolNames: sharedState.offeredToolNames,
       mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
     });
 

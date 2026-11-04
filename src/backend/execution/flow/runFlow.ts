@@ -618,6 +618,7 @@ function installPersonaActivitySnapshot(
   delete sharedState.personaCoreAppRefs;
   sharedState.armedSyntheticTools = undefined;
   sharedState.toolNameMap = undefined;
+  sharedState.offeredToolNames = undefined;
   // The successor Activity starts from the immutable Behavior policy, never
   // from stale graph-derived rules or an unguarded empty policy.
   sharedState.behaviorRules = structuredClone(canonicalFlow.behaviorRules ?? []);
@@ -2362,7 +2363,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           sharedState.debugPendingToolCalls = remainingCalls.length > 0 ? remainingCalls : undefined;
           log.info(`[Debug Step] Executing ${callsToExecute.length} pending tool call(s) for conv ${effectiveConvId}.`);
           const toolProcessingResult = await processToolCallsRecoverably({
-            toolCalls: callsToExecute, toolNameMap: sharedState.toolNameMap, emit,
+            toolCalls: callsToExecute, toolNameMap: sharedState.toolNameMap, offeredToolNames: sharedState.offeredToolNames, emit,
             // Run-resource auto-capture: ephemeral (subflow-child) runs never
             // write resources — same policy as persistConversationState.
             conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -2830,7 +2831,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               } else {
                 log.info(`[flujo=true, requireApproval=false] Processing ${ordinaryToolCalls.length} tools internally for conv ${effectiveConvId}`);
                 const toolProcessingResult = await processToolCallsRecoverably({
-                  toolCalls: ordinaryToolCalls, toolNameMap: sharedState.toolNameMap, emit,
+                  toolCalls: ordinaryToolCalls, toolNameMap: sharedState.toolNameMap, offeredToolNames: sharedState.offeredToolNames, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   runId: logicalRunId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
@@ -2891,7 +2892,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               if (internalTools.length > 0) {
                 log.info(`[flujo=false] Processing ${internalTools.length} internal tools for conv ${effectiveConvId}. External tools (${externalTools.length}) will be ignored this step.`);
                 const toolProcessingResult = await processToolCallsRecoverably({
-                  toolCalls: internalTools, toolNameMap: sharedState.toolNameMap, emit,
+                  toolCalls: internalTools, toolNameMap: sharedState.toolNameMap, offeredToolNames: sharedState.offeredToolNames, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   runId: logicalRunId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,

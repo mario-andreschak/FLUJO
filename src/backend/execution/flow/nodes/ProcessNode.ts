@@ -1212,6 +1212,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     if (terminalRouting === 'tool-free' && prepResult.availableTools?.length) {
       throw new Error('Tool-free terminal routing cannot advertise executable tools');
     }
+    // Written last so it reflects every late change above, such as sticky synthetic
+    // tools or the forced summary turn that strips all tools.
+    sharedState.offeredToolNames = (prepResult.availableTools ?? []).map((tool) => tool.name);
     log.info('prep() completed', {
       completePromptLength: completePrompt.length,
       boundModel,

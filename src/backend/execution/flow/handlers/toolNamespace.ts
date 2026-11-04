@@ -157,6 +157,31 @@ export function decodeToolName(name: string, map?: ToolNameMap): DecodedTool | n
   return null;
 }
 
+/**
+ * Whether a model-emitted tool name belongs to the current step's offer.
+ *
+ * `offered` is the exact list the current Process node advertised on this turn
+ * (`SharedState.offeredToolNames`). `undefined` means no step recorded an offer:
+ * direct callers and runs paused before this field existed keep their behaviour.
+ * A legacy `_-_-_SERVER_-_-_TOOL` spelling counts only as an alias of an offered
+ * (server, tool) pair, so it cannot reach a tool bound by an earlier step.
+ *
+ * `read_resource` always counts. ModelHandler can add it after prep, when the wire
+ * refers to a stored run result (ensureReadResourceArmed), so a recorded offer can
+ * lag behind what the model was really shown. It only reads this run's own results.
+ */
+export function isToolOfferedInStep(
+  name: string,
+  offered: readonly string[] | undefined,
+  map?: ToolNameMap,
+): boolean {
+  if (!offered) return true;
+  if (offered.includes(name) || name === 'read_resource') return true;
+  if (!name.includes(LEGACY_SEP)) return false;
+  const decoded = decodeToolName(name, map);
+  return !!decoded && offered.includes(encodeToolName(decoded.server, decoded.tool));
+}
+
 /** Synthetic FLUJO tool names that are always internal (no MCP server dispatch needed). */
 const SYNTHETIC_INTERNAL_TOOLS = new Set([
   'write_resource',
