@@ -86,6 +86,17 @@ export type FlowSpecStaticEntry =
       captureVariable?: string;
       resultFormat?: 'text' | 'json';
       onError?: 'continue' | 'fail';
+      /** Real calls only: a person decides on the call before it runs. */
+      requireApproval?: boolean;
+      onReject?: 'stop' | 'continue';
+      rejectedText?: string;
+    }
+  | {
+      /** The run waits here until a person decides, with no tool involved. */
+      kind: 'humanGate';
+      text: string;
+      onReject?: 'stop' | 'continue';
+      rejectedText?: string;
     };
 
 /** An MCP server a process step may call tools on. */
@@ -949,7 +960,22 @@ export function compileFlowSpec(
             warn('static-invalid-entry', `Node "${key}": entry #${i + 1} is not an object; dropped.`, key);
             continue;
           }
-          if (entry.kind === 'message') {
+          // Dropping a wait or a required approval would let a run continue without
+          // the person it promised, so these problems stop the compile.
+          const rejectOptions: { onReject?: 'stop' | 'continue'; rejectedText?: string } = {
+            ...(entry.onReject === 'stop' || entry.onReject === 'continue' ? { onReject: entry.onReject } : {}),
+            ...(typeof entry.rejectedText === 'string' && entry.rejectedText ? { rejectedText: entry.rejectedText } : {}),
+          };
+          if (entry.onReject !== undefined && entry.onReject !== 'stop' && entry.onReject !== 'continue') {
+            issues.push({ severity: 'error', code: 'static-invalid-onreject', message: `Node "${key}": onReject must be stop or continue.`, nodeKey: key });
+          }
+          if (entry.kind === 'humanGate') {
+            if (typeof entry.text === 'string' && entry.text.trim()) {
+              clean.push({ kind: 'humanGate', text: entry.text, ...rejectOptions });
+            } else {
+              issues.push({ severity: 'error', code: 'static-human-gate-text', message: `Node "${key}": human gate entry #${i + 1} needs text that tells the person what to decide.`, nodeKey: key });
+            }
+          } else if (entry.kind === 'message') {
             const role = entry.role;
             const content = entry.content;
             if ((role === 'system' || role === 'user' || role === 'assistant') && typeof content === 'string') {
@@ -982,7 +1008,14 @@ export function compileFlowSpec(
             if (typeof toolName === 'string' && toolName.trim() && typeof argumentsJson === 'string' && typeof result === 'string') {
               const executionMode = entry.executionMode === 'real' ? 'real' : 'mock';
               const serverName = typeof entry.serverName === 'string' ? entry.serverName.trim() : '';
-              const captureOptions: Pick<Extract<FlowSpecStaticEntry, { kind: 'toolCall' }>, 'captureVariable' | 'resultFormat' | 'onError'> = {
+              if (entry.requireApproval !== undefined && entry.requireApproval !== true && entry.requireApproval !== false) {
+                issues.push({ severity: 'error', code: 'static-invalid-require-approval', message: `Node "${key}": requireApproval must be true or false.`, nodeKey: key });
+              }
+              if (entry.requireApproval === true && (executionMode !== 'real' || !serverName)) {
+                issues.push({ severity: 'error', code: 'static-mock-require-approval', message: `Node "${key}": requireApproval needs a real call with an MCP server.`, nodeKey: key });
+              }
+              const captureOptions: Pick<Extract<FlowSpecStaticEntry, { kind: 'toolCall' }>, 'captureVariable' | 'resultFormat' | 'onError' | 'requireApproval' | 'onReject' | 'rejectedText'> = {
+                ...(entry.requireApproval === true ? { requireApproval: true, ...rejectOptions } : {}),
                 ...(typeof entry.captureVariable === 'string' && entry.captureVariable.trim() ? { captureVariable: entry.captureVariable.trim() } : {}),
                 ...(entry.resultFormat === 'text' || entry.resultFormat === 'json' ? { resultFormat: entry.resultFormat } : {}),
                 ...(entry.onError === 'continue' || entry.onError === 'fail' ? { onError: entry.onError } : {}),

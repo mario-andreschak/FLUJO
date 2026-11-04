@@ -69,7 +69,8 @@ NODE TYPES:
 - { "key": "...", "type": "static", "label": "...",                // OPTIONAL/advanced (rule 13): injects pre-authored
     "entries": [                                                    //   messages / few-shot examples, then passes through unchanged
       { "kind": "message", "role": "system|user|assistant", "content": "..." },
-      { "kind": "toolCall", "executionMode": "mock|real", "serverName": "...", "toolName": "...", "argumentsJson": "{...}", "result": "...", "captureVariable": "NAME", "resultFormat": "text|json", "onError": "continue|fail" }
+      { "kind": "humanGate", "text": "what the person decides", "onReject": "stop|continue", "rejectedText": "..." },   // the run waits for a person with no tool involved; rejection stops the run unless onReject is "continue". Route on the result with a condition on this node's edge: "approved" or "tool denied"
+      { "kind": "toolCall", "executionMode": "mock|real", "serverName": "...", "toolName": "...", "argumentsJson": "{...}", "result": "...", "captureVariable": "NAME", "resultFormat": "text|json", "onError": "continue|fail", "requireApproval": true, "onReject": "stop|continue", "rejectedText": "..." }
     ],
     "injectOnce": true, "outputTemplate": "\${var:NAME}" }            // optional output selection; omission preserves context-only injection
 

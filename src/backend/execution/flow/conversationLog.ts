@@ -814,7 +814,10 @@ export function repairDanglingToolCalls(
     || (state.status === 'awaiting_tool_approval' && !!state.pendingToolCalls?.length)
     // A mixed tool batch keeps its handoff unanswered until all ordinary calls
     // finish. runFlow resumes this persisted staged operation deterministically.
-    || !!state.handoffRequested;
+    || !!state.handoffRequested
+    // A person decided on a Static node's wait. The node answers the call when it
+    // resumes, and a crash before that leaves this decision to be picked up.
+    || !!state.staticHold?.decision;
   if (intentionallyPending) return [];
 
   const messages = state.messages ?? [];
