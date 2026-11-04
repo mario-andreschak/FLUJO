@@ -139,6 +139,7 @@ export const ProcessNodePropertiesModal = ({
   const [outputMode, setOutputMode] = useState<'full-conversation' | 'latest-message'>('full-conversation');
   // Issue #259: opt in to the synthetic `todo` tool for this node.
   const [enableTodoTool, setEnableTodoTool] = useState(false);
+  const [requireApprovalForWrites, setRequireApprovalForWrites] = useState(false);
   const [personaAbilities, setPersonaAbilities] = useState<PersonaAbilityId[]>([]);
   // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
   // into scope + key for editing and recombined via buildKvRef on save.
@@ -394,6 +395,7 @@ export const ProcessNodePropertiesModal = ({
       setAllowCallerPrompt(properties.allowCallerPrompt !== false);
       setOutputMode(properties.outputMode ?? 'full-conversation');
       setEnableTodoTool(properties.enableTodoTool ?? false);
+      setRequireApprovalForWrites(properties.requireApprovalForWrites === true);
       setPersonaAbilities(normalizePersonaAbilities(properties.personaTools));
 
       // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
@@ -585,6 +587,7 @@ export const ProcessNodePropertiesModal = ({
         // Issue #259: only persist enableTodoTool when ON, so flows that don't use
         // it stay byte-identical (same delete-when-false convention as captureX).
         if (enableTodoTool) properties.enableTodoTool = true; else delete properties.enableTodoTool;
+        if (requireApprovalForWrites) properties.requireApprovalForWrites = true; else delete properties.requireApprovalForWrites;
 
         // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
         // when empty, so flowToSpec never emits an empty captureX and existing
@@ -825,6 +828,16 @@ export const ProcessNodePropertiesModal = ({
                 />
               }
               label={t('flows.process.todo')}
+            />
+            <FormControlLabel
+              sx={{ mt: 1 }}
+              control={
+                <Switch
+                  checked={requireApprovalForWrites}
+                  onChange={(e) => setRequireApprovalForWrites(e.target.checked)}
+                />
+              }
+              label={t('flows.process.requireApprovalForWrites')}
             />
           </Box>}
 

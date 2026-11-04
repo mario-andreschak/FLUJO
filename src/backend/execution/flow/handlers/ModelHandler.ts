@@ -1379,9 +1379,20 @@ export class ModelHandler {
     // and the live transcript sink below.
     const emit = conversationId ? executionEventBus.emitterFor(conversationId) : undefined;
 
+    const stepApprovalTools = Object.values(toolNameMap ?? {}).filter((tool) => tool.requiresApproval);
+    // Adapters that run their own tool loop may name a tool differently, for example
+    // `server__tool`. A name that cannot be matched exactly falls back to a substring
+    // test, which can only ask a person too often, never too rarely.
+    const stepRequiresApproval = (name: string): boolean => {
+      const exact = toolNameMap && Object.hasOwn(toolNameMap, name) ? toolNameMap[name] : undefined;
+      if (exact) return exact.requiresApproval === true;
+      return stepApprovalTools.some((tool) => name.includes(tool.tool));
+    };
+
     const requestToolApproval =
-      requireToolApproval && emit && conversationId
+      (requireToolApproval || stepApprovalTools.length > 0) && emit && conversationId
         ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<boolean> => {
+            if (!requireToolApproval && !stepRequiresApproval(call.name)) return true;
             if (input.onApprovalRequired === 'fail') {
               // Self-orchestrating adapters own the tool loop, so waiting on
               // the ordinary approval registry would deadlock an unattended

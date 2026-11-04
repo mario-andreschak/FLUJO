@@ -72,7 +72,7 @@ export interface ModelCallInput {
    * can dispatch tool calls to mcpService. Built from SharedState.toolNameMap.
    * `timeout` is the source MCP node's per-call timeout in seconds.
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; requiresApproval?: boolean; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
   /** Conversation id — lets self-orchestrating adapters surface mid-run tool
    *  approval prompts on the conversation's event stream. */
   conversationId?: string;
@@ -148,7 +148,7 @@ export interface ToolCallProcessingInput {
    * falls back to the legacy `_-_-_SERVER_-_-_TOOL` scheme. `timeout` is the
    * source MCP node's per-call timeout in seconds (-1 = none; unset = default).
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; requiresApproval?: boolean; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
   /**
    * The tools the current step offered (SharedState.offeredToolNames). A call to
    * anything else is answered with a tool error and is not dispatched. When

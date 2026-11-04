@@ -3,6 +3,7 @@ import { hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError, getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
+import { flowRequiresStepApproval } from '@/utils/shared/flowApproval';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
@@ -2435,8 +2436,9 @@ export class SchedulerService {
             nextPlannedRun: this.getStatus(execution).nextRun ?? null,
           };
       const approvalPolicy = execution.approvalPolicy ?? 'auto';
+      const stepApproval = approvalPolicy === 'auto' && await this.flowHasStepApproval(execution.flowId);
       const mode: 'conversation' | 'ephemeral' =
-        execution.saveConversations || approvalPolicy === 'pause'
+        execution.saveConversations || approvalPolicy === 'pause' || stepApproval
           ? 'conversation'
           : 'ephemeral';
       const flowInput = {
@@ -2450,7 +2452,7 @@ export class SchedulerService {
         parentRunId: payload.parentConversationId,
         chainDepth: payload.chainDepth ?? 0,
         requireApproval: approvalPolicy !== 'auto',
-        onApprovalRequired: approvalPolicy,
+        onApprovalRequired: stepApproval ? 'pause' : approvalPolicy,
         debug: false,
         userTurn: true,
       } as const;
@@ -2999,11 +3001,13 @@ export class SchedulerService {
       // 'pause' send tools to the approval gate (requireApproval), and the
       // onApprovalRequired policy decides what happens there. A 'pause' run must
       // persist (conversation mode) so its paused state survives to be resumed
-      // via /api/approvals.
+      // via /api/approvals. 'auto' only skips the run-wide gate: a call that a flow
+      // step requires approval for still waits in that inbox and never runs unasked.
       const approvalPolicy = execution.approvalPolicy ?? 'auto';
       const requireApproval = approvalPolicy !== 'auto';
+      const stepApproval = approvalPolicy === 'auto' && await this.flowHasStepApproval(execution.flowId);
       const mode: 'conversation' | 'ephemeral' =
-        execution.saveConversations || approvalPolicy === 'pause' ? 'conversation' : 'ephemeral';
+        execution.saveConversations || approvalPolicy === 'pause' || stepApproval ? 'conversation' : 'ephemeral';
       const flowInput = {
         prompt: this.composePrompt(execution.prompt, payload, runInfo),
         mode,
@@ -3027,7 +3031,7 @@ export class SchedulerService {
         chainDepth: payload.chainDepth ?? 0,
         // Headless approval handling (#115).
         requireApproval,
-        onApprovalRequired: approvalPolicy,
+        onApprovalRequired: stepApproval ? 'pause' : approvalPolicy,
         debug: false,
         // Fresh user turn: routes from the Start node and runs preflight
         // flow validation.
@@ -3152,6 +3156,21 @@ export class SchedulerService {
       record.executionGenerationId = this.executionGenerationId(execution);
     }
     return this.finishFireRecord(execution, payload, record);
+  }
+
+  /**
+   * Whether an automation's flow requires a person for some tool calls. If the flow
+   * cannot be read, the answer is yes: the run is then saved and can wait, and the
+   * only cost is one saved conversation. The other answer could run a tool unasked.
+   */
+  private async flowHasStepApproval(flowId: string): Promise<boolean> {
+    try {
+      const { flowService } = await import('@/backend/services/flow');
+      return flowRequiresStepApproval(await flowService.getFlow(flowId));
+    } catch (error) {
+      log.warn(`Could not read flow ${flowId} to check its approval rules`, error);
+      return true;
+    }
   }
 
   /**

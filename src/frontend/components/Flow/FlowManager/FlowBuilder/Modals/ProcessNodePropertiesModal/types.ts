@@ -49,6 +49,8 @@ export interface ProcessNodeProperties extends Record<string, unknown> {
     allowCallerPrompt?: boolean;
     outputMode?: 'full-conversation' | 'latest-message';
     enableTodoTool?: boolean;
+    requireApprovalFor?: string[];
+    requireApprovalForWrites?: boolean;
     personaTools?: unknown;
     captureVariable?: string;
     captureResource?: string;
