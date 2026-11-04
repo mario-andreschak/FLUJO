@@ -638,7 +638,17 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       continue;
     }
     entries.forEach((entry: unknown, index: number) => {
+      if (entry && typeof entry === 'object' && 'kind' in entry && entry.kind === 'humanGate') {
+        const gate = entry as { text?: unknown };
+        if (typeof gate.text !== 'string' || !gate.text.trim()) {
+          add('error', 'static-human-gate-text', `Static node "${getNodeLabel(node)}": entry #${index + 1} waits for a person but does not say what they should decide.`, node);
+        }
+        return;
+      }
       if (!entry || typeof entry !== 'object' || !('kind' in entry) || entry.kind !== 'toolCall') return;
+      if ((entry as { requireApproval?: unknown }).requireApproval === true && (entry as { executionMode?: unknown }).executionMode !== 'real') {
+        add('error', 'static-mock-require-approval', `Static node "${getNodeLabel(node)}": entry #${index + 1} requires approval, which only works on a real tool call.`, node);
+      }
       const toolEntry = entry as {
         toolName?: unknown;
         executionMode?: unknown;

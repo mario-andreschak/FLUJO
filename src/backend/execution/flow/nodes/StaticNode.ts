@@ -1,7 +1,7 @@
 // Local implementation of PocketFlow for debugging
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
-import { SharedState, StaticEntry, StaticNodeParams, ERROR_ACTION, ErrorDetails, FINAL_RESPONSE_ACTION } from '../types';
+import { SharedState, StaticEntry, StaticNodeParams, ERROR_ACTION, ErrorDetails, FINAL_RESPONSE_ACTION, HUMAN_APPROVAL_ACTION } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { FlujoFunctionToolCall } from '@/shared/types/openai';
 import { resolveRunVars, isValidRunVarName } from '@/utils/shared/resolveRunVars';
@@ -17,6 +17,7 @@ import { mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
 import { redactErrorDetails } from '../normalizeError';
 import { combineAbortSignals } from '../combineAbortSignals';
 import { defaultConditionTarget, selectConditionedEdge } from '@/utils/shared/edgeConditions';
+import { HUMAN_GATE_APPROVED_RESULT, HUMAN_GATE_REJECTED_RESULT, HUMAN_GATE_TOOL_NAME } from '@/utils/shared/flowApproval';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   executePersonaMemoryMaintenanceCommit,
@@ -49,7 +50,9 @@ async function deliverResult(call: () => Promise<MCPServiceResponse>): Promise<M
  *    `real`, or uses the authored deterministic result for `mock`/legacy
  *    entries. It then appends a paired assistant tool-call and tool-result
  *    message. Well-formed pairing is mandatory, otherwise provider adapters
- *    reject the history — invalid `argumentsJson` therefore fails loudly.
+ *    reject the history — invalid `argumentsJson` therefore fails loudly. With
+ *    `requireApproval`, a person decides on the call before it runs.
+ *  - `humanGate` → the run waits for a person's decision, with no tool involved.
  *
  * Text fields support run variables/resources and dynamic @ references.
  * Real calls apply the connected server/node's hidden presets at dispatch.
@@ -107,6 +110,13 @@ export class StaticNode extends BaseNode<
     // can never suppress this run's injection.
     const runId = sharedState.logicalRunId ?? 'no-run';
     const alreadyInjected = sharedState.staticInjected?.[nodeId] === runId;
+    // A person's decision resumes this node at the entry that waited for it. A hold
+    // with no decision asks again rather than assuming. This cannot compare run ids:
+    // resuming after a decision starts a new logical run. A new user turn clears it.
+    const decided = sharedState.staticHold?.nodeId === nodeId && sharedState.staticHold.decision
+      ? sharedState.staticHold
+      : undefined;
+    sharedState.staticHold = undefined;
     const referenceContext = {
       conversationId: sharedState.conversationId,
       flowId: sharedState.flowId,
@@ -125,7 +135,7 @@ export class StaticNode extends BaseNode<
       return sharedState.executionExtensionContext ? text : String(await resolvePromptDynamicReferences(text, referenceContext));
     };
 
-    if (prepResult.injectOnce && alreadyInjected) {
+    if (prepResult.injectOnce && alreadyInjected && !decided) {
       log.info('injectOnce: skipping repeat injection', { nodeId });
     } else if (prepResult.entries.length > 0) {
       if (!Array.isArray(sharedState.messages)) {
@@ -133,7 +143,64 @@ export class StaticNode extends BaseNode<
       }
 
       const messages: FlujoChatMessage[] = [];
-      for (const entry of prepResult.entries) {
+      const holdForPerson = (
+        entryIndex: number,
+        toolCall: FlujoFunctionToolCall,
+        mcpCall?: { serverName: string; toolName: string },
+      ): string => {
+        messages.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: [toolCall],
+          ...(mcpCall ? { mcpToolCalls: { [toolCall.id]: mcpCall } } : {}),
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+        } as FlujoChatMessage);
+        sharedState.messages.push(...messages);
+        sharedState.staticHold = {
+          nodeId, entryIndex, toolCallId: toolCall.id, argumentsJson: toolCall.function.arguments,
+        };
+        sharedState.pendingToolCalls = [toolCall];
+        log.info('Waiting for a person', { nodeId, entryIndex });
+        return HUMAN_APPROVAL_ACTION;
+      };
+      const answerHold = (toolCallId: string, content: string) => messages.push({
+        role: 'tool', tool_call_id: toolCallId, content, id: crypto.randomUUID(), timestamp: Date.now(),
+      } as FlujoChatMessage);
+      const stopAfterRejection = async (rejectedText: string | undefined): Promise<string> => {
+        const output = boundStaticText(await resolve(rejectedText ?? 'Not approved.'));
+        messages.push({ role: 'assistant', content: output, id: crypto.randomUUID(), timestamp: Date.now() } as FlujoChatMessage);
+        sharedState.messages.push(...messages);
+        sharedState.lastResponse = output;
+        return FINAL_RESPONSE_ACTION;
+      };
+      const validateRejectOptions = (entry: { onReject?: unknown }) => {
+        if (entry.onReject !== undefined && entry.onReject !== 'stop' && entry.onReject !== 'continue') {
+          throw new Error(`Static node ${nodeId}: onReject must be stop or continue.`);
+        }
+      };
+
+      for (let entryIndex = decided?.entryIndex ?? 0; entryIndex < prepResult.entries.length; entryIndex++) {
+        const entry = prepResult.entries[entryIndex];
+        const heldHere = decided?.entryIndex === entryIndex ? decided : undefined;
+
+        if (entry.kind === 'humanGate') {
+          validateRejectOptions(entry);
+          if (!heldHere) {
+            const text = (await resolve(entry.text ?? '')).trim();
+            if (!text) throw new Error(`Static node ${nodeId}: a human gate entry requires text.`);
+            return holdForPerson(entryIndex, {
+              id: `call_static_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`,
+              type: 'function',
+              function: { name: HUMAN_GATE_TOOL_NAME, arguments: JSON.stringify({ text }) },
+            });
+          }
+          const approved = heldHere.decision === 'approved';
+          answerHold(heldHere.toolCallId, approved ? HUMAN_GATE_APPROVED_RESULT : HUMAN_GATE_REJECTED_RESULT);
+          if (!approved && (entry.onReject ?? 'stop') === 'stop') return stopAfterRejection(entry.rejectedText);
+          continue;
+        }
+
         if (entry.kind === 'message') {
           let content = await resolve(entry.content);
           const media: ModelMediaPart[] = [];
@@ -173,7 +240,13 @@ export class StaticNode extends BaseNode<
           if (!toolName) {
             throw new Error(`Static node ${nodeId}: a tool-call entry requires a tool name.`);
           }
-          let argumentsJson = (await resolveRunText(entry.argumentsJson ?? '')).trim() || '{}';
+          validateRejectOptions(entry);
+          if (entry.requireApproval === true && entry.executionMode !== 'real') {
+            throw new Error(`Static node ${nodeId}: requireApproval requires a real tool call.`);
+          }
+          // After a decision, run exactly what the person saw, not a fresh rendering.
+          let argumentsJson = heldHere?.argumentsJson
+            ?? ((await resolveRunText(entry.argumentsJson ?? '')).trim() || '{}');
           let args: Record<string, unknown>;
           try {
             args = JSON.parse(argumentsJson) as Record<string, unknown>;
@@ -182,7 +255,7 @@ export class StaticNode extends BaseNode<
               `Static node ${nodeId}: tool-call entry for "${toolName}" has invalid JSON arguments.`
             );
           }
-          if (!sharedState.executionExtensionContext) {
+          if (!sharedState.executionExtensionContext && !heldHere) {
             // Resolve JSON values after parsing so quotes and nested structures
             // remain valid; hidden preset values are added only at dispatch.
             const resolvedArgs = await resolvePromptDynamicReferences(args, {
@@ -192,7 +265,7 @@ export class StaticNode extends BaseNode<
             args = resolvedArgs;
           }
 
-          const toolCallId = `call_static_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`;
+          const toolCallId = heldHere?.toolCallId ?? `call_static_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`;
           const toolCall: FlujoFunctionToolCall = {
             id: toolCallId,
             type: 'function',
@@ -214,6 +287,17 @@ export class StaticNode extends BaseNode<
           if (entry.resultFormat !== undefined && entry.resultFormat !== 'text' && entry.resultFormat !== 'json') {
             throw new Error(`Static node ${nodeId}: resultFormat must be text or json.`);
           }
+          if (entry.requireApproval === true) {
+            if (!heldHere) {
+              return holdForPerson(entryIndex, toolCall, serverName ? { serverName, toolName } : undefined);
+            }
+            if (heldHere.decision !== 'approved') {
+              answerHold(toolCallId, HUMAN_GATE_REJECTED_RESULT);
+              if ((entry.onReject ?? 'stop') === 'stop') return stopAfterRejection(entry.rejectedText);
+              continue;
+            }
+          }
+
           let resultContent = executionMode === 'mock' ? await resolve(entry.result ?? '') : '';
           let resultValue: unknown = resultContent;
           let resultDelivered = false;
@@ -323,16 +407,19 @@ export class StaticNode extends BaseNode<
             });
           }
 
-          messages.push({
-            role: 'assistant',
-            content: '',
-            tool_calls: [toolCall],
-            ...(serverName ? {
-              mcpToolCalls: { [toolCallId]: { serverName, toolName } },
-            } : {}),
-            id: crypto.randomUUID(),
-            timestamp: Date.now(),
-          } as FlujoChatMessage);
+          // After a decision, the call is already in the conversation from the wait.
+          if (!heldHere) {
+            messages.push({
+              role: 'assistant',
+              content: '',
+              tool_calls: [toolCall],
+              ...(serverName ? {
+                mcpToolCalls: { [toolCallId]: { serverName, toolName } },
+              } : {}),
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+            } as FlujoChatMessage);
+          }
           messages.push({
             role: 'tool',
             tool_call_id: toolCallId,

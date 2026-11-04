@@ -207,6 +207,28 @@ provides correlation and does not authenticate the customer. See the
 [complete command reference](../dynamic-references.md) for current context,
 entity pickers, aliases, and available fields.
 
+## Wait for a person
+
+A Static node can stop a run until a person decides, in two ways:
+
+- **A wait with no tool.** Add a **Wait for a person** entry (`{ "kind": "humanGate", "text": "Send this reminder?" }`).
+- **Before a real tool call.** Turn on **Ask a person before this call** (`"requireApproval": true`). The person sees the exact arguments, and those exact arguments run after an approval.
+
+A waiting run uses the same approval path as any tool call. It appears in the chat and, for automations, in the approval inbox, and you can continue it from outside with `POST /v1/chat/conversations/{id}/respond` or `POST /api/approvals/{id}`. The run is saved while it waits, so it survives a restart.
+
+A rejection stops the run with the text "Not approved.", or with your `rejectedText`. To go on instead, set `"onReject": "continue"` and route on an outgoing edge. The last message is `approved` or `tool denied`:
+
+```json
+{
+  "edges": [
+    { "from": "decide", "to": "send", "condition": { "kind": "equals", "value": "approved" } },
+    { "from": "decide", "to": "archive" }
+  ]
+}
+```
+
+A run that cannot wait fails with `approval_required` and nothing after the wait happens. That applies to a run that is not saved and to an automation with `approvalPolicy: fail`. An automation set to `auto` is saved when its flow has a wait, so it can come back.
+
 ## Re-entry semantics
 
 A Static node can be traversed more than once in a single run — inside a loop, or via two

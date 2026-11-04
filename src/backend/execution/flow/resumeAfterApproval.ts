@@ -76,7 +76,13 @@ export async function applyApprovalDecision(
   // conversation log by the caller after the state is saved.
   const appendedMessages: FlujoChatMessage[] = [];
 
-  if (action === 'approve') {
+  if (sharedState.staticHold?.toolCallId === toolCallId) {
+    // A Static node acts on this itself when it resumes: it holds the capture, error
+    // and routing rules for the entry, and it answers the waiting call.
+    log.info(`Recording a decision for a Static node's wait: ${action} ${toolCallId}`);
+    sharedState.staticHold.decision = action === 'approve' ? 'approved' : 'rejected';
+    sharedState.pendingToolCalls = pending.filter(tc => tc.id !== toolCallId);
+  } else if (action === 'approve') {
     log.info(`Approving tool call ${toolCallId} (${toolCallToProcess.function.name})`);
     // Process *only* the approved tool call.
     const toolProcessingResult = await ModelHandler.processToolCalls({

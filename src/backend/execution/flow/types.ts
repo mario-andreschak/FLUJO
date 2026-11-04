@@ -712,6 +712,20 @@ export type StaticEntry =
         resultFormat?: 'text' | 'json';
         /** Real calls only. Omission preserves context injection and continuation. */
         onError?: 'continue' | 'fail';
+        /** Real calls only. A person sees the call and decides before it runs. */
+        requireApproval?: boolean;
+        /** With requireApproval: what a rejection does. Default 'stop' ends the run. */
+        onReject?: 'stop' | 'continue';
+        /** With onReject 'stop': the run's final text. Default "Not approved." */
+        rejectedText?: string;
+      }
+    | {
+        /** The run waits here until a person decides, with no tool involved. */
+        kind: 'humanGate';
+        /** What the person is asked to decide. */
+        text: string;
+        onReject?: 'stop' | 'continue';
+        rejectedText?: string;
       };
 
 export interface StaticNodeProperties {
@@ -1080,6 +1094,18 @@ export interface SharedState extends DebuggerStateView {
      * toolNameMap, which keeps earlier steps' tools decodable, this holds one step.
      */
     offeredToolNames?: string[];
+    /**
+     * A Static node waiting for a person, and where it continues. Saved with the
+     * conversation, so the wait survives a restart. The arguments are kept because
+     * what runs after an approval must be exactly what the person saw.
+     */
+    staticHold?: {
+      nodeId: string;
+      entryIndex: number;
+      toolCallId: string;
+      argumentsJson: string;
+      decision?: 'approved' | 'rejected';
+    };
     /**
      * Synthetic tools (`read_resource`, `list_mcp_resources`) that have been
      * armed at any point in this conversation.
@@ -1763,6 +1789,8 @@ export type ExecResult = StartNodeExecResult | ProcessNodeExecResult | FinishNod
 // Action constants for flow control
 export const TOOL_CALL_ACTION = 'TOOL_CALL';
 export const FINAL_RESPONSE_ACTION = 'FINAL_RESPONSE';
+/** A Static node stopped for a person's decision; `pendingToolCalls` holds what is asked. */
+export const HUMAN_APPROVAL_ACTION = 'HUMAN_APPROVAL';
 export const ERROR_ACTION = 'ERROR';
 export const STAY_ON_NODE_ACTION = "STAY_ON_NODE";
 /** Internal handoff emitted by a terminal one-way Subflow to resume its caller. */

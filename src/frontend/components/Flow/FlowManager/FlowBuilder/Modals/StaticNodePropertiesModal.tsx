@@ -40,6 +40,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import DnsRoundedIcon from '@mui/icons-material/DnsRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ForumRoundedIcon from '@mui/icons-material/ForumRounded';
+import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded';
 import SmartToyRoundedIcon from '@mui/icons-material/SmartToyRounded';
@@ -63,6 +64,24 @@ import {
   createPromptReferenceSuggestion,
   type PromptReferenceSuggestion,
 } from '@/utils/shared/promptRefs';
+
+function RejectChoice({ value, onChange }: { value?: 'stop' | 'continue'; onChange: (value: 'stop' | 'continue') => void }) {
+  const { t } = useI18n();
+  return (
+    <TextField
+      select
+      label={t('flows.static.onReject')}
+      value={value ?? 'stop'}
+      onChange={(event) => onChange(event.target.value as 'stop' | 'continue')}
+      helperText={t('flows.static.onRejectHelp')}
+      fullWidth
+      size="small"
+    >
+      <MenuItem value="stop">{t('flows.static.onRejectStop')}</MenuItem>
+      <MenuItem value="continue">{t('flows.static.onRejectContinue')}</MenuItem>
+    </TextField>
+  );
+}
 
 interface StaticNodePropertiesModalProps {
   open: boolean;
@@ -97,6 +116,15 @@ type StaticEntry =
       captureVariable?: string;
       resultFormat?: 'text' | 'json';
       onError?: 'continue' | 'fail';
+      requireApproval?: boolean;
+      onReject?: 'stop' | 'continue';
+      rejectedText?: string;
+    }
+  | {
+      kind: 'humanGate';
+      text: string;
+      onReject?: 'stop' | 'continue';
+      rejectedText?: string;
     };
 
 const EMPTY_STATIC_ENTRIES: StaticEntry[] = [];
@@ -394,6 +422,15 @@ const ToolCallEditor = ({ entry, onChange, onChooseServer }: ToolCallEditorProps
           <MenuItem value="fail">{t('flows.static.failOnError')}</MenuItem>
         </TextField>
       )}
+      {executionMode === 'real' && (
+        <FormControlLabel
+          control={<Switch checked={entry.requireApproval === true} onChange={(event) => onChange({ requireApproval: event.target.checked || undefined })} />}
+          label={t('flows.static.requireApproval')}
+        />
+      )}
+      {executionMode === 'real' && entry.requireApproval === true && (
+        <RejectChoice value={entry.onReject} onChange={(onReject) => onChange({ onReject })} />
+      )}
 
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
         <Stack spacing={2}>
@@ -542,7 +579,9 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     const initialEntries = Array.isArray(node.data.properties?.entries)
       ? node.data.properties.entries.map((entry: StaticEntry) => entry.kind === 'toolCall'
         ? { executionMode: 'mock' as const, ...entry }
-        : { ...entry, attachments: [...(entry.attachments ?? [])] })
+        : entry.kind === 'humanGate'
+          ? { ...entry }
+          : { ...entry, attachments: [...(entry.attachments ?? [])] })
       : [];
     setNodeData({ ...node.data, properties: { ...node.data.properties, entries: initialEntries } });
     setExpandedEntries(new Set(initialEntries.map((_: StaticEntry, index: number) => index)));
@@ -625,7 +664,8 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     || entries.some((entry) => entry.kind === 'toolCall' && (
       (!!entry.captureVariable && !isValidRunVarName(entry.captureVariable.trim()))
       || (entry.onError === 'fail' && entry.executionMode !== 'real')
-    ));
+    ))
+    || entries.some((entry) => entry.kind === 'humanGate' && !entry.text.trim());
 
   if (!node || !nodeData) return null;
 
@@ -743,6 +783,9 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                   <Button startIcon={<ForumRoundedIcon />} variant="outlined" onClick={() => appendEntry({ kind: 'message', role: 'user', content: '', attachments: [] })} sx={{ textTransform: 'none' }}>
                     {t('flows.static.addMessage')}
                   </Button>
+                  <Button startIcon={<PersonRoundedIcon />} variant="outlined" onClick={() => appendEntry({ kind: 'humanGate', text: '' })}>
+                    {t('flows.static.addHumanGate')}
+                  </Button>
                   <Button startIcon={<BuildRoundedIcon />} variant="contained" onClick={() => appendEntry({ kind: 'toolCall', executionMode: 'mock', serverName: '', toolName: '', argumentsJson: '{}', result: '' })} sx={{ textTransform: 'none' }}>
                     {t('flows.static.addToolCall')}
                   </Button>
@@ -762,9 +805,11 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                     const mode = entry.kind === 'toolCall' && entry.executionMode === 'real'
                       ? t('flows.static.realLabel')
                       : t('flows.static.mockLabel');
-                    const title = entry.kind === 'message'
-                      ? t('flows.static.messageTitle', { role: t(roleTranslationKey[entry.role]) })
-                      : `${t('flows.static.toolCallTitle', { mode })}${entry.toolName ? ` · ${entry.toolName}` : ''}`;
+                    const title = entry.kind === 'humanGate'
+                      ? t('flows.static.humanGateTitle')
+                      : entry.kind === 'message'
+                        ? t('flows.static.messageTitle', { role: t(roleTranslationKey[entry.role]) })
+                        : `${t('flows.static.toolCallTitle', { mode })}${entry.toolName ? ` · ${entry.toolName}` : ''}`;
                     return (
                       <Accordion
                         key={index}
@@ -785,8 +830,8 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                         <Stack direction="row" sx={{ alignItems: "center" }}>
                           <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ pl: 2, pr: 1, flex: 1, minWidth: 0 }}>
                             <Stack direction="row" spacing={1.25} sx={{ alignItems: "center",  width: '100%', minWidth: 0 }}>
-                              <Avatar sx={{ width: 30, height: 30, bgcolor: entry.kind === 'toolCall' ? 'info.main' : roleMeta[entry.role].color }}>
-                                {entry.kind === 'toolCall' ? <BuildRoundedIcon sx={{ fontSize: 17 }} /> : roleMeta[entry.role].icon}
+                              <Avatar sx={{ width: 30, height: 30, bgcolor: entry.kind === 'humanGate' ? 'warning.main' : entry.kind === 'toolCall' ? 'info.main' : roleMeta[entry.role].color }}>
+                                {entry.kind === 'humanGate' ? <PersonRoundedIcon sx={{ fontSize: 17 }} /> : entry.kind === 'toolCall' ? <BuildRoundedIcon sx={{ fontSize: 17 }} /> : roleMeta[entry.role].icon}
                               </Avatar>
                               <Chip size="small" label={index + 1} />
                               <Typography noWrap sx={{ fontWeight: 700,  flex: 1 }}>{title}</Typography>
@@ -800,7 +845,21 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                           </Stack>
                         </Stack>
                         <AccordionDetails sx={{ p: { xs: 1.5, sm: 2.5 }, pt: 0.5 }}>
-                          {entry.kind === 'message' ? (
+                          {entry.kind === 'humanGate' ? (
+                            <Stack spacing={2}>
+                              <TextField
+                                label={t('flows.static.humanGateText')}
+                                value={entry.text}
+                                onChange={(event) => updateEntry(index, { text: event.target.value })}
+                                helperText={t('flows.static.humanGateHelp')}
+                                error={!entry.text.trim()}
+                                fullWidth
+                                multiline
+                                size="small"
+                              />
+                              <RejectChoice value={entry.onReject} onChange={(onReject) => updateEntry(index, { onReject })} />
+                            </Stack>
+                          ) : entry.kind === 'message' ? (
                             <MessageComposer
                               entry={entry}
                               globalNames={globalNames}
