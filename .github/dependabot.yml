@@ -21,6 +21,9 @@ updates:
       # The current React/import plugins exclude ESLint10 from their peer ranges.
       - dependency-name: eslint
         versions: ['10.x']
+      # Major 1 switches every request to a new API version; see issue #1351.
+      - dependency-name: '@anthropic-ai/sdk'
+        update-types: ['version-update:semver-major']
       # Type declarations track the oldest supported runtime, Node22.
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']

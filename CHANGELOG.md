@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Projects
+
+- Give each chat its own project folder. Add any folder as a project from the sidebar, then use the chip above the chat input to see its branch and uncommitted changes, switch or create a branch, or move the chat into a Git worktree of its own ([#1331](https://github.com/mario-andreschak/FLUJO/pull/1331), [#1332](https://github.com/mario-andreschak/FLUJO/pull/1332)).
+
+### Dependencies
+
+- Update `follow-redirects` and `joi` past their high-severity advisories, and bring the other dependencies up to date. Schedules now use `croner` 11: a job set inside a skipped daylight-saving hour runs right after the change, and repeating jobs keep running through a repeated hour.
+
 ### System instructions
 
 - Stop adding "[System update] The system context changed…" messages to chats ([#1333](https://github.com/mario-andreschak/FLUJO/issues/1333)). When a step's instructions contained a live value (a `${resource:}` or `${kv:}` pill, or a date), every turn appended a copy of the entire instructions as a user message, which made chats slower and more expensive and showed fake user messages. A chat now keeps the instructions it started with until it is compacted; read live information through tools such as FLUJO MCP's conversation tools, or set the step to `per-turn` to render its instructions fresh every turn.
