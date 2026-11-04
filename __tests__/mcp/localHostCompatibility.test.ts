@@ -7,6 +7,11 @@ import { TrustedHostMcpError } from '@/backend/services/security/trustedHostMcp'
 
 let mockConfig: MCPStdioConfig;
 jest.mock('@/backend/services/mcp/config', () => ({ loadServerConfigs: async () => [mockConfig] }));
+jest.mock('@/backend/utils/resolveGlobalVars', () => ({
+  ...jest.requireActual('@/backend/utils/resolveGlobalVars'),
+  resolveAndDecryptApiKey: async (value: string) => value === 'encrypted:stored-form' ? 'resolved-secret'
+    : value === 'encrypted:rotated' ? 'rotated-secret' : value,
+}));
 
 const environmentNames = ['FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE',
   'FLUJO_MCP_ISOLATION_FILE', 'FLUJO_WORKER_MODE', 'FLUJO_EXPOSURE_MODE',
@@ -56,6 +61,17 @@ it('allows dispatch only from its captured local transport and current launch co
   mockConfig.args = ['different-server.js'];
   await expect(assertMcpIsolationDispatch(client, mockConfig.name)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
   expect(close).toHaveBeenCalledTimes(1);
+});
+
+it('compares a secret env by its resolved value, as it was launched', async () => {
+  mockConfig.env = { FLY_API_TOKEN: { value: 'encrypted:stored-form', metadata: { isSecret: true } } } as unknown as MCPStdioConfig['env'];
+  const launched = { ...mockConfig, env: { FLY_API_TOKEN: 'resolved-secret' } };
+  const transport = { start: jest.fn(async () => undefined) };
+  attachLocalHostLaunch(transport, launched, config => JSON.stringify([config.command, config.args, config.env]));
+  const client = { transport, close: jest.fn(async () => undefined) } as unknown as Client;
+  await expect(assertMcpIsolationDispatch(client, mockConfig.name)).resolves.toBeUndefined();
+  mockConfig.env = { FLY_API_TOKEN: { value: 'encrypted:rotated', metadata: { isSecret: true } } } as unknown as MCPStdioConfig['env'];
+  await expect(assertMcpIsolationDispatch(client, mockConfig.name)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
 });
 
 it('revokes a local transport when a protected profile is selected', () => {

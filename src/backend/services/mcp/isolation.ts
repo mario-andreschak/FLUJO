@@ -253,8 +253,12 @@ export async function assertMcpIsolationDispatch(client: Client, serverName: str
   const localLaunch = getLocalHostLaunch(client.transport);
   if (localLaunch) {
     try {
-      const current = await currentServerConfig(serverName);
-      if (!current || current.name !== serverName) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      const stored = await currentServerConfig(serverName);
+      if (!stored || stored.name !== serverName) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      // The launch identity was taken from the resolved config (decrypted secrets,
+      // bound globals). Comparing it with the stored, still-encrypted values made
+      // every local server with a secret env fail its first tool call.
+      const current = await (await import('./connection')).resolveConfigHeaders(stored);
       localLaunch.assertCurrent(current);
     } catch (error) {
       try { await client.close(); } catch { /* lifecycle receipts retain unknown cleanup */ }

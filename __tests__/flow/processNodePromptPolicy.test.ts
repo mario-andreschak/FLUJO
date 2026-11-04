@@ -99,3 +99,29 @@ it.each(['stable', 'per-turn'] as const)('archives the effective %s system instr
   expect(prep.modelInputForArchive?.systemMessage?.content).toBe(expected);
   expect(prep.modelInputForArchive?.wireMessages.find(message => message.role === 'system')?.content).toBe(expected);
 });
+
+it('adds no [System update] message when stable instructions drift on every turn (#1333)', async () => {
+  const model = { id: 'drift-model', name: 'Model', adapter: 'claude-cli', provider: 'claude-subscription', ApiKey: '' } as const;
+  await saveItem(StorageKey.MODELS, [model]);
+  jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
+  jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(false);
+  jest.spyOn(promptRenderer, 'resolveChatMessageReferences').mockImplementation(async text => text);
+  const render = jest.spyOn(promptRenderer, 'renderPrompt');
+  const state = {
+    trackingInfo: { executionId: 'drift', startTime: 1, nodeExecutionTracker: [] },
+    messages: [{ id: 'drift-user', role: 'user', content: 'Build the pet shop page', timestamp: 1 }],
+    flowId: 'drift-flow', conversationId: 'drift-conversation', ephemeral: true,
+    flowSnapshot: { id: 'drift-flow', name: 'Drift flow', nodes: [], edges: [] } as unknown as Flow,
+    title: 'Drift', createdAt: 1, updatedAt: 1,
+  } as SharedState;
+  const params: ProcessNodeParams = { id: 'drift-process', label: 'Process', type: 'process', properties: { boundModel: model.id } };
+  // A live resource in the prompt renders differently on every turn.
+  for (const [turn, rendered] of ['Recent chats: none', 'Recent chats: pet shop', 'Recent chats: pet shop, logo'].entries()) {
+    render.mockResolvedValueOnce(rendered);
+    state.messages.push({ id: `drift-user-${turn}`, role: 'user', content: `turn ${turn}`, timestamp: 2 + turn });
+    const prep = await new ProcessNode().prep(state, params);
+    expect(prep.currentPrompt).toBe('Recent chats: none');
+  }
+  expect(state.messages.map(message => message.id)).toEqual(['drift-user', 'drift-user-0', 'drift-user-1', 'drift-user-2']);
+  expect(state.messages.some(message => typeof message.content === 'string' && message.content.startsWith('[System update]'))).toBe(false);
+});
