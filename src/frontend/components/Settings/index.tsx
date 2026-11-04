@@ -89,6 +89,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     component: NetworkExposureSettings,
   },
   {
+    id: 'modelAccess',
+    titleKey: 'settings.section.modelAccess',
+    descriptionKey: 'settings.section.modelAccessDescription',
+    icon: LockRoundedIcon,
+    component: ModelAccessSettings,
+  },
+  {
     id: 'globalEnv',
     titleKey: 'settings.section.globalEnv',
     descriptionKey: 'settings.section.globalEnvDescription',
@@ -150,13 +157,6 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     descriptionKey: 'settings.section.updatesDescription',
     icon: SystemUpdateAltRoundedIcon,
     component: UpdateSettings,
-  },
-  {
-    id: 'modelAccess',
-    titleKey: 'settings.section.modelAccess',
-    descriptionKey: 'settings.section.modelAccessDescription',
-    icon: LockRoundedIcon,
-    component: ModelAccessSettings,
   },
   {
     id: 'privacy',

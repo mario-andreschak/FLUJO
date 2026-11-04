@@ -5,11 +5,16 @@ import { AutoAwesomeRounded } from '@mui/icons-material';
 import { Button, IconButton, Tooltip, useMediaQuery } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import { useAskFlujo } from '@/frontend/contexts/AskFlujoContext';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 
 export default function AskFlujoButton() {
   const { open, toggleDock } = useAskFlujo();
+  const { settings } = useStorage();
   const theme = useTheme();
   const compact = useMediaQuery(theme.breakpoints.down('sm'));
+
+  // Ask FLUJO runs on Quick Chat, so this button would lead nowhere once that is off.
+  if (settings?.modelAccess?.quickChat === false) return null;
 
   if (compact) {
     return (
