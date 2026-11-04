@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Flow steps
+
+- Hold a step's tool list when a tool is called, not only when it is offered. A model could call a tool that an earlier step of the same run had been offered, or one of FLUJO's built-in tools such as `todo` or `read_resource`, even though the current step did not offer it. Such a call now returns an error to the model and does not run.
+
 ### Projects
 
 - Give each chat its own project folder. Add any folder as a project from the sidebar, then use the chip above the chat input to see its branch and uncommitted changes, switch or create a branch, or move the chat into a Git worktree of its own ([#1331](https://github.com/mario-andreschak/FLUJO/pull/1331), [#1332](https://github.com/mario-andreschak/FLUJO/pull/1332)).

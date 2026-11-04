@@ -150,6 +150,12 @@ export interface ToolCallProcessingInput {
    */
   toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
   /**
+   * The tools the current step offered (SharedState.offeredToolNames). A call to
+   * anything else is answered with a tool error and is not dispatched. When
+   * omitted, every decodable name is accepted (direct, non-step callers).
+   */
+  offeredToolNames?: readonly string[];
+  /**
    * Live-event emitter for the run. When present, each MCP call is bracketed by
    * tool:call / tool:result events and server progress notifications become
    * tool:progress events — which keeps the chat UI's stall detector fed during

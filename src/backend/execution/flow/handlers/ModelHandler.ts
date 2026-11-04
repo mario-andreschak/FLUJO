@@ -19,7 +19,7 @@ import { classifyToolExitCode } from '../toolRepeatGuard';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path for FlujoChatMessage
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
-import { decodeToolName, assertToolIdentityFresh, type DecodedTool } from './toolNamespace';
+import { decodeToolName, assertToolIdentityFresh, isToolOfferedInStep, type DecodedTool } from './toolNamespace';
 import { assertNativeBrokerAuthority, createNativeToolPort, nativeDigest, nativeToolInventoryDigest,
   type NativeBrokerAuthority } from './nativeToolBroker';
 import { prepareNativeInvocation, submitNativeInvocation, finishNativeInvocation, holdNativeInvocation,
@@ -4108,6 +4108,21 @@ export class ModelHandler {
         await input.beforeToolDispatch?.();
 
         try {
+          // A step's tool list holds at call time, not only when it is offered.
+          // `toolNameMap` deliberately keeps every tool bound during the run so
+          // history stays decodable, which makes it the wrong authority here. This
+          // also covers FLUJO's by-name tools, which never pass the map. The call
+          // is answered with an error, so the model can recover within the step.
+          if (!isToolOfferedInStep(name, input.offeredToolNames, toolNameMap)) {
+            const reason = `Tool "${name}" is not available in this step. Use only the tools offered for this step.`;
+            log.warn(`Rejecting call to a tool this step did not offer: ${name}`);
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            emit?.({ type: 'tool:result', toolCallId: id, name, result: reason, isError: true });
+            toolCallMessages.push({ id: uuidv4(), role: 'tool', tool_call_id: id, content: reason, timestamp: Date.now() });
+            processedToolCalls.push({ name, args: {}, id, result: reason });
+            return;
+          }
+
           // Cancellation check BEFORE starting this call (issue #109/#252): once
           // Stop is pressed, a not-yet-started call is answered with a synthetic
           // "cancelled" tool message so every tool_call id stays answered and the
