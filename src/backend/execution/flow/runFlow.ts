@@ -62,6 +62,7 @@ import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/executio
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
+import { entryConditionStartNodeId } from '@/utils/shared/edgeConditions';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
@@ -1880,6 +1881,33 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     } catch (validationError) {
       // A failure to RUN the check must not block the user — log and proceed.
       log.warn(`Pre-run validation could not complete for ${sharedState.flowId}; proceeding`, validationError);
+    }
+  }
+
+  // --- Re-check entry conditions on every user turn ---
+  // A follow-up normally resumes at the last Process step, and an edit or a client
+  // can name a step directly. Either would skip a condition placed before the first
+  // model step, so a flow with such a condition always re-enters at its Start node.
+  if (userTurn && stateSource !== 'new' && sharedState.flowId && !preflightError) {
+    try {
+      const entryNodeId = entryConditionStartNodeId(sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId));
+      if (entryNodeId && entryNodeId !== sharedState.currentNodeId) {
+        log.info(`Entry condition: re-entering ${effectiveConvId} at Start node ${entryNodeId} (was ${sharedState.currentNodeId}).`);
+        sharedState.currentNodeId = entryNodeId;
+        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+      }
+    } catch (entryCheckError) {
+      // Unlike the check above, skipping this one could let a message past a
+      // condition. Only this turn fails; the next message reads the flow again.
+      log.warn(`Could not read entry conditions for ${sharedState.flowId}; ending this turn`, entryCheckError);
+      const message = 'FLUJO could not read this flow to check its conditions. Please send the message again.';
+      sharedState.lastResponse = {
+        success: false,
+        error: message,
+        errorDetails: { message, type: 'api_error', code: 'flow_entry_check_failed', status: 503 },
+      };
+      currentAction = ERROR_ACTION;
+      preflightError = true;
     }
   }
 

@@ -74,7 +74,7 @@ NODE TYPES:
 EDGES: { "from": "<node key>", "to": "<node key>", "bidirectional": true|false,
          "condition": { "kind": "contains"|"regex"|"equals", "value": "...",
                         "target": "last-assistant"|"last-message",  // optional, default last-assistant
-                        "ignoreCase": true|false, "negate": true|false } }   // condition optional; process-node edges only
+                        "ignoreCase": true|false, "negate": true|false } }   // condition optional; process, start and static edges only
 
 RULES:
 1. Exactly ONE start node; at least one finish node reachable from it.
@@ -82,7 +82,7 @@ RULES:
 3. A process step uses MCP tools ONLY via its "servers" list — never emit nodes of type "mcp".
 4. Do not embed \${tool:...} or \${resource:...} references in prompts — tools are wired through "servers".
 5. Branching: give a process node multiple outgoing edges; its model decides where to hand off at runtime. "bidirectional": true lets the target hand back to the source (agent <-> agent).
-5b. Deterministic routing: give a process node's outgoing edges a "condition" to route WITHOUT the model — the engine takes the first outgoing edge whose predicate matches the last message (default the step's own last assistant message), and a bare (condition-less) edge is the fallback. Use this for reliable data-driven branches (e.g. output contains "FAIL" -> fix step, else -> publish) instead of relying on a small model to emit a handoff. Only process-node edges may carry a condition. Without any condition on a node, that node keeps model-decided handoff (rule 5). If the model still calls a handoff tool, that wins over the condition.
+5b. Deterministic routing: give a process node's outgoing edges a "condition" to route WITHOUT the model — the engine takes the first outgoing edge whose predicate matches the last message (default the step's own last assistant message), and a bare (condition-less) edge is the fallback. Use this for reliable data-driven branches (e.g. output contains "FAIL" -> fix step, else -> publish) instead of relying on a small model to emit a handoff. Only process, start and static edges may carry a condition. A condition on a start edge, or on a static edge reached before the first process node, runs before any model sees the message and is checked again on every user turn: the flow re-enters at its start node. Start edges test the last user message by default, static edges test the last message. Without any condition on a node, that node keeps model-decided handoff (rule 5). If the model still calls a handoff tool, that wins over the condition.
 6. A subflow node references exactly ONE child: EITHER "flow" (an existing flow) OR "subflowSpec" (one inline nested FlowSpec), never both. It may have at most ONE outgoing edge. A nested FlowSpec may itself contain subflow nodes (bounded nesting).
 7. Every visit to a subflow is a queue of child jobs, even when the queue contains only one job. A routing model may call the SAME subflow handoff tool any number of times in one response; every call adds one job and may carry a "task" string. A call without "task" uses the subflow's configured input. Results are folded in request order after the complete queue drains.
 8. "concurrencyLimit" controls only the maximum number of child jobs running simultaneously. Set it to 1 for sequential execution or above 1 for parallel execution. It NEVER limits the total jobs accepted: extra jobs wait in the queue, and the runtime keeps available worker slots filled until the queue is empty.

@@ -49,7 +49,7 @@ import {
   ToolCallInfo
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
-import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
+import { selectConditionedEdge } from '@/utils/shared/edgeConditions';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
@@ -1956,25 +1956,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // model turn wins; mixed turns finish their ordinary tools first.
     const edgeConditions = node_params?.edgeConditions;
     if (edgeConditions && Object.keys(edgeConditions).length > 0) {
-      const ordered = this.orderedControlEdges(node_params);
-
-      // First matching predicate wins, in author order.
-      for (const edgeId of ordered) {
-        const cond = edgeConditions[edgeId];
-        if (!cond) continue;
-        const text = selectConditionText(sharedState.messages, cond.target);
-        if (evaluateCondition(cond, text)) {
-          log.info('Deterministic edge condition matched; routing', { edgeId, kind: cond.kind });
-          return edgeId;
-        }
-      }
-
-      // No predicate matched → take the first BARE (predicate-less) edge as the
-      // default/fallback, if any.
-      const bare = ordered.find((edgeId) => !edgeConditions[edgeId]);
-      if (bare) {
-        log.info('No edge condition matched; routing to bare fallback edge', { edgeId: bare });
-        return bare;
+      // First matching predicate wins, in author order; otherwise the first BARE
+      // (predicate-less) edge is the default/fallback, if any.
+      const routed = selectConditionedEdge(this.orderedControlEdges(node_params), edgeConditions, sharedState.messages);
+      if (routed) {
+        log.info('Deterministic edge condition routed the step', { edgeId: routed, conditioned: !!edgeConditions[routed] });
+        return routed;
       }
 
       // Conditioned node, nothing matched, no fallback → fall through and

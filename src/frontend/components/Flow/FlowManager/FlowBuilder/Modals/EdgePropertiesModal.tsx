@@ -27,6 +27,7 @@ import {
   EdgeConditionTarget,
   EDGE_CONDITION_KINDS,
   EDGE_CONDITION_TARGETS,
+  defaultConditionTarget,
   isRegexCompilable,
 } from '@/utils/shared/edgeConditions';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -35,6 +36,8 @@ interface EdgePropertiesModalProps {
   open: boolean;
   edge: Edge | null;
   onClose: () => void;
+  /** Type of the node the edge leaves. It decides which message is tested by default. */
+  sourceNodeType?: string;
   /** Persist the edited condition; pass `undefined` to clear it (plain edge). */
   onSave: (edgeId: string, condition?: EdgeCondition) => void;
 }
@@ -46,7 +49,7 @@ interface EdgePropertiesModalProps {
  * the condition (`onSave(id, undefined)`) so the edge stays byte-compatible
  * with the compiler's plain-edge output.
  */
-export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropertiesModalProps) => {
+export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSave }: EdgePropertiesModalProps) => {
   const { t } = useI18n();
   const kindLabels: Record<EdgeConditionKind, string> = {
     contains: t('flows.edgeModal.contains'),
@@ -57,11 +60,13 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
   const targetLabels: Record<EdgeConditionTarget, string> = {
     'last-assistant': t('flows.edgeModal.lastAgent'),
     'last-message': t('flows.edgeModal.lastMessage'),
+    'last-user': t('flows.edgeModal.lastUser'),
   };
+  const defaultTarget = defaultConditionTarget(sourceNodeType);
   const [conditional, setConditional] = useState(false);
   const [kind, setKind] = useState<EdgeConditionKind>('contains');
   const [value, setValue] = useState('');
-  const [target, setTarget] = useState<EdgeConditionTarget>('last-assistant');
+  const [target, setTarget] = useState<EdgeConditionTarget>(defaultTarget);
   const [ignoreCase, setIgnoreCase] = useState(false);
   const [negate, setNegate] = useState(false);
 
@@ -72,18 +77,18 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
       setConditional(true);
       setKind(cond.kind);
       setValue(typeof cond.value === 'string' ? cond.value : '');
-      setTarget(cond.target ?? 'last-assistant');
+      setTarget(cond.target ?? defaultTarget);
       setIgnoreCase(!!cond.ignoreCase);
       setNegate(!!cond.negate);
     } else {
       setConditional(false);
       setKind('contains');
       setValue('');
-      setTarget('last-assistant');
+      setTarget(defaultTarget);
       setIgnoreCase(false);
       setNegate(false);
     }
-  }, [edge, open]);
+  }, [edge, open, defaultTarget]);
 
   if (!edge) return null;
 
@@ -105,7 +110,7 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
       condition.value = value;
       if (ignoreCase) condition.ignoreCase = true;
     }
-    if (target !== 'last-assistant') condition.target = target;
+    if (target !== defaultTarget) condition.target = target;
     if (negate) condition.negate = true;
     onSave(edge.id, condition);
     onClose();

@@ -621,6 +621,10 @@ export interface SubflowInvocation {
 
 // Type-specific node params
 export interface StartNodeParams extends BaseNodeParams<StartNodeProperties> {
+    /** Routing conditions on this node's outgoing edges, keyed by edge id. */
+    edgeConditions?: Record<string, EdgeCondition>;
+    /** Outgoing control edges in author order, so the first match is deterministic. */
+    orderedOutgoingEdges?: string[];
     type: 'start';
 }
 
@@ -664,6 +668,10 @@ export interface SignalNodeParams extends BaseNodeParams<SignalNodeProperties> {
 }
 
 export interface StaticNodeParams extends BaseNodeParams<StaticNodeProperties> {
+    /** Routing conditions on this node's outgoing edges, keyed by edge id. */
+    edgeConditions?: Record<string, EdgeCondition>;
+    /** Outgoing control edges in author order, so the first match is deterministic. */
+    orderedOutgoingEdges?: string[];
     type: 'static';
 }
 

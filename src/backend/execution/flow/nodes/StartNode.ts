@@ -1,10 +1,11 @@
 // Local implementation of PocketFlow for debugging
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
-import { SharedState, StartNodeParams, StartNodePrepResult, StartNodeExecResult } from '../types';
+import { FINAL_RESPONSE_ACTION, SharedState, StartNodeParams, StartNodePrepResult, StartNodeExecResult } from '../types';
 import OpenAI from 'openai';
 import { FEATURES } from '@/config/features'; // Import feature flags
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
+import { defaultConditionTarget, selectConditionedEdge } from '@/utils/shared/edgeConditions';
 
 // Create a logger instance for this file
 const log = createLogger('execution/nodes/StartNode.ts');
@@ -77,6 +78,19 @@ export class StartNode extends BaseNode<StartNodeParams, SharedState, StartNodeP
       log.info('Added StartNode tracking information');
     }
     
+    // Conditions test the caller's message, so route before the system prompt is
+    // appended. Otherwise a 'last-message' condition would test the prompt itself.
+    const edgeConditions = node_params?.edgeConditions;
+    const hasConditions = !!edgeConditions && Object.keys(edgeConditions).length > 0;
+    const routed = hasConditions
+      ? selectConditionedEdge(
+          node_params?.orderedOutgoingEdges ?? Array.from(this.successors.keys()),
+          edgeConditions,
+          sharedState.messages,
+          defaultConditionTarget('start'),
+        )
+      : null;
+
     // Add system message to messages array if it doesn't exist
     if (prepResult.systemPrompt) {
       const systemMessage: FlujoChatMessage = {
@@ -99,6 +113,11 @@ export class StartNode extends BaseNode<StartNodeParams, SharedState, StartNodeP
       }
     }
     
+    if (hasConditions) {
+      log.info('Start node routing by edge condition', { edgeId: routed });
+      return routed ?? FINAL_RESPONSE_ACTION;
+    }
+
     // In pocketflowframework, we need to check the available actions
     // and return one of them to proceed to the next node
     

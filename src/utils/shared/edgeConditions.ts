@@ -14,6 +14,11 @@
  * It replaces the non-obvious always-matching `[\s\S]*` regex workaround and
  * needs no `value`.
  *
+ * Conditions may also leave a Start or Static node, which lets a flow check a
+ * message BEFORE any model sees it. Such a flow re-enters at its Start node on
+ * every user turn (see `entryConditionStartNodeId`), so a follow-up question is
+ * checked the same way as the first one.
+ *
  * This module is intentionally pure and dependency-light so it can run in the
  * browser (Flow builder / spec validation) and on the backend (ProcessNode.post)
  * alike. `evaluateCondition` NEVER throws — an invalid regex degrades to "no
@@ -21,7 +26,7 @@
  */
 
 export type EdgeConditionKind = 'contains' | 'regex' | 'equals' | 'always';
-export type EdgeConditionTarget = 'last-assistant' | 'last-message';
+export type EdgeConditionTarget = 'last-assistant' | 'last-message' | 'last-user';
 
 export interface EdgeCondition {
   /** How `value` is matched against the selected message. */
@@ -31,7 +36,9 @@ export interface EdgeCondition {
    *  require it (an empty/absent value is treated as "never match" by the
    *  compiler/validator for those kinds). */
   value?: string;
-  /** Which message to test. Default 'last-assistant' (the step's own output). */
+  /** Which message to test. The default depends on the node the edge leaves:
+   *  'last-assistant' after a Process node (the step's own output), 'last-user'
+   *  after a Start node, 'last-message' after a Static node. */
   target?: EdgeConditionTarget;
   /** Case-insensitive matching. For contains/equals it lowercases both sides;
    *  for regex it adds the `i` flag (JS regex has no `(?i)` inline flags). Default false. */
@@ -42,7 +49,17 @@ export interface EdgeCondition {
 }
 
 export const EDGE_CONDITION_KINDS: readonly EdgeConditionKind[] = ['contains', 'regex', 'equals', 'always'];
-export const EDGE_CONDITION_TARGETS: readonly EdgeConditionTarget[] = ['last-assistant', 'last-message'];
+export const EDGE_CONDITION_TARGETS: readonly EdgeConditionTarget[] = ['last-assistant', 'last-message', 'last-user'];
+
+/** Node types whose outgoing edges may carry a routing condition. */
+export const CONDITION_SOURCE_NODE_TYPES: readonly string[] = ['process', 'start', 'static'];
+
+/** The message a condition tests when it names no target, by the node it leaves. */
+export function defaultConditionTarget(sourceNodeType: string | undefined): EdgeConditionTarget {
+  if (sourceNodeType === 'start') return 'last-user';
+  if (sourceNodeType === 'static') return 'last-message';
+  return 'last-assistant';
+}
 
 /** True when `kind` is a known condition kind. */
 export function isValidConditionKind(kind: unknown): kind is EdgeConditionKind {
@@ -132,6 +149,8 @@ interface SelectableMessage {
  *   - 'last-assistant' (default): the most recent assistant message's text —
  *     the natural "what did this step say". Returns null if there is none.
  *   - 'last-message': the most recent message of any role (may be a tool result).
+ *   - 'last-user': the most recent user message, which stays correct when a
+ *     system prompt or injected entry follows it.
  * Returns null when no suitable message exists.
  */
 export function selectConditionText(
@@ -142,8 +161,9 @@ export function selectConditionText(
   if (target === 'last-message') {
     return messageText(messages[messages.length - 1]?.content);
   }
+  const role = target === 'last-user' ? 'user' : 'assistant';
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === 'assistant') return messageText(messages[i]?.content);
+    if (messages[i]?.role === role) return messageText(messages[i]?.content);
   }
   return null;
 }
@@ -197,4 +217,67 @@ export function evaluateCondition(
   }
 
   return cond.negate ? !matched : matched;
+}
+
+/**
+ * Pick the outgoing edge for a node that has conditions: the first edge in author
+ * order whose predicate matches, otherwise the first edge without one. Returns
+ * null when nothing matches and no such edge exists; the caller ends the run.
+ */
+export function selectConditionedEdge(
+  orderedEdges: readonly string[],
+  conditions: Readonly<Record<string, EdgeCondition>>,
+  messages: SelectableMessage[] | undefined | null,
+  defaultTarget: EdgeConditionTarget = 'last-assistant',
+): string | null {
+  for (const edgeId of orderedEdges) {
+    const cond = conditions[edgeId];
+    if (cond && evaluateCondition(cond, selectConditionText(messages, cond.target ?? defaultTarget))) {
+      return edgeId;
+    }
+  }
+  return orderedEdges.find((edgeId) => !conditions[edgeId]) ?? null;
+}
+
+interface EntryConditionFlow {
+  nodes?: ReadonlyArray<{ id: string; type?: string; data?: { type?: string } | null }> | null;
+  edges?: ReadonlyArray<{
+    source: string;
+    target: string;
+    data?: { edgeType?: string; condition?: unknown } | null;
+  }> | null;
+}
+
+/**
+ * The Start node's id when a routing condition sits between it and the first model
+ * step, otherwise null. Such a condition only protects the model if it sees every
+ * user turn, so the engine re-enters at this node instead of resuming at the last
+ * Process step. The walk stops at any node that can talk to a model, because a
+ * condition after that point is ordinary routing and must not restart the flow.
+ */
+export function entryConditionStartNodeId(flow: EntryConditionFlow | null | undefined): string | null {
+  const nodes = flow?.nodes ?? [];
+  const edges = flow?.edges ?? [];
+  const typeOf = (id: string) => {
+    const node = nodes.find((candidate) => candidate.id === id);
+    return node?.data?.type ?? node?.type;
+  };
+  const start = nodes.find((node) => (node.data?.type ?? node.type) === 'start');
+  if (!start) return null;
+
+  const seen = new Set<string>([start.id]);
+  const queue = [start.id];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const edge of edges) {
+      if (edge.source !== current || edge.data?.edgeType === 'mcp' || edge.data?.edgeType === 'resource') continue;
+      if (edge.data?.condition) return start.id;
+      const targetType = typeOf(edge.target);
+      if ((targetType === 'static' || targetType === 'signal') && !seen.has(edge.target)) {
+        seen.add(edge.target);
+        queue.push(edge.target);
+      }
+    }
+  }
+  return null;
 }
