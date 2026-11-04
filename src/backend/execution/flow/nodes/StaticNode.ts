@@ -17,7 +17,14 @@ import { mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
 import { redactErrorDetails } from '../normalizeError';
 import { combineAbortSignals } from '../combineAbortSignals';
 import { getHarnessExecution } from '@/backend/services/harness/executionScope';
-import { defaultConditionTarget, selectConditionedEdge } from '@/utils/shared/edgeConditions';
+import { defaultConditionTarget, recordVariableSource, selectConditionedEdge } from '@/utils/shared/edgeConditions';
+import {
+  DEFAULT_DECISION_VARIABLE,
+  MAX_DECISION_LOG,
+  decisionVariableValue,
+  selectDecisionRule,
+  type DecisionRule,
+} from '@/utils/shared/decisionRules';
 import { HUMAN_GATE_APPROVED_RESULT, HUMAN_GATE_REJECTED_RESULT, HUMAN_GATE_TOOL_NAME } from '@/utils/shared/flowApproval';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
@@ -53,6 +60,37 @@ async function callNeedsPerson(
   }
 }
 
+function setRuleVariable(sharedState: SharedState, name: string, value: string): void {
+  sharedState.variables ??= {};
+  Object.defineProperty(sharedState.variables, name, {
+    value, configurable: true, enumerable: true, writable: true,
+  });
+  recordVariableSource(sharedState, name, 'rule');
+}
+
+/** Carry out a decision: its variables, the tool limit and the record of it. */
+function applyDecision(rule: DecisionRule, sharedState: SharedState, nodeId: string, decisionVariable: string): void {
+  for (const [name, value] of Object.entries(rule.set ?? {})) {
+    if (!isValidRunVarName(name)) throw new Error(`Static node ${nodeId}: rule "${rule.id}" sets an invalid variable "${name}".`);
+    setRuleVariable(sharedState, name, String(value));
+  }
+  setRuleVariable(sharedState, decisionVariable, decisionVariableValue(rule));
+  sharedState.allowedToolNames = rule.allowTools ? [...rule.allowTools] : undefined;
+  sharedState.decisionLog = [
+    ...(sharedState.decisionLog ?? []),
+    {
+      nodeId,
+      ruleId: rule.id,
+      outcome: rule.outcome,
+      ...(rule.reason ? { reason: rule.reason } : {}),
+      ...(rule.allowTools ? { allowTools: [...rule.allowTools] } : {}),
+      at: new Date().toISOString(),
+      ...(sharedState.logicalRunId ? { runId: sharedState.logicalRunId } : {}),
+    },
+  ].slice(-MAX_DECISION_LOG);
+  log.info('Decision', { nodeId, ruleId: rule.id, outcome: rule.outcome });
+}
+
 async function deliverResult(call: () => Promise<MCPServiceResponse>): Promise<MCPServiceResponse> {
   try {
     return await call();
@@ -81,6 +119,10 @@ async function deliverResult(call: () => Promise<MCPServiceResponse>): Promise<M
  *    reject the history — invalid `argumentsJson` therefore fails loudly. With
  *    `requireApproval`, a person decides on the call before it runs.
  *  - `humanGate` → the run waits for a person's decision, with no tool involved.
+ *
+ * After the entries, a node can decide by fixed `rules`: the first that applies sets
+ * the outcome, its variables and the tools later model steps may use. See
+ * src/utils/shared/decisionRules.ts.
  *
  * Text fields support run variables/resources and dynamic @ references.
  * Real calls apply the connected server/node's hidden presets at dispatch.
@@ -214,6 +256,10 @@ export class StaticNode extends BaseNode<
 
         if (entry.kind === 'humanGate') {
           validateRejectOptions(entry);
+          const gateVariable = entry.captureVariable?.trim();
+          if (gateVariable && !isValidRunVarName(gateVariable)) {
+            throw new Error(`Static node ${nodeId}: invalid capture variable "${gateVariable}".`);
+          }
           // An evaluation has nobody to ask, and nothing it does has a real effect.
           if (getHarnessExecution()) continue;
           if (!heldHere) {
@@ -227,6 +273,13 @@ export class StaticNode extends BaseNode<
           }
           const approved = heldHere.decision === 'approved';
           answerHold(heldHere.toolCallId, approved ? HUMAN_GATE_APPROVED_RESULT : HUMAN_GATE_REJECTED_RESULT);
+          if (gateVariable) {
+            sharedState.variables ??= {};
+            Object.defineProperty(sharedState.variables, gateVariable, {
+              value: approved ? 'approved' : 'rejected', configurable: true, enumerable: true, writable: true,
+            });
+            recordVariableSource(sharedState, gateVariable, 'person');
+          }
           if (!approved && (entry.onReject ?? 'stop') === 'stop') return stopAfterRejection(entry.rejectedText);
           continue;
         }
@@ -436,6 +489,8 @@ export class StaticNode extends BaseNode<
             Object.defineProperty(sharedState.variables, captureVariable, {
               value: captured, configurable: true, enumerable: true, writable: true,
             });
+            // A mock result is authored text that can repeat a model's words.
+            recordVariableSource(sharedState, captureVariable, executionMode === 'real' ? 'tool' : 'model');
           }
 
           // After a decision, the call is already in the conversation from the wait.
@@ -481,6 +536,27 @@ export class StaticNode extends BaseNode<
       log.info('Injected static messages', { nodeId, messageCount: messages.length });
     }
 
+    const rules = node_params?.properties?.rules;
+    if (Array.isArray(rules) && rules.length > 0) {
+      const decisionVariable = node_params?.properties?.decisionVariable?.trim() || DEFAULT_DECISION_VARIABLE;
+      if (!isValidRunVarName(decisionVariable)) {
+        throw new Error(`Static node ${nodeId}: invalid decision variable "${decisionVariable}".`);
+      }
+      const rule = selectDecisionRule(rules, sharedState.messages, sharedState);
+      if (!rule) {
+        // Carrying on would allow whatever comes next without anyone having decided.
+        const message = `No decision rule applies in step "${node_params?.properties?.name || nodeId}".`;
+        log.warn(message, { nodeId });
+        sharedState.lastResponse = {
+          success: false,
+          error: message,
+          errorDetails: { message, type: 'flow_error', code: 'decision_no_rule' },
+        };
+        return ERROR_ACTION;
+      }
+      applyDecision(rule, sharedState, nodeId, decisionVariable);
+    }
+
     if (typeof node_params?.properties?.outputTemplate === 'string') {
       // Captured tool data is literal output, never another template. Resolve
       // authored resource/dynamic references before inserting run variables.
@@ -504,7 +580,7 @@ export class StaticNode extends BaseNode<
         edgeConditions,
         sharedState.messages,
         defaultConditionTarget('static'),
-        sharedState.variables,
+        sharedState,
       );
       log.info('Static node routing by edge condition', { nodeId, edgeId: routed });
       return routed ?? FINAL_RESPONSE_ACTION;

@@ -1,3 +1,5 @@
+import type { DecisionRule, FlowDecision } from '@/utils/shared/decisionRules';
+import type { RecordedVariableSource } from '@/utils/shared/edgeConditions';
 import type { ModelInputSnapshot } from '@/shared/types/execution/modelInput';
 import type { DebuggerStateView } from '@/shared/types/execution/debuggerState';
 export type {
@@ -724,6 +726,9 @@ export type StaticEntry =
         kind: 'humanGate';
         /** What the person is asked to decide. */
         text: string;
+        /** Run variable that receives `approved` or `rejected`, recorded as coming
+         *  from a person, so decision rules can require it. */
+        captureVariable?: string;
         onReject?: 'stop' | 'continue';
         rejectedText?: string;
       };
@@ -734,6 +739,10 @@ export interface StaticNodeProperties {
     entries?: StaticEntry[];
     /** Explicit deterministic output, resolved after entries (e.g. ${var:health}). */
     outputTemplate?: string;
+    /** Ordered rules, read after the entries. The first that applies is the decision. */
+    rules?: DecisionRule[];
+    /** Run variable that receives the decision as JSON. Defaults to `decision`. */
+    decisionVariable?: string;
     /** Real tool calls of this node that always wait for a person, as on a Process node. */
     requireApprovalFor?: string[];
     /** Same, for every real tool call its server does not mark read-only. */
@@ -1100,6 +1109,14 @@ export interface SharedState extends DebuggerStateView {
     offeredToolNames?: string[];
     /** The models this run may use: its flow's list narrowed by its parent run's. */
     allowedModels?: string[];
+    /** Who wrote each run variable, for conditions that demand a source. */
+    variableSources?: Record<string, RecordedVariableSource>;
+    /** The connected tools model steps may use, from the latest decision. */
+    allowedToolNames?: string[];
+    /** The limit of the run that started this subflow, which it cannot widen. */
+    inheritedAllowedToolNames?: string[];
+    /** What was decided and why, newest last. */
+    decisionLog?: FlowDecision[];
     /** Every model this user turn sent a request to, or tried to, by model id. */
     modelsUsed?: string[];
     /**

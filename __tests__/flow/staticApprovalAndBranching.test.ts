@@ -281,8 +281,8 @@ describe('conditions on run variables', () => {
 
   it('picks an edge by variable', () => {
     const conditions = { a: { kind: 'gte' as const, value: '10', target: 'variable' as const, variable: 'n' } };
-    expect(selectConditionedEdge(['a', 'b'], conditions, [], 'last-message', { n: '12' })).toBe('a');
-    expect(selectConditionedEdge(['a', 'b'], conditions, [], 'last-message', { n: '2' })).toBe('b');
+    expect(selectConditionedEdge(['a', 'b'], conditions, [], 'last-message', { variables: { n: '12' } })).toBe('a');
+    expect(selectConditionedEdge(['a', 'b'], conditions, [], 'last-message', { variables: { n: '2' } })).toBe('b');
     expect(selectConditionedEdge(['a', 'b'], conditions, [], 'last-message')).toBe('b');
   });
 });

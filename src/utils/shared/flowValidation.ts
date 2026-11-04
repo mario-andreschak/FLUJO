@@ -16,6 +16,7 @@
  * execution) alike. Pass whatever context you have — model/server lookups are optional and
  * checks that need them are simply skipped when absent.
  */
+import { decisionRuleIssues } from './decisionRules';
 import { findBindings } from './mcpBinding';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 import { CONDITION_SOURCE_NODE_TYPES, EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
@@ -614,6 +615,12 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   for (const node of staticNodes) {
     const props = node.data?.properties ?? {};
     const entries = Array.isArray(props.entries) ? props.entries : [];
+
+    if (props.rules !== undefined) {
+      for (const issue of decisionRuleIssues(props.rules, `Static node "${node.data?.label ?? node.id}"`)) {
+        add(issue.severity, issue.code, issue.message, node);
+      }
+    }
 
     // `injectOnce` only ever changes behaviour on a *repeat* traversal, which can only
     // happen when the node sits on a loop. On an acyclic path the toggle is a no-op and
