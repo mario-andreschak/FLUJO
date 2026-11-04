@@ -23,7 +23,8 @@ import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/ex
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { deleteRunResources } from '@/backend/services/runResources';
-import { quickChatFlowId } from '@/utils/shared/quickChat';
+import { isQuickChatFlowId, quickChatFlowId } from '@/utils/shared/quickChat';
+import { isQuickChatEnabled, QUICK_CHAT_DISABLED_CODE, QUICK_CHAT_DISABLED_MESSAGE } from '@/backend/services/workspace/modelAccess';
 import { DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { collectPinnedConversationIds } from '@/utils/shared/conversationPins';
 import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
@@ -699,6 +700,11 @@ async function POST_handler(req: NextRequest) {
     );
   } else if (typeof payload.flowId !== 'string' || !payload.flowId) {
     return NextResponse.json({ error: 'Invalid request body: Missing or invalid "flowId" (must be a non-empty string)' }, { status: 400 });
+  }
+  // A caller-supplied graph is how a Quick Chat conversation is created, so this is
+  // the point where a client could otherwise avoid the Quick Chat route entirely.
+  if ((payload.flowSnapshot || isQuickChatFlowId(payload.flowId)) && !(await isQuickChatEnabled())) {
+    return NextResponse.json({ error: QUICK_CHAT_DISABLED_MESSAGE, code: QUICK_CHAT_DISABLED_CODE }, { status: 403 });
   }
   if (typeof payload.createdAt !== 'number' || typeof payload.updatedAt !== 'number') {
      log.warn('Missing or invalid timestamps in payload, using current time', { requestId, conversationId: payload.id });

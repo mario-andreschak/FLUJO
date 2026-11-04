@@ -406,6 +406,14 @@ export interface ExperimentalSettings {
 /**
  * Settings interface containing all application settings
  */
+/** Per-workspace switches for reaching a model without a saved flow. Missing means on. */
+export interface ModelAccessSettings {
+  /** `false` refuses and hides `model-<id>` and `policy/<id>` on the `/v1` API. */
+  directModelCalls?: boolean;
+  /** `false` refuses Quick Chat and what is built on it: Ask FLUJO and the Flow Generator. */
+  quickChat?: boolean;
+}
+
 export interface Settings {
   speech: SpeechSettings;
   update?: UpdateSettings;
@@ -418,4 +426,5 @@ export interface Settings {
    * treated as disabled (experimental features hidden).
    */
   experimental?: ExperimentalSettings;
+  modelAccess?: ModelAccessSettings;
 }

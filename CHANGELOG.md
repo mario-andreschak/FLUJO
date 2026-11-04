@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Model access
+
+- Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.
+
 ### Flow steps
 
 - Check a message before any model sees it. Conditions can now sit on edges that leave a Start or a Static node, and they can test the last user message. A flow with such a condition goes back to its Start node on every user turn, so a follow-up question in the same chat is checked like the first one.

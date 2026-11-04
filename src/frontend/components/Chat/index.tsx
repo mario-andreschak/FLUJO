@@ -5079,7 +5079,7 @@ const Chat: React.FC = () => {
       onBulkDelete={sidebarBulkDeleteConversations}
       onStopConversation={sidebarStopConversation}
       onNewConversation={sidebarCreateNewConversation}
-      onQuickChat={sidebarOpenQuickChat}
+      onQuickChat={settings?.modelAccess?.quickChat === false ? undefined : sidebarOpenQuickChat}
       onCollapse={toggleSidebarCollapsed}
       collapsed={effectiveSidebarCollapsed}
     />
@@ -5935,15 +5935,17 @@ const Chat: React.FC = () => {
                   ? t('chat.page.selectOrCreate')
                   : t('chat.page.createToStart')}
               </Typography>
-              <Button
-                variant="contained"
-                size="large"
-                startIcon={<BoltIcon />}
-                onClick={sidebarOpenQuickChat}
-                sx={{ minHeight: 48, borderRadius: 999, px: 2.5 }}
-              >
-                {t('chat.page.quickChat')}
-              </Button>
+              {settings?.modelAccess?.quickChat !== false && (
+                <Button
+                  variant="contained"
+                  size="large"
+                  startIcon={<BoltIcon />}
+                  onClick={sidebarOpenQuickChat}
+                  sx={{ minHeight: 48, borderRadius: 999, px: 2.5 }}
+                >
+                  {t('chat.page.quickChat')}
+                </Button>
+              )}
               {flows.length > 0 && (
                 <Button
                   variant="contained"

@@ -8,6 +8,7 @@ import {
   restoreVendoredFlowGenerator,
 } from '@/backend/services/flow/systemFlows';
 import { gatherGenerationContext } from '@/backend/services/flow/generationContext';
+import { isQuickChatEnabled, QUICK_CHAT_DISABLED_CODE, QUICK_CHAT_DISABLED_MESSAGE } from '@/backend/services/workspace/modelAccess';
 
 /** Create a conversation-scoped snapshot of the latest editable generator. */
 async function POST_handler(request: NextRequest) {
@@ -25,6 +26,9 @@ async function POST_handler(request: NextRequest) {
     return json({ error: 'conversationId and modelId are required' }, 400);
   }
   try {
+    if (!(await isQuickChatEnabled())) {
+      return json({ error: QUICK_CHAT_DISABLED_MESSAGE, code: QUICK_CHAT_DISABLED_CODE }, 403);
+    }
     const context = await gatherGenerationContext();
     if (!(context.compile.models ?? []).some((model) => model.id === modelId)) {
       return json({ error: `Unknown generator model "${modelId}"` }, 400);
