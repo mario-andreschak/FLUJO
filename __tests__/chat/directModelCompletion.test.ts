@@ -71,6 +71,8 @@ describe('model- routing on /v1/chat/completions', () => {
     const pending = processChatCompletion({ model: 'model-Test', messages: [], stream }, false, false, false,
       undefined, false, false, undefined, ingress);
     ingress.release();
+    // The direct path reads the workspace's model-access switch before it dispatches.
+    while (generateChatCompletion.mock.calls.length === 0) await new Promise(resolve => setImmediate(resolve));
     expect(getChatIngressDiagnostics().active).toBe(1);
     finish({ success: true, completion: completionFixture() });
     const response = await pending;
