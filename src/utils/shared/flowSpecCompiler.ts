@@ -38,7 +38,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Edge } from '@xyflow/react';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
-import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
+import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TARGETS, EdgeCondition, EdgeConditionTarget, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 
 // ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ export interface FlowSpecEdge {
   /** Tier 2b: a deterministic predicate over the last message. When set, the
    *  engine takes this edge if the predicate matches (first matching outgoing
    *  edge wins, in author order); a bare edge is the fallback. Only meaningful
-   *  on edges leaving a process node. */
+   *  on edges leaving a process, start or static node. */
   condition?: EdgeCondition;
 }
 
@@ -1173,15 +1173,20 @@ export function compileFlowSpec(
 
       // Tier 2b: deterministic edge condition. Sanitize here so a bad predicate
       // is dropped (warned) rather than carried into the runtime graph. Only
-      // process nodes route deterministically, so a condition on any other
-      // source is dropped with a warning (it would be silently ignored anyway).
+      // process, start and static nodes route deterministically, so a condition on
+      // any other source is dropped with a warning (it would be silently ignored).
       let condition: EdgeCondition | undefined;
       const rawCond = specEdge.condition;
       if (rawCond && typeof rawCond === 'object') {
-        if (source.type !== 'process') {
+        // A default target is omitted so a plain condition keeps its compact form.
+        const targetProp: { target?: EdgeConditionTarget } = rawCond.target && rawCond.target !== defaultConditionTarget(source.type)
+          && (EDGE_CONDITION_TARGETS as readonly string[]).includes(rawCond.target)
+          ? { target: rawCond.target }
+          : {};
+        if (!CONDITION_SOURCE_NODE_TYPES.includes(source.type ?? 'unknown')) {
           warn(
             'edge-condition-non-process',
-            `Edge "${fromKey}" -> "${toKey}" has a condition but leaves a ${source.type} node; conditions only route from process nodes and were dropped.`
+            `Edge "${fromKey}" -> "${toKey}" has a condition but leaves a ${source.type} node; conditions only route from process, start and static nodes and were dropped.`
           );
         } else if (!isValidConditionKind(rawCond.kind)) {
           warn(
@@ -1194,7 +1199,7 @@ export function compileFlowSpec(
           // NOT be dropped by the value-required check below.
           condition = {
             kind: 'always',
-            ...(rawCond.target === 'last-message' ? { target: 'last-message' as const } : {}),
+            ...targetProp,
             ...(rawCond.negate === true ? { negate: true } : {}),
           };
         } else if (typeof rawCond.value !== 'string' || rawCond.value.length === 0) {
@@ -1212,7 +1217,7 @@ export function compileFlowSpec(
           condition = {
             kind: rawCond.kind,
             value: rawCond.value,
-            ...(rawCond.target === 'last-message' ? { target: 'last-message' as const } : {}),
+            ...targetProp,
             ...(rawCond.ignoreCase === true ? { ignoreCase: true } : {}),
             ...(rawCond.negate === true ? { negate: true } : {}),
           };

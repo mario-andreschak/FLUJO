@@ -2600,6 +2600,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       <EdgePropertiesModal
         open={!!editingEdge}
         edge={editingEdge}
+        sourceNodeType={nodes.find((node) => node.id === editingEdge?.source)?.data.type}
         onClose={() => setEditingEdge(null)}
         onSave={handleSaveEdgeCondition}
       />

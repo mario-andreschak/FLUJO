@@ -18,7 +18,7 @@
  */
 import { findBindings } from './mcpBinding';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
-import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
+import { CONDITION_SOURCE_NODE_TYPES, EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
 import {
@@ -894,9 +894,10 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
 
   // --- Tier 2b: deterministic edge conditions ---
   // A condition lets the engine route on the last message (first matching
-  // outgoing edge wins, a bare edge is the fallback). Only process nodes route
-  // this way, so a condition anywhere else is an error; and a conditioned node
-  // with no bare fallback can dead-end when nothing matches (advisory).
+  // outgoing edge wins, a bare edge is the fallback). Only process, start and
+  // static nodes route this way, so a condition anywhere else is an error; and a
+  // conditioned node with no bare fallback can dead-end when nothing matches
+  // (advisory).
   {
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
     const conditionedSources = new Set<string>();
@@ -907,15 +908,16 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
 
       const sourceNode = nodesById.get(edge.source);
       const sourceType = sourceNode ? getNodeType(sourceNode) : 'unknown';
-      if (sourceType !== 'process') {
+      if (!CONDITION_SOURCE_NODE_TYPES.includes(sourceType)) {
         add(
           'error',
           'edge-condition-non-process',
-          `An edge leaving ${sourceType === 'unknown' ? 'an unknown' : `the ${sourceType}`} node "${sourceNode ? getNodeLabel(sourceNode) : edge.source}" has a routing condition, but only process nodes can route on a condition.`,
+          `An edge leaving ${sourceType === 'unknown' ? 'an unknown' : `the ${sourceType}`} node "${sourceNode ? getNodeLabel(sourceNode) : edge.source}" has a routing condition, but only process, start and static nodes can route on a condition.`,
           sourceNode ?? undefined
         );
         continue;
       }
+      const sourceLabel = `${sourceType[0].toUpperCase()}${sourceType.slice(1)} node "${getNodeLabel(sourceNode!)}"`;
 
       conditionedSources.add(edge.source);
 
@@ -923,7 +925,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         add(
           'warning',
           'edge-condition-kind',
-          `Process node "${getNodeLabel(sourceNode!)}" has an outgoing edge whose condition kind "${String(condition.kind)}" is unknown; it will never match.`,
+          `${sourceLabel} has an outgoing edge whose condition kind "${String(condition.kind)}" is unknown; it will never match.`,
           sourceNode!
         );
       } else if (condition.kind === 'always') {
@@ -933,14 +935,14 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         add(
           'warning',
           'edge-condition-value',
-          `Process node "${getNodeLabel(sourceNode!)}" has an outgoing edge condition with no "value"; it will never match.`,
+          `${sourceLabel} has an outgoing edge condition with no "value"; it will never match.`,
           sourceNode!
         );
       } else if (condition.kind === 'regex' && !isRegexCompilable(condition.value)) {
         add(
           'warning',
           'edge-condition-regex',
-          `Process node "${getNodeLabel(sourceNode!)}" has an outgoing edge with a regex condition that does not compile; it will never match.`,
+          `${sourceLabel} has an outgoing edge with a regex condition that does not compile; it will never match.`,
           sourceNode!
         );
       }
@@ -966,7 +968,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         add(
           'warning',
           'edge-condition-no-fallback',
-          `Process node "${getNodeLabel(node)}" has conditioned outgoing edges but no bare fallback edge; if no condition matches, the flow ends here.`,
+          `${getNodeType(node)[0].toUpperCase()}${getNodeType(node).slice(1)} node "${getNodeLabel(node)}" has conditioned outgoing edges but no bare fallback edge; if no condition matches, the flow ends here.`,
           node
         );
       }

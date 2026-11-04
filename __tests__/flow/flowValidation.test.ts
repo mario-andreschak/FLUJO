@@ -888,14 +888,26 @@ describe('validateFlow — edge conditions (Tier 2b)', () => {
     data: { edgeType: 'standard', condition },
   });
 
-  it('errors on a condition leaving a non-process node', () => {
+  it('errors on a condition leaving a node that cannot route', () => {
+    const signal = { id: 'n', type: 'signal', data: { type: 'signal', label: 'Signal', properties: { topic: 'event' } } };
     const flow: VFlow = {
-      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), finishNode()],
-      edges: [condEdge('start', 'p', { kind: 'contains', value: 'x' }), edge('p', 'finish')],
+      nodes: [startNode(), signal, finishNode()],
+      edges: [edge('start', 'n'), condEdge('n', 'finish', { kind: 'contains', value: 'x' })],
     };
     const r = validateFlow(flow, { models });
     expect(codes(r)).toContain('edge-condition-non-process');
     expect(r.isRunnable).toBe(false);
+  });
+
+  it('accepts a condition leaving a start node', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), processNode('p', { boundModel: 'm1' }), finishNode()],
+      edges: [condEdge('start', 'finish', { kind: 'contains', value: 'x' }), edge('start', 'p'), edge('p', 'finish')],
+    };
+    const r = validateFlow(flow, { models });
+    expect(codes(r)).not.toContain('edge-condition-non-process');
+    expect(codes(r)).not.toContain('edge-condition-no-fallback');
+    expect(r.isRunnable).toBe(true);
   });
 
   it('warns when a conditioned node has no bare fallback edge', () => {

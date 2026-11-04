@@ -4,6 +4,7 @@
 
 ### Flow steps
 
+- Check a message before any model sees it. Conditions can now sit on edges that leave a Start or a Static node, and they can test the last user message. A flow with such a condition goes back to its Start node on every user turn, so a follow-up question in the same chat is checked like the first one.
 - Hold a step's tool list when a tool is called, not only when it is offered. A model could call a tool that an earlier step of the same run had been offered, or one of FLUJO's built-in tools such as `todo` or `read_resource`, even though the current step did not offer it. Such a call now returns an error to the model and does not run.
 
 ### Projects

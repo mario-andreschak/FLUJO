@@ -331,8 +331,25 @@ describe('compileFlowSpec — edge conditions (Tier 2b)', () => {
     expect((edge.data as any).condition).toBeUndefined();
   });
 
-  it('drops a condition on a non-process source edge with a warning', () => {
-    // A condition on the start->process edge — start nodes never route on conditions.
+  it('drops a condition on a source edge that cannot route, with a warning', () => {
+    // Signal nodes pass through and never route on conditions.
+    const spec: FlowSpec = {
+      nodes: [
+        { key: 's', type: 'start' },
+        { key: 'n', type: 'signal', topic: 'event' },
+        { key: 'f', type: 'finish' },
+      ],
+      edges: [
+        { from: 's', to: 'n' },
+        { from: 'n', to: 'f', condition: { kind: 'contains', value: 'x' } },
+      ],
+    };
+    const { flow, issues } = compileFlowSpec(spec, context);
+    expect(issues.some((i) => i.code === 'edge-condition-non-process')).toBe(true);
+    expect(flow!.edges.every((e) => (e.data as any).condition === undefined)).toBe(true);
+  });
+
+  it('keeps a condition on a start edge', () => {
     const spec: FlowSpec = {
       nodes: [
         { key: 's', type: 'start' },
@@ -345,9 +362,9 @@ describe('compileFlowSpec — edge conditions (Tier 2b)', () => {
       ],
     };
     const { flow, issues } = compileFlowSpec(spec, context);
-    expect(issues.some((i) => i.code === 'edge-condition-non-process')).toBe(true);
+    expect(issues.some((i) => i.code === 'edge-condition-non-process')).toBe(false);
     const edge = flow!.edges.find((e) => e.source === startId(flow))!;
-    expect((edge.data as any).condition).toBeUndefined();
+    expect((edge.data as any).condition).toEqual({ kind: 'contains', value: 'x' });
   });
 
   it('keeps a bad regex condition but warns it will never match', () => {

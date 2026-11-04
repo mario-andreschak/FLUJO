@@ -1,7 +1,7 @@
 // Local implementation of PocketFlow for debugging
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
-import { SharedState, StaticEntry, StaticNodeParams, ERROR_ACTION, ErrorDetails } from '../types';
+import { SharedState, StaticEntry, StaticNodeParams, ERROR_ACTION, ErrorDetails, FINAL_RESPONSE_ACTION } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { FlujoFunctionToolCall } from '@/shared/types/openai';
 import { resolveRunVars, isValidRunVarName } from '@/utils/shared/resolveRunVars';
@@ -16,6 +16,7 @@ import { applyPresetArguments, resolvePromptDynamicReferences } from '@/backend/
 import { mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
 import { redactErrorDetails } from '../normalizeError';
 import { combineAbortSignals } from '../combineAbortSignals';
+import { defaultConditionTarget, selectConditionedEdge } from '@/utils/shared/edgeConditions';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   executePersonaMemoryMaintenanceCommit,
@@ -375,6 +376,19 @@ export class StaticNode extends BaseNode<
       const output = boundStaticText(resolveRunVars(referenceText, sharedState.variables));
       sharedState.lastResponse = output;
       sharedState.messages.push({ role: 'assistant', content: output, id: crypto.randomUUID(), timestamp: Date.now() } as FlujoChatMessage);
+    }
+
+    // Conditions see this node's own result, because they run after its entries.
+    const edgeConditions = node_params?.edgeConditions;
+    if (edgeConditions && Object.keys(edgeConditions).length > 0) {
+      const routed = selectConditionedEdge(
+        node_params?.orderedOutgoingEdges ?? Array.from(this.successors.keys()),
+        edgeConditions,
+        sharedState.messages,
+        defaultConditionTarget('static'),
+      );
+      log.info('Static node routing by edge condition', { nodeId, edgeId: routed });
+      return routed ?? FINAL_RESPONSE_ACTION;
     }
 
     // Pass through to the first successor.
