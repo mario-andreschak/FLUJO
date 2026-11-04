@@ -21,7 +21,7 @@ import {
   bindChatProject,
   isValidConversationId,
   loadProjectState,
-  readChatBinding,
+  readEffectiveChatBinding,
   removeProject,
   setActiveProject,
 } from '@/backend/services/projects/projectStore';
@@ -70,8 +70,9 @@ async function payload(conversationId?: string) {
   })));
 
   let chat: ChatProjectEntry | null = null;
+  // A subflow chat shows the folder its agents actually use: its root chat's.
   const { stored, binding } = conversationId
-    ? await readChatBinding(conversationId)
+    ? await readEffectiveChatBinding(conversationId)
     : { stored: undefined, binding: undefined };
   // A chat bound to a removed project has no folder; it never follows the sidebar.
   const chatProject = binding?.project ?? (stored ? undefined : activeProject);

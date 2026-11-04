@@ -20,6 +20,8 @@ import {
   setActiveProject,
 } from '@/backend/services/projects/projectStore';
 import type { MCPServerConfig } from '@/shared/types/mcp';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
+import type { SharedState } from '@/backend/execution/flow/types';
 
 describe('workspace projects', () => {
   let dataRoot: string;
@@ -113,6 +115,42 @@ describe('workspace projects', () => {
     await expect(inWorkspace(loadProjectState)).resolves.toEqual({ projects: [one, two], activeProject: undefined });
     await expect(inWorkspace(() => resolveConversationProjectDir('chat-1'))).resolves.toBeUndefined();
     expect((await listWorkspaces()).find(w => w.name === 'side')?.activeProject).toBeUndefined();
+  });
+
+  it('runs subflow lanes in their root chat folder without binding each lane', async () => {
+    await inWorkspace(() => addProject(one));
+    await inWorkspace(() => addProject(two));
+    const worktree = path.join(dataRoot, 'code', 'one.worktrees', 'feat');
+    await fs.mkdir(worktree, { recursive: true });
+    await inWorkspace(() => bindChatProject('root-chat', one, worktree));
+    const states = await inWorkspace(async () => getConversationStates());
+    states.set('lane-1', { conversationId: 'lane-1', rootConversationId: 'root-chat' } as unknown as SharedState);
+    try {
+      // The sidebar selects `two`, but the lane works where its chat works.
+      await expect(inWorkspace(() => resolveConversationProjectDir('lane-1'))).resolves.toBe(worktree);
+      expect(Object.keys((await readWorkspaceMetadata('side')).chatProjects as object)).toEqual(['root-chat']);
+    } finally {
+      states.delete('lane-1');
+    }
+  });
+
+  it('never lets a first-use pin overwrite a binding chosen meanwhile', async () => {
+    await inWorkspace(() => addProject(one));
+    await inWorkspace(() => addProject(two));
+    // The user's choice and the agent's first tool call race for the same chat.
+    const [, resolved] = await Promise.all([
+      inWorkspace(() => bindChatProject('chat-1', one)),
+      inWorkspace(() => resolveConversationProjectDir('chat-1')),
+    ]);
+    await expect(inWorkspace(() => getChatProject('chat-1'))).resolves.toEqual({ project: one, path: one });
+    expect(resolved).toBe(one);
+  });
+
+  it('lets a workspace save repair an unreadable metadata file', async () => {
+    const metadataPath = path.join(dataRoot, 'workspaces', 'side', '.workspace.json');
+    await fs.writeFile(metadataPath, '{"roots": [', 'utf8');
+    await updateWorkspaceRoots('side', [one]);
+    await expect(readWorkspaceMetadata('side')).resolves.toEqual({ roots: [one] });
   });
 
   it('serializes concurrent metadata writes without losing updates', async () => {

@@ -18,6 +18,7 @@ import {
   ListSubheader,
   Menu,
   MenuItem,
+  Snackbar,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -143,6 +144,15 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
             }
           })()}
         />
+        {/* The menu is closed during the folder-picker flow, so its failures show here. */}
+        <Snackbar
+          open={Boolean(error) && !anchorEl}
+          autoHideDuration={8000}
+          onClose={(_event, reason) => { if (reason !== 'clickaway') setError(null); }}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert severity="error" onClose={() => setError(null)} sx={{ wordBreak: 'break-word' }}>{error}</Alert>
+        </Snackbar>
       </>
     );
   }
@@ -254,7 +264,11 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
             key={project.path}
             dense
             selected={samePath(project.path, chat.project)}
-            onClick={() => void run(conversationId ? 'bindChat' : 'activate', { project: project.path })}
+            // The checked project is a no-op: rebinding it would move the chat
+            // out of its worktree into the main checkout.
+            onClick={() => samePath(project.path, chat.project)
+              ? setAnchorEl(null)
+              : void run(conversationId ? 'bindChat' : 'activate', { project: project.path })}
           >
             <ListItemIcon><FolderOutlined fontSize="small" /></ListItemIcon>
             <ListItemText

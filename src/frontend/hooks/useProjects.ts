@@ -91,6 +91,8 @@ export function useProjects(conversationId?: string | null): {
   const [error, setError] = useState<string | null>(null);
   const conversationRef = useRef(conversationId);
   conversationRef.current = conversationId;
+  // Identifies this instance's change events: it already holds the answer.
+  const instanceRef = useRef({});
 
   const refresh = useCallback(async () => {
     const requested = conversationRef.current;
@@ -117,18 +119,23 @@ export function useProjects(conversationId?: string | null): {
   }, [conversationId, refresh]);
 
   useEffect(() => {
-    const onChanged = () => { void refresh(); };
+    const onChanged = (event: Event) => {
+      // The instance that made the change already applied the server's answer.
+      if ((event as CustomEvent).detail === instanceRef.current) return;
+      void refresh();
+    };
+    const onFocus = () => { void refresh(); };
     const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
     }, REFRESH_INTERVAL_MS);
     window.addEventListener(CHANGED_EVENT, onChanged);
-    window.addEventListener('focus', onChanged);
+    window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener(CHANGED_EVENT, onChanged);
-      window.removeEventListener('focus', onChanged);
+      window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [refresh]);
@@ -143,7 +150,7 @@ export function useProjects(conversationId?: string | null): {
     if (!response.ok) throw new Error(data.error || 'The project could not be updated.');
     const next = { projects: data.projects ?? [], activeProject: data.activeProject ?? null, chat: data.chat ?? null };
     setState(next);
-    window.dispatchEvent(new Event(CHANGED_EVENT));
+    window.dispatchEvent(new CustomEvent(CHANGED_EVENT, { detail: instanceRef.current }));
     return next;
   }, []);
 
