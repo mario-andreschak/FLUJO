@@ -119,7 +119,7 @@
     "@xyflow/react": "^12.12.0",
     "axios": "^1.20.0",
     "chokidar": "^6.0.0",
-    "croner": "^10.0.1",
+    "croner": "^11.0.0",
     "crypto-js": "^4.2.0",
     "jszip": "3.10.2",
     "lodash": "^4.18.1",
