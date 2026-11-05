@@ -277,4 +277,9 @@ in a log or report. A failed report changes nothing else, and is tried again nex
 - It does not install MCP server packages. It writes the configuration, and a server started with
   `npx` or similar fetches its package when it starts. Servers connect in the background: one that
   fails to connect does not fail the apply, and is visible in its server status.
+- It does not grant a server the right to run on this computer. A locally started (stdio) server runs
+  freely only on a plain localhost installation. With owner access or wider network exposure it also
+  needs its private approval, from `FLUJO_MCP_TRUSTED_HOST_FILE` or `FLUJO_MCP_ISOLATION_FILE`. A file
+  cannot give that, on purpose, so such a server stays stopped and says so in its status. Remote servers
+  do not need it.
 - It has not been run on a real fleet. See the pull request for what was checked and how.

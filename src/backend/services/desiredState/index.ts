@@ -369,7 +369,6 @@ async function applyWithinLock(
       lastApplyFailed: false,
       lastFailureAt: null,
       lastFailureCode: null,
-      interruptedApply: 'none',
       localEditsKept: plan.keptEntries.length,
     });
     await saveLastReport(scrub(report, compiled.secretValues));
@@ -557,37 +556,51 @@ export async function applyDesiredStateAtStartup(): Promise<void> {
   if (isWorkerMode()) return;
   try {
     // This start is what a pending restart was waiting for. Anything applied from here
-    // on came after the launcher read its settings, and says so again by itself.
-    if ((await loadStatus()).restartRequired) await updateStatus({ restartRequired: false });
-    const stuck = await withWorkspaceRuntimeLock(APPLY_LOCK, () => resumeWithinLock());
-    if (stuck) {
-      log.error(stuck.message);
-      return;
+    // on came after the launcher read its settings, and says so again by itself. Word of
+    // an interrupted update is about the start it happened in, unless it still needs help.
+    const before = await loadStatus();
+    if (before.restartRequired || before.interruptedApply === 'finished-at-restart' || before.interruptedApply === 'restored-at-restart') {
+      await updateStatus({
+        restartRequired: false,
+        ...(before.interruptedApply === 'needs-attention' ? {} : { interruptedApply: 'none' }),
+      });
     }
-
-    const read = await readConfiguredFile();
-    if (!read.configured) return;
-    if (read.problem) {
-      await recordFailure('unreadable-file', makeReport('invalid', 'The file cannot be used, so nothing was changed.', { problems: [read.problem] }));
-      log.error('The desired-state file cannot be used. Nothing was changed.');
-      return;
-    }
-    const parsed = parseDesiredState(read.input);
-    if (parsed.ok && !parsed.state.workspaces.includes(getCurrentWorkspace())) return;
-    // An operator went back from this exact file. Starting up must not undo that.
-    const durable = await loadDurableState();
-    if (durable.heldBack?.fileHash === hashOf(read.input)) {
-      log.warn(`Not applying version ${durable.heldBack.version} again, because it was rolled back. Change the file or apply it on request.`);
-      return;
-    }
-    const report = await getSchedulerService().withArmingDeferred(() => applyDesiredState(read.input, { reconcileRuntime: false }));
-    if (report.outcome === 'invalid' || report.outcome === 'failed') log.error(`Desired state not applied: ${report.message}`);
-    else log.info(report.message);
+    // An installation that never used this stops here, with nothing written.
+    if (!process.env[DESIRED_STATE_FILE_ENV]?.trim() && !await loadJournal()) return;
+    // Schedules saved here are armed by the scheduler's start, after servers have connected.
+    await getSchedulerService().withArmingDeferred(applyAtStartupWithinDeferral);
   } catch (error) {
     if (error instanceof SimulatedCrash) throw error;
     log.error('Applying the desired state at startup failed', error);
     await recordFailure('write-failed', makeReport('failed', 'Applying the desired state at startup failed. See the FLUJO log.')).catch(() => undefined);
   }
+}
+
+async function applyAtStartupWithinDeferral(): Promise<void> {
+  const stuck = await withWorkspaceRuntimeLock(APPLY_LOCK, () => resumeWithinLock());
+  if (stuck) {
+    log.error(stuck.message);
+    return;
+  }
+
+  const read = await readConfiguredFile();
+  if (!read.configured) return;
+  if (read.problem) {
+    await recordFailure('unreadable-file', makeReport('invalid', 'The file cannot be used, so nothing was changed.', { problems: [read.problem] }));
+    log.error('The desired-state file cannot be used. Nothing was changed.');
+    return;
+  }
+  const parsed = parseDesiredState(read.input);
+  if (parsed.ok && !parsed.state.workspaces.includes(getCurrentWorkspace())) return;
+  // An operator went back from this exact file. Starting up must not undo that.
+  const durable = await loadDurableState();
+  if (durable.heldBack?.fileHash === hashOf(read.input)) {
+    log.warn(`Not applying version ${durable.heldBack.version} again, because it was rolled back. Change the file or apply it on request.`);
+    return;
+  }
+  const report = await applyDesiredState(read.input, { reconcileRuntime: false });
+  if (report.outcome === 'invalid' || report.outcome === 'failed') log.error(`Desired state not applied: ${report.message}`);
+  else log.info(report.message);
 }
 
 /**

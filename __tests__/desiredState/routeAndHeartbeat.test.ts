@@ -13,7 +13,8 @@ import { applyDesiredState } from '@/backend/services/desiredState';
 import { sendDesiredStateHeartbeats } from '@/backend/services/desiredState/heartbeat';
 import { loadStatus } from '@/backend/services/desiredState/store';
 import { StorageKey } from '@/shared/types/storage';
-import * as secure from '@/utils/encryption/secure';
+import { authenticate, initializeEncryption } from '@/utils/encryption/secure';
+import { lockServer } from '@/utils/encryption/session';
 import { saveItem } from '@/utils/storage/backend';
 
 jest.setTimeout(60_000);
@@ -43,11 +44,12 @@ function aFile(version: string, overrides: Record<string, unknown> = {}) {
 }
 
 const URL_BASE = 'http://localhost/api/operations/desired-state?workspace=default-workspace';
-const post = (body: unknown, url = URL_BASE) => POST(new NextRequest(url, {
+const post = (body: unknown, host = 'localhost') => POST(new NextRequest(URL_BASE, {
   method: 'POST',
   body: typeof body === 'string' ? body : JSON.stringify(body),
-  headers: { 'content-type': 'application/json' },
+  headers: { 'content-type': 'application/json', host },
 }));
+const get = () => GET(new NextRequest(URL_BASE, { headers: { host: 'localhost' } }));
 
 describe('desired state over the operations route and heartbeat', () => {
   let dataDir: string;
@@ -66,6 +68,7 @@ describe('desired state over the operations route and heartbeat', () => {
     delete process.env.FLUJO_DESIRED_STATE_FILE;
     global.__flujo_flowsCache = null;
     global.__flujo_heartbeat_next_due = undefined;
+    global.__flujo_server_dek = undefined;
   });
 
   afterEach(async () => {
@@ -95,7 +98,7 @@ describe('desired state over the operations route and heartbeat', () => {
       expect(await (await post({ action: 'apply', state: aFile('1') })).json()).toMatchObject({ outcome: 'unchanged' });
       await post({ action: 'apply', state: aFile('2') });
 
-      const overview = await (await GET(new NextRequest(URL_BASE))).json();
+      const overview = await (await get()).json();
       expect(overview.status).toMatchObject({ appliedVersion: '2', lastApplyFailed: false, fileConfigured: false });
       expect(overview.versions.map((entry: { version: string }) => entry.version)).toEqual(['1', '2']);
       expect(overview.managed).toEqual(expect.arrayContaining([{ kind: 'flow', id: 'a-flow' }]));
@@ -138,26 +141,24 @@ describe('desired state over the operations route and heartbeat', () => {
         await (await post({ action: 'dry-run', state: aFile('1') })).text(),
         await (await post({ action: 'apply', state: aFile('1') })).text(),
         await (await post({ action: 'apply', state: aFile('2', { models: [{ id: 'x', name: 'n', provider: 'openai', apiKey: SECRET }] }) })).text(),
-        await (await GET(new NextRequest(URL_BASE))).text(),
+        await (await get()).text(),
       ];
       expect(bodies.join('\n')).not.toContain(SECRET);
     });
 
     it('reports locked storage and never works around it', async () => {
-      const spy = jest.spyOn(secure, 'isEncryptionLocked').mockResolvedValue(true);
-      try {
-        for (const response of [await post({ action: 'apply', state: aFile('1') }), await GET(new NextRequest(URL_BASE))]) {
-          expect(response.status).toBe(423);
-          expect(await response.json()).toMatchObject({ error: 'encryption_locked' });
-        }
-      } finally {
-        spy.mockRestore();
+      await initializeEncryption('a passphrase for this test');
+      lockServer();
+      for (const response of [await post({ action: 'apply', state: aFile('1') }), await get()]) {
+        expect(response.status).toBe(423);
+        expect(await response.json()).toMatchObject({ error: 'encryption_locked' });
       }
-      expect((await (await GET(new NextRequest(URL_BASE))).json()).status.appliedVersion).toBeNull();
+      await authenticate('a passphrase for this test');
+      expect((await (await get()).json()).status.appliedVersion).toBeNull();
     });
 
     it('refuses a caller from elsewhere before touching storage', async () => {
-      const response = await post({ action: 'apply', state: aFile('1') }, 'http://192.0.2.10/api/operations/desired-state');
+      const response = await post({ action: 'apply', state: aFile('1') }, '192.0.2.10');
 
       expect(response.status).toBeGreaterThanOrEqual(400);
       expect(response.status).toBeLessThan(500);
@@ -265,12 +266,11 @@ describe('desired state over the operations route and heartbeat', () => {
 
     it('reports a locked workspace as locked', async () => {
       process.env.FLUJO_HEARTBEAT_URL = address;
-      const spy = jest.spyOn(secure, 'isEncryptionLocked').mockResolvedValue(true);
-      try {
-        await sendDesiredStateHeartbeats();
-      } finally {
-        spy.mockRestore();
-      }
+      await initializeEncryption('a passphrase for this test');
+      lockServer();
+
+      await sendDesiredStateHeartbeats();
+
       expect(received[0].body.status).toBe('locked');
     });
 

@@ -19,7 +19,8 @@ import { mcpService } from '@/backend/services/mcp';
 import { modelService } from '@/backend/services/model';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { StorageKey, type Settings } from '@/shared/types/storage';
-import * as secure from '@/utils/encryption/secure';
+import { authenticate, initializeEncryption, isEncryptionLocked } from '@/utils/encryption/secure';
+import { lockServer } from '@/utils/encryption/session';
 import { compileFlowSpec } from '@/utils/shared/flowSpecCompiler';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { runWithWorkspace, workspaceExists } from '@/utils/workspace';
@@ -299,7 +300,7 @@ describe('desired state', () => {
       ['a schedule for a flow nobody has', { plannedExecutions: [{ id: 'p', name: 'P', flowId: 'nobody', enabled: false, prompt: 'x', trigger: { type: 'schedule', cron: '0 3 * * *' } }] }, /neither in this file nor on this instance/],
       ['a broken schedule', { plannedExecutions: [{ id: 'p', name: 'P', flowId: 'first-flow', enabled: false, prompt: 'x', trigger: { type: 'schedule', cron: 'whenever' } }] }, /.+/],
       ['a webhook, which needs a secret token', { plannedExecutions: [{ id: 'p', name: 'P', flowId: 'first-flow', enabled: false, prompt: 'x', trigger: { type: 'webhook', token: 'x' } }] }, /secret token/],
-      ['a file for another workspace', { workspace: 'somewhere-else' }, /not for "default-workspace"/],
+      ['a file for another workspace', { workspace: 'somewhere-else' }, /not for .*default-workspace/],
       ['a later file format', { schemaVersion: 99 }, /reads version 1/],
       ['a wider network without owner access', { settings: { network: { exposure: 'network' } } }, /refuse to start/],
     ];
@@ -350,11 +351,14 @@ describe('desired state', () => {
       await apply(baseFile('1'));
       const before = await snapshotOfInstance();
       const realSave = flowService.saveFlow.bind(flowService);
-      const spy = jest.spyOn(flowService, 'saveFlow').mockImplementation(async (flow, options) => (
-        flow.id === 'second-flow' && !spy.mock.calls.some(([saved]) => saved.id === 'restored-marker')
-          ? { success: false, error: 'the disk said no' }
-          : realSave(flow, options)
-      ));
+      let failures = 1;
+      const spy = jest.spyOn(flowService, 'saveFlow').mockImplementation(async (flow, options) => {
+        if (flow.id === 'second-flow' && failures > 0) {
+          failures -= 1;
+          return { success: false, error: 'the disk said no' };
+        }
+        return realSave(flow, options);
+      });
       try {
         // Second flow fails after the settings, model, server and first flow were written.
         const report = await apply(baseFile('2', {
@@ -376,6 +380,43 @@ describe('desired state', () => {
       const overview = await getDesiredStateOverview();
       expect(overview.status).toMatchObject({ appliedVersion: '1', lastApplyFailed: true, lastFailureCode: 'write-failed' });
       expect(overview.interruptedApplyWaiting).toBe(false);
+    });
+
+    it('says so plainly when putting back fails too, and the next attempt recovers', async () => {
+      await apply(baseFile('1'));
+      const realSave = flowService.saveFlow.bind(flowService);
+      let refusing = true;
+      const spy = jest.spyOn(flowService, 'saveFlow').mockImplementation(async (flow, options) => (
+        refusing && flow.id === 'second-flow' ? { success: false, error: 'the disk said no' } : realSave(flow, options)
+      ));
+      const version2 = baseFile('2', { flows: [
+        { id: 'first-flow', spec: simpleSpec('first_flow', 'half way') },
+        { id: 'second-flow', spec: simpleSpec('second_flow', 'never written') },
+      ] });
+      try {
+        const report = await apply(version2);
+
+        expect(report.outcome).toBe('failed');
+        expect(report.message).toContain('Putting everything back failed');
+        const overview = await getDesiredStateOverview();
+        expect(overview.interruptedApplyWaiting).toBe(true);
+        expect(overview.status).toMatchObject({ interruptedApply: 'needs-attention', lastFailureCode: 'restore-failed', lastApplyFailed: true });
+
+        // Nothing new starts on top of an unfinished update, and a dry run says why.
+        expect((await dryRun(version2)).message).toContain('interrupted');
+
+        // The disk recovers. The next attempt finishes the update it found.
+        refusing = false;
+        const recovered = await apply(version2);
+
+        expect(recovered.outcome).toBe('unchanged');
+      } finally {
+        spy.mockRestore();
+      }
+      const overview = await getDesiredStateOverview();
+      expect(overview.interruptedApplyWaiting).toBe(false);
+      expect(overview.status).toMatchObject({ appliedVersion: '2', lastApplyFailed: false });
+      expect(await answerOf('second-flow')).toBe('never written');
     });
   });
 
@@ -441,7 +482,7 @@ describe('desired state', () => {
       expect((await rollback()).outcome).toBe('rolled-back');
 
       expect(await answerOf('first-flow')).toBe('first answer');
-      expect((await flowService.getFlow('first-flow'))?.description).not.toContain('edit');
+      expect((await flowService.getFlow('first-flow'))?.description ?? '').not.toContain('edit');
     });
 
     it('can be previewed without changing anything', async () => {
@@ -454,7 +495,7 @@ describe('desired state', () => {
       expect(preview.outcome).toBe('would-roll-back');
       expect(preview.changes).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: 'flow', id: 'third-flow', action: 'delete' }),
-        expect.objectContaining({ kind: 'flow', id: 'second-flow', action: 'recreate' }),
+        expect.objectContaining({ kind: 'flow', id: 'second-flow', action: 'create' }),
       ]));
       expect(await snapshotOfInstance()).toEqual(before);
       expect((await getDesiredStateOverview()).status.appliedVersion).toBe('2');
@@ -896,21 +937,41 @@ describe('desired state', () => {
   });
 
   describe('locked storage', () => {
-    it('is reported and never worked around', async () => {
-      await apply(baseFile('1'));
-      const spy = jest.spyOn(secure, 'isEncryptionLocked').mockResolvedValue(true);
-      try {
-        const before = await snapshotOfInstance();
-        const reports = [await apply(baseFile('2')), await dryRun(baseFile('2')), await rollback()];
+    const passphrase = 'a passphrase for this test';
 
-        for (const report of reports) {
-          expect(report.outcome).toBe('locked');
-          expect(report.message).toContain('Nothing was changed');
-        }
-        expect(await snapshotOfInstance()).toEqual(before);
-      } finally {
-        spy.mockRestore();
+    afterEach(() => {
+      global.__flujo_server_dek = undefined;
+    });
+
+    it('is reported and never worked around', async () => {
+      expect(await initializeEncryption(passphrase)).toBe(true);
+      await authenticate(passphrase);
+      await apply(baseFile('1'));
+      await apply(baseFile('2'));
+      const before = await snapshotOfInstance();
+      lockServer();
+      expect(await isEncryptionLocked()).toBe(true);
+
+      const reports = [await apply(baseFile('3')), await dryRun(baseFile('3')), await rollback(), await rollback(true)];
+
+      for (const report of reports) {
+        expect(report.outcome).toBe('locked');
+        expect(report.message).toContain('Nothing was changed');
       }
+      expect(await snapshotOfInstance()).toEqual(before);
+    });
+
+    it('works again after the real unlock, with the secret under that encryption', async () => {
+      expect(await initializeEncryption(passphrase)).toBe(true);
+      lockServer();
+      expect((await apply(baseFile('1'))).outcome).toBe('locked');
+      expect(await modelService.loadModels()).toEqual([]);
+
+      await authenticate(passphrase);
+
+      expect((await apply(baseFile('1'))).outcome).toBe('applied');
+      // It can read the stored secret back, so the same value is not written again.
+      expect((await apply(baseFile('1'))).outcome).toBe('unchanged');
     });
   });
 

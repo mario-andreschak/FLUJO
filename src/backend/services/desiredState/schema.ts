@@ -307,6 +307,36 @@ function checkPlannedExecutions(state: ParsedDesiredState, problems: DesiredStat
   });
 }
 
+/**
+ * Shapes that are only ever credentials. The package scanner has no rule for these,
+ * because a package author's concern is different.
+ */
+const KEY_SHAPES = [
+  /\bsk-[A-Za-z0-9_-]{20,}/, // OpenAI, Anthropic and others
+  /\bgh[pousr]_[A-Za-z0-9]{30,}/, // GitHub
+  /\bgithub_pat_[A-Za-z0-9_]{30,}/,
+  /\bxox[abprs]-[A-Za-z0-9-]{20,}/, // Slack
+  /\bAKIA[0-9A-Z]{16}\b/, // AWS
+  /\bAIza[0-9A-Za-z_-]{30,}/, // Google
+];
+/**
+ * The package scanner also finds e-mail addresses, file paths and repository links, which
+ * a publisher may want to remove but which are normal here. Only these two kinds are secrets.
+ */
+const SECRET_FINDINGS = new Set(['token', 'url-cred']);
+
+/** Where the file holds something that looks like a secret value. Never what it found. */
+function locationsOfSecrets(targets: ScanTarget[]): string[] {
+  const found = new Set<string>();
+  for (const proposal of detectHeuristicSecrets(targets)) {
+    if (SECRET_FINDINGS.has(proposal.kind)) found.add(proposal.location);
+  }
+  for (const target of targets) {
+    if (KEY_SHAPES.some((shape) => shape.test(target.text))) found.add(target.location);
+  }
+  return [...found];
+}
+
 /** Every text in the file, except the fields already checked as credentials. */
 function scanTargets(value: unknown, location: string, out: ScanTarget[]): void {
   if (typeof value === 'string') {
@@ -373,8 +403,7 @@ export function parseDesiredState(input: unknown): ParseResult {
   const targets: ScanTarget[] = [];
   scanTargets(input, 'file', targets);
   // Report only where it was found. The text itself must never reach a report or log.
-  const found = [...new Set(detectHeuristicSecrets(targets).map((proposal) => proposal.location))];
-  for (const location of found) {
+  for (const location of locationsOfSecrets(targets)) {
     const message = 'this looks like a secret value. A file may only name a secret: write ${env:NAME} or ${global:NAME}.';
     if (state.policy.secretScan === 'warn') warnings.push(`${location}: ${message}`);
     else problems.push({ where: location, message });
