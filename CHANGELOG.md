@@ -5,6 +5,9 @@
 ### MCP servers
 
 - Stop starting a new process over and over for a server that prints a line on stdout that is not an MCP message, such as an ordinary log line. FLUJO treated that line as a lost connection, forgot the server without stopping it and started another one every few seconds, so the processes piled up. The server now stays connected and the line goes to its log. When a connection really fails, FLUJO stops the old process before it starts a new one.
+### Starting FLUJO
+
+- Keep starting when a data folder is opened by a different FLUJO installation. A copied built-in server links to the dependencies of the installation that first made it, so a second installation on the same data, such as `npx flujo-ai` beside a global install or a moved folder, stopped with "The copied package dependency link is invalid" and started no tools at all. FLUJO now updates its own link. Your edits to those servers stay, and a link in a package FLUJO did not copy is still left alone.
 
 ### Model access
 

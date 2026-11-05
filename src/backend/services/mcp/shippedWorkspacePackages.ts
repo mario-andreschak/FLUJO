@@ -223,6 +223,16 @@ export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, p
   });
 }
 
+/** Only a package FLUJO copied has dependency links FLUJO may rewrite. */
+async function isFlujoCopiedPackage(root: string): Promise<boolean> {
+  try {
+    const marker = JSON.parse(await fs.readFile(path.join(root, TEMPLATE_MARKER), 'utf8'));
+    return marker?.version === 1 && marker?.dependencyPolicy === 'installation-resolution';
+  } catch {
+    return false;
+  }
+}
+
 async function ensureDependencies(root: string, appRoot: string, name: string): Promise<void> {
   const target = path.join(root, 'node_modules');
   const existing = await optionalStat(target);
@@ -233,17 +243,31 @@ async function ensureDependencies(root: string, appRoot: string, name: string): 
   if (existing) {
     if (existing.isSymbolicLink() && layout.sharedRoot
       && await fs.realpath(target).catch(() => '') === layout.sharedRoot) return;
-    if (existing.isDirectory() && !existing.isSymbolicLink()) {
+    const isLinkDirectory = existing.isDirectory() && !existing.isSymbolicLink();
+    if (isLinkDirectory) {
+      let current = true;
       for (const dependency of layout.packages) {
         const link = path.join(target, dependency.name);
         if (!(await optionalStat(link))?.isSymbolicLink()
           || await fs.realpath(link).catch(() => '') !== dependency.directory) {
-          throw new Error('The copied package dependency links are incomplete; existing dependencies were not replaced.');
+          current = false;
+          break;
         }
       }
-      return;
+      if (current) return;
     }
-    throw new Error('The copied package dependency link is invalid; its existing dependencies were not replaced.');
+    // These links point at the installation that made them. The data folder can outlive it
+    // or be shared with another one, such as `npx flujo-ai` beside a global install, and
+    // that must not stop the application from starting. Links are all that is removed here.
+    if (!(await isFlujoCopiedPackage(root))) {
+      throw new Error(isLinkDirectory
+        ? 'The copied package dependency links are incomplete; existing dependencies were not replaced.'
+        : 'The copied package dependency link is invalid; its existing dependencies were not replaced.');
+    }
+    if (isLinkDirectory) await fs.rm(target, { recursive: true, force: true });
+    else await fs.unlink(target).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    });
   }
   try {
     if (layout.sharedRoot) {
