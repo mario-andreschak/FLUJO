@@ -5,6 +5,9 @@ metadata sample for one workspace. The CLI below records it without executing a
 flow, reconciling a scheduler, accepting an approval, starting an MCP server,
 clearing recovery uncertainty or repairing storage.
 
+The sample also holds the counts of the last conversation retention run, see
+[Keeping stored conversations for a limited time](conversation-retention.md).
+
 This is a source implementation for #570. Qualification of exact released
 artifacts and their operator upgrade/rollback exercises, plus the independent
 #564 scorecard review, remain required. Independent source-profile acceptance
