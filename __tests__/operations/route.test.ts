@@ -52,6 +52,27 @@ it('uses worker control authority and never calls scheduler reconciliation/armin
   expect(resolve).not.toHaveBeenCalled(); expect(inspect).toHaveBeenCalledTimes(1);
 });
 
+it('says which desired-state version this workspace is on, and nothing else from that record', async () => {
+  read.mockImplementation(async (relative: string) => (relative === 'db/desired-state/status.json' ? {
+    schemaVersion: 1, appliedVersion: 'v7', appliedAt: '2026-11-05T10:00:00.000Z', lastApplyFailed: true,
+    lastFailureAt: '2026-11-05T11:00:00.000Z', lastFailureCode: 'invalid-file', interruptedApply: 'needs-attention',
+    heldBackVersion: 'v8', localEditsKept: 2, restartRequired: true, somethingPrivate: 'PRIVATE_CONTENT',
+    heartbeat: { lastSentAt: '2026-11-05T12:00:00.000Z', lastOk: false, url: 'PRIVATE_ADDRESS' },
+  } : undefined));
+  const body = await (await GET(request('fixture-control'))).json();
+  expect(body.desiredState).toEqual({
+    schemaVersion: 1, fileConfigured: false, appliedVersion: 'v7', appliedAt: '2026-11-05T10:00:00.000Z', lastAttemptAt: null,
+    lastApplyFailed: true, lastFailureAt: '2026-11-05T11:00:00.000Z', lastFailureCode: 'invalid-file',
+    interruptedApply: 'needs-attention', heldBackVersion: 'v8', localEditsKept: 2, restartRequired: true,
+    heartbeat: { lastSentAt: '2026-11-05T12:00:00.000Z', lastOk: false },
+  });
+  expect(JSON.stringify(body)).not.toMatch(/PRIVATE_CONTENT|PRIVATE_ADDRESS/);
+});
+it('reports no desired-state version on an instance that never used one', async () => {
+  const body = await (await GET(request('fixture-control'))).json();
+  expect(body.desiredState).toMatchObject({ appliedVersion: null, appliedAt: null, lastApplyFailed: false, interruptedApply: 'none' });
+});
+
 it('reports numeric submission pressure without exposing retained inputs or identities', async () => {
   const permit = acquireFlowRunAdmission({ conversationId: 'PRIVATE_CONVERSATION', prompt: 'PRIVATE_PROMPT' });
   try {

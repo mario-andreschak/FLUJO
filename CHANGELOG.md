@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Setting up and updating an instance from a file
+
+- Describe what a workspace should contain in one file: settings, models, MCP servers, flows and planned executions. Name the file with `FLUJO_DESIRED_STATE_FILE`, or use `POST /api/operations/desired-state` to dry-run or apply it. A dry run reports exactly what would change, applying twice changes nothing, anything invalid leaves the instance as it was and says why, and a restart finishes an interrupted update. The file only names secrets, and values never reach a log or a response. Objects from the file are managed and objects a person made are left alone. What happens to an edited managed object, and to an object removed from the file, is a setting. Nothing changes without a file. Not possible from a file yet: webhook triggers and Persona-owned flows. See `docs/features/desired-state.md`.
+- Return a whole workspace to the previous version with one call. The last versions are kept as complete records, 5 unless the file says otherwise, so this does not depend on the per-flow history. The file of the version you left is not applied again by itself. Secret values do not go back, because the old value was never kept.
+- Report in `GET /api/operations/status` which version a workspace is on, when it was applied and whether the last attempt failed, with no content.
+- Add an optional heartbeat, off unless a URL is set. It sends version and status only, with no content.
+
+### Flow steps
+
+- Let a conversation freeze the subflows it can reach when it starts, so it finishes on the versions it began with even if they change or disappear meanwhile. Flows from a desired-state file do this by default. Any other flow behaves as before.
+
 ### Model access
 
 - Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.

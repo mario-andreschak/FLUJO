@@ -60,6 +60,14 @@ the authentication/workspace boundaries and the distinct MCP Apps sandbox
 origin; see [MCP Apps deployment](../features/mcp/apps.md). A single owner bearer
 does not implement user sessions, resource sharing or multi-user isolation.
 
+## Set up and update from a file
+
+An instance can take its configuration from one file, with no hands on it. See
+[Desired state](../features/desired-state.md). `GET /api/operations/status` then
+reports the applied version, when it was applied and whether the last attempt
+failed, under `desiredState`. A failed attempt leaves the applied version in place.
+The inspect CLI below treats a failed attempt as needing attention (exit `2`).
+
 ## Capture an operator sample
 
 Use `scripts/operations-inspect.mjs` from the exact package or pinned source.

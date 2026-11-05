@@ -36,6 +36,7 @@ import {
   saveLastReport,
   updateStatus,
   type BundleRecord,
+  type BundleUndo,
   type ChangeSet,
   type DesiredStateChange,
   type DesiredStateOutcome,
@@ -118,7 +119,7 @@ async function currentHash(kind: LedgerEntry['kind'], id: string): Promise<strin
 }
 
 /** Record the result and remove the journal. Safe to run again after a crash. */
-async function commit(journal: JournalRecord): Promise<void> {
+async function commit(journal: JournalRecord, interrupted = false): Promise<void> {
   const plan = journal.commit;
   if (plan.newRecord) await saveBundleRecord(plan.newRecord);
   const ledger: Record<string, LedgerEntry> = {};
@@ -140,7 +141,7 @@ async function commit(journal: JournalRecord): Promise<void> {
   };
   await saveDurableState(state);
   reachedPoint('after-state');
-  await finishCommit(journal);
+  await finishCommit(journal, interrupted);
 }
 
 /** The part after the state is saved. A journal older than the state resumes from here. */
@@ -223,9 +224,7 @@ async function resumeWithinLock(): Promise<DesiredStateReport | null> {
       return null;
     }
     await executeChangeSet(journal.forward);
-    await commit(journal);
-    await updateStatus({ interruptedApply: 'finished-at-restart' });
-    await saveLastReport({ ...journal.commit.report, message: `An update to version ${journal.version} was interrupted and has now been finished.` });
+    await commit(journal, true);
     return null;
   } catch (error) {
     if (error instanceof SimulatedCrash) throw error;
@@ -238,6 +237,11 @@ async function resumeWithinLock(): Promise<DesiredStateReport | null> {
     await recordFailure(restored ? 'write-failed' : 'restore-failed', report);
     return restored ? null : report;
   }
+}
+
+/** A dry run promises to change nothing, so it does not finish an interrupted update. */
+function interruptedReport(): DesiredStateReport {
+  return makeReport('failed', 'An earlier update was interrupted and is not finished yet. A dry run cannot say what would change until it is. The next apply or start finishes it.', { dryRun: true });
 }
 
 function unavailable(dryRun: boolean): DesiredStateReport | null {
@@ -259,6 +263,21 @@ function changeSummary(plan: OperationPlan): number {
 function keptSentence(plan: OperationPlan): string {
   const kept = plan.changes.filter((change) => change.action === 'keep-local-edit').length;
   return kept ? ` ${kept} object(s) changed on this instance were left as they are.` : '';
+}
+
+/** The older record comes first: a rollback puts back the oldest value it finds. */
+function mergeUndo(older: BundleUndo, newer: BundleUndo): BundleUndo {
+  return {
+    settings: [...older.settings, ...newer.settings],
+    adopted: {
+      secrets: [...older.adopted.secrets, ...newer.adopted.secrets],
+      settings: [...older.adopted.settings, ...newer.adopted.settings],
+      models: [...older.adopted.models, ...newer.adopted.models],
+      mcpServers: [...older.adopted.mcpServers, ...newer.adopted.mcpServers],
+      flows: [...older.adopted.flows, ...newer.adopted.flows],
+      plannedExecutions: [...older.adopted.plannedExecutions, ...newer.adopted.plannedExecutions],
+    },
+  };
 }
 
 /** Check a decoded file, then report what it would change or make those changes. */
@@ -303,6 +322,7 @@ async function applyWithinLock(
   dryRun: boolean,
   reconcileRuntime: boolean,
 ): Promise<DesiredStateReport> {
+  if (dryRun && await loadJournal()) return interruptedReport();
   const stuck = await resumeWithinLock();
   if (stuck) return stuck;
   const durable = await loadDurableState();
@@ -358,6 +378,10 @@ async function applyWithinLock(
 
   const operationSeq = durable.operationSeq + 1;
   const appliedAt = new Date().toISOString();
+  // The same file again, for example to replace a local edit, is not a new version. It
+  // takes over the place of the old record, and what that record could undo stays undoable.
+  const top = durable.history.at(-1);
+  const replaced = top?.version === state.version && top.fileHash === fileHash ? await loadBundleRecord(top.seq) : null;
   const record: BundleRecord = {
     seq: operationSeq,
     version: state.version,
@@ -365,7 +389,7 @@ async function applyWithinLock(
     appliedAt,
     policy: state.policy,
     targets: compiled.targets,
-    undo: plan.undo,
+    undo: replaced ? mergeUndo(replaced.undo, plan.undo) : plan.undo,
   };
   const entry = { seq: operationSeq, version: state.version, fileHash, appliedAt };
   const report = scrub(makeReport('applied', `Version ${state.version} is applied. ${count} object(s) changed, ${plan.unchanged} already matched.${keptSentence(plan)}`, reportOptions), compiled.secretValues);
@@ -383,7 +407,7 @@ async function applyWithinLock(
       keptEntries: plan.keptEntries,
       current: { recordSeq: operationSeq, version: state.version, fileHash, appliedAt, policy: state.policy },
       newRecord: record,
-      history: [...durable.history, entry].slice(-state.policy.keepVersions),
+      history: [...(replaced ? durable.history.slice(0, -1) : durable.history), entry].slice(-state.policy.keepVersions),
       report,
     },
   };
@@ -409,6 +433,7 @@ export async function rollbackDesiredState(options: { dryRun?: boolean; reconcil
 }
 
 async function rollbackWithinLock(dryRun: boolean, reconcileRuntime: boolean): Promise<DesiredStateReport> {
+  if (dryRun && await loadJournal()) return interruptedReport();
   const stuck = await resumeWithinLock();
   if (stuck) return stuck;
   const durable = await loadDurableState();
@@ -531,12 +556,14 @@ export async function applyConfiguredDesiredState(options: { dryRun?: boolean; r
 export async function applyDesiredStateAtStartup(): Promise<void> {
   if (isWorkerMode()) return;
   try {
+    // This start is what a pending restart was waiting for. Anything applied from here
+    // on came after the launcher read its settings, and says so again by itself.
+    if ((await loadStatus()).restartRequired) await updateStatus({ restartRequired: false });
     const stuck = await withWorkspaceRuntimeLock(APPLY_LOCK, () => resumeWithinLock());
-    if (stuck) log.error(stuck.message);
-    // A restart is what a pending restart was waiting for.
-    const status = await loadStatus();
-    if (status.restartRequired) await updateStatus({ restartRequired: false });
-    if (status.interruptedApply === 'none' && stuck) return;
+    if (stuck) {
+      log.error(stuck.message);
+      return;
+    }
 
     const read = await readConfiguredFile();
     if (!read.configured) return;

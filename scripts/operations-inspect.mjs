@@ -42,6 +42,25 @@ export function validateBaseUrl(value) {
   return url;
 }
 
+const desiredStateVersions = /^[\x20-\x7e]{1,128}$/;
+const optionalText = (value, pattern) => (typeof value === 'string' && pattern.test(value) ? value : null);
+
+/** An older endpoint has none. Text is checked too, so nothing else can travel in these fields. */
+function projectDesiredState(input) {
+  if (input === undefined) return undefined;
+  const source = object(input);
+  const timestamp = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/;
+  return {
+    appliedVersion: optionalText(source.appliedVersion, desiredStateVersions),
+    appliedAt: optionalText(source.appliedAt, timestamp),
+    lastApplyFailed: boolean(source.lastApplyFailed),
+    lastFailureAt: optionalText(source.lastFailureAt, timestamp),
+    interruptedApply: oneOf(source.interruptedApply, ['none', 'finished-at-restart', 'restored-at-restart', 'needs-attention']),
+    heldBackVersion: optionalText(source.heldBackVersion, desiredStateVersions),
+    restartRequired: boolean(source.restartRequired),
+  };
+}
+
 /** Re-project every field: a hostile or older endpoint cannot smuggle raw errors/secrets into the report. */
 export function projectSnapshot(input) {
   const source = object(input);
@@ -62,6 +81,7 @@ export function projectSnapshot(input) {
   const memory = object(source.memory);
   return {
     schemaVersion: 2, collectedAt: source.collectedAt, observationProcessId: processId(source.observationProcessId), workspace: source.workspace,
+    ...(source.desiredState === undefined ? {} : { desiredState: projectDesiredState(source.desiredState) }),
     observation: 'non-atomic-diagnostic-sample', complete: boolean(source.complete), truncated: boolean(source.truncated), rowLimit: MAX_ROWS,
     identity: { applicationVersion: identity.applicationVersion, snapshotFormatVersion: count(identity.snapshotFormatVersion),
       layoutVersion: count(identity.layoutVersion), workerProtocolVersion: count(identity.workerProtocolVersion),
@@ -171,7 +191,8 @@ export async function inspectOperations({ baseUrl, workspace, expectedRevision, 
     if (expectedProcessId !== undefined && snapshot.observationProcessId !== expectedProcessId) throw new OperationsInspectError('process-mismatch');
     const revisionMatch = snapshot.identity.revision === expectedRevision;
     const partial = !snapshot.complete || snapshot.truncated || snapshot.probes.some(probe => probe.state === 'unavailable');
-    const attention = partial || !revisionMatch || snapshot.alerts.some(alert => alert.severity === 'warning');
+    const attention = partial || !revisionMatch || snapshot.alerts.some(alert => alert.severity === 'warning')
+      || snapshot.desiredState?.lastApplyFailed === true || snapshot.desiredState?.interruptedApply === 'needs-attention';
     return { exitCode: attention ? 2 : 0, report: { schemaVersion: 2, tool: 'flujo-operations-inspect', expectedRevision,
       ...(expectedProcessId === undefined ? {} : { expectedProcessId }),
       checks: { request: 'authenticated-get-only', revision: revisionMatch ? 'self-report-matches' : snapshot.identity.revision ? 'self-report-mismatch' : 'self-report-missing',
