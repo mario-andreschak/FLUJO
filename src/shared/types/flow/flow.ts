@@ -64,6 +64,12 @@ export interface Flow {
    */
   allowedModels?: string[];
   /**
+   * Days to keep this flow's stored conversations after their last activity. Absent
+   * follows the workspace. Only used once the workspace has retention turned on, and
+   * how it combines with the workspace's period is a workspace setting.
+   */
+  conversationRetentionDays?: number;
+  /**
    * Server-managed last-modified time in epoch milliseconds (#108). Refreshed
    * on every save. Used by the dashboard/card-picker "Newest/Oldest" sort
    * (falls back to createdAt). Optional for the same reasons as createdAt.

@@ -74,7 +74,8 @@ export async function observeHarnessConversation(state: SharedState, admission: 
       const queue = await getQueue(profile.id);
       if (queue.pending.length >= 128) return;
       const output = [...messages].reverse().find(message => message.role === 'assistant' && typeof message.content === 'string')?.content;
-      const observation: HarnessObservation = { id, profileId: profile.id, sourceRunId, createdAt: Date.now(), input,
+      const observation: HarnessObservation = { id, profileId: profile.id, sourceRunId,
+        ...(state.conversationId ? { conversationId: state.conversationId } : {}), createdAt: Date.now(), input,
         output: typeof output === 'string' ? output.slice(0, 32000) : '', tools, messages: structuredClone(history), executionInputs,
         invocation: !state.personaAttribution ? 'flow' : state.personaInstructionContext ? 'persona-activity' : 'persona-behavior',
         source: admission.source,

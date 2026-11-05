@@ -86,6 +86,8 @@ interface InspectorPanelProps {
   onFlowNameChange: (value: string) => void;
   flowDescription: string;
   onFlowDescriptionChange: (value: string) => void;
+  conversationRetentionDays?: number;
+  onConversationRetentionDaysChange: (value: number | undefined) => void;
   authoringMode: FlowAuthoringMode;
   onAuthoringModeChange: (mode: FlowAuthoringMode) => void;
   beginnerMode?: boolean;
@@ -138,6 +140,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onFlowNameChange,
   flowDescription,
   onFlowDescriptionChange,
+  conversationRetentionDays,
+  onConversationRetentionDaysChange,
   authoringMode,
   onAuthoringModeChange,
   beginnerMode = false,
@@ -610,6 +614,24 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               fullWidth
               placeholder={beginnerMode ? t('flows.inspector.agentDescriptionPlaceholder') : t('flows.inspector.flowDescriptionPlaceholder')}
             />
+
+            {!beginnerMode && (
+              <TextField
+                size="small"
+                type="number"
+                label={t('flows.inspector.retentionLabel')}
+                helperText={t('flows.inspector.retentionHelp')}
+                value={conversationRetentionDays ?? ''}
+                slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                onChange={(event) => {
+                  const text = event.target.value.trim();
+                  const next = Number(text);
+                  if (text === '') onConversationRetentionDaysChange(undefined);
+                  else if (Number.isInteger(next) && next >= 0) onConversationRetentionDaysChange(next);
+                }}
+                fullWidth
+              />
+            )}
 
             {!beginnerMode && (
             <Box

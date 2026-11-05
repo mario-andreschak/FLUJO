@@ -320,6 +320,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
   // Optional free-text description shown on the Flow Card (#70).
   const [flowDescription, setFlowDescription] = useState<string>(initialFlow?.description || '');
+  const [retentionDays, setRetentionDays] = useState<number | undefined>(initialFlow?.conversationRetentionDays);
   const flowNames = useMemo(
     () => new Map(allFlows.map((flow) => [flow.id, flow.name])),
     [allFlows],
@@ -516,6 +517,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setEdges(validEdges);
       setFlowName(initialFlow.name);
       setFlowDescription(initialFlow.description || '');
+      setRetentionDays(initialFlow.conversationRetentionDays);
       // Guided mode cannot safely author every graph shape or runtime option.
       // Open those flows directly in Expert view unless the action that opened
       // the builder explicitly requested a view. The guided composer can still
@@ -545,6 +547,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setEdges([]);
       setFlowName(t('flows.page.untitled'));
       setFlowDescription('');
+      setRetentionDays(undefined);
       // Initialize history with the Start node
       const emptyState: HistoryEntry = {
         nodes: [startNode],
@@ -695,6 +698,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         edges,
         folder: initialFlow?.folder,    // Preserve folder assignment
         ...(initialFlow?.allowedModels ? { allowedModels: initialFlow.allowedModels } : {}),
+        ...(retentionDays !== undefined ? { conversationRetentionDays: retentionDays } : {}),
         favorite: initialFlow?.favorite, // Preserve favorite status
       };
 
@@ -732,7 +736,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       }
     });
     return savePromise;
-  }, [flowName, flowDescription, nodes, edges, initialFlow, onSave]);
+  }, [flowName, flowDescription, retentionDays, nodes, edges, initialFlow, onSave]);
 
   const handleTry = useCallback(async () => {
     if (!onTry) return;
@@ -785,6 +789,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(filterInvalidEdges(info.flow.edges || []));
     setFlowName(info.flow.name);
     setFlowDescription(info.flow.description || '');
+    setRetentionDays(info.flow.conversationRetentionDays);
     setFlowNameError(validateFlowName(info.flow.name));
     setHasUnsavedChanges(true);
 
@@ -835,6 +840,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(filterInvalidEdges(restored.edges || []));
     setFlowName(restored.name);
     setFlowDescription(restored.description || '');
+    setRetentionDays(restored.conversationRetentionDays);
     setFlowNameError(validateFlowName(restored.name));
     setHasUnsavedChanges(true);
     setImproveNotice({
@@ -858,6 +864,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       folder: initialFlow?.folder,
       favorite: initialFlow?.favorite,
       ...(initialFlow?.allowedModels ? { allowedModels: initialFlow.allowedModels } : {}),
+      ...(retentionDays !== undefined ? { conversationRetentionDays: retentionDays } : {}),
     };
     const { flow: repaired, changes } = autoRepairFlow(currentFlow);
     if (changes.length === 0) {
@@ -878,7 +885,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       severity: 'success',
       message: t('flows.builder.repaired', { changes: formatList(parts) }),
     });
-  }, [initialFlow, flowName, flowDescription, nodes, edges, filterInvalidEdges, formatList, t, tp]);
+  }, [initialFlow, flowName, flowDescription, retentionDays, nodes, edges, filterInvalidEdges, formatList, t, tp]);
 
   // AI-supported repair: pre-seed the AI-Improve dialog with the repair instruction and open
   // it, so model selection / install opt-in / result handling are all reused.
@@ -900,6 +907,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       nodes: flowToCopy.nodes,
       edges: flowToCopy.edges,
       ...(flowToCopy.allowedModels ? { allowedModels: flowToCopy.allowedModels } : {}),
+      ...(flowToCopy.conversationRetentionDays !== undefined ? { conversationRetentionDays: flowToCopy.conversationRetentionDays } : {}),
       folder: flowToCopy.folder,    // Preserve folder assignment
       favorite: flowToCopy.favorite, // Preserve favorite status
     };
@@ -952,6 +960,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         folder: initialFlow?.folder,
         favorite: initialFlow?.favorite,
         ...(initialFlow?.allowedModels ? { allowedModels: initialFlow.allowedModels } : {}),
+        ...(retentionDays !== undefined ? { conversationRetentionDays: retentionDays } : {}),
       };
       const saved = (await onSave(flow)) !== false;
       if (!saved) {
@@ -2425,6 +2434,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           flowDescription={flowDescription}
           onFlowDescriptionChange={(value) => {
             setFlowDescription(value);
+            markDirty();
+          }}
+          conversationRetentionDays={retentionDays}
+          onConversationRetentionDaysChange={(value) => {
+            setRetentionDays(value);
             markDirty();
           }}
           authoringMode={authoringMode}

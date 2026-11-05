@@ -208,6 +208,53 @@ export async function appendRunRecord(
   }
 }
 
+/**
+ * Remove the stored text (final output and error message) from matching rows. The
+ * row itself stays, with its status and times, so run history and counts still add
+ * up. Rows waiting for approval or owned by a Persona are never changed.
+ * Returns how many rows changed.
+ */
+export async function scrubRunRecordText(
+  executionId: string,
+  matches: (record: RunRecord) => boolean,
+): Promise<number> {
+  const chainKey = workspaceCacheKey(executionId);
+  const previous = appendChains.get(chainKey) ?? Promise.resolve();
+  let changed = 0;
+  const scrub = bindToCurrentWorkspace(() => withPersonaRuntimeLock(
+    TERMINAL_PUBLICATION_LOCK_ID,
+    async (lock) => {
+      const stored = await loadItem<unknown>(runsKey(executionId), []);
+      if (!Array.isArray(stored)) return;
+      const records = (stored as RunRecord[]).map((record) => {
+        if (record.status === 'needs_approval' || record.personaId || record.personaArchived) return record;
+        if ((record.outputText === undefined && record.error === undefined) || !matches(record)) return record;
+        changed += 1;
+        const { outputText: _outputText, error: _error, ...kept } = record;
+        return kept;
+      });
+      if (changed === 0) return;
+      await lock.assertOwned();
+      await saveItem(runsKey(executionId), records);
+    },
+  ));
+  const run = previous
+    .catch(() => { /* prior append's error surfaced to its own caller */ })
+    .then(scrub);
+  appendChains.set(chainKey, run);
+  try {
+    await run;
+  } finally {
+    if (appendChains.get(chainKey) === run) {
+      appendChains.delete(chainKey);
+    }
+  }
+  return changed;
+}
+
+/** Every planned execution that has a run history here. */
+export const listRunHistoryExecutions = listRunHistoryExecutionIds;
+
 export interface StableRunRecordUpsertResult {
   /** The one canonical history row for this stable delivery/run id. */
   record: RunRecord;

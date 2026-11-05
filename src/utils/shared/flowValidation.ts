@@ -22,6 +22,7 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 import { CONDITION_SOURCE_NODE_TYPES, EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { modelsOutsideBoundary, stepModelIds } from './flowModelBoundary';
 import { modelDecisionIssues } from './modelDecision';
+import { isValidRetentionDays } from '@/shared/types/conversationRetention';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
 import {
@@ -106,6 +107,7 @@ export interface VFlow {
   id?: string;
   name?: string;
   allowedModels?: string[];
+  conversationRetentionDays?: unknown;
   nodes: VNode[];
   edges: VEdge[];
 }
@@ -937,6 +939,13 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         node
       );
     }
+  }
+
+  // --- Conversation retention ---
+  // A wrong value is treated as not set at run time, which would quietly keep text
+  // longer than the author meant, so say so when the flow is checked.
+  if (flow?.conversationRetentionDays !== undefined && !isValidRetentionDays(flow.conversationRetentionDays)) {
+    add('error', 'invalid-conversation-retention', 'Keep conversations for (days) must be a whole number, 0 or more.');
   }
 
   // --- Allowed models ---

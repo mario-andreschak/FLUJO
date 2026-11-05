@@ -56,6 +56,8 @@ declare global {
   // Next.js hot-reload / duplicate module instantiation can't arm it twice
   // (mirrors __flujo_run_resources / the scheduler singletons).
   var __flujo_retention_cron: Cron | undefined;
+  // Stored conversations past their retention period. Costs almost nothing while off.
+  var __flujo_conversation_retention_cron: Cron | undefined;
   var __flujo_subflow_task_retention_cron: Cron | undefined;
   // Hourly retention/expiry sweep for durable REMOTE MCP task records (#404).
   var __flujo_mcp_remote_task_retention_cron: Cron | undefined;
@@ -214,6 +216,17 @@ function armRetentionSweep(): void {
       void sweepEveryWorkspace('run-resource', () => sweepOldRunResources());
     });
     log.info('Armed run-resource retention sweep (hourly)');
+  }
+  // Stored conversations: at start (after a minute, so startup comes first) and then
+  // hourly. Also finishes any deletion a restart interrupted, with retention on or off.
+  if (!global.__flujo_conversation_retention_cron) {
+    const sweepConversations = async () => {
+      const { runConversationRetention } = await import('@/backend/services/conversations/retention');
+      await sweepEveryWorkspace('conversation', () => runConversationRetention());
+    };
+    global.__flujo_conversation_retention_cron = new Cron('23 * * * *', { unref: true }, () => { void sweepConversations(); });
+    setTimeout(() => { void sweepConversations(); }, 60_000).unref?.();
+    log.info('Armed conversation retention sweep (at start and hourly)');
   }
   if (!global.__flujo_subflow_task_retention_cron) {
     global.__flujo_subflow_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {

@@ -7,24 +7,17 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
-import {
-  deleteConversationLog,
-  recoverConversationTranscript,
-} from '@/backend/execution/flow/conversationLog';
+import { recoverConversationTranscript } from '@/backend/execution/flow/conversationLog';
 import { SharedState } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem } from '@/utils/storage/backend'; // Import saveItem
 import { StorageKey } from '@/shared/types/storage';
 import { ConversationListItem } from '@/frontend/components/Chat'; // Import for response type
 import { buildContextInfo } from '@/backend/execution/flow/conversationContextInfo';
-import { isQuickChatFlowId, quickChatFlowId } from '@/utils/shared/quickChat';
-import { deleteRunResources } from '@/backend/services/runResources';
-import { deleteModelTurnArchive } from '@/backend/execution/flow/modelTurnArchive';
-import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
-import { deleteCollectionItem } from '@/utils/storage/backend';
+import { isQuickChatFlowId } from '@/utils/shared/quickChat';
+import { deleteConversationCompletely } from '@/backend/services/conversations/deletion';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 import { deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import {
-  deleteConversationSummary,
   persistConversationSummary,
   persistConversationSummaryStrict,
 } from '@/backend/execution/flow/conversationSummaryStore';
@@ -533,95 +526,30 @@ async function DELETE_handler(
     return NextResponse.json({ error: 'Invalid conversationId' }, { status: 400 });
   }
 
-  // A running legacy execution already holds the conversation lease. Preserve
-  // tombstone-first cancellation so DELETE does not wait for an unbounded run
-  // before it can request shutdown; ownership is still re-read authoritatively
-  // after the lease is acquired and no destructive write happens before then.
-  const preLockLiveState = FlowExecutor.conversationStates.get(conversationId);
-  let tombstonedBeforeLock = false;
-  if (
-    preLockLiveState?.status === 'running'
-    && !isPersonaOwnedConversationState(preLockLiveState)
-  ) {
-    markConversationDeleted(conversationId);
-    tombstonedBeforeLock = true;
-    preLockLiveState.isCancelled = true;
-  }
-
-  return withConversationExecutionLock(conversationId, async () => {
-    try {
-    const existingState = FlowExecutor.conversationStates.get(conversationId)
-      ?? await loadItemBackend<SharedState | undefined>(
-        `conversations/${conversationId}` as StorageKey,
-        undefined,
-      );
-    if (existingState && isPersonaOwnedConversationState(existingState)) {
-      if (tombstonedBeforeLock) unmarkConversationDeleted(conversationId);
-      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
-      if (personaNotLocal) return personaNotLocal;
-      const conflict = await personaConversationDeleteConflict(existingState, conversationId);
-      if (conflict) return NextResponse.json({ error: conflict }, { status: 409 });
-    }
-    // Tombstone FIRST: from here on, the persistence chokepoint and the
-    // conversation-log tap refuse this id, so an in-flight run can no longer
-    // re-write ("resurrect") the files we are about to remove. Rolled back in
-    // the catch below if the delete fails.
-    if (!tombstonedBeforeLock) markConversationDeleted(conversationId);
-
-    // Stop any in-flight run and clean up the in-memory state. The running
-    // loop holds a closure reference to this same state object, so setting the
-    // flag reaches it. While the run is 'running' the entry must STAY in the
-    // map: descendant subflows walk it for ancestor cancellation, and runFlow's
-    // final cleanup drops it (tombstoned ids are never re-registered).
-    const inMemoryState = FlowExecutor.conversationStates.get(conversationId);
-    if (inMemoryState) {
-      inMemoryState.isCancelled = true;
-      if (inMemoryState.status !== 'running') {
-        FlowExecutor.conversationStates.delete(conversationId);
-      }
-      log.debug(`Cancelled and cleaned up in-memory conversation state`, { requestId, conversationId, status: inMemoryState.status });
-    }
-
-    // Delete the state file through the storage layer: same path derivation as
-    // every writer (the old hand-built process.cwd() path missed the real file
-    // whenever FLUJO_DATA_DIR was set, so conversations "reappeared"), and the
-    // per-key write chain serializes the unlink behind any in-flight persist of
-    // the same conversation. A missing file is treated as already deleted.
-    await deleteCollectionItem('conversations', conversationId);
-    await deleteConversationSummary(conversationId);
+  try {
+    // The whole removal lives in one place, shared with bulk delete and the retention sweep.
+    const result = await deleteConversationCompletely<Response>(conversationId, {
+      cancelRunning: true,
+      guard: async (existingState) => {
+        if (!existingState || !isPersonaOwnedConversationState(existingState)) return undefined;
+        const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+        if (personaNotLocal) return personaNotLocal;
+        const conflict = await personaConversationDeleteConflict(existingState, conversationId);
+        return conflict ? NextResponse.json({ error: conflict }, { status: 409 }) : undefined;
+      },
+    });
+    if (!result.deleted) return result.refusal;
     log.info(`Deleted conversation state from storage`, { requestId, conversationId });
-
-    // A Quick-Chat (issue #61) carried its flow as an in-memory snapshot compiled
-    // under the namespaced id quickchat-<conversationId>; evict that cache entry
-    // so snapshots don't accumulate. Targeted by id, so it can never evict a
-    // real (shared) flow's compiled cache.
-    FlowExecutor.clearFlowCache(quickChatFlowId(conversationId));
-
-    // Remove the append-only conversation log alongside the state (idempotent).
-    await deleteConversationLog(conversationId);
-
-    // Remove exact historical SDK-request sidecars and their archived media.
-    await deleteModelTurnArchive(conversationId);
-
-    // Remove the conversation's run-scoped resources (Tier 3; idempotent).
-    await deleteRunResources(conversationId);
-
     return new Response(null, { status: 204 }); // Success, No Content
-
-    } catch (error) {
-
-      if (error instanceof ConversationLogReadPressureError) throw error;
-      // The conversation still exists (delete failed) — clear the tombstone so
-      // it isn't left permanently unpersistable/unloggable.
-      unmarkConversationDeleted(conversationId);
-      log.error('Error deleting conversation', {
-        requestId,
-        conversationId,
-        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, code: (error as NodeJS.ErrnoException).code } : error
-      });
-      return NextResponse.json({ error: 'Failed to delete conversation' }, { status: 500 });
-    }
-  });
+  } catch (error) {
+    if (error instanceof ConversationLogReadPressureError) throw error;
+    log.error('Error deleting conversation', {
+      requestId,
+      conversationId,
+      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, code: (error as NodeJS.ErrnoException).code } : error
+    });
+    return NextResponse.json({ error: 'Failed to delete conversation' }, { status: 500 });
+  }
 }
 
 export const GET = withWorkspaceRoute(GET_handler);

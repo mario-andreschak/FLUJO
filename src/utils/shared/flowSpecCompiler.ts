@@ -40,6 +40,7 @@ import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
 import { decisionRuleIssues, type DecisionRule } from './decisionRules';
 import { modelDecisionIssues, type DecisionQuestion } from './modelDecision';
+import { isValidRetentionDays } from '@/shared/types/conversationRetention';
 import { isValidRunVarName } from './resolveRunVars';
 import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TARGETS, EdgeCondition, EdgeConditionTarget, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
@@ -339,6 +340,8 @@ export interface FlowSpec {
   description?: string;
   /** The only models this flow and its subflows may send data to, by id or name. */
   allowedModels?: string[];
+  /** Days to keep this flow's stored conversations. Used only when the workspace has retention on. */
+  conversationRetentionDays?: number;
   nodes: FlowSpecNode[];
   edges: FlowSpecEdge[];
 }
@@ -1384,11 +1387,16 @@ export function compileFlowSpec(
       }
     }
 
+    if (levelSpec?.conversationRetentionDays !== undefined && !isValidRetentionDays(levelSpec.conversationRetentionDays)) {
+      issues.push({ severity: 'error', code: 'invalid-conversation-retention', message: 'conversationRetentionDays must be a whole number of days, 0 or more.' });
+    }
+
     const flow: Flow = {
       id: flowId,
       name: flowName,
       ...(levelSpec?.description ? { description: levelSpec.description } : {}),
       ...(levelSpec?.allowedModels !== undefined ? { allowedModels } : {}),
+      ...(levelSpec?.conversationRetentionDays !== undefined ? { conversationRetentionDays: levelSpec.conversationRetentionDays } : {}),
       nodes: flowNodes,
       edges,
     };
@@ -1846,6 +1854,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
     ...(flow?.name ? { name: flow.name } : {}),
     ...(flow?.description ? { description: flow.description } : {}),
     ...(flow?.allowedModels ? { allowedModels: flow.allowedModels } : {}),
+    ...(flow?.conversationRetentionDays !== undefined ? { conversationRetentionDays: flow.conversationRetentionDays } : {}),
     nodes: specNodes,
     edges: specEdges,
   };

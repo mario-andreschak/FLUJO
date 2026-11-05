@@ -115,6 +115,7 @@ const FlowSnapshotInputSchema = z.object({
   behaviorRules: z.array(BehaviorRuleSchema).max(10_000).optional(),
   permissionRules: z.array(BehaviorRuleSchema).max(10_000).optional(),
   allowedModels: z.array(z.string().min(1).max(512)).max(1_000).optional(),
+  conversationRetentionDays: z.number().int().min(0).max(36_500).optional(),
   nodes: z.array(FlowNodeSchema).max(10_000),
   edges: z.array(FlowEdgeSchema).max(50_000),
   input: z.string().max(64).optional(),

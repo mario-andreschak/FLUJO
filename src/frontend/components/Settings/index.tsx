@@ -44,6 +44,8 @@ import OnboardingSettings from './OnboardingSettings';
 import ExperimentalFeaturesSettings from './ExperimentalFeaturesSettings';
 import PrivacySettings from './PrivacySettings';
 import ModelAccessSettings from './ModelAccessSettings';
+import ConversationRetentionSettings from './ConversationRetentionSettings';
+import AutoDeleteRoundedIcon from '@mui/icons-material/AutoDeleteRounded';
 import LanguageSettings from './LanguageSettings';
 import NetworkExposureSettings from './NetworkExposureSettings';
 import RuntimeEnvironmentSettings from './RuntimeEnvironmentSettings';
@@ -63,6 +65,7 @@ type SettingsSectionId =
   | 'onboarding'
   | 'updates'
   | 'privacy'
+  | 'conversationRetention'
   | 'experimental';
 
 interface SettingsSection {
@@ -166,6 +169,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     component: PrivacySettings,
   },
   {
+    id: 'conversationRetention',
+    titleKey: 'settings.section.conversationRetention',
+    descriptionKey: 'settings.section.conversationRetentionDescription',
+    icon: AutoDeleteRoundedIcon,
+    component: ConversationRetentionSettings,
+  },
+  {
     id: 'experimental',
     titleKey: 'settings.section.experimental',
     descriptionKey: 'settings.section.experimentalDescription',
@@ -191,7 +201,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: 'system',
     titleKey: 'settings.category.system',
     descriptionKey: 'settings.category.systemDescription',
-    sectionIds: ['updates', 'privacy', 'experimental'],
+    sectionIds: ['updates', 'privacy', 'conversationRetention', 'experimental'],
   },
 ];
 

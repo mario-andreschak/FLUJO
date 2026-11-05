@@ -11,7 +11,6 @@ import { Flow } from '@/shared/types/flow';
 import {
   saveCollectionItem,
   assertSafeCollectionId,
-  deleteCollectionItem,
   loadCollectionItem,
 } from '@/utils/storage/backend';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
@@ -19,20 +18,18 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { ConversationLogReadPressureError, CONVERSATION_LOG_READ_CONCURRENCY } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
-import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
+import { unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
-import { deleteRunResources } from '@/backend/services/runResources';
-import { isQuickChatFlowId, quickChatFlowId } from '@/utils/shared/quickChat';
+import { buildConversationDeletionIndex, deleteConversationCompletely } from '@/backend/services/conversations/deletion';
+import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import { isQuickChatEnabled, QUICK_CHAT_DISABLED_CODE, QUICK_CHAT_DISABLED_MESSAGE } from '@/backend/services/workspace/modelAccess';
 import { DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { collectPinnedConversationIds } from '@/utils/shared/conversationPins';
-import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 import type { StorageKey } from '@/shared/types/storage';
 import {
   conversationSidebarTitle,
-  deleteConversationSummary,
   listConversationSummaries,
   persistConversationSummary,
   persistConversationSummaryStrict,
@@ -914,52 +911,24 @@ async function DELETE_handler(req: NextRequest) {
   const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
   let deleted = 0, errors = 0;
   const retryableIds: string[] = [];
+  const index = await buildConversationDeletionIndex();
   const removeOne = async (rawId: unknown) => {
     if (typeof rawId !== 'string' || !SAFE_ID.test(rawId)) { errors++; return; }
     const id = rawId;
-    // Preserve tombstone-first cancellation for an already-running legacy
-    // execution, which owns this same lease until it observes cancellation.
-    const preLockLiveState = FlowExecutor.conversationStates.get(id);
-    let tombstonedBeforeLock = false;
-    if (
-      preLockLiveState?.status === 'running'
-      && !isPersonaOwnedConversationState(preLockLiveState)
-    ) {
-      markConversationDeleted(id);
-      tombstonedBeforeLock = true;
-      preLockLiveState.isCancelled = true;
-    }
     try {
-      await withConversationExecutionLock(id, async () => {
-        const existingState = FlowExecutor.conversationStates.get(id)
-          ?? await loadCollectionItem<SharedState | undefined>('conversations', id, undefined);
-        if (isPersonaOwnedConversationState(existingState)) {
-          if (tombstonedBeforeLock) unmarkConversationDeleted(id);
-          // Every Persona marker, including a pending target or anonymized
-          // archive, is lifecycle-owned. Exposure authorization does not grant
-          // generic deletion rights.
-          errors++;
-          return;
-        }
-        if (!tombstonedBeforeLock) markConversationDeleted(id);
-        const mem = FlowExecutor.conversationStates.get(id);
-        if (mem) {
-          mem.isCancelled = true;
-          // A 'running' entry must stay in the map for descendant cancellation;
-          // runFlow's final cleanup drops it (tombstoned ids never re-register).
-          if (mem.status !== 'running') FlowExecutor.conversationStates.delete(id);
-        }
-        await deleteCollectionItem('conversations', id);
-        await deleteConversationLog(id);
-        await deleteRunResources(id);
-        await deleteConversationSummary(id);
-        FlowExecutor.clearFlowCache(quickChatFlowId(id));
-        deleted++;
+      const result = await deleteConversationCompletely<'persona'>(id, {
+        // Preserve tombstone-first cancellation for an already-running legacy
+        // execution, which owns this same lease until it observes cancellation.
+        cancelRunning: true,
+        index,
+        // Every Persona marker, including a pending target or anonymized
+        // archive, is lifecycle-owned. Exposure authorization does not grant
+        // generic deletion rights.
+        guard: state => isPersonaOwnedConversationState(state) ? 'persona' : undefined,
       });
+      if (result.deleted) deleted++;
+      else errors++;
     } catch (err) {
-      // Delete failed — clear the tombstone so the surviving conversation is
-      // still persistable/loggable.
-      unmarkConversationDeleted(id);
       if (err instanceof ConversationLogReadPressureError) retryableIds.push(id);
       log.error('Failed to delete conversation in bulk', { requestId, id, err });
       errors++;

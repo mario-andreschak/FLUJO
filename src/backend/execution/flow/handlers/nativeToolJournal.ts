@@ -359,6 +359,50 @@ export async function markNativeToolEffectMayHaveStarted(entry: ToolReceipt): Pr
   });
 }
 
+const SAFE_INVOCATION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** Which conversation each native call belongs to. A call counts as resolved only once terminal. */
+export async function listNativeInvocationOwners(): Promise<Array<{ invocationId: string; conversationId: string; resolved: boolean }>> {
+  const directory = path.join(root(), 'calls');
+  const names = await fs.readdir(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [] as string[];
+    throw error;
+  });
+  const owners: Array<{ invocationId: string; conversationId: string; resolved: boolean }> = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    // One unreadable record must not stop a deletion or a retention sweep.
+    const call = await readJson<NativeInvocationReceipt>(path.join(directory, name)).catch(() => undefined);
+    const invocationId = name.slice(0, -'.json'.length);
+    if (call?.invocationId === invocationId && SAFE_INVOCATION_ID.test(invocationId) && call.owner?.conversationId) {
+      owners.push({ invocationId, conversationId: call.owner.conversationId, resolved: call.state === 'terminal' });
+    }
+  }
+  return owners;
+}
+
+/**
+ * Remove the stored tool results and session material of finished native calls. A
+ * call with an unknown effect keeps its records, because they are what prevents the
+ * same action from running twice.
+ */
+export async function deleteNativeInvocationRecords(conversationId: string, invocationIds: readonly string[]): Promise<void> {
+  if (invocationIds.length === 0) return;
+  await withNativeScopeMutation(conversationId, async () => {
+    for (const invocationId of invocationIds) {
+      if (!SAFE_INVOCATION_ID.test(invocationId)) throw new Error('Unsafe native invocation id.');
+      const db = path.join(getWorkspaceDataDir(), 'db');
+      await fs.rm(path.join(root(), 'tools', invocationId), { recursive: true, force: true });
+      await fs.rm(path.join(db, 'native-session-payloads', invocationId), { recursive: true, force: true });
+      await fs.rm(path.join(db, 'native-session-origins', `${invocationId}.json`), { force: true });
+      await fs.rm(callFile(invocationId), { force: true });
+    }
+    const owner = { conversationId };
+    const scope = await readJson<NativeInvocationReceipt>(scopeFile(owner)).catch(() => undefined);
+    if (scope?.invocationId && invocationIds.includes(scope.invocationId)) await fs.rm(scopeFile(owner), { force: true });
+  });
+}
+
 export function nativeToolFingerprint(name: string, args: Record<string, unknown>, inventoryDigest: string): string {
   const canonical = (value: unknown): string => {
     if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';

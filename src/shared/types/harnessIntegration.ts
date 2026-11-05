@@ -67,6 +67,8 @@ export interface HarnessObservation {
   id: string;
   profileId: string;
   sourceRunId: string;
+  /** Lets deleting the conversation remove this copy. Missing on older records. */
+  conversationId?: string;
   createdAt: number;
   input: string;
   output: string;

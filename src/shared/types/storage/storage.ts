@@ -427,4 +427,6 @@ export interface Settings {
    */
   experimental?: ExperimentalSettings;
   modelAccess?: ModelAccessSettings;
+  /** Missing on existing installs, which means conversations are kept. */
+  conversationRetention?: import('../conversationRetention').ConversationRetentionSettings;
 }

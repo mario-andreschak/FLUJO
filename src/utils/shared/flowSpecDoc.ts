@@ -76,6 +76,7 @@ NODE TYPES:
     "injectOnce": true, "outputTemplate": "\${var:NAME}" }            // optional output selection; omission preserves context-only injection
 
 TOP LEVEL (optional): "allowedModels": ["model id or name"] limits this flow and its subflows to these models, checked before every model turn. Only set it when asked to.
+TOP LEVEL (optional): "conversationRetentionDays": <whole number> is how many days to keep this flow's stored conversations after their last activity, used only if the workspace has retention on. Only set it when asked to.
 
 EDGES: { "from": "<node key>", "to": "<node key>", "bidirectional": true|false,
          "condition": { "kind": "contains"|"regex"|"equals"|"exists"|"gt"|"gte"|"lt"|"lte", "value": "...", "variable": "name.path",
