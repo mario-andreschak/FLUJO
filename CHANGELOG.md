@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Tool approval
+
+- Show Approve and Reject again when you open a chat that is waiting for a decision. After a reload, a restart or coming back to the chat later, the buttons were gone and the only way out was to stop the run. `GET /v1/chat/conversations/{id}` now includes `pendingToolCalls` while a run waits.
 ### Starting FLUJO
 
 - Keep starting when a data folder is opened by a different FLUJO installation. A copied built-in server links to the dependencies of the installation that first made it, so a second installation on the same data, such as `npx flujo-ai` beside a global install or a moved folder, stopped with "The copied package dependency link is invalid" and started no tools at all. FLUJO now updates its own link. Your edits to those servers stay, and a link in a package FLUJO did not copy is still left alone.
