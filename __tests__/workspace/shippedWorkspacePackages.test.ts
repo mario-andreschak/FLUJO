@@ -246,6 +246,51 @@ describe('workspace copies of shipped application packages', () => {
     await expect(fs.readFile(copied('existing', 'bash/package.json'), 'utf8')).resolves.toBe('{"name":"user-owned"}');
   });
 
+  it('follows the installation that opens the data, without touching edits or the other installation', async () => {
+    await createWorkspace('shared-data');
+    await fs.writeFile(copied('shared-data', 'bash/src/index.ts'), 'my edit');
+    const links = copied('shared-data', 'bash/node_modules');
+    const other = path.join(fixture, 'other-installation');
+    await fs.cp(application, other, { recursive: true });
+
+    await ensureShippedWorkspacePackages(getWorkspaceDir('shared-data'), other, ['bash']);
+    expect(await fs.realpath(links)).toBe(await fs.realpath(path.join(other, 'node_modules')));
+    await expect(fs.readFile(copied('shared-data', 'bash/src/index.ts'), 'utf8')).resolves.toBe('my edit');
+    await expect(fs.readFile(path.join(application, 'node_modules/fixture-dependency/index.js'), 'utf8')).resolves.toContain('works');
+
+    // The installation the link points at can also be gone, as after a clean or a move.
+    await fs.rm(other, { recursive: true });
+    await ensureShippedWorkspacePackages(getWorkspaceDir('shared-data'), application, ['bash']);
+    expect(await fs.realpath(links)).toBe(await fs.realpath(path.join(application, 'node_modules')));
+  });
+
+  it('rebuilds a directory of dependency links for another installation', async () => {
+    await write('mcp-servers/filesystem/node_modules/nested-dependency/package.json', '{"name":"nested-dependency"}');
+    await write('mcp-servers/filesystem/package.json', JSON.stringify({
+      name: SHIPPED_MCP_SERVERS[1].packageId, type: 'module',
+      dependencies: { 'fixture-dependency': '1.0.0', 'nested-dependency': '1.0.0' },
+    }));
+    await createWorkspace('shared-links');
+    const links = copied('shared-links', 'filesystem/node_modules');
+    const other = path.join(fixture, 'other-installation');
+    await fs.cp(application, other, { recursive: true });
+
+    await ensureShippedWorkspacePackages(getWorkspaceDir('shared-links'), other, ['filesystem']);
+    expect(await fs.realpath(path.join(links, 'fixture-dependency'))).toBe(await fs.realpath(path.join(other, 'node_modules/fixture-dependency')));
+    await expect(fs.readFile(path.join(application, 'node_modules/fixture-dependency/index.js'), 'utf8')).resolves.toContain('works');
+  });
+
+  it('leaves a dependency link alone in a package FLUJO did not copy', async () => {
+    await createWorkspace('own-link');
+    const links = copied('own-link', 'bash/node_modules');
+    await fs.rm(copied('own-link', 'bash/.flujo-template.json'));
+    const other = path.join(fixture, 'other-installation');
+    await fs.cp(application, other, { recursive: true });
+
+    await expect(ensureShippedWorkspacePackages(getWorkspaceDir('own-link'), other, ['bash'])).rejects.toThrow('link is invalid');
+    expect(await fs.realpath(links)).toBe(await fs.realpath(path.join(application, 'node_modules')));
+  });
+
   it('rejects an unbuilt template and a partial existing copy rather than publishing either as ready', async () => {
     await fs.rm(path.join(application, 'mcp-servers/bash/dist/index.js'));
     await expect(createWorkspace('unbuilt')).rejects.toThrow('not built');
