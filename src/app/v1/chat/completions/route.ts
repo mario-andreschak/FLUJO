@@ -42,6 +42,7 @@ const flowNotAllowed = () => accessError(403, 'flow_not_allowed', 'This credenti
  */
 async function admitNamedCompletion(actor: AccessActor, input: {
   model: unknown; user: unknown; conversationId: string | undefined; personaTargeted: boolean;
+  reentersAtNode: boolean; debug: boolean;
 }): Promise<{ denied: Response } | { owner: AccessOwner }> {
   const endUser = parseEndUserRef(input.user);
   if (!endUser.ok) {
@@ -50,6 +51,11 @@ async function admitNamedCompletion(actor: AccessActor, input: {
   // A Persona is a durable actor with its own records, not a run of one person.
   if (input.personaTargeted && !actor.isAdmin) {
     return { denied: accessError(403, 'persona_not_allowed', 'This credential may not address a Persona.', 'metadata.personaId') };
+  }
+  // Jumping to a node or stepping through a debugger skips what the flow decides.
+  // Those belong to whoever may change the flow, not to someone who only runs it.
+  if ((input.reentersAtNode || input.debug) && !actor.isAdmin && !actor.scopes.includes('flows:write')) {
+    return { denied: accessError(403, 'flow_control_not_allowed', 'This credential may only run a flow from its start.') };
   }
   const model = typeof input.model === 'string' ? input.model : '';
   if (actor.flowIds && !model.startsWith('flow-')) return { denied: flowNotAllowed() };
@@ -129,6 +135,7 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
       const admitted = await admitNamedCompletion(actor, {
         model: completionData.model, user: completionData.user,
         conversationId: conversation_id, personaTargeted: Boolean(personaTarget),
+        reentersAtNode: Boolean(completionData.processNodeId), debug: flujodebug,
       });
       if ('denied' in admitted) return admitted.denied;
       accessOwner = admitted.owner;

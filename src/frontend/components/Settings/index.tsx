@@ -24,6 +24,7 @@ import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import DnsRoundedIcon from '@mui/icons-material/DnsRounded';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
+import PeopleAltRoundedIcon from '@mui/icons-material/PeopleAltRounded';
 import LanguageRoundedIcon from '@mui/icons-material/LanguageRounded';
 import MicRoundedIcon from '@mui/icons-material/MicRounded';
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded';
@@ -46,12 +47,14 @@ import PrivacySettings from './PrivacySettings';
 import ModelAccessSettings from './ModelAccessSettings';
 import LanguageSettings from './LanguageSettings';
 import NetworkExposureSettings from './NetworkExposureSettings';
+import PeopleSettings from './PeopleSettings';
 import RuntimeEnvironmentSettings from './RuntimeEnvironmentSettings';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 
 type SettingsSectionId =
   | 'network'
+  | 'people'
   | 'modelAccess'
   | 'runtimeEnv'
   | 'globalEnv'
@@ -87,6 +90,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     descriptionKey: 'settings.section.networkDescription',
     icon: PublicRoundedIcon,
     component: NetworkExposureSettings,
+  },
+  {
+    id: 'people',
+    titleKey: 'settings.section.people',
+    descriptionKey: 'settings.section.peopleDescription',
+    icon: PeopleAltRoundedIcon,
+    component: PeopleSettings,
   },
   {
     id: 'modelAccess',
@@ -179,7 +189,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: 'security',
     titleKey: 'settings.category.security',
     descriptionKey: 'settings.category.securityDescription',
-    sectionIds: ['network', 'modelAccess', 'runtimeEnv', 'globalEnv', 'encryption', 'backup'],
+    sectionIds: ['network', 'people', 'modelAccess', 'runtimeEnv', 'globalEnv', 'encryption', 'backup'],
   },
   {
     id: 'experience',

@@ -17,6 +17,7 @@ export function namedAccessOff(): Response {
 
 /** Admission comes from the route table, so a narrow credential reaches only what its scope names. */
 export function requireNamedActor(request: Request): { actor: AccessActor } | { response: Response } {
+  if (process.env.FLUJO_OWNER_AUTH_FILE === undefined) return { response: namedAccessOff() };
   const resolved = resolveOwnerRequest(request);
   if (!resolved.ok) return { response: resolved.response };
   const actor = accessActorFromPrincipal(resolved.authorization.principal);

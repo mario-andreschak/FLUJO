@@ -2,6 +2,7 @@ import type { SupportedLocale } from './locales';
 import { globalMessageRows } from './catalogs/global';
 import { sharedMessageRows } from './catalogs/shared';
 import { settingsMessageRows } from './catalogs/settings';
+import { accessMessageRows } from './catalogs/access';
 import { wavesMessageRows } from './catalogs/waves';
 import { statisticsMessageRows } from './catalogs/statistics';
 import { modelsMessageRows } from './catalogs/models';
@@ -208,6 +209,7 @@ const messageRows = {
   ...globalMessageRows,
   ...sharedMessageRows,
   ...settingsMessageRows,
+  ...accessMessageRows,
   ...wavesMessageRows,
   ...statisticsMessageRows,
   ...modelsMessageRows,

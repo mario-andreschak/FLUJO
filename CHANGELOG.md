@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Named access
+
+- Give each person their own access and role, for installations several people use or that another product calls on behalf of its staff. Roles are administrator, builder, operator, viewer, health only and maintainer, and a custom list of permissions stays possible. A credential can be limited to one workspace or to named flows. Settings > People and access creates, lists, renames, expires and revokes access, and shows a new secret once. A named person can sign in to the browser.
+- With this on, a person sees only the conversations, runs and approvals they started, unless their role says otherwise. Every route that names a conversation checks this first, and someone else's id gets the same answer as an id that does not exist. `/v1` callers can pass their own reference for an end user, and approval decisions record who decided.
+- Keep a bounded record of sign-ins, changes to people and flows, approval decisions and refused attempts, with no message content in it.
+- Off by default. An ordinary install behaves as before, and so does an existing owner policy until an administrator turns this on. FLUJO refuses to remove the last administrator, and `scripts/owner-access.mjs` adds a new one from the computer itself if all are lost. See [named access](docs/features/named-access.md) and its [security contract](docs/security/named-access-v1.md), which says what this does not protect against: flows of all people still run in one process.
+
 ### Model access
 
 - Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.

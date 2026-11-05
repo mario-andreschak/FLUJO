@@ -14,7 +14,9 @@ At `/owner/login`, an existing owner bearer with `control:admin` and
 `secrets:read` can create a new browser session. The form clears the credential
 after the request and never stores it in localStorage, a URL or a session record.
 Execution-only credentials cannot mint administrative sessions. A cookie alone
-cannot log in, select a caller-chosen session ID or rotate itself.
+cannot log in, select a caller-chosen session ID or rotate itself. With
+[named access](named-access-v1.md) on, a credential holding `session:login` may also
+sign in; its session never holds more than that credential.
 
 The cookie is host-only, Path `/`, HttpOnly and SameSite Strict. HTTPS uses the
 Secure `__Host-flujo-owner` cookie; HTTP loopback uses `flujo-owner-local`.
@@ -30,7 +32,8 @@ Sessions last at most eight hours and never outlive the source credential.
 Each request independently reads durable policy and session state, so sessions
 survive application restart without relying on shared proxy/handler memory.
 Credential revocation, removal, policy replacement, expiry and browser-origin
-changes invalidate sessions. An authorization witness additionally rechecks the
+changes invalidate sessions. With named access on, only a change to that person's own
+record counts, so managing other people signs nobody out. An authorization witness additionally rechecks the
 session before effects; logout invalidates existing witnesses as well as later
 requests. Corrupt or unsafe storage fails closed with generic diagnostics.
 

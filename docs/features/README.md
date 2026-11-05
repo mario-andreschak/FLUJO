@@ -2,6 +2,8 @@
 
 This section provides detailed documentation for Flujo's features.
 
+- **[Named access](./named-access.md)**: People, roles, limits to a workspace or to named flows, per-person separation of conversations and approvals, end-user references and a record of who did what. Off by default.
+
 - **[Harness Lab — experimental](./harness-lab.md)**: Evolve plain-text agent instructions with comparative probes, held-out checks, scoped lessons and reviewable agent copies. Off by default.
 
 - **[Chat commands and dynamic tool parameters](./dynamic-references.md)**: Current context, entity pickers, tool/resource references, and hidden parameter presets

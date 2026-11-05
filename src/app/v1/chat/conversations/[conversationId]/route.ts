@@ -38,6 +38,7 @@ import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 import { listPendingQuestions } from '@/backend/services/questionRegistry';
 import { listPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { currentAccessActor } from '@/backend/services/security/accessContext';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -301,6 +302,14 @@ async function PATCH_handler(
     if (error instanceof ConversationLogReadPressureError) throw error;
     log.warn('Invalid JSON in PATCH request body', { requestId, conversationId, error });
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  }
+
+  // A narrow credential may rename its own conversation. Changing which flow it
+  // runs or whether it asks for approval would step around a flow limit or a rule.
+  const actor = currentAccessActor();
+  if (actor && !actor.isAdmin && (!updateData || typeof updateData !== "object"
+    || Object.keys(updateData).some(field => field !== "title"))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // Build the set of allowed updates from whichever recognized fields are present

@@ -9,7 +9,8 @@ This document records the initial bearer-only source contract. Its pending-work
 statements describe that historical slice, rather than the current issue status.
 Later source implements [browser sessions](owner-browser-session-v1.md),
 [first-owner pairing](first-owner-pairing-v1.md), and the
-[MCP container integration](mcp-isolation-integration-v1.md). See
+[MCP container integration](mcp-isolation-integration-v1.md). [Named access](named-access-v1.md)
+adds roles, people and per-person separation on top of this contract. See
 [project status](../project-status.md) for current capabilities and release limits.
 
 ## Threat model
