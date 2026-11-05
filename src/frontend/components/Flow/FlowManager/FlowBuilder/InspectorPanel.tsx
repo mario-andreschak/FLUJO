@@ -87,7 +87,7 @@ interface InspectorPanelProps {
   flowDescription: string;
   onFlowDescriptionChange: (value: string) => void;
   conversationRetentionDays?: number;
-  onConversationRetentionDaysChange: (value: number | undefined) => void;
+  onConversationRetentionDaysChange?: (value: number | undefined) => void;
   authoringMode: FlowAuthoringMode;
   onAuthoringModeChange: (mode: FlowAuthoringMode) => void;
   beginnerMode?: boolean;
@@ -615,7 +615,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               placeholder={beginnerMode ? t('flows.inspector.agentDescriptionPlaceholder') : t('flows.inspector.flowDescriptionPlaceholder')}
             />
 
-            {!beginnerMode && (
+            {!beginnerMode && onConversationRetentionDaysChange && (
               <TextField
                 size="small"
                 type="number"

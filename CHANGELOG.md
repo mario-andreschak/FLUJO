@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Conversation retention
+
+- Let a workspace remove stored conversations a set number of days after their last activity, under Settings > Conversation retention. A flow can name its own period, and the workspace chooses whether the shorter period or the flow's applies. It is off by default. Anything running, waiting for a person, paused in the debugger, owned by a Persona or still needed by a schedule stays. A dry run shows how many would go, and `GET /api/operations/status` shows the counts of the last run.
+- Make deleting a conversation complete. The delete button, bulk delete and the new sweep now share one path, which also removes backups next to the state file, detached subflow tasks, stored results of finished native tool calls, recorded Harness examples and the text in the schedule's run history. Bulk delete used to leave the stored model requests behind. A deletion cut short by a restart now finishes on the next run. See `docs/operations/conversation-retention.md`, which also lists what this does not cover.
+
 ### Model access
 
 - Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.

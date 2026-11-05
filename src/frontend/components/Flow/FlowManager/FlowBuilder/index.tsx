@@ -789,7 +789,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(filterInvalidEdges(info.flow.edges || []));
     setFlowName(info.flow.name);
     setFlowDescription(info.flow.description || '');
-    setRetentionDays(info.flow.conversationRetentionDays);
     setFlowNameError(validateFlowName(info.flow.name));
     setHasUnsavedChanges(true);
 
