@@ -1,21 +1,12 @@
-/**
- * The operations route and the optional heartbeat, with real storage and a real loopback
- * address to report to.
- */
+/** The operations route, with real storage. */
 import { promises as fs } from 'node:fs';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { NextRequest } from 'next/server';
 import { GET, POST } from '@/app/api/operations/desired-state/route';
 import { applyDesiredState } from '@/backend/services/desiredState';
-import { sendDesiredStateHeartbeats } from '@/backend/services/desiredState/heartbeat';
-import { loadStatus } from '@/backend/services/desiredState/store';
-import { StorageKey } from '@/shared/types/storage';
 import { authenticate, initializeEncryption } from '@/utils/encryption/secure';
 import { lockServer } from '@/utils/encryption/session';
-import { saveItem } from '@/utils/storage/backend';
 
 jest.setTimeout(60_000);
 
@@ -51,7 +42,7 @@ const post = (body: unknown, host = 'localhost') => POST(new NextRequest(URL_BAS
 }));
 const get = () => GET(new NextRequest(URL_BASE, { headers: { host: 'localhost' } }));
 
-describe('desired state over the operations route and heartbeat', () => {
+describe('desired state over the operations route', () => {
   let dataDir: string;
   let previousDataDir: string | undefined;
 
@@ -63,18 +54,13 @@ describe('desired state over the operations route and heartbeat', () => {
     process.env.DS_ROUTE_KEY = SECRET;
     delete process.env.FLUJO_OWNER_AUTH_FILE;
     delete process.env.FLUJO_EXPOSURE_MODE;
-    delete process.env.FLUJO_HEARTBEAT_URL;
-    delete process.env.FLUJO_HEARTBEAT_TOKEN;
     delete process.env.FLUJO_DESIRED_STATE_FILE;
     global.__flujo_flowsCache = null;
-    global.__flujo_heartbeat_next_due = undefined;
     global.__flujo_server_dek = undefined;
   });
 
   afterEach(async () => {
     delete process.env.DS_ROUTE_KEY;
-    delete process.env.FLUJO_HEARTBEAT_URL;
-    delete process.env.FLUJO_HEARTBEAT_TOKEN;
     delete process.env.FLUJO_OWNER_AUTH_FILE;
     delete process.env.FLUJO_DESIRED_STATE_FILE;
     delete process.env.FLUJO_WORKER_MODE;
@@ -181,160 +167,6 @@ describe('desired state over the operations route and heartbeat', () => {
       const report = await applyDesiredState(aFile('1'), { reconcileRuntime: false });
 
       expect(report.outcome).toBe('not-available');
-    });
-  });
-
-  describe('the heartbeat', () => {
-    let server: http.Server;
-    let received: Array<{ path: string; authorization?: string; body: Record<string, unknown> }>;
-    let respond: (response: http.ServerResponse) => void;
-    let address: string;
-
-    beforeEach(async () => {
-      received = [];
-      respond = (response) => response.writeHead(204).end();
-      server = http.createServer((request, response) => {
-        let text = '';
-        request.on('data', (chunk) => { text += chunk; });
-        request.on('end', () => {
-          received.push({ path: request.url ?? '', authorization: request.headers.authorization, body: text ? JSON.parse(text) : {} });
-          respond(response);
-        });
-      });
-      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-      address = `http://127.0.0.1:${(server.address() as AddressInfo).port}/report/site`;
-    });
-
-    afterEach(async () => {
-      await new Promise((resolve) => server.close(resolve));
-    });
-
-    it('stays off without a URL and sends nothing', async () => {
-      await applyDesiredState(aFile('1'), { reconcileRuntime: false });
-      const before = await loadStatus();
-
-      await sendDesiredStateHeartbeats();
-
-      expect(received).toEqual([]);
-      expect((await loadStatus()).heartbeat).toEqual(before.heartbeat);
-    });
-
-    it('sends version and status only, no content', async () => {
-      await applyDesiredState(aFile('1', { settings: { heartbeat: { url: address, intervalMinutes: 5 } } }), { reconcileRuntime: false });
-
-      await sendDesiredStateHeartbeats();
-
-      expect(received).toHaveLength(1);
-      expect(received[0].path).toBe('/report/site');
-      expect(received[0].body).toEqual({
-        schemaVersion: 1,
-        flujoVersion: expect.any(String),
-        desiredStateVersion: '1',
-        appliedAt: expect.any(String),
-        lastApplyFailed: false,
-        status: 'ok',
-      });
-      const sent = JSON.stringify(received[0]);
-      for (const hidden of ['private_flow_name', 'private content', 'a-model', 'default-workspace', SECRET]) {
-        expect(sent).not.toContain(hidden);
-      }
-      expect((await loadStatus()).heartbeat).toEqual({ lastSentAt: expect.any(String), lastOk: true });
-    });
-
-    it('waits for its interval, then reports again', async () => {
-      await applyDesiredState(aFile('1', { settings: { heartbeat: { url: address, intervalMinutes: 5 } } }), { reconcileRuntime: false });
-      const start = Date.now();
-
-      await sendDesiredStateHeartbeats(start);
-      await sendDesiredStateHeartbeats(start + 60_000);
-      expect(received).toHaveLength(1);
-
-      await sendDesiredStateHeartbeats(start + 6 * 60_000);
-      expect(received).toHaveLength(2);
-    });
-
-    it('takes its address and token from the environment, and says when something needs attention', async () => {
-      process.env.FLUJO_HEARTBEAT_URL = address;
-      process.env.FLUJO_HEARTBEAT_TOKEN = 'heartbeat-token';
-      await applyDesiredState(aFile('1', { settings: { telemetri: {} } }), { reconcileRuntime: false });
-
-      await sendDesiredStateHeartbeats();
-
-      expect(received[0].authorization).toBe('Bearer heartbeat-token');
-      expect(received[0].body).toMatchObject({ status: 'attention', lastApplyFailed: true, desiredStateVersion: null });
-    });
-
-    it('reports a locked workspace as locked', async () => {
-      process.env.FLUJO_HEARTBEAT_URL = address;
-      await initializeEncryption('a passphrase for this test');
-      lockServer();
-
-      await sendDesiredStateHeartbeats();
-
-      expect(received[0].body.status).toBe('locked');
-    });
-
-    it('notes a failure and carries on when nobody answers', async () => {
-      process.env.FLUJO_HEARTBEAT_URL = 'http://127.0.0.1:9/nobody-here';
-
-      await expect(sendDesiredStateHeartbeats()).resolves.toBeUndefined();
-
-      expect((await loadStatus()).heartbeat.lastOk).toBe(false);
-    });
-
-    it('counts an error answer as a failure', async () => {
-      respond = (response) => response.writeHead(500).end();
-      process.env.FLUJO_HEARTBEAT_URL = address;
-
-      await sendDesiredStateHeartbeats();
-
-      expect((await loadStatus()).heartbeat.lastOk).toBe(false);
-    });
-
-    it('does not follow a redirect, which could carry the token elsewhere', async () => {
-      respond = (response) => response.writeHead(302, { location: `${address}/elsewhere` }).end();
-      process.env.FLUJO_HEARTBEAT_URL = address;
-      process.env.FLUJO_HEARTBEAT_TOKEN = 'heartbeat-token';
-
-      await sendDesiredStateHeartbeats();
-
-      expect(received).toHaveLength(1);
-      expect((await loadStatus()).heartbeat.lastOk).toBe(false);
-    });
-
-    it('will not send over plain http to another computer', async () => {
-      const spy = jest.spyOn(globalThis, 'fetch');
-      process.env.FLUJO_HEARTBEAT_URL = 'http://192.0.2.10/report';
-      try {
-        await sendDesiredStateHeartbeats();
-        expect(spy).not.toHaveBeenCalled();
-      } finally {
-        spy.mockRestore();
-      }
-      expect((await loadStatus()).heartbeat.lastOk).toBe(false);
-    });
-
-    it('refuses such an address in the file', async () => {
-      const report = await applyDesiredState(aFile('1', { settings: { heartbeat: { url: 'http://192.0.2.10/report' } } }), { reconcileRuntime: false });
-
-      expect(report.outcome).toBe('invalid');
-      expect(report.problems[0].where).toBe('settings.heartbeat.url');
-    });
-
-    it('never shows its address in a report', async () => {
-      const report = await applyDesiredState(aFile('1', { settings: { heartbeat: { url: address } } }), { reconcileRuntime: false, dryRun: true });
-
-      expect(JSON.stringify(report)).not.toContain(address);
-      expect(report.changes).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'heartbeat.url', action: 'update' })]));
-    });
-
-    it('leaves other settings in the document alone', async () => {
-      await saveItem(StorageKey.SPEECH_SETTINGS, { speech: { enabled: false, language: 'de' } });
-
-      await applyDesiredState(aFile('1', { settings: { heartbeat: { url: address } } }), { reconcileRuntime: false });
-
-      const stored = JSON.parse(await fs.readFile(path.join(dataDir, 'workspaces', 'default-workspace', 'db', 'speech_settings.json'), 'utf8'));
-      expect(stored.speech).toEqual({ enabled: false, language: 'de' });
     });
   });
 });

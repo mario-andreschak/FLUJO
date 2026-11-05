@@ -9,7 +9,6 @@
 import { flowService } from '@/backend/services/flow';
 import { encryptApiKey } from '@/backend/services/model/encryption';
 import { modelService } from '@/backend/services/model';
-import { getSchedulerService } from '@/backend/services/scheduler';
 import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtimeLock';
 import { createDefaultSettings } from '@/shared/config/defaultSettings';
 import { StorageKey, type Settings } from '@/shared/types/storage';
@@ -96,25 +95,6 @@ async function writeServers(changes: Array<{ name: string; value: StoredServer |
   await saveItem(StorageKey.MCP_SERVERS, servers);
 }
 
-const SERVER_MANAGED_EXECUTION_FIELDS = ['id', 'generationId', 'createdAt', 'updatedAt'];
-
-async function writeExecution(id: string, value: Record<string, unknown>): Promise<void> {
-  const scheduler = getSchedulerService();
-  const current = await scheduler.get(id) as unknown as Record<string, unknown> | null;
-  const definition = Object.fromEntries(Object.entries(value).filter(([key]) => !SERVER_MANAGED_EXECUTION_FIELDS.includes(key)));
-  let error: string | undefined;
-  if (current) {
-    // Update merges over what is there, so a field the file dropped must be cleared.
-    const cleared = Object.fromEntries(Object.keys(current)
-      .filter((key) => !SERVER_MANAGED_EXECUTION_FIELDS.includes(key) && !(key in definition))
-      .map((key) => [key, undefined]));
-    error = (await scheduler.update(id, { ...cleared, ...definition } as never)).error;
-  } else {
-    error = (await scheduler.create({ ...definition, id } as never)).error;
-  }
-  if (error) throw new DesiredStateWriteError(`Planned execution "${id}" could not be saved: ${error}`);
-}
-
 /**
  * Additions and changes go first, then removals in the opposite order, so nothing
  * points at an object that has already gone. Models come first of all because they are
@@ -134,13 +114,6 @@ export async function executeChangeSet(set: ChangeSet): Promise<void> {
     const result = await flowService.saveFlow(structuredClone(change.value));
     if (!result.success) throw new DesiredStateWriteError(`Flow "${change.id}" could not be saved: ${result.error ?? 'unknown reason'}.`);
     reachedPoint(`flow:${change.id}`);
-  }
-  for (const change of set.plannedExecutions) {
-    if (change.value) await writeExecution(change.id, change.value);
-  }
-  reachedPoint('planned-executions');
-  for (const change of set.plannedExecutions) {
-    if (!change.value) await getSchedulerService().delete(change.id);
   }
   for (const change of [...set.flows].reverse()) {
     if (change.value) continue;

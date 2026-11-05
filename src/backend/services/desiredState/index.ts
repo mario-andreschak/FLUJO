@@ -13,7 +13,6 @@ import { createHash } from 'node:crypto';
 import { canonicalJson } from '@/backend/services/enduringAgents/behaviorRevisions';
 import { withWorkspaceRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { mcpService } from '@/backend/services/mcp';
-import { getSchedulerService } from '@/backend/services/scheduler';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { isEncryptionLocked } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
@@ -275,7 +274,6 @@ function mergeUndo(older: BundleUndo, newer: BundleUndo): BundleUndo {
       models: [...older.adopted.models, ...newer.adopted.models],
       mcpServers: [...older.adopted.mcpServers, ...newer.adopted.mcpServers],
       flows: [...older.adopted.flows, ...newer.adopted.flows],
-      plannedExecutions: [...older.adopted.plannedExecutions, ...newer.adopted.plannedExecutions],
     },
   };
 }
@@ -549,7 +547,7 @@ export async function applyConfiguredDesiredState(options: { dryRun?: boolean; r
 }
 
 /**
- * Startup, after the workspace is unlocked and before servers and schedules start. Never
+ * Startup, after the workspace is unlocked and before servers connect. Never
  * throws: a bad file must not stop an instance from coming up, and it is reported.
  */
 export async function applyDesiredStateAtStartup(): Promise<void> {
@@ -567,8 +565,7 @@ export async function applyDesiredStateAtStartup(): Promise<void> {
     }
     // An installation that never used this stops here, with nothing written.
     if (!process.env[DESIRED_STATE_FILE_ENV]?.trim() && !await loadJournal()) return;
-    // Schedules saved here are armed by the scheduler's start, after servers have connected.
-    await getSchedulerService().withArmingDeferred(applyAtStartupWithinDeferral);
+    await applyConfiguredAtStartup();
   } catch (error) {
     if (error instanceof SimulatedCrash) throw error;
     log.error('Applying the desired state at startup failed', error);
@@ -576,7 +573,7 @@ export async function applyDesiredStateAtStartup(): Promise<void> {
   }
 }
 
-async function applyAtStartupWithinDeferral(): Promise<void> {
+async function applyConfiguredAtStartup(): Promise<void> {
   const stuck = await withWorkspaceRuntimeLock(APPLY_LOCK, () => resumeWithinLock());
   if (stuck) {
     log.error(stuck.message);

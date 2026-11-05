@@ -31,7 +31,6 @@ export interface DesiredStateStatus {
   localEditsKept: number;
   /** A change, such as network exposure, that takes effect only after a restart. */
   restartRequired: boolean;
-  heartbeat: { lastSentAt: string | null; lastOk: boolean | null };
 }
 
 export function emptyDesiredStateStatus(): DesiredStateStatus {
@@ -47,7 +46,6 @@ export function emptyDesiredStateStatus(): DesiredStateStatus {
     heldBackVersion: null,
     localEditsKept: 0,
     restartRequired: false,
-    heartbeat: { lastSentAt: null, lastOk: null },
   };
 }
 
@@ -61,7 +59,6 @@ export function projectDesiredStateStatus(raw: unknown): DesiredStateStatus & { 
   const base = emptyDesiredStateStatus();
   if (!raw || typeof raw !== 'object') return { ...base, fileConfigured };
   const stored = raw as Record<string, unknown>;
-  const heartbeat = (stored.heartbeat ?? {}) as Record<string, unknown>;
   const count = stored.localEditsKept;
   return {
     ...base,
@@ -77,9 +74,5 @@ export function projectDesiredStateStatus(raw: unknown): DesiredStateStatus & { 
     heldBackVersion: text(stored.heldBackVersion),
     localEditsKept: Number.isSafeInteger(count) && (count as number) >= 0 ? (count as number) : 0,
     restartRequired: stored.restartRequired === true,
-    heartbeat: {
-      lastSentAt: text(heartbeat.lastSentAt, 40),
-      lastOk: typeof heartbeat.lastOk === 'boolean' ? heartbeat.lastOk : null,
-    },
   };
 }

@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 
 const inspect = jest.fn(() => ({ workspace: 'fixture-workspace', started: true, pausedAtLastReconcile: false, armedTriggers: 0, runningRuns: 0,
   overlapQueued: 0, maxOverlapDepth: 0, exclusiveWaiting: 0, blockedByExclusive: 0, queueCap: 50, ownedWorkerRunIds: new Set(), statuses: [] }));
-const read = jest.fn(async () => undefined);
+const read = jest.fn(async (_relative?: string): Promise<unknown> => undefined);
 const recheck = jest.fn();
 const resolve = jest.fn();
 const unlock = jest.fn();
@@ -57,16 +57,14 @@ it('says which desired-state version this workspace is on, and nothing else from
     schemaVersion: 1, appliedVersion: 'v7', appliedAt: '2026-11-05T10:00:00.000Z', lastApplyFailed: true,
     lastFailureAt: '2026-11-05T11:00:00.000Z', lastFailureCode: 'invalid-file', interruptedApply: 'needs-attention',
     heldBackVersion: 'v8', localEditsKept: 2, restartRequired: true, somethingPrivate: 'PRIVATE_CONTENT',
-    heartbeat: { lastSentAt: '2026-11-05T12:00:00.000Z', lastOk: false, url: 'PRIVATE_ADDRESS' },
   } : undefined));
   const body = await (await GET(request('fixture-control'))).json();
   expect(body.desiredState).toEqual({
     schemaVersion: 1, fileConfigured: false, appliedVersion: 'v7', appliedAt: '2026-11-05T10:00:00.000Z', lastAttemptAt: null,
     lastApplyFailed: true, lastFailureAt: '2026-11-05T11:00:00.000Z', lastFailureCode: 'invalid-file',
     interruptedApply: 'needs-attention', heldBackVersion: 'v8', localEditsKept: 2, restartRequired: true,
-    heartbeat: { lastSentAt: '2026-11-05T12:00:00.000Z', lastOk: false },
   });
-  expect(JSON.stringify(body)).not.toMatch(/PRIVATE_CONTENT|PRIVATE_ADDRESS/);
+  expect(JSON.stringify(body)).not.toMatch(/PRIVATE_CONTENT/);
 });
 it('reports no desired-state version on an instance that never used one', async () => {
   const body = await (await GET(request('fixture-control'))).json();

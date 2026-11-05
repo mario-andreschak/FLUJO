@@ -1,7 +1,7 @@
 # Desired state: set up and update an instance from one file
 
-One JSON file says what a workspace should contain: settings, models, MCP servers,
-flows and planned executions. Applying it is safe to repeat, safe to interrupt and
+One JSON file says what a workspace should contain: settings, models, MCP servers and
+flows. Applying it is safe to repeat, safe to interrupt and
 reversible. This works the same whether one instance serves one site with nobody at the
 keyboard, or one instance serves several people who also create their own things.
 
@@ -11,9 +11,11 @@ call to the route, none of this runs.
 ## Two ways in
 
 **At start.** Set `FLUJO_DESIRED_STATE_FILE` to the absolute path of the file. It is
-applied once the workspace is unlocked and before servers connect and schedules arm, so
-they start from the wanted configuration. A broken file never stops FLUJO from starting.
-It is reported instead.
+applied once the workspace is unlocked and before servers connect, so they start from
+the wanted configuration. A broken file never stops FLUJO from starting.
+It is reported instead. This runs in the background of startup, so the server can answer
+before it has finished. Anything waiting for a version should watch `appliedVersion` and
+`lastApplyFailed` in `GET /api/operations/status`.
 
 **On request.** `POST /api/operations/desired-state`, with the same access rules as
 `GET /api/operations/status`:
@@ -28,6 +30,9 @@ It is reported instead.
 Leave `state` out to use the file named by the environment. `GET` on the same address
 lists the kept versions, the managed objects and the last report. `?workspace=` selects
 the workspace, as on every other route.
+
+If you use both, the file wins at the next start: a different state applied on request
+is replaced by the file then, unless you went back from that file with a rollback.
 
 | Status | Meaning |
 | --- | --- |
@@ -55,8 +60,7 @@ the workspace, as on every other route.
     "telemetry": { "enabled": false, "notifyDaily": false },
     "modelAccess": { "quickChat": false, "directModelCalls": false },
     "network": { "exposure": "localhost" },
-    "onboarding": { "completed": true },
-    "heartbeat": { "url": "https://example.org/report/site-1", "intervalMinutes": 15 }
+    "onboarding": { "completed": true }
   },
   "models": [{
     "id": "main",
@@ -75,15 +79,7 @@ the workspace, as on every other route.
   "flows": [
     { "id": "triage", "spec": { "name": "triage", "nodes": [], "edges": [] } },
     { "id": "copied", "flow": { "name": "copied", "nodes": [], "edges": [] } }
-  ],
-  "plannedExecutions": [{
-    "id": "nightly",
-    "name": "Nightly",
-    "flowId": "triage",
-    "enabled": true,
-    "prompt": "Run it.",
-    "trigger": { "type": "schedule", "cron": "0 3 * * *" }
-  }]
+  ]
 }
 ```
 
@@ -102,7 +98,7 @@ left out is not touched.
   the flow id and step key, so applying twice changes nothing, and a step that keeps its
   key keeps its id.
 - **`settings`** accepts these sections: `telemetry`, `network`, `modelAccess`,
-  `onboarding`, `update`, `speech`, `experimental`, `conversationRetention`, `heartbeat`.
+  `onboarding`, `update`, `speech`, `experimental`, `conversationRetention`.
   An unknown name is refused, so a typing mistake cannot pass quietly. A setting the file
   does not mention stays as it is. A new document starts from a new installation's defaults.
 
@@ -124,15 +120,15 @@ and never repeats the text.
 Secrets are never deleted by a file, and a rollback does not change them back, because the
 old value was never kept. They stay in the store when no longer mentioned.
 
-Not possible from a file yet: webhook triggers (they need a secret token), OAuth client
-secrets, models tied to an owner credential, Persona-targeted schedules and flows owned by
-a Persona. These are refused with that reason.
+Not possible from a file yet: scheduled entries, OAuth client secrets, models tied to an
+owner credential and flows owned by a Persona. These are refused with a reason. A person's
+own schedule is left alone, and keeps the flow it runs.
 
 ## What an apply promises
 
 **Dry-run is exact.** It runs the same planning as an apply and stops before the first
 write. It names objects and changed fields, not their contents. Settings also show old and
-new values, apart from the heartbeat address.
+new values.
 
 **Applying twice changes nothing.** The second run writes no file, adds no version and adds
 no flow history.
@@ -190,15 +186,14 @@ entirely before a rollback.
 which would undo the rollback. A changed file is a new decision and is applied. Applying the
 same file on request also lifts the hold.
 
-What a rollback does not bring back: secret values, and the run history of a planned execution
-it removes and re-creates. It covers what this file describes, and neither FLUJO's own program
-nor conversations.
+What a rollback does not bring back: secret values. It covers what this file describes, and
+neither FLUJO's own program nor conversations.
 
 ### How this relates to Persona Behavior revisions
 
 Persona revisions are immutable, one Persona and one Behavior at a time, and activation works
 only while idle. They do not cover ordinary flows reached through `/v1` or a schedule, nor models,
-servers, settings or schedules, and nothing ties several of them to one version. So they are not
+servers or settings, and nothing ties several of them to one version. So they are not
 enough on their own to version a whole update. Two things are reused from them instead: their
 way of freezing a flow together with the subflows it can reach, and the stable fingerprint of
 flow content. A file does not change Persona revisions, and a rollback leaves them as they are.
@@ -245,30 +240,12 @@ Limits:
 | `localEditsKept` | Edited objects the policy left alone |
 | `restartRequired` | A setting changed that the launcher reads only at start, such as network exposure |
 | `fileConfigured` | Whether `FLUJO_DESIRED_STATE_FILE` is set |
-| `heartbeat` | When the last report went out and whether it arrived |
 
 ### Network exposure
 
 The launcher reads `network.exposure` before the server starts, from the default workspace. So a
 change takes effect at the next restart, which `restartRequired` reports. A file that asks for
 `network` or `public` without owner access is refused, because FLUJO would then refuse to start.
-
-### Heartbeat
-
-Off unless a URL is set, through `settings.heartbeat.url` or `FLUJO_HEARTBEAT_URL`. The environment
-variable applies to the default workspace only, and `FLUJO_HEARTBEAT_TOKEN` adds a bearer token.
-Each workspace with an address sends a POST at its interval (15 minutes unless set, 1 to 1440), with
-a little random spread so that many instances do not report at the same moment:
-
-```json
-{ "schemaVersion": 1, "flujoVersion": "3.48.5", "desiredStateVersion": "2026.11.05-1",
-  "appliedAt": "2026-11-05T10:00:00.000Z", "lastApplyFailed": false, "status": "ok" }
-```
-
-`status` is `ok`, `attention` or `locked`. It holds no workspace name and no content, so an address
-that names the site is what tells sites apart. Only https is accepted, or http to this computer.
-Redirects count as failures, because one could carry the token elsewhere. The address never appears
-in a log or report. A failed report changes nothing else, and is tried again next time.
 
 ## What this does not do
 

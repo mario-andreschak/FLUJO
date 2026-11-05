@@ -1,8 +1,7 @@
 /**
  * The desired-state file: what one workspace of an instance should contain.
  *
- * Top-level names follow the package format (`models`, `mcpServers`, `flows`,
- * `plannedExecutions`). This module only reads the file and says, in plain words, why
+ * Top-level names follow the package format (`models`, `mcpServers`, `flows`). This module only reads the file and says, in plain words, why
  * it cannot be used. It touches no storage. Nothing in a valid file is a secret value:
  * credentials appear only as `${env:NAME}` (read from this process's environment when
  * applied) or `${global:NAME}` (already in the secret store).
@@ -61,7 +60,6 @@ export interface ParsedDesiredState {
   models: Array<Record<string, unknown> & { id: string; name: string }>;
   mcpServers: Array<Record<string, unknown> & { name: string }>;
   flows: DesiredFlowEntry[];
-  plannedExecutions: Array<Record<string, unknown> & { id: string; flowId: string }>;
 }
 
 export type DesiredStateProblem = { where: string; message: string };
@@ -80,14 +78,6 @@ export function parseSecretReference(value: unknown): { source: 'env' | 'global'
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-
-const heartbeatUrl = z.string().refine((value) => {
-  try {
-    const url = new URL(value);
-    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-    return !url.username && !url.password && (url.protocol === 'https:' || (url.protocol === 'http:' && loopback));
-  } catch { return false; }
-}, 'must be an https address (plain http only for this computer), with no user name or password in it');
 
 /**
  * Which parts of Settings a file may set. A new setting is one more line here. Each
@@ -111,10 +101,6 @@ const SETTINGS_SECTIONS: Record<string, z.ZodType<Record<string, unknown>>> = {
   // These two carry many fields owned by their own features, which check them on read.
   experimental: z.record(z.string(), z.unknown()),
   conversationRetention: z.record(z.string(), z.unknown()),
-  heartbeat: z.object({
-    url: heartbeatUrl.optional(),
-    intervalMinutes: z.number().int().min(1).max(1440).optional(),
-  }).strict(),
 };
 
 export const SETTINGS_SECTION_NAMES = Object.keys(SETTINGS_SECTIONS);
@@ -135,7 +121,6 @@ const TopLevel = z.object({
   models: z.array(z.record(z.string(), z.unknown())).optional(),
   mcpServers: z.array(z.record(z.string(), z.unknown())).optional(),
   flows: z.array(z.record(z.string(), z.unknown())).optional(),
-  plannedExecutions: z.array(z.record(z.string(), z.unknown())).optional(),
 }).strict();
 
 function zodProblems(prefix: string, error: z.ZodError): DesiredStateProblem[] {
@@ -285,28 +270,6 @@ function checkFlows(raw: Array<Record<string, unknown>>, problems: DesiredStateP
   return flows;
 }
 
-function checkPlannedExecutions(state: ParsedDesiredState, problems: DesiredStateProblem[]): void {
-  const seen = new Set<string>();
-  state.plannedExecutions.forEach((execution, index) => {
-    const where = `plannedExecutions[${index}]`;
-    if (typeof execution.id !== 'string' || !SAFE_ID.test(execution.id)) {
-      problems.push({ where: `${where}.id`, message: 'an id is required: letters, digits, dot, underscore, colon or hyphen.' });
-    } else if (seen.has(execution.id)) {
-      problems.push({ where: `${where}.id`, message: `the id "${execution.id}" is used twice.` });
-    } else seen.add(execution.id);
-    if (typeof execution.flowId !== 'string' || !execution.flowId) {
-      problems.push({ where: `${where}.flowId`, message: 'the flow to run is required.' });
-    }
-    for (const field of ['personaId', 'behaviorSlotKey', 'personaRetired', 'personaArchived', 'workerLocalRecovery']) {
-      if (field in execution) problems.push({ where: `${where}.${field}`, message: 'this cannot be set from a file.' });
-    }
-    const trigger = execution.trigger as { type?: unknown } | undefined;
-    if (trigger?.type === 'webhook') {
-      problems.push({ where: `${where}.trigger`, message: 'a webhook trigger needs a secret token, which a file cannot hold yet. Use another trigger or set this one up on the instance.' });
-    }
-  });
-}
-
 /**
  * Shapes that are only ever credentials. The package scanner has no rule for these,
  * because a package author's concern is different.
@@ -392,12 +355,10 @@ export function parseDesiredState(input: unknown): ParseResult {
     models: (data.models ?? []) as ParsedDesiredState['models'],
     mcpServers: (data.mcpServers ?? []) as ParsedDesiredState['mcpServers'],
     flows: [],
-    plannedExecutions: (data.plannedExecutions ?? []) as ParsedDesiredState['plannedExecutions'],
   };
   checkModels(state, problems);
   checkServers(state, problems);
   state.flows = checkFlows(data.flows ?? [], problems);
-  checkPlannedExecutions(state, problems);
 
   const warnings: string[] = [];
   const targets: ScanTarget[] = [];

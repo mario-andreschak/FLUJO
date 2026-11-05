@@ -71,14 +71,6 @@ function baseFile(version: string, overrides: Record<string, unknown> = {}) {
       { id: 'first-flow', spec: simpleSpec('first_flow', 'first answer') },
       { id: 'second-flow', spec: simpleSpec('second_flow', 'second answer') },
     ],
-    plannedExecutions: [{
-      id: 'nightly',
-      name: 'Nightly',
-      flowId: 'first-flow',
-      enabled: false,
-      prompt: 'Run it.',
-      trigger: { type: 'schedule', cron: '0 3 * * *' },
-    }],
     ...overrides,
   };
 }
@@ -138,12 +130,6 @@ describe('desired state', () => {
         .sort((a, b) => a.id.localeCompare(b.id)),
       models: await modelService.loadModels(),
       servers: await servers(),
-      executions: (await getSchedulerService().list())
-        .map(({ execution }) => {
-          const { updatedAt: _u, createdAt: _c, generationId: _g, ...rest } = execution;
-          return rest;
-        })
-        .sort((a, b) => a.id.localeCompare(b.id)),
       settings: await settings(),
     };
   }
@@ -170,7 +156,6 @@ describe('desired state', () => {
         'model:main-model:create',
         'mcpServer:file-server:create',
         'flow:first-flow:create',
-        'plannedExecution:nightly:create',
       ]));
     });
   });
@@ -194,7 +179,6 @@ describe('desired state', () => {
         TOKEN: { value: '${global:DS_TEST_KEY}', metadata: { isSecret: true } },
       });
       expect(await answerOf('first-flow')).toBe('first answer');
-      expect((await getSchedulerService().get('nightly'))?.flowId).toBe('first-flow');
 
       const overview = await getDesiredStateOverview();
       expect(overview.status).toMatchObject({ appliedVersion: '1', lastApplyFailed: false });
@@ -202,7 +186,6 @@ describe('desired state', () => {
         { kind: 'flow', id: 'first-flow' },
         { kind: 'model', id: 'main-model' },
         { kind: 'mcpServer', id: 'file-server' },
-        { kind: 'plannedExecution', id: 'nightly' },
         { kind: 'setting', id: 'telemetry.enabled' },
         { kind: 'secret', id: 'DS_TEST_KEY' },
       ]));
@@ -211,7 +194,7 @@ describe('desired state', () => {
     it('takes a flow in saved form too', async () => {
       const compiled = compileFlowSpec(simpleSpec('saved_form', 'from a saved flow') as never);
 
-      const report = await apply(baseFile('1', { flows: [{ id: 'saved', flow: compiled.flow }], plannedExecutions: [] }));
+      const report = await apply(baseFile('1', { flows: [{ id: 'saved', flow: compiled.flow }] }));
 
       expect(report.outcome).toBe('applied');
       expect((await flowService.getFlow('saved'))?.name).toBe('saved_form');
@@ -269,11 +252,11 @@ describe('desired state', () => {
     it('refuses to reuse a version for different content', async () => {
       await apply(baseFile('1'));
 
-      const report = await apply(baseFile('1', { plannedExecutions: [] }));
+      const report = await apply(baseFile('1', { settings: { telemetry: { enabled: true } } }));
 
       expect(report.outcome).toBe('invalid');
       expect(report.problems[0].message).toContain('already applied with different content');
-      expect(await getSchedulerService().get('nightly')).not.toBeNull();
+      expect((await settings())?.telemetry?.enabled).toBe(false);
     });
   });
 
@@ -297,9 +280,7 @@ describe('desired state', () => {
         { id: '1', source: 's', target: 'c', data: { edgeType: 'standard' } },
         { id: '2', source: 'c', target: 'e', data: { edgeType: 'standard' } },
       ] } }] }, /neither in this file nor on this instance/],
-      ['a schedule for a flow nobody has', { plannedExecutions: [{ id: 'p', name: 'P', flowId: 'nobody', enabled: false, prompt: 'x', trigger: { type: 'schedule', cron: '0 3 * * *' } }] }, /neither in this file nor on this instance/],
-      ['a broken schedule', { plannedExecutions: [{ id: 'p', name: 'P', flowId: 'first-flow', enabled: false, prompt: 'x', trigger: { type: 'schedule', cron: 'whenever' } }] }, /.+/],
-      ['a webhook, which needs a secret token', { plannedExecutions: [{ id: 'p', name: 'P', flowId: 'first-flow', enabled: false, prompt: 'x', trigger: { type: 'webhook', token: 'x' } }] }, /secret token/],
+      ['scheduled entries, which a file does not hold', { plannedExecutions: [] }, /not known: plannedExecutions/],
       ['a file for another workspace', { workspace: 'somewhere-else' }, /not for .*default-workspace/],
       ['a later file format', { schemaVersion: 99 }, /reads version 1/],
       ['a wider network without owner access', { settings: { network: { exposure: 'network' } } }, /refuse to start/],
@@ -326,7 +307,6 @@ describe('desired state', () => {
       const report = await apply(baseFile('1', {
         settings: { telemetry: { enabled: false } },
         flows: [{ id: 'first-flow', spec: simpleSpec('first_flow', 'fine') }, { id: 'bad', spec: { name: 'bad', nodes: [], edges: [] } }],
-        plannedExecutions: [],
       }));
 
       expect(report.outcome).toBe('invalid');
@@ -431,7 +411,6 @@ describe('desired state', () => {
         { id: 'first-flow', spec: simpleSpec('first_flow', 'version two') },
         { id: 'third-flow', spec: simpleSpec('third_flow', 'only in two') },
       ],
-      plannedExecutions: [],
     });
 
     it('returns the whole instance to the previous version with one call', async () => {
@@ -440,7 +419,6 @@ describe('desired state', () => {
       const settingBefore = (await settings())?.update;
       await apply(version2());
       expect(await flowService.getFlow('second-flow')).toBeNull();
-      expect(await getSchedulerService().get('nightly')).toBeNull();
 
       const report = await rollback();
 
@@ -451,11 +429,10 @@ describe('desired state', () => {
       expect(await flowService.getFlow('third-flow')).toBeNull();
       expect(await modelService.getModel('extra-model')).toBeNull();
       expect((await modelService.getModel('main-model'))?.name).toBe('provider-model-1');
-      expect((await getSchedulerService().get('nightly'))?.flowId).toBe('first-flow');
       expect((await settings())?.telemetry?.enabled).toBe(false);
       // Only version 2 managed this setting, so it returns to its value from before version 2.
       expect((await settings())?.update).toEqual(settingBefore);
-      const after = await snapshotOfInstance() as { flows: unknown; executions: unknown[] };
+      const after = await snapshotOfInstance() as { flows: unknown };
       expect(after.flows).toEqual((before as { flows: unknown }).flows);
       expect((await getDesiredStateOverview()).status).toMatchObject({ appliedVersion: '1', heldBackVersion: '2', lastApplyFailed: false });
     });
@@ -563,7 +540,7 @@ describe('desired state', () => {
 
   describe('a crash in the middle', () => {
     const points = [
-      'journal', 'secrets', 'models', 'settings', 'servers', 'flow:first-flow', 'planned-executions', 'removals',
+      'journal', 'secrets', 'models', 'settings', 'servers', 'flow:first-flow', 'removals',
       'before-state', 'after-state', 'before-journal-clear',
     ];
     const version2 = () => baseFile('2', {
@@ -759,7 +736,7 @@ describe('desired state', () => {
       const before = [await flowService.getFlow('person-flow'), await modelService.getModel('person-model'), (await servers())['person-server']];
 
       await apply(baseFile('1'));
-      await apply(baseFile('2', { flows: [{ id: 'first-flow', spec: simpleSpec('first_flow', 'two') }], plannedExecutions: [] }));
+      await apply(baseFile('2', { flows: [{ id: 'first-flow', spec: simpleSpec('first_flow', 'two') }] }));
       await rollback();
 
       const after = [await flowService.getFlow('person-flow'), await modelService.getModel('person-model'), (await servers())['person-server']];
@@ -792,12 +769,11 @@ describe('desired state', () => {
     it('can be taken over on request, and go back on a rollback', async () => {
       const original = { ...personFlow(), id: 'first-flow' };
       await flowService.saveFlow(original);
-      await apply(baseFile('1', { flows: [{ id: 'second-flow', spec: simpleSpec('second_flow', 'second') }], plannedExecutions: [] }));
+      await apply(baseFile('1', { flows: [{ id: 'second-flow', spec: simpleSpec('second_flow', 'second') }] }));
 
       const report = await apply(baseFile('2', {
         policy: { existingLocalObjects: 'adopt' },
         flows: [{ id: 'first-flow', spec: simpleSpec('first_flow', 'taken over') }, { id: 'second-flow', spec: simpleSpec('second_flow', 'second') }],
-        plannedExecutions: [],
       }));
 
       expect(report.changes).toEqual([expect.objectContaining({ id: 'first-flow', action: 'adopt' })]);
@@ -825,6 +801,22 @@ describe('desired state', () => {
       ]));
       expect(await modelService.getModel('main-model')).not.toBeNull();
       expect((await getDesiredStateOverview()).managed.map((entry) => entry.id)).not.toContain('main-model');
+    });
+  });
+
+  describe('a schedule a person made', () => {
+    it('keeps the flow it runs, even when the file stops mentioning it', async () => {
+      await apply(baseFile('1'));
+      await getSchedulerService().create({
+        id: 'person-schedule', name: 'Mine', flowId: 'second-flow', enabled: false, prompt: 'Run it.',
+        trigger: { type: 'schedule', cron: '0 3 * * *' },
+      } as never);
+
+      const report = await apply(baseFile('2', { flows: [{ id: 'first-flow', spec: simpleSpec('first_flow', 'first answer') }] }));
+
+      expect(report.changes).toEqual([expect.objectContaining({ kind: 'flow', id: 'second-flow', action: 'unmanage' })]);
+      expect(await flowService.getFlow('second-flow')).not.toBeNull();
+      expect(await getSchedulerService().get('person-schedule')).not.toBeNull();
     });
   });
 
@@ -871,7 +863,7 @@ describe('desired state', () => {
           await dryRun(baseFile('1')),
           await apply(baseFile('1')),
           await apply(baseFile('1')),
-          await apply(baseFile('2', { flows: [] , plannedExecutions: [] })),
+          await apply(baseFile('2', { flows: [] })),
           await rollback(true),
           await rollback(),
           await applyDesiredState(baseFile('3', { models: [{ id: 'x', name: 'n', provider: 'openai', apiKey: OTHER_SECRET }] }), { reconcileRuntime: false }),
@@ -911,7 +903,7 @@ describe('desired state', () => {
 
     it('are refused as literal text only where it can be told apart, and a warning is possible', async () => {
       const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789abcd';
-      const file = (policy: object) => baseFile('1', { policy, flows: [{ id: 'f', spec: simpleSpec('f', `Here: ${key}`) }], plannedExecutions: [] });
+      const file = (policy: object) => baseFile('1', { policy, flows: [{ id: 'f', spec: simpleSpec('f', `Here: ${key}`) }] });
 
       const refused = await dryRun(file({}));
       expect(refused.outcome).toBe('invalid');

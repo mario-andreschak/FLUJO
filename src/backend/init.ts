@@ -451,11 +451,6 @@ async function runInitialization(): Promise<void> {
     );
   }
 
-  // Before the lock check: a locked instance should still be able to say that it is.
-  if (!isWorkerMode()) {
-    (await import('@/backend/services/desiredState/heartbeat')).armDesiredStateHeartbeat();
-  }
-
   // MCP servers read secret env values and the scheduler fires flows that
   // resolve ${global:...} bindings and decrypt model API keys. In locked USER
   // encryption mode those secrets are undecryptable, so this secret-dependent
@@ -518,7 +513,7 @@ function startSecretDependentServices(): Promise<void> {
       }
 
       // Runs once the workspace is unlocked and shipped servers exist, and before
-      // servers connect and schedules arm, so they start from the wanted configuration.
+      // servers connect, so they start from the wanted configuration.
       // It reports its own failures and never stops startup.
       await (await import('@/backend/services/desiredState')).applyDesiredStateAtStartup();
 

@@ -26,7 +26,7 @@ import { emptyDesiredStateStatus, type DesiredStateStatus } from './status';
 const COLLECTION = 'desired-state';
 const HISTORY_COLLECTION = 'desired-state-history';
 
-export type ManagedKind = 'setting' | 'secret' | 'model' | 'mcpServer' | 'flow' | 'plannedExecution';
+export type ManagedKind = 'setting' | 'secret' | 'model' | 'mcpServer' | 'flow';
 
 export interface LedgerEntry {
   kind: ManagedKind;
@@ -40,7 +40,6 @@ export interface LedgerEntry {
 }
 
 export type StoredServer = Record<string, unknown>;
-export type PlannedExecutionDefinition = Record<string, unknown> & { id: string };
 
 export interface SettingTarget { path: string[]; value: unknown }
 export interface SecretTarget { name: string; fromEnv?: string }
@@ -53,7 +52,6 @@ export interface BundleTargets {
   mcpServers: Array<{ name: string; config: StoredServer }>;
   /** Children before the flows that call them. */
   flows: Flow[];
-  plannedExecutions: PlannedExecutionDefinition[];
 }
 
 /** One write in either direction. A null value means the object should not exist. */
@@ -63,11 +61,10 @@ export interface ChangeSet {
   models: Array<{ id: string; value: Model | null }>;
   mcpServers: Array<{ name: string; value: StoredServer | null }>;
   flows: Array<{ id: string; value: Flow | null }>;
-  plannedExecutions: Array<{ id: string; value: PlannedExecutionDefinition | null }>;
 }
 
 export function emptyChangeSet(): ChangeSet {
-  return { secrets: [], settings: [], models: [], mcpServers: [], flows: [], plannedExecutions: [] };
+  return { secrets: [], settings: [], models: [], mcpServers: [], flows: [] };
 }
 
 /** What taking over or first managing an object replaced, for a later rollback. */

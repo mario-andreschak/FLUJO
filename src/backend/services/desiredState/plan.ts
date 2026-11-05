@@ -33,16 +33,12 @@ import {
   type DurableState,
   type LedgerEntry,
   type ManagedKind,
-  type PlannedExecutionDefinition,
   type StoredServer,
 } from './store';
 
 const SERVER_MANAGED_FLOW_FIELDS = new Set(['createdAt', 'updatedAt']);
-const SERVER_MANAGED_EXECUTION_FIELDS = new Set(['generationId', 'createdAt', 'updatedAt']);
 /** Settings the launcher reads once, before the server starts. */
 const RESTART_SETTINGS = new Set(['network.exposure', 'network.allowAllMcpAppContent']);
-/** May name an installation in its path, so its value stays out of reports. */
-const QUIET_SETTINGS = new Set(['heartbeat.url']);
 const MAX_REPORTED_FIELDS = 40;
 
 export const ledgerKey = (kind: ManagedKind, id: string): string => `${kind}:${id}`;
@@ -55,7 +51,6 @@ export function fingerprint(kind: ManagedKind, value: unknown): string {
   let content = value;
   if (value && typeof value === 'object') {
     if (kind === 'flow') content = withoutFields(value, SERVER_MANAGED_FLOW_FIELDS);
-    if (kind === 'plannedExecution') content = withoutFields(value, SERVER_MANAGED_EXECUTION_FIELDS);
   }
   return createHash('sha256').update(canonicalJson(content)).digest('hex');
 }
@@ -68,7 +63,7 @@ function changedFields(before: unknown, after: unknown, path = '', out: string[]
     const left = before as Record<string, unknown>;
     const right = after as Record<string, unknown>;
     for (const key of [...new Set([...Object.keys(left), ...Object.keys(right)])]) {
-      if (!path && SERVER_MANAGED_EXECUTION_FIELDS.has(key)) continue;
+      if (!path && SERVER_MANAGED_FLOW_FIELDS.has(key)) continue;
       const next = Array.isArray(before) ? `${path}[${key}]` : path ? `${path}.${key}` : key;
       changedFields(left[key], right[key], next, out);
     }
@@ -112,8 +107,6 @@ export async function readStored(kind: ManagedKind, id: string): Promise<unknown
       if (!Array.isArray(configs)) throw new Error('The list of servers could not be read.');
       return configs.find((config) => config.name === id) ?? null;
     }
-    case 'plannedExecution':
-      return await getSchedulerService().get(id);
     case 'setting': {
       const found = settingValue(await readSettingsDocument(), id.split('.'));
       return found.exists ? found.value : null;
@@ -338,21 +331,8 @@ export async function compileTargets(state: ParsedDesiredState, durable: Durable
 
   const flows = await compileFlows(state, durable, modelsAfter, serverNames, problems, warnings);
 
-  const scheduler = getSchedulerService();
-  const localFlowIds = new Set((await flowService.loadFlows()).map((flow) => flow.id));
-  const plannedExecutions = state.plannedExecutions.map((entry) => {
-    const definition = { ...entry } as PlannedExecutionDefinition;
-    const where = `plannedExecutions.${entry.id}`;
-    if (!flows.some((flow) => flow.id === entry.flowId) && !localFlowIds.has(entry.flowId)) {
-      problems.push({ where, message: `it runs flow "${entry.flowId}", which is neither in this file nor on this instance.` });
-    }
-    const error = scheduler.validateDefinition(definition as never);
-    if (error) problems.push({ where, message: error });
-    return definition;
-  });
-
   return {
-    targets: { secrets: [...secrets.values()], settings, models, mcpServers, flows, plannedExecutions },
+    targets: { secrets: [...secrets.values()], settings, models, mcpServers, flows },
     problems,
     warnings,
     secretValues,
@@ -437,13 +417,11 @@ export async function buildOperationPlan(input: {
     if (kind === 'model') into.models.push({ id, value: rawModels.find((model) => model.id === id) ?? null });
     if (kind === 'mcpServer') into.mcpServers.push({ name: id, value: rawServers[id] ?? null });
     if (kind === 'flow') into.flows.push({ id, value: (preImage as Flow | null) ?? null });
-    if (kind === 'plannedExecution') into.plannedExecutions.push({ id, value: (preImage as PlannedExecutionDefinition | null) ?? null });
   };
   const write = (kind: ManagedKind, id: string, desired: unknown): void => {
     if (kind === 'model') plan.forward.models.push({ id, value: desired as Model | null });
     if (kind === 'mcpServer') plan.forward.mcpServers.push({ name: id, value: desired as StoredServer | null });
     if (kind === 'flow') plan.forward.flows.push({ id, value: desired as Flow | null });
-    if (kind === 'plannedExecution') plan.forward.plannedExecutions.push({ id, value: desired as PlannedExecutionDefinition | null });
   };
 
   const consider = async (kind: ManagedKind, id: string, desired: unknown): Promise<void> => {
@@ -525,7 +503,7 @@ export async function buildOperationPlan(input: {
     const decision = entry ? decide(entry, desiredHash, found.exists ? found.value : null, storedHash, policy)
       : storedHash === desiredHash ? 'unchanged' : 'update';
     if (decision === 'unchanged') { plan.unchanged += 1; continue; }
-    const shown = QUIET_SETTINGS.has(id) ? {} : { from: found.value, to: setting.value };
+    const shown = { from: found.value, to: setting.value };
     if (decision === 'keep-local-edit') {
       plan.ledgerTargets.pop();
       plan.keptEntries.push({ ...entry!, localEditKept: true });
@@ -543,7 +521,6 @@ export async function buildOperationPlan(input: {
   for (const model of targets.models) await consider('model', model.id, model);
   for (const server of targets.mcpServers) await consider('mcpServer', server.name, { name: server.name, ...server.config });
   for (const flow of targets.flows) await consider('flow', flow.id, flow);
-  for (const execution of targets.plannedExecutions) await consider('plannedExecution', execution.id, execution);
 
   // A server's stored record has no name inside it: the name is its key.
   for (const change of plan.forward.mcpServers) {
@@ -558,13 +535,12 @@ export async function buildOperationPlan(input: {
   const localFlowText = allFlows
     .filter((flow) => !targets.flows.some((target) => target.id === flow.id) && !durable.ledger[ledgerKey('flow', flow.id)])
     .map((flow) => JSON.stringify(flow));
-  const localExecutions = (await getSchedulerService().list())
-    .filter(({ execution }) => !durable.ledger[ledgerKey('plannedExecution', execution.id)]);
+  // A file does not manage schedules, so every schedule is somebody's own.
+  const schedules = await getSchedulerService().list();
   const stillUsed = (kind: ManagedKind, id: string): boolean => {
-    if (kind === 'plannedExecution') return false;
     const quoted = JSON.stringify(id);
     if (localFlowText.some((text) => text.includes(quoted))) return true;
-    if (kind === 'flow') return localExecutions.some(({ execution }) => execution.flowId === id);
+    if (kind === 'flow') return schedules.some(({ execution }) => execution.flowId === id);
     if (kind === 'model') {
       return rawModels.some((model) => !durable.ledger[ledgerKey('model', model.id)] && model.fallbackPolicy?.modelIds.includes(id));
     }
@@ -609,8 +585,7 @@ export async function buildOperationPlan(input: {
       const adopted = rollbackFrom.undo.adopted;
       const before = entry.kind === 'model' ? adopted.models.find((item) => item.id === entry.id)?.value
         : entry.kind === 'mcpServer' ? adopted.mcpServers.find((item) => item.name === entry.id)?.value
-        : entry.kind === 'flow' ? adopted.flows.find((item) => item.id === entry.id)?.value
-        : adopted.plannedExecutions.find((item) => item.id === entry.id)?.value;
+        : adopted.flows.find((item) => item.id === entry.id)?.value;
       if (before) {
         plan.writes = true;
         plan.changes.push({ kind: entry.kind, id: entry.id, action: 'restore', reason: 'This version took it over. It goes back to how it was and is no longer managed.' });
