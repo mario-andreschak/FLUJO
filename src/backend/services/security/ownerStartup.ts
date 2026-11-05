@@ -7,7 +7,8 @@ const recovery = 'Owner authentication is required for Network/Public exposure. 
   + 'with an active owner credential, then enable broader exposure.';
 const configuredRecovery = 'Owner authentication is required, but the configured policy is unavailable or has no active credential. '
   + 'Restore or repair the matching private owner policy at FLUJO_OWNER_AUTH_FILE with a current active owner credential, then restart. '
-  + 'Changing network exposure does not repair configured owner authority.';
+  + 'Changing network exposure does not repair configured owner authority. '
+  + 'scripts/owner-access.mjs recover adds a fresh administrator and keeps a corrupt policy aside.';
 
 /** Run before startup initialization; exposure and worker authority stay distinct. */
 export function assertOwnerStartup(now = Date.now()): void {

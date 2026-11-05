@@ -287,6 +287,10 @@ export interface ConversationListItem {
    *  redacted provider details/stack) so the sidebar's bulk listing stays
    *  small. Present when status === 'error'. */
   lastError?: { message: string; code?: string; errorClass?: NormalizedChatError['errorClass'] };
+  /** Named access: the credential that started this conversation. */
+  accessOwnerId?: string;
+  /** Named access: the caller's own reference for its end user. */
+  endUser?: string;
 }
 
 /**

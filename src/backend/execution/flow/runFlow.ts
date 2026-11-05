@@ -386,6 +386,9 @@ export interface FlowRunInput extends FlowReplayInputs {
   mode?: 'ephemeral' | 'conversation';
   /** Required to resume/persist a conversation; a random id is used otherwise. */
   conversationId?: string;
+  /** Named access: who started this run. Only ever recorded on a NEW conversation,
+   *  so a later turn or a resume can never change who a conversation belongs to. */
+  accessOwner?: import('@/backend/services/security/accessContext').AccessOwner;
   /** Stable logical run id supplied by an orchestrator (the scheduler uses its
    * existing RunRecord id). Approval/debug resumes recover it from SharedState. */
   runId?: string;
@@ -1074,6 +1077,11 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       // seeded from FlowRunInput.variables just below.
       variables: {},
     };
+    // A subflow belongs to whoever started the run that called it, so the person
+    // can follow their own run into its children and nobody else can.
+    const accessOwner = input.accessOwner
+      ?? (input.parentRunId ? FlowExecutor.conversationStates.get(input.parentRunId)?.accessOwner : undefined);
+    if (accessOwner) sharedState.accessOwner = { ...accessOwner };
   }
 
   if (personaInstructionContext && resetPersonaPromptPrefix) {

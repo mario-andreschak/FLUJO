@@ -6,6 +6,7 @@ import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
 import { listPersonas } from '@/backend/services/enduringAgents';
 import { json } from '../_helpers';
+import { recordFlowChange } from '@/backend/services/security/accessAudit';
 
 const log = createLogger('app/api/flow/[id]/route');
 
@@ -71,6 +72,7 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
       return json({ error: result.error || 'Failed to update flow' }, 400);
     }
 
+    recordFlowChange('flow.update', id);
     return json(flow, 200);
   } catch (error) {
     log.error('Error handling PUT request', error);
@@ -125,6 +127,7 @@ async function DELETE_handler(_request: NextRequest, { params }: RouteContext) {
       return json({ error: result.error || 'Failed to delete flow' }, 500);
     }
 
+    recordFlowChange('flow.delete', id);
     return new Response(null, { status: 204 });
   } catch (error) {
     log.error('Error handling DELETE request', error);

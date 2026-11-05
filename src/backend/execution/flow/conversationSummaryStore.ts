@@ -46,6 +46,10 @@ export interface ConversationSummary {
   plannedExecutionId?: string | null;
   parentConversationId?: string | null;
   rootConversationId?: string | null;
+  /** Named access: the credential that started this conversation. */
+  accessOwnerId?: string;
+  /** Named access: the caller's own reference for its end user. */
+  endUser?: string;
   /** User-facing resolved key for a persisted keyed child session. */
   sessionKey?: string;
   /** Internal stable correlation identity; returned for clients that need correlation, never displayed. */
@@ -147,6 +151,8 @@ export function summarizeConversation(state: SharedState, fallbackId: string): C
     ...(state.plannedExecutionId !== undefined ? { plannedExecutionId: state.plannedExecutionId } : {}),
     ...(state.parentConversationId !== undefined ? { parentConversationId: state.parentConversationId } : {}),
     ...(state.rootConversationId !== undefined ? { rootConversationId: state.rootConversationId } : {}),
+    ...(state.accessOwner?.credentialId ? { accessOwnerId: state.accessOwner.credentialId } : {}),
+    ...(state.accessOwner?.endUser ? { endUser: state.accessOwner.endUser } : {}),
     ...(state.subflowLane?.sessionKey ? { sessionKey: state.subflowLane.sessionKey } : {}),
     ...(state.subflowLane?.sessionIdentity ? { sessionIdentity: state.subflowLane.sessionIdentity } : {}),
     ...(state.recovery ? { recovery: state.recovery } : {}),

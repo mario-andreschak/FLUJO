@@ -50,6 +50,9 @@ import {
 import { SESSION_KEY_MAX_LENGTH } from '@/backend/execution/flow/sessionManagement';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
+import { accessOwnerFor, currentAccessActor } from '@/backend/services/security/accessContext';
+import { summaryVisibleToActor } from '@/backend/services/security/accessConversations';
+import { parseEndUserRef } from '@/shared/types/access';
 
 const log = createLogger('app/v1/chat/conversations/route');
 
@@ -267,11 +270,28 @@ async function GET_handler(request: NextRequest) {
     const files = await fs.readdir(conversationsDir);
     log.debug(`Found ${files.length} items in directory`, { requestId });
 
-    const jsonFiles: string[] = [];
+    let jsonFiles: string[] = [];
     for (const file of files.filter(file => file.endsWith('.json'))) {
       if (await exposeExecutionConversationInList(file.slice(0, -5))) jsonFiles.push(file);
     }
     log.debug(`Found ${jsonFiles.length} JSON files`, { requestId });
+
+    // Named access narrows the one list every branch below works from, so paging,
+    // search, presence and the older full listing cannot disagree about it.
+    const actor = currentAccessActor();
+    if (actor) {
+      const endUserFilter = parseEndUserRef(url.searchParams.get('endUser'));
+      if (!endUserFilter.ok) {
+        return NextResponse.json({ error: 'invalid endUser filter', code: 'invalid_end_user' }, { status: 400 });
+      }
+      if (!actor.isAdmin || endUserFilter.value) {
+        const allowed = new Set((await listConversationSummaries())
+          .filter(summary => summaryVisibleToActor(actor, summary)
+            && (!endUserFilter.value || summary.endUser === endUserFilter.value))
+          .map(summary => `${summary.id}.json`));
+        jsonFiles = jsonFiles.filter(file => allowed.has(file));
+      }
+    }
 
     // The dashboard only needs to know whether saved chats exist. Avoid reading
     // and projecting every conversation file for that lightweight status check.
@@ -441,6 +461,8 @@ async function GET_handler(request: NextRequest) {
             // Absent on legacy conversations => they render as roots.
             parentConversationId: state.parentConversationId ?? null,
             rootConversationId: state.rootConversationId ?? null,
+            ...(state.accessOwner?.credentialId ? { accessOwnerId: state.accessOwner.credentialId } : {}),
+            ...(state.accessOwner?.endUser ? { endUser: state.accessOwner.endUser } : {}),
             ...(state.subflowLane?.sessionKey ? { sessionKey: state.subflowLane.sessionKey } : {}),
             ...(state.subflowLane?.sessionIdentity ? { sessionIdentity: state.subflowLane.sessionIdentity } : {}),
             ...(isPersonaOwnedConversationState(state)
@@ -715,6 +737,18 @@ async function POST_handler(req: NextRequest) {
 
 
   const conversationId = payload.id;
+  const actor = currentAccessActor();
+  const narrow = actor && !actor.isAdmin ? actor : undefined;
+  if (narrow) {
+    // This route can bring a graph of its own or start a Persona chat. Neither
+    // belongs to a role that only runs what was built for it.
+    if (hasPersonaTarget || (payload.flowSnapshot && !narrow.scopes.includes('flows:write'))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    if (narrow.flowIds && !narrow.flowIds.includes(payload.flowId as string)) {
+      return NextResponse.json({ error: 'This credential may not run that flow.', code: 'flow_not_allowed' }, { status: 403 });
+    }
+  }
   return withConversationExecutionLock(conversationId, async () => {
     // This is the authoritative ownership check. It shares the same lease as
     // runFlow and Persona anonymization, so a stale legacy create can neither
@@ -726,6 +760,11 @@ async function POST_handler(req: NextRequest) {
         conversationId,
         undefined,
       );
+    // This route overwrites by id, so a narrow credential must never reach an id
+    // that already exists, whoever it belongs to. Same answer as "not found".
+    if (narrow && existingState) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
     if (isPersonaOwnedConversationState(existingState)) {
       const personaNotLocal = assertLocalRequest(req);
       if (personaNotLocal) return personaNotLocal;
@@ -787,6 +826,7 @@ async function POST_handler(req: NextRequest) {
       // "no Flow authority" until the trusted Persona dispatch installs the
       // immutable Behavior Flow immediately before execution.
       flowId: hasPersonaTarget ? '' : payload.flowId!,
+      ...(actor ? { accessOwner: accessOwnerFor(actor) } : {}),
       ...(hasPersonaTarget ? { personaTargetId: payload.personaTargetId } : {}),
       ...(hasPersonaTarget ? { personaBehaviorSlotKey: payload.personaBehaviorSlotKey } : {}),
       // Quick-Chats (issue #61): seed the in-memory flow snapshot so the engine

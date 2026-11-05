@@ -27,6 +27,9 @@ import {
   type PersonaFlowDispatchRecord,
 } from '@/backend/services/enduringAgents/personaDispatcher';
 
+import { currentAccessActor } from '@/backend/services/security/accessContext';
+import { auditApprovalDecision, recordApprovalDecision } from '@/backend/services/security/accessConversations';
+
 const log = createLogger('app/v1/chat/conversations/[conversationId]/respond/route');
 
 async function personaResumeResponse(
@@ -83,6 +86,7 @@ async function POST_handler(
 
   const { conversationId } = await params;
   const requestId = `conv-respond-${Date.now()}`;
+  const actor = currentAccessActor();
   log.info('Handling POST request for conversation response (Approve/Reject)', { requestId, conversationId });
 
   if (!conversationId) {
@@ -201,6 +205,7 @@ async function POST_handler(
       return NextResponse.json({ error: `No pending elicitation with ID ${elicitationId}` }, { status: 404 });
     }
     log.info('Resolved elicitation', { requestId, conversationId, action, elicitationId });
+    auditApprovalDecision(actor, conversationId, action);
     return NextResponse.json({ status: 'running', conversation_id: conversationId });
   }
 
@@ -231,6 +236,7 @@ async function POST_handler(
       return NextResponse.json({ error: `No pending question with ID ${questionId}` }, { status: 404 });
     }
     log.info('Resolved question', { requestId, conversationId, action, questionId });
+    auditApprovalDecision(actor, conversationId, action);
     return NextResponse.json({ status: 'running', conversation_id: conversationId });
   }
 
@@ -246,6 +252,7 @@ async function POST_handler(
   if (resolvePendingApproval(conversationId, toolCallId, action === 'approve')) {
     const remaining = listPendingToolCalls(conversationId);
     log.info('Resolved in-request tool approval', { requestId, conversationId, action, toolCallId, remaining: remaining.length });
+    auditApprovalDecision(actor, conversationId, action);
     return NextResponse.json(
       remaining.length > 0
         ? { status: 'awaiting_tool_approval', conversation_id: conversationId, pendingToolCalls: remaining }
@@ -326,6 +333,8 @@ async function POST_handler(
           if (decision.outcome === 'tool_not_found') {
             throw new Error(`Pending tool call with ID ${toolCallId} disappeared during resume.`);
           }
+          recordApprovalDecision(sharedState, actor, { toolCallId, action });
+          auditApprovalDecision(actor, conversationId, action);
           sharedState.lastResponse = undefined;
           sharedState.lastError = undefined;
           sharedState.errorEventEmitted = false;
@@ -351,6 +360,8 @@ async function POST_handler(
       return NextResponse.json({ error: `Pending tool call with ID ${toolCallId} not found` }, { status: 404 });
     }
     const appendedMessages: FlujoChatMessage[] = decision.appendedMessages;
+    recordApprovalDecision(sharedState, actor, { toolCallId, action });
+    auditApprovalDecision(actor, conversationId, action);
 
     // 5. Save updated state
     sharedState.lastResponse = undefined; // Clear last response before potentially resuming

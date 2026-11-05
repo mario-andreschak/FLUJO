@@ -95,7 +95,7 @@ export function GET(request: Request) {
     if (notLocal) return notLocal;
     return wrapped(request, { worker: false, local: true });
   }
-  const resolved = resolveOwnerRequest(request, ['control:admin', 'secrets:read']);
+  const resolved = resolveOwnerRequest(request);
   if (!resolved.ok) return resolved.response;
   return wrapped(request, { worker: false, authorization: resolved.authorization });
 }

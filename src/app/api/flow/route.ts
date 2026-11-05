@@ -5,6 +5,7 @@ import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
 import { json } from './_helpers';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { recordFlowChange } from '@/backend/services/security/accessAudit';
 
 const log = createLogger('app/api/flow/route');
 
@@ -56,6 +57,7 @@ async function POST_handler(request: NextRequest) {
       return json({ error: result.error || 'Failed to create flow' }, 400);
     }
 
+    recordFlowChange('flow.create', flow.id);
     return json(flow, 201);
   } catch (error) {
     log.error('Error handling POST request', error);

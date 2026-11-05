@@ -15,6 +15,8 @@ import { UnsupportedOpenAIToolTypeError } from '@/shared/types/openai';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { accessOwnerFor, currentAccessActor, type AccessActor, type AccessOwner } from '@/backend/services/security/accessContext';
+import { parseEndUserRef } from '@/shared/types/access';
 
 const log = createLogger('app/v1/chat/completions/route');
 
@@ -24,6 +26,52 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': '*',
   'Access-Control-Allow-Headers': '*'
 };
+
+function accessError(status: number, code: string, message: string, param: string | null = null) {
+  return NextResponse.json({ error: { message, type: 'invalid_request_error', code, param } }, { status, headers: corsHeaders });
+}
+
+const flowNotAllowed = () => accessError(403, 'flow_not_allowed', 'This credential may not run that flow.', 'model');
+
+/**
+ * What named access adds to a completion. Ordinary installs never get here. Runs
+ * before any flow starts, and returns who the new conversation will belong to.
+ *
+ * A flow limit guards the way in. A flow the credential may start can still call
+ * its own subflows, because those were chosen by whoever built that flow.
+ */
+async function admitNamedCompletion(actor: AccessActor, input: {
+  model: unknown; user: unknown; conversationId: string | undefined; personaTargeted: boolean;
+}): Promise<{ denied: Response } | { owner: AccessOwner }> {
+  const endUser = parseEndUserRef(input.user);
+  if (!endUser.ok) {
+    return { denied: accessError(400, 'invalid_end_user', 'The end-user reference is not valid.', 'user') };
+  }
+  // A Persona is a durable actor with its own records, not a run of one person.
+  if (input.personaTargeted && !actor.isAdmin) {
+    return { denied: accessError(403, 'persona_not_allowed', 'This credential may not address a Persona.', 'metadata.personaId') };
+  }
+  const model = typeof input.model === 'string' ? input.model : '';
+  if (actor.flowIds && !model.startsWith('flow-')) return { denied: flowNotAllowed() };
+  const { flowService } = await import('@/backend/services/flow');
+  let startingFlowId: string | undefined;
+  if (input.conversationId) {
+    // Trying to continue someone else's conversation looks like it does not exist.
+    const { actorMayAccess, lookupConversationOwnership } = await import('@/backend/services/security/accessConversations');
+    const ownership = await lookupConversationOwnership(input.conversationId);
+    if (ownership.exists && !actorMayAccess(actor, ownership)) {
+      return { denied: accessError(404, 'conversation_not_found', 'Conversation not found.', 'metadata.conversationId') };
+    }
+    if (ownership.exists && actor.flowIds) {
+      startingFlowId = (await loadConversationState(input.conversationId))?.flowId;
+    }
+  }
+  if (actor.flowIds) {
+    startingFlowId ??= (await flowService.getFlowByName(model.slice(5)))?.id;
+    if (!startingFlowId || !actor.flowIds.includes(startingFlowId)) return { denied: flowNotAllowed() };
+  }
+  return { owner: accessOwnerFor(actor, endUser.value ?? actor.endUser) };
+}
 
 // Handle both GET and POST requests with a common handler
 async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
@@ -74,6 +122,17 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
       personaTarget,
       ...completionData
     } = parsedData;
+
+    const actor = currentAccessActor();
+    let accessOwner: AccessOwner | undefined;
+    if (actor) {
+      const admitted = await admitNamedCompletion(actor, {
+        model: completionData.model, user: completionData.user,
+        conversationId: conversation_id, personaTargeted: Boolean(personaTarget),
+      });
+      if ('denied' in admitted) return admitted.denied;
+      accessOwner = admitted.owner;
+    }
 
     // Persona ids select a durable living actor. They follow the same selected
     // exposure policy as the rest of FLUJO's UI/control surface.
@@ -172,6 +231,7 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
       true, // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
       personaTarget,
       ingress,
+      accessOwner,
     );
 
     const duration = Date.now() - startTime;

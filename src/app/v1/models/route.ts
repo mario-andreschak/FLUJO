@@ -5,6 +5,7 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { isDirectModelCallsEnabled } from '@/backend/services/workspace/modelAccess';
 import { createLogger } from '@/utils/logger';
+import { currentAccessActor } from '@/backend/services/security/accessContext';
 
 const log = createLogger('app/v1/models/route');
 
@@ -16,7 +17,10 @@ async function GET_handler(_request: Request) {
     log.info('Fetching flows and models for models endpoint');
 
     // Use the same collection/migration path as saved agents and execution.
-    const flows = await flowService.loadFlows();
+    // A credential limited to named flows sees those flows and nothing else.
+    const allowedFlowIds = currentAccessActor()?.flowIds;
+    const flows = (await flowService.loadFlows())
+      .filter(flow => !allowedFlowIds || allowedFlowIds.includes(flow.id));
     log.debug('Flows loaded successfully', { count: flows.length });
 
     // Transform flows into the required format
@@ -42,7 +46,7 @@ async function GET_handler(_request: Request) {
     try {
       // A switched-off workspace does not advertise what it would refuse. An
       // unreadable setting takes the catch below, which lists flows only.
-      const models = await isDirectModelCallsEnabled() ? await modelService.loadModels() : [];
+      const models = !allowedFlowIds && await isDirectModelCallsEnabled() ? await modelService.loadModels() : [];
       const seen = new Set<string>();
       for (const m of models) {
         const identifier = (m.fallbackPolicy ? m.name : m.displayName?.trim() || m.name || '').trim();

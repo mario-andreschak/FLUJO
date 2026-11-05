@@ -6,6 +6,8 @@ import type { FlowInvocationSource } from '@/backend/execution/flow/types';
 import { flowService } from '@/backend/services/flow';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { currentAccessActor } from '@/backend/services/security/accessContext';
+import { stateVisibleToActor } from '@/backend/services/security/accessConversations';
 
 const log = createLogger('app/api/runs/active/route');
 
@@ -78,8 +80,10 @@ async function GET_handler(request: Request) {
 
     const active: ActiveRun[] = [];
     let personaControlDenied: Response | null | undefined;
+    const actor = currentAccessActor();
     for (const state of FlowExecutor.conversationStates.values()) {
       if (!state || !ACTIVE_STATUSES.has(state.status ?? '')) continue;
+      if (actor && !stateVisibleToActor(actor, state)) continue;
       if (isPersonaOwnedConversationState(state)) {
         personaControlDenied ??= assertLocalRequest(request, { strictLoopback: true });
         if (personaControlDenied) continue;

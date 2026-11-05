@@ -10,6 +10,9 @@ import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layout
 import { assertWorkerRequestReady, isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { authorizeExecutionTransport, withExecutionExtensionRoute, executionExtensionAdapter, hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertOwnerRequest, isOwnerProtocolException, resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
+import { accessActorFromPrincipal, runWithAccessActor, type AccessActor } from '@/backend/services/security/accessContext';
+import { classifyAccessRoute } from '@/backend/services/security/accessRoutes';
+import { ACCESS_END_USER_HEADER, parseEndUserRef } from '@/shared/types/access';
 import { bindOwnerStream } from '@/backend/services/security/ownerStream';
 import {
   resolveBundledFlujoWorkloadRequest,
@@ -167,6 +170,23 @@ export async function withWorkspace<T>(
 }
 
 /**
+ * The per-person half of named access. A credential bound to a workspace stays
+ * there, and a route that names a conversation or approval checks that row before
+ * the handler runs. The engine is only loaded when a narrow credential needs it.
+ */
+async function denyOutsideActorScope(actor: AccessActor, request: Request, workspace: string): Promise<Response | null> {
+  if (actor.workspaceId !== undefined && actor.workspaceId !== workspace) {
+    return Response.json({ error: 'Forbidden' }, { status: 403, headers: { 'Cache-Control': 'no-store' } });
+  }
+  if (actor.isAdmin) return null;
+  const { pathname } = new URL(request.url);
+  const rule = classifyAccessRoute(request.method, pathname);
+  if (rule?.row !== 'conversation' && rule?.row !== 'approval') return null;
+  const { enforceRowAccess } = await import('@/backend/services/security/accessConversations');
+  return enforceRowAccess(actor, rule, pathname);
+}
+
+/**
  * Wrap a Next.js route handler so it runs inside the requested workspace.
  *
  *   const GET_handler = async (request: NextRequest) => { ... };
@@ -237,6 +257,7 @@ export function withWorkspaceRoute<
     const extensionResponse = authorizeExecutionTransport(transportRequest);
     if (extensionResponse) return extensionResponse;
     let ownerAuthorization: OwnerRequestAuthorization | undefined;
+    let actor: AccessActor | undefined;
     if (extensionResponse === undefined) {
       const denied = isWorkerMode()
         ? assertSnapshotBearer(transportRequest)
@@ -247,14 +268,27 @@ export function withWorkspaceRoute<
         const resolved = resolveOwnerRequest(transportRequest);
         if (!resolved.ok) return resolved.response;
         ownerAuthorization = resolved.authorization;
+        if (resolved.authorization.principal.named) {
+          const endUser = parseEndUserRef(transportRequest.headers.get(ACCESS_END_USER_HEADER));
+          if (!endUser.ok) {
+            return Response.json({ error: 'The end-user reference is not valid.', code: 'invalid_end_user' },
+              { status: 400, headers: { 'Cache-Control': 'no-store' } });
+          }
+          actor = accessActorFromPrincipal(resolved.authorization.principal, endUser.value);
+        }
       }
     }
     return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
-      const selected = await withWorkspace(admittedRequest, async () => {
-        const run = () => invoke(
+      const selected = await withWorkspace(admittedRequest, async workspace => {
+        if (actor) {
+          const denied = await denyOutsideActorScope(actor, transportRequest, workspace);
+          if (denied) return denied;
+        }
+        const invokeHandler = () => invoke(
           admittedRequest === (request ?? normalizedRequest) ? handlerRequest : admittedRequest,
           ...rest,
         );
+        const run = actor ? () => runWithAccessActor(actor!, invokeHandler) : invokeHandler;
         if (ownerAuthorization && admittedRequest.method === 'GET' && !isWorkerMode()) {
           const { withOriginalOwnerHistoryAccess } = await import('@/backend/services/originalOwner/history');
           return withOriginalOwnerHistoryAccess(admittedRequest, run);

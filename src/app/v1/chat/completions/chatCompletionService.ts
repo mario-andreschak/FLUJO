@@ -33,6 +33,7 @@ import {
   type PersonaFlowDispatchSubmission,
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import type { PersonaChatCompletionTarget } from './requestParser';
+import type { AccessOwner } from '@/backend/services/security/accessContext';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
@@ -126,7 +127,8 @@ async function processChatCompletionInternal(
   // the "Execute in Debugger" checkbox takes effect on an existing conversation.
   // Internal resumes (step/continue/respond) leave this false to preserve the
   // session's debugMode.
-  userTurn: boolean = false
+  userTurn: boolean = false,
+  accessOwner?: AccessOwner,
 ) {
   const startTime = Date.now();
   log.info('Processing chat completion request', {
@@ -152,6 +154,7 @@ async function processChatCompletionInternal(
     debug: flujodebug,
     continueDebug,
     userTurn,
+    ...(accessOwner ? { accessOwner } : {}),
     ...(data.appendMessages === true ? { resumeAsNewTurn: true } : {}),
     // The same HTTP adapter serves interactive chat and an unattended worker.
     // Worker runs must drive forward and never wait for an absent chat user.
@@ -584,11 +587,12 @@ export async function processChatCompletion(
   userTurn: boolean = false,
   personaTarget?: PersonaChatCompletionTarget,
   ingress?: ChatIngressPermit,
+  accessOwner?: AccessOwner,
 ) {
   const owner = ingress ? claimChatIngress(ingress) : undefined;
   try {
     return await processAdmittedChatCompletion(data, flujo, requireApproval, flujodebug,
-      conversationId, continueDebug, userTurn, personaTarget, owner);
+      conversationId, continueDebug, userTurn, personaTarget, owner, accessOwner);
   } finally { owner?.release(); }
 }
 
@@ -602,6 +606,7 @@ async function processAdmittedChatCompletion(
   userTurn: boolean = false,
   personaTarget?: PersonaChatCompletionTarget,
   ingressOwner?: ReturnType<typeof claimChatIngress>,
+  accessOwner?: AccessOwner,
 ) {
   if (personaTarget && typeof data.model === 'string' && (data.model.startsWith('model-') || data.model.startsWith('policy/'))) {
     return NextResponse.json({
@@ -691,7 +696,7 @@ async function processAdmittedChatCompletion(
       const releaseProducer = ingressOwner?.retain();
       submitted = true;
       void withFlowRunAdmission(runAdmission, () =>
-        processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId, continueDebug, userTurn))
+        processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId, continueDebug, userTurn, accessOwner))
         .catch(async error => {
           primarySubmissionFailure = error;
           // Admission owns no execution state. A refused successor must not end
@@ -766,7 +771,7 @@ async function processAdmittedChatCompletion(
   } else {
     // Non-streaming path - use the internal function directly
     try {
-      return await processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
+      return await processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn, accessOwner);
     } catch (error) {
       if (isConversationDurabilityError(error)) return conversationDurabilityResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);

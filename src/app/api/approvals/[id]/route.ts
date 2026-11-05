@@ -29,6 +29,8 @@ import {
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { getSchedulerService } from '@/backend/services/scheduler';
+import { currentAccessActor } from '@/backend/services/security/accessContext';
+import { auditApprovalDecision, recordApprovalDecision } from '@/backend/services/security/accessConversations';
 
 const log = createLogger('app/api/approvals/[id]/route');
 
@@ -100,6 +102,7 @@ async function POST_handler(
 
   const { id } = await params;
   const requestId = `approval-${Date.now()}`;
+  const actor = currentAccessActor();
 
   let body: ApprovalActionBody;
   try {
@@ -141,6 +144,7 @@ async function POST_handler(
       return json({ error: `No pending question "${body.questionId}" for conversation "${id}"` }, 404);
     }
     log.info('Resolved headless question', { requestId, conversationId: id, questionId: body.questionId, action: body.action });
+    auditApprovalDecision(actor, id, body.action);
     return json({ status: 'running', conversationId: id, questionId: body.questionId }, 200);
   }
 
@@ -296,6 +300,8 @@ async function POST_handler(
               }
               continue;
             }
+            recordApprovalDecision(state, actor, { toolCallId, action: mappedAction });
+            auditApprovalDecision(actor, entry.conversationId, mappedAction);
             appendedMessages.push(...decision.appendedMessages);
             if (decision.outcome === 'ready') break;
           }
@@ -393,6 +399,8 @@ async function POST_handler(
         }
         continue; // snapshot drift — skip
       }
+      recordApprovalDecision(state, actor, { toolCallId, action: mappedAction });
+      auditApprovalDecision(actor, entry.conversationId, mappedAction);
       appendedMessages.push(...decision.appendedMessages);
       if (decision.outcome === 'ready') {
         break; // batch drained

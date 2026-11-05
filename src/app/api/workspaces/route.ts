@@ -13,6 +13,7 @@ import {
   updateWorkspaceRoots,
 } from '@/utils/workspace';
 import { mcpService } from '@/backend/services/mcp';
+import { resolveOwnerRequest } from '@/backend/services/security/ownerAccess';
 import {
   getWorkspaceLayoutStatus,
   waitForWorkspaceLayoutReady,
@@ -93,15 +94,22 @@ async function requestBody(request: Request): Promise<Record<string, unknown> | 
 }
 
 /** Installation-wide discovery; the filesystem remains the source of truth. */
-export async function GET() {
+function boundWorkspaceOf(request: Request | undefined): string | undefined {
+  if (!request || process.env.FLUJO_OWNER_AUTH_FILE === undefined) return undefined;
+  const resolved = resolveOwnerRequest(request);
+  return resolved.ok && resolved.authorization.principal.named ? resolved.authorization.principal.workspaceId : undefined;
+}
+
+export async function GET(request?: Request) {
   const unavailable = await waitForLayout();
   if (unavailable) return unavailable;
 
   try {
-    const workspaces = await listWorkspaces();
+    const bound = boundWorkspaceOf(request);
+    const workspaces = (await listWorkspaces()).filter(workspace => !bound || workspace.name === bound);
     return NextResponse.json({
       workspaces,
-      defaultWorkspace: DEFAULT_WORKSPACE,
+      defaultWorkspace: bound ?? DEFAULT_WORKSPACE,
     });
   } catch (error) {
     log.error('Failed to list workspaces', error);

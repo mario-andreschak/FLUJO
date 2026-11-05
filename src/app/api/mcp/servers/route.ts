@@ -9,6 +9,7 @@ import { MASKED_API_KEY } from '@/shared/types/constants';
 import { maskServerHeaders } from '@/utils/mcp/headers';
 import { json, validateServerName } from '../_helpers';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { currentAccessActor } from '@/backend/services/security/accessContext';
 
 const log = createLogger('app/api/mcp/servers/route');
 
@@ -46,6 +47,12 @@ async function GET_handler(_request: Request) {
     const configs = await mcpService.loadServerConfigs();
     if (!Array.isArray(configs)) {
       return json({ error: configs.error || 'Failed to load server configs' }, 500);
+    }
+    // A flow editor needs to know which servers exist. Commands, arguments and
+    // environment stay with administrators, because they can hold secrets.
+    const actor = currentAccessActor();
+    if (actor && !actor.isAdmin) {
+      return json(configs.map(config => ({ name: config.name, transport: config.transport, disabled: config.disabled })), 200);
     }
     return json(configs.map(redactServerConfig), 200);
   } catch (error) {

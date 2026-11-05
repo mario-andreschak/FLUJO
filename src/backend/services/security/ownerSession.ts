@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { type OwnerPolicy, type OwnerPrincipal } from './ownerCredentials';
-import { ownerPolicyRevision, readOwnerPolicy } from './ownerPolicy';
+import { ownerPrincipalOf, type OwnerPolicy, type OwnerPrincipal } from './ownerCredentials';
+import { ownerCredentialRevision, readOwnerPolicy } from './ownerPolicy';
 import type { AuthenticatedOwnerPrincipal } from './ownerAccess';
 
 const MAX_SESSION_BYTES = 4096;
@@ -111,7 +111,7 @@ function readSession(file: string): Session | null {
 function active(session: Session, policy: OwnerPolicy, now: number): boolean {
   const credential = policy.credentials.find(value => value.id === session.credentialId);
   return Number.isSafeInteger(now) && now >= session.issuedAt && now < session.expiresAt
-    && session.ownerId === policy.ownerId && session.policyRevision === ownerPolicyRevision(policy)
+    && session.ownerId === policy.ownerId && session.policyRevision === ownerCredentialRevision(policy, session.credentialId)
     && session.origin === browserOrigin().origin && Boolean(credential && credential.revokedAt === null
       && credential.issuedAt <= now && credential.expiresAt > now);
 }
@@ -128,8 +128,7 @@ export function resolveOwnerSession(request: Request, policy: OwnerPolicy, filen
   if (!session || !active(session, policy, now)) return null;
   const credential = policy.credentials.find(value => value.id === session.credentialId)!;
   return Object.freeze({
-    principal: Object.freeze({ ownerId: policy.ownerId, credentialId: credential.id,
-      scopes: Object.freeze([...credential.scopes]) }),
+    principal: ownerPrincipalOf(policy, credential),
     expiresAt: session.expiresAt,
     recheck: (current: OwnerPolicy, at: number) => {
       const saved = readSession(file);
@@ -139,7 +138,12 @@ export function resolveOwnerSession(request: Request, policy: OwnerPolicy, filen
   });
 }
 
-/** Only an authenticated admin bearer may exchange itself for a browser session. */
+/**
+ * Only an authenticated bearer may exchange itself for a browser session: an
+ * administrator, or a named person whose role allows signing in. The session never
+ * holds more than the credential behind it, because its scopes are read from that
+ * record on every request. An execution-only credential cannot mint one.
+ */
 export function createOwnerSession(request: Request, principal: AuthenticatedOwnerPrincipal, now = Date.now()): string {
   if (!ownerBrowserRequestAllowed(request, true)) throw new Error('Invalid owner browser request');
   const origin = browserOrigin();
@@ -147,16 +151,18 @@ export function createOwnerSession(request: Request, principal: AuthenticatedOwn
   if (!filename || !Number.isSafeInteger(now)) throw new Error('Owner authentication is unavailable');
   const policy = readOwnerPolicy(filename);
   const credential = policy.credentials.find(value => value.id === principal.credentialId);
-  if (policy.ownerId !== principal.ownerId || ownerPolicyRevision(policy) !== principal.policyRevision
+  const pinned = principal.credentialRevision ?? principal.policyRevision;
+  if (policy.ownerId !== principal.ownerId || ownerCredentialRevision(policy, principal.credentialId) !== pinned
       || !credential || credential.revokedAt !== null
       || credential.issuedAt > now || credential.expiresAt <= now
-      || !['control:admin', 'secrets:read'].every(scope => credential.scopes.includes(scope as 'control:admin' | 'secrets:read'))) {
+      || !(['control:admin', 'secrets:read'].every(scope => credential.scopes.includes(scope as 'control:admin' | 'secrets:read'))
+        || (policy.schemaVersion === 2 && credential.scopes.includes('session:login')))) {
     throw new Error('Owner authorization was lost');
   }
   const token = `flo_s1_${randomBytes(32).toString('base64url')}`;
   const expiresAt = Math.min(credential.expiresAt, now + OWNER_SESSION_MAX_AGE_MS);
   const record = sessionSchema.parse({ schemaVersion: 1, ownerId: policy.ownerId, credentialId: credential.id,
-    policyRevision: ownerPolicyRevision(policy), origin: origin.origin, issuedAt: now, expiresAt });
+    policyRevision: ownerCredentialRevision(policy, credential.id), origin: origin.origin, issuedAt: now, expiresAt });
   const fd = fs.openSync(sessionPath(filename, token, true), 'wx', 0o600);
   try { fs.writeFileSync(fd, JSON.stringify(record)); fs.fsyncSync(fd); }
   finally { fs.closeSync(fd); }

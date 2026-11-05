@@ -11,6 +11,8 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { getPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { currentAccessActor } from '@/backend/services/security/accessContext';
+import { stateVisibleToActor } from '@/backend/services/security/accessConversations';
 
 const log = createLogger('app/api/approvals/route');
 
@@ -43,6 +45,10 @@ async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
+  // With named access on, a narrow credential only hears about its own runs. Other
+  // people's entries are skipped outright, so they cannot change this answer.
+  const actor = currentAccessActor();
+  const narrow = actor && !actor.isAdmin ? actor : undefined;
   try {
     const entries = await listPendingApprovals();
     const approvals: Array<Record<string, unknown>> = [];
@@ -59,6 +65,7 @@ async function GET_handler(request: Request) {
       let state: SharedState | undefined;
       try {
         state = await loadConversationState(entry.conversationId);
+        if (narrow && !stateVisibleToActor(narrow, state)) continue;
         stillAwaiting = state?.status === 'awaiting_tool_approval';
         if (stillAwaiting && entry.resumeDispatchId) {
           const resumedDispatch = await getPersonaFlowDispatch(entry.resumeDispatchId);
@@ -79,6 +86,7 @@ async function GET_handler(request: Request) {
         if (!state || isPersonaOwnedConversationState(state)) requiresStrictControlPlane = true;
       } catch (error) {
         if (error instanceof ConversationLogReadPressureError) throw error;
+        if (narrow) continue;
         requiresStrictControlPlane = true;
         log.debug(`Could not load state for approval ${entry.approvalId}`, error);
       }
@@ -116,13 +124,15 @@ async function GET_handler(request: Request) {
     // disk-serialized approval pause, so they are surfaced from the in-memory
     // registry directly. Answer/decline via POST /api/approvals/:id with
     // action 'question-answer' / 'question-decline' (:id is the conversationId).
-    const pendingQuestions = listAllPendingQuestions();
-    for (const question of pendingQuestions) {
+    const pendingQuestions: ReturnType<typeof listAllPendingQuestions> = [];
+    for (const question of listAllPendingQuestions()) {
       const state = FlowExecutor.conversationStates.get(question.conversationId)
         ?? await loadConversationState(question.conversationId).catch(error => {
           if (error instanceof ConversationLogReadPressureError) throw error;
           return undefined;
         });
+      if (narrow && !stateVisibleToActor(narrow, state)) continue;
+      pendingQuestions.push(question);
       if (!state || isPersonaOwnedConversationState(state)) {
         requiresStrictControlPlane = true;
         break;

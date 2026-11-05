@@ -1400,6 +1400,20 @@ export interface SharedState extends DebuggerStateView {
      * a top-level conversation.
      */
     rootConversationId?: string;
+    /**
+     * Named access: who started this conversation, set once at creation and
+     * never changed. Absent on an ordinary install and on runs nobody started
+     * through a named credential, such as automations; those stay visible only
+     * to people whose role sees every run.
+     */
+    accessOwner?: import('@/backend/services/security/accessContext').AccessOwner;
+    /** Named access: who answered which tool approval. Bounded; the full record is the access log. */
+    approvalDecisions?: Array<{
+      toolCallId: string;
+      action: string;
+      decidedAt: number;
+      decidedBy: { credentialId: string; name?: string; endUser?: string };
+    }>;
 
     /**
      * Where this conversation originated (issue #113/#339). Set by runFlow from
