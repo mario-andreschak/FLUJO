@@ -1166,6 +1166,7 @@ function describeTrigger(trigger: unknown): { type: string; details: Array<{ lab
       push('cron', t.cron);
       push('timezone', t.timezone);
       push('catchUp', t.catchUp);
+      push('catchUpLimit', t.catchUpLimit);
       break;
     case 'webhook':
       // NEVER expose the shared secret — only whether one is required.

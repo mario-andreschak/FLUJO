@@ -20,10 +20,16 @@ export interface ScheduleTriggerConfig {
   /** IANA timezone (e.g. "Europe/Berlin"). Defaults to the server's local tz. */
   timezone?: string;
   /**
-   * When true and FLUJO was closed while a run was due, run ONCE at startup.
-   * Never replays every missed occurrence — one catch-up run at most.
+   * When true and FLUJO was closed or locked while a run was due, run at startup.
+   * One run unless catchUpLimit says otherwise.
    */
   catchUp?: boolean;
+  /**
+   * How many missed occurrences to run, 1 to 100 (default 1): the newest ones, run
+   * oldest first, one after the other. Older ones are skipped. Not replayed after a
+   * crash partway through, because a repeat could do outside work twice.
+   */
+  catchUpLimit?: number;
 }
 
 export interface WebhookTriggerConfig {

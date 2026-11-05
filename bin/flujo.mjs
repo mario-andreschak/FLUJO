@@ -36,7 +36,7 @@ const packageRoot = path.resolve(__dirname, '..');
 
 // Commands for running without a person (service, selftest, update). They settle
 // their own settings and storage, so they branch off before anything below runs.
-if (process.argv[2] === 'service') {
+if (['service', 'unlock-secret'].includes(process.argv[2])) {
   const { runSubcommand } = await import('./cli/index.mjs');
   process.exit(await runSubcommand(process.argv[2], process.argv.slice(3)));
 }
@@ -67,7 +67,7 @@ for (let index = 0; index < argv.length; index += 1) {
 // settings, so launcher-level variables work exactly like server-level ones.
 const bootstrapRoot = bootstrapDirectory(path.join(os.homedir(), '.flujo'));
 fs.mkdirSync(bootstrapRoot, { recursive: true });
-loadBootstrapEnvironment(bootstrapRoot, false, nextEnv.loadEnvConfig);
+const loadedSettings = loadBootstrapEnvironment(bootstrapRoot, false, nextEnv.loadEnvConfig);
 
 // --- args -----------------------------------------------------------------
 function readPort() {
@@ -98,6 +98,17 @@ try {
 } catch (error) {
   console.error(`[FLUJO] Could not create data directory ${process.env.FLUJO_DATA_DIR}:`, error);
   process.exit(1);
+}
+
+// Optional unattended unlock. Off unless a source is named, and then only the
+// checked result reaches the server: docs/operations/unattended-unlock.md.
+if (process.env.FLUJO_UNLOCK_SECRET_SOURCE?.trim()) {
+  const { resolveUnlockSecret, secretCameFromFile } = await import('./cli/unlock-secret.mjs');
+  const { problem } = resolveUnlockSecret(process.env, { loadedFromFile: secretCameFromFile(loadedSettings) });
+  if (problem) console.error(`[FLUJO] ${problem}`);
+} else {
+  delete process.env.FLUJO_UNLOCK_SECRET;
+  delete process.env.FLUJO_UNLOCK_SECRET_CHECKED;
 }
 
 // Tell the running server it was installed via npm so it reports the right update mode.
@@ -150,6 +161,9 @@ const child = spawn(process.execPath, [nextBin, ...nextArgs], {
   cwd: packageRoot,
   env: instance.env,
 });
+// The server has its copy. This process has no further use for one.
+delete process.env.FLUJO_UNLOCK_SECRET_CHECKED;
+delete instance.env.FLUJO_UNLOCK_SECRET_CHECKED;
 const registered = instance.register(child.pid).catch(() => {
   console.error('[FLUJO] Could not register private local instance discovery.');
 });

@@ -32,7 +32,8 @@ import { DEFAULT_WORKSPACE, getCurrentWorkspace, runWithWorkspace } from '@/util
 import { ArmedTrigger } from './triggers/types';
 import {
   armSchedule,
-  catchUpOccurrence,
+  catchUpOccurrences,
+  validateCatchUpLimit,
   validateSchedule,
 } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
@@ -504,26 +505,38 @@ export class SchedulerService {
     }
     // Catch up only occurrences due before arming. A future tick during slow
     // storage initialization is owned by the already-installed live timer.
-    const occurrence = trigger.catchUp
-      ? catchUpOccurrence(trigger, state.lastScheduledFireAt, armedAt)
-      : null;
-    if (!occurrence) return;
-    const payload: TriggerFirePayload = {
+    // Worker recovery has its own one-occurrence contract, so the limit stays out of it.
+    const occurrences = trigger.catchUp
+      ? catchUpOccurrences(isWorkerMode() ? { ...trigger, catchUpLimit: 1 } : trigger, state.lastScheduledFireAt, armedAt)
+      : [];
+    if (occurrences.length === 0) return;
+    const payloadFor = (occurrence: Date): TriggerFirePayload => ({
       kind: 'schedule-catchup',
       summary: 'Schedule (missed while FLUJO was closed — ran once at startup)',
       context: { scheduledOccurrence: occurrence.toISOString() },
       ...(execution.personaId
         ? { deliveryId: this.sourceDeliveryId(execution, 'schedule', occurrence.toISOString()) }
         : {}),
-    };
+    });
     if (execution.personaId) {
-      const admitted = await this.admitPersonaFire(execution, payload);
+      // Each occurrence has its own delivery identity, so a retry cannot double one.
+      const admitted = [];
+      for (const occurrence of occurrences) admitted.push(await this.admitPersonaFire(execution, payloadFor(occurrence)));
       await advanceLastScheduledFireAt(execution.id, baseline, () => this.assertCurrentSchedule(execution));
-      void admitted.completion.catch(error =>
-        log.error(`Catch-up continuation failed for ${execution.id}:`, error));
+      for (const entry of admitted) {
+        void entry.completion.catch(error =>
+          log.error(`Catch-up continuation failed for ${execution.id}:`, error));
+      }
     } else {
       await advanceLastScheduledFireAt(execution.id, baseline, () => this.assertCurrentSchedule(execution));
-      void this.fireOrdinarySchedule(execution, payload, occurrence.toISOString()).catch(error => {
+      // One after the other: running them together would make all but the first
+      // collide with the schedule's own overlap rule.
+      void (async () => {
+        for (const occurrence of occurrences) {
+          if (!await this.isCurrentSchedule(execution)) return;
+          await this.fireOrdinarySchedule(execution, payloadFor(occurrence), occurrence.toISOString());
+        }
+      })().catch(error => {
         const reason = error instanceof Error ? error.message : String(error);
         this.lastTriggerErrors.set(execution.id, `Schedule catch-up failed: ${reason.slice(0, 1024)}`);
         log.error(`Catch-up fire failed for ${execution.id}:`, error);
@@ -1364,7 +1377,8 @@ export class SchedulerService {
     switch (trigger.type) {
       case 'schedule': {
         const result = validateSchedule(trigger.cron, trigger.timezone);
-        return result.valid ? null : `Invalid schedule: ${result.error}`;
+        if (!result.valid) return `Invalid schedule: ${result.error}`;
+        return validateCatchUpLimit(trigger.catchUpLimit) ?? null;
       }
       case 'webhook':
         return null;

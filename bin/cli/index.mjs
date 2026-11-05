@@ -6,6 +6,7 @@ import { CliError } from './common.mjs';
 
 const COMMANDS = {
   service: () => import('./service.mjs'),
+  'unlock-secret': () => import('./unlock-secret.mjs'),
 };
 
 export async function runSubcommand(name, argv) {

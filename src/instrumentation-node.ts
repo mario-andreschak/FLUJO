@@ -15,6 +15,9 @@ const log = createLogger('instrumentation');
 
 export async function initializeNodeRuntime(): Promise<void> {
   assertOwnerStartup();
+  // Before anything can start a child program that would inherit the environment.
+  const { captureUnattendedUnlockSecret } = await import('@/backend/services/security/unattendedUnlock');
+  captureUnattendedUnlockSecret();
   // Refuse startup when a configured integration was not included in this build.
   const { executionExtensionAdapter } = await import('@/backend/execution/extensions');
   executionExtensionAdapter();

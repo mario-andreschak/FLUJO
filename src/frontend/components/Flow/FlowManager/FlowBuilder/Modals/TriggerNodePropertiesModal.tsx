@@ -339,6 +339,8 @@ const TriggerNodePropertiesModal = ({
               onChange={({ cron, timezone }) => setTrigger({ ...trigger, cron, timezone })}
               catchUp={trigger.catchUp === true}
               onCatchUpChange={(catchUp) => setTrigger({ ...trigger, catchUp })}
+              catchUpLimit={trigger.catchUpLimit}
+              onCatchUpLimitChange={(catchUpLimit) => setTrigger({ ...trigger, catchUpLimit })}
             />
           )}
           {trigger.type === 'webhook' && (

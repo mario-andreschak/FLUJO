@@ -135,7 +135,16 @@ export function forwardNextShutdown(child, instance, registered, { parent = proc
 /** Spawn `next <passthroughArgs>` with the TLS-configured env and forward its exit. */
 async function launchNext(passthroughArgs) {
   const runtimeEnvDirectory = process.env.FLUJO_CONTAINER ? '/app/data' : process.cwd();
-  loadLaunchEnvironment(runtimeEnvDirectory, passthroughArgs[0] === 'dev');
+  const loadedSettings = loadLaunchEnvironment(runtimeEnvDirectory, passthroughArgs[0] === 'dev');
+  // Optional unattended unlock: see docs/operations/unattended-unlock.md.
+  if (process.env.FLUJO_UNLOCK_SECRET_SOURCE?.trim()) {
+    const { resolveUnlockSecret, secretCameFromFile } = await import('../bin/cli/unlock-secret.mjs');
+    const { problem } = resolveUnlockSecret(process.env, { loadedFromFile: secretCameFromFile(loadedSettings) });
+    if (problem) console.error(`[FLUJO] ${problem}`);
+  } else {
+    delete process.env.FLUJO_UNLOCK_SECRET;
+    delete process.env.FLUJO_UNLOCK_SECRET_CHECKED;
+  }
   const baseEnv = {
     ...process.env,
     FLUJO_APP_ROOT: process.env.FLUJO_APP_ROOT || process.cwd(),

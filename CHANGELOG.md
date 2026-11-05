@@ -4,6 +4,8 @@
 
 ### Running with nobody there
 
+- Let a password-protected instance start with nobody present, if you opt in with `FLUJO_UNLOCK_SECRET_SOURCE`. The password comes from Windows DPAPI (`flujo unlock-secret`) or from a protected environment source, never from a `.env` file or a file inside the data directory. The server takes it out of its environment at once, so child programs never receive it, and any problem only leaves the instance locked. Nothing changes without this setting. See `docs/operations/unattended-unlock.md`.
+- Let a schedule catch up on more than one missed run. With catch-up on, `catchUpLimit` (1 to 100, also in the schedule dialog) runs that many of the most recent missed runs, one after the other. The default stays one run.
 - Add `flujo service install | status | start | stop | uninstall`. It sets up one named instance with its own data directory and port, started by the operating system, with no browser window. On Windows it uses Task Scheduler and runs as the ordinary user, not SYSTEM: at boot with nobody logged in if the install is run once as administrator, otherwise at logon, and it says which one it got. On Linux it writes a systemd unit. A small supervisor restarts FLUJO after a crash or if it stops answering, cleans up after itself, and keeps logs within a size limit. See `docs/operations/unattended-service.md`.
 
 ### Model access

@@ -74,6 +74,8 @@ interface SchedulePanelProps {
   verb?: string;
   /** Wire these to render the catch-up checkbox (schedule triggers only). */
   catchUp?: boolean;
+  catchUpLimit?: number;
+  onCatchUpLimitChange?: (limit: number | undefined) => void;
   onCatchUpChange?: (value: boolean) => void;
 }
 
@@ -83,6 +85,8 @@ const SchedulePanel = ({
   onChange,
   verb,
   catchUp,
+  catchUpLimit,
+  onCatchUpLimitChange,
   onCatchUpChange,
 }: SchedulePanelProps) => {
   const { t, formatDate } = useI18n();
@@ -227,6 +231,24 @@ const SchedulePanel = ({
             />
           }
           label={t('automations.schedule.catchUp')}
+        />
+      )}
+
+      {onCatchUpChange && catchUp === true && onCatchUpLimitChange && (
+        <TextField
+          sx={{ mt: 1, width: 280, maxWidth: '100%', display: 'block' }}
+          type="number"
+          size="small"
+          fullWidth
+          label={t('automations.schedule.catchUpLimit')}
+          helperText={t('automations.schedule.catchUpLimitHelp')}
+          value={catchUpLimit ?? 1}
+          slotProps={{ htmlInput: { min: 1, max: 100, step: 1 } }}
+          onChange={(e) => {
+            const value = Number(e.target.value);
+            // Anything out of range falls back to the default of one run.
+            onCatchUpLimitChange(Number.isSafeInteger(value) && value > 1 && value <= 100 ? value : undefined);
+          }}
         />
       )}
 

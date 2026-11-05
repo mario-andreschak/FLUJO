@@ -8,6 +8,7 @@ import { reconcileOrphanedTasks, sweepOldSubflowTasks } from '@/backend/services
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
+import { attemptUnattendedUnlock } from '@/backend/services/security/unattendedUnlock';
 import { createLogger } from '@/utils/logger';
 import { ensureDefaultFlujoAgent } from '@/backend/services/flow/defaultAgent';
 import {
@@ -452,6 +453,8 @@ async function runInitialization(): Promise<void> {
   // encryption mode those secrets are undecryptable, so this secret-dependent
   // startup must be DEFERRED until the user unlocks (see onUnlocked). In DEFAULT
   // mode — or once already unlocked — it runs immediately, exactly as before.
+  // An operator who opted in to unattended unlock gets it tried here first.
+  await attemptUnattendedUnlock();
   if (await isEncryptionLocked()) {
     setWorkerBootstrapStatus({ state: 'locked', error: 'Worker workspace encryption is locked. Unlock this workspace before running jobs.' });
     log.info(

@@ -79,6 +79,49 @@ export function catchUpOccurrence(
   }
 }
 
+export const MAX_CATCH_UP_LIMIT = 100;
+/** A schedule every minute over a long outage must not mean an unbounded walk. */
+const MAX_OCCURRENCES_SCANNED = 100_000;
+
+export function validateCatchUpLimit(limit: unknown): string | undefined {
+  if (limit === undefined) return undefined;
+  return Number.isSafeInteger(limit) && (limit as number) >= 1 && (limit as number) <= MAX_CATCH_UP_LIMIT
+    ? undefined
+    : `catchUpLimit must be a whole number from 1 to ${MAX_CATCH_UP_LIMIT}`;
+}
+
+/**
+ * Which missed occurrences to run, oldest first. With a limit of 1 this is exactly
+ * catchUpOccurrence. With more, it is the newest `limit` ones, because after a long
+ * outage recent work is the work still worth doing.
+ */
+export function catchUpOccurrences(
+  config: ScheduleTriggerConfig,
+  lastScheduledFireAt: string,
+  through: number = Date.now(),
+): Date[] {
+  const limit = Math.min(Math.max(config.catchUpLimit ?? 1, 1), MAX_CATCH_UP_LIMIT);
+  if (limit === 1) {
+    const occurrence = catchUpOccurrence(config, lastScheduledFireAt, through);
+    return occurrence ? [occurrence] : [];
+  }
+  const job = new Cron(config.cron, { timezone: config.timezone, paused: true });
+  try {
+    const newest: Date[] = [];
+    let previous = new Date(lastScheduledFireAt);
+    for (let scanned = 0; scanned < MAX_OCCURRENCES_SCANNED; scanned += 1) {
+      const due = job.nextRun(previous);
+      if (due === null || due.getTime() > through) break;
+      newest.push(due);
+      if (newest.length > limit) newest.shift();
+      previous = due;
+    }
+    return newest;
+  } finally {
+    job.stop();
+  }
+}
+
 /** Arm the cron job. Throws on an invalid pattern/timezone. */
 export function armSchedule(
   config: ScheduleTriggerConfig,
