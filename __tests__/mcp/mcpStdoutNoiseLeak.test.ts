@@ -60,8 +60,10 @@ describe('stdio server that writes a non-JSON line to stdout', () => {
       command: process.execPath,
       args: [FIXTURE],
       env: { PID_FILE: pidFile, NOISY_STDOUT: '1' },
-      cwd: dir,
+      rootPath: dir,
       disabled: false,
+      _buildCommand: '',
+      _installCommand: '',
     } as MCPServerConfig;
     (configModule as unknown as { __configState: { configs: unknown[] } }).__configState.configs = [config];
     service = new MCPService();
