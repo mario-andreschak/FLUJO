@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Starting FLUJO
+
+- Keep starting when a data folder is opened by a different FLUJO installation. A copied built-in server links to the dependencies of the installation that first made it, so a second installation on the same data, such as `npx flujo-ai` beside a global install or a moved folder, stopped with "The copied package dependency link is invalid" and started no tools at all. FLUJO now updates its own link. Your edits to those servers stay, and a link in a package FLUJO did not copy is still left alone.
+
 ### Model access
 
 - Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.
