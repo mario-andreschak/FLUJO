@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changes you may notice since 3.48.4
+
+Most flows behave as before. Three things changed on purpose, in 3.48.5 and 3.48.6:
+
+- A step can only use its own tools. A model that called a tool only an earlier step offered could run it. It now gets an error back and the run goes on. If a flow relied on this, connect the tool to the step that uses it.
+- A real tool call in a Static node now follows Require Tool Approval. With approval on it waits for a person, where it used to run at once. With approval off nothing changes. An automation set to fail when approval is needed now fails at such a node, and one set to run tools automatically runs as before.
+- Conditions can now sit on edges that leave a Start or a Static node. A flow with such a condition goes back to its Start node on every message. Existing flows are not affected, because these conditions were refused before.
+
 ### MCP servers
 
 - Stop starting a new process over and over for a server that prints a line on stdout that is not an MCP message, such as an ordinary log line. FLUJO treated that line as a lost connection, forgot the server without stopping it and started another one every few seconds, so the processes piled up. The server now stays connected and the line goes to its log. When a connection really fails, FLUJO stops the old process before it starts a new one.
