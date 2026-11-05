@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+export const MAX_COMPARISON_VARIANTS = 8;
+export const MAX_COMPARISON_CASES = 200;
+/** Fits 200 long examples. The page says so before sending rather than after. */
+export const HARNESS_COMPARISON_MAX_BODY_BYTES = 2 * 1024 * 1024;
+
 const Phrase = z.string().trim().min(1).max(500);
 
 const ComparisonCaseSchema = z.object({
@@ -13,6 +18,8 @@ const ComparisonCaseSchema = z.object({
   toolResults: z.record(z.string().min(1).max(200), z.string().max(32_000)).optional(),
 }).strict();
 
+export const HarnessComparisonCaseListSchema = z.array(ComparisonCaseSchema);
+
 const ComparisonVariantSchema = z.object({
   flowId: z.string().trim().min(1).max(256),
   /** Runs every Process step of the flow on this model instead of its own. */
@@ -22,13 +29,18 @@ const ComparisonVariantSchema = z.object({
 
 export const HarnessComparisonInputSchema = z.object({
   name: z.string().trim().min(1).max(200),
-  variants: z.array(ComparisonVariantSchema).min(1).max(8),
-  cases: z.array(ComparisonCaseSchema).min(1).max(200),
+  variants: z.array(ComparisonVariantSchema).min(1).max(MAX_COMPARISON_VARIANTS),
+  cases: z.array(ComparisonCaseSchema).min(1).max(MAX_COMPARISON_CASES),
   maxModelCallsPerCase: z.number().int().min(1).max(40).default(8),
 }).strict();
 
 export type HarnessComparisonInput = z.output<typeof HarnessComparisonInputSchema>;
 export type HarnessComparisonCase = HarnessComparisonInput['cases'][number];
+
+/** The id a result refers to its example by. */
+export function harnessComparisonCaseId(example: { id?: string }, index: number): string {
+  return example.id ?? `case-${index + 1}`;
+}
 
 export type HarnessComparisonStatus = 'running' | 'completed' | 'cancelled' | 'interrupted' | 'failed';
 
@@ -78,4 +90,15 @@ export interface HarnessComparison {
   results: HarnessComparisonResult[];
   summary: HarnessComparisonVariantSummary[];
   error?: string;
+}
+
+/** One row of `GET /api/harness/comparisons`. */
+export interface HarnessComparisonListItem {
+  id: string;
+  createdAt: number;
+  finishedAt?: number;
+  status: HarnessComparisonStatus;
+  name: string;
+  cases: number;
+  summary: HarnessComparisonVariantSummary[];
 }

@@ -3,9 +3,9 @@ import { HarnessError } from '@/backend/services/harness/service';
 import { HarnessModelError } from '@/backend/services/harness/model';
 import { readBoundedBody } from '@/utils/http/boundedBody';
 
-export async function harnessBody(request: Request): Promise<unknown> {
-  try { return JSON.parse((await readBoundedBody(request, 192 * 1024)).toString('utf8')); }
-  catch { throw new HarnessError('Provide a JSON body smaller than 192 KiB.'); }
+export async function harnessBody(request: Request, maxBytes = 192 * 1024): Promise<unknown> {
+  try { return JSON.parse((await readBoundedBody(request, maxBytes)).toString('utf8')); }
+  catch { throw new HarnessError(`Provide a JSON body smaller than ${Math.round(maxBytes / 1024)} KiB.`); }
 }
 
 export function harnessErrorResponse(error: unknown) {

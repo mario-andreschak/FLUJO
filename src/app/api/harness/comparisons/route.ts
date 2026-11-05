@@ -1,6 +1,7 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createHarnessComparison, listHarnessComparisons } from '@/backend/services/harness/comparison';
+import { HARNESS_COMPARISON_MAX_BODY_BYTES } from '@/shared/types/harnessComparison';
 import { harnessBody, harnessErrorResponse } from '../_helpers';
 
 export const runtime = 'nodejs';
@@ -16,6 +17,6 @@ export const GET = withWorkspaceRoute(async () => {
 export const POST = withWorkspaceRoute(async (request: Request) => {
   const locked = await assertUnlocked();
   if (locked) return locked;
-  try { return Response.json(await createHarnessComparison(await harnessBody(request)), { status: 201 }); }
+  try { return Response.json(await createHarnessComparison(await harnessBody(request, HARNESS_COMPARISON_MAX_BODY_BYTES)), { status: 201 }); }
   catch (error) { return harnessErrorResponse(error); }
 });

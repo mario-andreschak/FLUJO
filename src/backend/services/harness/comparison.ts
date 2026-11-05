@@ -22,6 +22,7 @@ import {
 } from '@/utils/storage/backend';
 import {
   HarnessComparisonInputSchema,
+  harnessComparisonCaseId,
   type HarnessComparison,
   type HarnessComparisonCase,
   type HarnessComparisonResult,
@@ -80,10 +81,6 @@ function variantFlow(flow: Flow, modelId: string | undefined): Flow {
     if (node.type === 'process') node.data.properties = { ...node.data.properties, boundModel: modelId };
   }
   return copy;
-}
-
-function caseId(example: HarnessComparisonCase, index: number): string {
-  return example.id ?? `case-${index + 1}`;
 }
 
 async function runCase(
@@ -235,7 +232,7 @@ async function runComparison(comparison: HarnessComparison, flows: Flow[], signa
         signal.throwIfAborted();
         const example = comparison.input.cases[index];
         comparison.results.push(await runCase(
-          flows[variant], example, variant, caseId(example, index), comparison.input.maxModelCallsPerCase, signal,
+          flows[variant], example, variant, harnessComparisonCaseId(example, index), comparison.input.maxModelCallsPerCase, signal,
         ));
         await saveProgress(comparison);
       }
@@ -267,7 +264,7 @@ export async function createHarnessComparison(raw: unknown): Promise<HarnessComp
     return existing;
   }
 
-  const ids = input.cases.map(caseId);
+  const ids = input.cases.map(harnessComparisonCaseId);
   if (new Set(ids).size !== ids.length) throw new HarnessError('Example IDs must be distinct.');
 
   const flows: Flow[] = [];
