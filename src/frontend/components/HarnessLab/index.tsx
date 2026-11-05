@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, FormControlLabel, LinearProgress, MenuItem, Paper, Stack, Switch, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, FormControlLabel, LinearProgress, MenuItem, Paper, Stack, Switch, Tab, Tabs, TextField, Typography } from '@mui/material';
 import { ScienceRounded } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -10,6 +10,7 @@ import { HarnessInputSchema, harnessCallLimit, type HarnessCase, type HarnessRun
 import type { Flow } from '@/shared/types/flow';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import CaseEditor from './CaseEditor';
+import ComparisonLab from './ComparisonLab';
 import RunEvidence from './RunEvidence';
 import TargetVersions from './TargetVersions';
 import { HarnessPolicySchema, type HarnessTarget } from '@/shared/types/harnessIntegration';
@@ -17,6 +18,9 @@ import { HarnessPolicySchema, type HarnessTarget } from '@/shared/types/harnessI
 interface ModelOption { id: string; label: string; name: string; authentication: string }
 interface RunSummary { id: string; name: string; status: HarnessRun['status']; createdAt: number }
 const statusKeys = { pending: 'harness.pending', completed: 'harness.completed', failed: 'harness.failed', cancelled: 'harness.cancelled' } as const;
+const COMPARE_VIEW = 'compare';
+/** Which tab a link asked for, so a comparison page can be linked to and reloaded. */
+const viewFromUrl = () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === COMPARE_VIEW ? COMPARE_VIEW : 'improve';
 const initialCases: HarnessCase[] = [
   { id: 'train-1', split: 'train', input: 'Summarize this support request: My parcel arrived with a cracked lid. I need a replacement.', required: ['replacement', 'cracked'], forbidden: ['refund approved'] },
   { id: 'train-2', split: 'train', input: 'Summarize this support request: My invoice has the wrong address. Please correct it.', required: ['invoice', 'address'], forbidden: ['already corrected'] },
@@ -29,6 +33,20 @@ export default function HarnessLab() {
   const { settings, settingsHydrated } = useStorage();
   const enabled = settingsHydrated && settings.experimental?.harnessLabEnabled === true;
   const [workspace] = useState(getSelectedWorkspace);
+  const [view, setView] = useState('improve');
+  const [compareOpened, setCompareOpened] = useState(false);
+  useEffect(() => {
+    const requested = viewFromUrl();
+    setView(requested);
+    if (requested === COMPARE_VIEW) setCompareOpened(true);
+  }, []);
+  const changeView = (next: string) => {
+    setView(next);
+    if (next === COMPARE_VIEW) setCompareOpened(true);
+    const url = new URL(window.location.href);
+    if (next === COMPARE_VIEW) url.searchParams.set('view', COMPARE_VIEW); else url.searchParams.delete('view');
+    window.history.replaceState(window.history.state, '', url);
+  };
   const [models, setModels] = useState<ModelOption[]>([]);
   const [history, setHistory] = useState<RunSummary[]>([]);
   const [flows, setFlows] = useState<Flow[]>([]);
@@ -127,9 +145,17 @@ export default function HarnessLab() {
     <PageHeader titleKey="harness.title" descriptionKey="harness.description" icon={ScienceRounded}
       badge={<Chip size="small" color="warning" label={t('harness.experimental')} />} />
     <Stack spacing={3} sx={{ p: { xs: 2, md: 3 }, maxWidth: 1250, mx: 'auto' }}>
-      <Alert severity="info">{t('harness.scope')}</Alert>
       {!enabled && settingsHydrated && <Alert severity="info" action={<Button component="a" href={withWorkspaceUrl('/settings', workspace)}>{t('nav.settings')}</Button>}>{t('harness.off')}</Alert>}
-      {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
+      <Tabs value={view} onChange={(_, next: string) => changeView(next)} variant="scrollable" allowScrollButtonsMobile aria-label={t('harness.title')} sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Tab value="improve" label={t('harness.compare.tabImprove')} sx={{ textTransform: 'none' }} />
+        <Tab value={COMPARE_VIEW} label={t('harness.compare.tabCompare')} sx={{ textTransform: 'none' }} />
+      </Tabs>
+      {compareOpened && <Box sx={view === COMPARE_VIEW ? { minWidth: 0 } : { display: 'none' }}>
+        <ComparisonLab enabled={enabled} active={view === COMPARE_VIEW} flows={flows} workspace={workspace} />
+      </Box>}
+      {view !== COMPARE_VIEW && <Alert severity="info">{t('harness.scope')}</Alert>}
+      {view !== COMPARE_VIEW && error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
+      {view !== COMPARE_VIEW && <>
       <TargetVersions workspace={workspace} enabled={enabled && !busy} models={models} onSelect={selectTarget}
         onExperiment={id => { void perform(async () => setRun(await api<HarnessRun>(`/${id}`, undefined, controller.current!.signal))); }} />
       {loading ? <CircularProgress aria-label={t('common.loading')} /> : <>
@@ -184,6 +210,7 @@ export default function HarnessLab() {
             <Button variant="contained" disabled={busy || !enabled || !modelId} onClick={create}>{t('harness.run')}</Button>
           </Stack>
         </Paper>}
+      </>}
       </>}
     </Stack>
   </Box>;

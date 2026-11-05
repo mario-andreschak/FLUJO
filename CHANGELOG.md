@@ -8,6 +8,7 @@
 
 ### Harness Lab
 
+- Add a page for comparing models or flows, under Harness Lab > Compare models or flows. Pick up to 8 variants, enter or paste up to 200 examples as a table or as JSON, watch the progress, and read the passes, failures, model calls, tokens and time per variant. Open any result to see why it failed, and find earlier comparisons on the same page. A comparison request can now be up to 2 MiB, so 200 long examples fit. Harness Lab stays experimental and off by default.
 - Compare models or flows on the same examples with fixed checks. A comparison run needs no proposing or judging model, takes up to 200 examples, and can check which tools were called. Tools do not run during it. There is an API for it, and no page yet.
 
 ### Flow steps

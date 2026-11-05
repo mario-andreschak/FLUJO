@@ -20,7 +20,9 @@ Normal conversations and completed, durably pinned Persona behavior calls supply
 
 An experiment improves one instruction on one fixed model, and it needs a model to propose and to judge. A comparison answers a different question: which of these models or flows gets my examples right? It changes nothing and asks no model for an opinion, so it costs only the runs themselves.
 
-`POST /api/harness/comparisons` starts one and returns at once. It also needs Harness Lab to be enabled. Read the result with `GET /api/harness/comparisons/{id}`:
+Open **Harness Lab → Compare models or flows** (`/harness?view=compare`). Pick up to 8 variants, each a flow and optionally a model, then enter up to 200 examples in the table or as JSON, or paste rows from a spreadsheet. The table and the JSON are one list. Start, and the page shows the progress, then for each variant the passes, failures, model calls, tokens and time. Open any result to see the answer and why it failed. Closing the page does not stop a comparison. Earlier comparisons stay listed, and **Use again** copies one into a new form.
+
+Through the API, `POST /api/harness/comparisons` starts one and returns at once, with a request of up to 2 MiB. It also needs Harness Lab to be enabled. Read the result with `GET /api/harness/comparisons/{id}`:
 
 ```json
 {
@@ -57,7 +59,7 @@ A case that passes these is `passed`, and one that misses any is `failed`. If th
 
 **Tools do not run.** Like an experiment, a comparison goes through the real engine with no real effects. A called tool answers with the case's `toolResults` for that tool, or with a fixed note. A flow's own limits still apply, including conditions before the model and allowed models. A wait for a person is skipped, because there is nobody to ask, so a comparison says nothing about what a person would decide.
 
-A comparison stops being able to continue after a restart. It then reads as `interrupted` and keeps the results so far. `DELETE /api/harness/comparisons/{id}` stops a running one, and otherwise removes its record. There is no page for comparisons yet.
+A comparison stops being able to continue after a restart. It then reads as `interrupted` and keeps the results so far. `DELETE /api/harness/comparisons/{id}` stops a running one, and otherwise removes its record.
 
 Fixed checks only see words and tool names. A passing comparison does not show that an answer is correct, and a small set of examples proves little. Use experiments to refine an instruction once you have chosen a model.
 

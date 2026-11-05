@@ -432,6 +432,21 @@ describe('comparison runs', () => {
       expect(response.status).toBe(409);
     });
 
+    it('takes 200 long examples, and refuses a request past the limit with a clear reason', async () => {
+      stepFlow('assistant');
+      const long = 'x'.repeat(4_000);
+      const cases = Array.from({ length: 200 }, (_, index) => ({ input: `${index} ${long}` }));
+      const fits = await post({ id: randomUUID(), input: { name: 'Long', variants: [{ flowId: 'assistant' }], cases } });
+      expect(fits.status).toBe(201);
+      const started = await fits.json() as HarnessComparison;
+      await itemDelete(new Request(`http://localhost/api/harness/comparisons/${started.id}?workspace=default-workspace`, { method: 'DELETE' }) as never, params(started.id) as never);
+      await harnessComparisonFinished(started.id);
+
+      const tooLong = await post({ id: randomUUID(), input: { name: 'Long', variants: [{ flowId: 'assistant' }], cases: [{ input: 'x' }], padding: 'y'.repeat(2_200_000) } });
+      expect(tooLong.status).toBe(400);
+      expect((await tooLong.json() as { error: string }).error).toContain('2048 KiB');
+    });
+
     it('stays off until Harness Lab is enabled', async () => {
       await saveItem(StorageKey.SPEECH_SETTINGS, { speech: {} } as never);
       stepFlow('assistant');
