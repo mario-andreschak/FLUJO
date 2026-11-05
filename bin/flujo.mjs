@@ -15,6 +15,7 @@
  *
  * Flags: --port <n> / FLUJO_PORT (default 4200); --no-open to suppress the
  * browser auto-open; --update-node to authorize a required runtime update.
+ * Subcommands for unattended use: see bin/cli/index.mjs.
  */
 import './app-node-runtime-preflight.mjs';
 import process from 'node:process';
@@ -32,6 +33,13 @@ const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Package root is the parent of bin/ — where package.json and the built .next live.
 const packageRoot = path.resolve(__dirname, '..');
+
+// Commands for running without a person (service, selftest, update). They settle
+// their own settings and storage, so they branch off before anything below runs.
+if (process.argv[2] === 'service') {
+  const { runSubcommand } = await import('./cli/index.mjs');
+  process.exit(await runSubcommand(process.argv[2], process.argv.slice(3)));
+}
 
 // Validate explicit options before loading settings or touching user storage.
 const argv = process.argv.slice(2);
