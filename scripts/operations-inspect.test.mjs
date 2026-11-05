@@ -130,6 +130,24 @@ test('partial observations, warning alerts and missing/mismatched revision requi
   assert.equal((await inspect(baseUrl)).report.checks.revision, 'self-report-missing');
 });
 
+test('carries the desired-state version, flags a failed attempt, and takes nothing else from that record', async t => {
+  let source = snapshot();
+  const { baseUrl } = await fixture(t, (_request, response) => json(response, source));
+  assert.equal((await inspect(baseUrl)).report.snapshot.desiredState, undefined);
+  assert.equal((await inspect(baseUrl)).exitCode, 0);
+  const record = { appliedVersion: 'v7', appliedAt: '2026-11-05T10:00:00.000Z', lastApplyFailed: false, lastFailureAt: null,
+    interruptedApply: 'none', heldBackVersion: null, restartRequired: false };
+  source = { ...snapshot(), desiredState: { ...record, somethingPrivate: 'PRIVATE_CONTENT' } };
+  const clean = await inspect(baseUrl);
+  assert.equal(clean.exitCode, 0);
+  assert.deepEqual(clean.report.snapshot.desiredState, record);
+  assert.doesNotMatch(JSON.stringify(clean.report), /PRIVATE_CONTENT/);
+  source = { ...snapshot(), desiredState: { ...record, lastApplyFailed: true } };
+  assert.equal((await inspect(baseUrl)).exitCode, 2);
+  source = { ...snapshot(), desiredState: { ...record, interruptedApply: 'needs-attention' } };
+  assert.equal((await inspect(baseUrl)).exitCode, 2);
+});
+
 test('refuses redirects without forwarding authority even to a second loopback server', async t => {
   const destination = await fixture(t, (_request, response) => json(response, snapshot()));
   const source = await fixture(t, (_request, response) => { response.writeHead(302, { Location: destination.baseUrl }); response.end('SECRET_REDIRECT'); });

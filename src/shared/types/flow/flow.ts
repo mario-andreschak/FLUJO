@@ -64,6 +64,12 @@ export interface Flow {
    */
   allowedModels?: string[];
   /**
+   * When true, a new conversation of this flow also freezes the subflows it can reach,
+   * so it finishes on the versions it started with even if those are changed or removed
+   * while it runs. Absent means subflows are looked up when they start, as ever.
+   */
+  pinSubflowsAtRunStart?: boolean;
+  /**
    * Server-managed last-modified time in epoch milliseconds (#108). Refreshed
    * on every save. Used by the dashboard/card-picker "Newest/Oldest" sort
    * (falls back to createdAt). Optional for the same reasons as createdAt.

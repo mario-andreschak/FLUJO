@@ -381,6 +381,31 @@ class ModelService {
   }
 
   /**
+   * Set or remove several models in one write, so a group of changes cannot stop halfway.
+   * The caller has already checked them. A stored `ApiKey` is kept exactly as given: it
+   * must be a reference or an already encrypted value, never a typed key.
+   */
+  async replaceModels(changes: Array<{ id: string; value: Model | null }>): Promise<ModelServiceResponse> {
+    try {
+      return await withModelCatalogWriteLease(async () => {
+        const models = await this.loadModels();
+        const removed = new Set(changes.filter((change) => !change.value).map((change) => change.id));
+        const next = models.filter((model) => !removed.has(model.id));
+        for (const { id, value } of changes) {
+          if (!value) continue;
+          const index = next.findIndex((model) => model.id === id);
+          if (index >= 0) next[index] = value;
+          else next.push(value);
+        }
+        await saveItem(StorageKey.MODELS, next);
+        return { success: true };
+      });
+    } catch (error) {
+      return catalogWriteFailure(error);
+    }
+  }
+
+  /**
    * Delete a model by ID
    */
   async deleteModel(id: string): Promise<ModelServiceResponse> {

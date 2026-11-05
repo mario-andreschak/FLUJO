@@ -34,7 +34,7 @@
  * compiler must not import frontend component modules, so the shapes are re-declared here
  * and pinned to the originals by __tests__/flow/flowSpecCompiler.test.ts.
  */
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import type { Edge } from '@xyflow/react';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { findBindings } from './mcpBinding';
@@ -47,6 +47,9 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 // ---------------------------------------------------------------------------
 // Recursion bounds (issue #94) — token/latency + loop guards
 // ---------------------------------------------------------------------------
+
+/** Fixed namespace for {@link CompileOptions.stableIdSeed}; changing it would change every derived id. */
+const STABLE_ID_NAMESPACE = '6f3a1d52-9c1e-5b47-8a2e-1d4c7b9e0f36';
 
 /** Hard maximum subflow nesting depth (root is depth 0). Never exceeded, whatever the caller asks. */
 export const MAX_SUBFLOW_DEPTH = 3;
@@ -388,6 +391,13 @@ export interface CompileOptions {
    * its behavior. Public new-flow authoring surfaces enable this option.
    */
   newSubflowDefaults?: boolean;
+  /**
+   * Derive flow and node ids from this text plus the flow name and node key instead of
+   * drawing random ones, so compiling the same spec twice gives the same flow. A step
+   * that keeps its key keeps its id across a changed spec, which is what lets a
+   * conversation resting on that step find it again. Absent means random ids, as ever.
+   */
+  stableIdSeed?: string;
 }
 
 export interface CompileIssue {
@@ -685,6 +695,11 @@ export function compileFlowSpec(
   // even if a level turns out to have no usable node) so the total-flow cap is honoured
   // exactly regardless of the children-before-parent push order.
   let flowCount = 0;
+  const newId = (...parts: string[]): string => (
+    options.stableIdSeed === undefined
+      ? uuidv4()
+      : uuidv5([options.stableIdSeed, ...parts].join('\u0000'), STABLE_ID_NAMESPACE)
+  );
 
   const rootFlow = compileLevel(spec, 0, []);
   return finalize(rootFlow, bundle, issues);
@@ -701,7 +716,7 @@ export function compileFlowSpec(
     const flowName = sanitizeFlowName(levelSpec?.name, takenNames);
     takenNames.push(flowName);
     flowCount++;
-    const flowId = uuidv4();
+    const flowId = newId('flow', flowName);
     const childAncestors = [...ancestorNames, flowName];
 
     // --- Pass 1: nodes -------------------------------------------------------
@@ -1140,7 +1155,7 @@ export function compileFlowSpec(
       // finish: no properties.
 
       const node: FlowNode = {
-        id: uuidv4(),
+        id: newId('node', flowName, key),
         type,
         position: { x: 0, y: 0 }, // layout pass below
         data: {
@@ -1201,7 +1216,7 @@ export function compileFlowSpec(
             enabledTools = known ? [...known] : [];
           }
           const mcpNode: FlowNode = {
-            id: uuidv4(),
+            id: newId('mcp', flowName, key, serverName),
             type: 'mcp',
             position: { x: 0, y: 0 },
             data: {

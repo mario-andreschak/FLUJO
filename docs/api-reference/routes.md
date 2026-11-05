@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 233.
+Route files: 234.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -102,6 +102,7 @@ Route files: 233.
 | `/api/oauth/callback` | GET, POST | [source](../../src/app/api/oauth/callback/route.ts) |
 | `/api/oauth/initiate` | POST | [source](../../src/app/api/oauth/initiate/route.ts) |
 | `/api/oauth/reset` | POST | [source](../../src/app/api/oauth/reset/route.ts) |
+| `/api/operations/desired-state` | GET, POST | [source](../../src/app/api/operations/desired-state/route.ts) |
 | `/api/operations/status` | GET | [source](../../src/app/api/operations/status/route.ts) |
 | `/api/original-owner` | GET, POST | [source](../../src/app/api/original-owner/route.ts) |
 | `/api/owner/bootstrap` | GET, POST | [source](../../src/app/api/owner/bootstrap/route.ts) |

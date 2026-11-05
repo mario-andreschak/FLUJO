@@ -42,6 +42,7 @@ explicit app/tool selections and creates a saved flow.
 
 ## Workspaces
 
+- **[Desired state](./desired-state.md)**: Set up and update an instance from one file, safely repeated and interrupted, with one call to return to the previous version
 - **[Workspaces](./workspaces.md)**: Independent sets of flows, models, conversations and MCP servers inside one installation — on-disk layout, migration from a pre-workspace install, the optional `workspace` API parameter, and the navbar tabs (Issue #406)
 
 ## Model Context Protocol (MCP)
