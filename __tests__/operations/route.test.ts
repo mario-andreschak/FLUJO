@@ -53,7 +53,7 @@ it('uses worker control authority and never calls scheduler reconciliation/armin
 });
 
 it('says which desired-state version this workspace is on, and nothing else from that record', async () => {
-  read.mockImplementation(async (relative: string) => (relative === 'db/desired-state/status.json' ? {
+  read.mockImplementation(async (relative?: string) => (relative === 'db/desired-state/status.json' ? {
     schemaVersion: 1, appliedVersion: 'v7', appliedAt: '2026-11-05T10:00:00.000Z', lastApplyFailed: true,
     lastFailureAt: '2026-11-05T11:00:00.000Z', lastFailureCode: 'invalid-file', interruptedApply: 'needs-attention',
     heldBackVersion: 'v8', localEditsKept: 2, restartRequired: true, somethingPrivate: 'PRIVATE_CONTENT',
