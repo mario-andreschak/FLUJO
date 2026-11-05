@@ -22,7 +22,7 @@ import {
 import { installSystemdUnit, removeSystemdUnit, startSystemdUnit, stopSystemdUnit, systemdStatus, unitNameFor } from './service-linux.mjs';
 
 const USAGE = `Usage:
-  flujo service install --name <name> --data-dir <folder> --port <port> [--mode auto|boot|logon] [--root <folder>] [--no-start] [--run-as <user>] [--json]
+  flujo service install --name <name> --data-dir <folder> --port <port> [--mode auto|boot|logon|timer] [--root <folder>] [--no-start] [--run-as <user>] [--json]
   flujo service status --name <name> [--root <folder>] [--json]
   flujo service start --name <name> [--root <folder>] [--json]
   flujo service stop --name <name> [--root <folder>] [--json]
@@ -91,7 +91,7 @@ async function probe(port) {
 async function install(values, { platform, root, name }) {
   const dataDir = absoluteDirectory(values['data-dir'], '--data-dir');
   const port = validatePort(values.port);
-  if (!['auto', 'boot', 'logon'].includes(values.mode)) throw new CliError('--mode must be auto, boot or logon.');
+  if (!['auto', 'boot', 'logon', 'timer'].includes(values.mode)) throw new CliError('--mode must be auto, boot, logon or timer.');
   if (isSameOrInside(dataDir, root)) throw new CliError('--root must be outside the data directory, so logs and old versions stay out of data backups.');
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const paths = prepareManagedRoot(root);

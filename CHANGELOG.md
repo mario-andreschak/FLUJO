@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Running with nobody there
+
+- Add `flujo service install | status | start | stop | uninstall`. It sets up one named instance with its own data directory and port, started by the operating system, with no browser window. On Windows it uses Task Scheduler and runs as the ordinary user, not SYSTEM: at boot with nobody logged in if the install is run once as administrator, otherwise at logon, and it says which one it got. On Linux it writes a systemd unit. A small supervisor restarts FLUJO after a crash or if it stops answering, cleans up after itself, and keeps logs within a size limit. See `docs/operations/unattended-service.md`.
+
 ### Model access
 
 - Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.

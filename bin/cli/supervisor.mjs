@@ -162,9 +162,12 @@ export async function runSupervisor({ name, dataDir, port, root, env = process.e
     // so stay silent rather than fill the log with the same line.
     if (stopRequested()) return 0;
     await hooks.beforeStart?.({ log });
-    writeState({ name, dataDir, port, supervisorPid: process.pid, startedAt: new Date().toISOString(), restarts, childPid: null, lastExit: null });
+    // Keep childPid here: it is how the cleanup below finds a program left behind
+    // by a supervisor that died without warning.
+    writeState({ name, dataDir, port, supervisorPid: process.pid, startedAt: new Date().toISOString(), restarts, lastExit: null });
     while (!stopRequested()) {
       stopLeftovers({ root, dataDir, port, instanceDirectory, log });
+      writeState({ childPid: null });
       if (!await portIsFree(port)) {
         // Give a just-stopped server a moment. Something else on the port is
         // reported and retried, never killed.

@@ -47,6 +47,10 @@ export const RUNTIME_ENVIRONMENT_DEFINITIONS: RuntimeEnvironmentDefinition[] = [
     FLUJO_SNAPSHOTS: 'Set to 0, false, or off to forcibly disable snapshots.',
     FLUJO_SYSTEM_SCREENSHOT_ENABLED: 'Enable the host screenshot tool with 1, true, yes, or on.',
     FLUJO_EXTRA_CA_CERTS: 'Path to an additional PEM CA bundle.',
+    FLUJO_LOG_MAX_BYTES: 'Size limit of one service log file in bytes (default 20971520; minimum 65536).',
+    FLUJO_LOG_MAX_FILES: 'Older service log files to keep (default 3; 0 keeps none).',
+    FLUJO_SERVICE_HANG_RESTART_MS: 'Restart a service instance that has not answered for this long (default 600000; 0 turns it off).',
+    FLUJO_SERVICE_LIVENESS_INTERVAL_MS: 'How often a service instance is checked for an answer (default 60000).',
   }),
   ...definitions('performance', {
     FLUJO_CONVERSATION_CACHE_TTL_MS: 'Conversation cache TTL in milliseconds (default 1800000).',

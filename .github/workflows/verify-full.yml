@@ -225,7 +225,7 @@ jobs:
           Import-Module Pester -RequiredVersion 5.7.1
           Invoke-Pester -Path tests/installer.Tests.ps1 -CI
       - name: Verify isolated launcher bootstrap and child environment
-        run: node --test scripts/bootstrap-directory.test.mjs scripts/bootstrap-launcher.test.mjs
+        run: node --test scripts/bootstrap-directory.test.mjs scripts/bootstrap-launcher.test.mjs scripts/service-cli.test.mjs
       - run: node --test scripts/run-local-jest.test.mjs
       - run: node --test scripts/release-evidence.test.mjs
       - name: Verify maintainer evidence boundaries
