@@ -354,6 +354,14 @@ function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
  * This simplified version focuses on providing a clean interface for server management
  * while maintaining compatibility with the MCP SDK.
  */
+/**
+ * Whether a stdio transport error means "this stdout line was not an MCP message". The
+ * SDK reports a line it cannot parse this way and keeps reading the stream.
+ */
+function isUnparsableStdioLine(error: Error): boolean {
+  return error instanceof SyntaxError || error?.name === "ZodError" || error?.name === "$ZodError";
+}
+
 export class MCPService {
   // --- Workspace-scoped registries (#406) -----------------------------------
   // Every registry below is keyed by SERVER NAME, and a server name is only
@@ -1317,6 +1325,15 @@ export class MCPService {
           return;
         }
 
+        // A stdio server that prints an ordinary log line on stdout is still connected:
+        // the transport drops that line and keeps reading. Reconnecting would only start
+        // another process that prints the same line.
+        if (config.transport === "stdio" && isUnparsableStdioLine(error)) {
+          log.warn(`connectServer: ${config.name} wrote a line on stdout that is not an MCP message; ignoring it`);
+          this.appendStderrLog(config.name, `Ignored a stdout line that is not an MCP message: ${error.message}`);
+          return;
+        }
+
         // Enhanced error logging to capture more details about transport errors
         log.error(`connectServer: Transport error for server ${config.name}:`);
 
@@ -1384,6 +1401,11 @@ export class MCPService {
 
         // Clean up client references for the transport that actually errored
         this.deregisterClient(config.name);
+        // Stop what this transport started before a reconnect starts another one. A
+        // deregistered transport's own close event is ignored by the guard above.
+        void transport.close().catch((closeError: unknown) => {
+          log.debug(`connectServer: closing the failed transport for ${config.name} failed`, closeError);
+        });
 
         // Check if server is still enabled before scheduling reconnection
         this.getServerConfig(config.name)

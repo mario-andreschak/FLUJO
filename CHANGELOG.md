@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### MCP servers
+
+- Stop starting a new process over and over for a server that prints a line on stdout that is not an MCP message, such as an ordinary log line. FLUJO treated that line as a lost connection, forgot the server without stopping it and started another one every few seconds, so the processes piled up. The server now stays connected and the line goes to its log. When a connection really fails, FLUJO stops the old process before it starts a new one.
+
 ### Model access
 
 - Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.
