@@ -233,6 +233,8 @@ export interface Conversation {
    *  Served by GET /v1/chat/conversations/[id] so the message + code survive
    *  a reload. */
   lastError?: NormalizedChatError;
+  /** The calls a person still has to decide on, while status === 'awaiting_tool_approval'. */
+  pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
 }
 
 export interface ChatApiResponse extends Partial<Conversation> {
@@ -1326,6 +1328,13 @@ const Chat: React.FC = () => {
       }
       setDetailedConversation(conversation);
       hydratePendingInputs(id, conversation.pendingInputs, inputSnapshotGeneration);
+      // After a reload or a restart no live stream can show this prompt again, and
+      // without it the person can only stop the run. A decision already on its way
+      // keeps the prompt closed.
+      if (conversation.status === 'awaiting_tool_approval' && conversation.pendingToolCalls?.length
+        && loadingConversationIdRef.current !== id) {
+        setPendingToolCalls(conversation.pendingToolCalls);
+      }
       // Issue #383 (gap 2): rehydrate the error message + code from the
       // server so it survives a reload or re-selecting an older errored
       // conversation from the sidebar — previously only a live SSE `error`

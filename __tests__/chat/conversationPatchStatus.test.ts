@@ -133,6 +133,22 @@ async function patchFlow(conversationId: string) {
 }
 
 describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
+  it('names the calls waiting for a person, so a reopened chat can ask again', async () => {
+    const conversationId = 'conv-waiting';
+    const calls = [{ id: 'call-1', type: 'function', function: { name: 'write_it', arguments: '{}' } }];
+    seedConversation(conversationId, 'awaiting_tool_approval');
+    stored[`conversations/${conversationId}`].pendingToolCalls = calls as SharedState['pendingToolCalls'];
+    const read = async () => (await GET(new NextRequest(`http://localhost/v1/chat/conversations/${conversationId}`, {
+      headers: { host: 'localhost', origin: 'http://localhost' },
+    }), { params: Promise.resolve({ conversationId }) })).json();
+
+    expect((await read()).pendingToolCalls).toEqual(calls);
+
+    // Calls left over in a finished run are not an open question.
+    stored[`conversations/${conversationId}`].status = 'completed';
+    expect((await read()).pendingToolCalls).toBeUndefined();
+  });
+
   beforeEach(async () => {
     for (const key of Object.keys(stored)) delete stored[key];
     mockPersonaDeleted = false;

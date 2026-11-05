@@ -207,6 +207,11 @@ async function GET_handler(
         createdAt: sharedState.createdAt || 0,
         updatedAt: sharedState.updatedAt || Date.now(), // Use current time if missing
         status: sharedState.status,
+        // A run waiting for a person has no live stream left after a reload or a
+        // restart, so the chat rebuilds its approval prompt from this.
+        ...(sharedState.status === 'awaiting_tool_approval' && sharedState.pendingToolCalls?.length
+          ? { pendingToolCalls: sharedState.pendingToolCalls }
+          : {}),
         // Additive recovery metadata: precise cancellation/interruption/failure
         // classification, latest safe checkpoint, lane identity, and warnings.
         recovery: sharedState.recovery,
