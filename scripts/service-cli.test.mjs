@@ -371,11 +371,11 @@ test('real processes: restart after a crash, single supervisor, stop request sta
   assert.match(logText, /fake flujo listening/);
   assert.match(logText, /Restart number 1/);
 
-  // The supervisor dies without warning: its FLUJO is left behind. The next
-  // supervisor must clean that up instead of failing on a busy port forever.
+  // The supervisor dies without warning. On Windows the system ends its children
+  // with it; on Linux FLUJO is left behind holding the port. Either way the next
+  // supervisor must end up running FLUJO, not fail on a busy port forever.
   again.kill('SIGKILL');
   await new Promise(resolve => { again.on('exit', resolve); });
-  assert.ok(isProcessAlive(orphan), 'the left-over process keeps running at first');
   const third = startSupervisor({ root, data, port, extraEnv: env });
   await waitFor(() => starts() === 4, 60_000);
   await waitFor(answers);
