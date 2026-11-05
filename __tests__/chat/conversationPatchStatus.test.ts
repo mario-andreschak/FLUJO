@@ -73,6 +73,9 @@ jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({
 // In-memory storage backing the route's loadItem/saveItem.
 const stored: Record<string, SharedState> = {};
 jest.mock('@/utils/storage/backend', () => ({
+  assertSafeCollectionId: jest.fn(),
+  listCollectionItems: jest.fn(async () => []),
+  saveCollectionItem: jest.fn(async () => undefined),
   loadItem: jest.fn(async (key: string) => stored[key]),
   saveItem: jest.fn(async (key: string, value: SharedState) => {
     stored[key] = value;

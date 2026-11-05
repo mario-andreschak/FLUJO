@@ -7,7 +7,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
 }));
 jest.mock('@/utils/storage/backend', () => ({
   loadItem: jest.fn(), loadCollectionItem: jest.fn(), deleteCollectionItem: jest.fn(),
-  saveCollectionItem: jest.fn(), assertSafeCollectionId: jest.fn(),
+  saveCollectionItem: jest.fn(), assertSafeCollectionId: jest.fn(), listCollectionItems: jest.fn(async () => []),
 }));
 jest.mock('@/backend/execution/flow/persistConversationState', () => ({ persistConversationState: jest.fn() }));
 jest.mock('@/backend/execution/flow/engine/ExecutionEventBus', () => ({ executionEventBus: { emit: jest.fn(), emitterFor: jest.fn() } }));
@@ -105,5 +105,5 @@ it('bulk pressure preserves successful deletions and reports only pressure ids a
     expect(deleteCollectionItem).not.toHaveBeenCalledWith('conversations', id);
     expect(deleteConversationLog).not.toHaveBeenCalledWith(id);
   }
-  expect(deleteCollectionItem).toHaveBeenCalledTimes(9);
+  expect((deleteCollectionItem as jest.Mock).mock.calls.filter(([collection]) => collection === 'conversations')).toHaveLength(9);
 });

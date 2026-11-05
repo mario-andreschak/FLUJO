@@ -921,6 +921,7 @@ async function DELETE_handler(req: NextRequest) {
         // execution, which owns this same lease until it observes cancellation.
         cancelRunning: true,
         index,
+        loadState: stateId => loadCollectionItem<SharedState | undefined>('conversations', stateId, undefined),
         // Every Persona marker, including a pending target or anonymized
         // archive, is lifecycle-owned. Exposure authorization does not grant
         // generic deletion rights.

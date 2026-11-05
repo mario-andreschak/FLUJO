@@ -43,10 +43,10 @@ const GET_handler = async (request: Request, admission: Admission) => {
   const locked = await assertUnlocked();
   if (locked) return locked;
   try {
-    const [{ getSchedulerService }, { FlowExecutor }, { listRuntimes }, { inspectWorkerRecovery }, { getConversationSequenceDiagnostics }, { getConversationRetentionStatus }] = await Promise.all([
+    const [{ getSchedulerService }, { FlowExecutor }, { listRuntimes }, { inspectWorkerRecovery }, { getConversationSequenceDiagnostics }] = await Promise.all([
       import('@/backend/services/scheduler'), import('@/backend/execution/flow/FlowExecutor'),
       import('@/backend/services/mcp/lifecycleCoordinator'), import('@/backend/services/scheduler/workerLocalRecovery'),
-      import('@/backend/execution/flow/conversationLog'), import('@/backend/services/conversations/retention'),
+      import('@/backend/execution/flow/conversationLog'),
     ]);
     const scheduler = getSchedulerService();
     const budget = process.env.FLUJO_OPERATIONS_RSS_BUDGET_BYTES;
@@ -59,7 +59,10 @@ const GET_handler = async (request: Request, admission: Admission) => {
       workerRecovery: inspectWorkerRecovery, active: FlowExecutor.conversationStates.values(), mcp: listRuntimes(),
       memory: process.memoryUsage(), ...(budget === undefined ? {} : { rssBudgetBytes: Number(budget) }),
     });
-    const conversationRetention = await getConversationRetentionStatus();
+    // A problem reading this must not take the whole status page down.
+    const conversationRetention = await import('@/backend/services/conversations/retention')
+      .then(module => module.getConversationRetentionStatus())
+      .catch(() => ({ unavailable: true }));
     const relocked = await assertUnlocked();
     if (relocked) return relocked;
     if (isWorkerMode() !== admission.worker || getCurrentWorkspace() !== workspace) return Response.json({ error: 'Operations profile changed.' },

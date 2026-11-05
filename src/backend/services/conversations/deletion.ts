@@ -128,6 +128,8 @@ export interface DeleteConversationOptions<R> {
    * Returning anything but `undefined` refuses the deletion and is handed back.
    */
   guard?: (state: SharedState | undefined) => Promise<R | undefined> | R | undefined;
+  /** How to read the state. Bulk delete reads under the shared read limit. */
+  loadState?: (conversationId: string) => Promise<SharedState | undefined>;
   /** Build once when removing many. */
   index?: ConversationDeletionIndex;
   /** Set when finishing an interrupted deletion: the state may be gone or unreadable. */
@@ -137,6 +139,12 @@ export interface DeleteConversationOptions<R> {
 export type DeleteConversationResult<R> =
   | { deleted: true; /** False when a leftover remains; its marker retries it later. */ complete: boolean }
   | { deleted: false; refusal: R };
+
+/** A marker left behind only costs one harmless retry. */
+async function dropMarker(conversationId: string): Promise<void> {
+  try { await deleteCollectionItem(MARKERS, conversationId); }
+  catch (error) { log.warn('Could not remove a deletion marker', { conversationId, error }); }
+}
 
 const pathExists = (target: string) => fs.lstat(target).then(() => true, () => false);
 
@@ -184,7 +192,9 @@ export async function deleteConversationCompletely<R = never>(
       const existingState = options.resumeMarker
         ? undefined
         : FlowExecutor.conversationStates.get(conversationId)
-          ?? await loadItem<SharedState | undefined>(`conversations/${conversationId}` as StorageKey, undefined);
+          ?? await (options.loadState
+            ? options.loadState(conversationId)
+            : loadItem<SharedState | undefined>(`conversations/${conversationId}` as StorageKey, undefined));
       const refusal = await options.guard?.(existingState);
       if (refusal !== undefined) {
         if (tombstonedBeforeLock) unmarkConversationDeleted(conversationId);
@@ -280,7 +290,7 @@ export async function deleteConversationCompletely<R = never>(
 
       const leftover = (await Promise.all(ownedPaths(conversationId).map(pathExists))).some(Boolean);
       const complete = failures.length === 0 && !leftover;
-      if (complete && markerWritten) await deleteCollectionItem(MARKERS, conversationId).catch(() => undefined);
+      if (complete && markerWritten) await dropMarker(conversationId);
       return { deleted: true, complete };
     } catch (error) {
       if (!stateRemoved) {
@@ -288,7 +298,7 @@ export async function deleteConversationCompletely<R = never>(
         // isn't left permanently unpersistable/unloggable, and drop the marker so a
         // later retry cannot remove a conversation the caller was told still exists.
         unmarkConversationDeleted(conversationId);
-        if (markerWritten && !options.resumeMarker) await deleteCollectionItem(MARKERS, conversationId).catch(() => undefined);
+        if (markerWritten && !options.resumeMarker) await dropMarker(conversationId);
       }
       throw error;
     }

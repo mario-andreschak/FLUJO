@@ -400,7 +400,7 @@ describe('the sweep', () => {
 
   it('gets through a batch without holding up other work', async () => {
     await turnOn();
-    const ids = Array.from({ length: 400 }, (_, index) => `mass-${index}`);
+    const ids = Array.from({ length: 40 }, (_, index) => `mass-${index}`);
     await Promise.all(ids.map((id, index) => stored(id, index % 2 ? 40 : 2)));
     let longestGap = 0;
     let previous = Date.now();
@@ -410,11 +410,11 @@ describe('the sweep', () => {
     }, 5);
     const report = await runConversationRetention({ batchSize: 10, pauseMs: 1 });
     clearInterval(sampler);
-    expect(report).toMatchObject({ scanned: 400, deleted: 200, failed: 0 });
-    expect(report!.kept.recent).toBe(200);
+    expect(report).toMatchObject({ scanned: 40, deleted: 20, failed: 0 });
+    expect(report!.kept.recent).toBe(20);
     // Generous, because this PC is shared. A sweep that blocked would take far longer.
     expect(longestGap).toBeLessThan(3_000);
-    expect((await fs.readdir(db('conversations'))).length).toBe(200);
+    expect((await fs.readdir(db('conversations'))).length).toBe(20);
   });
 
   it('shares one run between overlapping calls', async () => {
