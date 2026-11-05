@@ -397,6 +397,10 @@ export async function ensureAllWorkspacesInitialized(): Promise<void> {
     await ensureWorkspaceInitialized(snapshot.workspace);
     return;
   }
+  if (process.env.FLUJO_DESIRED_STATE_FILE?.trim()) {
+    await (await import('@/backend/services/desiredState')).ensureDesiredStateWorkspaces()
+      .catch(error => log.warn('Could not prepare workspaces for the desired state:', error));
+  }
   const workspaces = await listWorkspaces();
   for (const workspace of workspaces) {
     try {
@@ -445,6 +449,11 @@ async function runInitialization(): Promise<void> {
     refreshSpotlightServers().catch(error =>
       log.warn('Spotlight refresh failed at startup:', error)
     );
+  }
+
+  // Before the lock check: a locked instance should still be able to say that it is.
+  if (!isWorkerMode()) {
+    (await import('@/backend/services/desiredState/heartbeat')).armDesiredStateHeartbeat();
   }
 
   // MCP servers read secret env values and the scheduler fires flows that
@@ -507,6 +516,11 @@ function startSecretDependentServices(): Promise<void> {
         setMemo('secret', undefined);
         throw error;
       }
+
+      // Runs once the workspace is unlocked and shipped servers exist, and before
+      // servers connect and schedules arm, so they start from the wanted configuration.
+      // It reports its own failures and never stops startup.
+      await (await import('@/backend/services/desiredState')).applyDesiredStateAtStartup();
 
       // startEnabledServers() never rejects in practice (it catches per-server
       // failures) and always clears the startup flag in its own finally, so we

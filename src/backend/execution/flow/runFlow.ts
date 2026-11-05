@@ -57,6 +57,7 @@ import { waitForActiveSubflows, resumeSubflowOrchestrator } from './subflowCommu
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
+import { flowWithPinnedSubflows } from './subflowDependencies';
 import { Flow, normalizeBehaviorRulesInput } from '@/shared/types/flow';
 import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -1465,7 +1466,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     // absence for legacy runs); current catalog data is not historical proof.
     if (!input.flowDefinition) {
       resolvedFlow ??= await flowService.getFlow(resolvedFlowId) ?? undefined;
-      if (resolvedFlow) sharedState.flowSnapshot = structuredClone(resolvedFlow);
+      if (resolvedFlow) sharedState.flowSnapshot = structuredClone(await flowWithPinnedSubflows(resolvedFlow));
     }
 
     // Preserve caller-provided ids/timestamps (like the resume path below).

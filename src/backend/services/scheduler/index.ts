@@ -318,6 +318,7 @@ export class SchedulerService {
   /** Pause state as of the last reconcile (for synchronous status reads). */
   private pausedCache = false;
   private started = false;
+  private armingDeferred = false;
   /** Process-local joins for durable projection reconciliation; disk is source of truth. */
   private personaProjectionCompletions = new Map<string, Promise<RunRecord>>();
   /** Joins duplicate live/startup drains of the same durable file batch. */
@@ -377,7 +378,23 @@ export class SchedulerService {
     return this.queueReconcile(Object.freeze({ id: execution.id, configuration: runtimeConfiguration(execution) }));
   }
 
+  /**
+   * Save definitions without arming them, for startup work that runs before start().
+   * Armed triggers would otherwise race servers that are still connecting. start()
+   * arms everything afterwards. Once started, this changes nothing.
+   */
+  async withArmingDeferred<T>(task: () => Promise<T>): Promise<T> {
+    if (this.started) return task();
+    this.armingDeferred = true;
+    try {
+      return await task();
+    } finally {
+      this.armingDeferred = false;
+    }
+  }
+
   private queueReconcile(committed?: Readonly<{ id: string; configuration: string }>): Promise<void> {
+    if (this.armingDeferred) return Promise.resolve();
     const run = this.reconcileChain
       .catch(() => { /* prior reconcile's error surfaced to its own caller */ })
       .then(async () => {
@@ -1256,6 +1273,19 @@ export class SchedulerService {
    * Fill server-side trigger fields: an empty webhook token generates one;
    * legacy interval-based poll configs gain an equivalent cron on save.
    */
+  /** The reason this definition would be refused on save, or null. Writes nothing. */
+  validateDefinition(
+    input: Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>,
+  ): string | null {
+    const restrictionError = this.validateRestrictionFields(input);
+    if (restrictionError) return restrictionError;
+    return this.validateInput({
+      ...input,
+      ...normalizeStartRestrictions(input),
+      trigger: this.normalizeTrigger(input.trigger),
+    });
+  }
+
   private normalizeTrigger(trigger: PlannedExecution['trigger']): PlannedExecution['trigger'] {
     if (trigger?.type === 'webhook' && !trigger.token) {
       return { ...trigger, token: uuidv4() };

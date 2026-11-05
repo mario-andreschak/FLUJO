@@ -427,4 +427,12 @@ export interface Settings {
    */
   experimental?: ExperimentalSettings;
   modelAccess?: ModelAccessSettings;
+  /** Optional report of version and status to a central address. Off without a URL. */
+  heartbeat?: HeartbeatSettings;
+}
+
+export interface HeartbeatSettings {
+  url?: string;
+  /** Minutes between reports. Missing means 15. */
+  intervalMinutes?: number;
 }
