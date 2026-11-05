@@ -8,7 +8,7 @@
  * is undone from the journal. A process that dies leaves the journal behind, and the
  * next start finishes the work.
  */
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '@/backend/services/enduringAgents/behaviorRevisions';
 import { withWorkspaceRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
@@ -515,11 +515,26 @@ export async function readConfiguredFile(): Promise<{ configured: false } | { co
   const file = process.env[DESIRED_STATE_FILE_ENV]?.trim();
   if (!file) return { configured: false };
   try {
-    const stats = await fs.stat(file);
-    if (!stats.isFile() || stats.size > MAX_FILE_BYTES) {
-      return { configured: true, problem: { where: DESIRED_STATE_FILE_ENV, message: 'this does not name a file of a usable size.' } };
+    // One handle for the check and the read, so the file that passed is the file read.
+    // Not blocking, because opening a named pipe would otherwise wait for a writer.
+    const opened = await fs.open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    let text: string;
+    try {
+      const stats = await opened.stat();
+      if (!stats.isFile() || stats.size > MAX_FILE_BYTES) {
+        return { configured: true, problem: { where: DESIRED_STATE_FILE_ENV, message: 'this does not name a file of a usable size.' } };
+      }
+      const bytes = Buffer.alloc(stats.size);
+      let filled = 0;
+      while (filled < bytes.length) {
+        const { bytesRead } = await opened.read(bytes, filled, bytes.length - filled, filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      text = bytes.toString('utf8', 0, filled);
+    } finally {
+      await opened.close();
     }
-    const text = await fs.readFile(file, 'utf8');
     try {
       return { configured: true, input: JSON.parse(text.replace(/^﻿/, '')) };
     } catch {
