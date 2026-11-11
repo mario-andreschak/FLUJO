@@ -238,6 +238,17 @@ data: {
 data: [DONE]
 ```
 
+## Conversations From Other Chat Apps
+
+Apps such as Open WebUI and Msty keep the chat themselves. Each message arrives with the whole history and no conversation id. FLUJO recognizes that history and continues the same conversation, so one chat in the app is one conversation in FLUJO. The app needs no setup.
+
+- After each finished reply, FLUJO stores a fingerprint of the chat so far. It holds only a hash and ids, never the text.
+- A request continues a conversation only when its history matches and the conversation has not moved on since.
+- Otherwise, for example after regenerating a reply or editing an earlier message, the request starts a new conversation from the history it sent. Existing conversations are never overwritten.
+- An app that shortens the history it sends will not match. Such a client can pass `metadata.conversationId` to pick the conversation itself.
+
+Requests that pass `metadata.conversationId` skip this matching entirely.
+
 ## Error Handling
 
 The API returns appropriate HTTP status codes and error messages:

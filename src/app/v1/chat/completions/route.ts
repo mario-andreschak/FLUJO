@@ -6,6 +6,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { processChatCompletion } from './chatCompletionService';
+import { beginExternalChatTurn, isExternalChatRequest, type ExternalChatTurn } from './externalChatContinuity';
 import {
   InvalidPersonaChatMetadataError,
   parseRequestParameters,
@@ -33,7 +34,8 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
     requestId,
     method: request.method,
   });
-  
+
+  let externalTurn: ExternalChatTurn | undefined;
   try {
     // Get client IP for rate limiting
     // Check rate limit
@@ -161,18 +163,43 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
       personaTargeted: Boolean(personaTarget),
     });
 
+    // Chat apps resend the whole history with no conversation id. Match it to
+    // the conversation it came from so one chat stays one conversation.
+    externalTurn = isExternalChatRequest(request.method, parsedData)
+      ? await beginExternalChatTurn(parsedData)
+      : undefined;
+
     // Pass all flags to processChatCompletion
-    const response = await processChatCompletion(
-      completionData as ChatCompletionRequest, // Pass the remaining data
-      flujo,
-      requireApproval,
-      flujodebug, // Pass the new flag
-      conversation_id,
-      false, // continueDebug: only the debug "Continue" control sets this
-      true, // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
-      personaTarget,
-      ingress,
-    );
+    const response = await (externalTurn
+      ? processChatCompletion(
+          {
+            ...completionData,
+            messages: externalTurn.messages,
+            ...(externalTurn.conversationId ? { appendMessages: true } : {}),
+          } as ChatCompletionRequest,
+          flujo,
+          requireApproval,
+          flujodebug,
+          externalTurn.conversationId,
+          false,
+          true,
+          personaTarget,
+          ingress,
+          externalTurn,
+        )
+      : processChatCompletion(
+          completionData as ChatCompletionRequest, // Pass the remaining data
+          flujo,
+          requireApproval,
+          flujodebug, // Pass the new flag
+          conversation_id,
+          false, // continueDebug: only the debug "Continue" control sets this
+          true, // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
+          personaTarget,
+          ingress,
+        ));
+
+    if (response.status >= 400) await externalTurn?.release();
 
     const duration = Date.now() - startTime;
     log.info('Request processed successfully', {
@@ -193,6 +220,7 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
     
     return responseWithCors;
   } catch (error) {
+    await externalTurn?.release();
     if (error instanceof ConversationLogReadPressureError) throw error;
     const duration = Date.now() - startTime;
     const ingressError = isChatIngressError(error);

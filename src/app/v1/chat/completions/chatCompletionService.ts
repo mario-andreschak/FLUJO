@@ -34,6 +34,7 @@ import {
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import type { PersonaChatCompletionTarget } from './requestParser';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
+import type { ExternalChatTurn } from './externalChatContinuity';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -126,7 +127,9 @@ async function processChatCompletionInternal(
   // the "Execute in Debugger" checkbox takes effect on an existing conversation.
   // Internal resumes (step/continue/respond) leave this false to preserve the
   // session's debugMode.
-  userTurn: boolean = false
+  userTurn: boolean = false,
+  // Set for a non-streamed turn from an outside chat app; see externalChatContinuity.
+  externalTurn?: ExternalChatTurn,
 ) {
   const startTime = Date.now();
   log.info('Processing chat completion request', {
@@ -284,6 +287,10 @@ async function processChatCompletionInternal(
 
   log.info(`Returning success response for conv ${result.conversationId}`, { action: result.finalAction, status: responseData.status, flujo, requireApproval, flujodebug, finish_reason });
   log.verbose(`Final response data for conv ${result.conversationId}`, responseData);
+
+  if (responseData.status === 'completed') {
+    await externalTurn?.remember(result.outputText, result.conversationId, result.sharedState.messages.at(-1)?.id);
+  }
 
   return NextResponse.json(responseData);
 }
@@ -584,11 +591,12 @@ export async function processChatCompletion(
   userTurn: boolean = false,
   personaTarget?: PersonaChatCompletionTarget,
   ingress?: ChatIngressPermit,
+  externalTurn?: ExternalChatTurn,
 ) {
   const owner = ingress ? claimChatIngress(ingress) : undefined;
   try {
     return await processAdmittedChatCompletion(data, flujo, requireApproval, flujodebug,
-      conversationId, continueDebug, userTurn, personaTarget, owner);
+      conversationId, continueDebug, userTurn, personaTarget, owner, externalTurn);
   } finally { owner?.release(); }
 }
 
@@ -602,6 +610,7 @@ async function processAdmittedChatCompletion(
   userTurn: boolean = false,
   personaTarget?: PersonaChatCompletionTarget,
   ingressOwner?: ReturnType<typeof claimChatIngress>,
+  externalTurn?: ExternalChatTurn,
 ) {
   if (personaTarget && typeof data.model === 'string' && (data.model.startsWith('model-') || data.model.startsWith('policy/'))) {
     return NextResponse.json({
@@ -753,7 +762,7 @@ async function processAdmittedChatCompletion(
         });
 
       // Return streaming response immediately
-      return createStreamingResponse(data.model, effectiveConvId, snapshotReplayFrom, streamFromSeq, admission, submissionFailure.signal);
+      return createStreamingResponse(data.model, effectiveConvId, snapshotReplayFrom, streamFromSeq, admission, submissionFailure.signal, externalTurn);
     } catch (error) {
       // Response construction may fail after execution starts. The submitted
       // scope owns the reservation until that execution actually settles.
@@ -766,7 +775,7 @@ async function processAdmittedChatCompletion(
   } else {
     // Non-streaming path - use the internal function directly
     try {
-      return await processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
+      return await processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn, externalTurn);
     } catch (error) {
       if (isConversationDurabilityError(error)) return conversationDurabilityResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
@@ -914,6 +923,7 @@ export function createStreamingResponse(
   requestFromSeq?: number,
   ownedAdmission?: CompletionStreamAdmission,
   submissionFailure?: AbortSignal,
+  externalTurn?: ExternalChatTurn,
 ) {
   const admission = ownedAdmission ?? reserveCompletionStream(conversationId);
   if (!admission) return completionStreamCapacityResponse();
@@ -946,6 +956,7 @@ export function createStreamingResponse(
           onSubmissionFailure = () => {
             if (closed) return;
             try {
+              void externalTurn?.release();
               const error = submissionFailure?.reason;
               const body = isFlowRunPressureError(error)
                 ? { message: error.message, type: 'api_error', code: error.code,
@@ -982,6 +993,10 @@ export function createStreamingResponse(
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
           };
 
+          // The client stores exactly the text it was streamed, across every
+          // assistant message in the turn, and resends that as history.
+          let streamedText = '';
+
           const baseChunk = (delta: unknown, finish_reason: string | null) => ({
             id: chunkId,
             object: 'chat.completion.chunk',
@@ -1003,6 +1018,7 @@ export function createStreamingResponse(
                 typeof msg.content === 'string' &&
                 msg.content.length > 0
               ) {
+                if (externalTurn) streamedText += msg.content;
                 send(baseChunk({ content: msg.content }, null));
               }
               if (msg.media && msg.media.length > 0) {
@@ -1045,6 +1061,9 @@ export function createStreamingResponse(
                 }
                 for (let index = start; index < currentState.messages.length; index++) sendAssistant(currentState.messages[index]);
               }
+              if (status === 'completed') {
+                void externalTurn?.remember(streamedText, conversationId, currentState?.messages.at(-1)?.id);
+              }
               // Final unified chunk: empty content delta + the final conversation state.
               send(baseChunk({ content: '', conversation: currentState }, finishReason));
               // Standard OpenAI empty-delta terminator chunk.
@@ -1070,6 +1089,7 @@ export function createStreamingResponse(
               const delta: Record<string, unknown> = {};
               if (event.delta) {
                 streamedTextMessageIds.add(event.messageId);
+                if (externalTurn) streamedText += event.delta;
                 delta.content = event.delta;
               }
               if (event.mediaPart) {
