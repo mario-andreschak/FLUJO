@@ -41,6 +41,8 @@ function describeMapTrigger(execution: AutomationMapExecution, t: Translator): s
       return t('waves.kind.fileWatch');
     case 'mcp-poll':
       return t('automations.trigger.watchingTool', { server: trigger.serverName, tool: trigger.toolName });
+    case 'mcp-event':
+      return t('automations.trigger.onServerEvent', { server: trigger.serverName, event: trigger.eventName });
     case 'url-watch':
       return t('waves.kind.urlWatch');
     case 'flow-event':

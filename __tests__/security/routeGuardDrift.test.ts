@@ -77,6 +77,8 @@ describe('route guard drift', () => {
     '/api/oauth/reset',
     '/api/registry/oauth/callback',
     '/api/webhooks/[id]',
+    // This computer only, and every delivery is signature-checked in the route.
+    '/api/webhooks/mcp/[id]',
   ].sort();
 
   it('the set of public /api routes equals the reviewed snapshot', () => {

@@ -385,6 +385,20 @@ const CURATED_GROUPS: ApiGroup[] = [
           'The webhook body is untrusted input to the flow — prompts should treat it as data.',
         ],
       },
+      {
+        method: 'POST',
+        path: '/api/webhooks/mcp/{id}',
+        summary:
+          'Signed event from an MCP server, for an automation with the MCP event trigger. FLUJO hands this URL to the server itself.',
+        paramsLabel: 'Query',
+        params: [
+          { name: 'v', type: 'string', required: true, description: 'Fingerprint of the subscription this delivery belongs to.' },
+        ],
+        notes: [
+          'This computer only. Authenticated with Standard Webhooks signature headers.',
+          'Answers 503 with Retry-After while it cannot start a run, and 410 once the subscription is no longer in use.',
+        ],
+      },
     ],
   },
   {
@@ -412,6 +426,12 @@ const CURATED_GROUPS: ApiGroup[] = [
         path: '/api/mcp/servers/{name}/status',
         summary: 'Live connection status. Always 200, even when the server is down.',
         response: '{ status, ... }',
+      },
+      {
+        method: 'GET',
+        path: '/api/mcp/servers/{name}/events',
+        summary: 'List the events a server can report, for the automation editor.',
+        response: '{ supported, events, error? }.',
       },
       {
         method: 'GET',
@@ -676,6 +696,8 @@ const REFERENCE_DETAILS: Record<string, Partial<ApiEndpoint>> = {
   'GET /api/planned-executions/{id}': { response: 'PlannedExecution · 404' },
   'GET /api/planned-executions/{id}/runs': { response: '{ runs: RunRecord[] } (newest 100, oldest first) · 404' },
   'POST /api/planned-executions/{id}/run': { requestBody: 'none', response: '{ record: RunRecord } after the run finishes · 404 · 500' },
+  'POST /api/webhooks/mcp/{id}': { paramsLabel: 'Body', params: [p('(event)', 'object', 'eventId, name, timestamp and data, signed with webhook-id, webhook-timestamp and webhook-signature headers.', true)], response: '202 { accepted, runId } · 200 duplicate · 401 · 410 · 413 · 503' },
+  'GET /api/mcp/servers/{name}/events': { response: '{ supported, events, error? }' },
   'POST /api/webhooks/{id}': { paramsLabel: 'Body', params: [p('(payload)', 'object', 'Any JSON (or text) up to 256 KB, handed to the agent as trigger context.')], response: '202 { accepted: true, runId } · 400 · 401 token · 403 · 404 · 409 busy/disabled · 413 · 423 · 428 · 503' },
   'GET /api/mcp/servers': { response: 'MCPServerConfig[] (secret headers and client secrets masked)' },
   'GET /api/mcp/servers/{name}': { response: 'MCPServerConfig · 404 · 500' },

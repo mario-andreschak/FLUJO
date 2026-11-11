@@ -47,6 +47,7 @@ import ModelAccessSettings from './ModelAccessSettings';
 import LanguageSettings from './LanguageSettings';
 import NetworkExposureSettings from './NetworkExposureSettings';
 import RuntimeEnvironmentSettings from './RuntimeEnvironmentSettings';
+import McpStartupSettings from './McpStartupSettings';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 
@@ -54,6 +55,7 @@ type SettingsSectionId =
   | 'network'
   | 'modelAccess'
   | 'runtimeEnv'
+  | 'mcpStartup'
   | 'globalEnv'
   | 'encryption'
   | 'backup'
@@ -108,6 +110,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     descriptionKey: 'settings.section.runtimeEnvDescription',
     icon: DnsRoundedIcon,
     component: RuntimeEnvironmentSettings,
+  },
+  {
+    id: 'mcpStartup',
+    titleKey: 'settings.section.mcpStartup',
+    descriptionKey: 'settings.section.mcpStartupDescription',
+    icon: DnsRoundedIcon,
+    component: McpStartupSettings,
   },
   {
     id: 'encryption',
@@ -191,7 +200,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: 'system',
     titleKey: 'settings.category.system',
     descriptionKey: 'settings.category.systemDescription',
-    sectionIds: ['updates', 'privacy', 'experimental'],
+    sectionIds: ['mcpStartup', 'updates', 'privacy', 'experimental'],
   },
 ];
 

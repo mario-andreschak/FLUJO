@@ -12,6 +12,7 @@ export type FlowRunFiredBy =
   | 'webhook'
   | 'file'
   | 'mcp-poll'
+  | 'mcp-event'
   | 'url-watch'
   | 'flow-event'
   | 'manual'

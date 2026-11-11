@@ -118,6 +118,12 @@ export type MCPManagerConfig = {
    */
   exposeAsMcpServer?: boolean;
   /**
+   * Keep this server running: started with FLUJO even when tool servers start
+   * lazily, and never closed for being idle. For servers that hold a live
+   * connection or collect data in the background.
+   */
+  alwaysOn?: boolean;
+  /**
    * MCP Apps (SEP-1865 / #97): opt-in switch letting this server render its
    * interactive `ui://` UI resources in chat or the docked canvas. Off by
    * default — when absent/false FLUJO never fetches or renders server-supplied

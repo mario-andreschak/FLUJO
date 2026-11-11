@@ -130,6 +130,18 @@ describe('serializePackage / parsePackage round-trip', () => {
     );
   });
 
+  it('strips the event signing secret from serialized output', () => {
+    const eventExecution = {
+      ...plannedWebhook,
+      id: 'event-execution',
+      trigger: { type: 'mcp-event' as const, serverName: 'chat', eventName: 'message.received', secret: 'whsec_super-secret-value' },
+    };
+    const { json, package: pkg } = serializePackage({ ...baseInput, plannedExecutions: [eventExecution] });
+    expect(json).not.toContain('whsec_super-secret-value');
+    expect((pkg.plannedExecutions[0].trigger as { secret?: string }).secret).toBeUndefined();
+    expect(eventExecution.trigger.secret).toBe('whsec_super-secret-value');
+  });
+
   it('strips the webhook token from serialized output', () => {
     const { json, package: pkg } = serializePackage(baseInput);
     expect(json).not.toContain('super-secret-token-123');
