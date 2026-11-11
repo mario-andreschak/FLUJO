@@ -41,6 +41,7 @@ export const TRIGGER_TYPE_LABELS: Record<TriggerType, string> = {
   webhook: 'Webhook',
   'file-watch': 'File watch',
   'mcp-poll': 'MCP poll',
+  'mcp-event': 'MCP event',
   'url-watch': 'URL watch',
   'flow-event': 'Flow event',
 };

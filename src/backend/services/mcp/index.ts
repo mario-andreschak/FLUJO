@@ -256,6 +256,15 @@ import {
   McpRuntimeAuthorityRetirementError,
   assertMcpRuntimeAuthorityRetired,
 } from "./connection";
+import { resolveLazyStart } from "./lazyStart";
+import {
+  listMcpEvents,
+  serverSupportsEvents,
+  subscribeMcpEvent,
+  type McpEventDescriptor,
+  type McpEventSubscribeRequest,
+  type McpEventSubscribeResult,
+} from "./serverEvents";
 import { registerResourceNotificationHandlers } from "./resourceNotifications";
 import {
   isMcpBetaProtocolEnabled,
@@ -2169,6 +2178,31 @@ export class MCPService {
     return [...closed, ...evicted];
   }
 
+  /** The events a server can report, for the automation editor. */
+  async listServerEvents(serverName: string): Promise<{ supported: boolean; events: McpEventDescriptor[]; error?: string }> {
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) return { supported: false, events: [], error: acquired.error };
+    try {
+      if (!serverSupportsEvents(acquired.lease.client)) return { supported: false, events: [] };
+      return { supported: true, events: await listMcpEvents(acquired.lease.client) };
+    } finally {
+      acquired.lease.release();
+    }
+  }
+
+  /** Creates or refreshes a webhook subscription. Throws when the server refuses. */
+  async subscribeServerEvent(serverName: string, request: McpEventSubscribeRequest): Promise<McpEventSubscribeResult> {
+    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
+    try {
+      if (!serverSupportsEvents(acquired.lease.client)) throw new Error(`MCP server '${serverName}' does not report events`);
+      return await subscribeMcpEvent(acquired.lease.client, request);
+    } finally {
+      acquired.lease.release();
+    }
+  }
+
   /**
    * Acquire a lease on a server, connecting it lazily if it is cold.
    *
@@ -3548,6 +3582,15 @@ export class MCPService {
       await this.handleConnectionStateChange(serverName, updatedConfig);
     }
 
+    if ((config.alwaysOn === true) !== (updatedConfig.alwaysOn === true)) {
+      if (updatedConfig.alwaysOn === true) {
+        pinServer(updatedConfig.name, "always-on");
+        if (!updatedConfig.disabled) void this.connectServer(updatedConfig.name);
+      } else {
+        unpinServer(updatedConfig.name, "always-on");
+      }
+    }
+
     if (effectiveRootsChanged) {
       this.notifyRootsChanged(updatedConfig.name);
     }
@@ -3938,7 +3981,7 @@ export class MCPService {
   /**
    * Start all enabled servers.
    *
-   * Issue #413: with `FLUJO_MCP_LAZY_START` the sweep only DISCOVERS
+   * Issue #413: with lazy start (setting or `FLUJO_MCP_LAZY_START`) the sweep only DISCOVERS
    * configuration (so the MCP page and every tool/resource manifest consumer
    * still sees every enabled server) and warms nothing. Servers are then
    * connected on first use through `acquireServerLease`, which is the point of
@@ -3967,13 +4010,11 @@ export class MCPService {
 
       // Find all enabled servers
       const allEnabledServers = configs.filter((config) => !config.disabled);
-      const lazyStart = /^(1|true|yes)$/i.test(
-        process.env.FLUJO_MCP_LAZY_START ?? "",
-      );
+      const lazyStart = await resolveLazyStart();
       // An always-on server is pinned: it is exempt from idle/LRU closure and is
       // warmed even in lazy mode (long-lived subscriptions/triggers need it live).
       const alwaysOn = allEnabledServers.filter(
-        (config) => (config as { alwaysOn?: boolean }).alwaysOn === true,
+        (config) => config.alwaysOn === true,
       );
       for (const config of alwaysOn) {
         pinServer(config.name, "always-on");

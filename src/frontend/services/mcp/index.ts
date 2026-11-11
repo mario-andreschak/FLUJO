@@ -77,6 +77,18 @@ class MCPService {
   /**
    * List tools available from an MCP server with caching
    */
+  /** The events a server can report; empty when it has none or cannot be reached. */
+  async listServerEvents(serverName: string): Promise<{ supported: boolean; events: McpEventEntry[] }> {
+    try {
+      const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}/events`);
+      const data = await response.json() as { supported?: boolean; events?: McpEventEntry[] };
+      return { supported: data.supported === true, events: data.events ?? [] };
+    } catch (error) {
+      log.warn(`Failed to list events for ${serverName}`, error);
+      return { supported: false, events: [] };
+    }
+  }
+
   async listServerTools(serverName: string): Promise<{ tools: Tool[]; error?: string }> {
     try {
       // Check cache first
@@ -755,6 +767,13 @@ interface ServerResourcesResult {
   resources: Resource[];
   resourceTemplates: ResourceTemplate[];
   error?: string;
+}
+
+export interface McpEventEntry {
+  name: string;
+  description?: string;
+  delivery?: string[];
+  inputSchema?: Record<string, unknown>;
 }
 
 export const mcpService = new MCPService();

@@ -1181,6 +1181,10 @@ function describeTrigger(trigger: unknown): { type: string; details: Array<{ lab
       push('tool', t.toolName);
       push('intervalMs', t.intervalMs);
       break;
+    case 'mcp-event':
+      push('server', t.serverName);
+      push('event', t.eventName);
+      break;
     case 'url-watch':
       push('url', t.url);
       push('intervalMs', t.intervalMs);

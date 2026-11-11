@@ -44,6 +44,16 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: (...args: unknown[]) => runFlowMock(...args),
 }));
 
+// The mcp-event trigger subscribes when armed; these tests only exercise fire().
+jest.mock('@/backend/services/mcp', () => ({
+  mcpService: {
+    pinServer: jest.fn(),
+    unpinServer: jest.fn(),
+    isServerDisabled: jest.fn(async () => false),
+    subscribeServerEvent: jest.fn(async () => ({ id: 'sub', refreshBefore: null })),
+  },
+}));
+
 // --- encryption lock state (flippable) ------------------------------------
 
 let locked = false;
@@ -140,6 +150,33 @@ describe('SchedulerService overlap strategy (#121)', () => {
     pendingRuns[0](completedResult);
     await first;
     expect(scheduler.isRunning(execution!.id)).toBe(false);
+  });
+
+  it('never skips an event a sender was told arrived, even on the skip setting', async () => {
+    blockRunFlow();
+    const trigger = { type: 'mcp-event' as const, serverName: 'chat', eventName: 'message.received', secret: '' };
+    const { execution } = await scheduler.create(input({ trigger, overlapStrategy: 'skip' }));
+
+    const first = scheduler.fire(execution!, { kind: 'mcp-event', summary: 'first' });
+    await flush();
+    const second = scheduler.fire(execution!, { kind: 'mcp-event', summary: 'second' });
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    pendingRuns[0](completedResult);
+    await first;
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+    pendingRuns[1](completedResult);
+    expect((await second).status).toBe('completed');
+  });
+
+  it('generates a signing secret and requires a server and event', async () => {
+    const trigger = { type: 'mcp-event' as const, serverName: 'chat', eventName: 'message.received', secret: '' };
+    const { execution } = await scheduler.create(input({ trigger, enabled: false }));
+    expect((execution!.trigger as { secret: string }).secret).toMatch(/^whsec_/);
+    const invalid = await scheduler.create(input({ trigger: { ...trigger, eventName: '' }, enabled: false }));
+    expect(invalid.error).toMatch(/server and event/);
   });
 
   it("'error' records an error run for the overlapping fire and does not run it", async () => {

@@ -234,6 +234,8 @@ function publicTriggerOf(trigger: TriggerConfig): AutomationMapTrigger {
         ...(trigger.cron ? { cron: trigger.cron } : {}),
         ...(trigger.timezone ? { timezone: trigger.timezone } : {}),
       };
+    case 'mcp-event':
+      return { type: 'mcp-event', serverName: trigger.serverName, eventName: trigger.eventName };
     case 'url-watch':
       return {
         type: 'url-watch',

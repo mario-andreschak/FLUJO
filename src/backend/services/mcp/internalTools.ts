@@ -154,7 +154,7 @@ const MCP_SERVER_STATUSES = [
 ] as const;
 const MCP_TRANSPORTS = ['stdio', 'websocket', 'sse', 'streamable'] as const;
 const PLANNED_EXECUTION_STATES = ['enabled', 'disabled', 'running', 'attention'] as const;
-const TRIGGER_TYPES = ['schedule', 'webhook', 'file-watch', 'mcp-poll', 'url-watch', 'flow-event'] as const;
+const TRIGGER_TYPES = ['schedule', 'webhook', 'file-watch', 'mcp-poll', 'mcp-event', 'url-watch', 'flow-event'] as const;
 const RUN_STATUSES = ['completed', 'error', 'skipped', 'needs_approval', 'capped'] as const;
 
 /**

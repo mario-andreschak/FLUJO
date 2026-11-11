@@ -269,6 +269,7 @@ function flowNameFor(execution: AutomationMapExecution, data: AutomationMapRespo
 
 function eventLabelFor(trigger: AutomationMapTrigger): string {
   if (trigger.type === 'webhook') return 'Webhook';
+  if (trigger.type === 'mcp-event') return `${trigger.serverName} · ${trigger.eventName}`;
   if (trigger.type === 'file-watch') return 'File watcher';
   if (trigger.type === 'flow-event') {
     if (trigger.source.topic?.trim()) return `Signal · ${trigger.source.topic.trim()}`;
@@ -357,7 +358,7 @@ export function buildDaySchedule(input: {
     // Only organic event sources are truly listening. An unmatched flow-event
     // trigger is broken/unlinked, not an all-day listener, and remains surfaced
     // by the Playground's unlinked warning instead of being presented as armed.
-    if (execution.trigger.type === 'webhook' || execution.trigger.type === 'file-watch') {
+    if (execution.trigger.type === 'webhook' || execution.trigger.type === 'mcp-event' || execution.trigger.type === 'file-watch') {
       alwaysListening.push({
         ...common,
         key: `${execution.executionId}:always`,

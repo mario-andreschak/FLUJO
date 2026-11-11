@@ -524,6 +524,10 @@ function deriveEmbeddedContentSecrets(
 ): PackageSecret[] {
   const modelsWithoutApiKeys = models.map(({ ApiKey: _dropped, ...model }) => model);
   const executionsWithoutWebhookTokens = plannedExecutions.map((execution) => {
+    if (execution.trigger?.type === 'mcp-event') {
+      const { secret: _droppedSecret, ...eventTrigger } = execution.trigger;
+      return { ...execution, trigger: eventTrigger };
+    }
     if (execution.trigger?.type !== 'webhook') return execution;
     const { token: _dropped, ...trigger } = execution.trigger;
     return { ...execution, trigger };

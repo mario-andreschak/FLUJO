@@ -414,6 +414,11 @@ export interface ModelAccessSettings {
   quickChat?: boolean;
 }
 
+export interface McpStartupSettings {
+  /** Start tool servers on first use instead of with FLUJO. Off when missing. */
+  lazyStart?: boolean;
+}
+
 export interface Settings {
   speech: SpeechSettings;
   update?: UpdateSettings;
@@ -427,4 +432,5 @@ export interface Settings {
    */
   experimental?: ExperimentalSettings;
   modelAccess?: ModelAccessSettings;
+  mcp?: McpStartupSettings;
 }

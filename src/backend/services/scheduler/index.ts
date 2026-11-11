@@ -37,6 +37,7 @@ import {
 } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll } from './triggers/mcpPoll';
+import { armMcpEvent, mcpEventDeliveryUrl, newMcpEventSecret } from './triggers/mcpEvent';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import { armUrlWatch } from './triggers/urlWatch';
 import { armFlowEvent } from './triggers/flowEvent';
@@ -706,6 +707,36 @@ export class SchedulerService {
         );
         break;
       }
+      case 'mcp-event': {
+        const pin = `trigger:${execution.id}`;
+        this.armed.set(
+          execution.id,
+          armMcpEvent({
+            subscribe: this.bindToWorkspace(async (ttlMs: number) => {
+              const { mcpService } = await import('@/backend/services/mcp');
+              if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before subscribing');
+              return mcpService.subscribeServerEvent(trigger.serverName, {
+                name: trigger.eventName,
+                arguments: trigger.arguments,
+                url: mcpEventDeliveryUrl(execution.id, trigger, getCurrentWorkspace()),
+                secret: trigger.secret,
+                ttlMs,
+              });
+            }),
+            pin: this.bindToWorkspace(async () => {
+              const { mcpService } = await import('@/backend/services/mcp');
+              mcpService.pinServer(trigger.serverName, pin);
+            }),
+            unpin: this.bindToWorkspace(async () => {
+              const { mcpService } = await import('@/backend/services/mcp');
+              mcpService.unpinServer(trigger.serverName, pin);
+            }),
+            onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
+            onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
+          })
+        );
+        break;
+      }
       case 'url-watch': {
         this.armed.set(
           execution.id,
@@ -1260,6 +1291,9 @@ export class SchedulerService {
     if (trigger?.type === 'webhook' && !trigger.token) {
       return { ...trigger, token: uuidv4() };
     }
+    if (trigger?.type === 'mcp-event' && !trigger.secret) {
+      return { ...trigger, secret: newMcpEventSecret() };
+    }
     if (trigger?.type === 'mcp-poll' && !trigger.cron) {
       return { ...trigger, cron: intervalMsToCron(trigger.intervalMs) };
     }
@@ -1403,6 +1437,11 @@ export class SchedulerService {
         }
         return null;
       }
+      case 'mcp-event':
+        if (!trigger.serverName || !trigger.eventName) {
+          return 'A server and event are required';
+        }
+        return null;
       case 'url-watch': {
         try {
           const parsed = new URL(trigger.url ?? '');
@@ -2848,7 +2887,11 @@ export class SchedulerService {
     // Overlap policy (issue #121): decide what to do when a fire arrives while
     // a previous run for THIS execution is still in flight. Defaults to 'skip'
     // (historical behavior). The encryption-locked guard above always wins.
-    const strategy: OverlapStrategy = execution.overlapStrategy ?? 'skip';
+    // A skipped event would be lost after the sender was told it arrived.
+    const configuredStrategy: OverlapStrategy = execution.overlapStrategy ?? 'skip';
+    const strategy: OverlapStrategy = execution.trigger.type === 'mcp-event' && configuredStrategy === 'skip'
+      ? 'queue'
+      : configuredStrategy;
     if (
       !bypassOverlap
       && !restrictions.emergency

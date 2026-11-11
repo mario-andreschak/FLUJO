@@ -61,6 +61,7 @@ export type AutomationMapTrigger =
   | { type: 'webhook' }
   | { type: 'file-watch' }
   | { type: 'mcp-poll'; serverName: string; toolName: string; cron?: string; timezone?: string }
+  | { type: 'mcp-event'; serverName: string; eventName: string }
   | { type: 'url-watch'; cron: string; timezone?: string }
   | {
       type: 'flow-event';

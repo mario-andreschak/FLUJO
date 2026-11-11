@@ -105,6 +105,22 @@ export interface McpPollTriggerConfig {
   evaluate: McpPollEvaluate;
 }
 
+/**
+ * Fire when an MCP server reports an event. FLUJO subscribes with the server,
+ * which delivers signed webhooks to a local URL and retries until they are
+ * accepted, so events survive either side being offline.
+ */
+export interface McpEventTriggerConfig {
+  type: 'mcp-event';
+  serverName: string;
+  /** An event name from the server's `events/list`. */
+  eventName: string;
+  /** Subscription arguments, as described by the event's `inputSchema`. */
+  arguments?: Record<string, unknown>;
+  /** Signing secret (`whsec_...`). Generated on save; never exported. */
+  secret: string;
+}
+
 export interface UrlWatchTriggerConfig {
   type: 'url-watch';
   /** The http(s) resource to watch. */
@@ -159,6 +175,7 @@ export type TriggerConfig =
   | WebhookTriggerConfig
   | FileWatchTriggerConfig
   | McpPollTriggerConfig
+  | McpEventTriggerConfig
   | UrlWatchTriggerConfig
   | FlowEventTriggerConfig;
 
@@ -443,6 +460,7 @@ export interface TriggerFirePayload {
     | 'webhook'
     | 'file'
     | 'mcp-poll'
+    | 'mcp-event'
     | 'url-watch'
     | 'flow-event';
   /** Short human-readable summary, stored on the RunRecord. */

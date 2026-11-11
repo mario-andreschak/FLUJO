@@ -22,6 +22,7 @@ export type WaveTriggerKind =
   | 'url-watch'
   /** Unpredictable timing — pinned left. */
   | 'webhook'
+  | 'mcp-event'
   | 'file-watch'
   /** Never a root; always a chain link resolved from a signal/completion. */
   | 'flow-event';

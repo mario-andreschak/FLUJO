@@ -108,6 +108,8 @@ const statusLine = (
         return t('automations.card.listeningWebhook');
       case 'file-watch':
         return t('automations.card.watchingPath', { path: execution.trigger.path });
+      case 'mcp-event':
+        return t('automations.card.listeningEvent');
       case 'mcp-poll':
       case 'url-watch':
         return t('automations.card.watchingChanges');
@@ -204,6 +206,7 @@ const ExecutionCard = ({
       case 'file-watch':
         return <FolderOpenRoundedIcon />;
       case 'mcp-poll':
+      case 'mcp-event':
         return <HubRoundedIcon />;
       case 'url-watch':
         return <TravelExploreRoundedIcon />;

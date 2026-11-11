@@ -134,6 +134,9 @@ function packPlannedExecution(pe: PlannedExecution): PackagedPlannedExecution {
     // Remove the shared secret entirely — never packaged.
     delete (copy.trigger as { token?: string }).token;
   }
+  if (copy.trigger && copy.trigger.type === 'mcp-event') {
+    delete (copy.trigger as { secret?: string }).secret;
+  }
   return copy as unknown as PackagedPlannedExecution;
 }
 

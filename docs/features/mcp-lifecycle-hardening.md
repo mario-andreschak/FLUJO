@@ -126,9 +126,10 @@ startup" with acquire-on-use:
 
 `MCPService.callTool()` holds a lease for the whole call, so an in-flight tool call
 can never have its server closed underneath it. `startEnabledServers()` supports
-`FLUJO_MCP_LAZY_START=1`, which discovers configuration without warming anything
-except always-on servers. It defaults **off**: eager startup may only be retired
-once every consumer acquires a lease before use.
+lazy start (**Settings > Tool server startup**, or `FLUJO_MCP_LAZY_START`, which wins
+when set), which discovers configuration without warming anything except always-on
+servers. It defaults **off**: eager startup may only be retired once every consumer
+acquires a lease before use. Always-on is set per server on the same settings page.
 
 ## 5. Bounded conversation state
 

@@ -20,6 +20,7 @@ export const TRIGGER_KIND_META: Record<WaveTriggerKind, TriggerKindMeta> = {
   'mcp-poll': { label: 'MCP Poll', labelKey: 'waves.kind.mcpPoll', color: '#7b1fa2', timeline: true },
   'url-watch': { label: 'URL Watch', labelKey: 'waves.kind.urlWatch', color: '#0288d1', timeline: true },
   webhook: { label: 'Webhook', labelKey: 'waves.kind.webhook', color: '#2e7d32', timeline: false },
+  'mcp-event': { label: 'MCP Event', labelKey: 'waves.kind.mcpEvent', color: '#6a1b9a', timeline: false },
   'file-watch': { label: 'File Watcher', labelKey: 'waves.kind.fileWatch', color: '#ed6c02', timeline: false },
   'flow-event': { label: 'Event', labelKey: 'waves.kind.event', color: '#616161', timeline: false },
 };
