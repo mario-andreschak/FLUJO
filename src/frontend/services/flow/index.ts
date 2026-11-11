@@ -570,10 +570,14 @@ class FlowService {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        // A proxy or crash can answer with a non-JSON body. The refusal itself
+        // still has to reach the caller as a readable failure.
+        const errorData = await response.json().catch(() => null) as { error?: unknown } | null;
         return {
           success: false,
-          error: errorData.error || 'Failed to delete flow'
+          error: typeof errorData?.error === 'string' && errorData.error
+            ? errorData.error
+            : 'Failed to delete flow'
         };
       }
 
