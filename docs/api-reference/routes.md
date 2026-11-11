@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 233.
+Route files: 235.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -76,6 +76,7 @@ Route files: 233.
 | `/api/mcp/security-review` | POST | [source](../../src/app/api/mcp/security-review/route.ts) |
 | `/api/mcp/servers` | GET, POST | [source](../../src/app/api/mcp/servers/route.ts) |
 | `/api/mcp/servers/{name}` | DELETE, GET, PUT | [source](../../src/app/api/mcp/servers/[name]/route.ts) |
+| `/api/mcp/servers/{name}/events` | GET | [source](../../src/app/api/mcp/servers/[name]/events/route.ts) |
 | `/api/mcp/servers/{name}/host-consent` | DELETE, GET, POST | [source](../../src/app/api/mcp/servers/[name]/host-consent/route.ts) |
 | `/api/mcp/servers/{name}/prompts` | GET | [source](../../src/app/api/mcp/servers/[name]/prompts/route.ts) |
 | `/api/mcp/servers/{name}/prompts/get` | POST | [source](../../src/app/api/mcp/servers/[name]/prompts/get/route.ts) |
@@ -155,6 +156,7 @@ Route files: 233.
 | `/api/transcription` | POST | [source](../../src/app/api/transcription/route.ts) |
 | `/api/update` | GET, POST | [source](../../src/app/api/update/route.ts) |
 | `/api/waves` | GET | [source](../../src/app/api/waves/route.ts) |
+| `/api/webhooks/mcp/{id}` | POST | [source](../../src/app/api/webhooks/mcp/[id]/route.ts) |
 | `/api/webhooks/{id}` | POST | [source](../../src/app/api/webhooks/[id]/route.ts) |
 | `/api/worker/status` | GET | [source](../../src/app/api/worker/status/route.ts) |
 | `/api/workspaces` | DELETE, GET, PATCH, POST | [source](../../src/app/api/workspaces/route.ts) |
