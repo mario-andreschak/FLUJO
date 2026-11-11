@@ -433,9 +433,17 @@ const FlowsPage = () => {
   const handleDeleteFlow = async (flowId: string) => {
     log.info('Deleting flow', { flowId });
     try {
-      await flowService.deleteFlow(flowId);
+      const result = await flowService.deleteFlow(flowId);
+
+      // The server can refuse a delete, for example while a Persona still uses
+      // the flow. Keep it in the list and say why.
+      if (!result.success) {
+        log.warn('Flow delete was refused', { flowId, error: result.error });
+        showSnackbar(result.error || t('flows.page.deleteFailed'), 'error');
+        return;
+      }
       log.debug('Flow deleted successfully');
-      
+
       // Update local state
       setFlows(prevFlows => prevFlows.filter(f => f.id !== flowId));
       

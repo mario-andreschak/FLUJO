@@ -115,7 +115,7 @@ async function DELETE_handler(_request: NextRequest, { params }: RouteContext) {
     });
     if (referencedBy) {
       return json({
-        error: `Flow "${id}" is used by Persona "${referencedBy.name}". Replace or remove that binding first.`,
+        error: `Flow "${existing.name || id}" is used by Persona "${referencedBy.name}". Replace or remove that binding first.`,
         code: 'PERSONA_FLOW_REFERENCED',
       }, 409);
     }
