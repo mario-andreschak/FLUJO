@@ -24,9 +24,11 @@ env:
   RELEASE_VERSION: ${{ inputs.expected_version }}
   IMAGE_EVIDENCE_DIR: /tmp/flujo-image-evidence-${{ github.run_id }}-${{ github.run_attempt }}
 
+# Pinned: Docker 29 on Ubuntu 26 reports a manifest digest as the image ID, but this
+# workflow proves the tested bytes by comparing the image's config digest.
 jobs:
   candidate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
       contents: read
@@ -142,7 +144,7 @@ jobs:
 
   attest:
     needs: candidate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -197,7 +199,7 @@ jobs:
 
   publish:
     needs: [candidate, attest]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read

@@ -266,6 +266,9 @@ test('image workflow builds once, signs separately and promotes its original art
   assert.equal(builds[0].with.push, false);
   assert.equal(builds[0].with.load, true);
   assert.equal(builds[0].with.platforms, 'linux/amd64');
+  for (const job of [candidate, attest, publish]) {
+    assert.equal(job['runs-on'], 'ubuntu-24.04', 'Docker 29 reports a manifest digest as the image ID, which breaks the tested-bytes comparison');
+  }
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   assert.deepEqual(publish.needs, ['candidate', 'attest']);
   assert.equal(attest.needs, 'candidate');
