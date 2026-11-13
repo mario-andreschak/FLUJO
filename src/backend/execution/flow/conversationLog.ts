@@ -23,6 +23,7 @@ import { CONVERSATION_SEQUENCE_REGISTRY_LIMITS, admitSequenceRegistryKey, insert
 import { publishConversation, publishConversationBatch, flushConversationPublication, conversationPublicationSnapshotCommits, retryConversationPublication,
   fenceConversationPublication, conversationPublicationIsFenced, ConversationPublicationError } from './conversationPublication';
 import { withConversationLogWriter, withConversationPublicationIntent } from './conversationPublicationIO';
+import { traceSpan } from './turnTrace';
 
 const log = createLogger('backend/execution/flow/conversationLog');
 
@@ -328,7 +329,7 @@ export function appendFromBus(event: ExecutionEvent): void {
     try {
       await retryConversationPublication(() => commitConversationWrite(state, () => withWorkspaceMutation(() =>
         withConversationPublicationIntent(conversationId, () =>
-          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned))))));
+          withConversationLogWriter(logFilePath(conversationId), writer => traceSpan('log.write', () => writer.append(owned)))))));
     } catch (error) {
       fenceConversationPublication('required bus event was not acknowledged durably', error);
       throw error;
@@ -358,7 +359,7 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
     const pending = publishConversation(publicationKey(conversationId), raws,
       owned => retryConversationPublication(() => commitConversationWrite(state, () => withWorkspaceMutation(() =>
         withConversationPublicationIntent(conversationId, () =>
-          withConversationLogWriter(logFilePath(conversationId), writer => writer.append(owned)))))),
+          withConversationLogWriter(logFilePath(conversationId), writer => traceSpan('log.write', () => writer.append(owned))))))),
       undefined, owned => {
         for (const raw of owned) Object.assign(raw, { conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() });
       });

@@ -7,6 +7,7 @@ import { promisify } from 'util';
 
 import { assertSafeCollectionId, runInWriteChain } from '@/utils/storage/backend';
 import { stableEnduringAgentId } from './ids';
+import { traceSpan } from '@/backend/execution/flow/turnTrace';
 import { getPersonaRuntimeClock, getPersonaFilesystemClock, type PersonaRuntimeClock } from './runtimeClock';
 import {
   ensureWorkspaceDirs,
@@ -1292,20 +1293,22 @@ async function withModelCatalogPhysicalLease<T>(
         await admission.release();
       }
     }
-    const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
     let reader: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
     const readerId = `${MODEL_CATALOG_READER_PREFIX}${randomUUID()}`;
-    try {
-      await admission.lock.assertOwned();
-      reader = await acquireFilesystemLock(readerId, MODEL_CATALOG_WAIT_MS);
-    } finally {
+    await traceSpan('lock.catalogAdmit', async () => {
+      const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
       try {
-        await admission.release();
-      } catch (error) {
-        await reader?.release();
-        throw error;
+        await admission.lock.assertOwned();
+        reader = await acquireFilesystemLock(readerId, MODEL_CATALOG_WAIT_MS);
+      } finally {
+        try {
+          await admission.release();
+        } catch (error) {
+          await reader?.release();
+          throw error;
+        }
       }
-    }
+    });
     try {
       await reader!.lock.assertOwned();
       return await modelCatalogLeaseScope.run(
@@ -1313,7 +1316,7 @@ async function withModelCatalogPhysicalLease<T>(
         task,
       );
     } finally {
-      await reader?.release();
+      if (reader) await traceSpan('lock.catalogRelease', () => reader!.release());
     }
   });
 }
@@ -1332,7 +1335,7 @@ export async function assertModelCatalogFilesystemLeaseOwned(): Promise<void> {
       || !ISSUED_RUNTIME_LOCKS.has(inherited.lock)) {
     throw new Error('Model catalog lease is missing.');
   }
-  await inherited.lock.assertOwned();
+  await traceSpan('lock.catalogAssert', () => inherited.lock.assertOwned());
 }
 
 /** Serialize Role-version allocation and Role reference creation by definition. */
@@ -1433,13 +1436,15 @@ export async function withWorkspaceProcessMutation<T>(task: () => Promise<T>): P
   return systemLockTime.run(true, async () => {
     let writer: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
     try {
-      await registerWorkspaceWriter(async () => {
-        writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
+      await traceSpan('lock.writerAdmit', async () => {
+        await registerWorkspaceWriter(async () => {
+          writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
+        });
+        await writer!.lock.assertOwned();
       });
-      await writer!.lock.assertOwned();
       return await task();
     } finally {
-      await writer?.release();
+      if (writer) await traceSpan('lock.writerRelease', () => writer!.release());
     }
   });
 }

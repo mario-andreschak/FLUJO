@@ -9,7 +9,7 @@ import { ensurePrivateDirectory, writePrivateJson } from './local-instance.mjs';
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Test equipment issues through the production issuer; tokens stay in RAM. */
-export async function createSmokeOperator() {
+export async function createSmokeOperator({ scopes = ['control:admin', 'mcp:access', 'secrets:read'], ttlMs = 15 * 60_000 } = {}) {
   const require = createRequire(import.meta.url);
   const filename = path.join(sourceRoot, 'src/backend/services/security/ownerCredentials.ts');
   let source;
@@ -53,7 +53,7 @@ export async function createSmokeOperator() {
   };
   try {
     await ensurePrivateDirectory(directory);
-    const issued = issuer.issueOwnerCredential(['control:admin', 'mcp:access', 'secrets:read'], Date.now() + 15 * 60_000);
+    const issued = issuer.issueOwnerCredential(scopes, Date.now() + ttlMs);
     const policy = issuer.ownerPolicySchema.parse({ schemaVersion: 1, ownerId: 'packed-smoke-operator', credentials: [issued.record] });
     const ownerFile = path.join(directory, 'owner.json');
     await writePrivateJson(ownerFile, policy, { exclusive: true });

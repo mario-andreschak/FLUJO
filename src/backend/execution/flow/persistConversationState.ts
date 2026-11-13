@@ -9,6 +9,7 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { reconcileSubflowFold, hasSubflowFoldFence } from './subflowFoldFence';
 import { publishConversation, freezeConversationSnapshot } from './conversationPublication';
 import { workspaceCacheKey } from '@/utils/workspace';
+import { traceSpan } from './turnTrace';
 
 const log = createLogger('backend/execution/flow/persistConversationState');
 const RUNTIME_FIELDS = new Set(['executionTrace', 'emit', 'executionAuthority', 'executionExtensionContext',
@@ -31,7 +32,11 @@ const RUNTIME_FIELDS = new Set(['executionTrace', 'emit', 'executionAuthority', 
  * an incremental persist path nobody remembered to guard wrote a subflow child
  * to disk. Do NOT add call-site `if (!ephemeral)` guards; they are redundant.
  */
-export async function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
+export function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
+  return traceSpan('persist.snapshot', () => persistConversationStateUntraced(key, state));
+}
+
+async function persistConversationStateUntraced(key: StorageKey, state: SharedState): Promise<void> {
   if (state.executionExtensionOwned && !state.executionExtensionContext) throw new Error('trusted_execution_context_required');
   // Path-traversal guard (issue #126): the key/id becomes a filesystem path via
   // getFilePath(), so an id like "../encryption_key" would escape db/conversations/

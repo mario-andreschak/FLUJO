@@ -2,6 +2,7 @@ import cloneDeep from "lodash/cloneDeep";
 import { createLogger } from '@/utils/logger';
 import type { BaseNodeParams } from './types';
 import type { EdgeCondition } from '@/utils/shared/edgeConditions';
+import { traceSpan } from './turnTrace';
 
 const log = createLogger('backend/execution/flow/pocketflow');
 
@@ -149,15 +150,16 @@ export abstract class BaseNode<
       node_params: this.node_params
     });
 
-    const prepResult = await this.prep(sharedState, this.node_params); // Pass node_params to prep
+    const traceName = `node.${this.node_params?.type ?? 'unknown'}`;
+    const prepResult = await traceSpan(`${traceName}.prep`, () => this.prep(sharedState, this.node_params)); // Pass node_params to prep
 
     log.verbose('run prepResult', prepResult);
 
-    const execResult = await this.execWrapper(prepResult, this.node_params); // Pass node_params to execWrapper
+    const execResult = await traceSpan(`${traceName}.exec`, () => this.execWrapper(prepResult, this.node_params)); // Pass node_params to execWrapper
 
     log.verbose('run execResult', execResult);
 
-    const action = await this.post(prepResult, execResult, sharedState, this.node_params); // Pass node_params to post
+    const action = await traceSpan(`${traceName}.post`, () => this.post(prepResult, execResult, sharedState, this.node_params)); // Pass node_params to post
 
     log.debug(`action`, { action });
     log.debug(`run finished. Returning action: ${action}`);

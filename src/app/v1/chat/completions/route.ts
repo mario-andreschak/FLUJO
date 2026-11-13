@@ -16,6 +16,7 @@ import { UnsupportedOpenAIToolTypeError } from '@/shared/types/openai';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { traceMark, traceSpan, withTurnTrace } from '@/backend/execution/flow/turnTrace';
 
 const log = createLogger('app/v1/chat/completions/route');
 
@@ -66,7 +67,7 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
     // Parse parameters from either query string or body
     log.debug('Parsing request parameters', { requestId });
     // parseRequestParameters now returns ParsedChatCompletionRequest which includes flujo and requireApproval
-    const parsedData = await parseRequestParameters(request, ingress);
+    const parsedData = await traceSpan('route.parse', () => parseRequestParameters(request, ingress));
     // Destructure all flags, including flujodebug
     const {
       flujo,
@@ -166,7 +167,7 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
     // Chat apps resend the whole history with no conversation id. Match it to
     // the conversation it came from so one chat stays one conversation.
     externalTurn = isExternalChatRequest(request.method, parsedData)
-      ? await beginExternalChatTurn(parsedData)
+      ? await traceSpan('route.externalChat', () => beginExternalChatTurn(parsedData))
       : undefined;
 
     // Pass all flags to processChatCompletion
@@ -298,7 +299,8 @@ async function GET_handler(request: NextRequest, ingress: ChatIngressPermit) {
 
 // Handle POST requests
 async function POST_handler(request: NextRequest, ingress: ChatIngressPermit) {
-  const _lock = await assertUnlocked({ openai: true });
+  traceMark('route.handler');
+  const _lock = await traceSpan('route.unlock', () => assertUnlocked({ openai: true }));
   if (_lock) return _lock;
 
   const requestId = `post-${Date.now()}`;
@@ -323,12 +325,12 @@ async function POST_handler(request: NextRequest, ingress: ChatIngressPermit) {
 
 function withChatIngress(handler: (request: NextRequest, ingress: ChatIngressPermit) => Promise<Response>) {
   const inWorkspace = withWorkspaceRoute(handler);
-  return async (request: NextRequest): Promise<Response> => {
+  return (request: NextRequest): Promise<Response> => withTurnTrace('chat.completions', async () => {
     let ingress: ChatIngressPermit;
     try {
       // Workspace and authority adapters may decode the URL. Admission belongs
       // outside that wrapper, while its auth/isolation decisions stay intact.
-      ingress = await acquireChatIngressWhenAvailable(request);
+      ingress = await traceSpan('route.ingress', () => acquireChatIngressWhenAvailable(request));
     } catch (error) {
       if (!isChatIngressError(error)) throw error;
       return NextResponse.json({ error: { message: error.message,
@@ -340,7 +342,7 @@ function withChatIngress(handler: (request: NextRequest, ingress: ChatIngressPer
     }
     try { return await inWorkspace(request, ingress); }
     finally { ingress.release(); }
-  };
+  });
 }
 
 export const GET = withChatIngress(GET_handler);
