@@ -1,6 +1,7 @@
 import {
   ResourceListChangedNotificationSchema,
   ResourceUpdatedNotificationSchema,
+  ToolListChangedNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
@@ -19,6 +20,21 @@ const log = createLogger('backend/services/mcp/resourceNotifications');
  * elicitation) but BEFORE client.connect(transport). The v2 beta client is wired
  * separately via the `listChanged.resources` option in its constructor (betaClient.ts).
  */
+/**
+ * Register a v1-SDK handler for `notifications/tools/list_changed`, so a reused
+ * tool list (see listCache.ts) is dropped as soon as the server announces a change.
+ */
+export function registerToolListChangedHandler(client: Client, serverName: string, onListChanged: () => void): void {
+  try {
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      log.debug(`toolListChanged notification received for ${serverName}`);
+      onListChanged();
+    });
+  } catch (err) {
+    log.warn(`registerToolListChangedHandler: failed to register tools list_changed for ${serverName}`, err);
+  }
+}
+
 export function registerResourceNotificationHandlers(
   client: Client,
   serverName: string,
