@@ -1,6 +1,7 @@
 import { isConversationDurabilityError, isConversationDurabilityCode } from '@/backend/execution/flow/conversationPublicationError';
 import { getConversationStates } from '../conversationStateRegistry';
 import { isCancelledByAncestry } from '../cancellation';
+import { traceSpan } from '../turnTrace';
 import { reserveArchiveSnapshot, estimateArchiveSnapshotBytes,
   ModelTurnArchiveMemoryError, type ArchiveMemoryReservation } from '../modelTurnArchiveWriteBudget';
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
@@ -1293,7 +1294,7 @@ export class ModelHandler {
    * Does NOT handle tool execution loops internally.
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
-    return withSubflowOutputConsumption(() => this.callModelAdmitted(input));
+    return traceSpan('model.callModel', () => withSubflowOutputConsumption(() => this.callModelAdmitted(input)));
   }
 
   private static async callModelAdmitted(input: ModelCallInput): Promise<Result<ModelCallResult>> {
@@ -2128,14 +2129,14 @@ export class ModelHandler {
     ...args: Parameters<typeof ModelHandler.generateCompletionCore>
   ): Promise<Result<ModelCallResult>> {
     const admission = args[4]?.modelCatalogAdmission;
-    if (!admission) return this.generateCompletionCore(...args);
+    if (!admission) return traceSpan('model.generate', () => this.generateCompletionCore(...args));
     try {
       if (admission.model.id !== args[0]) {
         throw new ExecutionExtensionError('execution_model_binding_changed');
       }
       return await withModelCatalogLease(async () => {
         await assertCatalogAdmissionCurrent(admission);
-        return this.generateCompletionCore(...args);
+        return traceSpan('model.generate', () => this.generateCompletionCore(...args));
       });
     } catch (error) {
       return ModelHandler.shapeCompletionError(error, args[0], false);
@@ -4023,7 +4024,7 @@ export class ModelHandler {
   public static async processToolCalls( // Make public static
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
-    return withSubflowOutputConsumption(() => this.processToolCallsAdmitted(input));
+    return traceSpan('tool.process', () => withSubflowOutputConsumption(() => this.processToolCallsAdmitted(input)));
   }
 
   private static async processToolCallsAdmitted(input: ToolCallProcessingInput): Promise<Result<ToolCallProcessingResult>> {

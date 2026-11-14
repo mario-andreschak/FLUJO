@@ -10,6 +10,7 @@ import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { claimFlowRunAdmission, recheckFlowRunAdmission, type FlowRunAdmissionPermit } from './runAdmission';
+import { traceMark, traceSpan } from './turnTrace';
 import { assertSubflowLaneCount, preflightSubflowHandoffArguments, subflowWorkerLimit, withSubflowPreparationBudget, type SubflowPreparationBudget } from './subflowPreparationBudget';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { bindExecutionModelStepOrdinals } from '@/backend/execution/flow/modelStepOrdinals';
@@ -538,6 +539,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 }
 
 async function runFlowAdmitted(input: FlowRunInput, admission: FlowRunAdmissionPermit): Promise<FlowRunResult> {
+  traceMark('runFlow.admitted');
   const delegated=await prepareExecutionSubflowInput(input);
   if(delegated)return runWithExecutionInput(delegated,()=>runFlowAdmitted(delegated, admission));
   input = await applyOriginalOwnerRunInput(applyExecutionRunInput(input));
@@ -555,6 +557,7 @@ async function runFlowAdmitted(input: FlowRunInput, admission: FlowRunAdmissionP
   };
   try {
     const execute = () => {
+      traceMark('runFlow.locked');
       // A lock/barrier can outlive the original input estimate or process
       // headroom. Recheck before touching the conversation it protects.
       recheckFlowRunAdmission(admission, registeredInput);
@@ -799,7 +802,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
   // --- 1. Initialize or Retrieve State ---
   const effectiveConvId = input.conversationId || crypto.randomUUID();
-  await warmConversationSequence(effectiveConvId);
+  await traceSpan('runFlow.warmSequence', () => warmConversationSequence(effectiveConvId));
   prepareConversationSequence(effectiveConvId);
   const storageKey = `conversations/${effectiveConvId}` as StorageKey;
   let stateSource: 'storage' | 'memory' | 'new' = 'new';
@@ -868,6 +871,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     normalizeRecoveredBehaviorRules(loadedState);
   }
 
+  traceMark('state.loaded');
   if (loadedState?.personaArchived) {
     throw new Error(
       `Conversation ${effectiveConvId} is an anonymized Persona archive and cannot be executed.`,
@@ -1427,7 +1431,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     let resolvedFlow: Flow | undefined;
     if (!resolvedFlowId && data.model) {
       const flowName = data.model.substring(5); // Assumes "flow-FlowName" format
-      const reactFlow = await flowService.getFlowByName(flowName);
+      const reactFlow = await traceSpan('flow.getFlowByName', () => flowService.getFlowByName(flowName));
       if (!reactFlow) {
         log.error(`Flow not found: ${flowName}`);
         return finalizeRun({
@@ -1466,6 +1470,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     if (!input.flowDefinition) {
       resolvedFlow ??= await flowService.getFlow(resolvedFlowId) ?? undefined;
       if (resolvedFlow) sharedState.flowSnapshot = structuredClone(resolvedFlow);
+      traceMark('flow.resolved');
     }
 
     // Preserve caller-provided ids/timestamps (like the resume path below).
@@ -1606,11 +1611,11 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       // (graph plus node configuration). Statistics store only the fingerprint;
       // the conversation's snapshot separately preserves its definition.
       if (executionFlow && !sharedState.statisticsFlowRevisionId) {
-        sharedState.statisticsFlowRevisionId = await statisticsRevisionId('flow', {
+        sharedState.statisticsFlowRevisionId = await traceSpan('stats.revisionId', () => statisticsRevisionId('flow', {
           id: executionFlow.id,
           nodes: executionFlow.nodes,
           edges: executionFlow.edges,
-        });
+        }));
       }
     } catch {
       // Snapshot names are best-effort; the stable flow id remains authoritative.
@@ -1624,7 +1629,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // is emitted. Ephemeral runs are refused inside. Advisory on failure: the
   // legacy SharedState persistence below still covers the conversation.
   try {
-    await reconcileConversationLog(sharedState, messagesBeforeTurn, admittedMessageIds);
+    await traceSpan('log.reconcile', () => reconcileConversationLog(sharedState, messagesBeforeTurn, admittedMessageIds));
     // Issue #256: heal any assistant tool_calls turn left unanswered by a
     // crash/restart mid-tool before the run loop builds a provider request.
     // Persist each synthetic result via the log-only path so the projection is
@@ -1888,9 +1893,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     try {
       // Validate the pinned execution definition, including saved-flow runs.
       // Legacy conversations without a snapshot retain the by-id path.
-      const validation = sharedState.flowSnapshot
+      const validation = await traceSpan('preflight.validate', async () => sharedState.flowSnapshot
         ? await validateFlowObjectForRun(sharedState.flowSnapshot)
-        : await validateFlowForRun(sharedState.flowId);
+        : await validateFlowForRun(sharedState.flowId));
       if (!validation.isRunnable) {
         const errs = validation.issues.filter(i => i.severity === 'error');
         const message =
@@ -2419,8 +2424,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   try {
     // Initial owned-state emissions can exhaust too; they must reach the same
     // terminal cleanup as execution failures before any provider dispatch.
+    traceMark('run.start');
     emit({ type: 'run:start', flowId: sharedState.flowId });
     await commitRecoveryTransition(storageKey, sharedState, 'running', {}, recoveryEmit);
+    traceMark('loop.start');
     if (!preflightError) {
       while (true) {
         internalIterations++;
@@ -3489,6 +3496,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     clearElicitationContext(serverName);
   }
 
+  traceMark('loop.done');
   const finalExecutionTime = Date.now() - startTime;
   let finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   const recordTerminalSequenceFailure = (error: unknown) => {
@@ -3631,8 +3639,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         log.verbose(`Updated conversation title for ${effectiveConvId} before final return to: ${sharedState.title}`);
       }
     }
+    traceMark('terminal.events');
     await persistState(storageKey, sharedState); // chokepoint refuses ephemeral + deleted states
     finalSnapshotPersisted = true;
+    traceMark('terminal.persisted');
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
@@ -3679,14 +3689,14 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     });
     if (!getHarnessExecution()) void releaseRunOwnedBashSessions(runOwnerScope);
     if (!isConversationDeleted(effectiveConvId) && !ephemeral) {
-      await markConversationTerminal(effectiveConvId, sharedState, async () => {
+      await traceSpan('terminal.markTerminal', () => markConversationTerminal(effectiveConvId, sharedState, async () => {
         // The snapshot above already succeeded in the normal case; only retry it
         // when that write failed, so persist-before-evict still holds.
         if (!finalSnapshotPersisted) {
           await persistState(storageKey, sharedState);
           finalSnapshotPersisted = true;
         }
-      });
+      }));
     }
   }
 

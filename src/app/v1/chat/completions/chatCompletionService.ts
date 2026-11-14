@@ -35,6 +35,7 @@ import {
 import type { PersonaChatCompletionTarget } from './requestParser';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import type { ExternalChatTurn } from './externalChatContinuity';
+import { holdTurnTrace, traceSpan } from '@/backend/execution/flow/turnTrace';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -669,7 +670,7 @@ async function processAdmittedChatCompletion(
   if (data.stream === true) {
     // Generate a conversation ID if not provided
     const effectiveConvId = conversationId || crypto.randomUUID();
-    await warmConversationSequence(effectiveConvId);
+    await traceSpan('service.warmSequence', () => warmConversationSequence(effectiveConvId));
     const snapshotReplayFrom = data.appendMessages || !userTurn
       ? FlowExecutor.conversationStates.get(effectiveConvId)?.messages.length : undefined;
     const streamFromSeq = executionEventBus.currentSeq(effectiveConvId);
@@ -698,6 +699,7 @@ async function processAdmittedChatCompletion(
       // Start processing asynchronously (don't await)
       // The reference in FlowExecutor.conversationStates will prevent garbage collection
       const releaseProducer = ingressOwner?.retain();
+      const releaseTrace = holdTurnTrace();
       submitted = true;
       void withFlowRunAdmission(runAdmission, () =>
         processChatCompletionInternal(data, flujo, requireApproval, flujodebug, effectiveConvId, continueDebug, userTurn))
@@ -753,7 +755,7 @@ async function processAdmittedChatCompletion(
             log.warn('Failed to publish background terminal event', { cleanupError });
             submissionFailure.abort(error);
           }
-        }).finally(() => releaseProducer?.()).catch(error => {
+        }).finally(() => { releaseTrace(); releaseProducer?.(); }).catch(error => {
           // Observe the complete detached chain, including cleanup/release.
           // The producer reservation lasts through that cleanup even if the
           // HTTP consumer disconnected or response construction failed.

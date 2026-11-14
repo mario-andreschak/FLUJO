@@ -1,6 +1,7 @@
 // Local implementation of PocketFlow for debugging
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
+import { traceSpan } from '../turnTrace';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
@@ -517,7 +518,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Use the promptRenderer to build the complete prompt
     log.info('Using promptRenderer to build the complete prompt');
     await assertModelCatalogLeaseOwned();
-    const renderedPrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
+    const renderedPrompt = await traceSpan('prep.renderPrompt', () => promptRenderer.renderPrompt(flowId, nodeId, {
       admittedModel: admission.model,
       renderMode: 'rendered',
       includeConversationHistory: false,
@@ -537,7 +538,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         source: 'pill',
         ...info,
       }),
-    });
+    }));
 
     // Tier 2c (named variables): inject `${var:NAME}` from the run-scoped
     // scratchpad AFTER rendering. Tier 3 then injects `${res:NAME}` resources.
@@ -652,10 +653,10 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         });
 
         await assertModelCatalogLeaseOwned();
-        const mcpResult = await ToolHandler.processMCPNodes({
+        const mcpResult = await traceSpan('prep.mcpTools', () => ToolHandler.processMCPNodes({
           mcpNodes,
           executionExtensionContext,
-        });
+        }));
 
         if (!mcpResult.success) {
           log.error('Failed to process MCP nodes', { error: mcpResult.error });
@@ -669,7 +670,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Generate handoff tools for each connected non-MCP node (also emits
     // `call_subflow_<slug>` tool-invocation tools for tool-mode Subflow
     // targets — issue #385 — and populates sharedState.subflowToolNameMap).
-    const handoffTools = terminalRouting === 'tool-free' ? [] : await this.generateHandoffTools(sharedState, Boolean(executionExtensionContext));
+    const handoffTools = terminalRouting === 'tool-free' ? [] : await traceSpan('prep.handoffTools', () => this.generateHandoffTools(sharedState, Boolean(executionExtensionContext)));
 
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];

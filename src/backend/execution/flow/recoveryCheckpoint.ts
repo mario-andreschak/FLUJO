@@ -16,6 +16,7 @@ import type { SharedState } from './types';
 import { appendRawForState, flushConversationLog } from './conversationLog';
 import { persistConversationState } from './persistConversationState';
 import { parseRetryAfterMs } from './retryAfter';
+import { traceSpan } from './turnTrace';
 
 // Route bundles and hot reloads in one process must agree on the recovery owner.
 const recoveryRuntime = globalThis as typeof globalThis & { __flujoRecoveryOwnerId?: string };
@@ -159,17 +160,19 @@ async function persistRecoveryEvent(
   emit?: RecoveryEmitFn,
   publication: RecoveryPublicationOperation = async operation => operation(),
 ): Promise<void> {
-  if (emit) {
-    // Terminal cleanup may supply an async admission-aware emitter. Await its
-    // acceptance before flushing, then retry the snapshot independently.
-    await emit(raw);
-    if (state.conversationId && !state.ephemeral) {
-      await flushConversationLog(state.conversationId);
+  return traceSpan(raw.type, async () => {
+    if (emit) {
+      // Terminal cleanup may supply an async admission-aware emitter. Await its
+      // acceptance before flushing, then retry the snapshot independently.
+      await emit(raw);
+      if (state.conversationId && !state.ephemeral) {
+        await flushConversationLog(state.conversationId);
+      }
+    } else {
+      await publication(() => appendRawForState(state, [raw]));
     }
-  } else {
-    await publication(() => appendRawForState(state, [raw]));
-  }
-  await publication(() => persistConversationState(storageKey, state));
+    await publication(() => persistConversationState(storageKey, state));
+  });
 }
 
 export async function commitRecoveryCheckpoint(

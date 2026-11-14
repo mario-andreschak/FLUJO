@@ -12,6 +12,7 @@ import {
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
 import { emitErrorOnce } from './normalizeError';
+import { traceSpan } from './turnTrace';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 import { getConversationStates } from './conversationStateRegistry';
 
@@ -171,6 +172,10 @@ export class FlowExecutor {
    *   omitted (e.g. legacy callers), execution behaves exactly as before.
    */
   static async executeStep(sharedState: SharedState, emit?: EmitFn): Promise<{ sharedState: SharedState, action: string }> {
+    return traceSpan('flow.step', () => this.executeStepUntraced(sharedState, emit));
+  }
+
+  private static async executeStepUntraced(sharedState: SharedState, emit?: EmitFn): Promise<{ sharedState: SharedState, action: string }> {
     const { conversationId, flowId, currentNodeId } = sharedState;
 
     // Ensure conversationId is valid before proceeding
@@ -200,7 +205,7 @@ export class FlowExecutor {
 
     try {
       // Resolve the node to run (resume / start) via the engine.
-      const node = await this.engine.resolveNode(sharedState);
+      const node = await traceSpan('flow.resolveNode', () => this.engine.resolveNode(sharedState));
       attemptedNodeId = node.id;
       attemptedNodeName = node.name;
       attemptedNodeType = node.type;
