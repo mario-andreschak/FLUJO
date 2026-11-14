@@ -20,10 +20,15 @@ node scripts/flow-turn-benchmark.mjs --runs 10
 ```
 
 The report goes to standard output. `--out <file>` also writes all runs as
-JSON; keep that file outside the checkout.
+JSON; keep that file outside the checkout. To compare two such files step by
+step (for example before and after a change):
+
+```bash
+node scripts/flow-turn-benchmark.mjs --compare before.json after.json
+```
 
 - `--modes stream,json`: streamed and non-streamed `/v1/chat/completions`.
-- `--scenarios answer,tool,continue`:
+- `--scenarios answer,tool,continue` (default `answer,tool`):
   - `answer`: a new conversation, the model answers at once.
   - `tool`: a new conversation, the model calls one MCP tool first.
   - `continue`: one conversation across all runs. Each turn appends only its new
@@ -36,6 +41,7 @@ JSON; keep that file outside the checkout.
   `FLUJO_BENCH_REAL_KEY` or `OPENAI_API_KEY`).
 - `--fs-probe`: count file-system calls per turn inside the server.
 - `--profile <dir>`: write CPU profiles of the warm runs.
+- `--node-options <flags>`: extra Node flags for the server under test.
 
 Every mode/scenario pair gets a fresh server process. Run 1 is the cold turn
 (first turn after start); the report shows it, the last run and the median of

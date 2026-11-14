@@ -22,6 +22,8 @@
  *   --no-owner-auth  run like a default localhost install (no owner sign-in file)
  *   --fs-probe       count file-system calls per turn inside the server
  *   --profile <dir>  write CPU profiles of the warm runs
+ *   --node-options <flags>  extra Node flags for the server under test
+ *   --compare <before.json> <after.json>  print two --out files side by side and exit
  *   --real   use a real model instead of the stub. Reads FLUJO_BENCH_REAL_BASE_URL
  *            (default https://api.openai.com/v1), FLUJO_BENCH_REAL_MODEL
  *            (default gpt-4.1-mini) and the key from FLUJO_BENCH_REAL_KEY or
@@ -54,11 +56,11 @@ import { createSmokeOperator } from './smoke-bundled-operator.mjs';
 // ---------------------------------------------------------------- arguments
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
-function option(name, fallback) {
+function option(name, fallback, { flagValue = false } = {}) {
   const index = args.indexOf(`--${name}`);
   if (index === -1) return fallback;
   const value = args[index + 1];
-  assert.ok(value && !value.startsWith('--'), `--${name} needs a value`);
+  assert.ok(value && (flagValue || !value.startsWith('--')), `--${name} needs a value`);
   return value;
 }
 const flag = name => args.includes(`--${name}`);
@@ -81,12 +83,53 @@ const profileDir = option('profile', undefined);
 const fsProbe = flag('fs-probe');
 // Without owner sign-in the server runs like a default localhost desktop install.
 const ownerAuth = !flag('no-owner-auth');
+// Extra Node flags for the server under test, e.g. --node-options "--experimental-async-context-frame".
+const extraNodeOptions = option('node-options', '', { flagValue: true });
 const realModel = real ? {
   baseUrl: process.env.FLUJO_BENCH_REAL_BASE_URL || 'https://api.openai.com/v1',
   name: process.env.FLUJO_BENCH_REAL_MODEL || 'gpt-4.1-mini',
   key: process.env.FLUJO_BENCH_REAL_KEY || process.env.OPENAI_API_KEY,
 } : undefined;
 if (real) assert.ok(realModel.key, '--real needs FLUJO_BENCH_REAL_KEY or OPENAI_API_KEY');
+
+// ---------------------------------------------------------------- compare mode
+// node scripts/flow-turn-benchmark.mjs --compare <before.json> <after.json>
+// prints cold and warm-median values of two --out files side by side.
+const compareAt = args.indexOf('--compare');
+if (compareAt !== -1) {
+  const files = args.slice(compareAt + 1, compareAt + 3);
+  assert.ok(files.length === 2 && files.every(file => !file.startsWith('--')), '--compare needs <before.json> <after.json>');
+  const [before, after] = await Promise.all(files.map(async file => JSON.parse(await fs.readFile(file, 'utf8'))));
+  const middle = values => {
+    const sorted = values.filter(value => typeof value === 'number').sort((a, b) => a - b);
+    if (!sorted.length) return undefined;
+    const half = Math.floor(sorted.length / 2);
+    return Math.round((sorted.length % 2 ? sorted[half] : (sorted[half - 1] + sorted[half]) / 2) * 10) / 10;
+  };
+  const pick = (series, key) => {
+    const value = run => key.startsWith('trace: ') ? run.trace?.[key.slice(7)] : run[key];
+    const warmRuns = series.runs.slice(Math.min(4, series.runs.length - 1));
+    return { cold: value(series.runs[0]), warm: middle(warmRuns.map(value)) };
+  };
+  const change = (old, value) => typeof old === 'number' && typeof value === 'number' && old > 0
+    ? `${Math.round((value - old) / old * 100)}%` : '';
+  const out = [`# ${before.label} -> ${after.label}`, '', 'Times in ms. Warm = median of runs 5 to the last.', ''];
+  for (const series of after.series) {
+    const old = before.series.find(item => item.mode === series.mode && item.scenario === series.scenario);
+    if (!old) continue;
+    out.push(`## ${series.mode} / ${series.scenario}`, '', '| step | cold before | cold after | warm before | warm after | warm change |', '|---|---:|---:|---:|---:|---:|');
+    const keys = ['total', 'before_model', 'first_token_from_send', 'first_token_pass', 'tool_roundtrip', 'after_model', 'flujo_own'];
+    const traceKeys = [...new Set([...old.runs, ...series.runs].flatMap(run => Object.keys(run.trace ?? {})))].map(key => `trace: ${key}`);
+    for (const key of [...keys, ...traceKeys]) {
+      const a = pick(old, key), b = pick(series, key);
+      if ([a.cold, a.warm, b.cold, b.warm].every(value => value === undefined)) continue;
+      out.push(`| ${key} | ${a.cold ?? '-'} | ${b.cold ?? '-'} | ${a.warm ?? '-'} | ${b.warm ?? '-'} | ${change(a.warm, b.warm)} |`);
+    }
+    out.push('');
+  }
+  console.log(out.join('\n'));
+  process.exit(0);
+}
 
 await fs.access(path.join(application, '.next', 'BUILD_ID')).catch(() => {
   throw new Error(`No production build in ${application}. Run "npm run build" first or pass --app.`);
@@ -277,7 +320,7 @@ async function startServer() {
       FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(await freePort()),
       FLUJO_TURN_TRACE_FILE: traceFile,
       ...(fsProbe ? { FLUJO_BENCH_FS_STATS: fsStatsBase } : {}),
-      NODE_OPTIONS: [profileDir ? '--inspect=127.0.0.1:0' : '',
+      NODE_OPTIONS: [extraNodeOptions, profileDir ? '--inspect=127.0.0.1:0' : '',
         // NODE_OPTIONS treats backslashes inside quotes as escapes; use forward slashes.
         fsProbe ? `--require "${path.join(repo, 'scripts', 'flow-turn-benchmark-fs-probe.cjs').replaceAll('\\', '/')}"` : ''].filter(Boolean).join(' ') },
   });
