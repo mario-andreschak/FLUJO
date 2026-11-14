@@ -39,6 +39,7 @@ node scripts/flow-turn-benchmark.mjs --compare before.json after.json
 - `--real`: use a real model instead of the stub
   (`FLUJO_BENCH_REAL_BASE_URL`, `FLUJO_BENCH_REAL_MODEL`, key from
   `FLUJO_BENCH_REAL_KEY` or `OPENAI_API_KEY`).
+- `--seed-from <FLUJO data folder> --seed-model <model id>`: use a model that is already configured in another FLUJO, such as a Claude subscription model. Only that model entry and the encryption key file are copied, still encrypted, into the throwaway data folder. This needs FLUJO's default encryption (no password).
 - `--fs-probe`: count file-system calls per turn inside the server.
 - `--profile <dir>`: write CPU profiles of the warm runs.
 - `--node-options <flags>`: extra Node flags for the server under test.

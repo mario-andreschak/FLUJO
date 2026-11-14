@@ -8,7 +8,9 @@ import { promisify } from 'util';
 import { assertSafeCollectionId, runInWriteChain } from '@/utils/storage/backend';
 import { stableEnduringAgentId } from './ids';
 import { traceSpan } from '@/backend/execution/flow/turnTrace';
-import { getPersonaRuntimeClock, getPersonaFilesystemClock, type PersonaRuntimeClock } from './runtimeClock';
+import {
+  getPersonaRuntimeClock, getPersonaFilesystemClock, type PersonaRuntimeClock, type PersonaRuntimeTimer,
+} from './runtimeClock';
 import {
   ensureWorkspaceDirs,
   getCurrentWorkspace,
@@ -83,6 +85,8 @@ declare global {
   > | undefined;
   var __flujo_enduring_agent_deferred_lock_cleanups: Set<string> | undefined;
   var __flujo_workspace_writer_admission_chains: Map<string, Promise<void>> | undefined;
+  var __flujo_shared_workspace_writer_leases: Map<string, SharedWriterLease> | undefined;
+  var __flujo_pending_workspace_captures: Map<string, number> | undefined;
   var __flujo_model_catalog_lease_scope: AsyncLocalStorage<{
     lock: PersonaRuntimeLock;
     workspace: string;
@@ -1020,6 +1024,8 @@ function scheduleOwnedCanonicalRetirement(
 async function acquireFilesystemLock(personaId: string, timeoutMs = LOCK_ACQUIRE_TIMEOUT_MS): Promise<{
   lock: PersonaRuntimeLock;
   release: () => Promise<void>;
+  /** Canonical directory holding the lock file. */
+  lockRoot: string;
 }> {
   const lockRoot = await ensureRuntimeLockRoot();
   const lockPath = path.join(lockRoot, `${personaId}.lock`);
@@ -1164,6 +1170,7 @@ async function acquireFilesystemLock(personaId: string, timeoutMs = LOCK_ACQUIRE
 
   return {
     lock: runtimeLock,
+    lockRoot,
     release: async () => {
       await closeIssuedPersonaRuntimeLock(runtimeLock);
       let assertionError: unknown;
@@ -1431,22 +1438,206 @@ function registerWorkspaceWriter(task: WorkspaceWriterRegistration['task']): Pro
  * writes must not make every local writer poll the same lock until its timeout.
  * Only registration is serialized; admitted tasks retain independent writer
  * locks and run concurrently, so capture still drains every complete mutation.
+ * A published registration may cover further writes of this process while no
+ * capture waits; see SharedWriterLease.
  */
 export async function withWorkspaceProcessMutation<T>(task: () => Promise<T>): Promise<T> {
   return systemLockTime.run(true, async () => {
-    let writer: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
-    try {
-      await traceSpan('lock.writerAdmit', async () => {
-        await registerWorkspaceWriter(async () => {
-          writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
+    const key = getWorkspaceDbDir();
+    let lease = await traceSpan('lock.writerJoin', () => joinWriterLease(key));
+    if (!lease) {
+      let writer: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
+      try {
+        await traceSpan('lock.writerAdmit', async () => {
+          await registerWorkspaceWriter(async () => {
+            writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
+          });
+          await writer!.lock.assertOwned();
         });
-        await writer!.lock.assertOwned();
-      });
+      } catch (error) {
+        if (writer) await traceSpan('lock.writerRelease', () => writer!.release());
+        throw error;
+      }
+      lease = installWriterLease(key, writer!);
+    }
+    const covering = lease;
+    try {
       return await task();
     } finally {
-      if (writer) await traceSpan('lock.writerRelease', () => writer!.release());
+      await traceSpan('lock.writerRelease', () => finishWriterLeaseWrite(covering));
     }
   });
+}
+
+/**
+ * One published writer registration covering several writes (issue #1404).
+ *
+ * A flow turn makes many short durable writes. Registering each with its own
+ * writer lock costs two lock files (capture admission and writer), each with a
+ * flush to disk and several filesystem round trips. A registration that is
+ * already published may instead cover further writes of this process:
+ *
+ * - A capture still sees a live writer until the last covered write finished,
+ *   so it drains every write exactly as before.
+ * - A write joins only while no capture waits: never while a capture of this
+ *   process is pending, and never while the capture admission lock exists. A
+ *   capture holds that lock throughout, so writes stop joining as soon as one
+ *   starts and it cannot be starved. Registrations elsewhere hold it briefly;
+ *   a write that sees it simply registers as before.
+ * - Ownership is verified before and after every covered write, as with a
+ *   private writer lock, and a loss is reported to that write.
+ * - An idle registration retires after WRITER_LEASE_IDLE_MS, and at once when
+ *   a capture waits. A crashed process leaves a writer lock that captures retire
+ *   through the existing liveness protocol, exactly as for an unfinished write.
+ */
+interface SharedWriterLease {
+  readonly key: string;
+  readonly lock: PersonaRuntimeLock;
+  readonly release: () => Promise<void>;
+  readonly admissionPath: string;
+  /** Restores the registering write's async context for a deferred release. */
+  readonly inContext: <R>(fn: () => R) => R;
+  users: number;
+  closing: boolean;
+  idleTimer?: PersonaRuntimeTimer;
+  retiring?: Promise<void>;
+}
+
+const WRITER_LEASE_IDLE_MS = 1_000;
+const SHARED_WRITER_LEASES = global.__flujo_shared_workspace_writer_leases
+  ??= new Map<string, SharedWriterLease>();
+const PENDING_LOCAL_CAPTURES = global.__flujo_pending_workspace_captures
+  ??= new Map<string, number>();
+
+/** FLUJO_WRITER_LEASE_IDLE_MS=0 registers every write separately again. */
+function writerLeaseIdleMs(): number {
+  const configured = process.env.FLUJO_WRITER_LEASE_IDLE_MS;
+  const value = configured === undefined || configured.trim() === '' ? NaN : Number(configured);
+  return Number.isFinite(value) && value >= 0 ? Math.min(value, 10_000) : WRITER_LEASE_IDLE_MS;
+}
+
+function localCaptureWaiting(key: string): boolean {
+  return (PENDING_LOCAL_CAPTURES.get(key) ?? 0) > 0;
+}
+
+async function captureAdmissionPresent(lease: SharedWriterLease): Promise<boolean> {
+  try {
+    await fs.lstat(lease.admissionPath);
+    return true;
+  } catch (error) {
+    // Only a definite absence admits a join; uncertainty registers normally.
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
+function installWriterLease(
+  key: string,
+  writer: Awaited<ReturnType<typeof acquireFilesystemLock>>,
+): SharedWriterLease {
+  const lease: SharedWriterLease = {
+    key,
+    lock: writer.lock,
+    release: writer.release,
+    admissionPath: path.join(writer.lockRoot, `${WORKSPACE_CAPTURE_ADMISSION_LOCK}.lock`),
+    inContext: AsyncLocalStorage.snapshot(),
+    users: 1,
+    closing: false,
+  };
+  // Concurrent first writes each publish their own registration; one of them
+  // becomes the shared one and the rest retire after their write, as before.
+  const current = SHARED_WRITER_LEASES.get(key);
+  if ((!current || current.closing) && !localCaptureWaiting(key) && writerLeaseIdleMs() > 0) {
+    SHARED_WRITER_LEASES.set(key, lease);
+  }
+  return lease;
+}
+
+function retireWriterLease(lease: SharedWriterLease): Promise<void> {
+  if (lease.retiring) return lease.retiring;
+  lease.closing = true;
+  lease.idleTimer?.clear();
+  lease.idleTimer = undefined;
+  if (SHARED_WRITER_LEASES.get(lease.key) === lease) SHARED_WRITER_LEASES.delete(lease.key);
+  lease.retiring = lease.inContext(() => lease.release());
+  return lease.retiring;
+}
+
+/** Cover one write with this process's open registration, or return undefined to register normally. */
+async function joinWriterLease(key: string): Promise<SharedWriterLease | undefined> {
+  const lease = SHARED_WRITER_LEASES.get(key);
+  if (!lease || lease.closing || localCaptureWaiting(key)) return undefined;
+  // Pin before awaiting so the registration cannot retire under this write.
+  lease.users += 1;
+  lease.idleTimer?.clear();
+  lease.idleTimer = undefined;
+  let joined = false;
+  try {
+    if (!await captureAdmissionPresent(lease) && !localCaptureWaiting(key)) {
+      await lease.lock.assertOwned();
+      joined = !lease.closing;
+    }
+  } catch {
+    // A lost or unreadable registration admits no further writes.
+    lease.closing = true;
+  }
+  if (joined) return lease;
+  await leaveWriterLease(lease, true).catch(() => undefined);
+  return undefined;
+}
+
+async function leaveWriterLease(lease: SharedWriterLease, retireNow = false): Promise<void> {
+  lease.users -= 1;
+  if (lease.users > 0) return;
+  let retire = retireNow || lease.closing || SHARED_WRITER_LEASES.get(lease.key) !== lease
+    || localCaptureWaiting(lease.key) || writerLeaseIdleMs() === 0;
+  if (!retire) retire = await captureAdmissionPresent(lease);
+  // A write may have joined while that check ran; its own departure decides.
+  if (lease.users > 0) return;
+  if (retire || lease.closing) {
+    await retireWriterLease(lease);
+    return;
+  }
+  const timer = systemClock.setTimer(() => {
+    if (lease.idleTimer !== timer) return;
+    lease.idleTimer = undefined;
+    if (lease.users === 0 && !lease.closing) void retireWriterLease(lease).catch(() => undefined);
+  }, writerLeaseIdleMs());
+  timer.unref();
+  lease.idleTimer?.clear();
+  lease.idleTimer = timer;
+}
+
+async function finishWriterLeaseWrite(lease: SharedWriterLease): Promise<void> {
+  // Report a lost registration to the write it covered, as releasing a private
+  // writer lock does, and admit no further writes under it.
+  let lost: unknown;
+  try {
+    await lease.lock.assertOwned();
+  } catch (error) {
+    lost = error;
+    lease.closing = true;
+  }
+  try {
+    await leaveWriterLease(lease);
+  } catch (error) {
+    lost ??= error;
+  }
+  if (lost !== undefined) throw lost;
+}
+
+/** Retire this process's idle registration before a capture scans for writers. */
+async function retireIdleWriterLease(key: string): Promise<void> {
+  const lease = SHARED_WRITER_LEASES.get(key);
+  if (lease && lease.users === 0) await retireWriterLease(lease).catch(() => undefined);
+}
+
+/**
+ * Release this process's idle writer registration for a workspace, so a reader
+ * of the workspace files sees the lock directory as it was before shared
+ * registrations: without writer locks while no write runs.
+ */
+export async function retireIdleWorkspaceWriterRegistration(workspace?: string): Promise<void> {
+  await retireIdleWriterLease(getWorkspaceDbDir(workspace));
 }
 
 /**
@@ -1468,45 +1659,65 @@ export async function withWorkspaceProcessSnapshot<T>(
     const timeoutMs = options.timeoutMs ?? 30_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Invalid workspace capture timeout.');
     options.signal?.throwIfAborted();
-    const started = clockForLock().monotonicNow();
-    const admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
-    const check = async () => {
-      options.signal?.throwIfAborted();
-      if (clockForLock().monotonicNow() - started >= timeoutMs) {
-        const error = new Error('Timed out waiting for workspace processes to finish writing.');
-        error.name = 'WorkspaceSnapshotTimeoutError';
-        throw error;
-      }
-      await admission.lock.assertOwned();
-    };
+    // Stop this process's writes from joining a shared registration, and retire
+    // an idle one, before admission closes; see SharedWriterLease.
+    const key = getWorkspaceDbDir();
+    PENDING_LOCAL_CAPTURES.set(key, (PENDING_LOCAL_CAPTURES.get(key) ?? 0) + 1);
     try {
-      const root = await ensureRuntimeLockRoot();
-      while (true) {
-        await check();
-        const writers = (await fs.readdir(root)).filter((name) => WORKSPACE_WRITER_LOCK.test(name));
-        let live = false;
-        for (const name of writers) {
-          await check();
-          const owner = await readOwner(path.join(root, name));
-          if (!owner) continue;
-          if (owner.workspace !== getCurrentWorkspace()) throw new Error('Workspace writer has foreign ownership.');
-          const abandoned = await listAbandonedOwnerIds(root, path.join(root, name));
-          if (await isOwnerProcessAlive(owner, abandoned)) {
-            live = true;
-            continue;
-          }
-          // Use the same conditional recovery protocol as runtime locks, rather
-          // than unlinking a filename after a liveness observation.
-          const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
-          await retired.release();
-        }
-        if (!live) break;
-        await clockForLock().sleep(LOCK_RETRY_MS);
-      }
-      await check();
-      return await task(admission.lock);
+      await retireIdleWriterLease(key);
+      return await captureWorkspaceProcesses(task, timeoutMs, options.signal);
     } finally {
-      await admission.release();
+      const remaining = (PENDING_LOCAL_CAPTURES.get(key) ?? 1) - 1;
+      if (remaining > 0) PENDING_LOCAL_CAPTURES.set(key, remaining);
+      else PENDING_LOCAL_CAPTURES.delete(key);
     }
   });
+}
+
+async function captureWorkspaceProcesses<T>(
+  task: (lock: PersonaRuntimeLock) => Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  const options = { signal };
+  const started = clockForLock().monotonicNow();
+  const admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
+  const check = async () => {
+    options.signal?.throwIfAborted();
+    if (clockForLock().monotonicNow() - started >= timeoutMs) {
+      const error = new Error('Timed out waiting for workspace processes to finish writing.');
+      error.name = 'WorkspaceSnapshotTimeoutError';
+      throw error;
+    }
+    await admission.lock.assertOwned();
+  };
+  try {
+    const root = await ensureRuntimeLockRoot();
+    while (true) {
+      await check();
+      const writers = (await fs.readdir(root)).filter((name) => WORKSPACE_WRITER_LOCK.test(name));
+      let live = false;
+      for (const name of writers) {
+        await check();
+        const owner = await readOwner(path.join(root, name));
+        if (!owner) continue;
+        if (owner.workspace !== getCurrentWorkspace()) throw new Error('Workspace writer has foreign ownership.');
+        const abandoned = await listAbandonedOwnerIds(root, path.join(root, name));
+        if (await isOwnerProcessAlive(owner, abandoned)) {
+          live = true;
+          continue;
+        }
+        // Use the same conditional recovery protocol as runtime locks, rather
+        // than unlinking a filename after a liveness observation.
+        const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
+        await retired.release();
+      }
+      if (!live) break;
+      await clockForLock().sleep(LOCK_RETRY_MS);
+    }
+    await check();
+    return await task(admission.lock);
+  } finally {
+    await admission.release();
+  }
 }

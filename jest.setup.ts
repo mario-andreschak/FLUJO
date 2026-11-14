@@ -18,6 +18,12 @@ if (typeof globalThis.TextDecoder === 'undefined') Object.defineProperty(globalT
 
 jest.setTimeout(15_000);
 
+// A shared workspace writer registration retires on an idle timer (#1404). Keep
+// one registration per write in ordinary suites, so a deferred release never
+// lands inside a later test that observes the filesystem. The writer lease
+// suite opts back in explicitly.
+process.env.FLUJO_WRITER_LEASE_IDLE_MS = '0';
+
 // Workspace route wrappers now await the real layout barrier. Give every Jest
 // environment an isolated installation root before test modules are evaluated,
 // so an unmocked route can never migrate or write the checkout's real data.
