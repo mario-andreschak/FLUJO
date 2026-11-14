@@ -45,6 +45,7 @@ function countWriterPublications() {
 }
 
 beforeEach(async () => {
+  // jest.setup.ts disables sharing for ordinary suites; this suite tests it.
   delete process.env.FLUJO_WRITER_LEASE_IDLE_MS;
   mockDbDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-writer-lease-'));
   lockRoot = path.join(mockDbDir, '.runtime-locks', 'enduring-agents');
