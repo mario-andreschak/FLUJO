@@ -330,7 +330,8 @@ function withChatIngress(handler: (request: NextRequest, ingress: ChatIngressPer
     try {
       // Workspace and authority adapters may decode the URL. Admission belongs
       // outside that wrapper, while its auth/isolation decisions stay intact.
-      ingress = await traceSpan('route.ingress', () => acquireChatIngressWhenAvailable(request));
+      ingress = await acquireChatIngressWhenAvailable(request);
+      traceMark('route.admitted');
     } catch (error) {
       if (!isChatIngressError(error)) throw error;
       return NextResponse.json({ error: { message: error.message,
