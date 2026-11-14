@@ -288,6 +288,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleMcpListCacheChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`MCP list reuse toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        mcpListCache: event.target.checked,
+      },
+    });
+  };
+
   const handleMcpRuntimeHomeIsolationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Workspace MCP runtime-home isolation toggled: ${event.target.checked}`);
     updateSettings({
@@ -531,6 +542,13 @@ export default function ExperimentalFeaturesSettings() {
             label={t('settings.experimental.mcpBeta')}
             name="mcpBetaProtocol"
             onChange={handleMcpBetaProtocolChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.mcpListCache ?? false}
+            description={t('settings.experimental.mcpListCacheDescription')}
+            label={t('settings.experimental.mcpListCache')}
+            name="mcpListCache"
+            onChange={handleMcpListCacheChange}
           />
           <ExperimentalToggle
             checked={experimental.mcpRuntimeHomeIsolation ?? false}

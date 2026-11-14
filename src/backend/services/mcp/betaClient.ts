@@ -123,7 +123,7 @@ export function isBetaClient(client: Client): boolean {
  * Returned typed as the v1 Client so it can live in the shared connection map;
  * see the module comment for why that cast is sound.
  */
-export function createNewBetaClient(config: MCPServerConfig, onResourcesChanged?: () => void): Client {
+export function createNewBetaClient(config: MCPServerConfig, onResourcesChanged?: () => void, onToolsChanged?: () => void): Client {
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
@@ -162,7 +162,7 @@ export function createNewBetaClient(config: MCPServerConfig, onResourcesChanged?
       // The SDK opens modern listen streams, validates acknowledgment/correlation,
       // invalidates catalog caches, and closes streams with this generation.
       listChanged: {
-        tools: { autoRefresh: false, onChanged: () => {} },
+        tools: { autoRefresh: false, onChanged: () => onToolsChanged?.() },
         prompts: { autoRefresh: false, onChanged: () => {} },
         resources: { autoRefresh: false, onChanged: () => onResourcesChanged?.() },
       },

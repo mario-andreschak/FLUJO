@@ -308,6 +308,15 @@ export interface ExperimentalSettings {
    */
   mcpBetaProtocol?: boolean;
   /**
+   * When true, FLUJO reuses an MCP server's tool, resource and resource
+   * template lists between requests instead of asking again each time
+   * (issue #1408). Only for servers that announce list changes (the MCP
+   * `listChanged` capability); a list is refreshed when the server announces a
+   * change, after a reconnect, and at the latest after 60 seconds. Off by
+   * default; FLUJO_MCP_LIST_CACHE=1 turns it on without the setting.
+   */
+  mcpListCache?: boolean;
+  /**
    * Make workspace-managed HOME/config/cache directories the default for stdio
    * MCP servers whose per-server runtime-home mode is `inherit`. Opt-in: a
    * missing value is false. An operator process override remains authoritative.

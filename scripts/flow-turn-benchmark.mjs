@@ -32,6 +32,9 @@
  *   --claude-warm    turn on the Claude subscription adapter's parked process
  *                    (FLUJO_CLAUDE_WARM_PROCESS=1) in the server under test
  *   --pause <ms>     wait this long between runs, like a caller speaking (default 0)
+ *   --mcp-delay <ms> answer each MCP request this much later, like a remote server
+ *   --mcp-list-cache turn on reuse of MCP tool and resource lists
+ *                    (FLUJO_MCP_LIST_CACHE=1) in the server under test
  *   --compare <before.json> <after.json>  print two --out files side by side and exit
  *   --real   use a real model instead of the stub. Reads FLUJO_BENCH_REAL_BASE_URL
  *            (default https://api.openai.com/v1), FLUJO_BENCH_REAL_MODEL
@@ -95,6 +98,9 @@ const ownerAuth = !flag('no-owner-auth');
 // Extra Node flags for the server under test, e.g. --node-options "--experimental-async-context-frame".
 const extraNodeOptions = option('node-options', '', { flagValue: true });
 const claudeWarm = flag('claude-warm');
+const mcpDelayMs = Number(option('mcp-delay', '0'));
+assert.ok(Number.isFinite(mcpDelayMs) && mcpDelayMs >= 0 && mcpDelayMs <= 10_000, '--mcp-delay must be 0..10000 ms');
+const mcpListCache = flag('mcp-list-cache');
 const pauseMs = Number(option('pause', '0'));
 assert.ok(Number.isFinite(pauseMs) && pauseMs >= 0 && pauseMs <= 60_000, '--pause must be 0..60000 ms');
 const realModel = real ? {
@@ -248,7 +254,10 @@ const TOOLS = [
 ];
 const mcpSessions = new Map();
 function newMcpSession() {
-  const server = new Server({ name: 'bench-mcp', version: '1.0.0' }, { capabilities: { tools: {}, resources: {} } });
+  // Like most current servers (the TypeScript SDK's McpServer does this), the
+  // stub announces list changes; its lists never change.
+  const server = new Server({ name: 'bench-mcp', version: '1.0.0' },
+    { capabilities: { tools: { listChanged: true }, resources: { listChanged: true } } });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
   server.setRequestHandler(ListResourcesRequestSchema, () => ({ resources: [{ uri: KNOWLEDGE_URI, name: 'Shop FAQ', mimeType: 'text/plain' }] }));
   server.setRequestHandler(ListResourceTemplatesRequestSchema, () => ({ resourceTemplates: [] }));
@@ -272,6 +281,7 @@ const stubMcp = http.createServer(async (request, response) => {
     for (const method of methods) mcpCounts[method] = (mcpCounts[method] ?? 0) + 1;
     const entry = { method: label, arrival, replied: undefined };
     if (request.method === 'POST') current?.mcp.push(entry);
+    if (mcpDelayMs > 0 && request.method === 'POST') await delay(mcpDelayMs);
     response.once('finish', () => { entry.replied = now(); });
     let session = mcpSessions.get(request.headers['mcp-session-id']);
     if (!session && body?.method === 'initialize') {
@@ -367,6 +377,7 @@ async function startServer() {
       FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(await freePort()),
       FLUJO_TURN_TRACE_FILE: traceFile,
       ...(claudeWarm ? { FLUJO_CLAUDE_WARM_PROCESS: '1' } : {}),
+      ...(mcpListCache ? { FLUJO_MCP_LIST_CACHE: '1' } : {}),
       ...(fsProbe ? { FLUJO_BENCH_FS_STATS: fsStatsBase } : {}),
       NODE_OPTIONS: [extraNodeOptions, profileDir ? '--inspect=127.0.0.1:0' : '',
         // NODE_OPTIONS treats backslashes inside quotes as escapes; use forward slashes.
@@ -642,7 +653,8 @@ const results = { schemaVersion: 1, label, application, startedUtc: new Date().t
   buildId: (await fs.readFile(path.join(application, '.next', 'BUILD_ID'), 'utf8')).trim(),
   model: real ? `real ${realModel.name}` : seedFrom ? `configured model ${seedModelId}`
     : claudeModel ? `Claude subscription ${claudeModel}${claudeToken ? '' : ' (placeholder token: start-up only)'}${claudeWarm ? ', warm process on' : ''}`
-    : `stub (token gap ${tokenGapMs} ms)`, runs, series: [] };
+    : `stub (token gap ${tokenGapMs} ms)`, mcp: `${mcpDelayMs ? `MCP answers after ${mcpDelayMs} ms` : 'local MCP'}${mcpListCache ? ', list reuse on' : ''}`,
+  runs, series: [] };
 try {
   for (const name of ['application', 'data', 'home', 'temp']) await fs.mkdir(path.join(root, name), { recursive: true });
   for (const name of ['roaming', 'local', 'config', 'cache']) await fs.mkdir(path.join(root, 'home', name));
@@ -733,7 +745,7 @@ try {
 // ---------------------------------------------------------------- report
 const KEYS = ['total', 'before_model', 'mcp_before_model', 'first_token_from_send', 'first_token_pass', 'tool_roundtrip', 'after_model', 'flujo_own'];
 const lines = [`# Flow turn benchmark: ${label}`, '',
-  `${results.platform}, Node ${results.node}, build ${results.buildId}, model ${results.model}. Times in ms.`, ''];
+  `${results.platform}, Node ${results.node}, build ${results.buildId}, model ${results.model}, ${results.mcp}. Times in ms.`, ''];
 for (const series of results.series) {
   const cold = series.runs[0];
   const warm = series.runs.at(-1);

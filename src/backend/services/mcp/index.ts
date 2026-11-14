@@ -265,7 +265,8 @@ import {
   type McpEventSubscribeRequest,
   type McpEventSubscribeResult,
 } from "./serverEvents";
-import { registerResourceNotificationHandlers } from "./resourceNotifications";
+import { registerResourceNotificationHandlers, registerToolListChangedHandler } from "./resourceNotifications";
+import { cachedMcpList, invalidateMcpLists } from "./listCache";
 import {
   isMcpBetaProtocolEnabled,
   createNewBetaClient,
@@ -544,6 +545,7 @@ export class MCPService {
   // -------------------------------------------------------------------------
 
   private onResourceListChanged(serverName: string): void {
+    invalidateMcpLists(this.clients.get(serverName), 'resources');
     const prev = this.resourceListVersion.get(serverName) ?? 0;
     this.resourceListVersion.set(serverName, prev + 1);
     log.debug(
@@ -1187,7 +1189,10 @@ export class MCPService {
       assertMcpRuntimeAuthorityRetired(config.name);
       client = useBeta ? createNewBetaClient(config, bindToCurrentWorkspace(() => {
         if (this.getClient(config.name) === client) this.onResourceListChanged(config.name);
-      })) : createNewClient(config);
+      }), () => {
+        invalidateMcpLists(client, 'tools');
+        invalidateMcpLists(this.clients.get(config.name), 'tools');
+      }) : createNewClient(config);
       if (executionExtensionContext) pendingProtectedClient = client;
       const transport = useBeta
         ? createBetaTransport(config, transportOptions)
@@ -1214,6 +1219,11 @@ export class MCPService {
           bindToCurrentWorkspace((name: string) => this.onResourceListChanged(name)),
           bindToCurrentWorkspace((name: string, uri: string) => this.onResourceUpdated(name, uri)),
         );
+        const notifiedClient = client;
+        registerToolListChangedHandler(client, config.name, bindToCurrentWorkspace(() => {
+          invalidateMcpLists(notifiedClient, 'tools');
+          invalidateMcpLists(this.clients.get(config.name), 'tools');
+        }));
       } else {
         // v2 beta SDK: the Client class's setNotificationHandler takes a method string and a
         // typed handler. Cast through unknown to call it without importing the beta types here.
@@ -2335,7 +2345,11 @@ export class MCPService {
       log.warn(`listServerTools: Client not found for ${serverName}`);
     }
 
-    let result = await listTools(client, serverName, audience, pageCursor);
+    // #1408: an opt-in reuse of complete lists for servers that announce
+    // changes. Protected execution contexts and paged requests always list.
+    let result = executionExtensionContext || pageCursor !== undefined
+      ? await listTools(client, serverName, audience, pageCursor)
+      : await cachedMcpList(client, 'tools', audience, () => listTools(client, serverName, audience, pageCursor));
     if (executionExtensionContext) {
       await assertExecutionExtensionCurrent(executionExtensionContext);
       if (this.getClient(serverName) !== protectedClient) {
@@ -2835,7 +2849,9 @@ export class MCPService {
   ): Promise<{ resources: MCPResource[]; nextCursor?: string; error?: string }> {
     if (isProtectedExecutionServer(serverName)) return { resources: [], error: 'execution_protocol_surface_forbidden' };
     log.debug(`listServerResources: Entering method for server ${serverName}`);
-    return this.listWithReconnect<{ resources: MCPResource[]; nextCursor?: string; error?: string }>(serverName, (client, name) => listResources(client, name, cursor), { resources: [] });
+    return this.listWithReconnect<{ resources: MCPResource[]; nextCursor?: string; error?: string }>(serverName, (client, name) => cursor === undefined
+      ? cachedMcpList(client, 'resources', 'resources', () => listResources(client, name, cursor))
+      : listResources(client, name, cursor), { resources: [] });
   }
 
   /**
@@ -2849,7 +2865,9 @@ export class MCPService {
     log.debug(
       `listServerResourceTemplates: Entering method for server ${serverName}`,
     );
-    return this.listWithReconnect<{ resourceTemplates: MCPResourceTemplate[]; nextCursor?: string; error?: string }>(serverName, (client, name) => listResourceTemplates(client, name, cursor), {
+    return this.listWithReconnect<{ resourceTemplates: MCPResourceTemplate[]; nextCursor?: string; error?: string }>(serverName, (client, name) => cursor === undefined
+      ? cachedMcpList(client, 'resources', 'templates', () => listResourceTemplates(client, name, cursor))
+      : listResourceTemplates(client, name, cursor), {
       resourceTemplates: [],
     });
   }
