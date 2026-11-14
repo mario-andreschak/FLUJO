@@ -18,6 +18,7 @@ import { getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
 import type { EncryptionMetadata } from '@/utils/encryption/format';
 import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
 import { CREDENTIAL_TRANSFER_STORES, transformCredentialValues } from './credentialTransfer';
+import { retireIdleWorkspaceWriterRegistration } from '@/backend/services/enduringAgents/runtimeLock';
 import { StorageKey } from '@/shared/types/storage';
 import { getServerDek } from '@/utils/encryption/session';
 import type { MCPServerConfig } from '@/shared/types/mcp';
@@ -219,6 +220,10 @@ export async function captureWorkspaceSnapshot(
       'Workspace directory is not a real directory.',
     );
   }
+
+  // A capture normally retires this process's idle shared writer registration
+  // before admission; a direct capture must not archive its lock file either.
+  await retireIdleWorkspaceWriterRegistration(workspace);
 
   const limits = getSnapshotLimits();
   const maxFileBytes = limits.maxFileBytes;

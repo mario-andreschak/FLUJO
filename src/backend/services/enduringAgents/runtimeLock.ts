@@ -1632,6 +1632,15 @@ async function retireIdleWriterLease(key: string): Promise<void> {
 }
 
 /**
+ * Release this process's idle writer registration for a workspace, so a reader
+ * of the workspace files sees the lock directory as it was before shared
+ * registrations: without writer locks while no write runs.
+ */
+export async function retireIdleWorkspaceWriterRegistration(workspace?: string): Promise<void> {
+  await retireIdleWriterLease(getWorkspaceDbDir(workspace));
+}
+
+/**
  * Close cross-process admission and drain already admitted writers. All source
  * writers must use withWorkspaceProcessMutation for this boundary to be a
  * coherent capture. Unregistered/older processes and arbitrary external file
