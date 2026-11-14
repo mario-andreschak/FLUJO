@@ -48,6 +48,11 @@ node scripts/flow-turn-benchmark.mjs --compare before.json after.json
 - `--claude-warm`: turn on the parked Claude Code process
   (`FLUJO_CLAUDE_WARM_PROCESS=1`, issue #1408) in the server under test.
 - `--pause <ms>`: wait between runs, like the gap while a caller speaks.
+- `--mcp-delay <ms>`: the stub MCP server answers each request this much later,
+  like a remote server.
+- `--mcp-list-cache`: turn on reuse of MCP tool and resource lists
+  (`FLUJO_MCP_LIST_CACHE=1`, issue #1408) in the server under test. The stub
+  server announces list changes, as most current servers do.
 - `--scenarios direct`: a one-word classification sent straight to the model
   (`model-<name>`, no flow).
 - `--fs-probe`: count file-system calls per turn inside the server.
