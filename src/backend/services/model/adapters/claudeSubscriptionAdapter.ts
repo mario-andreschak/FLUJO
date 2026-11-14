@@ -58,6 +58,18 @@ import { prepareClaudeRuntimeEnvironment } from './claudeRuntimeHome';
 import { assertOwnerCredentialAdapterRoute } from '@/backend/execution/extensions';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
+import { traceMark } from '@/backend/execution/flow/turnTrace';
+import {
+  claimClaudeSpare,
+  closeAllClaudeSpares,
+  explainClaudeSpareMiss,
+  isClaudeWarmProcessEnabled,
+  prepareClaudeSpare,
+  releaseClaudeSpare,
+  takeClaudeSpare,
+  type ClaudeSpareBinding,
+  type ClaudeSpareToolHandler,
+} from './claudeWarmProcess';
 import {
   classifyStatisticsError,
   createStatisticsEvent,
@@ -75,6 +87,27 @@ const DEFAULT_MAX_TURNS = DEFAULT_AGENTIC_MAX_TURNS;
 // Name of the in-process MCP server we expose FLUJO's tools through. The Agent
 // SDK prefixes the model-facing tool names as `mcp__<server>__<tool>`.
 const SDK_SERVER_NAME = 'flujo';
+
+/**
+ * Iterate the Agent SDK's messages without waiting for its process to exit
+ * when the loop stops early. Leaving a `for await` calls the iterator's
+ * `return()`, and the SDK's clean-up there waits up to two seconds for Claude
+ * Code to exit. This wrapper starts that same clean-up and returns at once.
+ */
+function withoutExitWait<T>(source: AsyncIterable<T>): AsyncIterable<T> {
+  return {
+    [Symbol.asyncIterator]: () => {
+      const iterator = source[Symbol.asyncIterator]();
+      return {
+        next: () => iterator.next(),
+        return: (value?: unknown) => {
+          iterator.return?.(value as T)?.catch?.(() => undefined);
+          return Promise.resolve({ done: true as const, value: value as T });
+        },
+      };
+    },
+  };
+}
 
 // Claude Code's built-in tool suite. The Agent SDK advertises these to the model
 // BY DEFAULT, independent of which FLUJO tools a node bound — so without explicit
@@ -386,7 +419,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely
     // references the adapter factory.
-    const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
+    const { query, createSdkMcpServer, tool, prewarm } = await import('@anthropic-ai/claude-agent-sdk');
     const runtime = await prepareClaudeRuntimeEnvironment();
     const runtimeIdentity = claudeSdkRuntimeIdentity();
     let runResourceSettings: RunResourceSettings | undefined;
@@ -947,6 +980,19 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings));
     delete childEnv.ANTHROPIC_API_KEY;
 
+    // #1408 opt-in warm process: a request that starts a fresh Claude session
+    // can take a parked Claude Code process started with exactly these options.
+    // Resumed sessions, the native broker paths and extension-bound runs always
+    // start Claude Code themselves.
+    const warmEnabled = !nativeToolPort && !nativeOriginalProcessHost && !resumeSessionId && !executionExtensionContext
+      && await isClaudeWarmProcessEnabled();
+    if (!warmEnabled && !nativeToolPort && !nativeOriginalProcessHost) closeAllClaudeSpares();
+    // Claude Code adds the account's claude.ai connectors while it starts. A
+    // parked process has always finished that, a fresh one often has not, so
+    // the model could see different tools. FLUJO denies them anyway (#166);
+    // in this mode they stay off so every request offers only FLUJO's tools.
+    if (warmEnabled) childEnv.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
+
     const hasImages = typeof userContent !== 'string';
     log.debug('createCompletion via Claude Agent SDK', {
       model: model.name,
@@ -1257,6 +1303,25 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       log.warn('Could not archive Claude Agent SDK request', archiveError);
     }
 
+    // Everything the process is started with. The environment carries the
+    // account's token and the workspace's private Claude home. The SDK adds
+    // CLAUDE_AGENT_SDK_VERSION to this process's environment on its first
+    // query and to every child it starts, so it is left out of the match.
+    const warmShape: Record<string, unknown> | undefined = warmEnabled ? {
+      version: 1,
+      env: { ...childEnv, CLAUDE_AGENT_SDK_VERSION: undefined },
+      options: { ...queryOptions, env: undefined, abortController: undefined, canUseTool: undefined, hooks: undefined, mcpServers: undefined },
+      tools: effectiveSdkTools.map(definition => ({ name: definition.name, description: definition.description })),
+      toolShapes: hostToolShapes,
+    } : undefined;
+    const requestPreToolUse = queryOptions.hooks!.PreToolUse![0].hooks[0];
+    // In the same opt-in mode the answer does not wait for the used process to
+    // exit (about 0.7 s on Windows); it is told to stop and exits on its own.
+    // A turn that records a session for later resume still waits, so the
+    // session file is complete before the next turn reads it.
+    const exitInBackground = Boolean(warmShape) && !sessionTracking;
+    let claimedSpare: ReturnType<typeof takeClaudeSpare>;
+
     let response: ReturnType<typeof query>;
     try {
       if (nativeOriginalProcessHost) {
@@ -1269,7 +1334,28 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         });
         queryOptions.spawnClaudeCodeProcess = ownedSpawner.spawnClaudeCodeProcess;
       }
-      response = query({ prompt: promptStream(), options: queryOptions });
+      traceMark('claude.query');
+      const spare = warmShape ? takeClaudeSpare(warmShape) : undefined;
+      if (warmShape && !spare) {
+        const differing = explainClaudeSpareMiss(warmShape);
+        if (differing.length) {
+          traceMark(`claude.spareMiss:${differing.slice(0, 5).join('+')}`);
+          log.debug('No parked Claude process matches this request', { differing });
+        }
+      }
+      const binding: ClaudeSpareBinding | undefined = spare ? {
+        canUseTool: queryOptions.canUseTool!,
+        preToolUse: requestPreToolUse,
+        tools: new Map(effectiveSdkTools.map(definition => [definition.name, definition.handler as ClaudeSpareToolHandler])),
+      } : undefined;
+      const warmResponse = spare && binding
+        ? await claimClaudeSpare(spare, { prompt: promptStream, cwd: runtime.workingDirectory, binding, signal: abortController.signal })
+        : undefined;
+      if (warmResponse) {
+        claimedSpare = spare;
+        traceMark('claude.claimed');
+      }
+      response = warmResponse ?? query({ prompt: promptStream(), options: queryOptions });
     } catch (error) {
       closeInput();
       abortController.abort();
@@ -1368,8 +1454,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     let allowanceObservation: ReturnType<typeof collectClaudeAllowance> | undefined;
     const allowanceKey = allowanceAccountKey('claude', apiKey);
+    let tracedFirstMessage = false;
+    let tracedFirstDelta = false;
     const messageLoop = async (): Promise<void> => {
-      for await (const message of response) {
+      for await (const message of exitInBackground ? withoutExitWait(response) : response) {
+        if (!tracedFirstMessage) { tracedFirstMessage = true; traceMark('claude.firstMessage'); }
+        if (message.type === 'system' && message.subtype === 'init') traceMark('claude.init');
+        if (!tracedFirstDelta && message.type === 'stream_event' && (message as SDKPartialAssistantMessage).event.type === 'content_block_delta') {
+          tracedFirstDelta = true; traceMark('claude.firstDelta');
+        }
+        if (message.type === 'result') traceMark('claude.result');
         // An issued descendant can lose saved lineage while its SDK still
         // yields messages. Fence every frame before live/transcript/usage callbacks.
         await nativeOriginalProcessHost?.assertOutputCurrent();
@@ -1570,7 +1664,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           const terminalReason = message.terminal_reason;
           onSessionEvent?.({ kind: 'result', terminalReason });
           if (terminalReason && terminalReason !== 'completed' && handoffCalls.length === 0) {
-            throw new Error(`Claude invocation incomplete: ${terminalReason}`);
+            const errs = (message as { errors?: string[] }).errors;
+            const reported = Array.isArray(errs) && errs.length ? errs.join('; ')
+              : (message as { result?: string }).result?.trim();
+            const detail = reported && apiKey ? reported.split(apiKey).join('[credential redacted]') : reported;
+            throw new Error(`Claude invocation incomplete: ${terminalReason}${detail ? ` (${detail.slice(0, 500)})` : ''}`);
           }
           await nativeOriginalProcessHost?.observeSdkUsage(message);
           for (const denial of message.permission_denials ?? []) {
@@ -1648,6 +1746,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
     } finally {
       toolScopeClosed = true;
+      traceMark('claude.teardown');
       interruptedBeforeTeardown = abortController.signal.aborted;
       closeInput();
       let teardownFailure: unknown;
@@ -1665,7 +1764,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           recordAllowanceSnapshot(allowanceKey, claudeAllowanceSnapshot(observation));
         }
       });
+      traceMark('claude.allowance');
       const streamClosed = await finish(() => response.close?.());
+      traceMark('claude.closed');
       // Close also cancels outstanding local callbacks, including queries
       // that naturally ended or threw without an external stop signal.
       abortController.abort();
@@ -1689,6 +1790,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         ...usageTracker.getAccounting(), partial: dispatchOutcome !== 'completed' || !nativeSdkTerminal
           || !foregroundSettled || handoffCalls.length > 0 || endedByCaller || ambientTasks > 0,
       } }));
+      traceMark('claude.accounted');
       if (dispatchId && onSdkRequestResult) {
         try {
           await onSdkRequestResult({ dispatchId, outcome: dispatchOutcome });
@@ -1701,6 +1803,28 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             log.warn('Could not update Claude Agent SDK request archive', archiveError);
           }
         }
+      }
+      traceMark('claude.archived');
+      if (claimedSpare) releaseClaudeSpare(claimedSpare);
+      // Park a process for the next request of this shape while the caller
+      // is busy elsewhere (for a voice turn: while the user speaks). A stopped
+      // request parks nothing; a failed one does, as its next try would start
+      // Claude Code anyway.
+      if (warmShape && !signal?.aborted) {
+        prepareClaudeSpare({
+          shape: warmShape,
+          sdk: { prewarm },
+          makeOptions: delegates => ({
+            ...queryOptions,
+            abortController: delegates.abortController,
+            canUseTool: delegates.canUseTool,
+            hooks: { PreToolUse: [{ hooks: [delegates.preToolUse] }] },
+            ...(effectiveSdkTools.length > 0 ? { mcpServers: { [SDK_SERVER_NAME]: createSdkMcpServer({
+              name: SDK_SERVER_NAME, version: '1.0.0',
+              tools: effectiveSdkTools.map(definition => ({ ...definition, handler: delegates.toolHandler(definition.name) })),
+            }) } } : {}),
+          }),
+        });
       }
       if (teardownFailure && !(primaryFailure && isConversationDurabilityError(teardownFailure))) throw teardownFailure;
     }
