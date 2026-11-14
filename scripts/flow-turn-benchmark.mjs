@@ -91,6 +91,15 @@ const realModel = real ? {
   key: process.env.FLUJO_BENCH_REAL_KEY || process.env.OPENAI_API_KEY,
 } : undefined;
 if (real) assert.ok(realModel.key, '--real needs FLUJO_BENCH_REAL_KEY or OPENAI_API_KEY');
+// --seed-from <FLUJO data dir> --seed-model <model id>: use a model that is already
+// configured there (for example a Claude subscription model). Only that model entry and
+// the encryption key file are copied, still encrypted, into the throwaway data folder;
+// FLUJO decrypts the credential in memory. Needs FLUJO's default (no password) encryption.
+const seedFrom = option('seed-from', undefined);
+const seedModelId = option('seed-model', undefined);
+assert.ok(Boolean(seedFrom) === Boolean(seedModelId), '--seed-from and --seed-model go together');
+assert.ok(!(seedFrom && real), 'Use either --real or --seed-from');
+const realModelRun = real || Boolean(seedFrom);
 
 // ---------------------------------------------------------------- compare mode
 // node scripts/flow-turn-benchmark.mjs --compare <before.json> <after.json>
@@ -262,6 +271,24 @@ const stubMcp = http.createServer(async (request, response) => {
     response.end();
   }
 });
+
+// ---------------------------------------------------------------- seeded model (optional)
+async function seedModel() {
+  const source = path.join(path.resolve(seedFrom), 'workspaces');
+  const target = path.join(data, 'workspaces');
+  const encryption = JSON.parse(await fs.readFile(path.join(source, 'default-workspace', 'db', 'encryption_key.json'), 'utf8'));
+  assert.equal(encryption.encryption_type, 'default', 'Only a data folder with default (no password) encryption can be seeded');
+  const models = JSON.parse(await fs.readFile(path.join(source, 'default-workspace', 'db', 'models.json'), 'utf8'));
+  const model = models.find(entry => entry.id === seedModelId);
+  assert.ok(model, `Model ${seedModelId} not found in ${seedFrom}`);
+  await fs.mkdir(path.join(target, 'default-workspace', 'db'), { recursive: true });
+  await fs.copyFile(path.join(source, '.workspace-layout.json'), path.join(target, '.workspace-layout.json')).catch(() => undefined);
+  await fs.copyFile(path.join(source, 'default-workspace', 'db', 'encryption_key.json'), path.join(target, 'default-workspace', 'db', 'encryption_key.json'));
+  // The entry is copied as stored: its credential stays encrypted.
+  await fs.writeFile(path.join(target, 'default-workspace', 'db', 'models.json'), JSON.stringify([model], null, 2));
+  say(`Seeded model ${model.id} (${model.name}, ${model.adapter})`);
+  return { id: model.id, name: model.name, adapter: model.adapter };
+}
 
 // ---------------------------------------------------------------- FLUJO process
 async function listen(server) {
@@ -503,7 +530,7 @@ async function turn(mode, scenario) {
   assert.ok(response.ok, `Turn failed with ${response.status}`);
   const diagnostics = () => JSON.stringify({ model: record.model.map(call => ({ tool: call.tool, tools: call.tools })),
     mcp: record.mcp.map(entry => entry.method), raw: record.raw?.slice(0, 1500) });
-  if (!real) assert.ok(content.includes('ships today'), `Unexpected answer: ${content.slice(0, 200)} ${diagnostics()}`);
+  if (!realModelRun) assert.ok(content.includes('ships today'), `Unexpected answer: ${content.slice(0, 200)} ${diagnostics()}`);
   else assert.ok(content.length > 0, 'Real model returned no text');
   record.contentChars = content.length;
   if (fsBefore) {
@@ -567,7 +594,7 @@ const median = values => {
 const results = { schemaVersion: 1, label, application, startedUtc: new Date().toISOString(),
   node: process.version, platform: `${process.platform} ${os.release()} ${os.cpus().length} threads ${Math.round(os.totalmem() / 2 ** 30)} GB`,
   buildId: (await fs.readFile(path.join(application, '.next', 'BUILD_ID'), 'utf8')).trim(),
-  model: real ? `real ${realModel.name}` : `stub (token gap ${tokenGapMs} ms)`, runs, series: [] };
+  model: real ? `real ${realModel.name}` : seedFrom ? `configured model ${seedModelId}` : `stub (token gap ${tokenGapMs} ms)`, runs, series: [] };
 try {
   for (const name of ['application', 'data', 'home', 'temp']) await fs.mkdir(path.join(root, name), { recursive: true });
   for (const name of ['roaming', 'local', 'config', 'cache']) await fs.mkdir(path.join(root, 'home', name));
@@ -582,17 +609,21 @@ try {
   const modelPort = await listen(stubModel);
   const mcpPort = await listen(stubMcp);
 
+  let seededModel;
+  if (seedFrom) seededModel = await seedModel();
   say('Starting FLUJO for setup...');
   results.setupStartupMs = Math.round(await startServer());
-  assert.equal((await api('/api/encryption/secure', { action: 'initialize', password })).success, true);
-  assert.equal((await api('/api/encryption/secure', { action: 'authenticate', password })).success, true);
+  if (!seededModel) {
+    assert.equal((await api('/api/encryption/secure', { action: 'initialize', password })).success, true);
+    assert.equal((await api('/api/encryption/secure', { action: 'authenticate', password })).success, true);
+  }
   await api('/api/storage', { key: 'speech_settings', value: { onboarding: { completed: true }, telemetry: { enabled: false } } });
   for (const config of await api('/api/mcp/servers')) {
     if (config.name !== 'bench') await api(`/api/mcp/servers/${encodeURIComponent(config.name)}`, { disabled: true }, 'PUT');
   }
   await api('/api/mcp/servers', { name: 'bench', transport: 'streamable', serverUrl: `http://127.0.0.1:${mcpPort}/mcp`, disabled: false });
-  const modelId = 'bench-model';
-  await api('/api/model', real
+  const modelId = seededModel?.id ?? 'bench-model';
+  if (!seededModel) await api('/api/model', real
     ? { id: modelId, name: realModel.name, provider: 'openai', adapter: 'openai', ApiKey: realModel.key, baseUrl: realModel.baseUrl }
     : { id: modelId, name: 'bench-model', provider: 'openai', adapter: 'openai', ApiKey: STUB_KEY, baseUrl: `http://127.0.0.1:${modelPort}/v1` });
   const node = (id, type, properties = {}) => ({ id, type, position: { x: 0, y: 0 }, data: { type, label: `${type} node`, properties } });
@@ -616,7 +647,7 @@ try {
     say(`Fresh FLUJO process for ${mode}/${scenario}...`);
     continuedConversation = undefined;
     const startupMs = await startServer();
-    assert.equal((await api('/api/encryption/secure', { action: 'authenticate', password })).success, true);
+    if (!seedFrom) assert.equal((await api('/api/encryption/secure', { action: 'authenticate', password })).success, true);
     const series = { mode, scenario, startupMs: Math.round(startupMs), runs: [] };
     let profiles;
     for (let index = 1; index <= runs; index++) {
