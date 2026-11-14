@@ -274,6 +274,15 @@ export interface ExperimentalSettings {
    */
   claudeSessionResume?: boolean;
   /**
+   * When true, the Claude Subscription adapter keeps one started Claude Code
+   * process parked for the next request with the same model, instructions,
+   * tools and account (issue #1408), so that request skips Claude Code's
+   * start-up. Each parked process serves one request only. Off by default; a
+   * missing value is disabled. FLUJO_CLAUDE_WARM_PROCESS=1 turns it on without
+   * the setting.
+   */
+  claudeWarmProcess?: boolean;
+  /**
    * When true, pass the normal Codex installation's `models_cache.json` to the
    * SDK as its `model_catalog_json` startup override. This can avoid Codex's
    * online catalogue refresh, but the cached file may be incompatible with the

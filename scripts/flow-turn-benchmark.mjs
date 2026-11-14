@@ -19,10 +19,19 @@
  *              tool     = a new conversation, the model calls one MCP tool first
  *              continue = one conversation across all runs; each run appends its
  *                         new message (metadata.appendMessages), like a voice app
+ *              direct   = a one-word classification sent straight to the model
+ *                         (model-<id>, no flow), like a voice app's safety check
  *   --no-owner-auth  run like a default localhost install (no owner sign-in file)
  *   --fs-probe       count file-system calls per turn inside the server
  *   --profile <dir>  write CPU profiles of the warm runs
  *   --node-options <flags>  extra Node flags for the server under test
+ *   --claude <model> use FLUJO's Claude subscription adapter (Claude Code) with this
+ *                    model alias, for example haiku. The token comes from
+ *                    FLUJO_BENCH_CLAUDE_TOKEN (from `claude setup-token`). Without
+ *                    one, add --allow-model-errors to time Claude Code's start-up only.
+ *   --claude-warm    turn on the Claude subscription adapter's parked process
+ *                    (FLUJO_CLAUDE_WARM_PROCESS=1) in the server under test
+ *   --pause <ms>     wait this long between runs, like a caller speaking (default 0)
  *   --compare <before.json> <after.json>  print two --out files side by side and exit
  *   --real   use a real model instead of the stub. Reads FLUJO_BENCH_REAL_BASE_URL
  *            (default https://api.openai.com/v1), FLUJO_BENCH_REAL_MODEL
@@ -70,7 +79,7 @@ assert.ok(Number.isInteger(runs) && runs >= 1 && runs <= 200, '--runs must be 1.
 const modes = option('modes', 'stream,json').split(',');
 const scenarios = option('scenarios', 'answer,tool').split(',');
 for (const mode of modes) assert.ok(['stream', 'json'].includes(mode), `Unknown mode ${mode}`);
-for (const scenario of scenarios) assert.ok(['answer', 'tool', 'continue'].includes(scenario), `Unknown scenario ${scenario}`);
+for (const scenario of scenarios) assert.ok(['answer', 'tool', 'continue', 'direct'].includes(scenario), `Unknown scenario ${scenario}`);
 const outFile = option('out', undefined);
 const label = option('label', path.basename(application));
 const keep = flag('keep');
@@ -85,6 +94,9 @@ const fsProbe = flag('fs-probe');
 const ownerAuth = !flag('no-owner-auth');
 // Extra Node flags for the server under test, e.g. --node-options "--experimental-async-context-frame".
 const extraNodeOptions = option('node-options', '', { flagValue: true });
+const claudeWarm = flag('claude-warm');
+const pauseMs = Number(option('pause', '0'));
+assert.ok(Number.isFinite(pauseMs) && pauseMs >= 0 && pauseMs <= 60_000, '--pause must be 0..60000 ms');
 const realModel = real ? {
   baseUrl: process.env.FLUJO_BENCH_REAL_BASE_URL || 'https://api.openai.com/v1',
   name: process.env.FLUJO_BENCH_REAL_MODEL || 'gpt-4.1-mini',
@@ -99,7 +111,15 @@ const seedFrom = option('seed-from', undefined);
 const seedModelId = option('seed-model', undefined);
 assert.ok(Boolean(seedFrom) === Boolean(seedModelId), '--seed-from and --seed-model go together');
 assert.ok(!(seedFrom && real), 'Use either --real or --seed-from');
-const realModelRun = real || Boolean(seedFrom);
+const claudeModel = option('claude', undefined);
+assert.ok(!(claudeModel && (seedFrom || real)), 'Use only one of --claude, --real and --seed-from');
+const realModelRun = real || Boolean(seedFrom) || Boolean(claudeModel);
+// --allow-model-errors keeps the timing of turns whose model call failed (for example to
+// measure start-up with an expired credential) instead of stopping the benchmark.
+const allowModelErrors = flag('allow-model-errors');
+const claudeToken = process.env.FLUJO_BENCH_CLAUDE_TOKEN?.trim();
+assert.ok(!claudeModel || claudeToken || allowModelErrors,
+  '--claude needs FLUJO_BENCH_CLAUDE_TOKEN, or --allow-model-errors to time start-up with a placeholder token');
 
 // ---------------------------------------------------------------- compare mode
 // node scripts/flow-turn-benchmark.mjs --compare <before.json> <after.json>
@@ -287,7 +307,7 @@ async function seedModel() {
   // The entry is copied as stored: its credential stays encrypted.
   await fs.writeFile(path.join(target, 'default-workspace', 'db', 'models.json'), JSON.stringify([model], null, 2));
   say(`Seeded model ${model.id} (${model.name}, ${model.adapter})`);
-  return { id: model.id, name: model.name, adapter: model.adapter };
+  return { id: model.id, name: model.name, displayName: model.displayName, adapter: model.adapter };
 }
 
 // ---------------------------------------------------------------- FLUJO process
@@ -346,6 +366,7 @@ async function startServer() {
       FLUJO_TELEMETRY_URL: `${base}/disabled-telemetry`, FLUJO_CODEX_AUTO_UPDATE: '0',
       FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(await freePort()),
       FLUJO_TURN_TRACE_FILE: traceFile,
+      ...(claudeWarm ? { FLUJO_CLAUDE_WARM_PROCESS: '1' } : {}),
       ...(fsProbe ? { FLUJO_BENCH_FS_STATS: fsStatsBase } : {}),
       NODE_OPTIONS: [extraNodeOptions, profileDir ? '--inspect=127.0.0.1:0' : '',
         // NODE_OPTIONS treats backslashes inside quotes as escapes; use forward slashes.
@@ -482,6 +503,8 @@ const FLOW_NAME = 'VoiceBench';
 // 'continue' keeps one conversation across the runs of a series, as a stateful
 // voice client does: each turn sends only its new message (appendMessages).
 let continuedConversation;
+// 'direct' sends a one-word classification straight to the model (model-<id>, no flow).
+let benchModelId = 'bench-model'; // the name used in model-<name>
 async function turn(mode, scenario) {
   const marker = scenario === 'tool' ? '[bench:tool] Where is my order A-1?' : 'When does store 3 open?';
   const metadata = scenario === 'continue'
@@ -494,12 +517,24 @@ async function turn(mode, scenario) {
   const response = await fetch(new URL('/v1/chat/completions', base), {
     method: 'POST', signal: AbortSignal.timeout(120_000),
     headers: { authorization: `Bearer ${operator.token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: `flow-${FLOW_NAME}`, stream: mode === 'stream',
-      messages: [{ id: randomUUID(), role: 'user', content: marker }], ...(metadata ? { metadata } : {}) }),
+    body: JSON.stringify(scenario === 'direct'
+      ? { model: `model-${benchModelId}`, stream: mode === 'stream', messages: [
+        { role: 'system', content: 'Classify the caller message. Answer with exactly one word: order, store or other.' },
+        { role: 'user', content: 'Where is my order A-1? It should ship today.' }] }
+      : { model: `flow-${FLOW_NAME}`, stream: mode === 'stream',
+        messages: [{ id: randomUUID(), role: 'user', content: marker }], ...(metadata ? { metadata } : {}) }),
   });
   record.headers = now();
   let content = '';
-  if (mode === 'stream') {
+  if (mode === 'stream' && !response.ok) {
+    // A call that fails before streaming starts answers with a JSON error.
+    const text = await response.text();
+    record.raw = text.slice(0, 3000);
+    if (allowModelErrors) {
+      try { record.modelError = JSON.parse(text).error?.message; } catch { /* plain text */ }
+      record.modelError ||= text.slice(0, 300) || `HTTP ${response.status}`;
+    } else assert.fail(`Turn failed with ${response.status}: ${text.slice(0, 500)}`);
+  } else if (mode === 'stream') {
     const decoder = new TextDecoder();
     let buffer = '';
     for await (const bytes of response.body) {
@@ -511,6 +546,8 @@ async function turn(mode, scenario) {
         if (!line || line === 'data: [DONE]') continue;
         const parsed = JSON.parse(line.slice(6));
         if (parsed.error) throw new Error(`Stream error: ${JSON.stringify(parsed.error)}`);
+        // A failed run streams its error text and ends with finish_reason 'error'.
+        if (parsed.choices?.[0]?.finish_reason === 'error') record.streamError = true;
         const delta = parsed.choices?.[0]?.delta?.content;
         if (delta) { record.firstContent ??= now(); content += delta; }
         record.conversationId ??= parsed.choices?.[0]?.delta?.conversation?.conversationId;
@@ -520,19 +557,28 @@ async function turn(mode, scenario) {
     const text = await response.text();
     record.raw = text.slice(0, 3000);
     const parsed = JSON.parse(text);
-    assert.ok(response.ok, `Turn failed with ${response.status}: ${text.slice(0, 500)}`);
+    if (!response.ok && allowModelErrors) record.modelError = parsed.error?.message ?? text.slice(0, 300);
+    else assert.ok(response.ok, `Turn failed with ${response.status}: ${text.slice(0, 500)}`);
     content = parsed.choices?.[0]?.message?.content ?? '';
     record.conversationId = parsed.conversation_id;
   }
   if (scenario === 'continue') continuedConversation ??= record.conversationId;
   record.end = now();
   current = undefined;
-  assert.ok(response.ok, `Turn failed with ${response.status}`);
+  if (allowModelErrors && (record.modelError || record.streamError)) {
+    record.modelError ??= content.slice(0, 300);
+    say(`model error kept: ${record.modelError.slice(0, 160)}`);
+  } else {
+    assert.ok(response.ok, `Turn failed with ${response.status}`);
+    assert.ok(!record.streamError, `Turn ended with an error: ${content.slice(0, 300)}`);
+  }
   const diagnostics = () => JSON.stringify({ model: record.model.map(call => ({ tool: call.tool, tools: call.tools })),
     mcp: record.mcp.map(entry => entry.method), raw: record.raw?.slice(0, 1500) });
-  if (!realModelRun) assert.ok(content.includes('ships today'), `Unexpected answer: ${content.slice(0, 200)} ${diagnostics()}`);
+  if (record.modelError) { /* timing only */ }
+  else if (!realModelRun) assert.ok(content.includes('ships today'), `Unexpected answer: ${content.slice(0, 200)} ${diagnostics()}`);
   else assert.ok(content.length > 0, 'Real model returned no text');
   record.contentChars = content.length;
+  if (process.env.FLUJO_BENCH_SHOW_ANSWER) say(`answer: ${content.slice(0, 300)}`);
   if (fsBefore) {
     await delay(400); // let background writes after the answer finish and the probe flush
     const fsAfter = await fsSnapshot();
@@ -594,7 +640,9 @@ const median = values => {
 const results = { schemaVersion: 1, label, application, startedUtc: new Date().toISOString(),
   node: process.version, platform: `${process.platform} ${os.release()} ${os.cpus().length} threads ${Math.round(os.totalmem() / 2 ** 30)} GB`,
   buildId: (await fs.readFile(path.join(application, '.next', 'BUILD_ID'), 'utf8')).trim(),
-  model: real ? `real ${realModel.name}` : seedFrom ? `configured model ${seedModelId}` : `stub (token gap ${tokenGapMs} ms)`, runs, series: [] };
+  model: real ? `real ${realModel.name}` : seedFrom ? `configured model ${seedModelId}`
+    : claudeModel ? `Claude subscription ${claudeModel}${claudeToken ? '' : ' (placeholder token: start-up only)'}${claudeWarm ? ', warm process on' : ''}`
+    : `stub (token gap ${tokenGapMs} ms)`, runs, series: [] };
 try {
   for (const name of ['application', 'data', 'home', 'temp']) await fs.mkdir(path.join(root, name), { recursive: true });
   for (const name of ['roaming', 'local', 'config', 'cache']) await fs.mkdir(path.join(root, 'home', name));
@@ -623,7 +671,12 @@ try {
   }
   await api('/api/mcp/servers', { name: 'bench', transport: 'streamable', serverUrl: `http://127.0.0.1:${mcpPort}/mcp`, disabled: false });
   const modelId = seededModel?.id ?? 'bench-model';
-  if (!seededModel) await api('/api/model', real
+  // Direct calls address a model by its display name (or name).
+  benchModelId = seededModel ? (seededModel.displayName || seededModel.name) : 'bench-model';
+  if (!seededModel) await api('/api/model', claudeModel
+    ? { id: modelId, name: claudeModel, displayName: 'bench-model', provider: 'claude-subscription', adapter: 'claude-cli',
+      ApiKey: claudeToken || 'sk-ant-oat01-benchmark-placeholder-not-a-token' }
+    : real
     ? { id: modelId, name: realModel.name, provider: 'openai', adapter: 'openai', ApiKey: realModel.key, baseUrl: realModel.baseUrl }
     : { id: modelId, name: 'bench-model', provider: 'openai', adapter: 'openai', ApiKey: STUB_KEY, baseUrl: `http://127.0.0.1:${modelPort}/v1` });
   const node = (id, type, properties = {}) => ({ id, type, position: { x: 0, y: 0 }, data: { type, label: `${type} node`, properties } });
@@ -653,6 +706,7 @@ try {
     for (let index = 1; index <= runs; index++) {
       mcpCounts = {};
       if (profileDir && index === 2) profiles = await startProfiles();
+      if (pauseMs > 0 && index > 1) await delay(pauseMs);
       const record = await turn(mode, scenario);
       const result = { run: index, ...spans(record), mcpMethods: mcpCounts };
       series.runs.push(result);

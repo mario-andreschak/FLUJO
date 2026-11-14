@@ -244,6 +244,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleClaudeWarmProcessChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Claude warm process toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        claudeWarmProcess: event.target.checked,
+      },
+    });
+  };
+
   const handleCodexModelCatalogCacheChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Codex model catalog cache toggled: ${event.target.checked}`);
     updateSettings({
@@ -434,6 +445,13 @@ export default function ExperimentalFeaturesSettings() {
             label={t('settings.experimental.claudeResume')}
             name="claudeSessionResume"
             onChange={handleClaudeSessionResumeChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.claudeWarmProcess ?? false}
+            description={t('settings.experimental.claudeWarmProcessDescription')}
+            label={t('settings.experimental.claudeWarmProcess')}
+            name="claudeWarmProcess"
+            onChange={handleClaudeWarmProcessChange}
           />
           <ExperimentalToggle
             checked={experimental.codexModelCatalogCache ?? false}

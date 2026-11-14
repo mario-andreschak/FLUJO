@@ -40,6 +40,16 @@ node scripts/flow-turn-benchmark.mjs --compare before.json after.json
   (`FLUJO_BENCH_REAL_BASE_URL`, `FLUJO_BENCH_REAL_MODEL`, key from
   `FLUJO_BENCH_REAL_KEY` or `OPENAI_API_KEY`).
 - `--seed-from <FLUJO data folder> --seed-model <model id>`: use a model that is already configured in another FLUJO, such as a Claude subscription model. Only that model entry and the encryption key file are copied, still encrypted, into the throwaway data folder. This needs FLUJO's default encryption (no password).
+- `--claude <model>`: use FLUJO's Claude subscription adapter (Claude Code) with
+  a model alias such as `haiku`. The token comes from `FLUJO_BENCH_CLAUDE_TOKEN`
+  (made with `claude setup-token`). Without a token, add `--allow-model-errors`:
+  each turn then ends with the model's sign-in error, which still times Claude
+  Code's start-up and FLUJO's own work.
+- `--claude-warm`: turn on the parked Claude Code process
+  (`FLUJO_CLAUDE_WARM_PROCESS=1`, issue #1408) in the server under test.
+- `--pause <ms>`: wait between runs, like the gap while a caller speaks.
+- `--scenarios direct`: a one-word classification sent straight to the model
+  (`model-<name>`, no flow).
 - `--fs-probe`: count file-system calls per turn inside the server.
 - `--profile <dir>`: write CPU profiles of the warm runs.
 - `--node-options <flags>`: extra Node flags for the server under test.
@@ -69,3 +79,9 @@ When the server starts with `FLUJO_TURN_TRACE_FILE=<file>`, each
 the spans to its report as `trace: <name>`. Spans can nest, so they do not add
 up. Without the variable the timers call straight through and cost nothing.
 </content>
+
+With `--claude`, the marks `claude.query` (FLUJO asks for Claude Code),
+`claude.claimed` (a parked process took the request), `claude.init`,
+`claude.firstDelta` (first streamed text), `claude.result` and the clean-up
+steps after it (`claude.teardown` to `claude.archived`) show where a Claude turn
+spends its time.
