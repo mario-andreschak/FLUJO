@@ -428,6 +428,28 @@ function fsDiff(before, after, group, top = 12) {
   }).filter(([, value]) => value.count > 0).sort((a, b) => b[1].ms - a[1].ms).slice(0, top);
 }
 
+// ---------------------------------------------------------------- in-server step timers
+// A server that supports FLUJO_TURN_TRACE_FILE appends one line per request once
+// the request and its streamed run have finished, which can be just after the
+// client saw the end. Wait briefly for that line; a build without the timers
+// writes none, so stop waiting once that is known.
+let traceLinesSeen = 0;
+let traceSupported;
+async function readTurnTrace() {
+  const deadline = Date.now() + (traceSupported === false ? 0 : 3_000);
+  for (;;) {
+    const lines = (await fs.readFile(traceFile, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+    if (lines.length > traceLinesSeen || Date.now() >= deadline) {
+      const fresh = lines.slice(traceLinesSeen);
+      traceLinesSeen = lines.length;
+      if (fresh.length) traceSupported = true;
+      else traceSupported ??= false;
+      return fresh.map(line => JSON.parse(line));
+    }
+    await delay(20);
+  }
+}
+
 // ---------------------------------------------------------------- one turn
 const FLOW_NAME = 'VoiceBench';
 // 'continue' keeps one conversation across the runs of a series, as a stateful
@@ -440,7 +462,6 @@ async function turn(mode, scenario) {
     : undefined;
   const record = { sent: 0, model: [], mcp: [], headers: undefined, firstContent: undefined, end: undefined };
   current = record;
-  const traceBefore = await fs.stat(traceFile).then(stat => stat.size, () => 0);
   const fsBefore = fsProbe ? await fsSnapshot() : undefined;
   record.sent = now();
   const response = await fetch(new URL('/v1/chat/completions', base), {
@@ -490,9 +511,7 @@ async function turn(mode, scenario) {
     const fsAfter = await fsSnapshot();
     record.fs = { ops: fsDiff(fsBefore, fsAfter, 'stats', 20), sites: fsDiff(fsBefore, fsAfter, 'sites', 25) };
   }
-  // In-process trace lines written by a server that supports FLUJO_TURN_TRACE_FILE.
-  const traceText = await fs.readFile(traceFile, 'utf8').catch(() => '');
-  record.trace = traceText.slice(traceBefore).split('\n').filter(Boolean).map(line => JSON.parse(line));
+  record.trace = await readTurnTrace();
   return record;
 }
 
