@@ -246,6 +246,19 @@ describe('claude warm process fallback', () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
+  it('stops waiting for a parked process when the request is stopped', async () => {
+    const spareProcess = fakeSpareProcess();
+    prepare('key-a', spareProcess);
+    const requestStop = new AbortController();
+    const pending = claimClaudeSpare(takeClaudeSpare(shapeOf('key-a'))!, {
+      prompt: requestPrompt, cwd: '/w', binding: binding(), signal: requestStop.signal,
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    requestStop.abort();
+    await expect(pending).resolves.toBeUndefined();
+    await expect(collect(spareProcess.prompt)).resolves.toEqual([]);
+  });
+
   it('drops a process that failed to start or died while parked', async () => {
     prepare('key-a', Promise.reject(new Error('spawn failed')) as Promise<never>);
     const parked = fakeSpareProcess();

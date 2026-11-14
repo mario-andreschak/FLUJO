@@ -167,12 +167,21 @@ export async function claimClaudeSpare(spare: Spare, params: {
   signal: AbortSignal;
 }): Promise<Query | undefined> {
   const deadline = Date.now() + CLAIM_TIMEOUT_MS;
+  // Wait until the deadline, or until the request is stopped.
   const within = <T>(promise: Promise<T>, fallback: T): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let onStop: (() => void) | undefined;
     return Promise.race([
       promise,
-      new Promise<T>(resolve => { timer = setTimeout(() => resolve(fallback), Math.max(0, deadline - Date.now())); }),
-    ]).finally(() => { if (timer) clearTimeout(timer); });
+      new Promise<T>(resolve => {
+        timer = setTimeout(() => resolve(fallback), Math.max(0, deadline - Date.now()));
+        onStop = () => resolve(fallback);
+        params.signal.addEventListener('abort', onStop, { once: true });
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+      if (onStop) params.signal.removeEventListener('abort', onStop);
+    });
   };
   // A spare still starting is waited for: it began before this request did.
   const spareProcess = await within(spare.ready.catch(() => undefined), undefined);
