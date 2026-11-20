@@ -1444,6 +1444,22 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // ("irmed. Now building…"). Track the open aborted prose so both its live
     // deltas and its durable continuation reconcile onto ONE stable message id.
     let pendingAbortedProse: { messageId: string } | undefined;
+    // Issue #1412: the SDK answers a tool's control requests (PreToolUse,
+    // canUseTool, the handler) as soon as they arrive, apart from the message
+    // stream this loop reads. So a plain handoff can be recorded while frames
+    // of the turn that called it, including that turn's answer text, are still
+    // unread. Until the loop has read the handoff's own tool_use frame, it
+    // keeps reading that turn instead of ending at once. A top-level user
+    // frame (tool results come after the turn that called the tools) or the
+    // run's result still ends it, so nothing after the handoff turn is read.
+    // Native broker runs keep the immediate end.
+    const readHandoffUseIds = new Set<string>();
+    const handoffTurnUnread = (message: unknown): boolean => {
+      if (nativeToolPort || !endSpawning) return false;
+      const frame = message as { type?: string; parent_tool_use_id?: string | null };
+      if (frame.type === 'result' || (frame.type === 'user' && !frame.parent_tool_use_id)) return false;
+      return handoffCalls.some(call => call.id !== undefined && !readHandoffUseIds.has(call.id));
+    };
 
     // The message loop, extracted so an external cancellation can race it: the
     // SDK does NOT reliably throw when its abortController fires mid-turn — the
@@ -1528,12 +1544,18 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // instead let the model keep calling the spawn tool (one call per
         // turn, or several tool_uses in one turn) and end the run when the
         // model produces a turn WITHOUT another handoff call — or at the
-        // runaway cap.
+        // runaway cap. A plain handoff whose own turn is still unread reads
+        // that turn first (#1412, see handoffTurnUnread); nothing is streamed
+        // live meanwhile.
+        let readingHandoffTurn = false;
         if (handoffCalls.length > 0 && (endSpawning || handoffCalls.length >= MAX_SPAWN_CALLS)) {
-          abortController.abort();
-          break;
+          readingHandoffTurn = handoffTurnUnread(message);
+          if (!readingHandoffTurn) {
+            abortController.abort();
+            break;
+          }
         }
-        if (message.type === 'stream_event') {
+        if (message.type === 'stream_event' && !readingHandoffTurn) {
           const partial = message as SDKPartialAssistantMessage;
           const event = partial.event;
           // Stable per-API-message key (see streamApiMessageId above).
@@ -1596,21 +1618,26 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               if (block?.type === 'tool_use' && typeof (block as { name?: unknown }).name === 'string') {
                 const rawName = (block as { name: string }).name;
                 const bare = rawName.includes('__') ? rawName.slice(rawName.lastIndexOf('__') + 2) : rawName;
-                if (isHandoffName(bare)) turnHandoffUses++;
+                if (isHandoffName(bare)) {
+                  turnHandoffUses++;
+                  const useId = (block as { id?: unknown }).id;
+                  if (typeof useId === 'string') readHandoffUseIds.add(useId);
+                }
               }
             }
           }
           // Spawning ended: the model produced a turn with no further handoff
           // call after spawning at least one worker. Stop BEFORE accumulating
           // it so the model can't narrate post-handoff.
-          if (handoffCalls.length > 0 && turnHandoffUses === 0) {
+          if (handoffCalls.length > 0 && turnHandoffUses === 0 && !readingHandoffTurn) {
             abortController.abort();
             break;
           }
           // Mid-spawn narration (between successive spawn calls) is mid-action
           // plumbing, not the node's answer — the routing turn's own prose
-          // (before any handoff was recorded) is still preserved below.
-          if ((turnText || turnMedia.length > 0) && handoffCalls.length === 0) {
+          // (before any handoff was recorded, or read late per #1412) is still
+          // preserved below.
+          if ((turnText || turnMedia.length > 0) && (handoffCalls.length === 0 || readingHandoffTurn)) {
             if (isMalformedClaudeToolCallProse(turnText)) {
               // Quarantine the complete contaminated SDK turn. Keeping adjacent
               // prose would require guessing a safe boundary; skipping it keeps
