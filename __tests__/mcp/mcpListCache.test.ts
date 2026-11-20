@@ -26,6 +26,14 @@ const announcing = (listChanged = true) => ({
   getServerCapabilities: () => ({ tools: { listChanged }, resources: { listChanged } }),
 });
 
+/**
+ * A list loader as the callers pass it: its result may carry the optional
+ * `error` that `cachedMcpList` looks at. Without that field in the type,
+ * TypeScript rejects the mock (no property in common with `{ error?: string }`).
+ */
+const loader = <T extends object>(load: () => T | Promise<T>) =>
+  jest.fn(async (): Promise<T & { error?: string }> => load());
+
 beforeEach(() => {
   _resetMcpListCacheSettingForTests();
   loadItemMock.mockReset().mockResolvedValue(undefined);
@@ -50,7 +58,7 @@ describe('MCP list reuse switch', () => {
   it('lists every time when off', async () => {
     process.env.FLUJO_MCP_LIST_CACHE = '0';
     const client = announcing();
-    const load = jest.fn(async () => ({ tools: [{ name: 'a' }] }));
+    const load = loader(() => ({ tools: [{ name: 'a' }] }));
     await cachedMcpList(client, 'tools', 'model', load);
     await cachedMcpList(client, 'tools', 'model', load);
     expect(load).toHaveBeenCalledTimes(2);
@@ -60,7 +68,7 @@ describe('MCP list reuse switch', () => {
 describe('MCP list reuse', () => {
   it('reuses a list for a server that announces changes, as a separate copy', async () => {
     const client = announcing();
-    const load = jest.fn(async () => ({ tools: [{ name: 'a' }] }));
+    const load = loader(() => ({ tools: [{ name: 'a' }] }));
     const first = await cachedMcpList(client, 'tools', 'model', load);
     first.tools.push({ name: 'changed by a caller' });
     const second = await cachedMcpList(client, 'tools', 'model', load);
@@ -70,7 +78,7 @@ describe('MCP list reuse', () => {
 
   it('keeps audiences and list kinds apart', async () => {
     const client = announcing();
-    const load = jest.fn(async () => ({ items: [] as string[] }));
+    const load = loader(() => ({ items: [] as string[] }));
     await cachedMcpList(client, 'tools', 'model', load);
     await cachedMcpList(client, 'tools', 'all', load);
     await cachedMcpList(client, 'resources', 'resources', load);
@@ -80,7 +88,7 @@ describe('MCP list reuse', () => {
 
   it('always lists for a server that does not announce changes', async () => {
     const client = announcing(false);
-    const load = jest.fn(async () => ({ tools: [] }));
+    const load = loader(() => ({ tools: [] }));
     await cachedMcpList(client, 'tools', 'model', load);
     await cachedMcpList(client, 'tools', 'model', load);
     expect(load).toHaveBeenCalledTimes(2);
@@ -98,7 +106,7 @@ describe('MCP list reuse', () => {
   });
 
   it('starts empty for a new connection', async () => {
-    const load = jest.fn(async () => ({ tools: [] }));
+    const load = loader(() => ({ tools: [] }));
     await cachedMcpList(announcing(), 'tools', 'model', load);
     await cachedMcpList(announcing(), 'tools', 'model', load);
     expect(load).toHaveBeenCalledTimes(2);
@@ -106,8 +114,8 @@ describe('MCP list reuse', () => {
 
   it('drops only the announced kind on a change notice', async () => {
     const client = announcing();
-    const tools = jest.fn(async () => ({ tools: [] }));
-    const resources = jest.fn(async () => ({ resources: [] }));
+    const tools = loader(() => ({ tools: [] }));
+    const resources = loader(() => ({ resources: [] }));
     await cachedMcpList(client, 'tools', 'model', tools);
     await cachedMcpList(client, 'resources', 'resources', resources);
     invalidateMcpLists(client, 'tools');
@@ -120,7 +128,7 @@ describe('MCP list reuse', () => {
   it('lists again after the maximum age, in case a notice was lost', async () => {
     jest.useFakeTimers({ now: 1_000_000 });
     const client = announcing();
-    const load = jest.fn(async () => ({ tools: [] }));
+    const load = loader(() => ({ tools: [] }));
     await cachedMcpList(client, 'tools', 'model', load);
     jest.setSystemTime(1_000_000 + MCP_LIST_CACHE_MAX_AGE_MS - 1);
     await cachedMcpList(client, 'tools', 'model', load);
@@ -140,7 +148,7 @@ describe('MCP list reuse', () => {
     });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-    const list = jest.fn(async () => ({ tools: (await client.listTools()).tools.map(tool => tool.name) }));
+    const list = loader(async () => ({ tools: (await client.listTools()).tools.map(tool => tool.name) }));
 
     await expect(cachedMcpList(client, 'tools', 'model', list)).resolves.toEqual({ tools: ['lookup_order'] });
     await expect(cachedMcpList(client, 'tools', 'model', list)).resolves.toEqual({ tools: ['lookup_order'] });
