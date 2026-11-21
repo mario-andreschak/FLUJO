@@ -652,7 +652,10 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                   seenSteps.add(`${cliConversationId}:${step.step_index}`);
                   if (seenSteps.size > maxTurns * 8 + 16) throw new Error('Antigravity CLI exceeded the FLUJO execution step budget.');
                   if (step.step_type === 'error_message') streamError = true;
-                  if (step.step_type === 'tool') {
+                  // A step that names a tool or delegates to a subagent is a native
+                  // tool request whatever its step type. Newer CLI releases report
+                  // invoke_subagent as step type "subagent", not "tool" (#1416).
+                  if (step.step_type === 'tool' || step.step_type === 'subagent' || step.tool_name !== undefined) {
                     if (!['call_mcp_tool', 'list_resources', 'read_resource', 'manage_task'].includes(step.tool_name ?? '')) throw new Error('Antigravity CLI attempted an unbound native tool.');
                     if (step.tool_name !== 'manage_task') {
                       const parameters = step.tool_info?.parameters;
