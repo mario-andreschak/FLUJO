@@ -31,6 +31,8 @@ Most flows behave as before. Three things changed on purpose, in 3.48.5 and 3.48
 ### Model access
 
 - Let a workspace switch off the ways to reach a model without a flow, under Settings > Model access. Direct model calls on the `/v1` API and Quick Chat can each be turned off. Quick Chat includes Ask FLUJO, the Flow Generator and existing Quick Chat conversations. Both stay on by default.
+- Keep the answer of a Claude subscription model that writes it in the same turn in which it hands off to the Finish node. FLUJO stopped reading as soon as the hand-off was reported, so the answer could come back empty although the model had written one and its output tokens were counted (#1412).
+- Fail the run again when a model behind the Antigravity CLI asks for a subagent. Newer CLI releases report that request as a step of type `subagent` instead of `tool`, so FLUJO returned the model's next answer as a normal completion, while it fails the run for every other native tool request. Nothing ran in that case, because the CLI refused the step itself (#1416).
 
 ### Harness Lab
 

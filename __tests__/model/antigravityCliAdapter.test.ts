@@ -1,6 +1,6 @@
 import type { CompletionInput, ModelSteering, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
-import type { AntigravityCliEvent } from '@/backend/services/model/adapters/antigravityCliEvents';
+import { AntigravityCliEventDecoder, type AntigravityCliEvent } from '@/backend/services/model/adapters/antigravityCliEvents';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import { ExecutionExtensionError, registerExecutionExtension } from '@/backend/execution/extensions';
 import { fixtureAdapter, mintFixture } from '../executionExtensions/fixtureAdapter';
@@ -502,6 +502,94 @@ test('native or foreign MCP steps cannot silently complete as successful provide
   });
   await expect(new AntigravityCliAdapter().createCompletion(input())).rejects.toThrow(/unbound native tool/);
   expect(mockCleanup).toHaveBeenCalledTimes(1);
+});
+
+// Native stream lines recorded from the official CLI (#1416). Only the init
+// event's working directory and tool list are shortened.
+const recordedLines = (conversation: string, steps: string[]): string[] => [
+  `{"event":"init","conversation_id":"${conversation}","init":{"model":"gemini-3.1-pro-high","cwd":"/tmp/invocation/workspace","agent":"flujo","tools":["call_mcp_tool","invoke_subagent","list_resources","manage_task","read_resource","view_file"],"permission_mode":"request-review"}}`,
+  ...steps,
+];
+const replay = (options: RunOptions) => {
+  const decoder = new AntigravityCliEventDecoder(options.onEvent);
+  return (lines: string[]) => decoder.push(lines.map(line => `${line}\n`).join(''));
+};
+
+test('a native subagent step that the CLI ends itself still fails the run instead of returning its answer', async () => {
+  // verify run 43443447716 on the Linux CI runner, 13 Nov 2026.
+  const lines = recordedLines('198450f4-bb44-4a03-ad52-1934e72955ca', [
+    '{"event":"step_update","step_update":{"conversation_id":"198450f4-bb44-4a03-ad52-1934e72955ca","step_index":0,"state":"DONE","step_type":"user_input"}}',
+    '{"event":"step_update","step_update":{"conversation_id":"198450f4-bb44-4a03-ad52-1934e72955ca","step_index":1,"state":"DONE","step_type":"agent_response","duration_seconds":0.004732812,"usage":{"input_tokens":12,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":17}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"198450f4-bb44-4a03-ad52-1934e72955ca","step_index":2,"state":"ACTIVE","step_type":"subagent","tool_name":"invoke_subagent","subagent_info":{"subagents":[{}]}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"198450f4-bb44-4a03-ad52-1934e72955ca","step_index":2,"state":"ERROR","step_type":"subagent","tool_name":"invoke_subagent","duration_seconds":0.001172097,"subagent_info":{"subagents":[{}]}}}',
+    '{"event":"step_update","step_update":{"conversation_id":"198450f4-bb44-4a03-ad52-1934e72955ca","step_index":3,"state":"DONE","step_type":"agent_response","text_delta":"Denied attack.\\n","duration_seconds":0.003585491,"usage":{"input_tokens":12,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":17}}}',
+    '{"event":"result","result":{"conversation_id":"198450f4-bb44-4a03-ad52-1934e72955ca","status":"SUCCESS","response":"Denied attack.\\n","duration_seconds":0.046843586,"num_turns":1,"usage":{"input_tokens":24,"output_tokens":10,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":34}}}',
+  ]);
+  mockRun.mockImplementation(async (options: RunOptions) => { await options.onStarted(); replay(options)(lines); });
+  const deltas = jest.fn();
+  const transcript = jest.fn();
+  await expect(new AntigravityCliAdapter().createCompletion(input({ onModelDelta: deltas, onTranscriptMessage: transcript })))
+    .rejects.toThrow('Antigravity CLI attempted an unbound native tool.');
+  expect(deltas).not.toHaveBeenCalled();
+  expect(transcript).not.toHaveBeenCalled();
+  expect(mockCallTool).not.toHaveBeenCalled();
+  expect(mockCleanup).toHaveBeenCalledTimes(1);
+});
+
+test.each([
+  ['the older tool step for invoke_subagent', { step_type: 'tool', tool_name: 'invoke_subagent' }],
+  ['a subagent step without a tool name', { step_type: 'subagent' }],
+  ['another step type that names a native tool', { step_type: 'browser', tool_name: 'open_browser_url' }],
+])('rejects %s', async (_label, shape) => {
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    options.onEvent({ event: 'step_update', step_update: { conversation_id: sessions.get(options)!, step_index: 2, state: 'ACTIVE', ...shape } });
+    finish(options);
+  });
+  await expect(new AntigravityCliAdapter().createCompletion(input())).rejects.toThrow(/unbound native tool/);
+  expect(mockCleanup).toHaveBeenCalledTimes(1);
+});
+
+test('recorded plain answers and bound FLUJO MCP calls still complete normally', async () => {
+  // Official CLI 1.5.13 (the release CI installs today), driven by the same
+  // synthetic model requests as the native integration test.
+  const plain = recordedLines('cb06d371-f6a4-4b31-9a52-6b2097b246f4', [
+    '{"event":"step_update","step_update":{"conversation_id":"cb06d371-f6a4-4b31-9a52-6b2097b246f4","step_index":0,"state":"DONE","step_type":"user_input"}}',
+    '{"event":"step_update","step_update":{"conversation_id":"cb06d371-f6a4-4b31-9a52-6b2097b246f4","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"Updater probe.\\n","duration_seconds":0.0048951,"usage":{"input_tokens":12,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":17}}}',
+    '{"event":"result","result":{"conversation_id":"cb06d371-f6a4-4b31-9a52-6b2097b246f4","status":"SUCCESS","response":"Updater probe.\\n","duration_seconds":0.0262064,"num_turns":1,"usage":{"input_tokens":12,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":17}}}',
+  ]);
+  mockRun.mockImplementation(async (options: RunOptions) => { await options.onStarted(); replay(options)(plain); });
+  const answer = await new AntigravityCliAdapter().createCompletion(input());
+  expect(answer.completion.choices[0]).toMatchObject({ finish_reason: 'stop', message: { content: 'Updater probe.\n' } });
+
+  const id = '15ebef23-348d-4c40-bc13-d623cdd80dba';
+  const toolStep = (state: string, extra = '') => `{"event":"step_update","step_update":{"conversation_id":"${id}","step_index":2,"state":"${state}","step_type":"tool","tool_name":"call_mcp_tool"${extra ? ',"duration_seconds":0.0236655' : ''},"tool_info":{"name":"call_mcp_tool","parameters":{"Arguments":{"purpose":"model-attempt"},"ServerName":"flujo","ToolName":"synthetic__controlled_nonce"}${extra}}}}`;
+  const [init, ...steps] = recordedLines(id, [
+    `{"event":"step_update","step_update":{"conversation_id":"${id}","step_index":0,"state":"DONE","step_type":"user_input"}}`,
+    `{"event":"step_update","step_update":{"conversation_id":"${id}","step_index":1,"state":"DONE","step_type":"agent_response","duration_seconds":0.0089971,"usage":{"input_tokens":12,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":17}}}`,
+    toolStep('ACTIVE'),
+  ]);
+  const after = [
+    toolStep('DONE', ',"output":"\\"synthetic-tool-nonce:5f562397ff10c79ff4d166705b856862\\""'),
+    `{"event":"step_update","step_update":{"conversation_id":"${id}","step_index":3,"state":"DONE","step_type":"agent_response","text_delta":"Verified 5f562397ff10c79ff4d166705b856862\\n","duration_seconds":0.011948,"usage":{"input_tokens":12,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":17}}}`,
+    `{"event":"result","result":{"conversation_id":"${id}","status":"SUCCESS","response":"Verified 5f562397ff10c79ff4d166705b856862\\n","duration_seconds":0.1825371,"num_turns":1,"usage":{"input_tokens":24,"output_tokens":10,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":34}}}`,
+  ];
+  mockCallTool.mockResolvedValue({ success: true, data: { content: [{ type: 'text', text: '"synthetic-tool-nonce:5f562397ff10c79ff4d166705b856862"' }] } });
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await options.onStarted();
+    const push = replay(options);
+    push([init, ...steps]);
+    await mockTools[0].handler({ purpose: 'model-attempt' });
+    push(after);
+  });
+  const result = await new AntigravityCliAdapter().createCompletion(input({
+    tools: [fnTool('controlled_nonce')],
+    toolNameMap: { controlled_nonce: { server: 'synthetic', tool: 'controlled_nonce' } },
+  }));
+  expect(mockTools.map(tool => tool.name)).toEqual(['synthetic__controlled_nonce']);
+  expect(mockCallTool).toHaveBeenCalledTimes(1);
+  expect(result.transcript?.map(message => message.role)).toEqual(['assistant', 'tool', 'assistant']);
+  expect(result.completion.choices[0].message.content).toBe('Verified 5f562397ff10c79ff4d166705b856862\n');
 });
 
 test('terminal text fallback records once and preserves aggregate usage without context claims', async () => {
