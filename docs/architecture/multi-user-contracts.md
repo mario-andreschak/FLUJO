@@ -152,11 +152,11 @@ password, showing stored secrets in plain text, credential transfer and
 migration, whole-workspace backup and restore, renaming or deleting the
 workspace, and giving it a new owner.
 
-Kinds of route (`ROUTE_CAPABILITIES`, 244 routes after #575; the test counts them, these numbers only illustrate):
+Kinds of route (`ROUTE_CAPABILITIES`, 249 routes after #575; the test counts them, these numbers only illustrate):
 
 | Kind | Count | Who may call it |
 |---|---|---|
-| `workspace` | 207 | Anyone with access to the selected workspace, for the action of the method (GET/HEAD/OPTIONS read, others edit) |
+| `workspace` | 212 | Anyone with access to the selected workspace, for the action of the method (GET/HEAD/OPTIONS read, others edit) |
 | `host` | 11 | People with host access (admins, or members an admin trusted), and only in a workspace they may use |
 | `admin` | 7 | Admins |
 | `account` | 6 | Any signed-in person; the sign-in routes also while signed out |

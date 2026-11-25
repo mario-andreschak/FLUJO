@@ -4,12 +4,13 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 245.
+Route files: 249.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
 | `/api/accounts/mode` | POST | [source](../../src/app/api/accounts/mode/route.ts) |
 | `/api/accounts/session` | DELETE, GET, POST | [source](../../src/app/api/accounts/session/route.ts) |
+| `/api/accounts/teams` | DELETE, GET, PATCH, POST | [source](../../src/app/api/accounts/teams/route.ts) |
 | `/api/accounts/tokens` | DELETE, GET, POST | [source](../../src/app/api/accounts/tokens/route.ts) |
 | `/api/accounts/users` | GET, PATCH, POST, PUT | [source](../../src/app/api/accounts/users/route.ts) |
 | `/api/approvals` | GET | [source](../../src/app/api/approvals/route.ts) |
@@ -33,6 +34,7 @@ Route files: 245.
 | `/api/credential-transfer/restore` | POST | [source](../../src/app/api/credential-transfer/restore/route.ts) |
 | `/api/cwd` | GET | [source](../../src/app/api/cwd/route.ts) |
 | `/api/diagnostics/report` | GET | [source](../../src/app/api/diagnostics/report/route.ts) |
+| `/api/edit-locks` | DELETE, GET, POST | [source](../../src/app/api/edit-locks/route.ts) |
 | `/api/encryption/secure` | POST | [source](../../src/app/api/encryption/secure/route.ts) |
 | `/api/env` | GET, POST | [source](../../src/app/api/env/route.ts) |
 | `/api/factory-observatory` | GET | [source](../../src/app/api/factory-observatory/route.ts) |
@@ -58,6 +60,7 @@ Route files: 245.
 | `/api/harness/comparisons/{id}` | DELETE, GET | [source](../../src/app/api/harness/comparisons/[id]/route.ts) |
 | `/api/harness/profiles` | GET, POST | [source](../../src/app/api/harness/profiles/route.ts) |
 | `/api/harness/{id}` | GET, POST | [source](../../src/app/api/harness/[id]/route.ts) |
+| `/api/history` | GET, POST | [source](../../src/app/api/history/route.ts) |
 | `/api/human-tasks` | GET | [source](../../src/app/api/human-tasks/route.ts) |
 | `/api/human-tasks/{requestId}` | GET, POST | [source](../../src/app/api/human-tasks/[requestId]/route.ts) |
 | `/api/init` | GET | [source](../../src/app/api/init/route.ts) |
@@ -158,6 +161,7 @@ Route files: 245.
 | `/api/snapshots/open-folder` | POST | [source](../../src/app/api/snapshots/open-folder/route.ts) |
 | `/api/statistics` | GET | [source](../../src/app/api/statistics/route.ts) |
 | `/api/storage` | DELETE, GET, POST | [source](../../src/app/api/storage/route.ts) |
+| `/api/team-copy` | GET, POST | [source](../../src/app/api/team-copy/route.ts) |
 | `/api/telemetry/daily-active` | GET, POST | [source](../../src/app/api/telemetry/daily-active/route.ts) |
 | `/api/tickets` | DELETE, GET, POST | [source](../../src/app/api/tickets/route.ts) |
 | `/api/tickets/{id}` | DELETE, GET, PATCH | [source](../../src/app/api/tickets/[id]/route.ts) |
