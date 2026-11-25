@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 243.
+Route files: 244.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -26,6 +26,7 @@ Route files: 243.
 | `/api/backup` | POST | [source](../../src/app/api/backup/route.ts) |
 | `/api/browse` | GET | [source](../../src/app/api/browse/route.ts) |
 | `/api/bugs/enhance` | POST | [source](../../src/app/api/bugs/enhance/route.ts) |
+| `/api/chat/attachments` | GET, POST | [source](../../src/app/api/chat/attachments/route.ts) |
 | `/api/cloud/instance` | GET | [source](../../src/app/api/cloud/instance/route.ts) |
 | `/api/credential-migration` | GET, POST | [source](../../src/app/api/credential-migration/route.ts) |
 | `/api/credential-transfer` | POST | [source](../../src/app/api/credential-transfer/route.ts) |
