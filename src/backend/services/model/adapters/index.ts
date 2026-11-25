@@ -14,6 +14,7 @@ import { AntigravityCliAdapter } from './antigravityCliAdapter';
 import { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 import { FallbackAdapter } from './fallbackAdapter';
+import { guardCutOffToolCalls } from './cutOffReply';
 import { resolveCompletionAdapterRoute, type CompletionAdapterRoute } from './completionRoute';
 import { assertOwnerCredentialAdapterRoute, ExecutionExtensionError } from '@/backend/execution/extensions';
 
@@ -59,7 +60,7 @@ export type {
  * Gateway profiles also resolve older Chat Completions records to Responses.
  */
 export function getCompletionAdapter(model: Model, requiredRoute?: CompletionAdapterRoute): CompletionAdapter {
-  return guardHarnessAdapter(createCompletionAdapter(model, requiredRoute));
+  return guardHarnessAdapter(guardCutOffToolCalls(createCompletionAdapter(model, requiredRoute)));
 }
 
 function createCompletionAdapter(model: Model, requiredRoute?: CompletionAdapterRoute): CompletionAdapter {

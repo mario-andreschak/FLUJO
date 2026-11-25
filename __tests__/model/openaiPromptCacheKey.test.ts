@@ -37,7 +37,7 @@ jest.mock('@/utils/logger', () => {
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
 import type { Model } from '@/shared/types/model';
 
-const OK = { id: 'c1', choices: [{ message: { role: 'assistant', content: 'hi' } }], usage: {} };
+const OK = { id: 'c1', choices: [{ message: { role: 'assistant', content: 'hi' } }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } };
 
 const model = (provider: string, baseUrl = `https://${provider}.example/v1`): Model =>
   ({ id: 'm1', name: 'gpt-test', provider, baseUrl, ApiKey: 'k' } as unknown as Model);

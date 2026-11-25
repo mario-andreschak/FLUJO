@@ -21,6 +21,7 @@
  * applies to every OpenAI-compatible provider that populates
  * `prompt_tokens_details.cached_tokens`.
  */
+import type OpenAI from 'openai';
 
 /** OpenAI-shaped usage, as reported on a ChatCompletion's `usage` field. */
 export interface OpenAiUsageLike {
@@ -51,6 +52,72 @@ export interface MappedOpenAiUsage {
   cacheReadTokens?: number;
   /** Subset of `promptTokens` written to the provider prompt cache. */
   cacheWriteTokens?: number;
+}
+
+type UsageRecord = Record<string, unknown>;
+
+const asRecord = (value: unknown): UsageRecord | undefined =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as UsageRecord : undefined;
+
+const count = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+/**
+ * One usage block in OpenAI's spelling, from the names servers actually use:
+ * OpenAI and vLLM (`prompt_tokens`), Responses-style gateways (`input_tokens`)
+ * and Ollama's own fields (`prompt_eval_count`).
+ */
+function usageFromBlock(block: UsageRecord | undefined): OpenAI.CompletionUsage | undefined {
+  if (!block) return undefined;
+  const prompt = count(block.prompt_tokens) ?? count(block.input_tokens) ?? count(block.prompt_eval_count);
+  const completion = count(block.completion_tokens) ?? count(block.output_tokens) ?? count(block.eval_count);
+  const total = count(block.total_tokens);
+  if (prompt === undefined && completion === undefined && total === undefined) return undefined;
+  const promptDetails = asRecord(block.prompt_tokens_details) ?? asRecord(block.input_tokens_details);
+  const completionDetails = asRecord(block.completion_tokens_details) ?? asRecord(block.output_tokens_details);
+  // Keep the server's other fields, such as OpenRouter's cost.
+  return {
+    ...block,
+    prompt_tokens: prompt ?? Math.max(0, (total ?? 0) - (completion ?? 0)),
+    completion_tokens: completion ?? 0,
+    total_tokens: total ?? (prompt ?? 0) + (completion ?? 0),
+    prompt_tokens_details: promptDetails as OpenAI.CompletionUsage.PromptTokensDetails | undefined,
+    completion_tokens_details: completionDetails as OpenAI.CompletionUsage.CompletionTokensDetails | undefined,
+  };
+}
+
+/** llama.cpp's own `timings`: prompt tokens read now, prompt tokens reused, tokens written. */
+function usageFromLlamaCppTimings(timings: UsageRecord | undefined): OpenAI.CompletionUsage | undefined {
+  const read = count(timings?.prompt_n);
+  const written = count(timings?.predicted_n);
+  if (read === undefined && written === undefined) return undefined;
+  const cached = count(timings?.cache_n);
+  const prompt = (read ?? 0) + (cached ?? 0);
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: written ?? 0,
+    total_tokens: prompt + (written ?? 0),
+    ...(cached !== undefined ? { prompt_tokens_details: { cached_tokens: cached } } : {}),
+  };
+}
+
+/**
+ * Read token usage from a completion or stream chunk of any OpenAI-compatible
+ * server. Groq puts it under `x_groq`, some servers put it on the choice, and
+ * older llama.cpp builds send only `timings`. A block of zeros is a server
+ * that fills the field without counting, so it is "not reported" as well.
+ */
+export function readOpenAiCompatibleUsage(source: unknown): OpenAI.CompletionUsage | undefined {
+  const record = asRecord(source);
+  if (!record) return undefined;
+  const choice = Array.isArray(record.choices) ? asRecord(record.choices[0]) : undefined;
+  const usage = usageFromBlock(asRecord(record.usage))
+    ?? usageFromBlock(asRecord(asRecord(record.x_groq)?.usage))
+    ?? usageFromBlock(asRecord(choice?.usage))
+    ?? usageFromLlamaCppTimings(asRecord(record.timings));
+  return usage && (usage.prompt_tokens > 0 || usage.completion_tokens > 0 || usage.total_tokens > 0)
+    ? usage
+    : undefined;
 }
 
 /**

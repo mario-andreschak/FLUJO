@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
+import { readOpenAiCompatibleUsage } from './openaiUsage';
 import { isOwnerCredentialBoundModel, type Model } from '@/shared/types/model';
 import { assertExecutionExtensionAdapterCurrent, assertExecutionExtensionCurrent, claimExecutionModelRequest, dispatchExecutionModelRequest, executionOwnerModelRouting, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionBoundModelIdentity, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
 import {
@@ -45,6 +46,13 @@ const PROMPT_CACHE_KEY_PROVIDERS = new Set(['openai', 'openrouter', 'litellm']);
 const rejectedPromptCacheKey = new Set<string>();
 /** Endpoints/models that rejected GPT-5.6 explicit cache controls. */
 const rejectedPromptCacheControls = new Set<string>();
+/**
+ * Endpoints that refused `stream_options`. Every OpenAI-compatible server is
+ * asked for token counts while streaming (vLLM, LM Studio and Ollama send none
+ * otherwise); one that refuses the field is asked once, then streamed without
+ * it until FLUJO restarts.
+ */
+const rejectedStreamOptions = new Set<string>();
 
 const endpointKey = (provider?: string, baseUrl?: string) => `${provider ?? 'openai'}|${baseUrl ?? ''}`;
 
@@ -259,6 +267,21 @@ function isPromptCacheKeyRejection(err: unknown): boolean {
   );
 }
 
+/** True only when a server refuses the `stream_options` field itself. */
+function isStreamOptionsRejection(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status !== 400 && status !== 422) return false;
+  const haystack = [
+    (err as { message?: string })?.message,
+    JSON.stringify((err as { error?: unknown })?.error ?? ''),
+  ]
+    .join(' ')
+    .toLowerCase();
+  if (!haystack.includes('stream_options') && !haystack.includes('include_usage')) return false;
+  return ['unknown', 'unrecognized', 'unsupported', 'not supported', 'not allowed', 'not permitted', 'extra', 'additional', 'invalid']
+    .some(word => haystack.includes(word));
+}
+
 /** True only for an unsupported explicit cache option/content marker. */
 function isPromptCacheControlsRejection(err: unknown): boolean {
   const status = (err as { status?: number })?.status;
@@ -438,7 +461,10 @@ export class OpenAiAdapter implements CompletionAdapter {
     while (true) {
       try {
         const completion = await send(useCacheKey, useCacheControls);
-        const canonicalCompletion = translateCompletionFromProvider(completion, toolNames);
+        const canonicalCompletion = translateCompletionFromProvider(
+          { ...completion, usage: readOpenAiCompatibleUsage(completion) },
+          toolNames,
+        );
         return {
           completion: canonicalCompletion,
           contextUsage: contextUsageFromCompletion(canonicalCompletion.usage, model.contextWindow),
@@ -515,9 +541,6 @@ export class OpenAiAdapter implements CompletionAdapter {
         : {}),
       ...(typeof maxTokens === 'number' ? { max_tokens: maxTokens } : {}),
       ...(providerTools?.length ? { tools: providerTools } : {}),
-      ...(['openai', 'openrouter'].includes(model.provider ?? 'openai')
-        ? { stream_options: { include_usage: true } }
-        : {}),
     };
     applyRequestedOutputModalities(
       requestParams as unknown as Record<string, unknown>,
@@ -538,6 +561,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     const consume = async (
       withCacheKey: boolean,
       withCacheControls: boolean,
+      withStreamOptions: boolean,
     ): Promise<CompletionResult> => {
       const baseParams = withCacheControls
         ? requestParams
@@ -547,6 +571,7 @@ export class OpenAiAdapter implements CompletionAdapter {
           };
       const body = {
         ...baseParams,
+        ...(withStreamOptions ? { stream_options: { include_usage: true } } : {}),
         ...(withCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
         ...(withCacheControls ? { prompt_cache_options: { mode: 'explicit' as const } } : {}),
       };
@@ -599,7 +624,7 @@ export class OpenAiAdapter implements CompletionAdapter {
         completionId = chunk.id || completionId;
         created = chunk.created || created;
         responseModel = chunk.model || responseModel;
-        usage = chunk.usage ?? usage;
+        usage = readOpenAiCompatibleUsage(chunk) ?? usage;
         const choice = chunk.choices?.[0];
         if (!choice) continue;
         if (choice.finish_reason) finishReason = choice.finish_reason;
@@ -696,11 +721,23 @@ export class OpenAiAdapter implements CompletionAdapter {
 
     let useCacheKey = sendCacheKey;
     let useCacheControls = sendCacheControls;
+    let useStreamOptions = !rejectedStreamOptions.has(endpoint);
     while (true) {
       try {
-        return await consume(useCacheKey, useCacheControls);
+        return await consume(useCacheKey, useCacheControls, useStreamOptions);
       } catch (error) {
+        const streamOptionsRefused = useStreamOptions && isStreamOptionsRejection(error);
+        // A single-attempt run cannot resend, but its next call leaves the field out.
+        if (streamOptionsRefused) rejectedStreamOptions.add(endpoint);
         if (singlePhysicalAttempt) throw error;
+        if (streamOptionsRefused) {
+          useStreamOptions = false;
+          log.warn('Provider refused stream_options; streaming without token counts', {
+            provider: model.provider,
+            baseUrl: model.baseUrl,
+          });
+          continue;
+        }
         if (useCacheControls && isPromptCacheControlsRejection(error)) {
           rejectedPromptCacheControls.add(cacheControlsKey);
           useCacheControls = false;
