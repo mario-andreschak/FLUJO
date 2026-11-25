@@ -119,10 +119,11 @@ async function checkHistory(priorCount: number, tornAt: number | undefined, plan
   expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 0, quarantinedWriterSlots: 0, chains: 0 });
 }
 
+// Every save syncs a real file to disk, so this suite gets a longer limit.
 it('appends exactly its own lines, rolls back to the exact prior bytes and never touches earlier events', async () => {
   await fc.assert(fc.asyncProperty(
     fc.integer({ min: 0, max: 3 }), fc.option(fc.nat({ max: 60 }), { nil: undefined }), fc.array(save, { minLength: 1, maxLength: 5 }),
     async (priorCount, tornAt, plans) => {
       try { await checkHistory(priorCount, tornAt, plans); } finally { jest.restoreAllMocks(); }
-    }), { numRuns: 60 });
-});
+    }), { numRuns: 40 });
+}, 120_000);

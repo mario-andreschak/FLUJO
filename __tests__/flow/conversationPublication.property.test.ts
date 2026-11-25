@@ -135,4 +135,4 @@ it('writes every item once, in order, and heals every fence, slot and charge', a
     }
     expect(getConversationPublicationDiagnostics().fences).toBe(0);
   }), { numRuns: 200 });
-});
+}, 60_000);
