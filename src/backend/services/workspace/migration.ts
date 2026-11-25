@@ -543,41 +543,41 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function rewriteConfigReference(record: Record<string, unknown>, key: string): number {
+async function rewriteConfigReference(record: Record<string, unknown>, key: string): Promise<number> {
   const value = record[key];
   if (typeof value !== 'string') return 0;
-  const remapped = remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
+  const remapped = await remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
   if (remapped === value) return 0;
   record[key] = remapped;
   return 1;
 }
 
-function rewriteConfigReferenceArray(record: Record<string, unknown>, key: string): number {
+async function rewriteConfigReferenceArray(record: Record<string, unknown>, key: string): Promise<number> {
   const values = record[key];
   if (!Array.isArray(values)) return 0;
   let changed = 0;
-  record[key] = values.map(value => {
+  record[key] = await Promise.all(values.map(async value => {
     if (typeof value !== 'string') return value;
-    const remapped = remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
+    const remapped = await remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
     if (remapped !== value) changed++;
     return remapped;
-  });
+  }));
   return changed;
 }
 
-function rewriteConfigEnvironment(record: Record<string, unknown>, key: string): number {
+async function rewriteConfigEnvironment(record: Record<string, unknown>, key: string): Promise<number> {
   const environment = record[key];
   if (!isRecord(environment)) return 0;
   let changed = 0;
   for (const [name, entry] of Object.entries(environment)) {
     if (typeof entry === 'string') {
-      const remapped = remapLegacyDefaultWorkspaceReference(entry, 'mcp-servers');
+      const remapped = await remapLegacyDefaultWorkspaceReference(entry, 'mcp-servers');
       if (remapped !== entry) {
         environment[name] = remapped;
         changed++;
       }
     } else if (isRecord(entry) && typeof entry.value === 'string') {
-      const remapped = remapLegacyDefaultWorkspaceReference(entry.value, 'mcp-servers');
+      const remapped = await remapLegacyDefaultWorkspaceReference(entry.value, 'mcp-servers');
       if (remapped !== entry.value) {
         entry.value = remapped;
         changed++;
@@ -587,22 +587,22 @@ function rewriteConfigEnvironment(record: Record<string, unknown>, key: string):
   return changed;
 }
 
-function rewriteStoredMcpServer(server: Record<string, unknown>): number {
+async function rewriteStoredMcpServer(server: Record<string, unknown>): Promise<number> {
   let changed = 0;
   for (const key of ['rootPath', 'cwd', 'command']) {
-    changed += rewriteConfigReference(server, key);
+    changed += await rewriteConfigReference(server, key);
   }
   for (const key of ['args', 'roots']) {
-    changed += rewriteConfigReferenceArray(server, key);
+    changed += await rewriteConfigReferenceArray(server, key);
   }
-  changed += rewriteConfigEnvironment(server, 'env');
+  changed += await rewriteConfigEnvironment(server, 'env');
 
   if (isRecord(server.launch)) {
     for (const key of ['command', 'cwd']) {
-      changed += rewriteConfigReference(server.launch, key);
+      changed += await rewriteConfigReference(server.launch, key);
     }
-    changed += rewriteConfigReferenceArray(server.launch, 'args');
-    changed += rewriteConfigEnvironment(server.launch, 'env');
+    changed += await rewriteConfigReferenceArray(server.launch, 'args');
+    changed += await rewriteConfigEnvironment(server.launch, 'env');
   }
   return changed;
 }
@@ -631,7 +631,7 @@ async function rewritePersistedMcpServerPaths(
 
       let changed = 0;
       for (const server of Object.values(stored)) {
-        if (isRecord(server)) changed += rewriteStoredMcpServer(server);
+        if (isRecord(server)) changed += await rewriteStoredMcpServer(server);
       }
       if (changed === 0) return 0;
 

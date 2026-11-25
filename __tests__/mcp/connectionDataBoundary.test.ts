@@ -90,13 +90,13 @@ describe('MCP connection data admission', () => {
     expect(resolver).not.toHaveBeenCalled();
   });
 
-  it('applies env admission to stdio launch construction without spawning a process', () => {
+  it('applies env admission to stdio launch construction without spawning a process', async () => {
     const inheritedValue = jest.fn(() => 'SYNTHETIC-INHERITED');
     const approved = installTrustedHostProfile({ environment: Object.fromEntries([
       ['MODE', 'SYNTHETIC'], ['EMPTY', ''], ['__proto__', 'SYNTHETIC-OWN'],
     ]) });
     try {
-    const result = resolveStdioLaunch(approved.config);
+    const result = await resolveStdioLaunch(approved.config);
     expect(result.env.MODE).toBe('SYNTHETIC');
     expect(result.env.EMPTY).toBe('');
     expect(Object.getPrototypeOf(result.env)).toBeNull();
@@ -110,7 +110,7 @@ describe('MCP connection data admission', () => {
       const config: MCPStdioConfig = { ...approved.config,
         env: { ...approved.config.env, ...Object.fromEntries([[name, value]]) } };
       expect(() => approved.approve(config)).toThrow();
-      expect(() => resolveStdioLaunch(config)).toThrow();
+      await expect(resolveStdioLaunch(config)).rejects.toThrow();
     }
     expect(inheritedValue).not.toHaveBeenCalled();
     expect(resolver).not.toHaveBeenCalled();

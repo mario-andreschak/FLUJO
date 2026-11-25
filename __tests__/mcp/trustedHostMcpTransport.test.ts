@@ -72,7 +72,7 @@ afterEach(() => {
 });
 
 test.each(['v1', 'beta'])('%s factory binds fixed parameters and suppresses both SDK inherited defaults', async era => {
-  const transport = era === 'v1' ? createStdioTransport(config) : createBetaTransport(config);
+  const transport = era === 'v1' ? await createStdioTransport(config) : await createBetaTransport(config);
   const parameters = (transport as unknown as { _serverParams: { command: string; args: string[]; env: Record<string, string>; cwd: string } })._serverParams;
   expect(parameters.command).toBe(config.command);
   expect(parameters.cwd).toBe(config.cwd);
@@ -89,7 +89,7 @@ test.each(['v1', 'beta'])('%s factory binds fixed parameters and suppresses both
 });
 
 test('another server module graph retains the launched identity and still checks revocation', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const original = getManagedTrustedHost(transport);
   let lookup!: typeof getManagedTrustedHost;
   jest.isolateModules(() => {
@@ -106,20 +106,20 @@ test('another server module graph retains the launched identity and still checks
 
 test.each(['v1', 'beta'])('%s refuses revoked consent before SDK start and retires the generation', async era => {
   const start = jest.spyOn(era === 'v1' ? StdioClientTransport.prototype : BetaStdioClientTransport.prototype, 'start').mockResolvedValue();
-  const transport = era === 'v1' ? createStdioTransport(config) : createBetaTransport(config);
+  const transport = era === 'v1' ? await createStdioTransport(config) : await createBetaTransport(config);
   grant.approvals = []; persist();
   await expect(transport.start()).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
   expect(start).not.toHaveBeenCalled();
   await expect(getManagedTrustedHost(transport)!.assertCurrent(config)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
 });
 
-test.each(['v1', 'beta'])('%s refuses an imported profile without private owner approval', era => {
+test.each(['v1', 'beta'])('%s refuses an imported profile without private owner approval', async era => {
   delete process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
-  expect(() => era === 'v1' ? createStdioTransport(config) : createBetaTransport(config)).toThrow('explicit owner consent');
+  await expect(era === 'v1' ? createStdioTransport(config) : createBetaTransport(config)).rejects.toThrow('explicit owner consent');
 });
 
 test('actual tool preflight refuses revocation before discovery or shared-secret reads', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const sdkCall = jest.fn();
   const list = jest.fn();
   const close = jest.fn(() => transport.close());
@@ -143,13 +143,13 @@ test.each(['removed', 'disabled'])('untracked dispatch refuses a %s current serv
 test.each(['v1', 'beta'])('%s closes a modeled startup if consent is revoked while SDK start awaits', async era => {
   jest.spyOn(era === 'v1' ? StdioClientTransport.prototype : BetaStdioClientTransport.prototype, 'start').mockImplementation(async () => { grant.approvals = []; persist(); });
   const close = jest.spyOn(era === 'v1' ? StdioClientTransport.prototype : BetaStdioClientTransport.prototype, 'close').mockResolvedValue();
-  const transport = era === 'v1' ? createStdioTransport(config) : createBetaTransport(config);
+  const transport = era === 'v1' ? await createStdioTransport(config) : await createBetaTransport(config);
   await expect(transport.start()).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
   expect(close).toHaveBeenCalledTimes(1);
 });
 
 test('a newly approved same-name revision cannot authorize the older client', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const changed = { ...config, args: ['new-revision'] };
   approve(changed);
   configs.mockResolvedValue([changed]);
@@ -159,7 +159,7 @@ test('a newly approved same-name revision cannot authorize the older client', as
 });
 
 test('tool dispatch forwards literals without reading shared secrets', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const sdkCall = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'synthetic result' }] });
   const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   expect(await callTool(client, config.name, 'probe', { literal: 'scoped input' }, 5)).toMatchObject({ success: true });
@@ -169,7 +169,7 @@ test('tool dispatch forwards literals without reading shared secrets', async () 
 });
 
 test('tool dispatch denies shared-secret references before calling the SDK', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const sdkCall = jest.fn();
   const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   expect(await callTool(client, config.name, 'probe', { secret: '${global:UNAPPROVED}' }, 5)).toMatchObject({ success: false, error: 'HOST_POLICY_INVALID', statusCode: 403 });
@@ -179,7 +179,7 @@ test('tool dispatch denies shared-secret references before calling the SDK', asy
 });
 
 test('tool dispatch redacts SDK errors without reading shared secrets', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const sdkCall = jest.fn().mockRejectedValue(new Error('synthetic private SDK diagnostic'));
   const client = { transport, callTool: sdkCall, close: () => transport.close() } as unknown as Client;
   const failed = await callTool(client, config.name, 'probe', {}, 5);
@@ -207,7 +207,7 @@ test('roots disclose only approved literal entries and reject newly approved sta
   config = { ...config, roots: [path.join(directory, 'approved')] };
   approve();
   configs.mockResolvedValue([config]);
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const owner = { transport, close: () => transport.close() };
   setNodeRoots(config.name, 'synthetic-node', [path.join(directory, 'unapproved-overlay')]);
   const handler = createRootsListHandler(config, owner);
@@ -228,7 +228,7 @@ test('beta local client refuses automatic sibling-process negotiation', () => {
 });
 
 test('natural close preserves SDK callbacks and refuses reuse of the retired generation', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const callback = jest.fn();
   transport.onclose = callback;
   transport.onclose!();
@@ -238,7 +238,7 @@ test('natural close preserves SDK callbacks and refuses reuse of the retired gen
 });
 
 test('roots removal retires its actual managed generation', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const close = jest.fn(() => transport.close());
   const handler = createRootsListHandler(config, { transport, close });
   configs.mockResolvedValue([]);
@@ -247,18 +247,17 @@ test('roots removal retires its actual managed generation', async () => {
   await expect(getManagedTrustedHost(transport)!.assertCurrent(config)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
 });
 
-test.each(['v1', 'beta'])('%s revokes the actual issued broker lease after host environment refusal', era => {
+test.each(['v1', 'beta'])('%s revokes the actual issued broker lease after host environment refusal', async era => {
   config = { ...config, enableMcpApps: true };
   approve();
   expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
-  expect(() => era === 'v1' ? createStdioTransport(config, { enableRuntimeBroker: true }) : createBetaTransport(config, { enableRuntimeBroker: true }))
-    .toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
+  await expect(era === 'v1' ? createStdioTransport(config, { enableRuntimeBroker: true }) : createBetaTransport(config, { enableRuntimeBroker: true })).rejects.toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
   expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
 });
 
 test.each(['disabled', 'removed', 'retargeted'].flatMap(change => ['tool', 'roots'].map(request => ({ change, request }))))
 ('$request rechecks a $change stored config after fingerprinting while the old grant remains valid', async ({ change, request }) => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const close = jest.fn(() => transport.close());
   const sdkCall = jest.fn();
   const client = { transport, close, callTool: sdkCall } as unknown as Client;

@@ -1,4 +1,4 @@
-import * as fs from 'fs';
+import fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
@@ -155,12 +155,14 @@ export function formatErrorChain(error: unknown): string {
 /**
  * Enhance error messages for common MCP connection issues
  */
-export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerConfig, stderrLogs: string[], redact?: (message: string) => string): string {
+export async function enhanceConnectionErrorMessage(error: unknown, config: MCPServerConfig, stderrLogs: string[], redact?: (message: string) => string): Promise<string> {
   const sanitize = redact ?? ((message: string) => message);
-  return sanitize(buildConnectionErrorMessage(error, config, stderrLogs.map(sanitize), redact));
+  return sanitize(await buildConnectionErrorMessage(error, config, stderrLogs.map(sanitize), redact));
 }
 
-function buildConnectionErrorMessage(error: unknown, config: MCPServerConfig, stderrLogs: string[], redact?: (message: string) => string): string {
+const pathExists = (candidate: string): Promise<boolean> => fs.access(candidate).then(() => true, () => false);
+
+async function buildConnectionErrorMessage(error: unknown, config: MCPServerConfig, stderrLogs: string[], redact?: (message: string) => string): Promise<string> {
   const diagnosticLog = redact ? {
     debug: (message: string) => log.debug(redact(message)),
     info: (message: string) => log.info(redact(message)),
@@ -226,7 +228,7 @@ function buildConnectionErrorMessage(error: unknown, config: MCPServerConfig, st
               : path.join(getWorkspaceDataDir(), serverDir, batFile);
 
             diagnosticLog.debug(`Full .bat file path: ${batFilePath}`);
-            const batFileExists = fs.existsSync(batFilePath);
+            const batFileExists = await pathExists(batFilePath);
             diagnosticLog.debug(`.bat file exists: ${batFileExists}`);
 
             if (!batFileExists) {
@@ -236,14 +238,14 @@ function buildConnectionErrorMessage(error: unknown, config: MCPServerConfig, st
           // Check if the command is a path (not just 'node' or 'npm')
           else if (isLikelyFilePath(execPath)) {
             diagnosticLog.debug(`Checking if executable exists: ${execPath}`);
-            const execExists = fs.existsSync(execPath);
+            const execExists = await pathExists(execPath);
             diagnosticLog.debug(`Executable exists: ${execExists}`);
 
             if (!execExists) {
               // Try checking in the server directory
               const fullExecPath = path.join(getWorkspaceDataDir(), serverDir, execPath);
               diagnosticLog.debug(`Checking in server directory: ${fullExecPath}`);
-              const fullExecExists = fs.existsSync(fullExecPath);
+              const fullExecExists = await pathExists(fullExecPath);
               diagnosticLog.debug(`Executable exists in server directory: ${fullExecExists}`);
 
               if (!fullExecExists) {
@@ -263,7 +265,7 @@ function buildConnectionErrorMessage(error: unknown, config: MCPServerConfig, st
                 : path.join(getWorkspaceDataDir(), serverDir, scriptPath);
 
               diagnosticLog.debug(`Full script path: ${fullPath}`);
-              const scriptExists = fs.existsSync(fullPath);
+              const scriptExists = await pathExists(fullPath);
               diagnosticLog.debug(`Script exists: ${scriptExists}`);
 
               if (!scriptExists) {

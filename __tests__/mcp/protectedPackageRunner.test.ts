@@ -116,8 +116,8 @@ afterAll(() => {
 test.each(['v1', 'beta'])('%s starts the reviewed package via genuine offline npx within the original deadline', era => ownedCase(async () => {
   const ignoredConfig = path.join(config.cwd!, '.npmrc');
   fs.writeFileSync(ignoredConfig, 'script-shell=unreviewed-shell-that-does-not-exist\nregistry=https://example.invalid\n');
-  const transport = era === 'v1' ? createStdioTransport(config, { isolateRuntimeHome: true })
-    : createBetaTransport(config, { isolateRuntimeHome: true });
+  const transport = era === 'v1' ? await createStdioTransport(config, { isolateRuntimeHome: true })
+    : await createBetaTransport(config, { isolateRuntimeHome: true });
   const client = era === 'v1' ? new Client({ name: 'synthetic-probe-client', version: '1.0.0' }) : createNewBetaClient(config);
   try {
     await client.connect(transport, { timeout: 10_000 });
@@ -136,8 +136,8 @@ test.each(['v1', 'beta'])('%s starts the reviewed package via genuine offline np
 }), caseTimeout);
 
 test.each(['v1', 'beta'])('%s refuses durable revocation before genuine SDK startup', async era => {
-  const transport = era === 'v1' ? createStdioTransport(config, { isolateRuntimeHome: true })
-    : createBetaTransport(config, { isolateRuntimeHome: true });
+  const transport = era === 'v1' ? await createStdioTransport(config, { isolateRuntimeHome: true })
+    : await createBetaTransport(config, { isolateRuntimeHome: true });
   ledger.approvals = []; persist();
   try { await expect(transport.start()).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' }); }
   finally { await transport.close(); }
@@ -153,8 +153,8 @@ test.each(['v1', 'beta'])('%s honors a genuinely approved package-runner host-ho
     trustedHost: { ...policy, runtimeHome: 'host' as const } };
   approve(host);
   expect(await saveConfig(new Map([[host.name, host]]))).toMatchObject({ success: true });
-  const transport = era === 'v1' ? createStdioTransport(host, { isolateRuntimeHome: false })
-    : createBetaTransport(host, { isolateRuntimeHome: false });
+  const transport = era === 'v1' ? await createStdioTransport(host, { isolateRuntimeHome: false })
+    : await createBetaTransport(host, { isolateRuntimeHome: false });
   const client = era === 'v1' ? new Client({ name: 'synthetic-host-probe', version: '1.0.0' }) : createNewBetaClient(host);
   try {
     await client.connect(transport, { timeout: 10_000 });
@@ -193,23 +193,23 @@ test('effective runtime-home precedence uses actual workspace settings and serve
   } finally { await saveItem(StorageKey.SPEECH_SETTINGS, {}); }
 });
 
-test.each(['v1', 'beta'])('%s refuses an isolated approval requested with host launch mode', era => {
-  expect(() => era === 'v1' ? createStdioTransport(config, { isolateRuntimeHome: false })
-    : createBetaTransport(config, { isolateRuntimeHome: false })).toThrow();
+test.each(['v1', 'beta'])('%s refuses an isolated approval requested with host launch mode', async era => {
+  await expect(era === 'v1' ? createStdioTransport(config, { isolateRuntimeHome: false })
+    : createBetaTransport(config, { isolateRuntimeHome: false })).rejects.toThrow();
 });
 
-test.each(['v1', 'beta'])('%s refuses a host approval requested with isolated launch mode', era => {
+test.each(['v1', 'beta'])('%s refuses a host approval requested with isolated launch mode', async era => {
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
   const host = { ...config, runtimeHomeMode: 'host' as const, trustedHost: { ...policy, runtimeHome: 'host' as const } };
   approve(host);
-  expect(() => era === 'v1' ? createStdioTransport(host, { isolateRuntimeHome: true })
-    : createBetaTransport(host, { isolateRuntimeHome: true })).toThrow();
+  await expect(era === 'v1' ? createStdioTransport(host, { isolateRuntimeHome: true })
+    : createBetaTransport(host, { isolateRuntimeHome: true })).rejects.toThrow();
 });
 
-test.each(['HOME', 'NPM_CONFIG_CACHE'])('a reviewed stale %s cannot silently change the effective runtime profile', field => {
+test.each(['HOME', 'NPM_CONFIG_CACHE'])('a reviewed stale %s cannot silently change the effective runtime profile', async field => {
   const changed = { ...config, env: { ...config.env, [field]: path.join(directory, 'wrong-runtime-home') } };
   approve(changed);
-  expect(() => resolveStdioLaunch(changed, { isolateRuntimeHome: true })).toThrow();
+  await expect(resolveStdioLaunch(changed, { isolateRuntimeHome: true })).rejects.toThrow();
 });
 
 test('package manifest drift cannot be covered by reusing the source digest', () => ownedCase(async () => {
@@ -279,7 +279,7 @@ test.each(['isolated', 'host'] as const)('a %s approval cannot survive an overri
   process.env.FLUJO_MCP_RUNTIME_HOME_ISOLATION = initialMode;
   approve(current);
   expect(await saveConfig(new Map([[current.name, current]]))).toMatchObject({ success: true });
-  const transport = createStdioTransport(current, { isolateRuntimeHome: initialMode === 'isolated' });
+  const transport = await createStdioTransport(current, { isolateRuntimeHome: initialMode === 'isolated' });
   const source = path.join(policy.packageRunner!.packageDirectory, 'node_modules', 'owned-probe', 'server.cjs');
   const actualOpen = fs.promises.open.bind(fs.promises);
   let flipped = false;
@@ -336,10 +336,10 @@ test('ancestor binary resolution authority is also refused', async () => {
   }
 });
 
-test.each(['args', 'cwd'])('a changed %s cannot reuse the real owner grant', field => {
+test.each(['args', 'cwd'])('a changed %s cannot reuse the real owner grant', async field => {
   const changed = field === 'args' ? { ...config, args: [...config.args!, '--different'] }
     : { ...config, cwd: path.dirname(config.cwd!) };
-  expect(() => resolveStdioLaunch(changed, { isolateRuntimeHome: true })).toThrow();
+  await expect(resolveStdioLaunch(changed, { isolateRuntimeHome: true })).rejects.toThrow();
 });
 
 test('new cwd binary authority is refused even after policy reapproval', async () => {

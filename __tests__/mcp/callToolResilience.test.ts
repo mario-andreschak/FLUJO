@@ -117,7 +117,7 @@ describe('MCPService.callTool', () => {
     profile.config.source = { type: 'marketplace', id: '@mario.andreschak/mcp-flujo' };
     profile.approve();
     loadServerConfigsMock.mockResolvedValue([profile.config]);
-    const transport = createStdioTransport(profile.config);
+    const transport = await createStdioTransport(profile.config);
     createNewClientMock.mockReturnValue({ ...makeClient(), transport });
     try {
     const svc = new MCPService();

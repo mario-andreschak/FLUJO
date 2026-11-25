@@ -61,10 +61,10 @@ function connectedClient(state: string): Client {
   return client;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   profile = installTrustedHostProfile({ name: 'gated-server' });
   jest.mocked(loadServerConfigs).mockResolvedValue([profile.config]);
-  transport = createStdioTransport(profile.config);
+  transport = await createStdioTransport(profile.config);
   global.__mcp_clients?.clear();
   global.__mcp_external_authorization_status?.clear();
   dispatchToolMock.mockClear();

@@ -61,7 +61,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
    console.log(JSON.stringify({stage:'bundle-approved',sdk:era,elapsedMs:performance.now()-started,approvalMs}));
    const approved=(await stored.loadServerConfigs()).find(item=>item.name===config.name);assert.ok(approved.trustedHost?.bundledInstallation);
    const launchStarted=performance.now();
-   transport=era==='v1'?ordinary.createStdioTransport(approved):beta.createBetaTransport(approved);
+   transport=await (era==='v1'?ordinary.createStdioTransport(approved):beta.createBetaTransport(approved));
    const client=era==='v1'?ordinary.createNewClient(approved):beta.createNewBetaClient(approved);await client.connect(transport);
    const grant=(await readPrivateApprovalAsync(ledgerFilename)).approvals.find(item=>item.serverName===approved.name);
    const launchInitializeMs=performance.now()-launchStarted;

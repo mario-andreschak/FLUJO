@@ -83,7 +83,7 @@ afterEach(() => {
 });
 
 test.each(['v1', 'beta'])('%s factory selects only the isolated attach command and clears SDK account defaults', async era => {
-  const transport = era === 'v1' ? createStdioTransport(config) : createBetaTransport(config);
+  const transport = era === 'v1' ? await createStdioTransport(config) : await createBetaTransport(config);
   const parameters = (transport as unknown as { _serverParams: { command: string; args: string[]; env: Record<string, string> } })._serverParams;
   expect(parameters.command).toBe(launch.command);
   expect(parameters.args).toEqual(launch.args);
@@ -104,7 +104,7 @@ test('beta client uses documented legacy mode instead of cloning a disposable si
 });
 
 test.each(['v1', 'beta'])('%s valid isolated factory ignores the broker option without requiring host approval', async era => {
-  const transport = era === 'v1' ? createStdioTransport(config, { enableRuntimeBroker: true }) : createBetaTransport(config, { enableRuntimeBroker: true });
+  const transport = era === 'v1' ? await createStdioTransport(config, { enableRuntimeBroker: true }) : await createBetaTransport(config, { enableRuntimeBroker: true });
   expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
   const parameters = (transport as unknown as { _serverParams: { env: Record<string, string> } })._serverParams;
   expect(parameters.env.FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN).toBeUndefined();
@@ -113,17 +113,16 @@ test.each(['v1', 'beta'])('%s valid isolated factory ignores the broker option w
   revokeMcpAppRuntimeBrokerForServer(config.name);
 });
 
-test.each(['v1', 'beta'])('%s isolated Apps remain unsupported and cannot issue a broker lease', era => {
+test.each(['v1', 'beta'])('%s isolated Apps remain unsupported and cannot issue a broker lease', async era => {
   const apps = { ...config, enableMcpApps: true };
-  expect(() => era === 'v1' ? createStdioTransport(apps, { enableRuntimeBroker: true }) : createBetaTransport(apps, { enableRuntimeBroker: true }))
-    .toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
+  await expect(era === 'v1' ? createStdioTransport(apps, { enableRuntimeBroker: true }) : createBetaTransport(apps, { enableRuntimeBroker: true })).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
   expect(create).not.toHaveBeenCalled();
   expect(getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === config.name)).toHaveLength(0);
 });
 
 test.each(['v1', 'beta'])('%s start rechecks revocation before SDK spawn', async era => {
   const baseStart = jest.spyOn(era === 'v1' ? StdioClientTransport.prototype : BetaStdioClientTransport.prototype, 'start').mockResolvedValue();
-  const transport = era === 'v1' ? createStdioTransport(config) : createBetaTransport(config);
+  const transport = era === 'v1' ? await createStdioTransport(config) : await createBetaTransport(config);
   approvals.approvals = []; persist();
   await expect(transport.start()).rejects.toMatchObject({ code: 'ISOLATION_RECONSENT_REQUIRED' });
   expect(baseStart).not.toHaveBeenCalled();
@@ -159,12 +158,12 @@ test.each(['missing', 'service error', 'invalid transport', 'disabled', 'thrown 
 });
 
 test('a current explicitly approved host config exposes its declared filesystem roots', async () => {
-  const fixture = installTrustedHostProfile({ name: config.name, roots: unrestrictedHostRoots().map(root => root.uri) });
+  const fixture = installTrustedHostProfile({ name: config.name, roots: (await unrestrictedHostRoots()).map(root => root.uri) });
   let transport: StdioClientTransport | undefined;
   try {
     const host = fixture.config;
     configs.mockResolvedValue([host]);
-    transport = createStdioTransport(host);
+    transport = await createStdioTransport(host);
     const owned = transport;
     const result = await createRootsListHandler(host, { transport: owned, close: () => owned.close() })();
     expect(result.roots.length).toBeGreaterThan(0);
@@ -185,41 +184,41 @@ test('a current host config cannot expose roots by omitting its private isolatio
   expect(resolveGlobalVars).not.toHaveBeenCalled();
 });
 
-test.each(['missing approval', 'wrong workspace', 'wrong owner', 'expired grant', 'changed policy'])('rejects %s before container creation', reason => {
+test.each(['missing approval', 'wrong workspace', 'wrong owner', 'expired grant', 'changed policy'])('rejects %s before container creation', async reason => {
   if (reason === 'missing approval') approvals.approvals = [];
   if (reason === 'wrong workspace') approvals.approvals[0].workspace = 'another-workspace';
   if (reason === 'wrong owner') approvals.ownerId = 'another-owner';
   if (reason === 'expired grant') approvals.approvals[0].expiresAt = Date.now();
   if (reason === 'changed policy') (config.isolation as { memoryMiB: number }).memoryMiB = 256;
   persist();
-  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
+  await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
   expect(create).not.toHaveBeenCalled();
 });
 
-test.each(['enableMcpApps', 'enableMcpSkills', 'sampling', 'elicitation', 'command'])('rejects unapproved host-side capability %s', capability => {
+test.each(['enableMcpApps', 'enableMcpSkills', 'sampling', 'elicitation', 'command'])('rejects unapproved host-side capability %s', async capability => {
   if (capability === 'command') config.command = 'another-command';
   else if (capability === 'sampling' || capability === 'elicitation') config[capability] = { enabled: true };
   else config[capability as 'enableMcpApps' | 'enableMcpSkills'] = true;
-  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
+  await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
   expect(create).not.toHaveBeenCalled();
 });
 
-test('malformed approval/policy and absent configuration fail closed without host fallback', () => {
+test('malformed approval/policy and absent configuration fail closed without host fallback', async () => {
   fs.writeFileSync(process.env.FLUJO_MCP_ISOLATION_FILE!, 'private malformed approval');
-  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   delete process.env.FLUJO_MCP_ISOLATION_FILE;
-  expect(() => createBetaTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(createBetaTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(create).not.toHaveBeenCalled();
 });
 
-test.each(['FLUJO_MCP_ISOLATION_FILE', 'FLUJO_OWNER_AUTH_FILE'])('refuses multiply linked %s before either SDK launch', name => {
+test.each(['FLUJO_MCP_ISOLATION_FILE', 'FLUJO_OWNER_AUTH_FILE'])('refuses multiply linked %s before either SDK launch', async name => {
   fs.linkSync(process.env[name]!, path.join(directory, `${name}-alias`));
-  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
-  expect(() => createBetaTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(createBetaTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(create).not.toHaveBeenCalled();
 });
 
-test('refuses an approval file that changes during its actual descriptor read', () => {
+test('refuses an approval file that changes during its actual descriptor read', async () => {
   const original = fs.readSync;
   let changed = false;
   jest.spyOn(fs, 'readSync').mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
@@ -230,15 +229,15 @@ test('refuses an approval file that changes during its actual descriptor read', 
     }
     return count;
   }) as typeof fs.readSync);
-  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(changed).toBe(true);
   expect(create).not.toHaveBeenCalled();
 });
 
-test('remote transports cannot carry an ignored isolation declaration', () => {
+test('remote transports cannot carry an ignored isolation declaration', async () => {
   const remote = { ...config, transport: 'streamable', serverUrl: 'https://example.invalid' } as unknown as Parameters<typeof createTransport>[0];
-  expect(() => createTransport(remote)).toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
-  expect(() => createBetaTransport(remote)).toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
+  await expect(createTransport(remote)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
+  await expect(createBetaTransport(remote)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
 });
 
 test('adding or changing isolation participates in the reconnect identity', () => {
@@ -247,7 +246,7 @@ test('adding or changing isolation participates in the reconnect identity', () =
 });
 
 test('dispatch observes grant revocation and stops the exact managed container', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const client = { transport } as unknown as Client;
   await expect(assertMcpIsolationDispatch(client, config.name)).resolves.toBeUndefined();
   approvals.approvals = []; persist();
@@ -339,7 +338,7 @@ test('a protected adapter without a private config retains the authoritative cat
 });
 
 test('actual tool dispatch keeps literal arguments, denies host-secret interpolation and rechecks revoked approval', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const sdkCall = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'synthetic result' }] });
   const client = { transport, callTool: sdkCall } as unknown as Client;
   expect(await callTool(client, config.name, 'probe', { literal: 'approved caller input' }, 5))
@@ -356,7 +355,7 @@ test('actual tool dispatch keeps literal arguments, denies host-secret interpola
 });
 
 test('actual isolated tool errors redact SDK diagnostics', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   const client = { transport, callTool: jest.fn().mockRejectedValue(new Error('synthetic private SDK diagnostic')) } as unknown as Client;
   const result = await callTool(client, config.name, 'probe', {}, 5);
   expect(result).toMatchObject({ success: false, error: 'ISOLATED_TOOL_FAILED', errorType: 'mcp-isolation', statusCode: 502 });
@@ -369,7 +368,7 @@ test('a host connection cannot dispatch after the selected config requires isola
 });
 
 test.each(['host', 'isolated'])('%s dispatch denies a config service error without exposing its payload', async kind => {
-  const transport = kind === 'isolated' ? createStdioTransport(config) : {};
+  const transport = kind === 'isolated' ? await createStdioTransport(config) : {};
   configs.mockResolvedValue({ success: false, error: 'synthetic private configuration diagnostic' });
   const failure = assertMcpIsolationDispatch({ transport } as unknown as Client, config.name);
   await expect(failure).rejects.toMatchObject({ code: 'ISOLATION_UNAVAILABLE' });
@@ -380,15 +379,15 @@ test.each(['host', 'isolated'])('%s dispatch denies a config service error witho
 
 test('an imported config cannot omit the profile and bypass its private isolation grant', async () => {
   const omitted = { ...config, isolation: undefined };
-  expect(() => createStdioTransport(omitted)).toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
-  expect(() => createBetaTransport(omitted)).toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
+  await expect(createStdioTransport(omitted)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
+  await expect(createBetaTransport(omitted)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
   await expect(assertMcpIsolationDispatch({ transport: {} } as unknown as Client, config.name, omitted))
     .rejects.toMatchObject({ code: 'ISOLATION_RECONSENT_REQUIRED' });
   expect(create).not.toHaveBeenCalled();
 });
 
-test('natural transport close removes its generation and preserves subsequently assigned SDK callbacks', () => {
-  const transport = createStdioTransport(config);
+test('natural transport close removes its generation and preserves subsequently assigned SDK callbacks', async () => {
+  const transport = await createStdioTransport(config);
   const callback = jest.fn();
   transport.onclose = callback;
   transport.onclose();
@@ -397,8 +396,8 @@ test('natural transport close removes its generation and preserves subsequently 
   expect(global.__flujo_mcp_isolated_generations?.size).toBe(0);
 });
 
-test('close callback composition cannot recurse through the SDK previous-callback pattern', () => {
-  const transport = createStdioTransport(config);
+test('close callback composition cannot recurse through the SDK previous-callback pattern', async () => {
+  const transport = await createStdioTransport(config);
   const previous = transport.onclose;
   const callback = jest.fn(() => previous?.());
   transport.onclose = callback;
@@ -414,26 +413,26 @@ test('isolated arguments cannot interpolate global secrets or cause unbounded re
   expect(() => assertIsolatedMcpArguments({ plain: 'approved literal', nested: [1, null, true] })).not.toThrow();
 });
 
-test('a second launch cannot remove an active same-server generation as a test probe', () => {
-  createStdioTransport(config);
-  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+test('a second launch cannot remove an active same-server generation as a test probe', async () => {
+  await createStdioTransport(config);
+  await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(close).not.toHaveBeenCalled();
   expect(create).toHaveBeenCalledTimes(1);
 });
 
 test('unobserved cleanup prevents replacement; successful reconciliation permits it', async () => {
-  const first = createStdioTransport(config);
+  const first = await createStdioTransport(config);
   close.mockReturnValue({ outcome: 'unknown' });
   await first.close();
-  expect(() => createStdioTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(create).toHaveBeenCalledTimes(1);
   close.mockReturnValue({ outcome: 'removed' });
-  createStdioTransport(config);
+  await createStdioTransport(config);
   expect(create).toHaveBeenCalledTimes(2);
 });
 
 test('a stopped attach CLI cannot qualify unknown container cleanup', async () => {
-  const transport = createStdioTransport(config);
+  const transport = await createStdioTransport(config);
   (transport as unknown as { _process: unknown })._process = { exitCode: 0, signalCode: null, kill: jest.fn() };
   close.mockReturnValue({ outcome: 'unknown' });
   const result = await safelyCloseClient({ transport, close: jest.fn() } as unknown as Client, config.name, config);

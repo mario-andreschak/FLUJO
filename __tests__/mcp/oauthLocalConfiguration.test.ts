@@ -11,7 +11,7 @@ test.each(['http://127.0.0.1:8787/mcp', 'https://mcp.example.com:8443/mcp'])
     rootPath: 'mcp-servers/manual-oauth', env: {}, disabled: false, _buildCommand: '', _installCommand: '',
     oauthClientId: 'synthetic-public-client-id', oauthScopes: ['read', 'write'],
     oauthIssuer: 'https://authorization.example.test' };
-  const transport = createTransport(config);
+  const transport = await createTransport(config);
   expect(transport).toBeInstanceOf(StreamableHTTPClientTransport);
   // Check the real installed SDK constructor's inputs; no connection, provider
   // request, storage mutation or authentication success is claimed by this test.

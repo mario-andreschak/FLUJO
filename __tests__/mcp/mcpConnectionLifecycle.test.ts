@@ -76,23 +76,22 @@ function fakeClientFor(transport: unknown, config: MCPServerConfig): Client {
 }
 
 describe("shouldRecreateClient stdio config comparison", () => {
-  it("keeps a byte-identical approved Node config unchanged and refuses a legacy bare command", () => {
+  it("keeps a byte-identical approved Node config unchanged and refuses a legacy bare command", async () => {
     // Bare `node` is rewritten to an absolute path at transport creation time
     // (resolveNodeCommand). The old comparison read that as "parameters changed" and
     // killed a healthy server on every reconnect attempt.
     const config = stdioConfig();
-    const transport = createStdioTransport(config);
+    const transport = await createStdioTransport(config);
     const client = fakeClientFor(transport, config);
 
     const result = shouldRecreateClient(client, stdioConfig());
     expect(result).toEqual({ needsNewClient: false });
-    expect(() => createStdioTransport({ ...config, command: 'node' } as MCPStdioConfig))
-      .toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
+    await expect(createStdioTransport({ ...config, command: 'node' } as MCPStdioConfig)).rejects.toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
   });
 
-  it("detects a real args change", () => {
+  it("detects a real args change", async () => {
     const config = stdioConfig();
-    const transport = createStdioTransport(config);
+    const transport = await createStdioTransport(config);
     const client = fakeClientFor(transport, config);
 
     const result = shouldRecreateClient(
@@ -103,9 +102,9 @@ describe("shouldRecreateClient stdio config comparison", () => {
     expect(result.reason).toBe("Connection parameters changed");
   });
 
-  it("detects a real env change, including { value } shaped secrets", () => {
+  it("detects a real env change, including { value } shaped secrets", async () => {
     const config = stdioConfig({ env: { TOKEN: { value: "a" } } });
-    const transport = createStdioTransport(config);
+    const transport = await createStdioTransport(config);
     const client = fakeClientFor(transport, config);
 
     // Same value in flat form is NOT a change...
@@ -120,9 +119,9 @@ describe("shouldRecreateClient stdio config comparison", () => {
     ).toBe(true);
   });
 
-  it("rebuilds when the effective runtime-home isolation policy changes", () => {
+  it("rebuilds when the effective runtime-home isolation policy changes", async () => {
     const config = stdioConfig();
-    const transport = createStdioTransport(config, {
+    const transport = await createStdioTransport(config, {
       isolateRuntimeHome: false,
     });
     const client = fakeClientFor(transport, config);
@@ -348,7 +347,7 @@ describe("safelyCloseClient graceful shutdown", () => {
     // SIGTERMs at 2s; the old safelyCloseClient invoked it immediately, so this child
     // died with a signal. The fixed version waits for the natural exit first.
     const config = stdioConfig();
-    const transport = createStdioTransport(config);
+    const transport = await createStdioTransport(config);
     await transport.start();
     const child = (
       transport as unknown as {

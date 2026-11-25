@@ -524,7 +524,7 @@ describe('production Native Parent using captured dispatcher authority', () => {
         if (!privateConfig) throw new Error('Trusted Source adapter did not resolve its private MCP config.');
         const resolvedConfig = await connection.resolveConfigHeaders(privateConfig);
         serviceClient = connection.createNewClient(resolvedConfig);
-        const transport = connection.createTransport(resolvedConfig);
+        const transport = await connection.createTransport(resolvedConfig);
         await serviceClient.connect(transport);
         (service as any).clients.set('seagulled-worker', serviceClient);
         (service as any).activeTransports.set('seagulled-worker', transport);

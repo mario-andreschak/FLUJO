@@ -445,7 +445,7 @@ it('starts the rebuilt bundled filesystem process and reads/writes only the targ
     });
     // Exercise the managed production transport without changing its reviewed environment.
     const { createStdioTransport } = await import('@/backend/services/mcp/connection');
-    await client.connect(createStdioTransport(approved.config));
+    await client.connect(await createStdioTransport(approved.config));
     return { success: true };
   });
   try {

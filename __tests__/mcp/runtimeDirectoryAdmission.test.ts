@@ -58,16 +58,16 @@ describe('isolated MCP runtime directory admission', () => {
     fs.mkdirSync(anchor, { mode: 0o700 });
     fs.mkdirSync(home, { mode: 0o755 });
   }
-  function admitThroughContainer(): RuntimeDirectoryAdmission {
-    const admission = new RuntimeDirectoryAdmission(root);
-    admission.admit(userdata);
-    admission.admit(container);
+  async function admitThroughContainer(): Promise<RuntimeDirectoryAdmission> {
+    const admission = await RuntimeDirectoryAdmission.open(root);
+    await admission.admit(userdata);
+    await admission.admit(container);
     return admission;
   }
-  function admitTree(): RuntimeDirectoryAdmission {
-    const admission = admitThroughContainer();
-    admission.admit(anchor, true);
-    admission.admit(home);
+  async function admitTree(): Promise<RuntimeDirectoryAdmission> {
+    const admission = await admitThroughContainer();
+    await admission.admit(anchor, true);
+    await admission.admit(home);
     return admission;
   }
   function clone(stat: BigIntStats, patch: Partial<BigIntStats>): BigIntStats {
@@ -83,65 +83,64 @@ describe('isolated MCP runtime directory admission', () => {
     processModel('platform', platform);
     processModel('geteuid', () => 1234);
     processModel('getuid', () => 5678);
-    const lstat = fs.lstatSync.bind(fs);
-    jest.spyOn(fs, 'lstatSync').mockImplementation((candidate, options) => {
+    jest.spyOn(fs.promises, 'lstat').mockImplementation(async (candidate, options) => {
       expect(options).toEqual({ bigint: true });
       const name = String(candidate);
-      const actual = lstat(candidate, { bigint: true });
+      const actual = fs.lstatSync(candidate, { bigint: true });
       return clone(actual, { uid: BigInt(1234),
         mode: (actual.mode & ~BigInt(0o777)) | BigInt(name === anchor ? 0o700 : 0o755),
         ...patches.get(name) });
     });
   }
 
-  it('retains existing paths, marker bytes and admitted identities across repeated visits', () => {
+  it('retains existing paths, marker bytes and admitted identities across repeated visits', async () => {
     seedDirectories();
     const markerDirectory = path.join(container, 'clone-preparation');
     fs.mkdirSync(markerDirectory);
     const marker = path.join(markerDirectory, 'recipe.json');
     fs.writeFileSync(marker, 'existing-marker');
     const before = fs.lstatSync(anchor, { bigint: true });
-    const mkdir = jest.spyOn(fs, 'mkdirSync');
-    const chmod = jest.spyOn(fs, 'chmodSync');
-    const admission = admitTree();
-    admission.admit(home);
-    admission.admit(anchor);
-    admission.verify();
+    const mkdir = jest.spyOn(fs.promises, 'mkdir');
+    const chmod = jest.spyOn(fs.promises, 'chmod');
+    const admission = await admitTree();
+    await admission.admit(home);
+    await admission.admit(anchor);
+    await admission.verify();
     expect(mkdir).not.toHaveBeenCalled();
     expect(chmod).not.toHaveBeenCalled();
     expect(fs.readFileSync(marker, 'utf8')).toBe('existing-marker');
     expect(fs.lstatSync(anchor, { bigint: true }).ino).toBe(before.ino);
   });
 
-  it('creates direct descendants exclusively with mode0700 and admits the published directories', () => {
-    const mkdir = jest.spyOn(fs, 'mkdirSync');
-    const admission = admitTree();
-    admission.verify();
+  it('creates direct descendants exclusively with mode0700 and admits the published directories', async () => {
+    const mkdir = jest.spyOn(fs.promises, 'mkdir');
+    const admission = await admitTree();
+    await admission.verify();
     expect(mkdir.mock.calls.map(args => args[0])).toEqual([userdata, container, anchor, home]);
     for (const args of mkdir.mock.calls) expect(args[1]).toEqual({ mode: 0o700 });
     for (const directory of [userdata, container, anchor, home]) expect(fs.lstatSync(directory).isDirectory()).toBe(true);
   });
 
-  it.each(['missing', 'file'] as const)('does not recreate a %s workspace', kind => {
+  it.each(['missing', 'file'] as const)('does not recreate a %s workspace', async kind => {
     const workspace = path.join(root, 'workspace');
     if (kind === 'file') fs.writeFileSync(workspace, 'occupied');
-    const mkdir = jest.spyOn(fs, 'mkdirSync');
-    expect(() => new RuntimeDirectoryAdmission(workspace)).toThrow(expect.objectContaining(denied));
+    const mkdir = jest.spyOn(fs.promises, 'mkdir');
+    await expect(RuntimeDirectoryAdmission.open(workspace)).rejects.toThrow(expect.objectContaining(denied));
     expect(mkdir).not.toHaveBeenCalled();
     if (kind === 'file') expect(fs.readFileSync(workspace, 'utf8')).toBe('occupied');
     else expect(fs.existsSync(workspace)).toBe(false);
   });
 
-  it.each(['root', 'outside', 'unchecked-parent'] as const)('refuses %s as a child admission without creating anything', kind => {
-    const admission = new RuntimeDirectoryAdmission(root);
+  it.each(['root', 'outside', 'unchecked-parent'] as const)('refuses %s as a child admission without creating anything', async kind => {
+    const admission = await RuntimeDirectoryAdmission.open(root);
     const candidate = kind === 'root' ? root : kind === 'outside' ? path.join(root, '..', 'unowned-child')
       : path.join(root, 'unchecked-parent', 'child');
-    const mkdir = jest.spyOn(fs, 'mkdirSync');
-    expect(() => admission.admit(candidate)).toThrow(expect.objectContaining(denied));
+    const mkdir = jest.spyOn(fs.promises, 'mkdir');
+    await expect(admission.admit(candidate)).rejects.toThrow(expect.objectContaining(denied));
     expect(mkdir).not.toHaveBeenCalled();
   });
 
-  it.each(['workspace', 'anchor'] as const)('refuses an actual directory link at the %s', kind => {
+  it.each(['workspace', 'anchor'] as const)('refuses an actual directory link at the %s', async kind => {
     fs.mkdirSync(userdata);
     fs.mkdirSync(container);
     const target = path.join(root, 'link-target');
@@ -150,44 +149,42 @@ describe('isolated MCP runtime directory admission', () => {
     // Directory junctions do not require Windows symlink privilege. On POSIX
     // Node treats this as a directory symlink. This tests type admission only.
     fs.symlinkSync(target, link, 'junction');
-    if (kind === 'workspace') expect(() => new RuntimeDirectoryAdmission(link)).toThrow(expect.objectContaining(denied));
-    else expect(() => admitThroughContainer().admit(anchor, true)).toThrow(expect.objectContaining(denied));
+    if (kind === 'workspace') await expect(RuntimeDirectoryAdmission.open(link)).rejects.toThrow(expect.objectContaining(denied));
+    else await expect((await admitThroughContainer()).admit(anchor, true)).rejects.toThrow(expect.objectContaining(denied));
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
     expect(fs.readdirSync(target)).toEqual([]);
   });
 
-  it.each(['valid-directory', 'file', 'unsafe-private-mode'] as const)('admits only a safe EEXIST creation winner: %s', winner => {
+  it.each(['valid-directory', 'file', 'unsafe-private-mode'] as const)('admits only a safe EEXIST creation winner: %s', async winner => {
     fs.mkdirSync(userdata);
     fs.mkdirSync(container);
     if (winner === 'unsafe-private-mode') modelMetadata(new Map([[anchor, { mode: BigInt(0o40777) }]]));
-    const admission = admitThroughContainer();
-    const mkdir = fs.mkdirSync.bind(fs);
-    const spy = jest.spyOn(fs, 'mkdirSync').mockImplementation((...args) => {
+    const admission = await admitThroughContainer();
+    const spy = jest.spyOn(fs.promises, 'mkdir').mockImplementation(async (...args) => {
       if (String(args[0]) === anchor) {
         if (winner === 'file') fs.writeFileSync(anchor, 'winner-bytes');
-        else mkdir(anchor, { mode: winner === 'unsafe-private-mode' ? 0o777 : 0o700 });
+        else fs.mkdirSync(anchor, { mode: winner === 'unsafe-private-mode' ? 0o777 : 0o700 });
         throw Object.assign(new Error('Synthetic exclusive creation race'), { code: 'EEXIST' });
       }
-      return mkdir(...args);
+      return fs.mkdirSync(...args);
     });
-    if (winner === 'valid-directory') expect(() => admission.admit(anchor, true)).not.toThrow();
-    else expect(() => admission.admit(anchor, true)).toThrow(expect.objectContaining(denied));
+    if (winner === 'valid-directory') await expect(admission.admit(anchor, true)).resolves.toBeUndefined();
+    else await expect(admission.admit(anchor, true)).rejects.toThrow(expect.objectContaining(denied));
     expect(spy).toHaveBeenCalledTimes(1);
     if (winner === 'file') expect(fs.readFileSync(anchor, 'utf8')).toBe('winner-bytes');
   });
 
-  it('denies an invalid just-created publication without repair or deletion', () => {
+  it('denies an invalid just-created publication without repair or deletion', async () => {
     fs.mkdirSync(userdata);
     fs.mkdirSync(container);
-    const admission = admitThroughContainer();
-    const mkdir = fs.mkdirSync.bind(fs);
-    jest.spyOn(fs, 'mkdirSync').mockImplementation((...args) => {
-      const result = mkdir(...args);
+    const admission = await admitThroughContainer();
+    jest.spyOn(fs.promises, 'mkdir').mockImplementation(async (...args) => {
+      const result = fs.mkdirSync(...args);
       fs.rmdirSync(anchor);
       fs.writeFileSync(anchor, 'replacement');
       return result;
     });
-    expect(() => admission.admit(anchor, true)).toThrow(expect.objectContaining(denied));
+    await expect(admission.admit(anchor, true)).rejects.toThrow(expect.objectContaining(denied));
     expect(fs.readFileSync(anchor, 'utf8')).toBe('replacement');
   });
 
@@ -196,121 +193,119 @@ describe('isolated MCP runtime directory admission', () => {
     ['anchor', 'owner', 5678], ['home', 'owner', 5678], ['workspace', 'mode', 0o40770],
     ['container', 'mode', 0o40777], ['anchor', 'mode', 0o40755], ['anchor', 'mode', 0o40710],
     ['anchor', 'mode', 0o40705], ['anchor', 'mode', 0o40500], ['home', 'mode', 0o40777],
-  ] as const)('denies modeled POSIX %s %s=%i without chmod or recreation', (role, field, value) => {
+  ] as const)('denies modeled POSIX %s %s=%i without chmod or recreation', async (role, field, value) => {
     seedDirectories();
     const candidate = { workspace: root, userdata, container, anchor, home }[role];
     modelMetadata(new Map([[candidate, field === 'owner' ? { uid: BigInt(value) } : { mode: BigInt(value) }]]));
-    const mkdir = jest.spyOn(fs, 'mkdirSync');
-    const chmod = jest.spyOn(fs, 'chmodSync');
-    expect(() => admitTree()).toThrow(expect.objectContaining(denied));
+    const mkdir = jest.spyOn(fs.promises, 'mkdir');
+    const chmod = jest.spyOn(fs.promises, 'chmod');
+    await expect(admitTree()).rejects.toThrow(expect.objectContaining(denied));
     expect(mkdir).not.toHaveBeenCalled();
     expect(chmod).not.toHaveBeenCalled();
   });
 
-  it('accepts modeled0755 shared containers and protected descendants behind a0700 anchor', () => {
+  it('accepts modeled0755 shared containers and protected descendants behind a0700 anchor', async () => {
     seedDirectories();
     modelMetadata();
-    expect(() => admitTree().verify()).not.toThrow();
+    await expect((await admitTree()).verify()).resolves.toBeUndefined();
   });
 
-  it('uses modeled effective uid, with real uid only as a fallback', () => {
+  it('uses modeled effective uid, with real uid only as a fallback', async () => {
     seedDirectories();
     modelMetadata();
-    expect(() => admitTree()).not.toThrow();
+    await expect(admitTree()).resolves.toBeInstanceOf(RuntimeDirectoryAdmission);
     processModel('geteuid', undefined);
     processModel('getuid', () => 1234);
-    expect(() => admitTree()).not.toThrow();
+    await expect(admitTree()).resolves.toBeInstanceOf(RuntimeDirectoryAdmission);
   });
 
-  it('denies non-Windows admission when no process uid can be established', () => {
+  it('denies non-Windows admission when no process uid can be established', async () => {
     seedDirectories();
     modelMetadata();
     processModel('geteuid', undefined);
     processModel('getuid', undefined);
-    expect(() => admitTree()).toThrow(expect.objectContaining(denied));
+    await expect(admitTree()).rejects.toThrow(expect.objectContaining(denied));
   });
 
-  it('does not treat modeled Windows uid/mode fields as owner or DACL privacy proof', () => {
+  it('does not treat modeled Windows uid/mode fields as owner or DACL privacy proof', async () => {
     seedDirectories();
     modelMetadata(new Map([[anchor, { uid: BigInt(9999), mode: BigInt(0o40777) }]]), 'win32');
-    expect(() => admitTree().verify()).not.toThrow();
+    await expect((await admitTree()).verify()).resolves.toBeUndefined();
   });
 
-  it.each(['dev', 'ino', 'mode', 'uid', 'gid'] as const)('denies post-admission %s drift', field => {
+  it.each(['dev', 'ino', 'mode', 'uid', 'gid'] as const)('denies post-admission %s drift', async field => {
     seedDirectories();
-    const admission = admitTree();
-    const lstat = fs.lstatSync.bind(fs);
-    jest.spyOn(fs, 'lstatSync').mockImplementation(candidate => {
-      const actual = lstat(candidate, { bigint: true });
+    const admission = await admitTree();
+    jest.spyOn(fs.promises, 'lstat').mockImplementation(async candidate => {
+      const actual = fs.lstatSync(candidate, { bigint: true });
       return String(candidate) === anchor ? clone(actual, { [field]: actual[field] + BigInt(1) }) : actual;
     });
-    expect(() => admission.verify()).toThrow(expect.objectContaining(denied));
+    await expect(admission.verify()).rejects.toThrow(expect.objectContaining(denied));
   });
 
-  it.each(['dev', 'ino'] as const)('retains BigInt precision for %s collisions above Number precision', field => {
+  it.each(['dev', 'ino'] as const)('retains BigInt precision for %s collisions above Number precision', async field => {
     seedDirectories();
     const collision = BigInt('9007199254740992');
     let changed = false;
-    const lstat = fs.lstatSync.bind(fs);
-    jest.spyOn(fs, 'lstatSync').mockImplementation(candidate => {
-      const actual = lstat(candidate, { bigint: true });
+    jest.spyOn(fs.promises, 'lstat').mockImplementation(async candidate => {
+      const actual = fs.lstatSync(candidate, { bigint: true });
       return String(candidate) === anchor ? clone(actual, { [field]: collision + BigInt(changed ? 1 : 0) }) : actual;
     });
-    const admission = admitTree();
+    const admission = await admitTree();
     expect(Number(collision)).toBe(Number(collision + BigInt(1)));
     changed = true;
-    expect(() => admission.verify()).toThrow(expect.objectContaining(denied));
+    await expect(admission.verify()).rejects.toThrow(expect.objectContaining(denied));
   });
 
-  it('denies canonical target drift after admission', () => {
+  it('denies canonical target drift after admission', async () => {
     seedDirectories();
-    const admission = admitTree();
-    const realpath = fs.realpathSync.bind(fs);
-    jest.spyOn(fs, 'realpathSync').mockImplementation(candidate => String(candidate) === anchor ? path.join(container, 'different-target') : realpath(candidate));
-    expect(() => admission.verify()).toThrow(expect.objectContaining(denied));
+    const admission = await admitTree();
+    jest.spyOn(fs.promises, 'realpath').mockImplementation(async candidate =>
+      String(candidate) === anchor ? path.join(container, 'different-target') : fs.realpathSync(candidate));
+    await expect(admission.verify()).rejects.toThrow(expect.objectContaining(denied));
   });
 
-  it('refuses a replaced admitted parent before creating its child', () => {
+  it('refuses a replaced admitted parent before creating its child', async () => {
     fs.mkdirSync(userdata);
     fs.mkdirSync(container);
-    const admission = admitThroughContainer();
+    const admission = await admitThroughContainer();
     fs.renameSync(container, path.join(userdata, 'original-container'));
     fs.mkdirSync(container);
-    const mkdir = jest.spyOn(fs, 'mkdirSync');
-    expect(() => admission.admit(anchor, true)).toThrow(expect.objectContaining(denied));
+    const mkdir = jest.spyOn(fs.promises, 'mkdir');
+    await expect(admission.admit(anchor, true)).rejects.toThrow(expect.objectContaining(denied));
     expect(mkdir).not.toHaveBeenCalled();
     expect(fs.existsSync(anchor)).toBe(false);
   });
 
-  it('denies parent replacement during creation at the publication recheck', () => {
+  it('denies parent replacement during creation at the publication recheck', async () => {
     fs.mkdirSync(userdata);
     fs.mkdirSync(container);
-    const admission = admitThroughContainer();
-    const mkdir = fs.mkdirSync.bind(fs);
-    jest.spyOn(fs, 'mkdirSync').mockImplementation((...args) => {
-      const result = mkdir(...args);
+    const admission = await admitThroughContainer();
+    jest.spyOn(fs.promises, 'mkdir').mockImplementation(async (...args) => {
+      const result = fs.mkdirSync(...args);
       fs.renameSync(container, path.join(userdata, 'original-container'));
-      mkdir(container);
-      mkdir(anchor, { mode: 0o700 });
+      fs.mkdirSync(container);
+      fs.mkdirSync(anchor, { mode: 0o700 });
       return result;
     });
-    expect(() => admission.admit(anchor, true)).toThrow(expect.objectContaining(denied));
+    await expect(admission.admit(anchor, true)).rejects.toThrow(expect.objectContaining(denied));
     expect(fs.existsSync(path.join(userdata, 'original-container', legacyServerKey))).toBe(true);
   });
 
-  it('allows actual child creation to change directory timestamps, size and link count', () => {
+  it('allows actual child creation to change directory timestamps, size and link count', async () => {
     seedDirectories();
-    const admission = admitTree();
+    const admission = await admitTree();
     fs.mkdirSync(path.join(home, 'child'), { mode: 0o700 });
     fs.writeFileSync(path.join(home, 'child', 'cache'), 'new-cache');
-    expect(() => admission.verify()).not.toThrow();
+    await expect(admission.verify()).resolves.toBeUndefined();
   });
 
-  it('redacts native paths, ownership values and error material', () => {
-    const mkdir = jest.spyOn(fs, 'mkdirSync');
-    jest.spyOn(fs, 'lstatSync').mockImplementation(() => { throw new Error(`${root} uid=1234 TOKEN_CANARY`); });
-    expect(() => new RuntimeDirectoryAdmission(root)).toThrow(expect.objectContaining(denied));
-    expect(() => new RuntimeDirectoryAdmission(root)).not.toThrow(/TOKEN_CANARY|uid=|flujo-runtime-admission/);
+  it('redacts native paths, ownership values and error material', async () => {
+    const mkdir = jest.spyOn(fs.promises, 'mkdir');
+    jest.spyOn(fs.promises, 'lstat').mockImplementation(async () => { throw new Error(`${root} uid=1234 TOKEN_CANARY`); });
+    const failure: unknown = await RuntimeDirectoryAdmission.open(root).catch((error: unknown) => error);
+    expect(failure).toEqual(expect.objectContaining(denied));
+    expect(String(failure)).not.toMatch(/TOKEN_CANARY|uid=|flujo-runtime-admission/);
     expect(mkdir).not.toHaveBeenCalled();
   });
 
@@ -338,7 +333,7 @@ describe('isolated MCP runtime directory admission', () => {
     fs.mkdirSync(markers, { recursive: true, mode: 0o755 });
     const marker = path.join(markers, 'recipe.json');
     fs.writeFileSync(marker, 'marker-identity');
-    const launch = resolveStdioLaunch(config(), { isolateRuntimeHome: true });
+    const launch = await resolveStdioLaunch(config(), { isolateRuntimeHome: true });
     const legacyRoot = path.join(runtimeContainer, legacyServerKey);
     // Fixed approved entries keep their consented source cwd; the home identity
     // and sibling clone markers remain the existing server-name identity.
@@ -352,7 +347,7 @@ describe('isolated MCP runtime directory admission', () => {
     expect(launch.env.FLUJO_PARENT_DATA_DIR).toBe(process.env.FLUJO_PARENT_DATA_DIR);
     expect(launch.command).toBeTruthy();
     expect(launch.args).toEqual(config().args);
-    const again = resolveStdioLaunch(config(), { isolateRuntimeHome: true });
+    const again = await resolveStdioLaunch(config(), { isolateRuntimeHome: true });
     expect(again).toEqual(launch);
     expect(fs.readFileSync(marker, 'utf8')).toBe('marker-identity');
   });
@@ -363,7 +358,7 @@ describe('isolated MCP runtime directory admission', () => {
     fs.mkdirSync(runtimeContainer);
     const occupied = path.join(runtimeContainer, legacyServerKey);
     fs.writeFileSync(occupied, 'occupied-anchor');
-    expect(() => resolveStdioLaunch(config(), { isolateRuntimeHome: true })).toThrow(expect.objectContaining(denied));
+    await expect(resolveStdioLaunch(config(), { isolateRuntimeHome: true })).rejects.toThrow(expect.objectContaining(denied));
     expect(fs.readFileSync(occupied, 'utf8')).toBe('occupied-anchor');
   });
 
@@ -373,14 +368,14 @@ describe('isolated MCP runtime directory admission', () => {
     fs.mkdirSync(runtimeContainer);
     const occupied = path.join(runtimeContainer, legacyServerKey);
     fs.writeFileSync(occupied, 'occupied-anchor');
-    const launch = resolveStdioLaunch(config(), { isolateRuntimeHome: false });
+    const launch = await resolveStdioLaunch(config(), { isolateRuntimeHome: false });
     expect(launch.env.HOME).toBe(config().env.HOME);
     expect(fs.readFileSync(occupied, 'utf8')).toBe('occupied-anchor');
   });
 
   it('refuses a legacy dynamic package runner without a private execution grant', async () => {
     await workspaceFixture();
-    expect(() => resolveStdioLaunch({ ...config(), command: 'npx', args: ['-y', '@example/fixture'], trustedHost: undefined },
-      { isolateRuntimeHome: true })).toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+    await expect(resolveStdioLaunch({ ...config(), command: 'npx', args: ['-y', '@example/fixture'], trustedHost: undefined },
+      { isolateRuntimeHome: true })).rejects.toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 });

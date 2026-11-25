@@ -212,13 +212,13 @@ describe('workspace copies of shipped application packages', () => {
     await runWithWorkspace('after-rename', async () => {
       const owner = installBundledFixtureOwner();
       try {
-        expect(() => resolveStdioLaunch(config)).toThrow('explicit owner consent');
+        await expect(resolveStdioLaunch(config)).rejects.toThrow('explicit owner consent');
         expect((await saveConfig(new Map([[config.name, config]]))).success).toBe(true);
         const preview = await previewBundledHostConsent(config.name, { runtimeHome: 'host' });
         const approved = await approveBundledHostConsent(owner.request(config.name), config.name, {
           runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: owner.expiresAt,
         });
-        const launch = resolveStdioLaunch(approved.config);
+        const launch = await resolveStdioLaunch(approved.config);
         expect(launch.cwd).toBe(copied('after-rename', 'filesystem'));
         expect(launch.env.FLUJO_DATA_DIR).toBe(getWorkspaceDir('after-rename'));
         await expect(fs.stat(path.resolve(launch.cwd, launch.args[0]))).resolves.toBeDefined();
