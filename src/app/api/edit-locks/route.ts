@@ -50,11 +50,12 @@ async function target(request: Request): Promise<{ kind: SharedItemKind; id: str
 }
 
 async function describe(request: Request, take: boolean): Promise<Response> {
+  // Mode off: answer before reading anything (not even the lock state).
+  const editor = await currentSharedEditor();
+  if (!editor) return json(OFF);
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   try {
-    const editor = await currentSharedEditor();
-    if (!editor) return json(OFF);
     const item = await target(request);
     if (item instanceof Response) return item;
     const current = await loadSharedItem(item.kind, item.id);

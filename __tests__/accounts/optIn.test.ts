@@ -75,6 +75,27 @@ describe('multi-user mode is opt-in', () => {
     expect(await sessionRoute(request('GET', '/api/accounts/session')).then(response => response.json())).toEqual({ mode: 'off', user: null });
   });
 
+  it('has no team features while the mode is off (#575): no teams, no edit notes, no history, nothing written', async () => {
+    const { GET: teamsRoute } = await import('@/app/api/accounts/teams/route');
+    const { POST: takeLease, GET: whoIsEditing } = await import('@/app/api/edit-locks/route');
+    const { currentSharedEditor } = await import('@/backend/services/sharedItems/guard');
+    const before = await snapshotTree(path.join(dir, 'workspaces'));
+    const teams = await teamsRoute(request('GET', '/api/accounts/teams'));
+    expect([teams.status, (await teams.json()).code]).toEqual([409, 'MULTI_USER_OFF']);
+    const lease = await takeLease(request('POST', '/api/edit-locks?kind=flow&id=f1'));
+    expect(await lease.json()).toEqual({ enabled: false });
+    expect(await (await whoIsEditing(request('GET', '/api/edit-locks?kind=flow&id=f1'))).json()).toEqual({ enabled: false });
+    expect(await currentSharedEditor()).toBeNull();
+    const { GET: historyRoute } = await import('@/app/api/history/route');
+    const { GET: copyTargets, POST: copyItem } = await import('@/app/api/team-copy/route');
+    expect(await (await historyRoute(request('GET', '/api/history?kind=flow&id=f1'))).json()).toEqual({ enabled: false });
+    expect(await (await copyTargets(request('GET', '/api/team-copy'))).json()).toEqual({ enabled: false });
+    const copy = await copyItem(request('POST', '/api/team-copy', {}, { kind: 'flow', id: 'f1', targetWorkspace: 'team-notes' }));
+    expect([copy.status, (await copy.json()).code]).toEqual([409, 'MULTI_USER_OFF']);
+    expect(await snapshotTree(path.join(dir, 'workspaces'))).toEqual(before);
+    await expect(fs.stat(path.join(dir, 'accounts'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('turns on and off again without changing a byte under workspaces/', async () => {
     const before = await snapshotTree(path.join(dir, 'workspaces'));
     const turnedOn = await modeRoute(request('POST', '/api/accounts/mode', {}, { enabled: true, name: 'Anna', password: PASSWORD }));

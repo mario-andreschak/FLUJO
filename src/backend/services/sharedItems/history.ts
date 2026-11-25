@@ -106,6 +106,24 @@ async function readEntries(file: string, kind: SharedItemKind, itemId: string): 
   }
 }
 
+/** True for a missing or empty file, or one whose last byte is a newline. */
+async function endsWithNewline(file: string): Promise<boolean> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await withRetry(() => fs.open(file, 'r'));
+    const { size } = await handle.stat();
+    if (size === 0) return true;
+    const last = Buffer.alloc(1);
+    await handle.read(last, 0, 1, size - 1);
+    return last[0] === 10;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
 function countLines(buffer: Buffer): number {
   let lines = 0;
   for (let index = buffer.indexOf(10); index !== -1; index = buffer.indexOf(10, index + 1)) lines++;
@@ -162,7 +180,9 @@ export async function recordHistory(input: RecordInput): Promise<HistoryEntry | 
   try {
     await runInWriteChain(`history/${input.kind}/${path.basename(file)}`, async () => {
       await fs.mkdir(path.dirname(file), { recursive: true });
-      await withRetry(() => fs.appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8'));
+      // A line cut short by a crash must not swallow this entry: start on a new line.
+      const separator = (await endsWithNewline(file)) ? '' : '\n';
+      await withRetry(() => fs.appendFile(file, `${separator}${JSON.stringify(entry)}\n`, 'utf8'));
       const stat = await fs.stat(file);
       // Cheap checks first: every line is far longer than 64 bytes, and
       // counting newline bytes needs no parsing. Only a file over a limit is

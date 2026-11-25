@@ -35,11 +35,12 @@ function itemFrom(kind: unknown, id: unknown): { kind: SharedItemKind; id: strin
 }
 
 async function GET_handler(request: NextRequest): Promise<Response> {
+  // Mode off: answer before reading anything (not even the lock state).
+  const editor = await currentSharedEditor();
+  if (!editor) return json({ enabled: false });
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   try {
-    const editor = await currentSharedEditor();
-    if (!editor) return json({ enabled: false });
     const url = new URL(request.url);
     const item = itemFrom(url.searchParams.get('kind'), url.searchParams.get('id'));
     if (item instanceof Response) return item;
@@ -58,13 +59,13 @@ async function GET_handler(request: NextRequest): Promise<Response> {
 }
 
 async function POST_handler(request: NextRequest): Promise<Response> {
+  const editor = await currentSharedEditor();
+  if (!editor) {
+    return json({ error: 'Change history is part of sign-in for several people, which is off.', code: 'MULTI_USER_OFF' }, 409);
+  }
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   try {
-    const editor = await currentSharedEditor();
-    if (!editor) {
-      return json({ error: 'Change history is part of sign-in for several people, which is off.', code: 'MULTI_USER_OFF' }, 409);
-    }
     let body: Record<string, unknown> = {};
     try {
       const parsed: unknown = await request.json();

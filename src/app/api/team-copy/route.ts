@@ -34,12 +34,13 @@ function json(body: unknown, status = 200): Response {
 const MULTI_USER_OFF = { error: 'Copying into a team workspace needs sign-in for several people to be on.', code: 'MULTI_USER_OFF' };
 
 async function GET_handler(_request: NextRequest): Promise<Response> {
+  // Mode off: answer before reading anything (not even the lock state).
+  const editor = await currentSharedEditor();
+  const principal = currentAccountPrincipal();
+  if (!editor || !principal) return json({ enabled: false });
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   try {
-    const editor = await currentSharedEditor();
-    const principal = currentAccountPrincipal();
-    if (!editor || !principal) return json({ enabled: false });
     const now = Date.now();
     const source = getCurrentWorkspace();
     const targets = (await listWorkspaces())
@@ -65,12 +66,12 @@ async function GET_handler(_request: NextRequest): Promise<Response> {
 }
 
 async function POST_handler(request: NextRequest): Promise<Response> {
+  const editor = await currentSharedEditor();
+  const principal = currentAccountPrincipal();
+  if (!editor || !principal) return json(MULTI_USER_OFF, 409);
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   try {
-    const editor = await currentSharedEditor();
-    const principal = currentAccountPrincipal();
-    if (!editor || !principal) return json(MULTI_USER_OFF, 409);
     let body: Record<string, unknown> | null = null;
     try {
       const parsed: unknown = await request.json();
