@@ -48,6 +48,16 @@ const getServerStatusMock = jest.fn();
 const reconcileOrphanedTasksMock = jest.fn();
 const resumeRemoteMcpTasksMock = jest.fn();
 const workerRecoveryConfiguredMock = jest.fn();
+const connectServerMock = jest.fn();
+const warnLogMock = jest.fn();
+
+jest.mock('@/utils/logger', () => {
+  const actual = jest.requireActual('@/utils/logger');
+  return { ...actual, createLogger: (file: string, level?: number) => {
+    const real = actual.createLogger(file, level);
+    return file.includes('workerMcpServers') ? { ...real, warn: (...a: unknown[]) => warnLogMock(...a) } : real;
+  } };
+});
 
 jest.mock('@/backend/services/scheduler/workerLocalRecovery', () => ({
   isWorkerLocalRecoveryConfigured: () => workerRecoveryConfiguredMock(),
@@ -83,6 +93,7 @@ jest.mock('@/backend/services/mcp', () => ({
     startEnabledServers: (...a: unknown[]) => startEnabledServersMock(...a),
     loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...a),
     getServerStatus: (...a: unknown[]) => getServerStatusMock(...a),
+    connectServer: (...a: unknown[]) => connectServerMock(...a),
   },
 }));
 jest.mock('@/backend/services/mcp/shippedServerMigration', () => ({
@@ -121,7 +132,9 @@ import {
   onUnlocked,
 } from '@/backend/init';
 import { ensureWorkspaceDirs } from '@/utils/workspace';
-import { getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import { assertWorkerRequestReady, getWorkerBootstrapStatus, setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import { workerMcpServerReport } from '@/backend/services/workspace/workerMcpReason';
+import { startApprovedWorkerServer, stopWorkerMcpRecheck } from '@/backend/services/workspace/workerMcpServers';
 import { NextRequest } from 'next/server';
 import { GET as initializeRoute } from '@/app/api/init/route';
 
@@ -168,6 +181,7 @@ describe('backend init startup gating (#78)', () => {
   });
 
   afterEach(() => {
+    stopWorkerMcpRecheck();
     if (originalWorkerMode === undefined) delete process.env.FLUJO_WORKER_MODE;
     else process.env.FLUJO_WORKER_MODE = originalWorkerMode;
     global.__flujo_worker_bootstrap_status = undefined;
@@ -437,6 +451,73 @@ describe('backend init startup gating (#78)', () => {
     await expect(ensureBackendInitialized()).rejects.toThrow('MCP startup failed');
     expect(getWorkerBootstrapStatus().state).toBe('error');
     expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain('credential-bearing diagnostic');
+    expect(getWorkerBootstrapStatus().servers).toEqual([expect.objectContaining({ name: 'server-one', status: 'failed',
+      reason: expect.objectContaining({ code: 'CONNECT_FAILED' }) })]);
     expect(schedulerStartMock).not.toHaveBeenCalled();
+  });
+
+  describe('private-workspace worker with bundled servers (#1369)', () => {
+    const bundled = ['flujo', 'filesystem', 'bash', 'browser'];
+    const approved = new Set<string>();
+    const consentRefusal = { success: false, statusCode: 409, errorType: 'execution-approval', requiresApproval: true,
+      errorCode: 'HOST_CONSENT_REQUIRED', error: 'Owner approval required.' };
+
+    beforeEach(() => {
+      approved.clear();
+      process.env.FLUJO_WORKER_MODE = '1';
+      setWorkerBootstrapStatus({ workspace: 'default-workspace' });
+      reinstallWorkspaceMcpServersMock.mockResolvedValue({ ok: true,
+        servers: bundled.map(name => workerMcpServerReport(name, 'HOST_CONSENT_REQUIRED')) });
+      loadServerConfigsMock.mockResolvedValue(bundled.map(name => ({ name, transport: 'stdio', disabled: false })));
+      getServerStatusMock.mockImplementation(async (name: string) => approved.has(name) ? { status: 'connected' }
+        : { status: 'requires_approval', requiresApproval: true, errorCode: 'HOST_CONSENT_REQUIRED', message: 'Owner approval required.' });
+      connectServerMock.mockImplementation(async (name: string) => approved.has(name) ? { success: true } : consentRefusal);
+    });
+
+    it('starts a fresh workspace with its servers waiting for approval and says why', async () => {
+      await ensureBackendInitialized();
+      const status = getWorkerBootstrapStatus();
+      expect(status.state).toBe('ready');
+      expect(status.servers?.map(server => [server.name, server.status])).toEqual(bundled.map(name => [name, 'waiting']));
+      for (const server of status.servers ?? []) {
+        if (server.status !== 'waiting') throw new Error('Expected a waiting server.');
+        expect(server.reason.code).toBe('HOST_CONSENT_REQUIRED');
+        expect(server.reason.message).toBe('This server needs the owner\'s approval before it can run on this worker.');
+        expect(server.reason.action).toContain(`/api/mcp/servers/${server.name}/host-consent`);
+      }
+      // The worker is usable for everything that does not need those servers.
+      expect(assertWorkerRequestReady(new Request('http://worker/v1/chat/completions'), 'default-workspace')).toBeNull();
+      expect(warnLogMock.mock.calls.map(call => String(call[0])).filter(line => line.includes('HOST_CONSENT_REQUIRED'))).toHaveLength(4);
+    });
+
+    it('starts a server approved later without a restart', async () => {
+      await ensureBackendInitialized();
+      approved.add('filesystem');
+      const report = await startApprovedWorkerServer('filesystem');
+      expect(report).toEqual({ name: 'filesystem', status: 'ready' });
+      const status = getWorkerBootstrapStatus();
+      expect(status.state).toBe('ready');
+      expect(status.servers?.find(server => server.name === 'filesystem')).toEqual({ name: 'filesystem', status: 'ready' });
+      expect(status.servers?.filter(server => server.status === 'waiting').map(server => server.name)).toEqual(['flujo', 'bash', 'browser']);
+      expect(reinstallWorkspaceMcpServersMock).toHaveBeenCalledTimes(1);
+      expect(connectServerMock).toHaveBeenCalledWith('filesystem');
+      expect(connectServerMock).not.toHaveBeenCalledWith('bash');
+    });
+
+    it('keeps a real preparation failure in error with a reason and no error text', async () => {
+      reinstallWorkspaceMcpServersMock.mockResolvedValueOnce({ ok: false, servers: [
+        workerMcpServerReport('flujo', 'HOST_CONSENT_REQUIRED'), workerMcpServerReport('github-tools', 'INSTALL_FAILED'),
+      ] });
+      await expect(ensureBackendInitialized()).rejects.toThrow('MCP dependency');
+      const status = getWorkerBootstrapStatus();
+      expect(status.state).toBe('error');
+      expect(status.servers).toEqual([
+        expect.objectContaining({ name: 'flujo', status: 'waiting' }),
+        { name: 'github-tools', status: 'failed', error: 'Installing this server on the worker failed.',
+          reason: { code: 'INSTALL_FAILED', message: 'Installing this server on the worker failed.',
+            action: 'Check that the worker can reach GitHub and the package registry. Then call /api/init or restart the worker to try again.' } },
+      ]);
+      expect(warnLogMock.mock.calls.some(call => String(call[0]).includes('"github-tools" is failed (INSTALL_FAILED)'))).toBe(true);
+    });
   });
 });

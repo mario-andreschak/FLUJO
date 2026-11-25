@@ -142,11 +142,12 @@ async function startWorker(port, archivePath, archiveHash, harness, phase = 'rea
       if (result.status === 404) throw new Error('Worker status route unavailable in the smoke application.');
       const state = await result.json();
       lastState = state;
-      if (phase === 'consent' && state.state === 'error'
-          && state.error === 'Worker MCP dependency preparation failed. Check the worker server status.') return state;
       if (state.state === 'error') throw new Error(`Worker reported bootstrap failure: ${state.error}`);
       if (result.ok && state.state === 'ready') {
-        if (phase === 'consent') throw new Error('Worker became ready without the required cold owner consent.');
+        // A server waiting for owner approval must not start, and must not hold back the worker.
+        if (phase === 'consent' && state.servers?.find(server => server.name === 'filesystem')?.status !== 'waiting') {
+          throw new Error(`Worker started filesystem without the required cold owner consent: ${JSON.stringify(state.servers)}`);
+        }
         return state;
       }
     } catch (error) {
@@ -155,6 +156,20 @@ async function startWorker(port, archivePath, archiveHash, harness, phase = 'rea
     await delay(500);
   }
   throw new Error(`Worker did not become ready: ${JSON.stringify(lastState)}`);
+}
+
+/** An approved server starts on the running worker, without a restart. */
+async function waitForWorkerServer(port, name) {
+  const started = Date.now();
+  let last;
+  while (Date.now() - started < 60_000) {
+    const result = await fetch(`http://127.0.0.1:${port}/api/worker/status`, { headers: { authorization: `Bearer ${controlToken}` }, signal: AbortSignal.timeout(15_000) });
+    last = (await result.json()).servers?.find(server => server.name === name);
+    if (last?.status === 'ready') return;
+    if (last?.status === 'failed') throw new Error(`Approved ${name} failed to start: ${JSON.stringify(last.reason)}`);
+    await delay(500);
+  }
+  throw new Error(`Approved ${name} did not start without a restart: ${JSON.stringify(last)}`);
 }
 
 try {
@@ -234,12 +249,15 @@ const server=http.createServer((req,res)=>handler(req,res));
 server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
 `);
   console.log(`Starting ${production ? 'packaged production' : 'isolated development'} worker with an encrypted synthetic snapshot...`);
-  const refused = await startWorker(workerPort, archivePath, archiveHash, harness, 'consent');
-  assert.equal(refused.state, 'error', 'The original cold bootstrap must refuse unapproved host execution.');
+  const waiting = await startWorker(workerPort, archivePath, archiveHash, harness, 'consent');
+  assert.deepEqual(waiting.servers.map(({ name, status, reason }) => ({ name, status, code: reason?.code })),
+    [{ name: 'filesystem', status: 'waiting', code: 'HOST_CONSENT_REQUIRED' }],
+    'The original cold bootstrap must hold unapproved host execution and say why.');
   const consentUrl = new URL(`/api/mcp/servers/filesystem/host-consent?workspace=${workspace}`, `http://127.0.0.1:${workerPort}`);
   const snapshotOnly = await fetch(consentUrl, { headers: { authorization: `Bearer ${controlToken}` }, signal: AbortSignal.timeout(15_000) });
   assert.ok([401, 403].includes(snapshotOnly.status), 'Snapshot authority must not approve host execution.');
   await approveSmokeServer(`http://127.0.0.1:${workerPort}`, 'filesystem', operator.token, 15_000, workspace);
+  await waitForWorkerServer(workerPort, 'filesystem');
   const configFile = path.join(root, 'data', 'workspaces', workspace, 'db', 'mcp_servers.json');
   const approvedConfig = await fs.readFile(configFile);
   const approvedLedger = await fs.readFile(operator.env.FLUJO_MCP_TRUSTED_HOST_FILE);
