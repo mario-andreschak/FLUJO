@@ -29,6 +29,18 @@ when their applicability to a specific model is not established.
   deadline, disables the affected account's check and blocks backend retries.
   The endpoint and SDK capability are experimental; failed or malformed data
   never imply a balance. Claude's own usage page remains available as a link.
+  Usage of 100% or more shows as 0% left. When the usage page only sends its
+  newer `limits[]` rows, FLUJO reads them by their `kind` (`session` is the
+  five-hour window, `weekly_all` the weekly one); while the older fields are
+  still sent, they are used.
+- Claude limit warnings during runs: every model turn carries Claude's
+  rate-limit headers, and the Agent SDK repeats them as a `rate_limit_event`.
+  This also works for a setup-token that may not open the usage page. Claude
+  only sends a number near a limit: a warning carries the share used of one
+  window (a 0 to 1 fraction), a refusal means that window is used up (0% left)
+  until its reset, and "allowed" ends earlier warnings. FLUJO lays such a
+  window over the last full reading and says where the number came from. Far
+  from every limit, a setup-token therefore still shows "Usage not exposed".
 - Codex subscriptions: explicit Refresh uses a short-lived owned app-server to
   read the file-backed login and ChatGPT rate-limit windows. It never starts a
   thread or turn, runs tools, redeems credits, or changes login. API-key-only
@@ -36,6 +48,9 @@ when their applicability to a specific model is not established.
   the previous observation. Runtime preparation is drained if it cannot cancel;
   an expired request cannot subsequently start a child, and owned shutdown is
   drained before returning.
+- Antigravity CLI signed in with a Google account is a subscription, but it
+  offers no usage reading to other apps. Its segment says "FLUJO can't read
+  usage" and never triggers a check. With an API key it is API billing.
 - API providers and gateways use API billing; local inference has no subscription
   balance. Request/token rate limits, accumulated cost and context capacity are
   different metrics. Hosted Ollama endpoints are API connections, not local
@@ -48,12 +63,48 @@ restores 100%. Restarting FLUJO starts with unknown observations. Credentials,
 account identifiers and native diagnostics are not included in the response.
 
 Visible subscription displays check missing or expired readings and share one
-workspace snapshot. A single cached GET observer runs every 30 seconds while
-those displays are visible, and on focus, so observations recorded during runs
-reach the UI. Unknown values, partial readings, denied usage access and provider
-throttling remain different states. Provider failures are independent: a failed
-Claude read does not discard a valid Codex reading. Reset and observation times
-use relative labels, with localized absolute times available on hover.
+workspace snapshot. A single cached GET observer runs every two minutes while
+those displays are visible, and on focus at most once a minute, so observations
+recorded during runs reach the UI. Unknown values, partial readings, denied usage
+access and provider throttling remain different states. Provider failures are
+independent: a failed Claude read does not discard a valid Codex reading. Reset
+and observation times use relative labels, with localized absolute times
+available on hover.
+
+## What the bar shows
+
+A bar appears only for a complete, current reading. Its colour follows the
+percentage left: green above 25%, amber from 25% down to 11%, red at 10% or
+less. Without a current number the bar is replaced by plain words, never by 0%
+or 100%:
+
+| Text | Meaning |
+|---|---|
+| No reading yet | FLUJO has not read this account since it started. |
+| Outdated, with "Checked … ago" | The last reading is more than five minutes old. |
+| Partial reading | At least one window has no number, or it reset after the reading. |
+| Usage not exposed | Claude refused the usage page for this login (HTTP 403). |
+| Usage check paused, with "Try again …" | The provider asked FLUJO to wait (HTTP 429). |
+| Check failed | Any other failure: expired login, provider error, unreadable answer. |
+| FLUJO can't read usage | The provider has no usage reading for other apps. |
+
+`__tests__/model/fixtures/claudeAllowanceFixtures.ts` lists every known Claude
+answer (usage page, SDK usage, rate-limit events, refusals, throttling, stale
+and reset readings). `__tests__/frontend/components/AllowanceFixtures.test.tsx`
+runs each one through the store and projection and checks the bar's text,
+value and colour; `__tests__/model/claudeAllowanceFixtures.test.ts` checks the
+live reader gives the same result for each recorded usage-page answer.
+
+## How providers expose what is left (checked November 2026)
+
+| Provider | Official way to read it | Used by FLUJO |
+|---|---|---|
+| Claude subscription | Usage page `GET api.anthropic.com/api/oauth/usage` (what the official CLI's `/usage` reads; needs the login's profile scope, which `claude setup-token` tokens may lack). Agent SDK `usage_EXPERIMENTAL…()` returns the same windows. Since SDK 0.3.x the page also sends `limits[]` rows and per-model weekly rows (for example "Fable"). | Yes |
+| Claude subscription, during runs | Rate-limit response headers (`anthropic-ratelimit-unified-5h-utilization`, `-7d-…`, `-status`, `-reset`), repeated by the SDK as `rate_limit_event`. The CLI status line also gets `rate_limits.five_hour` / `seven_day` (`used_percentage` 0 to 100, `resets_at` in epoch seconds) since Claude Code 2.1.80, but only inside the terminal. | Yes (SDK event) |
+| Codex / ChatGPT plan | Codex app-server `account/rateLimits/read`: `primary` and `secondary` windows with `usedPercent`, `windowDurationMins`, `resetsAt`; newer CLIs add `rateLimitsByLimitId` buckets. The app-server also sends `account/rateLimits/updated` during turns. | Yes (read on check; the update notice is not used yet) |
+| Antigravity CLI (Google login) | No public usage reading. | Says so plainly |
+| Gemini API key, Anthropic API key, OpenAI API key | Pay per use, no "allowance left". Only per-minute rate-limit headers, and spend reports through admin-only APIs. | API billing |
+| OpenRouter | Prepaid credit, not a subscription: `GET /api/v1/key` returns the key's `limit`, `limit_remaining` and `limit_reset`; `GET /api/v1/credits` returns account `total_credits` and `total_usage`. | Not yet (API billing) |
 
 ## Local API
 
@@ -100,7 +151,7 @@ encryption guards, refuse restricted execution transports, and set
 `Cache-Control: private, no-store`. The workspace query/header conventions are
 the same as other FLUJO routes.
 
-Offline tests cover normalization, expiry, account deduplication, immutable Flow
+Offline tests cover the recorded Claude answers above, normalization, expiry, account deduplication, immutable Flow
 dependencies, policy ordering, workspace switching, lock guards, credential-safe
 responses, quota-only child messages, cancellation and child cleanup. Synthetic
 UI fixture screenshots demonstrate rendering; they do not establish a real

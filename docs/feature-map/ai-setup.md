@@ -14,6 +14,7 @@ Here the user connects the AI that every agent and conversation uses, and manage
 - `ai-setup-card-actions`: "Duplicate model", "Move model to folder", "Delete model" and a star for favourites.
 - `ai-setup-convert-to-agent`: "Convert <model> to an agent" opens "Convert model to agent" with "Agent name", optional connected apps and "Save and open".
 - `ai-setup-fallback-policy`: "Create fallback policy" opens the "Fallback policy" dialog.
+- `ai-setup-allowance`: the "Subscription allowance" panel shows one bar per subscription account (Claude, Codex, Antigravity) with "N% left", coloured green, amber or red, and "Refresh". Without a current number it says "No reading yet", "Outdated", "Partial reading", "Usage not exposed", "Usage check paused", "Check failed" or "FLUJO can't read usage" instead of a bar. The same bar sits on model cards, fallback policies, agents and Personas; clicking an account opens its windows and models.
 
 ## How to get to it (user POV)
 
@@ -38,4 +39,5 @@ Preconditions: a throwaway instance from the verify-flujo skill; a fresh instanc
 - "I’m an expert" in the wizard skips the questions and opens the manual form.
 - Offline (Ollama) and subscription routes check or install tools on the machine running FLUJO. Do not let a run install software.
 - Provider model lists hide models known not to support tool calls (for example image generators) unless "Show models without tool capabilities" is on under Settings → Experimental features.
+- The allowance panel appears only when a subscription connection exists, and a throwaway instance has no real subscription, so it can only show the wording states. Percentages from real accounts need the owner's own logins; `docs/features/models/subscription-allowance.md` lists what each state means.
 - The "Connect AI" button carries `data-tour="add-model"`; the page itself carries `data-tour="models-overview"`.

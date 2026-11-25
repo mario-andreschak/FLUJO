@@ -6,10 +6,12 @@ import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded';
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 import { useAllowance } from '@/frontend/contexts/AllowanceContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
-import { ALLOWANCE_MAX_AGE_MS, isSubscriptionAllowance, modelAllowancePercent, type ModelAllowance } from '@/shared/types/model/allowance';
+import { ALLOWANCE_MAX_AGE_MS, allowanceLevel, isSubscriptionAllowance, modelAllowancePercent, type ModelAllowance } from '@/shared/types/model/allowance';
 
 /** Accounts shown in the page overview before "Show all". */
 const OVERVIEW_ACCOUNTS = 4;
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' };
+const LEVEL_COLOURS = { ok: 'success', low: 'warning', critical: 'error' } as const;
 
 /** Account groups are alternatives, not additive balances. Never average their percentages. */
 export function groupAllowances(rows: ModelAllowance[], now = Date.now()): ModelAllowance[] {
@@ -60,14 +62,14 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
   const accounts = groupAllowances(rows.filter(isSubscriptionAllowance), now);
   const hasAccounts = accounts.length > 0;
   const rateLimited = (row: ModelAllowance) => row.reason === 'rate-limited' && !!row.retryAt && Date.parse(row.retryAt) > now;
-  const paused = hasAccounts && accounts.every(rateLimited);
+  const paused = hasAccounts && accounts.every(row => rateLimited(row) || row.reason === 'unsupported');
   useEffect(() => observe(), [observe]);
   useEffect(() => { if (hasAccounts) void ensureFresh(rows.map(row => row.modelId)); }, [hasAccounts, rows, snapshot, now, ensureFresh]);
   if (!hasAccounts && !(overview && failed)) return null;
 
   const accountKey = (row: ModelAllowance) => row.provider + ':' + (row.accountGroup ?? row.modelId);
   const accountName = (row: ModelAllowance) => {
-    const name = row.provider === 'claude' ? 'Claude' : 'Codex';
+    const name = PROVIDER_NAMES[row.provider] ?? row.provider;
     const sameProvider = accounts.filter(account => account.provider === row.provider);
     return sameProvider.length > 1 ? name + ' · ' + t('models.allowance.accountNumber', { number: sameProvider.findIndex(account => accountKey(account) === accountKey(row)) + 1 }) : name;
   };
@@ -109,11 +111,14 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
         const percent = incomplete ? null : modelAllowancePercent(row);
         const limiting = percent === null ? undefined : row.windows.find(window => window.remainingPercent === percent);
         const sharing = catalogue.filter(model => !model.policyModelIds && model.accountGroup && model.accountGroup === row.accountGroup && model.provider === row.provider).length;
-        const state = row.reason === 'rate-limited' ? t('models.allowance.rateLimited')
+        const level = percent === null ? undefined : LEVEL_COLOURS[allowanceLevel(percent)];
+        const state = row.reason === 'unsupported' ? t('models.allowance.notReadable')
+          : row.reason === 'rate-limited' ? t('models.allowance.rateLimited')
           : row.reason === 'usage-permission' ? t('models.allowance.usagePermission')
           : row.refreshFailed && percent === null ? t('models.allowance.checkFailed')
           : incomplete && row.status === 'available' ? t('models.allowance.partialSummary')
           : t(row.status === 'stale' ? 'models.allowance.stale' : 'models.allowance.unknown');
+        const outdated = percent === null && !loading && row.status === 'stale' && row.observedAt;
         return <Box key={accountKey(row)} sx={{ minWidth: 0, ...(overview ? { px: 2, pb: 1 } : { flex: '1 1 240px' }) }}>
           <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
             <Button onClick={toggle} aria-expanded={expanded} aria-controls={detailsId} aria-label={accountName(row) + ' · ' + t('models.allowance.title')}
@@ -128,13 +133,14 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
             </Button>
             {!overview && <Tooltip title={t('models.allowance.refresh')}><span><IconButton size="small" aria-label={t('models.allowance.refresh')} onClick={check} disabled={loading || paused}><RefreshRoundedIcon fontSize="small" /></IconButton></span></Tooltip>}
           </Stack>
-          {percent !== null && <LinearProgress variant="determinate" value={percent} color={percent <= 10 ? 'error' : percent <= 25 ? 'warning' : 'success'}
+          {percent !== null && level && <LinearProgress variant="determinate" value={percent} color={level}
             aria-label={accountName(row) + ': ' + t('models.allowance.remaining', { percent: formatNumber(percent) })}
-            sx={{ height: overview ? 8 : 6, borderRadius: 4, my: 0.75, bgcolor: 'action.hover', '& .MuiLinearProgress-bar': { backgroundImage: 'none', bgcolor: percent <= 10 ? 'error.main' : percent <= 25 ? 'warning.main' : 'success.main' } }} />}
+            sx={{ height: overview ? 8 : 6, borderRadius: 4, my: 0.75, bgcolor: 'action.hover', '& .MuiLinearProgress-bar': { backgroundImage: 'none', bgcolor: level + '.main' } }} />}
+          {outdated && <Typography variant="caption" component="div" color="text.secondary" title={formatDate(outdated, { dateStyle: 'medium', timeStyle: 'short' })}>{t('models.allowance.lastChecked', { time: relativeTime(outdated) })}</Typography>}
           {limiting && <Typography variant="caption" component="div" color="text.secondary">{windowName(limiting.label)}{limiting.resetAt ? ' · ' + t('models.allowance.resetIn', { time: relativeTime(limiting.resetAt) }) : ''}</Typography>}
           {sharing > 1 && <Typography variant="caption" component="div" color="text.secondary">{t('models.allowance.shared', { count: sharing })}</Typography>}
           {rateLimited(row) && <Typography variant="caption" component="div" color="text.secondary">{t('models.allowance.retryIn', { time: relativeTime(row.retryAt!) })}</Typography>}
-          {(row.reason === 'usage-permission' || row.reason === 'rate-limited') && <Button component="a" href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer" size="small" endIcon={<OpenInNewRoundedIcon fontSize="small" />} sx={{ p: 0, mt: 0.5, textTransform: 'none' }}>{t('models.allowance.providerUsage')}</Button>}
+          {row.provider === 'claude' && (row.reason === 'usage-permission' || row.reason === 'rate-limited') && <Button component="a" href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer" size="small" endIcon={<OpenInNewRoundedIcon fontSize="small" />} sx={{ p: 0, mt: 0.5, textTransform: 'none' }}>{t('models.allowance.providerUsage')}</Button>}
         </Box>;
       })}
     </Box>
@@ -154,10 +160,12 @@ export default function AllowanceBar({ modelIds, provider, entity, overview = fa
           </Stack>
           {row.reason === 'usage-permission' && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{t('models.allowance.setupTokenHelp')}</Typography>}
           {row.reason === 'rate-limited' && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{t('models.allowance.rateLimitHelp')}</Typography>}
+          {row.reason === 'unsupported' && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{t('models.allowance.notReadableHelp')}</Typography>}
+          {row.source === 'claude-rate-limit-event' && row.status === 'available' && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{t('models.allowance.rateLimitSource')}</Typography>}
           {row.refreshFailed && row.reason !== 'usage-permission' && row.reason !== 'rate-limited' && <Typography role="status" variant="body2" color="error" sx={{ mt: 0.5 }}>{t('models.allowance.failed')}</Typography>}
           {row.windows.map(window => <Stack key={window.id + ':' + (window.modelFamily ?? '')} direction="row" sx={{ justifyContent: 'space-between', alignItems: 'baseline', gap: 1, flexWrap: 'wrap', mt: 0.75 }}>
             <Typography variant="body2">{windowName(window.label)}{window.modelFamily ? ' (' + window.modelFamily + ')' : ''}</Typography>
-            <Box sx={{ textAlign: 'right' }}><Typography variant="body2" sx={{ fontWeight: 600 }}>{row.status !== 'available' || window.remainingPercent === null ? t('models.allowance.unknown') : t('models.allowance.remaining', { percent: formatNumber(window.remainingPercent) })}</Typography>
+            <Box sx={{ textAlign: 'right' }}><Typography variant="body2" sx={{ fontWeight: 600 }}>{row.status !== 'available' || window.remainingPercent === null ? t(row.status === 'stale' ? 'models.allowance.stale' : 'models.allowance.unknown') : t('models.allowance.remaining', { percent: formatNumber(window.remainingPercent) })}</Typography>
               {window.resetAt && <Typography variant="caption" color="text.secondary" title={formatDate(window.resetAt, { dateStyle: 'medium', timeStyle: 'short' })}>{t('models.allowance.resetIn', { time: relativeTime(window.resetAt) })}</Typography>}</Box>
           </Stack>)}
         </Box>)}

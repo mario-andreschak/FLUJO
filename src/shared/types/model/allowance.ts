@@ -1,5 +1,5 @@
 /** Account allowance is independent of token consumption and context capacity. */
-export type AllowanceProvider = 'claude' | 'codex';
+export type AllowanceProvider = 'claude' | 'codex' | 'antigravity';
 export type AllowanceFailureReason = 'collection-failed' | 'usage-permission' | 'rate-limited';
 export interface AllowanceWindow {
   id: string;
@@ -11,7 +11,7 @@ export interface AllowanceWindow {
 }
 export interface AllowanceSnapshot {
   provider: AllowanceProvider;
-  source: 'claude-sdk-usage' | 'claude-oauth-usage' | 'codex-app-server';
+  source: 'claude-sdk-usage' | 'claude-oauth-usage' | 'claude-rate-limit-event' | 'codex-app-server';
   observedAt: string;
   windows: AllowanceWindow[];
 }
@@ -43,6 +43,12 @@ export const ALLOWANCE_MAX_AGE_MS = 5 * 60 * 1000;
 export function isSubscriptionAllowance(row: ModelAllowance): boolean {
   return row.billing === 'subscription' || (row.billing === undefined
     && (row.provider === 'claude' || row.provider === 'codex') && row.reason !== 'unsupported');
+}
+
+/** Bar colour for a known percentage: green above 25%, amber down to 11%, red at 10% or less. */
+export type AllowanceLevel = 'ok' | 'low' | 'critical';
+export function allowanceLevel(percent: number): AllowanceLevel {
+  return percent <= 10 ? 'critical' : percent <= 25 ? 'low' : 'ok';
 }
 
 /** Expired observations never imply that a reset has restored 100% allowance. */

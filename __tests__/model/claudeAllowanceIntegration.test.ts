@@ -57,6 +57,26 @@ describe('Claude adapter allowance boundary', () => {
     expect(JSON.stringify(snapshot)).not.toContain(model.ApiKey);
   });
 
+  it('records a rate-limit warning from a setup-token run that cannot read the usage page', async () => {
+    const token = 'offline-setup-token-without-usage';
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+    const stream = (async function* () {
+      yield { type: 'system', subtype: 'init', session_id: 'offline-warning' };
+      yield { type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.88, resetsAt }, session_id: 'offline-warning' };
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'hello' }] }, session_id: 'offline-warning' };
+      yield { type: 'result', subtype: 'success', result: 'hello', session_id: 'offline-warning', usage: { input_tokens: 1, output_tokens: 1 } };
+    })();
+    Object.assign(stream, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({ rate_limits_available: false, rate_limits: null }) });
+    queryMock.mockReturnValue(stream);
+    await new ClaudeSubscriptionAdapter().createCompletion(input({ apiKey: token }));
+    const key = allowanceAccountKey('claude', token);
+    const snapshot = readAllowanceSnapshot(key);
+    expect(snapshot?.source).toBe('claude-rate-limit-event');
+    const projected = projectModelAllowance({ ...model, ApiKey: token }, key, snapshot);
+    expect(projected.status).toBe('available');
+    expect(projected.windows).toEqual([{ id: 'seven_day', label: 'Weekly', remainingPercent: 12, resetAt: new Date(resetsAt * 1000).toISOString() }]);
+  });
+
   it('does not record the observation for a cancelled model turn', async () => {
     const controller = new AbortController();
     const token = 'offline-cancelled-allowance-token';

@@ -4,7 +4,7 @@ import { resolveModelAdapter } from '@/shared/types/model/provider';
 import type { Model } from '@/shared/types/model/model';
 import type { WorkspaceAllowance } from '@/shared/types/model/allowance';
 import { allowanceAccountKey, readAllowanceSnapshot, recordAllowanceSnapshot, recordAllowanceFailure, allowanceRefreshFailure } from './store';
-import { projectModelAllowance } from './projection';
+import { projectModelAllowance, applyAllowanceFailure, allowancePlanProvider } from './projection';
 import { allowanceEntityModels } from './entities';
 import { collectCodexAllowance, readCodexAllowanceAccountKey } from './codex';
 import { collectClaudeAccountAllowance, ClaudeAllowanceError } from './claudeAccount';
@@ -26,9 +26,9 @@ export async function workspaceAllowance(): Promise<WorkspaceAllowance> {
   const credentials = new Map<string, Promise<string | null>>();
   const rows = [];
   for (const model of models) {
-    const adapter = resolveModelAdapter(model.provider, model.adapter);
+    const plan = allowancePlanProvider(model);
     let accountKey: string | undefined;
-    if (!model.fallbackPolicy && adapter === 'claude-cli') {
+    if (plan === 'claude') {
       let resolved = credentials.get(model.ApiKey);
       if (!resolved) {
         resolved = resolveAndDecryptApiKey(model.ApiKey).catch(() => null);
@@ -36,17 +36,14 @@ export async function workspaceAllowance(): Promise<WorkspaceAllowance> {
       }
       const credential = await resolved;
       if (credential) accountKey = allowanceAccountKey('claude', credential);
-    } else if (!model.fallbackPolicy && adapter === 'codex-cli' && !model.ApiKey) {
+    } else if (plan === 'codex') {
       accountKey = codexKey;
+    } else if (plan === 'antigravity') {
+      // Every Antigravity model without a key uses the one host login.
+      accountKey = allowanceAccountKey('antigravity', 'host-login');
     }
     const row = projectModelAllowance(model, accountKey, accountKey ? readAllowanceSnapshot(accountKey) : undefined);
-    const failure = accountKey ? allowanceRefreshFailure(accountKey) : undefined;
-    if (failure) {
-      row.refreshFailed = true;
-      if (row.status === 'unknown' || row.status === 'stale') row.reason = failure.reason;
-      row.retryAt = failure.retryAt;
-    }
-    rows.push(row);
+    rows.push(applyAllowanceFailure(row, accountKey ? allowanceRefreshFailure(accountKey) : undefined));
   }
   return { models: rows, entities: await allowanceEntityModels(), observedAt: new Date().toISOString() };
 }

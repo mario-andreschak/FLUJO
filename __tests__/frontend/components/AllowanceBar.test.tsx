@@ -289,6 +289,24 @@ test('a page overview of many subscriptions shows four compact accounts until ex
   expect(screen.getAllByRole('progressbar')).toHaveLength(4);
 });
 
+test('an Antigravity login is named, says FLUJO cannot read it, and never asks for a usage check', async () => {
+  fetchMock.mockResolvedValue(respond(snapshot([
+    row('agy-pro', { provider: 'antigravity', billing: 'subscription', accountGroup: 'google', status: 'unavailable', reason: 'unsupported', observedAt: null, source: null, windows: [] }),
+    row('agy-flash', { provider: 'antigravity', billing: 'subscription', accountGroup: 'google', status: 'unavailable', reason: 'unsupported', observedAt: null, source: null, windows: [] }),
+  ])));
+  render(<AllowanceProvider><AllowanceBar modelIds={['agy-pro', 'agy-flash']} /></AllowanceProvider>);
+  await screen.findByText("FLUJO can't read usage");
+  expect(screen.getByText('Antigravity')).toBeInTheDocument();
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled();
+  expect(screen.queryByRole('link', { name: 'View Claude usage' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /Subscription allowance/ }));
+  expect(screen.getByText(/does not tell other apps how much of your plan is left/)).toBeInTheDocument();
+  expect(screen.queryByText('API billing')).not.toBeInTheDocument();
+  await act(async () => { await Promise.resolve(); });
+  expect(fetchMock.mock.calls.map(call => call[1].method)).toEqual(['GET']);
+});
+
 test('a usage-permission refusal keeps Refresh available and is not shown as a provider pause', async () => {
   fetchMock.mockResolvedValue(respond(snapshot([row('claude', { provider: 'claude', reason: 'usage-permission', retryAt: permissionRecheck(), status: 'unknown', observedAt: null, windows: [] })])));
   render(<AllowanceProvider><AllowanceBar modelIds={['claude']} /></AllowanceProvider>);
