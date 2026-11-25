@@ -14,7 +14,8 @@ import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { getCurrentWorkspace } from '@/utils/workspace';
-import { fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostSource } from './fixtures/trustedHostFingerprint';
 
 import { materializeProtectedPackageRunner } from './fixtures/protectedPackageRunner';
 

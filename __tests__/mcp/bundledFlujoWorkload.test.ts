@@ -245,7 +245,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
       const callback = jest.fn(() => { throw original; });
       const controlled = { start: nativeStart, close: nativeClose, onclose: reason === 'onclose' ? callback : undefined };
       transport = controlled;
-      attachTrustedHost(controlled, approved.config, reason === 'explicit' ? callback : undefined, capsule);
+      await attachTrustedHost(controlled, approved.config, reason === 'explicit' ? callback : undefined, capsule);
       if (reason !== 'start-failed') await timed('diagnostic-guarded-start', () => controlled.start());
       const actualInfo = console.info;
       const observations: unknown[][] = [];
@@ -280,7 +280,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
     }
     const start = jest.fn(async () => undefined), close = jest.fn(async () => undefined);
     transport = { start, close };
-    attachTrustedHost(transport, approved.config, undefined, capsule);
+    await attachTrustedHost(transport, approved.config, undefined, capsule);
     const key = createHash('sha256').update(token).digest('hex');
     let recordDescriptor: number | undefined;
     const actualOpen = fs.openSync;

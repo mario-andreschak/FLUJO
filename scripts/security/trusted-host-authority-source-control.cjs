@@ -30,14 +30,12 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const first=policy.trustedHostMcpPolicyDigest(fixture.config);
   assert.equal(policy.trustedHostMcpPolicyDigest(fixture.config),first);
   assert.notEqual(policy.trustedHostMcpPolicyDigest({...fixture.config,env:{...fixture.config.env,SECRET:'synthetic-credential-b'}}),first);
-  assert.equal(policy.trustedHostMcpApproval(fixture.config).digest,first);
-  const originalOpen=fs.openSync,originalRead=fs.readSync;
-  let targetFd,swapped=false,reads=0;
-  fs.openSync=function(...args){const fd=Reflect.apply(originalOpen,fs,args);if(path.resolve(String(args[0]))===candidate&&!swapped){targetFd=fd;swapped=true;try{fs.renameSync(candidate,retained);fs.writeFileSync(candidate,'unapproved-replacement');}catch(error){fs.closeSync(fd);throw error;}}return fd;};
-  fs.readSync=function(...args){if(args[0]===targetFd)reads++;return Reflect.apply(originalRead,fs,args);};
-  try{assert.throws(()=>policy.fingerprintTrustedHostExecutable(candidate),e=>e.code==='HOST_SOURCE_CHANGED');assert.equal(swapped,true);assert.equal(reads,0);}
-  finally{fs.openSync=originalOpen;fs.readSync=originalRead;if(fs.existsSync(retained)){fs.unlinkSync(candidate);fs.renameSync(retained,candidate);}}
+  assert.equal((await policy.trustedHostMcpApprovalAsync(fixture.config)).digest,first);
   const originalAsyncOpen=fs.promises.open;
+  let swapped=false,reads=0;
+  fs.promises.open=async function(...args){const handle=await Reflect.apply(originalAsyncOpen,fs.promises,args);if(path.resolve(String(args[0]))===candidate&&!swapped){swapped=true;const read=handle.read.bind(handle);handle.read=(...readArgs)=>{reads++;return read(...readArgs);};try{await fs.promises.rename(candidate,retained);await fs.promises.writeFile(candidate,'unapproved-replacement');}catch(error){await handle.close();throw error;}}return handle;};
+  try{await assert.rejects(policy.fingerprintTrustedHostExecutableAsync(candidate),e=>e.code==='HOST_SOURCE_CHANGED');assert.equal(swapped,true);assert.equal(reads,0);}
+  finally{fs.promises.open=originalAsyncOpen;if(fs.existsSync(retained)){fs.unlinkSync(candidate);fs.renameSync(retained,candidate);}}
   swapped=false;reads=0;
   fs.promises.open=async function(...args){const handle=await Reflect.apply(originalAsyncOpen,fs.promises,args);if(path.resolve(String(args[0]))===candidate&&!swapped){swapped=true;const read=handle.read.bind(handle);handle.read=(...readArgs)=>{reads++;return read(...readArgs);};try{await fs.promises.rename(candidate,retained);await fs.promises.writeFile(candidate,'unapproved-async-replacement');}catch(error){await handle.close();throw error;}}return handle;};
   try{await assert.rejects(policy.verifyTrustedHostMcp(fixture.config),e=>e.code==='HOST_SOURCE_CHANGED');assert.equal(swapped,true);assert.equal(reads,0);}

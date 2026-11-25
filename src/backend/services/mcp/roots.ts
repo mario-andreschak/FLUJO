@@ -333,7 +333,7 @@ export function createRootsListHandler(config: MCPServerConfig,
       }
     }
     if (current.transport === 'stdio') {
-      try { assertHostMcpLaunchAllowed(current); }
+      try { await assertHostMcpLaunchAllowed(current); }
       catch { return { roots: [] }; }
     }
     const [restricted, workspaceRoots] = await Promise.all([

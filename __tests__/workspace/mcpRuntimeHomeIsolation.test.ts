@@ -13,7 +13,8 @@ import {
   runWithWorkspace,
 } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
-import { fingerprintTrustedHostSource, trustedHostEnvironment, trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostEnvironment, trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostSource } from '../mcp/fixtures/trustedHostFingerprint';
 import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
 import { materializeProtectedPackageRunner } from '../mcp/fixtures/protectedPackageRunner';
 

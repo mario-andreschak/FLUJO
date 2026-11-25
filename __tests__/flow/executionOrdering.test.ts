@@ -80,7 +80,8 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { saveConfig } from '@/backend/services/mcp/config';
 import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trustedHostMcpApproval } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpApprovalAsync } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from '../mcp/fixtures/trustedHostFingerprint';
 import { encodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
 
@@ -158,7 +159,7 @@ async function stageToolConfig() {
       `from ${JSON.stringify(pathToFileURL(require.resolve(moduleName)).href)}`);
   toolProfile = installTrustedHostProfile({ name: 'ordering-fixture', nodeSource: source });
   const config = toolProfile.config;
-  const policy = trustedHostMcpApproval(config).policy;
+  const policy = (await trustedHostMcpApprovalAsync(config)).policy;
   const originalEntryPoint = policy.entryPoint;
   const entryPoint = path.join(policy.sourceRoot, 'processBoundaryServer.mjs');
   fs.renameSync(originalEntryPoint, entryPoint);

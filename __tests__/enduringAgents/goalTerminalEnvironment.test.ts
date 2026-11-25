@@ -20,7 +20,7 @@ it('executes Node and npm through the approved terminal with its reduced environ
       await fs.writeFile(path.join(directory, 'probe.cjs'),
         'console.log(JSON.stringify({node:process.execPath,secret:!!process.env.FLUJO_TERMINAL_TEST_SECRET,observer:process.env.NODE_OPTIONS}));');
       installed = installApprovedGoalMcp(directory, true, 30_000);
-      const launch = resolveTrustedHostLaunch(installed.config);
+      const launch = await resolveTrustedHostLaunch(installed.config);
       await client.connect(new StdioClientTransport({ ...launch, stderr: 'pipe' }));
       const result = await client.callTool({ name: 'terminal', arguments: { command: 'node probe.cjs', timeoutMs: 10_000 } });
       const output = JSON.parse((result.content as Array<{ text: string }>)[0].text);

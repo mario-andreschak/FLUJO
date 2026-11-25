@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { McpIsolationError } from '../security/isolatedMcp';
 import { resolveTrustedHostLaunch, trustedHostBrokerEnvironment, attachTrustedHost } from './trustedHost';
-import { trustedHostMcpApproval, TrustedHostMcpError } from '../security/trustedHostMcp';
+import { trustedHostMcpApprovalAsync, TrustedHostMcpError } from '../security/trustedHostMcp';
 import { attachLocalHostLaunch } from './localHost';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
@@ -875,14 +875,14 @@ export async function resolveStdioLaunch(
   if (config.transport !== 'stdio') throw new McpTransportError();
   if (config.isolation !== undefined) {
     if (config.trustedHost !== undefined) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
-    const isolation = prepareMcpIsolation(config, transformEnv(config.env));
+    const isolation = await prepareMcpIsolation(config, transformEnv(config.env));
     const { launch } = isolation;
     return { command: launch.command, args: [...launch.args], env: isolatedSdkEnvironment(launch), cwd: launch.cwd, isolation };
   }
-  assertHostMcpLaunchAllowed(config);
+  await assertHostMcpLaunchAllowed(config);
   if (config.trustedHost !== undefined) {
-    const launch = resolveTrustedHostLaunch(config);
-    const authority = trustedHostMcpApproval(config);
+    const launch = await resolveTrustedHostLaunch(config);
+    const authority = await trustedHostMcpApprovalAsync(config);
     const isolateHome = options?.isolateRuntimeHome === true;
     if (isolateHome !== (authority.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     if (isolateHome) {
@@ -1137,10 +1137,11 @@ export async function createStdioTransport(
     runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
     const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
+    const brokerEnv = runtimeBroker ? (config.trustedHost ? await trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {};
     const transportoptions: StdioServerParameters = {
       command: command,
       args: args,
-      env: { ...env, ...(runtimeBroker ? (config.trustedHost ? trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {}), ...workloadEnv },
+      env: { ...env, ...brokerEnv, ...workloadEnv },
       cwd: cwd,
       stderr: isolation ? 'ignore' : 'pipe',
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -1153,7 +1154,7 @@ export async function createStdioTransport(
 
     transport = new StdioClientTransport(transportoptions);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
-    else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else if (config.trustedHost) await attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
     else {
       attachShippedWorkspaceReadiness(transport, config, cwd);
       attachLocalHostLaunch(transport, config, current => JSON.stringify([

@@ -10,11 +10,11 @@ import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAcce
 import { ownerPolicySchema } from './ownerCredentials';
 import { previewPackageRunnerConsent } from './packageRunnerConsent';
 import { trustedHostMcpPolicySchema } from './trustedHostMcp';
-import { consentDiagnosticStage, consentDiagnosticStageSync, BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
+import { consentDiagnosticStage, BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
 import { BUNDLED_FLUJO_WORKLOAD_PURPOSE, computeBundledFlujoWorkloadInventory } from '../mcp/bundledFlujoWorkloadInventory';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
+import { fingerprintTrustedHostExecutableAsync, fingerprintTrustedHostSourceAsync, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
   trustedHostApprovalsSchema, trustedHostEnvironment, trustedHostMcpPreviewDigestAsync,
   TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES, sameTrustedHostConsent } from './trustedHostMcp';
 
@@ -154,8 +154,8 @@ export async function previewBundledHostConsent(serverName: string, options: { r
   const config: MCPStdioConfig = { ...stored, command: process.execPath, args: [entryPoint, ...originalArgs.slice(1)],
     cwd: revision.sourceRoot, rootPath: revision.sourceRoot, env: environment, runtimeHomeMode: options.runtimeHome,
     trustedHost: { schemaVersion: 1, kind: 'trusted-host', privileges: 'owner-account', runtime: 'node', runtimeHome: options.runtimeHome,
-      entryPoint, sourceRoot: revision.sourceRoot, sourceDigest: consentDiagnosticStageSync('SOURCE_FINGERPRINT', () => fingerprintTrustedHostSource(revision.sourceRoot, revision.dependencyLinks)),
-      executableDigest: consentDiagnosticStageSync('EXEC_FINGERPRINT', () => fingerprintTrustedHostExecutable(process.execPath)), environmentNames: [...new Set(environmentNames)],
+      entryPoint, sourceRoot: revision.sourceRoot, sourceDigest: await consentDiagnosticStage('SOURCE_FINGERPRINT', () => fingerprintTrustedHostSourceAsync(revision.sourceRoot, undefined, revision.dependencyLinks)),
+      executableDigest: await consentDiagnosticStage('EXEC_FINGERPRINT', () => fingerprintTrustedHostExecutableAsync(process.execPath)), environmentNames: [...new Set(environmentNames)],
       bundledInstallation: { packageDirectory: descriptor.packageDirectory as 'flujo' | 'filesystem' | 'bash' | 'browser',
         installationRoot: revision.installation, dependencyNamespaceRoot: revision.dependencyNamespaceRoot,
         assetDigest: revision.assetDigest, dependencyGraphDigest: revision.dependencyGraph.digest,

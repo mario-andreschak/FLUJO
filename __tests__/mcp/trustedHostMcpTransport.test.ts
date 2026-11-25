@@ -11,7 +11,8 @@ import { createBetaTransport, createNewBetaClient } from '@/backend/services/mcp
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { assertMcpIsolationDispatch } from '@/backend/services/mcp/isolation';
 import { getManagedTrustedHost } from '@/backend/services/mcp/trustedHost';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trustedHostMcpPolicyDigest } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicyDigest } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from './fixtures/trustedHostFingerprint';
 import { callTool } from '@/backend/services/mcp/tools';
 import { createRootsListHandler, setNodeRoots, _resetNodeRootsForTests } from '@/backend/services/mcp/roots';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';

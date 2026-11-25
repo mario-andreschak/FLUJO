@@ -5,7 +5,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trustedHostMcpPolicyDigest } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicyDigest } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from '../../mcp/fixtures/trustedHostFingerprint';
 
 /** Admit the real disposable campaign server through the production private grant. */
 export function installApprovedGoalMcp(fixtureDirectory: string, terminalOnly: boolean, timeoutMs: number) {
