@@ -10,17 +10,24 @@ remains the alternative for them.
 ## How it works
 
 1. When the automation is armed, FLUJO calls `events/subscribe` on the server with a local
-   URL (`/api/webhooks/mcp/{id}`) and a generated signing secret. It repeats this every few
-   minutes, which keeps the subscription alive and tells the server FLUJO is reachable.
-2. The server posts each event as a signed webhook.
-3. FLUJO checks the signature and starts the flow or Persona. The event reaches it as
+   URL (`/api/webhooks/mcp/{id}`), a generated signing secret and the cursor of the last
+   event it accepted. It repeats this every few minutes, which keeps the subscription alive
+   and tells the server FLUJO is reachable. Each grant asks for at most one day.
+2. If the server first checks the URL, FLUJO answers its challenge.
+3. The server posts each event as a signed webhook.
+4. FLUJO checks the signature and starts the flow or Persona. The event reaches it as
    untrusted trigger data.
+5. When the automation is deleted, switched off or pointed at another event, FLUJO calls
+   `events/unsubscribe`. Pausing all automations keeps the subscription, so events wait.
 
 The wire format follows the webhook part of the
-[MCP events draft](https://github.com/modelcontextprotocol/experimental-ext-triggers-events)
-and [Standard Webhooks](https://www.standardwebhooks.com/) signing. The draft will change,
-so everything that knows its format is in `src/backend/services/mcp/serverEvents.ts`. A
-server opts in by declaring `events`, either top-level or under `experimental`.
+[MCP events extension](https://github.com/modelcontextprotocol/ext-events)
+(`io.modelcontextprotocol/events`, SEP-3415, Beta) and
+[Standard Webhooks](https://www.standardwebhooks.com/) signing. The extension can still
+change, so everything that knows its format is in `src/backend/services/mcp/serverEvents.ts`
+and `receiveMcpEvent`. A server opts in by declaring the extension in
+`capabilities.extensions`, or, as earlier drafts did, `events` top-level or under
+`experimental`. FLUJO declares itself as an events client in each request's `_meta`.
 
 `events/*` are protocol requests rather than tools on purpose: a model can call a tool, but
 it cannot create a subscription.
@@ -32,9 +39,11 @@ The sender owns reliability. FLUJO never holds an unstarted event in memory:
 | FLUJO answers | Meaning | The sender |
 |---|---|---|
 | `202` | The run started | Moves on |
-| `200` | Already seen (`webhook-id` is remembered), or added to the running conversation | Moves on |
+| `200` | Already seen (by `eventId`, or `webhook-id` for older senders), or added to the running conversation | Moves on |
+| `200` + `{"challenge": …}` | The answer to a `verification` message | Activates delivery |
+| `200` | A `gap` or `terminated` notice; the automation card shows a note | Moves on |
 | `503` + `Retry-After` | A run is going, automations are paused, or the steered conversation has not reached a safe point yet | Tries the same event again |
-| `410` | Automation deleted, disabled or changed | Stops this subscription |
+| `410` | Automation deleted, disabled or changed | Drops this delivery |
 | `401` | Bad signature | Retries with backoff |
 | `413` | Over 256 KB | Skips the event |
 
@@ -42,9 +51,26 @@ Events are processed one at a time unless the automation allows parallel runs. T
 overlap setting does not apply to this trigger, because a skipped event would be lost after
 the sender was told it arrived.
 
+FLUJO saves the server's `cursor` from each accepted event (and from a `gap` notice) and
+sends it with every subscribe. A subscription that expired while FLUJO was off starts again
+from there instead of "from now". Repeats from such a replay are recognised by `eventId`.
+
+The current draft suggests a sender retries for only 10 to 15 minutes. An event that stays
+busy longer (a run that takes longer than that while the next event waits) can be dropped
+by the sender. The saved cursor helps only when the server honours it.
+
 While the automation is armed, FLUJO pins the server so it is not closed for being idle.
 
 The endpoint only accepts calls from this computer.
+
+### Known gap: `https` callback URLs
+
+The current draft says servers must refuse callback URLs that are not `https`, and should
+refuse loopback addresses unless configured to allow them. FLUJO's URL is
+`http://127.0.0.1:<port>/…`, so it works with servers that allow local delivery
+(`mcp-whatsapp-web` does), but a strict server will refuse the subscription and the card
+shows its error. The draft's `events/stream` push mode, over the MCP connection itself,
+would avoid this for local servers; it is not built yet.
 
 ## Claude channel messages (no delivery guarantee)
 
@@ -73,6 +99,9 @@ is off is lost, and so are messages held when the automation is changed or switc
 Choose **Events (delivery guaranteed)** whenever the server offers them. Only automations
 that chose this source listen; without one, channel messages are ignored and nothing runs.
 
+Permission relay (`claude/channel/permission`) is not supported: anyone who can write to a
+channel could then approve tool use.
+
 ## Steer a running conversation
 
 Fill in **Send to a running conversation (optional)** with a conversation id or a
@@ -92,7 +121,17 @@ the automation starts a run as usual.
   starts a run instead.
 - Persona conversations take the event through the Persona's durable mailbox.
 
+## Bridge to Claude Code (not built)
+
+The plan in #1401 has a small stdio program that Claude Code starts as a channel and that
+forwards FLUJO's events into a Claude Code session. It is deferred: Claude Code channels are
+still a research preview, a custom channel only loads with
+`--dangerously-load-development-channels` in an interactive session (never with `-p` or the
+Agent SDK), and organisations can switch channels off. The design itself still fits the
+current Claude Code docs (stdio, `experimental['claude/channel']`, `content` plus `meta`).
+
 ## Writing a server
 
-Declare the capability and implement `events/list` and `events/subscribe`. Keep the events
-durably and retry until a `2xx`. `mcp-whatsapp-web` is a complete example.
+Declare the extension and implement `events/list`, `events/subscribe` and
+`events/unsubscribe`. Keep the events durably and retry until a `2xx`. Put an `eventId` and,
+if you can, a `cursor` on every event. `mcp-whatsapp-web` is a complete example.

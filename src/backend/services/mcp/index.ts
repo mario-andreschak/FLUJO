@@ -262,9 +262,11 @@ import {
   listMcpEvents,
   serverSupportsEvents,
   subscribeMcpEvent,
+  unsubscribeMcpEvent,
   type McpEventDescriptor,
   type McpEventSubscribeRequest,
   type McpEventSubscribeResult,
+  type McpEventUnsubscribeRequest,
 } from "./serverEvents";
 import { registerResourceNotificationHandlers, registerToolListChangedHandler } from "./resourceNotifications";
 import {
@@ -2233,6 +2235,18 @@ export class MCPService {
       const channel = serverDeclaresClaudeChannel(acquired.lease.client);
       if (!serverSupportsEvents(acquired.lease.client)) return { supported: false, channel, events: [] };
       return { supported: true, channel, events: await listMcpEvents(acquired.lease.client) };
+    } finally {
+      acquired.lease.release();
+    }
+  }
+
+  /** Ends a webhook subscription. Throws when the server cannot be reached or refuses. */
+  async unsubscribeServerEvent(serverName: string, request: McpEventUnsubscribeRequest): Promise<void> {
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
+    try {
+      if (!serverSupportsEvents(acquired.lease.client)) return;
+      await unsubscribeMcpEvent(acquired.lease.client, request);
     } finally {
       acquired.lease.release();
     }

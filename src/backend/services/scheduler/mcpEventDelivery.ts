@@ -38,6 +38,8 @@ export interface McpEventDeliveryDeps {
   updateState: (id: string, update: (current: PlannedExecutionState) => PlannedExecutionState) => Promise<unknown>;
   /** Hands an event to a running conversation (#1401). Absent: events always start runs. */
   steer?: (request: EventSteeringRequest) => Promise<EventSteeringOutcome>;
+  /** A note for the automation card (skipped events, ended subscription). */
+  onNotice?: (executionId: string, message: string) => void;
   onBackgroundError?: (message: string, error: unknown) => void;
   now?: () => number;
 }
@@ -64,6 +66,8 @@ export interface McpEventItem<T = unknown> {
   key: string;
   /** Older keys that also mean "already seen". */
   aliases?: string[];
+  /** The server's resume point after this event, saved once it is accepted. */
+  cursor?: string;
   payload: T;
 }
 
@@ -111,15 +115,39 @@ export async function receiveMcpEvent(
   if (!signed) return { status: 401, body: { error: 'Invalid signature' } };
   const webhookId = input.webhookId!;
 
-  let event: { eventId?: unknown; name?: unknown; timestamp?: unknown; data?: unknown };
+  let event: {
+    eventId?: unknown;
+    name?: unknown;
+    timestamp?: unknown;
+    data?: unknown;
+    cursor?: unknown;
+    type?: unknown;
+    challenge?: unknown;
+  };
   try {
     event = JSON.parse(input.body);
   } catch {
     return { status: 400, body: { error: 'Body is not valid JSON' } };
   }
+  if (!event || typeof event !== 'object') return { status: 400, body: { error: 'Body is not an event' } };
+
+  // Control envelopes of the current draft, told apart by a top-level `type`.
+  if (event.name === undefined && typeof event.type === 'string') {
+    return receiveControlEnvelope(deps, execution, event);
+  }
   if (event.name !== trigger.eventName) return { status: 400, body: { error: 'Unexpected event name' } };
 
-  return admitMcpEvents(deps, execution, [{ key: webhookId, payload: event }], ([item]) => ({
+  // `eventId` names the event, `webhook-id` one message about it. A server may
+  // send the same event again in a new message (a replay from a cursor), so
+  // the event id is the key; the message id still counts as seen.
+  const eventId = typeof event.eventId === 'string' && event.eventId ? event.eventId : webhookId;
+  const cursor = typeof event.cursor === 'string' ? event.cursor : undefined;
+  return admitMcpEvents(deps, execution, [{
+    key: eventId,
+    aliases: eventId === webhookId ? undefined : [webhookId],
+    cursor,
+    payload: event,
+  }], ([item]) => ({
     summary: `${trigger.serverName}: ${trigger.eventName}`,
     context: {
       event: {
@@ -130,6 +158,32 @@ export async function receiveMcpEvent(
       },
     },
   }));
+}
+
+async function receiveControlEnvelope(
+  deps: McpEventDeliveryDeps,
+  execution: McpEventExecution,
+  envelope: { type?: unknown; challenge?: unknown; cursor?: unknown },
+): Promise<McpEventDeliveryResult> {
+  switch (envelope.type) {
+    case 'verification':
+      // The server checks that this endpoint is really ours before it delivers.
+      if (typeof envelope.challenge !== 'string') return { status: 400, body: { error: 'Missing challenge' } };
+      return { status: 200, body: { challenge: envelope.challenge } };
+    case 'gap':
+      // Events were skipped. Resume after the gap; tell the user.
+      if (typeof envelope.cursor === 'string') {
+        const cursor = envelope.cursor;
+        await deps.updateState(execution.id, current => ({ ...current, eventCursor: cursor }));
+      }
+      deps.onNotice?.(execution.id, 'The server skipped some events. Runs for them did not happen.');
+      return { status: 200, body: { accepted: true } };
+    case 'terminated':
+      deps.onNotice?.(execution.id, 'The server ended the subscription. FLUJO subscribes again within a few minutes.');
+      return { status: 200, body: { accepted: true } };
+    default:
+      return { status: 400, body: { error: 'Unknown control message' } };
+  }
 }
 
 /**
@@ -158,9 +212,11 @@ export async function admitMcpEvents<T>(
     .update(`${execution.id}\0${execution.generationId ?? execution.createdAt}\0${keys.join('\0')}`)
     .digest('hex');
   const { summary, context } = describe(fresh);
+  const cursor = fresh.map(item => item.cursor).filter((value): value is string => Boolean(value)).at(-1);
   const remember = () => deps.updateState(execution.id, current => ({
     ...current,
     seenIds: [...(current.seenIds ?? []), ...keys].slice(-MAX_SEEN_IDS),
+    ...(cursor ? { eventCursor: cursor } : {}),
   }));
 
   if (trigger.steerConversationId && deps.steer) {

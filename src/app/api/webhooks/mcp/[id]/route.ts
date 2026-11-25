@@ -25,11 +25,13 @@ async function POST_handler(request: NextRequest, { params }: { params: Promise<
   try {
     const { id } = await params;
     await ensureBackendInitialized().catch(() => { /* surfaced at startup */ });
+    const scheduler = getSchedulerService();
     const result = await receiveMcpEvent({
-      scheduler: getSchedulerService(),
+      scheduler,
       loadState: loadExecutionState,
       updateState: (executionId, update) => updateExecutionState(executionId, update),
       steer: steerEventWithRuntime,
+      onNotice: (executionId, message) => scheduler.reportTriggerNotice(executionId, message),
       onBackgroundError: (message, error) => log.warn(`${message} for ${id}:`, error),
     }, {
       id,

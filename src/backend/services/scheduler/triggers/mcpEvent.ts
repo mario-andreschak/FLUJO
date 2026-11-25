@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
-import type { McpEventTriggerConfig } from '@/shared/types/plannedExecution';
+import { mcpEventSource, type McpEventTriggerConfig, type TriggerConfig } from '@/shared/types/plannedExecution';
 import { DEFAULT_WORKSPACE } from '@/utils/workspace';
 import type { ArmedTrigger } from './types';
 
@@ -11,12 +11,19 @@ import type { ArmedTrigger } from './types';
 
 /** Refreshing often means a receiver that came back gets its backlog within minutes. */
 const REFRESH_MS = 5 * 60_000;
-const SUBSCRIPTION_TTL_MS = 7 * 86_400_000;
+/**
+ * The extension suggests grants "from a few minutes up to about a day". A
+ * subscription FLUJO no longer refreshes (lost unsubscribe, deleted data) ends
+ * by itself within a day.
+ */
+const SUBSCRIPTION_TTL_MS = 86_400_000;
 const RETRY_DELAYS_MS = [5_000, 15_000, 60_000, 300_000];
 const SIGNATURE_TOLERANCE_SECONDS = 300;
 
 export interface McpEventDeps {
   subscribe: (ttlMs: number) => Promise<{ refreshBefore: string | null }>;
+  /** Ends the subscription when the automation is retired. Best effort. */
+  unsubscribe?: () => Promise<void>;
   /** Keeps the server running while the trigger is armed. */
   pin: () => void | Promise<void>;
   unpin: () => void | Promise<void>;
@@ -35,6 +42,15 @@ export function newMcpEventSecret(): string {
 export function mcpEventFingerprint(trigger: Pick<McpEventTriggerConfig, 'serverName' | 'eventName' | 'arguments'>): string {
   const key = JSON.stringify([trigger.serverName, trigger.eventName, trigger.arguments ?? {}]);
   return createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+/**
+ * What the server keys a webhook subscription on (delivery URL, name,
+ * arguments), or null when the trigger holds no subscription.
+ */
+export function mcpEventSubscriptionKey(trigger: TriggerConfig | undefined): string | null {
+  if (trigger?.type !== 'mcp-event' || mcpEventSource(trigger) !== 'events') return null;
+  return mcpEventFingerprint(trigger);
 }
 
 /** Always this machine: event content never needs to leave it to reach FLUJO. */
@@ -98,13 +114,23 @@ export function armMcpEvent(deps: McpEventDeps): ArmedTrigger {
 
   void Promise.resolve(deps.pin()).catch(() => undefined).then(tick);
 
+  const dispose = () => {
+    disposed = true;
+    if (timer) clearTimeout(timer);
+    void Promise.resolve(deps.unpin()).catch(() => undefined);
+  };
+
   return {
-    // The subscription stays: events that arrive while FLUJO is down wait for it.
-    // A disabled or changed automation answers 410, which ends the subscription.
-    dispose() {
-      disposed = true;
-      if (timer) clearTimeout(timer);
-      void Promise.resolve(deps.unpin()).catch(() => undefined);
+    // The subscription stays: events that arrive while FLUJO is down or the
+    // automations are paused wait for it.
+    dispose,
+    // Deleted, switched off or changed. A 410 refuses each delivery, and since
+    // the current draft it no longer ends the subscription, so end it here.
+    // If that fails, the grant runs out within a day.
+    retire() {
+      if (disposed) return;
+      dispose();
+      if (deps.unsubscribe) void deps.unsubscribe().catch(error => deps.onError(error instanceof Error ? error.message : String(error)));
     },
   };
 }

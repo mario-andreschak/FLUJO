@@ -461,8 +461,14 @@ export interface PlannedExecutionState {
   lastScheduledFireAt?: string;
   /** on-change: hash of the last seen tool result. */
   lastHash?: string;
-  /** new-items: ids already seen (capped). */
+  /** new-items: ids already seen (capped). mcp-event: accepted event ids. */
   seenIds?: string[];
+  /**
+   * mcp-event: the server's cursor from the last accepted event (or a gap
+   * notice). Sent on every subscribe, so a new or expired subscription
+   * resumes where FLUJO stopped instead of "from now" (#1401).
+   */
+  eventCursor?: string;
   /** llm-gate: day stamp (YYYY-MM-DD) + count for the daily call cap. */
   llmCallsDay?: string;
   llmCallsCount?: number;

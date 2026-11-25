@@ -40,7 +40,7 @@ import {
 } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll } from './triggers/mcpPoll';
-import { armMcpEvent, mcpEventDeliveryUrl, newMcpEventSecret } from './triggers/mcpEvent';
+import { armMcpEvent, mcpEventDeliveryUrl, mcpEventSubscriptionKey, newMcpEventSecret } from './triggers/mcpEvent';
 import { armClaudeChannel } from './triggers/claudeChannel';
 import { subscribeInboundEvents } from '@/backend/services/mcp/inboundEvents';
 import { composeTriggerPrompt } from './triggerPrompt';
@@ -396,6 +396,26 @@ export class SchedulerService {
     return run;
   }
 
+  /**
+   * Whether an armed trigger is going away for good (deleted, switched off, or
+   * listening to something else now), not just paused or re-armed with the same
+   * subscription. Only then may it end outside state such as an MCP event
+   * subscription: ending a subscription that is about to be renewed under the
+   * same key could race the renewal.
+   */
+  private isRetiredTrigger(id: string, file: PlannedExecutionsFile): boolean {
+    if (file.paused) return false;
+    const current = file.executions.find(execution => execution.id === id);
+    if (!current || !current.enabled || current.personaRetired || current.personaArchived) return true;
+    let armedTrigger: PlannedExecution['trigger'] | undefined;
+    try {
+      armedTrigger = (JSON.parse(this.armedConfigurations.get(id) ?? 'null') as PlannedExecution | null)?.trigger;
+    } catch {
+      return false;
+    }
+    return mcpEventSubscriptionKey(current.trigger) !== mcpEventSubscriptionKey(armedTrigger);
+  }
+
   private async doReconcile(committed?: Readonly<{ id: string; configuration: string }>): Promise<void> {
     // Keep timers alive while reading storage. Disposing before this await can
     // lose a due occurrence and re-arm directly at the following cron boundary.
@@ -423,7 +443,8 @@ export class SchedulerService {
     for (const [id, trigger] of this.armed) {
       if (configurations.get(id) === this.armedConfigurations.get(id)) continue;
       try {
-        trigger.dispose();
+        if (trigger.retire && this.isRetiredTrigger(id, file)) trigger.retire();
+        else trigger.dispose();
       } catch (error) {
         log.warn(`Failed to dispose trigger for ${id}:`, error);
       }
@@ -758,12 +779,22 @@ export class SchedulerService {
             subscribe: this.bindToWorkspace(async (ttlMs: number) => {
               const { mcpService } = await import('@/backend/services/mcp');
               if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before subscribing');
+              const { eventCursor } = await loadExecutionState(execution.id);
               return mcpService.subscribeServerEvent(trigger.serverName, {
                 name: trigger.eventName,
                 arguments: trigger.arguments,
                 url: mcpEventDeliveryUrl(execution.id, trigger, getCurrentWorkspace()),
                 secret: trigger.secret,
                 ttlMs,
+                cursor: eventCursor ?? null,
+              });
+            }),
+            unsubscribe: this.bindToWorkspace(async () => {
+              const { mcpService } = await import('@/backend/services/mcp');
+              await mcpService.unsubscribeServerEvent(trigger.serverName, {
+                name: trigger.eventName,
+                arguments: trigger.arguments,
+                url: mcpEventDeliveryUrl(execution.id, trigger, getCurrentWorkspace()),
               });
             }),
             pin: this.bindToWorkspace(async () => {
@@ -946,6 +977,14 @@ export class SchedulerService {
         return { execution, status: this.getStatus(execution), lastRun: await loadLastRunRecord(execution.id) };
       })
     );
+  }
+
+  /**
+   * A note from an event source (skipped events, an ended subscription) shown on
+   * the automation card. It clears itself on the trigger's next successful check.
+   */
+  reportTriggerNotice(id: string, message: string): void {
+    this.lastTriggerErrors.set(id, message);
   }
 
   async get(id: string): Promise<PlannedExecution | null> {

@@ -158,7 +158,7 @@ const McpEventPanel = ({ config, onChange }: McpEventPanelProps) => {
           const id = conversationIdFromInput(e.target.value);
           onChange({ ...config, steerConversationId: id || undefined });
         }}
-        inputProps={{ 'data-testid': 'mcp-event-steer-conversation' }}
+        slotProps={{ htmlInput: { 'data-testid': 'mcp-event-steer-conversation' } }}
       />
       <Alert severity="info" sx={{ mt: 2 }}>{t('automations.event.info')}</Alert>
     </Box>

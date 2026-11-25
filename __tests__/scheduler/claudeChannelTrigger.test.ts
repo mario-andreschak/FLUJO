@@ -186,13 +186,14 @@ describe('armClaudeChannel', () => {
   });
 
   it('turns a burst of 100 messages in one second into a couple of runs, not a flood', async () => {
-    const { deps, armed, emit } = setup();
+    const deliver = jest.fn<Promise<'accepted'>, [McpInboundEvent[]]>().mockResolvedValue('accepted');
+    const { armed, emit } = setup({ deliver });
     for (let i = 0; i < 100; i++) {
       emit(event(i));
       await jest.advanceTimersByTimeAsync(10);
     }
     await jest.advanceTimersByTimeAsync(1_000);
-    const batches = deps.deliver.mock.calls.map(call => (call as unknown[])[0] as McpInboundEvent[]);
+    const batches = deliver.mock.calls.map(([batch]) => batch);
     expect(batches.length).toBeLessThanOrEqual(5);
     expect(batches.flat().map(inbound => inbound.deliveryId)).toEqual(Array.from({ length: 100 }, (_, i) => `channel:${i}`));
     armed.dispose();
