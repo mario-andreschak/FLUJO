@@ -13,7 +13,7 @@ export function localVerificationCommands({ full = false, install = false, tests
   node('scripts/run-local-jest.cjs', '--ci', '--selectProjects', 'node', '--runInBand', '--runTestsByPath', ...CRITICAL_TEST_FILES);
   node('scripts/run-local-jest.cjs', '--ci', '--selectProjects', 'jsdom', '--runInBand', '--runTestsByPath', ...CRITICAL_FRONTEND_TEST_FILES);
   if (full) {
-    npm('run', 'typecheck'); npm('run', 'lint:all'); npm('run', 'lint:ratchet'); npm('run', 'check:repo-hygiene'); npm('audit', '--include=dev', '--audit-level=high');
+    npm('run', 'typecheck'); npm('run', 'lint:all'); npm('run', 'lint:ratchet'); npm('run', 'check:repo-hygiene'); npm('run', 'check:feature-map'); npm('audit', '--include=dev', '--audit-level=high');
     npm('run', 'smoke:mcp-artifacts'); npm('run', 'test:ci');
     npm('run', 'verify:test-baseline', '--', '--stage=ci', '--results=jest-results.json');
     if (isolated) { npm('run', 'test:isolated'); npm('run', 'verify:test-baseline', '--', '--stage=isolated', '--results=jest-results-isolated.json'); }

@@ -19,8 +19,12 @@ return. Take the first of these that works:
    written.
 2. A check: a lint rule in `tooling/eslint-plugin-flujo`, a type or a test.
    Its message says how to fix the cause, never how to silence it.
-3. Verification: run the app and check what the user sees.
+3. Verification: run the app and check what the user sees
+   (`.claude/skills/verify-flujo/SKILL.md`, `docs/feature-map/`).
 4. Prose here or in a skill, only for calls that need judgment.
+
+Before you call a change a user can see done, check it in a throwaway FLUJO with
+the `verify-flujo` skill and keep the proof.
 
 Then add a row to the table. The recipe is `.claude/skills/correct/SKILL.md`.
 
@@ -44,6 +48,7 @@ workaround.
 | Effects, refs and state follow React's rules | `react-hooks/*` in `eslint.config.mjs` |
 | `backend`, `frontend` and `shared` import only what their layer allows | `__tests__/architecture/importBoundaries.test.ts` |
 | Repository hygiene | `scripts/check-repo-hygiene.mjs` |
+| Every page has exactly one feature map entry | `scripts/check-feature-map.mjs` |
 | Resilience over refusal | Prose: needs judgment |
 
 # Resilience over refusal

@@ -366,11 +366,12 @@ jobs:
       # Covers src/, __tests__/ and scripts/ with warnings treated as errors.
       - name: Verify the locked Next lint adapter and real rule callers
         run: npm run test:dependency-glob
-      - name: Verify FLUJO's own lint rules and repository checks
-        run: npm run test:lint-rules
+      - name: Verify FLUJO's own lint rules, repository checks and app driver
+        run: npm run test:checks
       - run: npm run lint:all
       - run: npm run lint:ratchet
       - run: npm run check:repo-hygiene
+      - run: npm run check:feature-map
 
   test:
     name: test

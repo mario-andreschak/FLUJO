@@ -1,0 +1,44 @@
+# Talk
+
+Routes: `/chat`
+
+Here a user chats. They can talk to one of their saved agents, or start a Quick Chat straight with an AI model, which finds connected apps and saved agents on its own. A "Conversations" sidebar lists past chats; they can be searched, filtered, pinned, renamed, stopped or deleted. While a chat runs, the user can watch the steps the agent carried out, approve tool use, attach documents, and open a debugger.
+
+## Sub-features
+
+- `talk-history`: the "Conversations" sidebar with search and filters, or "No conversations yet" / "Start a new conversation" when empty.
+- `talk-new-conversation`: the "New" button starts a chat with the last picked, favorite or first agent.
+- `talk-choose-agent`: the "Select an agent or Persona" button opens a picker with "Agents" and "Personas" tabs. With no agents it says "No agents available. Create an agent first."
+- `talk-quick-chat`: the "Quick" button opens the "Quick Chat" dialog with an "AI" choice, "Instructions (optional)", "Apps (optional)" and "Start chat".
+- `talk-send`: the "Message" box ("Type a message…") and the "Send message" button; "Attach document" adds files.
+- `talk-run-options`: "Run options" holds "Require tool approvals" and "Debugger".
+- `talk-executed-steps`: the "Toggle executed steps panel" button (tooltip "Show executed steps" / "Hide executed steps") shows the steps the agent ran.
+- `talk-rename`: "Rename conversation" changes the chat title.
+- `talk-copy-link`: "Copy link to this chat" in the top bar, shown only while a conversation is open.
+- `talk-delete`: "Delete conversation" on a sidebar row, with a confirmation.
+
+## How to get to it (user POV)
+
+- Choose `Talk` in the top navigation (`data-tour="nav-chat"`). Below 1536 px wide, first choose `Open navigation menu`.
+- Open `http://127.0.0.1:<port>/chat`.
+- Choose `Use` on an agent card in Agents, or "Try it" / "Try my agent" in the agent editor.
+- Follow a chat link (`/chat?conversation=<id>`).
+
+## Driving it with flujo-drive
+
+Preconditions: a throwaway instance from the verify-flujo skill. A fresh instance has no AI model and only the built-in "FLUJO" agent. You can open the page, the Quick Chat dialog and the agent picker without them. Getting a reply needs a connected model (a provider key or a local model server), plus a saved agent for agent chats. If neither can be set up, report the send-and-reply steps as unmet. Do not count the empty state as a pass for chatting.
+
+- **Open**: `node scripts/flujo-drive.mjs open /chat` → the sidebar "Conversations" and "Create a new conversation to start chatting."
+- **Quick Chat without a model**: `node scripts/flujo-drive.mjs click /chat --role button --name "Quick Chat: your AI" --then-shot talk-quick.png` → the "Quick Chat" dialog. It says "Connect an AI to start" and offers a "Connect AI" link to `/models?add=1`.
+- **Agent picker**: `node scripts/flujo-drive.mjs click /chat --role button --name "Select an agent or Persona" --then-aria talk-picker.aria` → the "Agents" and "Personas" tabs.
+- **Chat with an agent** (needs a model and an agent): `node scripts/flujo-drive.mjs steps /chat --file talk-send.json`. The steps: click button "New"; fill "Message"; click button "Send message"; expect-text for a word from the reply; then shot and aria.
+- **Proof**: an ARIA snapshot and a screenshot of the conversation showing the sent message and the reply, or of the Quick Chat dialog when no model exists.
+
+## Gotchas
+
+- The Quick button's accessible name comes from its tooltip: "Quick Chat: your AI discovers connected apps and saved agents as needed". The text on the button is only "Quick".
+- Quick Chat can be switched off in Settings (model access). Then the Quick button is not shown.
+- "New" with no saved agent does not create a chat. It shows the agent/Persona picker instead.
+- Each flujo-drive command is a fresh browser. Open a chat by its `?conversation=<id>` link, or do the whole thing in one `steps` run.
+- Replies stream in over time. Wait for text from the reply (expect-text) rather than taking a screenshot right after sending.
+- The guided tour starts on its own only on the home page `/`, so opening `/chat` directly avoids it.

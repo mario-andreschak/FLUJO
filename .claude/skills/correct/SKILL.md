@@ -23,8 +23,8 @@ and `eslint-suppressions.json`. One case is a bug, not a pattern: fix it and sto
    Give each piece of state one owner, hide internals, and delete the old path
    once its callers have moved.
 2. A check. Can a program tell right from wrong? Add a lint rule, a type or a test.
-3. Verification. Does it only show in the running app? Add it to the app's
-   runtime checks.
+3. Verification. Does it only show in the running app? Add the journey to the
+   matching `docs/feature-map/` entry and check it with the `verify-flujo` skill.
 4. Prose. Only when it needs judgment. Add one short line to AGENTS.md with an
    example of the failure.
 
@@ -59,5 +59,5 @@ delete that line.
 ```
 npm run lint:all
 npm run lint:ratchet
-node --test tooling/eslint-plugin-flujo/rules.test.mjs
+npm run test:checks
 ```
