@@ -24,6 +24,7 @@ import { workspaceActionForMethod } from './access';
 export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/accounts/mode': 'admin', // turns multi-user mode on (allowed to anyone while it is off) or off
   '/api/accounts/session': 'account', // sign in and sign out with a name and password
+  '/api/accounts/teams': 'account', // teams the signed-in person is in; each change checks the team (#575)
   '/api/accounts/tokens': 'account', // the signed-in person's own API tokens
   '/api/accounts/users': 'admin', // people and workspace owners
   '/api/approvals': 'workspace',
@@ -47,6 +48,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/credential-transfer/restore': 'workspace',
   '/api/cwd': 'host', // shows server folders
   '/api/diagnostics/report': 'workspace',
+  '/api/edit-locks': 'workspace', // "Anna is editing" notes on shared items (#575)
   '/api/encryption/secure': 'workspace',
   '/api/env': 'workspace',
   '/api/factory-observatory': 'admin', // installation-wide FACTORY connection
@@ -72,6 +74,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/harness/comparisons': 'workspace',
   '/api/harness/comparisons/[id]': 'workspace',
   '/api/harness/profiles': 'workspace',
+  '/api/history': 'workspace', // who changed a shared item, and restoring an older version (#575)
   '/api/human-tasks': 'workspace',
   '/api/human-tasks/[requestId]': 'workspace',
   '/api/init': 'workspace',
@@ -172,6 +175,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/snapshots/open-folder': 'host', // opens a folder window on the server
   '/api/statistics': 'workspace',
   '/api/storage': 'workspace',
+  '/api/team-copy': 'workspace', // copy into another workspace without secrets; checks the target too (#575)
   '/api/telemetry/daily-active': 'admin', // installation-wide usage heartbeat
   '/api/tickets': 'workspace',
   '/api/tickets/[id]': 'workspace',

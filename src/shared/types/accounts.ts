@@ -42,8 +42,15 @@ export type InstallationRole = typeof INSTALLATION_ROLES[number];
 /** A new person is a member without host access until an admin decides otherwise. */
 export const DEFAULT_INSTALLATION_ROLE: InstallationRole = 'member';
 
-/** Role of a person inside one team (Tier 1, #575). */
-export const TEAM_ROLES = ['owner', 'member'] as const;
+/**
+ * Role of a person inside one team (Tier 1, #575).
+ *
+ * - `owner`: everything in the team's workspaces, and manages the team.
+ * - `member`: reads, edits and runs everything in the team's workspaces (the
+ *   "editor" role); cannot reveal secrets or manage the workspace itself.
+ * - `viewer`: only looks. Cannot change, run or reveal anything.
+ */
+export const TEAM_ROLES = ['owner', 'member', 'viewer'] as const;
 export type TeamRole = typeof TEAM_ROLES[number];
 
 /** Only `member` gives access. `invited` has not accepted yet; `removed` is kept for the record. */
@@ -301,6 +308,8 @@ export const AUDIT_ACTIONS = [
   'token-issued', 'token-revoked',
   'team-created', 'team-changed', 'team-deleted', 'member-added', 'member-changed', 'member-removed',
   'workspace-owner-changed',
+  /** Something was copied from one workspace into another (#575). Never with the secret values. */
+  'item-copied',
 ] as const;
 export type AuditAction = typeof AUDIT_ACTIONS[number];
 

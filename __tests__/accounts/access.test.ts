@@ -211,7 +211,7 @@ describe('multi-user access rules: routes by kind', () => {
 
   it('maps every denial to one HTTP status', () => {
     expect(ACCESS_DENIAL_STATUS).toEqual({
-      'sign-in-required': 401, 'not-found': 404, 'workspace-admin-required': 403, 'host-access-required': 403,
+      'sign-in-required': 401, 'not-found': 404, 'workspace-admin-required': 403, 'view-only': 403, 'host-access-required': 403,
       'admin-required': 403, 'token-scope-missing': 403, 'owner-inactive': 403, 'starter-lost-access': 403,
     });
   });

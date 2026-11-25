@@ -36,6 +36,7 @@ export async function GET(request: Request): Promise<Response> {
       revision: accounts.revision,
       me: current.user.id,
       users: accounts.users.map(publicUser),
+      teams: accounts.teams.map(team => ({ id: team.id, name: team.name })),
       workspaces,
     });
   } catch (error) {
@@ -72,7 +73,7 @@ export async function PATCH(request: Request): Promise<Response> {
   }
 }
 
-/** Give a workspace to a person: `{ workspace, ownerId }`. */
+/** Give a workspace to a person or a team: `{ workspace, ownerId, ownerType? }` (`ownerType` is `user` or `team`). */
 export async function PUT(request: Request): Promise<Response> {
   if (!sameOriginChange(request)) return json({ error: 'Forbidden' }, 403);
   try {
@@ -85,8 +86,9 @@ export async function PUT(request: Request): Promise<Response> {
     if (!(await listWorkspaces()).some(workspace => workspace.name === body.workspace)) {
       return json({ error: `Unknown workspace: ${body.workspace}` }, 404);
     }
-    await assignWorkspace(body.workspace, body.ownerId, current.user);
-    return json({ workspace: body.workspace, ownerId: body.ownerId });
+    const ownerType = body.ownerType === 'team' ? 'team' : 'user';
+    await assignWorkspace(body.workspace, body.ownerId, current.user, Date.now(), ownerType);
+    return json({ workspace: body.workspace, ownerId: body.ownerId, ownerType });
   } catch (error) {
     return accountErrorResponse(error);
   }

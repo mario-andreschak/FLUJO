@@ -21,7 +21,9 @@ import {
 import {
   accountRequestUser, accountsDamagedResponse, denialResponse, unknownWorkspaceResponse, type AccountRequestUser,
 } from '@/backend/services/accounts/requestAccess';
-import { hasHostAccess, listAccessibleWorkspaces, workspaceActions } from '@/backend/services/accounts/access';
+import {
+  hasHostAccess, listAccessibleWorkspaces, mayCreateWorkspaceFor, workspaceActions,
+} from '@/backend/services/accounts/access';
 import { recordWorkspaceCreated, recordWorkspaceRenamed } from '@/backend/services/accounts/admin';
 import { AccountsDamagedError } from '@/backend/services/accounts/store';
 
@@ -173,8 +175,14 @@ export async function POST(request: Request) {
   try {
     const person = await signedInPerson(request);
     if (person instanceof Response) return person;
+    // Multi-user mode (#575): `teamId` creates a workspace the team owns. Team
+    // owners and admins may; anyone else is told the team does not exist.
+    const teamId = person && typeof body.teamId === 'string' && body.teamId ? body.teamId : undefined;
+    if (teamId && !mayCreateWorkspaceFor(person.accounts, person.user, { ownerType: 'team', ownerId: teamId })) {
+      return NextResponse.json({ error: 'No such team, or you are not one of its owners.' }, { status: 404 });
+    }
     const workspace = await createWorkspace(body.name as string);
-    await recordWorkspaceCreated(workspace.name, person?.user.id ?? null);
+    await recordWorkspaceCreated(workspace.name, person?.user.id ?? null, Date.now(), teamId);
     return NextResponse.json(
       { workspace, workspaces: await visibleWorkspaces(request, person) },
       { status: 201 },

@@ -4,6 +4,8 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
 import { adoptFirstModelForDefaultAgent } from '@/backend/services/flow/defaultAgent';
+import { currentSharedEditor, recordChange } from '@/backend/services/sharedItems/guard';
+import { loadSharedItem } from '@/backend/services/sharedItems/load';
 import * as modelAdapter from './frontend-model-adapter';
 
 const log = createLogger('app/api/model/route');
@@ -78,6 +80,12 @@ async function POST_handler(request: NextRequest) {
     }
 
     if (result.model) await adoptAsFirstAi(result.model);
+    // Multi-user mode (#575): the change history starts with who made it.
+    const editor = await currentSharedEditor();
+    if (editor && result.model?.id) {
+      await recordChange(editor, { kind: 'model', itemId: result.model.id, action: 'created', before: null,
+        after: await loadSharedItem('model', result.model.id) });
+    }
     return new Response(JSON.stringify(result.model), {
       status: 201,
       headers: { 'Content-Type': 'application/json' },

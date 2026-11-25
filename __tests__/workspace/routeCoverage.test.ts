@@ -6,6 +6,7 @@ const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'] as 
 const INSTALLATION_WIDE = new Set([
   '/api/accounts/mode',
   '/api/accounts/session',
+  '/api/accounts/teams',
   '/api/accounts/tokens',
   '/api/accounts/users',
   '/api/cloud/instance',
