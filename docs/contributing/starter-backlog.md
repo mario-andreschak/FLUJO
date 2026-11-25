@@ -1,37 +1,37 @@
-# Curated starter backlog
+# Starter tasks
 
-Curated October 3, 2026 against main `3511ba4`; all entries are **unclaimed
-proposals**, not assignments or promises of merge. Steward role: contributor
-onboarding, currently no consenting human recorded. Recheck open issues/PRs before
-claiming an item in #576. Review this list after every accepted starter PR and at
-least monthly once a steward has consented. Replace completed/stale entries;
-retain their accepted PR and review links in the continuity evidence record.
+Small, real tasks for your first pull request. Each issue explains what is wrong,
+the steps, the commands to check your work, and when it is done. None needs an AI
+account.
 
-| Starter | Useful deliverable / bounded acceptance | Prerequisite / reviewer |
+The live list is every open issue labelled
+[`good first issue`](https://github.com/mario-andreschak/FLUJO/labels/good%20first%20issue).
+These were opened on November 25, 2026:
+
+| Issue | What you will do | Skills |
 | --- | --- | --- |
-| Reproduce contributor setup on Linux | Follow the clean-clone recipe, retain versions/commands and fix one documented setup error. Record any coaching or hidden input. | No paid account; contributor reviewer |
-| Observe Windows onboarding | Have a willing novice follow setup and one focused test, then submit a documentation fix for actual friction. Synthetic data only. | Consent and authorized recruitment; #576 |
-| Explain recovery failure diagnosis | Add one worked synthetic example of a checksum/path rejection using the existing `snapshotRestore` fixture, with raw error and the safe next step. | Production #570 confirms contract; no change to acceptance assertions |
-| Improve a tool failure message | Select one existing reproducible UI error, add the user action and a component boundary regression. | Feature owner checks #517/#526 and reserves exact component first |
-| Document a core behavior contract | Explain cancellation or conversation ordering using one existing targeted regression and a concrete before/after example. | Code health #571 reserves module; no broad refactor |
+| [#1438](https://github.com/mario-andreschak/FLUJO/issues/1438) Clear the "Copied" and "Saved" messages with the shared timer hook | Swap two raw timers for `useTimeout`, add two small component tests | React, Jest |
+| [#1439](https://github.com/mario-andreschak/FLUJO/issues/1439) Share one lazy-loading helper for the three browser services | Replace three copies of the same code with one typed helper and a test | TypeScript |
+| [#1440](https://github.com/mario-andreschak/FLUJO/issues/1440) Persona goal card: stop reading the clock while drawing | Make a card switch its label on time, with a fake-timer test | React, Jest |
+| [#1441](https://github.com/mario-andreschak/FLUJO/issues/1441) Try the contributor guide on Linux or macOS | Follow the setup guide and fix what is wrong | Documentation |
+| [#1442](https://github.com/mario-andreschak/FLUJO/issues/1442) Say "run npm run build:mcp" instead of a raw ENOENT | Make an error message helpful and prove it with a test | TypeScript, Node.js |
 
-Do not assign auth, crypto, release permissions or concurrency redesign to a
-novice without a qualified reviewer. Larger work remains in #564–#578. A starter
-is substantive when it resolves observed friction or behavior and is accepted
-after meaningful review; typo volume and automated commits are not a bus-factor
-metric.
+## How to take one
 
-## Reviewable invitation draft
+1. Check that nobody has claimed it in the issue comments or an open pull request.
+2. Comment that you are taking it. If you stop, say so, so someone else can.
+3. Follow the [contributor guide](README.md). Ask in the issue whenever you are
+   stuck; that helps us improve these instructions.
 
-> FLUJO is looking for willing contributors to review core behavior and improve
-> onboarding. You can start with a small offline task using synthetic data and no
-> paid provider account. Maintainer responsibilities are optional and require
-> separate consent, training, and a disposable release/recovery drill. We would
-> like to retain a link to your accepted work and review, and ask separately for
-> consent to record continuity evidence. Please share your preferred scope and
-> availability; no repository or account permission is granted by this invitation.
+## Rules for this list
 
-The owner must approve recipients and channel before any outreach. Record the
-authorized invitation and any response separately from participation consent,
-accepted work, training and access evidence. An invitation does not enroll its
-recipient or grant permissions.
+- **Kept for people.** AI agents working on this repository leave
+  `good first issue` issues alone (see `AGENTS.md`), so they stay available for
+  newcomers.
+- **Small and checkable.** A good starter changes one or two files, has a test or
+  command that proves it, and needs no access, account or payment. Login,
+  encryption, release permissions and concurrency changes are never starters.
+- **Kept fresh.** When one is done, the maintainer (or anyone who helps maintain
+  this list) opens a replacement and updates the table above. Good sources are the
+  old lint exceptions in `eslint-suppressions.json` (one rule in one or two files)
+  and setup problems newcomers report.

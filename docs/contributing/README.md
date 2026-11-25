@@ -1,28 +1,108 @@
-# Contributing to Flujo
+# Contributing to FLUJO
 
-You can run the focused checks below without a model account, private files,
-an existing FLUJO installation, or paid tool calls. Node.js **22.23.4 or newer in the 22.x line, or 24.22.1 or newer in the 24.x line**, npm
-and Git are required. Start from a fresh clone; preserve any existing checkout.
+This guide takes you from nothing to a first pull request. You do not need an AI
+account, a paid service, private files or an existing FLUJO installation.
 
-## Reproducible setup
+Last walked through step by step on **Windows 10, November 25, 2026** (Node.js
+22.23.4, npm 10.9.9, Git 2.47). Times below are from that machine. If a step is
+wrong on your system, fixing this page is a welcome first pull request
+([#1441](https://github.com/mario-andreschak/FLUJO/issues/1441) asks for a
+Linux or macOS check).
+
+## What you need
+
+- **Node.js 22.23.4 or newer 22.x, or 24.22.1 or newer 24.x**, with the npm that
+  comes with it. The app and the test runner refuse older versions with a message
+  that explains how to update.
+- **Git.**
+- About **2 GB of free disk space** (the installed packages take 1.4 GB).
+
+Check what you have:
 
 ```sh
-git clone https://github.com/mario-andreschak/FLUJO.git flujo-contribution
-cd flujo-contribution
-git switch -c contrib/my-change
 node --version
 npm --version
+git --version
+```
+
+To install or update Node.js, use [nodejs.org](https://nodejs.org/en/download),
+`nvm install 22` (Linux or macOS with nvm), or on Windows
+`winget install --id OpenJS.NodeJS.22 --exact --source winget`.
+
+On Windows you may have more than one Node.js installed. `Get-Command node -All`
+lists them; the first one wins. Put the new one first on `PATH`, or open a new
+terminal after installing.
+
+## 1. Get your own copy
+
+You cannot push to the main repository, so work in your own copy (a fork):
+
+1. On GitHub, open [mario-andreschak/FLUJO](https://github.com/mario-andreschak/FLUJO)
+   and click **Fork**. (With the GitHub CLI: `gh repo fork mario-andreschak/FLUJO --clone`.)
+2. Clone your fork and create a branch for your change:
+
+```sh
+git clone https://github.com/YOUR-NAME/FLUJO.git
+cd FLUJO
+git remote add upstream https://github.com/mario-andreschak/FLUJO.git
+git switch -c my-first-change
+```
+
+Clone the full history (no `--depth`). A few checks read old files from it.
+The download is about 300 MB.
+
+On Windows, keep the folder path short (for example `C:\dev\FLUJO`). Some
+installed files sit about 150 characters deep, which breaks on systems without
+long path support.
+
+## 2. Install
+
+```sh
 npm ci --include=dev
+npm run build:mcp
+```
+
+- `npm ci` installs the exact package versions from `package-lock.json`. It took
+  4 minutes. Warnings about deprecated packages are normal.
+- `npm run build:mcp` builds the four built-in MCP servers in `mcp-servers/`
+  (about 30 seconds). The app and every test that creates a workspace need them.
+  Without this step those tests fail with `ENOENT ... mcp-servers/flujo/dist`.
+
+If `npm ci` fails, keep the error and your Node.js, npm and OS versions and open
+an issue. Do not copy `node_modules` from another folder or delete the lock file:
+the test runner refuses a borrowed install on purpose.
+
+## 3. Check that it works
+
+```sh
 npm run test:dependencies
+node scripts/run-local-jest.cjs __tests__/scripts/localTestDependencies.test.ts --runInBand
 node --test scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs
 ```
 
-`npm ci` must finish successfully in this checkout. The test wrapper rejects
-missing/mismatched local dependencies rather than borrowing a parent's install.
-If installation fails, retain the error and Node/npm/OS versions; do not copy
-another checkout's `node_modules` or remove the lockfile to hide the failure.
+The first command checks your Node.js and your install and finishes in a second.
+The second runs one small Jest test file (a few seconds). The third runs 37 small
+script tests (under a second). All three must pass.
 
-To explore the UI, create a new empty data directory and choose an unused port.
+## 4. Try the app with throwaway data
+
+Never point a test run at the FLUJO you use every day. The easiest way is the
+drive tool, which picks a free port and an empty data folder:
+
+```sh
+node scripts/flujo-drive.mjs launch
+node scripts/flujo-drive.mjs stop
+```
+
+`launch` prints the address to open (for example `http://127.0.0.1:4301/`) and
+returns once the first page loads; the first start compiles pages and can take a
+few minutes. `stop` stops only that instance and deletes the data folder it
+created. The tool can also click through pages for you; see the
+[feature map](../feature-map/README.md).
+
+To run the development server yourself instead, give it a new empty data folder
+and keep it on your own machine:
+
 PowerShell:
 
 ```powershell
@@ -33,7 +113,7 @@ $env:FLUJO_EXPOSURE_MODE = 'localhost'
 node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 ```
 
-POSIX shell:
+Linux or macOS:
 
 ```sh
 export FLUJO_DATA_DIR="$(mktemp -d -t flujo-contributor.XXXXXX)"
@@ -41,68 +121,98 @@ export FLUJO_EXPOSURE_MODE=localhost
 node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 ```
 
-Open `http://127.0.0.1:4300`, keep the terminal running, and stop with Ctrl+C.
-These commands select both local request policy and a loopback listener, even
-when the shell inherited a network/public exposure setting. Use a fresh terminal
-afterward so the disposable data and exposure variables do not affect your
-regular installation. Do not import a personal backup or log into a provider
-for the offline first PR. UI/model/MCP journeys have separate acceptance gates.
-See [getting started](../getting-started/README.md) when you deliberately choose
-to connect a provider or external tool.
+Open `http://127.0.0.1:4300` and stop with Ctrl+C. Close that terminal afterwards
+so the throwaway settings do not leak into your everyday FLUJO. Do not connect a
+real AI account or import a personal backup for a first change.
 
-Read this checkout's `AGENTS.md` and the relevant installed guide under
-`node_modules/next/dist/docs/` before changing Next.js routes or components.
+The November 25 check did not start the app (the machine was shared with other
+work), so tell us in an issue if this step does not work for you.
 
-## A useful first PR
+## 5. Make your change
 
-1. Select an unclaimed item from the [starter backlog](starter-backlog.md), check
-   linked issues/open PRs, and agree scope in the issue before touching a shared area.
-2. Find the responsible module and focused test recipe in the [task map](task-map.md).
-3. Reproduce the behavior, make one small change, and test the observable boundary.
-4. Explain the before/after result, revision, commands, failures and skips in the PR.
-   Include screenshots for visible UI changes using synthetic data.
-5. Request the review appropriate to the changed boundary and retain its link.
-   Authorized development and publication can proceed under the current session.
-   Independent human continuity requires an actual consenting human review;
-   automation or an unreviewed draft cannot establish it.
+1. Pick a task. Issues labelled
+   [`good first issue`](https://github.com/mario-andreschak/FLUJO/labels/good%20first%20issue)
+   are small and spell out every step; the [starter list](starter-backlog.md)
+   explains them. Comment on the issue to claim it before you start.
+2. Read [`AGENTS.md`](../../AGENTS.md). It holds the house rules for people and
+   AI agents alike: fix causes, not symptoms; keep slow work off the server's main
+   loop; let failures heal themselves instead of blocking until a restart.
+3. Find the code and its tests with the [newcomer map](task-map.md).
+4. Write a test that fails first, then make it pass. Keep the change small and
+   about one thing.
 
-Record setup friction and help received in the [onboarding evidence form](maintainership.md#evidence-record).
-A contributor completing this guide without live coaching is a separate human
-observation; automated checks cannot establish that outcome.
+If you change routes or components in `src/app`, read the matching guide in
+`node_modules/next/dist/docs/` first. This Next.js version differs from older
+tutorials.
 
-## Documentation Guidelines
+## 6. Before you open a pull request
 
-- **[Documentation Guidelines](./documentation-guidelines.md)**: Guidelines for contributing to documentation
+Run the checks for what you touched. You do not need to run everything;
+continuous integration (CI) runs the full suite on every pull request.
 
-## Code Contribution Guidelines
+| You changed | Run |
+| --- | --- |
+| Any code | The test files for it: `node scripts/run-local-jest.cjs <test files> --runInBand` |
+| Any code | Lint only your files: `npx eslint <files>`, then `npm run lint:ratchet` |
+| TypeScript | `npm run typecheck` (several minutes) |
+| A page in `src/app` | `npm run check:feature-map`, and update its entry in `docs/feature-map/` |
+| An API route added or removed | `node scripts/generate-api-inventory.mjs` |
+| `mcp-servers/` | `npm run build:mcp` and `npm run test:mcp-process-boundary` |
+| Lint rules or repository tools | `npm run test:checks` |
 
-Use TypeScript and the existing module boundaries. Keep API handlers responsible for request validation and workspace/auth gates; put reusable behavior in backend/frontend services. Add regression coverage for bugs at the boundary where they occur.
+Never add entries to `eslint-suppressions.json`; that list only shrinks. If a
+rule really does not fit one line, disable it on that line with a reason:
+`// eslint-disable-next-line <rule> -- <why>`.
 
-For pull requests, explain the observable before/after behavior, affected platforms, data-migration implications, and checks actually run. Do not commit local workspaces, credentials, generated runtime data, or unrelated changes. Issues should include install method, version/revision, OS, reproducible steps, and redacted errors.
+More test recipes are in the [newcomer map](task-map.md#test-recipes).
 
-## Development Setup
+## 7. Open the pull request
 
-Use the clean-clone recipe above and a disposable `FLUJO_DATA_DIR` for experiments.
+Push your branch to your fork and open a pull request against `main`. The
+template asks for:
 
-Before submitting, run `npm run typecheck`, `npm run lint:all`, and the relevant Jest suites through `node scripts/run-local-jest.cjs --runInBand <test paths>`. Changes involving standalone MCP packages also require `npm run build:mcp` and process-boundary validation. CI separates ordinary and isolated suites; inspect raw failures and quarantine notes rather than relying only on the overall badge.
+- what changes for the user, before and after;
+- how you tested it, and what you did not test;
+- screenshots for anything visible, using made-up data only;
+- `Fixes #123` when it fully solves an issue, otherwise `Refs #123`.
 
-Run `node scripts/generate-api-inventory.mjs` after adding/removing API routes, and keep the relevant guide and changelog current. See [documentation guidelines](documentation-guidelines.md).
+Never include passwords, API keys, session cookies or personal data in code,
+issues, pull requests, logs or screenshots.
 
-## Review and escalation
+## How reviews work
 
-Keep PRs focused and say which checks were actually completed. Do not weaken an
-assertion, quarantine a new failure, or regenerate expected output solely to make
-a check green. Retain skipped/manual/installed-release work as visible gaps.
+- **Who reviews.** Today there is one maintainer, Mario
+  ([@mario-andreschak](https://github.com/mario-andreschak)). He reviews and merges
+  pull requests from contributors. Most commits in this repository are written by
+  AI coding agents that work for him under the `flujo-app` account and merge their
+  own work under his standing instructions. Your pull request is reviewed by a
+  person.
+- **Areas that always need the maintainer.** `.github/CODEOWNERS` lists them:
+  security, login, stored credentials, starting MCP servers, install and update,
+  releases and the HTTP API. Changes there need a short note on how to undo them,
+  and review may take longer.
+- **What a reviewer checks.** A test shows the behaviour; the change is focused;
+  no new lint exceptions; the rules in `AGENTS.md` hold; nothing private is
+  included.
+- **Checks.** `main` does not block a merge when CI fails today, so reviewers
+  read the CI results themselves. Never weaken a test, skip it, or regenerate
+  expected output only to make a check pass. Say which checks you ran and which
+  you skipped.
+- **Disagreements.** Discuss in the issue with examples. The maintainer makes the
+  final call; see [maintainership](maintainership.md).
+- **Waiting.** If nobody has answered after a week, add a comment to the pull
+  request. That is welcome, not rude.
 
-Execution, credentials, authentication, MCP privileges, install/update, migrations
-and release changes need boundary-focused review and an explicit compatibility/rollback
-assessment. Follow the applicable repository controls and existing session authorization
-for development and publication. Record missing independent human review when it is
-required for a release or continuity claim; the author cannot self-certify it.
-Repository enforcement is owned by #565; this guide does not establish branch protection.
+## Reporting bugs
 
-Raise non-sensitive decisions in the linked issue with evidence, alternatives and
-affected consumers. Integration owners settle cross-stream compatibility. Escalate
-unresolved release/security decisions to the consenting accountable human in the
-[role register](maintainership.md), or mark that duty unstaffed. Do not invent an
-approver or contact prospective contributors without authorization.
+Include how you installed FLUJO (npm, Windows installer, Docker or source), the
+version, your OS, the steps to reproduce, and the error with private details
+removed. Report security problems privately as described in
+[SECURITY.md](../../SECURITY.md), never in a public issue.
+
+## More
+
+- [Documentation guidelines](documentation-guidelines.md)
+- [Maintainership basics](maintainership.md) and the
+  [release and recovery drill](maintainer-drill.md), for people who want to help
+  maintain FLUJO.

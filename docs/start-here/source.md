@@ -17,9 +17,11 @@
    cd FLUJO
    ```
 
-2. Install dependencies:
+2. Install dependencies and build the four built-in Connected Apps (MCP servers).
+   Without the second command they cannot start:
    ```bash
    npm ci
+   npm run build:mcp
    ```
 
 3. Start the development server:

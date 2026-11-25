@@ -1,27 +1,38 @@
 # Contributing to FLUJO
 
-Start with the [contributor setup and first PR guide](docs/contributing/README.md).
-It includes disposable data setup, focused checks, and the review policy.
+Thank you for helping. You need Node.js, npm and Git; no AI account.
 
-- [Architecture and task map](docs/contributing/task-map.md)
-- [Curated starter backlog](docs/contributing/starter-backlog.md)
-- [Maintainer roles and succession](docs/contributing/maintainership.md)
-- [Disposable release/recovery drill](docs/contributing/maintainer-drill.md)
+1. **Set up and make a first change:** the [contributor guide](docs/contributing/README.md)
+   (about 10 minutes of steps plus a 4-minute install).
+2. **Pick a task:** issues labelled
+   [`good first issue`](https://github.com/mario-andreschak/FLUJO/labels/good%20first%20issue),
+   explained in the [starter list](docs/contributing/starter-backlog.md).
+3. **Find your way around:** the [newcomer map](docs/contributing/task-map.md)
+   shows where code lives and how to test it.
+4. **Know how reviews work:** see
+   [how reviews work](docs/contributing/README.md#how-reviews-work) before you open
+   a pull request.
 
-Never include credentials or personal workspace data in issues, PRs or evidence.
-Security policy and private vulnerability reporting are being established in
-[#565](https://github.com/mario-andreschak/FLUJO/issues/565); do not report an
-unpatched vulnerability in a public issue.
+The house rules for people and AI agents are in [`AGENTS.md`](AGENTS.md).
+People who want to help maintain FLUJO can read the
+[maintainership basics](docs/contributing/maintainership.md) and the
+[release and recovery drill](docs/contributing/maintainer-drill.md).
+
+## Security and privacy
+
+Never report an unfixed security problem in a public issue; use the private
+report described in [SECURITY.md](SECURITY.md). Never put passwords, API keys or
+personal data in issues, pull requests, logs or screenshots.
 
 ## Keep the checkout small
 
-Save generated audit output, provider traces, test recordings, agent handovers
-and media editing projects outside the repository. Only publish media used by
-GitHub Pages or a maintained product guide, and reuse identical existing assets.
+Keep generated test output, recordings, AI agent handovers and media projects
+outside the repository. Only commit media that the website or a maintained guide
+uses, and reuse identical files that already exist. `npm run check:repo-hygiene`
+checks this.
 
-Historical regression inputs removed from the working tree are read from the
-fixed pre-cleanup Git revision by `scripts/read-archived-fixture.mjs`. Those
-checks require the repository's history; they never fetch it automatically.
-The default scorecard command validates that historical baseline, not the current
-release. Pass a current external ledger to validate new release records; its
-payloads must exist locally and do not fall back to historical data.
+Some older test inputs were removed from the working tree. Checks that need them
+read them from a fixed older Git revision through
+`scripts/read-archived-fixture.mjs`, so clone the full history (no `--depth`).
+The default scorecard command checks that historical baseline, not the current
+release; pass a current external ledger to check new release records.
