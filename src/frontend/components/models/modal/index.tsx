@@ -91,6 +91,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const discoveryRequestIdRef = useRef(0);
   const currentProfile = getProviderProfile(formState.provider, formState.adapter);
+  // Ollama ignores keys; like the guided setup, an empty key is stored as the placeholder "ollama".
+  const keylessProvider = currentProfile.provider === 'ollama';
+  const apiKeyOptional = keylessProvider || supportsLocalModelAuth(currentProfile.adapter);
   const canDiscoverProviderModels =
     supportsProviderModelDiscovery(currentProfile, formState.baseUrl);
   const discoveryCredential = isApiKeyBound && boundToGlobalVar
@@ -507,7 +510,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       }
     }
     // Local-auth CLI profiles can use the login on the host running FLUJO.
-    if (!isApiKeyBound && !formState.ApiKey?.trim() && !supportsLocalModelAuth(currentProfile.adapter)) {
+    if (!isApiKeyBound && !formState.ApiKey?.trim() && !apiKeyOptional) {
       newErrors.ApiKey = t('models.modal.apiKeyRequired');
     }
 
@@ -526,7 +529,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         name: formState.name!,
         displayName: formState.displayName!,
         description: formState.description,
-        ApiKey: formState.ApiKey,
+        ApiKey: keylessProvider && !isApiKeyBound && !formState.ApiKey?.trim() ? 'ollama' : formState.ApiKey,
         baseUrl: formState.baseUrl,
         azureApiVersion: currentProfile.adapter === 'azure' ? formState.azureApiVersion : '',
         provider: formState.provider!,
@@ -741,7 +744,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     margin="dense"
                     label={t('models.modal.apiKey')}
                     fullWidth
-                    required={!isApiKeyBound && !supportsLocalModelAuth(currentProfile.adapter)}
+                    required={!isApiKeyBound && !apiKeyOptional}
                     type={isApiKeyBound ? "text" : "password"}
                     value={formState.ApiKey || ''}
                     onChange={(e) => handleChange('ApiKey', e.target.value)}
@@ -750,7 +753,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       ? t('models.modal.apiKeyOptionalCodex')
                       : currentProfile.adapter === 'antigravity-cli'
                         ? t('models.modal.apiKeyOptionalAntigravityCli')
-                        : t('models.modal.apiKeyRequiredProvider'))}
+                        : keylessProvider
+                          ? t('models.modal.apiKeyOptionalOllama')
+                          : t('models.modal.apiKeyRequiredProvider'))}
                     slotProps={{ input: {
                       readOnly: isApiKeyBound,
                       endAdornment: (

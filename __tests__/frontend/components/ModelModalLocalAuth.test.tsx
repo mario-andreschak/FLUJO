@@ -157,6 +157,33 @@ it('preserves saved text-only metadata when a different provider switches to nat
   });
 });
 
+it('saves a local Ollama connection without asking for a key it does not need', async () => {
+  const onSave = showModel('openai', 'openai');
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /^Provider$/ }));
+  fireEvent.click(screen.getByRole('option', { name: 'Ollama' }));
+  expect(screen.getByLabelText(/API key/)).not.toBeRequired();
+  expect(screen.getByText('Not needed for Ollama. Leave it empty.')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'Local llama' } });
+  fireEvent.change(screen.getByLabelText(/Base URL/), { target: { value: 'http://127.0.0.1:11434/v1' } });
+  fireEvent.change(screen.getByLabelText(/Technical name/), { target: { value: 'llama3.2:3b' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  // The same placeholder the guided Ollama setup stores.
+  expect(onSave.mock.calls[0][0]).toMatchObject({
+    provider: 'ollama', adapter: 'openai', ApiKey: 'ollama', name: 'llama3.2:3b', baseUrl: 'http://127.0.0.1:11434/v1',
+  });
+});
+
+it('keeps a key the user typed for an Ollama server behind a proxy', async () => {
+  const onSave = showModel('ollama', 'openai');
+  fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'Proxied llama' } });
+  fireEvent.change(screen.getByLabelText(/Technical name/), { target: { value: 'llama3.2:3b' } });
+  fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'proxy-token' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  expect(onSave.mock.calls[0][0]).toMatchObject({ provider: 'ollama', ApiKey: 'proxy-token' });
+});
+
 it('does not offer OrcaRouter in manual creation', () => {
   showModel('openai', 'openai');
   fireEvent.mouseDown(screen.getByRole('combobox', { name: /^Provider$/ }));
