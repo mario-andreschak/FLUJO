@@ -36,6 +36,7 @@ jest.mock('@/backend/services/mcp', () => ({
 }));
 
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
+import { FLUJO_SYSTEM_SECTIONS_SLOT, fillFlujoSystemSections } from '@/shared/utils/flujoSystemPrompt';
 
 // A flow whose target node carries the given prompt template; exclusions on so only the
 // node prompt (plus resolved bindings) is rendered.
@@ -285,5 +286,53 @@ describe('PromptRenderer excludeSystemPrompt (issue #67)', () => {
     const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
 
     expect(result).not.toContain(SYSTEM_BLOCK_MARKER);
+  });
+});
+
+describe('PromptRenderer FLUJO system sections (issue #1231)', () => {
+  const withFinish = (flags: Parameters<typeof flowWithFlags>[0] & { excludeSystemPromptSections?: string[] }) => {
+    const base = flowWithFlags(flags);
+    return {
+      ...base,
+      nodes: [...base.nodes, { id: 'finish', type: 'finish', data: { label: 'Finish', type: 'finish', properties: {} } }],
+      edges: [{ id: 'e1', source: 'node-1', target: 'finish' }],
+    };
+  };
+
+  it('leaves one slot for a run that learns its tools later, and fills it in place', async () => {
+    getFlowMock.mockResolvedValue(withFinish({}));
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1', { systemPromptContext: 'deferred' });
+    expect(result.split(FLUJO_SYSTEM_SECTIONS_SLOT)).toHaveLength(2);
+    expect(result).not.toContain(SYSTEM_BLOCK_MARKER);
+    expect(fillFlujoSystemSections(result, 'SECTIONS\n\n'))
+      .toBe('SECTIONS\n\n# YOUR OPERATIONAL INSTRUCTION:\nNode instruction body\n');
+    expect(fillFlujoSystemSections(result, '')).not.toContain('\u0000');
+  });
+
+  it('leaves no slot when the whole system prompt is excluded', async () => {
+    getFlowMock.mockResolvedValue(withFinish({ excludeSystemPrompt: true }));
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1', { systemPromptContext: 'deferred' });
+    expect(result).not.toContain(FLUJO_SYSTEM_SECTIONS_SLOT);
+  });
+
+  it('previews the sections the flow graph allows and honours the node\'s left-out sections', async () => {
+    getFlowMock.mockResolvedValue(withFinish({}));
+    expect(await promptRenderer.renderPrompt('flow-1', 'node-1')).toContain('## Workflow');
+
+    getFlowMock.mockResolvedValue(withFinish({ excludeSystemPromptSections: ['workflow'] }));
+    const withoutWorkflow = await promptRenderer.renderPrompt('flow-1', 'node-1');
+    expect(withoutWorkflow).toContain(SYSTEM_BLOCK_MARKER);
+    expect(withoutWorkflow).not.toContain('## Workflow');
+
+    const override = await promptRenderer.renderPrompt('flow-1', 'node-1', { excludeSystemPromptSections: [] });
+    expect(override).toContain('## Workflow');
+  });
+
+  it('never claims other agents for a step without hand-offs', async () => {
+    getFlowMock.mockResolvedValue(flowWithFlags({}));
+    const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
+    expect(result).toContain(SYSTEM_BLOCK_MARKER);
+    expect(result).not.toContain('other agents');
+    expect(result).not.toContain('handoff_to_');
   });
 });

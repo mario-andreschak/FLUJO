@@ -9,6 +9,14 @@ import type { MCPNodeReference } from '@/backend/execution/flow/types';
 import type { Flow } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
 import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
+import {
+  FLUJO_SYSTEM_SECTIONS_SLOT,
+  buildFlujoSystemPrompt,
+  estimateFlujoSystemPromptContext,
+  normalizeExcludedSystemPromptSections,
+  type FlujoSystemPromptContext,
+  type FlujoSystemPromptSectionId,
+} from '@/shared/utils/flujoSystemPrompt';
 
 const log = createLogger('backend/utils/PromptRenderer');
 
@@ -18,6 +26,7 @@ interface PromptNodeProperties {
   excludeModelPrompt?: unknown;
   excludeStartNodePrompt?: unknown;
   excludeSystemPrompt?: unknown;
+  excludeSystemPromptSections?: unknown;
 }
 
 interface DescribedTool {
@@ -34,7 +43,15 @@ export interface PromptRenderOptions {
   includeConversationHistory?: boolean;
   excludeModelPrompt?: boolean; // Override node's excludeModelPrompt setting
   excludeStartNodePrompt?: boolean; // Override node's excludeStartNodePrompt setting
-  excludeSystemPrompt?: boolean; // Override node's excludeSystemPrompt setting (hardcoded # GENERAL INFORMATION block)
+  excludeSystemPrompt?: boolean; // Override node's excludeSystemPrompt setting (FLUJO's # GENERAL INFORMATION sections)
+  /** Override the node's list of FLUJO system sections to leave out. */
+  excludeSystemPromptSections?: FlujoSystemPromptSectionId[];
+  /**
+   * What the step can really use, which picks FLUJO's system sections.
+   * 'deferred' leaves {@link FLUJO_SYSTEM_SECTIONS_SLOT} for a caller that
+   * learns its tools after rendering. Omitted: estimated from the flow graph.
+   */
+  systemPromptContext?: FlujoSystemPromptContext | 'deferred';
   /** Reject resource pills before any MCP connection in protected execution. */
   rejectResourceBindings?: boolean;
   /**
@@ -123,7 +140,8 @@ export class PromptRenderer {
       prompt: nodePrompt,
       excludeModelPrompt: nodeExcludeModelPrompt,
       excludeStartNodePrompt: nodeExcludeStartNodePrompt,
-      excludeSystemPrompt: nodeExcludeSystemPrompt
+      excludeSystemPrompt: nodeExcludeSystemPrompt,
+      excludeSystemPromptSections: nodeExcludedSections,
     } = await this.findNodePrompt(nodeId, flowId, options?.flowSnapshot);
 
     // Use options to override node settings if provided
@@ -186,20 +204,25 @@ export class PromptRenderer {
 
     }
 
-    // 2b. Hardcoded system information block (if not excluded). Gated
-    // independently of the model prompt (issue #67) so it can be toggled on its
-    // own via the "Exclude System Prompt" switch, while default output is
-    // unchanged when the flag is false.
+    // 2b. FLUJO's own sections, each only when the step can use what it
+    // describes. "Exclude system prompt" (issue #67) drops all of them;
+    // excludeSystemPromptSections drops single ones.
     if (!excludeSystemPrompt) {
-      completePrompt += `# GENERAL INFORMATION:\n`
-      completePrompt += `You are operating in a workflow with other agents, each with it's own responsibilities.\n`
-      completePrompt += `You will receive a message from the user which may contain tasks that are outside of your scope.\n`
-      completePrompt += `Focus on the part of the user-message that can be accomplished using the tools provided to you.\n\n`
-      completePrompt += `You may do multiple tool calls.\n\n`
-      completePrompt += `After you completed the user's request to the best of your ability, you can use the 'handoff_to_xxxx' tool.\n\n`
-      completePrompt += `When a user requests an answer, provide the requested response before handing off to Finish, in the requested format. A Finish handoff alone is not an answer.\n\n`
-      completePrompt += `For a requested identifier, select the exact ID field from its source record. Match the record to the requested entity and preserve the field's value and type. Return a full record only when requested.\n\n`
-      completePrompt += `Answer the current user request, then stop. Do not invent future user messages, observations or review rounds. If processing returns to you in a loop, use the latest actual input and completed-action evidence; do not repeat completed actions.\n\n`
+      const context = options?.systemPromptContext;
+      if (context === 'deferred') {
+        completePrompt += FLUJO_SYSTEM_SECTIONS_SLOT;
+      } else {
+        const excludedSections = options?.excludeSystemPromptSections !== undefined
+          ? normalizeExcludedSystemPromptSections(options.excludeSystemPromptSections)
+          : nodeExcludedSections;
+        completePrompt += buildFlujoSystemPrompt(
+          context ?? estimateFlujoSystemPromptContext(
+            options?.flowSnapshot ?? await flowService.getFlow(flowId),
+            nodeId,
+          ),
+          excludedSections,
+        );
+      }
     }
 
     // 3. Node Prompt
@@ -344,21 +367,29 @@ export class PromptRenderer {
     excludeModelPrompt: boolean;
     excludeStartNodePrompt: boolean;
     excludeSystemPrompt: boolean;
+    excludeSystemPromptSections: FlujoSystemPromptSectionId[];
   }> {
     log.debug(`Finding node prompt for node ${nodeId} in flow ${flowId}`);
+    const nothing = {
+      prompt: '',
+      excludeModelPrompt: false,
+      excludeStartNodePrompt: false,
+      excludeSystemPrompt: false,
+      excludeSystemPromptSections: [],
+    };
 
     // Get the flow
     const flow = flowSnapshot ?? await flowService.getFlow(flowId);
     if (!flow) {
       log.warn(`Flow not found: ${flowId}`);
-      return { prompt: '', excludeModelPrompt: false, excludeStartNodePrompt: false, excludeSystemPrompt: false };
+      return nothing;
     }
 
     // Find the node
     const node = flow.nodes.find(n => n.id === nodeId);
     if (!node) {
       log.warn(`Node not found: ${nodeId} in flow: ${flowId}`);
-      return { prompt: '', excludeModelPrompt: false, excludeStartNodePrompt: false, excludeSystemPrompt: false };
+      return nothing;
     }
 
     // Return the node's prompt template and exclusion settings
@@ -379,7 +410,8 @@ export class PromptRenderer {
       prompt: promptTemplate,
       excludeModelPrompt,
       excludeStartNodePrompt,
-      excludeSystemPrompt
+      excludeSystemPrompt,
+      excludeSystemPromptSections: normalizeExcludedSystemPromptSections(properties?.excludeSystemPromptSections),
     };
   }
 

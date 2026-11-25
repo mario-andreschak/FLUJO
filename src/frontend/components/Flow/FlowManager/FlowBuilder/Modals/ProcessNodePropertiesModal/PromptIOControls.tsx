@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Typography, FormControlLabel, Switch, Checkbox, TextField } from '@mui/material';
+import { Box, Typography, FormControlLabel, FormGroup, Switch, Checkbox, TextField } from '@mui/material';
 import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
 import EditNoteIcon from '@mui/icons-material/EditNote';
@@ -8,6 +8,11 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutlined';
 import OptionCard from '@/frontend/components/shared/OptionCard';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Model, ProcessNodeData } from './types';
+import {
+  FLUJO_SYSTEM_PROMPT_SECTION_IDS,
+  type FlujoSystemPromptSectionId,
+} from '@/shared/utils/flujoSystemPrompt';
+import type { TranslationKey } from '@/frontend/i18n';
 
 type InputMode = 'full-history' | 'latest-message' | 'isolated';
 type OutputMode = 'full-conversation' | 'latest-message';
@@ -19,6 +24,8 @@ export interface PromptIOControlsProps {
   setExcludeStartNodePrompt: (value: boolean) => void;
   excludeSystemPrompt: boolean;
   setExcludeSystemPrompt: (value: boolean) => void;
+  excludeSystemPromptSections: FlujoSystemPromptSectionId[];
+  setExcludeSystemPromptSections: (value: FlujoSystemPromptSectionId[]) => void;
   inputMode: InputMode;
   setInputMode: (value: InputMode) => void;
   isolatedPrompt: string;
@@ -41,6 +48,15 @@ export interface PromptIOControlsProps {
  * `insertText` ref keeps working across tab switches. Pure presentational: all
  * state still lives in the root modal and is threaded in via props.
  */
+const SECTION_LABELS: Record<FlujoSystemPromptSectionId, TranslationKey> = {
+  basics: 'flows.process.systemSection.basics',
+  workflow: 'flows.process.systemSection.workflow',
+  agents: 'flows.process.systemSection.agents',
+  people: 'flows.process.systemSection.people',
+  flujoTools: 'flows.process.systemSection.flujoTools',
+  storedResults: 'flows.process.systemSection.storedResults',
+};
+
 const PromptIOControls: React.FC<PromptIOControlsProps> = ({
   excludeModelPrompt,
   setExcludeModelPrompt,
@@ -48,6 +64,8 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
   setExcludeStartNodePrompt,
   excludeSystemPrompt,
   setExcludeSystemPrompt,
+  excludeSystemPromptSections,
+  setExcludeSystemPromptSections,
   inputMode,
   setInputMode,
   isolatedPrompt,
@@ -61,6 +79,40 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
   nodeData,
 }) => {
   const { t } = useI18n();
+  const modelName = (() => {
+    const modelId = nodeData.properties?.boundModel;
+    if (!modelId) return t('flows.process.none');
+    const model = models.find(m => m.id === modelId);
+    return model ? (model.displayName || model.name) : nodeData.properties?.modelName || t('flows.process.none');
+  })();
+  const renderOrder = [
+    !excludeStartNodePrompt && {
+      key: 'start', color: 'primary.main', title: t('flows.process.startPrompt'), detail: t('flows.process.fromStart'),
+    },
+    !excludeModelPrompt && isModelBound && {
+      key: 'model', color: 'secondary.main', title: t('flows.process.modelPrompt'), detail: t('flows.process.fromModel', { model: modelName }),
+    },
+    !excludeSystemPrompt && excludeSystemPromptSections.length < FLUJO_SYSTEM_PROMPT_SECTION_IDS.length && {
+      key: 'system', color: 'text.primary', title: t('flows.process.systemPrompt'), detail: t('flows.process.fromFlujo'),
+    },
+    {
+      key: 'node', color: 'text.primary', title: t('flows.process.nodePrompt'), detail: t('flows.process.fromTask'),
+    },
+    {
+      key: 'input',
+      color: 'text.primary',
+      title: inputMode === 'isolated'
+        ? t('flows.subflow.isolatedPrompt')
+        : inputMode === 'latest-message'
+          ? t('flows.subflow.latest')
+          : t('flows.process.history'),
+      detail: inputMode === 'isolated'
+        ? t('flows.process.isolatedDetail')
+        : inputMode === 'latest-message'
+          ? t('flows.process.latestDetail')
+          : t('flows.process.historyDetail'),
+    },
+  ].filter((entry): entry is { key: string; color: string; title: string; detail: string } => Boolean(entry));
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column' }}>
       {/* Exclude toggles */}
@@ -100,66 +152,52 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
         />
       </Box>
 
+      {!excludeSystemPrompt && (
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="subtitle2" id="flujo-system-sections-title">
+            {t('flows.process.systemSections')}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+            {t('flows.process.systemSectionsHelp')}
+          </Typography>
+          <FormGroup row role="group" aria-labelledby="flujo-system-sections-title">
+            {FLUJO_SYSTEM_PROMPT_SECTION_IDS.map((section) => (
+              <FormControlLabel
+                key={section}
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={!excludeSystemPromptSections.includes(section)}
+                    onChange={(e) => setExcludeSystemPromptSections(
+                      FLUJO_SYSTEM_PROMPT_SECTION_IDS.filter((id) => id === section
+                        ? !e.target.checked
+                        : excludeSystemPromptSections.includes(id)),
+                    )}
+                  />
+                }
+                label={t(SECTION_LABELS[section])}
+              />
+            ))}
+          </FormGroup>
+        </Box>
+      )}
+
       {/* Prompt inclusion preview */}
       <Box sx={{ mb: 2, p: 2, bgcolor: 'rgba(0, 0, 0, 0.03)', borderRadius: 1, fontSize: '0.85rem' }}>
         <Typography variant="caption" sx={{ display: 'block', mb: 1, fontWeight: 'bold' }}>
           {t('flows.process.renderOrder')}
         </Typography>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-          {!excludeStartNodePrompt && (
-            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-              <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 'medium' }}>
-                1. {t('flows.process.startPrompt')}
+        <Box component="ol" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, m: 0, pl: 2.5 }}>
+          {renderOrder.map((entry) => (
+            <Box component="li" key={entry.key}>
+              <Typography variant="caption" sx={{ color: entry.color, fontWeight: 'medium' }}>
+                {entry.title}
               </Typography>
               <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                {t('flows.process.fromStart')}
+                {entry.detail}
               </Typography>
             </Box>
-          )}
-          {!excludeModelPrompt && isModelBound && (
-            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-              <Typography variant="caption" sx={{ color: 'secondary.main', fontWeight: 'medium' }}>
-                {!excludeStartNodePrompt ? '2.' : '1.'} {t('flows.process.modelPrompt')}
-              </Typography>
-              <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                {t('flows.process.fromModel', {
-                  model: (() => {
-                    const modelId = nodeData.properties?.boundModel;
-                    if (!modelId) return t('flows.process.none');
-                    const model = models.find(m => m.id === modelId);
-                    return model ? (model.displayName || model.name) : nodeData.properties?.modelName || t('flows.process.none');
-                  })(),
-                })}
-              </Typography>
-            </Box>
-          )}
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <Typography variant="caption" sx={{ fontWeight: 'medium' }}>
-              {(!excludeStartNodePrompt && !excludeModelPrompt && isModelBound) ? '3.' :
-                (!excludeStartNodePrompt || (!excludeModelPrompt && isModelBound)) ? '2.' : '1.'} {t('flows.process.nodePrompt')}
-            </Typography>
-            <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-              {t('flows.process.fromTask')}
-            </Typography>
-          </Box>
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <Typography variant="caption" sx={{ fontWeight: 'medium' }}>
-              {(!excludeStartNodePrompt && !excludeModelPrompt && isModelBound) ? '4.' :
-                (!excludeStartNodePrompt || (!excludeModelPrompt && isModelBound)) ? '3.' : '2.'}{' '}
-              {inputMode === 'isolated'
-                ? t('flows.subflow.isolatedPrompt')
-                : inputMode === 'latest-message'
-                  ? t('flows.subflow.latest')
-                  : t('flows.process.history')}
-            </Typography>
-            <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-              {inputMode === 'isolated'
-                ? t('flows.process.isolatedDetail')
-                : inputMode === 'latest-message'
-                  ? t('flows.process.latestDetail')
-                  : t('flows.process.historyDetail')}
-            </Typography>
-          </Box>
+          ))}
         </Box>
       </Box>
 

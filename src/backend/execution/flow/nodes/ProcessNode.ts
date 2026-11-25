@@ -3,6 +3,11 @@ import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
 import { traceSpan } from '../turnTrace';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
+import {
+  buildFlujoSystemPrompt,
+  fillFlujoSystemSections,
+  normalizeExcludedSystemPromptSections,
+} from '@/shared/utils/flujoSystemPrompt';
 import { ToolHandler } from '../handlers/ToolHandler';
 import { ModelHandler } from '../handlers/ModelHandler';
 import { createProcessNativeOriginalHost } from '../handlers/nativeOriginalHost';
@@ -21,7 +26,7 @@ import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { prepareModelInputMaterialization, finalizeModelInputMaterialization } from '../materializeModelInput';
 import { resolveFrozenSystemPrompt } from '../systemPromptFreeze';
 import { buildHandoffDescription } from '../buildHandoffDescription';
-import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
+import { buildHandoffToolNameMap, buildSubflowToolNameMap, HANDOFF_TOOL_PREFIX, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
 import { buildPersonaTools } from '../handlers/personaTools';
@@ -427,6 +432,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     const excludeModelPrompt = node_params?.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
     const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
+    const excludedSystemSections = normalizeExcludedSystemPromptSections(node_params?.properties?.excludeSystemPromptSections);
     const executionExtensionContext = sharedState.executionExtensionContext;
     if (isExecutionProtectedState(sharedState) && !executionExtensionContext) {
       throw new ExecutionExtensionError('trusted_execution_context_required');
@@ -525,6 +531,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       excludeModelPrompt: executionExtensionContext ? true : excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt,
+      // FLUJO's sections describe only tools this step offers, which are
+      // known after the tool set below is built.
+      systemPromptContext: 'deferred',
       rejectResourceBindings: Boolean(executionExtensionContext),
       // A Persona execution is pinned to this immutable snapshot. Never fall
       // back to the mutable Flow record while one is present.
@@ -803,6 +812,33 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         };
       }
     }
+
+    // read_resource is armed from what this step has before any stored-result
+    // link exists (see below), so the prompt can already describe it.
+    const hasMcpTools = availableTools.some((t) => !!t.server);
+    const hasWriteResource = availableTools.some((t) => t.name === WRITE_RESOURCE_TOOL_NAME);
+    const hasResourceNodes = resourceNodes.length > 0;
+    const hasNativeResources = availableTools.some(
+      (t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME,
+    );
+    const armsReadResourceAtPrep = !executionExtensionContext && (
+      hasMcpTools || hasWriteResource || hasResourceNodes || hasNativeResources
+    );
+    const offersReadResource = armsReadResourceAtPrep || (
+      !executionExtensionContext && (sharedState.armedSyntheticTools ?? []).includes(READ_RESOURCE_TOOL_NAME)
+    );
+    completePrompt = fillFlujoSystemSections(completePrompt, buildFlujoSystemPrompt({
+      tools: offersReadResource && !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)
+        ? [...availableTools, { name: READ_RESOURCE_TOOL_NAME }]
+        : availableTools,
+      handoffs: availableTools
+        .filter((tool) => !tool.server && tool.name.startsWith(HANDOFF_TOOL_PREFIX))
+        .map((tool) => ({
+          name: tool.name,
+          targetType: sharedState.handoffTargetTypes?.[sharedState.handoffNameMap?.[tool.name] ?? ''] ?? 'unknown',
+        })),
+      startedByAgent: Boolean(sharedState.parentRunId || sharedState.parentConversationId),
+    }, excludedSystemSections));
 
   // Create a properly typed PrepResult
   const prepResult: ProcessNodePrepResult = {
@@ -1125,20 +1161,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         part => part.resourceUri?.startsWith(RUN_RESOURCE_SCHEME) && !part.localPath,
       ) ?? false;
     });
-    const hasMcpTools = availableTools.some((t) => !!t.server);
-    const hasWriteResource = availableTools.some((t) => t.name === WRITE_RESOURCE_TOOL_NAME);
-    const hasResourceNodes = resourceNodes.length > 0;
-    const hasNativeResources = availableTools.some(
-      (t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME,
-    );
     const shouldArmReadResource =
-      !executionExtensionContext && (
-        hasMcpTools ||
-        hasWriteResource ||
-        hasResourceNodes ||
-        hasNativeResources ||
-        historyHasRunResourceUri
-      );
+      armsReadResourceAtPrep || (!executionExtensionContext && historyHasRunResourceUri);
 
     // Sticky arming: a synthetic tool offered once on this conversation keeps
     // being offered. Guards the reverse flip — e.g. a server's resource listing

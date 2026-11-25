@@ -122,6 +122,7 @@ async function buildPreviewSystemPrompt(
     excludeModelPrompt: properties.excludeModelPrompt ?? false,
     excludeStartNodePrompt: properties.excludeStartNodePrompt ?? false,
     excludeSystemPrompt: properties.excludeSystemPrompt ?? false,
+    excludeSystemPromptSections: properties.excludeSystemPromptSections ?? [],
     flowSnapshot: flow,
   });
 

@@ -52,6 +52,7 @@ import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjus
 import { createLogger } from '@/utils/logger';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { normalizeExcludedSystemPromptSections, type FlujoSystemPromptSectionId } from '@/shared/utils/flujoSystemPrompt';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
 
@@ -130,6 +131,7 @@ export const ProcessNodePropertiesModal = ({
   const [excludeModelPrompt, setExcludeModelPrompt] = useState(false);
   const [excludeStartNodePrompt, setExcludeStartNodePrompt] = useState(false);
   const [excludeSystemPrompt, setExcludeSystemPrompt] = useState(false);
+  const [excludeSystemPromptSections, setExcludeSystemPromptSections] = useState<FlujoSystemPromptSectionId[]>([]);
   const [systemPromptPolicy, setSystemPromptPolicy] = useState<'stable' | 'per-turn'>('stable');
   const [inputMode, setInputMode] = useState<'full-history' | 'latest-message' | 'isolated'>('full-history');
   const [isolatedPrompt, setIsolatedPrompt] = useState('');
@@ -389,6 +391,7 @@ export const ProcessNodePropertiesModal = ({
       setExcludeModelPrompt(properties.excludeModelPrompt ?? false);
       setExcludeStartNodePrompt(properties.excludeStartNodePrompt ?? false);
       setExcludeSystemPrompt(properties.excludeSystemPrompt ?? false);
+      setExcludeSystemPromptSections(normalizeExcludedSystemPromptSections(properties.excludeSystemPromptSections));
       setSystemPromptPolicy(properties.systemPromptPolicy === 'per-turn' ? 'per-turn' : 'stable');
       setInputMode(properties.inputMode ?? 'full-history');
       setIsolatedPrompt(properties.isolatedPrompt ?? '');
@@ -587,6 +590,11 @@ export const ProcessNodePropertiesModal = ({
         // Issue #259: only persist enableTodoTool when ON, so flows that don't use
         // it stay byte-identical (same delete-when-false convention as captureX).
         if (enableTodoTool) properties.enableTodoTool = true; else delete properties.enableTodoTool;
+        if (excludeSystemPromptSections.length > 0) {
+          properties.excludeSystemPromptSections = excludeSystemPromptSections;
+        } else {
+          delete properties.excludeSystemPromptSections;
+        }
         if (requireApprovalForWrites) properties.requireApprovalForWrites = true; else delete properties.requireApprovalForWrites;
 
         // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
@@ -806,6 +814,8 @@ export const ProcessNodePropertiesModal = ({
               setExcludeStartNodePrompt={setExcludeStartNodePrompt}
               excludeSystemPrompt={excludeSystemPrompt}
               setExcludeSystemPrompt={setExcludeSystemPrompt}
+              excludeSystemPromptSections={excludeSystemPromptSections}
+              setExcludeSystemPromptSections={setExcludeSystemPromptSections}
               inputMode={inputMode}
               setInputMode={setInputMode}
               isolatedPrompt={isolatedPrompt}
@@ -923,6 +933,7 @@ export const ProcessNodePropertiesModal = ({
                   excludeModelPrompt={excludeModelPrompt}
                   excludeStartNodePrompt={excludeStartNodePrompt}
                   excludeSystemPrompt={excludeSystemPrompt}
+                  excludeSystemPromptSections={excludeSystemPromptSections}
                   nodeData={nodeData}
                   flowId={flowId}
                   suggestions={referenceSuggestions}

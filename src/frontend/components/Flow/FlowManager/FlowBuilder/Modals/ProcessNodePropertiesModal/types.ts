@@ -2,6 +2,7 @@ import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { Model as SharedModel } from '@/shared/types/model';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import type { FlujoSystemPromptSectionId } from '@/shared/utils/flujoSystemPrompt';
 
 // Re-export the shared Model type
 export type Model = SharedModel;
@@ -44,6 +45,7 @@ export interface ProcessNodeProperties extends Record<string, unknown> {
     excludeModelPrompt?: boolean;
     excludeStartNodePrompt?: boolean;
     excludeSystemPrompt?: boolean;
+    excludeSystemPromptSections?: FlujoSystemPromptSectionId[];
     inputMode?: 'full-history' | 'latest-message' | 'isolated';
     isolatedPrompt?: string;
     allowCallerPrompt?: boolean;

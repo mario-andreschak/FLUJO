@@ -24,6 +24,7 @@ import OpenAI from 'openai';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
+import type { FlujoSystemPromptSectionId } from '@/shared/utils/flujoSystemPrompt';
 import type { ConversationCompactionState } from './compaction/types';
 import type { ManualCompactionRequest } from './compaction/manualRequest';
 import type { ResponsesSessionState } from '@/backend/services/model/adapters/responsesSessionState';
@@ -169,10 +170,12 @@ export interface ProcessNodeProperties {
     systemPromptPolicy?: 'stable' | 'per-turn';
     excludeModelPrompt?: boolean;
     excludeStartNodePrompt?: boolean;
-    /** When true, suppress the hardcoded `# GENERAL INFORMATION:` system block
-     *  (workflow/handoff guidance) from the rendered prompt. Independent of
-     *  excludeModelPrompt. Defaults to false (block shown). Issue #67. */
+    /** When true, leave out all of FLUJO's own `# GENERAL INFORMATION:`
+     *  sections. Independent of excludeModelPrompt. Defaults to false. Issue #67. */
     excludeSystemPrompt?: boolean;
+    /** FLUJO sections to leave out one by one (`workflow`, `agents`, …).
+     *  Each section is only added when the step can use it anyway. */
+    excludeSystemPromptSections?: FlujoSystemPromptSectionId[];
     /** How much of the conversation the node's MODEL sees. Mirrors the subflow
      *  node's input modes so a process node can run scoped to the current task
      *  or fully self-contained:

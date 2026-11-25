@@ -710,7 +710,7 @@ const REFERENCE_DETAILS: Record<string, Partial<ApiEndpoint>> = {
   'POST /api/model/provider': { paramsLabel: 'Body', params: [p('baseUrl', 'string', 'Provider URL (not needed for native CLI/SDK profiles).'), p('modelId', 'string', 'Saved model whose stored key should be used.'), p('searchTerm', 'string', 'Filter (max 200).'), p('apiKey', 'string', 'Key for a model that is not saved yet; never echoed back.'), p('profileId', 'string', 'Provider profile id.')], response: '{ models: [{ id, name, description?, contextWindow?, maxTokens?, reasoningEfforts? }] } · 400 · 500' },
   'GET /api/flow': { response: 'Flow[]' },
   'GET /api/flow/{id}': { response: 'Flow · 404' },
-  'POST /api/flow/prompt-renderer': { paramsLabel: 'Body', params: [p('flowId', 'string', 'Agent id.', true), p('nodeId', 'string', 'Node to render.', true), p('options', 'object', '{ renderMode?, includeConversationHistory?, excludeModelPrompt?, excludeStartNodePrompt?, excludeSystemPrompt? }')], response: '{ prompt } · 400 · 500' },
+  'POST /api/flow/prompt-renderer': { paramsLabel: 'Body', params: [p('flowId', 'string', 'Agent id.', true), p('nodeId', 'string', 'Node to render.', true), p('options', 'object', '{ renderMode?, includeConversationHistory?, excludeModelPrompt?, excludeStartNodePrompt?, excludeSystemPrompt?, excludeSystemPromptSections? }')], response: '{ prompt } · 400 · 500' },
   'GET /api/planned-executions/{id}': { response: 'PlannedExecution · 404' },
   'GET /api/planned-executions/{id}/runs': { response: '{ runs: RunRecord[] } (newest 100, oldest first) · 404' },
   'POST /api/planned-executions/{id}/run': { requestBody: 'none', response: '{ record: RunRecord } after the run finishes · 404 · 500' },

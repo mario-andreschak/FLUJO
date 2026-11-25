@@ -45,7 +45,8 @@ NODE TYPES:
     "captureKv": "NAME",                                               // optional; ALSO save this step's output to a PERSISTENT cross-run key other steps inject with \${kv:NAME} (see rule 9d)
     "excludeModelPrompt": true|false,                                   // optional; drop the model's base prompt
     "excludeStartNodePrompt": true|false,                              // optional; drop the start node's prompt for this step
-    "excludeSystemPrompt": true|false }                                // optional; drop the workflow/handoff guidance block
+    "excludeSystemPrompt": true|false,                                 // optional; drop all of FLUJO's own guidance sections
+    "excludeSystemPromptSections": ["workflow"] }                      // optional; drop single sections: basics, workflow, agents, people, flujoTools, storedResults
 - { "key": "...", "type": "subflow", "label": "...",
     "flow": "<existing flow name or id>",          // reference exactly ONE existing child flow, OR:
     "subflowSpec": { ...a nested FlowSpec... },     // define exactly ONE new child flow inline (compiled and wired automatically)

@@ -234,6 +234,7 @@ describe('flowToSpec — Tier 1 fields round-trip', () => {
           maxTurns: 25,
           excludeModelPrompt: true,
           excludeSystemPrompt: true,
+          excludeSystemPromptSections: ['people', 'unknown', 'workflow'],
           allowedTools: ['read_file', 'write_file'],
         },
         { key: 'f', type: 'finish' },
@@ -249,6 +250,7 @@ describe('flowToSpec — Tier 1 fields round-trip', () => {
     expect(p.maxTurns).toBe(25);
     expect(p.excludeModelPrompt).toBe(true);
     expect(p.excludeSystemPrompt).toBe(true);
+    expect(p.excludeSystemPromptSections).toEqual(['workflow', 'people']);
     expect(p.excludeStartNodePrompt).toBeUndefined(); // was false → not emitted
     expect(p.allowedTools).toEqual(['read_file', 'write_file']);
 

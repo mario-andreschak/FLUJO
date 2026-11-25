@@ -1,10 +1,26 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
-import { promptRenderer } from '@/backend/utils/PromptRenderer';
+import { promptRenderer, type PromptRenderOptions } from '@/backend/utils/PromptRenderer';
+import { normalizeExcludedSystemPromptSections } from '@/shared/utils/flujoSystemPrompt';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('api/flow/prompt-renderer');
+
+function previewOptions(options: unknown): PromptRenderOptions {
+  const input = options && typeof options === 'object' ? options as Record<string, unknown> : {};
+  const flag = (name: string) => typeof input[name] === 'boolean' ? input[name] as boolean : undefined;
+  return {
+    renderMode: input.renderMode === 'raw' ? 'raw' : 'rendered',
+    includeConversationHistory: flag('includeConversationHistory'),
+    excludeModelPrompt: flag('excludeModelPrompt'),
+    excludeStartNodePrompt: flag('excludeStartNodePrompt'),
+    excludeSystemPrompt: flag('excludeSystemPrompt'),
+    ...(Array.isArray(input.excludeSystemPromptSections)
+      ? { excludeSystemPromptSections: normalizeExcludedSystemPromptSections(input.excludeSystemPromptSections) }
+      : {}),
+  };
+}
 
 /**
  * API endpoint to render a prompt for a node in a flow
@@ -33,8 +49,9 @@ async function POST_handler(request: NextRequest): Promise<NextResponse> {
     
     log.info(`Rendering prompt for node ${nodeId} in flow ${flowId}`, { options });
     
-    // Render the prompt
-    const prompt = await promptRenderer.renderPrompt(flowId, nodeId, options);
+    // Only display options: a preview estimates FLUJO's system sections from
+    // the flow graph and never receives the runtime's slot.
+    const prompt = await promptRenderer.renderPrompt(flowId, nodeId, previewOptions(options));
     
     // Return the rendered prompt
     return NextResponse.json({ prompt });
