@@ -2,11 +2,12 @@
 
 Routes: `/settings`
 
-One page for everything that shapes the whole installation. Sections are grouped into "Data & security" (who can reach FLUJO, model access, variables, encryption password, backup), "Experience" (look, language, voice input, the guided tour) and "System" (when tool servers start, updates, privacy, experimental features). The user picks a section on the left and changes it on the right. This is also where experimental features, including Harness Lab, are switched on.
+One page for everything that shapes the whole installation. Sections are grouped into "Data & security" (who can reach FLUJO, users and sign-in, model access, variables, encryption password, backup), "Experience" (look, language, voice input, the guided tour) and "System" (when tool servers start, updates, privacy, experimental features). The user picks a section on the left and changes it on the right. This is also where experimental features, including Harness Lab, are switched on.
 
 ## Sub-features
 
 - `settings-network`: "Network access" with "Localhost", "Local Network" and "Public", plus "Allow all MCP app content (relax sandbox)". Changes apply after a restart.
+- `settings-users`: "Users and sign-in": turn on sign-in for several people ("Your sign-in name", "Display name", "Password", "Repeat password", "Turn on sign-in for several people"). Once on: "Signed in as …" with "Sign out", "Your API tokens" ("Token label", "Create token", "Revoke"; a new token is shown once), and for admins the "People" table ("Turn off"/"Turn on", "Make admin"/"Make member", "Allow host access"/"Remove host access", "Set new password"), "Add a person", "Workspaces" with each owner or "Unassigned (admins only)" and "Give to", and "Turn off sign-in for several people".
 - `settings-model-access`: "Model access": whether people can reach a model without a flow.
 - `settings-process-env`: "Process environment": launcher and bundled-service environment variables.
 - `settings-global-variables`: "Global variables": shared values and secrets used by connected services.
@@ -47,4 +48,5 @@ Preconditions: a throwaway instance from the verify-flujo skill. Nothing else ne
 - Choosing "Local Network" or "Public" takes effect after a restart. Without a configured owner sign-in, the app's own data requests are then refused ("Owner authentication is unavailable"). Leave a throwaway instance on "Localhost".
 - Switching to a "Legacy" theme changes some labels elsewhere, for example "Add server" instead of "Connect App" on Connected Apps.
 - The diagnostic report needs FLUJO unlocked; while it waits for the encryption password, "Create report" shows a warning instead. A section that cannot be read in five seconds is listed under "Could not read" and is tried again on the next "Create report".
+- Turning on "Users and sign-in" means everyone, including you, must sign in on every page from then on, and all existing workspaces belong to the first admin. A throwaway instance should turn it off again ("Turn off sign-in for several people") or be thrown away after the run.
 - Setting an encryption password protects stored credentials; forgetting it locks them. Do not set one in a run unless that is the test.

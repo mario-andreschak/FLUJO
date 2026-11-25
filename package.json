@@ -38,6 +38,7 @@
     "scripts/operations-inspect.mjs",
     "scripts/subscription-allowance.mjs",
     "scripts/owner-bootstrap.mjs",
+    "scripts/accounts-cli.mjs",
     "scripts/exclude-workspaces-from-next-glob.cjs",
     "scripts/exposure-mode.mjs",
     "scripts/migration-landscape-demo.mjs",
@@ -54,6 +55,7 @@
   ],
   "scripts": {
     "dev": "node scripts/launch-next.mjs dev --webpack",
+    "users": "node scripts/accounts-cli.mjs",
     "turbo": "node scripts/launch-next.mjs dev --turbopack",
     "build": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
     "dockerbuild": "gh workflow run publish-image.yml -R mario-andreschak/FLUJO --ref main",

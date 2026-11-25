@@ -22,6 +22,10 @@ import { workspaceActionForMethod } from './access';
  * they are started from (#574, step 574-4).
  */
 export const ROUTE_CAPABILITIES = Object.freeze({
+  '/api/accounts/mode': 'admin', // turns multi-user mode on (allowed to anyone while it is off) or off
+  '/api/accounts/session': 'account', // sign in and sign out with a name and password
+  '/api/accounts/tokens': 'account', // the signed-in person's own API tokens
+  '/api/accounts/users': 'admin', // people and workspace owners
   '/api/approvals': 'workspace',
   '/api/approvals/[id]': 'workspace',
   '/api/automation-map': 'workspace',
@@ -264,6 +268,7 @@ export type RoutePattern = keyof typeof ROUTE_CAPABILITIES;
 
 /** Account routes that must work while signed out, because they are how one signs in. */
 export const SIGNED_OUT_ROUTES: ReadonlySet<RoutePattern> = new Set<RoutePattern>([
+  '/api/accounts/session',
   '/api/owner/bootstrap',
   '/api/owner/session',
 ]);

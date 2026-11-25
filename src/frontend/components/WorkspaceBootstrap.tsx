@@ -3,7 +3,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
-  DEFAULT_WORKSPACE,
   getSelectedWorkspace,
   initializeWorkspaceSelection,
   readWorkspacePageRequest,
@@ -11,7 +10,7 @@ import {
   workspacePageUrl,
 } from '@/frontend/utils/workspaceSelection';
 import { migrateLegacyBrowserWorkspaceContent } from '@/frontend/utils/workspaceContentKeys';
-import { discoverWorkspaces } from '@/frontend/utils/workspaceDiscovery';
+import { discoverWorkspaces, fallbackWorkspace } from '@/frontend/utils/workspaceDiscovery';
 
 interface WorkspaceBootstrapProps {
   children: React.ReactNode;
@@ -30,7 +29,9 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
   initializeWorkspaceSelection();
   migrateLegacyBrowserWorkspaceContent();
   const pageRequestOnMount = useRef(readWorkspacePageRequest());
-  const [status, setStatus] = useState<'loading' | 'slow' | 'migrating' | 'ready' | 'error' | 'owner-auth'>('loading');
+  const [status, setStatus] = useState<
+    'loading' | 'slow' | 'migrating' | 'ready' | 'error' | 'owner-auth' | 'account-sign-in' | 'no-workspace'
+  >('loading');
   const [errorMessage, setErrorMessage] = useState('FLUJO did not answer for a minute. Check that it is still running, then retry.');
 
   useEffect(() => {
@@ -43,8 +44,13 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
         onSlow: () => { if (!cancelled) setStatus('slow'); },
       });
       if (cancelled || outcome.kind === 'cancelled') return;
-      if (outcome.kind === 'owner-auth') {
-        setStatus('owner-auth');
+      if (outcome.kind === 'owner-auth' || outcome.kind === 'account-sign-in') {
+        setStatus(outcome.kind);
+        return;
+      }
+      if (outcome.kind === 'accounts-damaged') {
+        setErrorMessage(outcome.message);
+        setStatus('error');
         return;
       }
       // Data providers stay unmounted until discovery succeeds, so they never
@@ -68,8 +74,14 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
           setStatus('error');
           return;
         }
-        setSelectedWorkspace(DEFAULT_WORKSPACE);
-        window.location.assign(workspacePageUrl(DEFAULT_WORKSPACE));
+        // In multi-user mode a person may lack the default workspace, or have none.
+        const nextWorkspace = fallbackWorkspace(outcome.names);
+        if (!nextWorkspace) {
+          setStatus('no-workspace');
+          return;
+        }
+        setSelectedWorkspace(nextWorkspace);
+        window.location.assign(workspacePageUrl(nextWorkspace));
         return;
       }
 
@@ -109,12 +121,21 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
       </div>
     );
   }
-  if (status === 'owner-auth') {
+  if (status === 'owner-auth' || status === 'account-sign-in') {
     const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    const owner = status === 'owner-auth';
     return <div className="app-loading" role="alert">
       <div className="app-loading__content">
-        <span>Sign in as the owner to open this workspace.</span>
-        <Link href={`/owner/login?returnTo=${encodeURIComponent(returnTo)}`}>Owner sign in</Link>
+        <span>{owner ? 'Sign in as the owner to open this workspace.' : 'Sign in to open FLUJO.'}</span>
+        <Link href={`/owner/login?returnTo=${encodeURIComponent(returnTo)}`}>{owner ? 'Owner sign in' : 'Sign in'}</Link>
+      </div>
+    </div>;
+  }
+  if (status === 'no-workspace') {
+    return <div className="app-loading" role="alert">
+      <div className="app-loading__content">
+        <span>You do not have a workspace yet. Ask an admin to give you one.</span>
+        <Link href="/owner/login">Sign in as someone else</Link>
       </div>
     </div>;
   }

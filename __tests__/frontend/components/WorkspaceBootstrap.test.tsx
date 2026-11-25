@@ -178,4 +178,54 @@ describe('WorkspaceBootstrap deep links', () => {
     expect(await screen.findByText('workspace provider mounted after migration')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it('offers account sign-in when multi-user mode answers that nobody is signed in (#574)', async () => {
+    window.history.replaceState({}, '', '/flows?workspace=team-b');
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false, status: 401, json: async () => ({ error: 'Sign in to continue.', code: 'ACCOUNT_SIGN_IN_REQUIRED' }),
+    });
+    Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: fetchMock });
+    render(<WorkspaceBootstrap><div>private data mounted</div></WorkspaceBootstrap>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Sign in to open FLUJO.');
+    expect(screen.getByRole('link', { name: 'Sign in' }))
+      .toHaveAttribute('href', '/owner/login?returnTo=%2Fflows%3Fworkspace%3Dteam-b');
+    expect(screen.queryByText(/owner/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('private data mounted')).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the damaged accounts message instead of waiting a minute (#574)', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false, status: 503, headers: { get: () => '30' },
+      json: async () => ({ error: 'Sign-in is unavailable because the accounts file is damaged.', code: 'ACCOUNTS_DAMAGED' }),
+    });
+    Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: fetchMock });
+    render(<WorkspaceBootstrap><div>never mounted</div></WorkspaceBootstrap>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('accounts file is damaged');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches to the first listed workspace when this person does not have the default one (#574)', async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'someone-elses');
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true, status: 200, json: async () => ({ workspaces: [{ name: 'ada-private' }, { name: 'team-b' }] }),
+    });
+    Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: fetchMock });
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(<WorkspaceBootstrap><div>never mounted before the reload</div></WorkspaceBootstrap>);
+    await waitFor(() => expect(window.localStorage.getItem(WORKSPACE_STORAGE_KEY)).toBe('ada-private'));
+    expect(screen.queryByText('never mounted before the reload')).not.toBeInTheDocument();
+  });
+
+  it('tells a person without any workspace to ask an admin instead of reloading forever (#574)', async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'default-workspace');
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ workspaces: [] }) });
+    Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: fetchMock });
+    render(<WorkspaceBootstrap><div>never mounted</div></WorkspaceBootstrap>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('You do not have a workspace yet. Ask an admin to give you one.');
+    expect(window.localStorage.getItem(WORKSPACE_STORAGE_KEY)).toBe('default-workspace');
+    expect(screen.queryByText('never mounted')).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

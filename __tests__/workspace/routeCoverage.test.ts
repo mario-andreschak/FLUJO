@@ -4,6 +4,10 @@ import path from 'path';
 const APP_ROOT = path.join(process.cwd(), 'src', 'app');
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'] as const;
 const INSTALLATION_WIDE = new Set([
+  '/api/accounts/mode',
+  '/api/accounts/session',
+  '/api/accounts/tokens',
+  '/api/accounts/users',
   '/api/cloud/instance',
   '/api/mcp/servers/[name]/host-consent',
   '/api/network-exposure',

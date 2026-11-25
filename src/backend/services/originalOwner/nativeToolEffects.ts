@@ -1,4 +1,5 @@
 import { constants as fsConstants, lstatSync, realpathSync, promises as fs, type BigIntStats } from 'node:fs';
+import { assertHostAccess } from '@/backend/services/accounts/hostAccess';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { OriginalOwnerEnrollment } from './types';
@@ -346,6 +347,7 @@ export async function prepareNativeToolEffect(
 ): Promise<{ start(): Promise<ToolResult> }> {
   if (!signal || typeof signal.throwIfAborted !== 'function' || !enrollment || !Array.isArray(enrollment.allowedTools)
     || !enrollment.allowedTools.includes(name as never)) return refused();
+  await assertHostAccess('owner-native-tool');
   const captured = normalizedArguments(name, args);
   const command = name === 'worker_command' ? (captured.command as string) : undefined;
   if (command && (!Array.isArray(enrollment.commands) || !enrollment.commands.includes(command))) return refused();

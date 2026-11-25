@@ -21,6 +21,10 @@ import {
 import { isRequestHostAllowed, isLocalRequest } from '@/utils/http/localRequest';
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
+import { gateAccountRequest } from '@/backend/services/accounts/requestAccess';
+import { runWithAccountPrincipal } from '@/backend/services/accounts/context';
+import { bindAccountStream } from '@/backend/services/accounts/stream';
+import type { AccountPrincipal } from '@/shared/types/accounts';
 
 const log = createLogger('app/api/_workspace');
 
@@ -237,16 +241,24 @@ export function withWorkspaceRoute<
     const extensionResponse = authorizeExecutionTransport(transportRequest);
     if (extensionResponse) return extensionResponse;
     let ownerAuthorization: OwnerRequestAuthorization | undefined;
+    let accountPrincipal: AccountPrincipal | null | undefined;
     if (extensionResponse === undefined) {
-      const denied = isWorkerMode()
-        ? assertSnapshotBearer(transportRequest)
-        : assertOwnerRequest(transportRequest);
-      if (denied) return denied;
-      if (!isWorkerMode() && process.env.FLUJO_OWNER_AUTH_FILE !== undefined
-          && !isOwnerProtocolException(transportRequest)) {
-        const resolved = resolveOwnerRequest(transportRequest);
-        if (!resolved.ok) return resolved.response;
-        ownerAuthorization = resolved.authorization;
+      // Multi-user mode (opt-in, #574) replaces the owner policy; while it is
+      // off the gate answers `off` and the owner checks below run unchanged.
+      const accountGate = await gateAccountRequest(transportRequest);
+      if (accountGate.kind === 'denied') return accountGate.response;
+      if (accountGate.kind === 'allowed') accountPrincipal = accountGate.principal;
+      else {
+        const denied = isWorkerMode()
+          ? assertSnapshotBearer(transportRequest)
+          : assertOwnerRequest(transportRequest);
+        if (denied) return denied;
+        if (!isWorkerMode() && process.env.FLUJO_OWNER_AUTH_FILE !== undefined
+            && !isOwnerProtocolException(transportRequest)) {
+          const resolved = resolveOwnerRequest(transportRequest);
+          if (!resolved.ok) return resolved.response;
+          ownerAuthorization = resolved.authorization;
+        }
       }
     }
     return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
@@ -255,12 +267,16 @@ export function withWorkspaceRoute<
           admittedRequest === (request ?? normalizedRequest) ? handlerRequest : admittedRequest,
           ...rest,
         );
+        if (accountPrincipal) return runWithAccountPrincipal(accountPrincipal, run);
         if (ownerAuthorization && admittedRequest.method === 'GET' && !isWorkerMode()) {
           const { withOriginalOwnerHistoryAccess } = await import('@/backend/services/originalOwner/history');
           return withOriginalOwnerHistoryAccess(admittedRequest, run);
         }
         return run();
       });
+      if (accountPrincipal !== undefined && selected instanceof Response) {
+        return bindAccountStream(selected, transportRequest, transportRequest.signal);
+      }
       return ownerAuthorization && selected instanceof Response
         ? bindOwnerStream(selected, ownerAuthorization, transportRequest.signal)
         : selected;

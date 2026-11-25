@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { assertHostAccess } from '@/backend/services/accounts/hostAccess';
 import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { AntigravityCliEventDecoder, type AntigravityCliEvent } from './antigravityCliEvents';
@@ -78,6 +79,7 @@ export async function readAntigravityCliCommand(
   runtime: AntigravityCliRuntime, command: 'version' | 'models', signal?: AbortSignal,
 ): Promise<string> {
   if (signal?.aborted) throw antigravityCliAbortError();
+  await assertHostAccess('command-line-model');
   const binary = await resolveAntigravityCliEntry();
   const args = command === 'version' ? ['--version'] : ['models'];
   if (signal?.aborted) throw antigravityCliAbortError();
@@ -124,6 +126,7 @@ export async function runAntigravityCli(options: {
   onEvent(event: AntigravityCliEvent): void; timeoutMs?: number; onStarted?: () => Promise<void>;
 }): Promise<void> {
   if (options.signal.aborted) throw antigravityCliAbortError();
+  await assertHostAccess('command-line-model');
   const entry = await resolveAntigravityCliEntry();
   if (options.signal.aborted) throw antigravityCliAbortError();
   const timeoutMs = options.timeoutMs ?? ANTIGRAVITY_CLI_TIMEOUT_MS;

@@ -8,6 +8,7 @@ import { resolveBundledFlujoWorkloadRequest } from '@/backend/services/security/
 import {
   assertOwnerRequest, resolveOwnerRequest, isRemoteAvatarVoiceRequest, assertRemoteAvatarVoiceOrigin,
 } from '@/backend/services/security/ownerAccess';
+import { gateAccountRequest } from '@/backend/services/accounts/requestAccess';
 
 /**
  * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
@@ -101,14 +102,22 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const ownerDenied = assertOwnerRequest(request);
+  // Multi-user mode (opt-in, #574): people's own accounts replace the owner
+  // policy. While it is off the gate answers `off` and nothing below changes.
+  const accountGate = await gateAccountRequest(request);
+  if (accountGate.kind === 'denied') return new NextResponse(accountGate.response.body, {
+    status: accountGate.response.status, headers: accountGate.response.headers,
+  });
+  const multiUser = accountGate.kind === 'allowed';
+
+  const ownerDenied = multiUser ? null : assertOwnerRequest(request);
   if (ownerDenied) return new NextResponse(ownerDenied.body, {
     status: ownerDenied.status, headers: ownerDenied.headers,
   });
 
   // The private BFF may differ from this host. Only exact voice routes with a
   // strict workspace-bound voice principal and explicitly approved Origin pass.
-  if (isRemoteAvatarVoiceRequest(request)) {
+  if (!multiUser && isRemoteAvatarVoiceRequest(request)) {
     const admitted = resolveOwnerRequest(request, ['avatar:voice']);
     const denied = admitted.ok ? assertRemoteAvatarVoiceOrigin(request) : admitted.response;
     return denied ? new NextResponse(denied.body, { status: denied.status, headers: denied.headers }) : NextResponse.next();

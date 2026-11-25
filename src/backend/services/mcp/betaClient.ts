@@ -33,6 +33,7 @@ import {
   stdioConfigKey,
   capabilityKey,
   attachShippedWorkspaceReadiness,
+  attachHostAccessCheck,
   ClientWithBetaMarker,
   TransportWithConfigKey,
   type TransportCreationOptions,
@@ -378,6 +379,7 @@ export function createBetaTransport(
       Object.freeze(parameters);
     }
     transport = new BetaStdioClientTransport(parameters);
+    if (!isolation) attachHostAccessCheck(transport);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
     else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
     else {

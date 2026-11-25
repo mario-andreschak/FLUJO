@@ -2,7 +2,10 @@
 
 Status: accepted, 2026-11-25. Part of the [multi-user plan](multi-user-plan.md)
 (epic #212). This page fixes the rules that #574 and #575 build on, so nobody
-has to invent them along the way. Nothing in the running app uses this code yet.
+has to invent them along the way. Since #574 the running app uses them: the
+store, sign-in, sessions and tokens live in `src/backend/services/accounts/`,
+and `src/proxy.ts` and `withWorkspaceRoute` check every request with
+`requestAccess.ts`.
 
 Multi-user mode stays opt-in. While `<data>/accounts/accounts.json` is missing
 or says `"enabled": false`, FLUJO reads none of these files and every access
@@ -16,6 +19,8 @@ rule answers "allowed" (`multi-user-off`), exactly like today.
 | Who may do what (pure functions) | `src/backend/services/accounts/access.ts` |
 | The kind of every HTTP route | `src/backend/services/accounts/routeCapabilities.ts` |
 | Tests that hold them in place | `__tests__/accounts/access.test.ts`, `routeCapabilities.test.ts`, `accountsSchema.test.ts` |
+| Store, passwords, sessions, tokens, the request check, host access and background pauses (#574) | `src/backend/services/accounts/*.ts`; tests in `__tests__/accounts/` (`optIn`, `twoUserIsolation`, `store`, `passwords`, `hostAccess`, `hostAccessStartPoints`, `backgroundPause`, `accountsCli`) |
+| Server command line | `scripts/accounts-cli.mjs` (`node bin/flujo.mjs users …`, `npm run users -- …`) |
 
 The tests are the source of truth. If this page and a test disagree, the test
 wins and this page is fixed.

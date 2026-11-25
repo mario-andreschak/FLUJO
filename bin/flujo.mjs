@@ -33,8 +33,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Package root is the parent of bin/ — where package.json and the built .next live.
 const packageRoot = path.resolve(__dirname, '..');
 
-// Validate explicit options before loading settings or touching user storage.
 const argv = process.argv.slice(2);
+
+// `flujo users …` manages multi-user sign-in on this machine and exits; it
+// never starts the server. See scripts/accounts-cli.mjs.
+if (argv[0] === 'users') {
+  const usersBootstrapRoot = bootstrapDirectory(path.join(os.homedir(), '.flujo'));
+  fs.mkdirSync(usersBootstrapRoot, { recursive: true });
+  loadBootstrapEnvironment(usersBootstrapRoot, false, nextEnv.loadEnvConfig);
+  const { runAccountsCli } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'accounts-cli.mjs')).href);
+  process.exit(await runAccountsCli(argv.slice(1), {
+    defaultDataDir: process.env.FLUJO_DATA_DIR?.trim() || path.join(os.homedir(), '.flujo'),
+  }));
+}
+
+// Validate explicit options before loading settings or touching user storage.
 const noOpen = argv.includes('--no-open');
 function invalidPort() {
   console.error('[FLUJO] Invalid port. Use an integer from 1 to 65535.');

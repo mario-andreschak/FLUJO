@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
+import { BACKGROUND_PAUSE_RETRY_MS, backgroundWorkPause } from '@/backend/services/accounts/background';
 import { bindPersonaNativeOriginalAuthority } from '@/backend/execution/flow/handlers/nativeOriginalHost';
 import { captureOriginalOwnerAuthority, runOriginalOwnerNativeFlow } from '@/backend/services/originalOwner/producer';
 import { ownerDigest } from '@/backend/services/originalOwner/types';
@@ -3662,6 +3663,12 @@ export class PersonaFlowDispatcher {
 
     for (;;) {
       if (control.cancelRequested || this.quiescedPersonas.has(personaId)) return;
+      // Multi-user mode (#574): queued work waits while the workspace owner is
+      // turned off and is looked at again later, so it resumes by itself.
+      if ((await backgroundWorkPause(this.workspaceId)).paused) {
+        this.scheduleWake(personaId, runtimeClock.now() + BACKGROUND_PAUSE_RETRY_MS);
+        return;
+      }
       let claim: PersonaActivityClaim | null;
       try {
         claim = await this.inWorkspace(() => this.dependencies.claimNextPersonaActivity({

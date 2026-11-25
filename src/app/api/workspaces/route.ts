@@ -11,12 +11,19 @@ import {
   renameWorkspace,
   runWithWorkspace,
   updateWorkspaceRoots,
+  type WorkspaceInfo,
 } from '@/utils/workspace';
 import { mcpService } from '@/backend/services/mcp';
 import {
   getWorkspaceLayoutStatus,
   waitForWorkspaceLayoutReady,
 } from '@/backend/services/workspace/layoutReadiness';
+import {
+  accountRequestUser, accountsDamagedResponse, denialResponse, unknownWorkspaceResponse, type AccountRequestUser,
+} from '@/backend/services/accounts/requestAccess';
+import { hasHostAccess, listAccessibleWorkspaces, workspaceActions } from '@/backend/services/accounts/access';
+import { recordWorkspaceCreated, recordWorkspaceRenamed } from '@/backend/services/accounts/admin';
+import { AccountsDamagedError } from '@/backend/services/accounts/store';
 
 // FLUJO_INSTALLATION_WIDE_ROUTE: discovers and manages workspace namespaces.
 
@@ -92,13 +99,55 @@ async function requestBody(request: Request): Promise<Record<string, unknown> | 
   }
 }
 
+type SignedIn = AccountRequestUser & { user: NonNullable<AccountRequestUser['user']> };
+
+/**
+ * Multi-user mode (#574): the signed-in person, `null` while the mode is off,
+ * or the answer to send instead (signed out, damaged accounts file).
+ */
+async function signedInPerson(request: Request | undefined): Promise<SignedIn | null | Response> {
+  try {
+    const current = await accountRequestUser(request ?? new Request('http://localhost/api/workspaces'));
+    if (!current) return null;
+    return current.user ? current as SignedIn : denialResponse('sign-in-required', '');
+  } catch (error) {
+    if (error instanceof AccountsDamagedError) return accountsDamagedResponse();
+    throw error;
+  }
+}
+
+/** Only the workspaces this person may open. Unknown and forbidden names look the same. */
+async function visibleWorkspaces(request: Request | undefined, person: SignedIn | null): Promise<WorkspaceInfo[]> {
+  const workspaces = await listWorkspaces();
+  if (!person) return workspaces;
+  const current = await signedInPerson(request);
+  if (!current || current instanceof Response) return [];
+  const entries = listAccessibleWorkspaces(current.accounts, current.principal, workspaces.map(workspace => workspace.name), Date.now());
+  if (!Array.isArray(entries)) return [];
+  const allowed = new Set(entries.map(entry => entry.workspace));
+  return workspaces.filter(workspace => allowed.has(workspace.name));
+}
+
+/** In multi-user mode, renaming, deleting and changing folders need the workspace `admin` action; folders also need host access. */
+function workspaceChangeRefused(person: SignedIn | null, name: unknown, changesRoots: boolean): Response | null {
+  if (!person) return null;
+  const workspace = typeof name === 'string' ? name : '';
+  const actions = workspaceActions(person.accounts, person.user, workspace);
+  if (!actions.includes('admin')) {
+    return actions.length > 0 ? denialResponse('workspace-admin-required', workspace) : unknownWorkspaceResponse(workspace);
+  }
+  return changesRoots && !hasHostAccess(person.user) ? denialResponse('host-access-required', workspace) : null;
+}
+
 /** Installation-wide discovery; the filesystem remains the source of truth. */
-export async function GET() {
+export async function GET(request?: Request) {
   const unavailable = await waitForLayout();
   if (unavailable) return unavailable;
 
   try {
-    const workspaces = await listWorkspaces();
+    const person = await signedInPerson(request);
+    if (person instanceof Response) return person;
+    const workspaces = await visibleWorkspaces(request, person);
     return NextResponse.json({
       workspaces,
       defaultWorkspace: DEFAULT_WORKSPACE,
@@ -122,9 +171,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'A workspace name is required.' }, { status: 400 });
   }
   try {
+    const person = await signedInPerson(request);
+    if (person instanceof Response) return person;
     const workspace = await createWorkspace(body.name as string);
+    await recordWorkspaceCreated(workspace.name, person?.user.id ?? null);
     return NextResponse.json(
-      { workspace, workspaces: await listWorkspaces() },
+      { workspace, workspaces: await visibleWorkspaces(request, person) },
       { status: 201 },
     );
   } catch (error) {
@@ -143,6 +195,10 @@ export async function PATCH(request: Request) {
     );
   }
   try {
+    const person = await signedInPerson(request);
+    if (person instanceof Response) return person;
+    const refused = workspaceChangeRefused(person, body.name, Object.prototype.hasOwnProperty.call(body, 'roots'));
+    if (refused) return refused;
     const currentName = body.name as string;
     const newName = body.newName as string;
     if (Object.prototype.hasOwnProperty.call(body, 'roots')) assertWorkspaceRoots(body.roots);
@@ -155,13 +211,14 @@ export async function PATCH(request: Request) {
         `Workspace ${JSON.stringify(currentName)} does not exist.`,
       );
     }
+    if (renamed.name !== currentName) await recordWorkspaceRenamed(currentName, renamed.name);
     const workspace = Object.prototype.hasOwnProperty.call(body, 'roots')
       ? await updateWorkspaceRoots(renamed.name, body.roots)
       : renamed;
     if (Object.prototype.hasOwnProperty.call(body, 'roots')) {
       runWithWorkspace(workspace.name, () => mcpService.notifyAllRootsChanged());
     }
-    return NextResponse.json({ workspace, workspaces: await listWorkspaces() });
+    return NextResponse.json({ workspace, workspaces: await visibleWorkspaces(request, person) });
   } catch (error) {
     return mutationErrorResponse(error, 'edit');
   }
@@ -175,9 +232,14 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'A workspace name is required.' }, { status: 400 });
   }
   try {
+    const person = await signedInPerson(request);
+    if (person instanceof Response) return person;
+    const refused = workspaceChangeRefused(person, body.name, false);
+    if (refused) return refused;
     const name = body.name as string;
     await deleteWorkspace(name);
-    return NextResponse.json({ deleted: name, workspaces: await listWorkspaces() });
+    await recordWorkspaceRenamed(name, null);
+    return NextResponse.json({ deleted: name, workspaces: await visibleWorkspaces(request, person) });
   } catch (error) {
     return mutationErrorResponse(error, 'delete');
   }

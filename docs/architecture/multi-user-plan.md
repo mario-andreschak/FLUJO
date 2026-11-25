@@ -216,6 +216,26 @@ tests in `__tests__/accounts/`.
 
 ### #574: Tier 0, private ownership
 
+Built on 2026-11-25 (all six steps; user guide: [several people on one
+FLUJO](../guides/multi-user.md)). Where it differs from the steps below:
+
+- Pages are gated in the browser (`WorkspaceBootstrap` shows "Sign in to open
+  FLUJO." when the API answers 401) instead of a proxy redirect. Pages hold no
+  data, and leaving the proxy matcher as it was keeps single-user page loads
+  untouched. Every API, `/v1` and MCP request is still checked twice: in
+  `src/proxy.ts` and in `withWorkspaceRoute`.
+- The admin page is the "Users and sign-in" section in Settings
+  (`settings-users` in the feature map). The audit view is not built yet;
+  `<data>/accounts/audit.jsonl` is readable on the server.
+- Background work acts for the workspace owner only; storing `startedBy` per
+  schedule comes with teams (#575), where a removed member's automations matter.
+- A paused automatic run is skipped, not queued, and nothing about the pause is
+  stored, so it resumes at the next tick after the owner is turned on again.
+- The remote voice device keeps using the owner policy and is unavailable while
+  the mode is on.
+- Not yet proven in a running FLUJO with two browsers: the supervisor's
+  end-of-day run uses `scripts/check-multi-user.mjs` for that.
+
 - **574-1 Accounts store.** `store.ts`, `passwords.ts`, `sessions.ts`,
   `tokens.ts` and the `users` CLI commands (init, add, disable, reset-password,
   off). Tests: save/load, `.bak` fallback, parallel writes, password checks,

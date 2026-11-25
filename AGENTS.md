@@ -65,6 +65,8 @@ workaround.
 | Every shipped form (npm, Windows installer, Docker) runs the same backup, restart, upgrade and restore checks before release | `assertPackagedAcceptance` in `scripts/workflow-contract.mjs` |
 | App code reads website files only from `githubpages/oauth/client-metadata.json`; installers and the image leave the rest out | `tests/installer-repository.test.mjs` |
 | A new user can still connect an AI, test a tool, build and run an agent and reuse it | `npm run journey:first-use` on a throwaway FLUJO (`scripts/first-journey/run.mjs`) |
+| Multi-user mode stays opt-in: without `accounts/accounts.json` no new file is read or created and no new check runs | `__tests__/accounts/optIn.test.ts` |
+| Code that starts a program on the server checks host access right before it starts (multi-user mode) | `__tests__/accounts/hostAccessStartPoints.test.ts` |
 | Persona runtime cleanup writes only with a grant from the rollout switches | `PersonaRuntimeRetentionWriteGrant` argument of the compactors in `compactRuntime.ts`; `personaRuntimeRetentionSweep.test.ts` |
 | The shareable diagnostic report holds only versions, counts and labels from fixed lists, never names, text, paths, addresses or keys | `normalizeDiagnosticReport` in `src/shared/types/diagnosticReport.ts`; `__tests__/diagnostics/diagnosticReport.test.ts` |
 | A subscription bar never shows a made-up 0% or 100%; every known provider answer has a fixture with the text and colour it must show | `__tests__/model/fixtures/claudeAllowanceFixtures.ts`; `__tests__/frontend/components/AllowanceFixtures.test.tsx` |
