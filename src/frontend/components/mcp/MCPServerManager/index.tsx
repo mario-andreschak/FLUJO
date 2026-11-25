@@ -7,6 +7,7 @@ import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import { openOAuthPopup, reserveOAuthPopup } from '@/frontend/utils/oauth';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
+import EditConflictHost from '@/frontend/components/shared/sharedEditing/EditConflictHost';
 import { BIG_TUTORIAL_EVENT, isBigTutorialEvent } from '@/frontend/components/Tour/bigTutorialEvents';
 import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
 import McpConnectionWizard from './McpConnectionWizard';
@@ -104,6 +105,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     isLoading,
     loadError,
     connectingServers,
+    loadServers,
     toggleServer,
     retryServer,
     deleteServer,
@@ -1254,7 +1256,10 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         onUpdate={handleUpdateServer}
         onRestartAfterUpdate={handleServerRetry}
         onSaveAndAuthenticate={handleSaveAndAuthenticate}
+        onReload={loadServers}
       />
+      {/* Multi-user mode (#575): "someone else saved this server first". */}
+      <EditConflictHost kind="mcp-server" onReload={loadServers} />
 
       {modern ? (
         <McpConnectionWizard

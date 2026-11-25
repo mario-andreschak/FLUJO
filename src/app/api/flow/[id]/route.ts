@@ -5,6 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
 import { listPersonas } from '@/backend/services/enduringAgents';
+import { checkBaseRevision, currentSharedEditor, recordChange } from '@/backend/services/sharedItems/guard';
 import { json } from '../_helpers';
 
 const log = createLogger('app/api/flow/[id]/route');
@@ -56,6 +57,12 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
       return json({ error: `Flow "${id}" not found` }, 404);
     }
 
+    // Multi-user mode (#575): refuse to silently replace a newer save by
+    // someone else. `editor` is null while the mode is off.
+    const editor = await currentSharedEditor();
+    const conflict = await checkBaseRevision(request, editor, 'flow', id, existing);
+    if (conflict) return conflict;
+
     // The path segment is the source of truth for which flow is being updated.
     const flow: Flow = {
       ...body,
@@ -66,10 +73,19 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
         : { personaOwnership: undefined }),
     };
 
-    const result = await flowService.saveFlow(flow);
+    // With an editor the save also checks, under the flow lock, that nobody
+    // saved between the check above and this write.
+    const result = await flowService.saveFlow(flow, editor && typeof existing.updatedAt === 'number'
+      ? { expectedUpdatedAt: existing.updatedAt } : {});
     if (!result.success) {
+      if (editor && result.error === 'Flow changed since inspection.') {
+        const newer = await flowService.getFlow(id);
+        const raced = newer && await checkBaseRevision(request, editor, 'flow', id, newer);
+        if (raced) return raced;
+      }
       return json({ error: result.error || 'Failed to update flow' }, 400);
     }
+    await recordChange(editor, { kind: 'flow', itemId: id, action: 'saved', before: existing, after: flow });
 
     return json(flow, 200);
   } catch (error) {
@@ -124,6 +140,7 @@ async function DELETE_handler(_request: NextRequest, { params }: RouteContext) {
     if (!result.success) {
       return json({ error: result.error || 'Failed to delete flow' }, 500);
     }
+    await recordChange(await currentSharedEditor(), { kind: 'flow', itemId: id, action: 'deleted', before: existing, after: null });
 
     return new Response(null, { status: 204 });
   } catch (error) {

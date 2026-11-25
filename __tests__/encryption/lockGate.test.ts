@@ -159,6 +159,14 @@ describe('deny-by-default coverage guard', () => {
       // First-owner pairing authenticates its private one-time capability while locked.
       'src/app/api/owner/bootstrap/route.ts',
       'src/app/api/owner/session/route.ts',
+      // Multi-user accounts (#574, #575) live in <data>/accounts/, outside every
+      // workspace and its keyring. Signing in, tokens, people and teams must
+      // work before anyone unlocks a workspace; they return no workspace data.
+      'src/app/api/accounts/mode/route.ts',
+      'src/app/api/accounts/session/route.ts',
+      'src/app/api/accounts/teams/route.ts',
+      'src/app/api/accounts/tokens/route.ts',
+      'src/app/api/accounts/users/route.ts',
       // Owner-authorized transfer restore writes only a fresh namespace under a
       // fresh recipient key; it cannot read or overwrite the locked source.
       'src/app/api/credential-transfer/restore/route.ts',

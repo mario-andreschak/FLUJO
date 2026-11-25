@@ -256,6 +256,13 @@ export interface PlannedExecution {
    */
   generationId?: string;
   name: string;
+  /**
+   * Multi-user mode (#575): the person who last set this up (created it or
+   * changed it). Server-authored; never taken from a request body. Automatic
+   * runs pause while this person may not run things in the workspace, and
+   * resume by themselves when they may again. Absent in single-user mode.
+   */
+  startedBy?: string;
   /** Optional user-assigned folder used to organize the execution browser. */
   folder?: string;
   enabled: boolean;

@@ -40,6 +40,8 @@ import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
 import type { QuickModelChangeResult } from '@/frontend/components/Flow/FlowDashboard/QuickChangeModelsDialog';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
+import { setEditBase, type EditConflict } from '@/frontend/services/sharedItems';
+import EditConflictDialog from '@/frontend/components/shared/sharedEditing/EditConflictDialog';
 import {
   remapFlowModelBindings,
   type FlowModelReplacementMap,
@@ -114,6 +116,12 @@ const FlowsPage = () => {
   // persisted just before the root on first save, so every subflowId resolves. Discarding
   // the draft discards these too.
   const [draftDescendants, setDraftDescendants] = useState<Flow[]>([]);
+  // Multi-user mode (#575): a save refused because someone else saved first.
+  // The builder's save waits until the person chooses what to keep.
+  const [flowConflict, setFlowConflict] = useState<{ conflict: EditConflict; flow: Flow } | null>(null);
+  const flowConflictAnswer = useRef<((saved: boolean) => void) | null>(null);
+  // Bumped to show a version saved outside the builder (theirs, or a restored one).
+  const [builderReloadKey, setBuilderReloadKey] = useState(0);
   // Some creation actions promise a specific first view. Keep that intent
   // separate from the persisted preference so advanced-feature detection does
   // not override an explicit "Continue to simple builder" handoff.
@@ -377,10 +385,18 @@ const FlowsPage = () => {
 
       // A flow not yet in state is a create (POST); otherwise it's an update (PUT).
       const isNew = !flows.some(f => f.id === flow.id);
-      const result = isNew
+      const result: { success: boolean; error?: string; conflict?: EditConflict } = isNew
         ? await flowService.addFlow(flow)
         : await flowService.updateFlow(flow);
 
+      if (!result.success && result.conflict) {
+        log.warn('Someone else saved this flow first', { flowId: flow.id });
+        const conflict = result.conflict;
+        return await new Promise<boolean>(resolve => {
+          flowConflictAnswer.current = resolve;
+          setFlowConflict({ conflict, flow });
+        });
+      }
       if (!result.success) {
         log.error('Failed to save flow', { error: result.error });
         showSnackbar(result.error || t('flows.page.saveFailed'), 'error');
@@ -417,6 +433,41 @@ const FlowsPage = () => {
       showSnackbar(t('flows.page.saveFailed'), 'error');
       return false;
     }
+  };
+
+  /** Show a version of a flow that was saved outside the builder, replacing the canvas. */
+  const showStoredFlow = (stored: Flow) => {
+    setFlows(previous => previous.map(existing => (existing.id === stored.id ? stored : existing)));
+    setBuilderReloadKey(key => key + 1);
+  };
+
+  const answerFlowConflict = (saved: boolean) => {
+    const answer = flowConflictAnswer.current;
+    flowConflictAnswer.current = null;
+    setFlowConflict(null);
+    answer?.(saved);
+  };
+
+  const loadTheirFlow = () => {
+    const pending = flowConflict;
+    if (!pending) return;
+    const theirs = pending.conflict.current;
+    answerFlowConflict(false);
+    if (theirs && typeof theirs === 'object') {
+      showStoredFlow(theirs as Flow);
+      showSnackbar('Showing their version. Your changes were not saved.', 'info');
+    }
+  };
+
+  const saveMyFlowAnyway = async () => {
+    const pending = flowConflict;
+    if (!pending) return;
+    const answer = flowConflictAnswer.current;
+    flowConflictAnswer.current = null;
+    setFlowConflict(null);
+    // Start from their version on purpose; it stays in the change history.
+    setEditBase('flow', pending.flow.id, pending.conflict.currentRevision);
+    answer?.(await handleSaveFlow(pending.flow));
   };
 
   // The conversion endpoint has already persisted both flows. Mirror its
@@ -768,7 +819,7 @@ const FlowsPage = () => {
               </Box>
             )}
             <FlowBuilder
-              key={selectedFlow}
+              key={`${selectedFlow}:${builderReloadKey}`}
               ref={flowBuilderRef}
               initialFlow={selectedFlowData}
               initialAuthoringMode={builderEntryMode ?? requestedAuthoringMode}
@@ -784,6 +835,17 @@ const FlowsPage = () => {
               isDraft={draftFlow?.id === selectedFlowData.id}
               onTry={handleOpenSelectedFlowInChat}
               onNavigateToFlow={handleSelectFlow}
+              onExternalSave={(stored) => {
+                showStoredFlow(stored);
+                showSnackbar('The older version is the newest version again.', 'success');
+              }}
+            />
+            <EditConflictDialog
+              conflict={flowConflict?.conflict ?? null}
+              mine={flowConflict?.flow ?? null}
+              onLoadTheirs={loadTheirFlow}
+              onSaveMine={() => void saveMyFlowAnyway()}
+              onClose={() => answerFlowConflict(false)}
             />
           </Box>
         </Fade>

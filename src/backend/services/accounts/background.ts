@@ -39,8 +39,13 @@ function note(workspace: string, reason: string | null): void {
   }
 }
 
-/** May background work run in this workspace now? Never throws: an unreadable accounts file pauses. */
-export async function backgroundWorkPause(workspace: string = getCurrentWorkspace(), now = Date.now()): Promise<BackgroundPause> {
+/**
+ * May background work run in this workspace now? Never throws: an unreadable
+ * accounts file pauses. `startedBy` is the person who set the work up (#575):
+ * it also pauses while that person may not run things in the workspace.
+ */
+export async function backgroundWorkPause(workspace: string = getCurrentWorkspace(), now = Date.now(),
+  startedBy?: string): Promise<BackgroundPause> {
   if (isWorkerMode()) return RUNS;
   let state;
   try {
@@ -58,10 +63,18 @@ export async function backgroundWorkPause(workspace: string = getCurrentWorkspac
     note(workspace, reason);
     return { paused: true, reason: `Paused: ${reason}` };
   }
-  const decision = decideBackgroundAccess(state.accounts, workspace, { kind: 'background' }, now);
+  const decision = decideBackgroundAccess(state.accounts, workspace,
+    { kind: 'background', ...(startedBy ? { startedBy } : {}) }, now);
   if (decision.allowed) {
-    note(workspace, null);
+    if (!startedBy) note(workspace, null);
     return RUNS;
+  }
+  if (decision.denial === 'starter-lost-access') {
+    // About one automation, not the whole workspace: not noted per workspace.
+    return {
+      paused: true,
+      reason: 'Paused: the person who set this up can no longer run things in this workspace. It runs again by itself once they can, or after someone who can changes it.',
+    };
   }
   const reason = 'the owner of this workspace is turned off or missing. It runs again by itself once an admin turns the owner on or gives the workspace to an active person.';
   note(workspace, reason);

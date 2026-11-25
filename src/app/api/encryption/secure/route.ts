@@ -19,6 +19,7 @@ import {
 import { onUnlocked } from '@/backend/init';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
+import { workspaceAdminStepRefused } from '@/backend/services/accounts/workspaceAdminStep';
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/encryption/secure/route');
@@ -40,6 +41,14 @@ async function POST_handler(req: NextRequest) {
     if (!action) {
       log.error(`Missing action parameter`, { requestId });
       return NextResponse.json({ error: 'Action is required' }, { status: 400 });
+    }
+
+    // Multi-user mode (#575): choosing or changing the workspace password is a
+    // workspace `admin` step (owner or admin). The automatic default setup
+    // (`initialize_default`) stays open: it never replaces an existing setup.
+    if (action === 'initialize' || action === 'change_password') {
+      const refused = await workspaceAdminStepRefused();
+      if (refused) return refused;
     }
 
       // Handle different actions

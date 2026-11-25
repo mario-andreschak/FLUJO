@@ -7,6 +7,8 @@ import { MCPServerConfig, MCPStreamableConfig } from '@/shared/types/mcp';
 import { formatErrorResponse } from '@/utils/mcp/utils';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { maskServerHeaders } from '@/utils/mcp/headers';
+import { currentSharedEditor, recordChange } from '@/backend/services/sharedItems/guard';
+import { loadSharedItem } from '@/backend/services/sharedItems/load';
 import { json, validateServerName } from '../_helpers';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 
@@ -95,6 +97,12 @@ async function POST_handler(request: NextRequest) {
       return json({ error: result.error }, 400);
     }
 
+    // Multi-user mode (#575): the change history starts with who made it.
+    const editor = await currentSharedEditor();
+    if (editor) {
+      await recordChange(editor, { kind: 'mcp-server', itemId: config.name, action: 'created', before: null,
+        after: await loadSharedItem('mcp-server', config.name) });
+    }
     log.info(`Successfully created config for ${config.name}`);
     return json(result, 201);
   } catch (error) {

@@ -217,6 +217,9 @@ export default function ModelClient() {
         // Save and cancel consume the same modal history entry.
         await handleCloseModal();
         return { success: true, model: result.model };
+      } else if (result.conflict) {
+        // Multi-user mode (#575): the editor asks what to keep; no page-wide error.
+        return { success: false, error: result.error, conflict: result.conflict };
       } else {
         setError(result.error || t('models.saveFailed'));
         return { success: false, error: result.error };
@@ -653,6 +656,7 @@ export default function ModelClient() {
             model={currentModel}
             onSave={handleSave}
             onClose={handleCloseModal}
+            onReload={async () => setModels(await getModelService().loadModels())}
           />
         ) : null
       }

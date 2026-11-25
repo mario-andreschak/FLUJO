@@ -274,34 +274,48 @@ export async function upgradePasswordHash(userId: string, passwordHash: string):
 }
 
 /**
- * Give a workspace to a person. `actor` must be allowed to (admins may assign
- * any workspace, including unassigned ones). `null` as the actor is the
- * server command line.
+ * Give a workspace to a person, or to a team when `ownerType` is `team`
+ * (#575). `actor` must be allowed to (admins may assign any workspace,
+ * including unassigned ones). `null` as the actor is the server command line.
  */
-export async function assignWorkspace(workspace: string, ownerUserId: string, actor: AccountUser | null,
-  now = Date.now()): Promise<void> {
+export async function assignWorkspace(workspace: string, ownerId: string, actor: AccountUser | null,
+  now = Date.now(), ownerType: 'user' | 'team' = 'user'): Promise<void> {
   const accounts = await enabledAccounts();
   if (!WORKSPACE_NAME_PATTERN.test(workspace)) throw new AccountInputError('Unknown workspace.', 404);
-  if (!accounts.users.some(user => user.id === ownerUserId)) throw new AccountInputError('No such person.', 404);
-  if (actor && !mayTransferWorkspace(accounts, actor, workspace, { ownerType: 'user', ownerId: ownerUserId })) {
+  const known = ownerType === 'user'
+    ? accounts.users.some(user => user.id === ownerId)
+    : accounts.teams.some(team => team.id === ownerId);
+  if (!known) throw new AccountInputError(ownerType === 'user' ? 'No such person.' : 'No such team.', 404);
+  if (actor && !mayTransferWorkspace(accounts, actor, workspace, { ownerType, ownerId })) {
     throw new AccountInputError('Unknown workspace.', 404);
   }
   await write(current => ({
     ...current!,
-    workspaces: { ...current!.workspaces, [workspace]: { ownerType: 'user', ownerId: ownerUserId, assignedAt: now } },
+    workspaces: { ...current!.workspaces, [workspace]: { ownerType, ownerId, assignedAt: now } },
   }));
-  await appendAudit({ action: 'workspace-owner-changed', actorUserId: actor?.id ?? null, target: { type: 'workspace', id: workspace }, detail: { ownerId: ownerUserId } });
+  await appendAudit({ action: 'workspace-owner-changed', actorUserId: actor?.id ?? null, target: { type: 'workspace', id: workspace }, detail: { ownerType, ownerId } });
 }
 
-/** A new workspace belongs to the person who created it. No-op while the mode is off. */
-export async function recordWorkspaceCreated(workspace: string, creatorUserId: string | null, now = Date.now()): Promise<void> {
+/**
+ * A new workspace belongs to the person who created it, or to the team they
+ * created it for (#575; the caller checked `mayCreateWorkspaceFor`). No-op
+ * while the mode is off.
+ */
+export async function recordWorkspaceCreated(workspace: string, creatorUserId: string | null, now = Date.now(),
+  teamId?: string): Promise<void> {
   const state = await loadAccountsState();
   if (state.mode !== 'on' || !creatorUserId) return;
   await write(current => ({
     ...current!,
-    workspaces: { ...current!.workspaces, [workspace]: { ownerType: 'user', ownerId: creatorUserId, assignedAt: now } },
+    workspaces: {
+      ...current!.workspaces,
+      [workspace]: teamId
+        ? { ownerType: 'team', ownerId: teamId, assignedAt: now }
+        : { ownerType: 'user', ownerId: creatorUserId, assignedAt: now },
+    },
   }));
-  await appendAudit({ action: 'workspace-owner-changed', actorUserId: creatorUserId, target: { type: 'workspace', id: workspace }, detail: { created: true } });
+  await appendAudit({ action: 'workspace-owner-changed', actorUserId: creatorUserId, target: { type: 'workspace', id: workspace },
+    detail: teamId ? { created: true, ownerType: 'team', ownerId: teamId } : { created: true } });
 }
 
 /** Keep the owner record with a renamed workspace, and drop it for a deleted one. No-op while the mode is off. */

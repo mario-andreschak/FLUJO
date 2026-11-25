@@ -6,6 +6,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import { json } from '../_helpers';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
+import { withAutomationStarter } from '@/backend/services/accounts/automationStarter';
 
 const log = createLogger('app/api/planned-executions/[id]/route');
 
@@ -77,7 +78,7 @@ async function PATCH_handler(
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }
-    const result = await scheduler.update(id, patch);
+    const result = await scheduler.update(id, withAutomationStarter(patch));
     if (result.error || !result.execution) {
       const missing = result.error?.startsWith('No planned execution');
       return json({ error: result.error ?? 'Failed to update' }, missing ? 404 : 400);

@@ -26,8 +26,10 @@ export type AccessGrant =
   | 'personal-owner'
   /** The person is an owner of the team that owns this workspace. */
   | 'team-owner'
-  /** The person is a member of the team that owns this workspace. */
+  /** The person is a member (editor) of the team that owns this workspace. */
   | 'team-member'
+  /** The person is a viewer in the team that owns this workspace: read only (#575). */
+  | 'team-viewer'
   /** Any signed-in person (account routes such as the own workspace list). */
   | 'signed-in'
   /** A host route that selects no workspace, for a person with host access. */
@@ -42,6 +44,8 @@ export type AccessDenial =
   | 'not-found'
   /** The person can see the workspace but this action needs the workspace `admin` action. */
   | 'workspace-admin-required'
+  /** The person is a viewer in the team that owns this workspace: they may look, not change or run (#575). */
+  | 'view-only'
   /** The route runs programs or touches files on the server machine. */
   | 'host-access-required'
   /** The route changes the whole installation. */
@@ -57,6 +61,7 @@ export const ACCESS_DENIAL_STATUS: Readonly<Record<AccessDenial, 401 | 403 | 404
   'sign-in-required': 401,
   'not-found': 404,
   'workspace-admin-required': 403,
+  'view-only': 403,
   'host-access-required': 403,
   'admin-required': 403,
   'token-scope-missing': 403,
@@ -70,20 +75,24 @@ export type AccessDecision =
 
 const ALL_ACTIONS: readonly WorkspaceAction[] = Object.freeze([...WORKSPACE_ACTIONS]);
 const MEMBER_ACTIONS: readonly WorkspaceAction[] = Object.freeze(['read', 'edit', 'run']);
+const VIEWER_ACTIONS: readonly WorkspaceAction[] = Object.freeze(['read']);
+
+/** The ways a person can reach a workspace. */
+export type WorkspaceGrant = 'installation-admin' | 'personal-owner' | 'team-owner' | 'team-member' | 'team-viewer';
 
 /**
  * What each kind of access may do in a workspace. Team members can use
  * everything in the workspace, including its secrets in runs, but they cannot
  * see secrets in plain text, change the workspace password, back it up,
- * restore it, transfer credentials, rename or delete it.
+ * restore it, transfer credentials, rename or delete it. Team viewers only
+ * look: they cannot change or run anything (#575).
  */
-export const WORKSPACE_GRANT_ACTIONS: Readonly<Record<
-  'installation-admin' | 'personal-owner' | 'team-owner' | 'team-member', readonly WorkspaceAction[]
->> = Object.freeze({
+export const WORKSPACE_GRANT_ACTIONS: Readonly<Record<WorkspaceGrant, readonly WorkspaceAction[]>> = Object.freeze({
   'installation-admin': ALL_ACTIONS,
   'personal-owner': ALL_ACTIONS,
   'team-owner': ALL_ACTIONS,
   'team-member': MEMBER_ACTIONS,
+  'team-viewer': VIEWER_ACTIONS,
 });
 
 /** Showing a stored secret in plain text (for example `/api/env?includeSecrets=true`). */
@@ -123,11 +132,12 @@ export function activeUser(accounts: AccountsFile, principal: AccountPrincipal |
   return user;
 }
 
-function teamGrant(accounts: AccountsFile, user: AccountUser, teamId: string): 'team-owner' | 'team-member' | null {
+function teamGrant(accounts: AccountsFile, user: AccountUser, teamId: string): 'team-owner' | 'team-member' | 'team-viewer' | null {
   const team = accounts.teams.find(candidate => candidate.id === teamId);
   const membership = team?.members.find(member => member.userId === user.id && member.state === 'member');
   if (!membership) return null;
-  return membership.role === 'owner' ? 'team-owner' : 'team-member';
+  if (membership.role === 'owner') return 'team-owner';
+  return membership.role === 'viewer' ? 'team-viewer' : 'team-member';
 }
 
 /**
@@ -136,8 +146,7 @@ function teamGrant(accounts: AccountsFile, user: AccountUser, teamId: string): '
  * Workspace names are compared exactly; the caller passes the name as it is on
  * disk.
  */
-export function workspaceGrant(accounts: AccountsFile, user: AccountUser, workspace: string):
-  'installation-admin' | 'personal-owner' | 'team-owner' | 'team-member' | null {
+export function workspaceGrant(accounts: AccountsFile, user: AccountUser, workspace: string): WorkspaceGrant | null {
   if (user.disabled) return null;
   if (user.role === 'admin') return 'installation-admin';
   const owner: WorkspaceOwner | undefined = Object.prototype.hasOwnProperty.call(accounts.workspaces, workspace)
@@ -164,7 +173,8 @@ function decideForUser(accounts: AccountsFile, principal: AccountPrincipal, user
   }
   const grant = workspaceGrant(accounts, user, workspace);
   if (!grant) return deny('not-found');
-  return WORKSPACE_GRANT_ACTIONS[grant].includes(action) ? allow(grant) : deny('workspace-admin-required');
+  if (WORKSPACE_GRANT_ACTIONS[grant].includes(action)) return allow(grant);
+  return deny(action !== 'admin' && grant === 'team-viewer' ? 'view-only' : 'workspace-admin-required');
 }
 
 /** May this principal take this action in this workspace? */
@@ -225,7 +235,7 @@ export function decideRouteAccess(accounts: AccountsFile | null, principal: Acco
 
 export interface WorkspaceListEntry {
   readonly workspace: string;
-  readonly grant: 'installation-admin' | 'personal-owner' | 'team-owner' | 'team-member';
+  readonly grant: WorkspaceGrant;
   /** Whether the workspace has an owner record. Unassigned ones show on the admin page. */
   readonly assigned: boolean;
 }
@@ -276,8 +286,10 @@ export function decideBackgroundAccess(accounts: AccountsFile | null, workspace:
     if (!activeMember(accounts, owner.ownerId)) return deny('owner-inactive');
     grant = 'personal-owner';
   } else {
+    // A team acts while someone who may run things in it is active; viewers alone do not count.
     const team = accounts.teams.find(candidate => candidate.id === owner.ownerId);
-    if (!team || !team.members.some(member => member.state === 'member' && activeMember(accounts, member.userId))) {
+    if (!team || !team.members.some(member => member.state === 'member' && member.role !== 'viewer'
+      && activeMember(accounts, member.userId))) {
       return deny('owner-inactive');
     }
     grant = 'team-owner';

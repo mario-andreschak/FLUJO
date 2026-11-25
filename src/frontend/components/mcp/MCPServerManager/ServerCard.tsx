@@ -20,6 +20,7 @@ import WidgetsIcon from "@mui/icons-material/Widgets";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CopyLinkButton from "@/frontend/components/shared/CopyLinkButton";
+import CopyToTeamButton from "@/frontend/components/shared/CopyToTeamButton";
 import DataObjectIcon from "@mui/icons-material/DataObject";
 import DriveFileMoveOutlinedIcon from "@mui/icons-material/DriveFileMoveOutlined";
 import SystemUpdateAltIcon from "@mui/icons-material/SystemUpdateAlt";
@@ -1610,6 +1611,10 @@ const ServerCard: React.FC<ServerCardProps> = ({
                 </IconButton>
               </Tooltip>
             )}
+
+            {/* Multi-user mode only (#575): renders nothing otherwise. */}
+            <CopyToTeamButton kind="mcp-server" itemId={name} itemName={name}
+              sx={modern ? { color: "text.secondary", "&:hover": { color: "primary.main" } } : undefined} />
 
             <Tooltip title={t("mcp.card.edit")}>
               <IconButton

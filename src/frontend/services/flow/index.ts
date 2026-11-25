@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
+import { baseRevisionHeaders, editConflictFrom, flowRevision, type EditConflict } from '@/frontend/services/sharedItems';
 import type {
   FlowPlausibilityResult,
   StepAgentSuggestion,
@@ -289,6 +290,8 @@ class FlowService {
       }
 
       const savedFlow = (await response.json()) as Flow;
+      if (typeof savedFlow.updatedAt === 'number') flow.updatedAt = savedFlow.updatedAt;
+      if (typeof savedFlow.createdAt === 'number') flow.createdAt = savedFlow.createdAt;
 
       // Update cache
       if (this.flowsCache) {
@@ -509,8 +512,14 @@ class FlowService {
 
   /**
    * Update an existing flow (PUT /api/flow/{id}). Use addFlow to create a new flow.
+   *
+   * Multi-user mode (#575): the save names the version it started from (the
+   * builder's registered version, else the flow's own `updatedAt`). When
+   * someone else saved in between, the server answers 409 and the result
+   * carries `conflict` instead of saving. With the mode off the server ignores
+   * the version.
    */
-  async updateFlow(flow: Flow): Promise<{ success: boolean; error?: string }> {
+  async updateFlow(flow: Flow, options: { baseRevision?: string | null } = {}): Promise<{ success: boolean; error?: string; conflict?: EditConflict }> {
     log.debug('updateFlow: Entering method', {
       flowId: flow.id,
       flowName: flow.name,
@@ -519,16 +528,21 @@ class FlowService {
     });
 
     try {
+      const fallbackBase = typeof flow.updatedAt === 'number' ? flowRevision(flow.updatedAt) : null;
+      const baseHeaders = baseRevisionHeaders('flow', flow.id, options.baseRevision);
       const response = await fetch(`/api/flow/${encodeURIComponent(flow.id)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          ...(Object.keys(baseHeaders).length > 0 ? baseHeaders : baseRevisionHeaders('flow', flow.id, fallbackBase)),
         },
         body: JSON.stringify(flow)
       });
 
       if (!response.ok) {
         const errorData = await response.json();
+        const conflict = editConflictFrom(response.status, errorData);
+        if (conflict) return { success: false, error: conflict.message, conflict };
         return {
           success: false,
           error: errorData.error || 'Failed to update flow'
@@ -536,6 +550,10 @@ class FlowService {
       }
 
       const savedFlow = (await response.json()) as Flow;
+      // Hand the server's version stamp back to the caller's object, so the
+      // page keeps knowing which version it shows (the next save names it).
+      if (typeof savedFlow.updatedAt === 'number') flow.updatedAt = savedFlow.updatedAt;
+      if (typeof savedFlow.createdAt === 'number') flow.createdAt = savedFlow.createdAt;
 
       // Update cache
       if (this.flowsCache) {

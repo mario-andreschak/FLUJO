@@ -1,6 +1,7 @@
 import { Model } from '@/shared/types';
 import { ModelTestResult, NormalizedModel } from '@/shared/types/model/response';
 import { createLogger } from '@/utils/logger';
+import { baseRevisionHeaders, editConflictFrom, type EditConflict } from '@/frontend/services/sharedItems';
 
 const log = createLogger('frontend/services/model');
 
@@ -10,6 +11,20 @@ export interface ModelResult {
   success: boolean;
   model?: Model;
   error?: string;
+  /** Multi-user mode (#575): someone else saved this model first; nothing was saved. */
+  conflict?: EditConflict;
+}
+
+/** A failed request, with the answer the server gave. */
+class ModelRequestError extends Error {
+  readonly status: number;
+  readonly data: unknown;
+  constructor(message: string, status: number, data: unknown) {
+    super(message);
+    this.name = 'ModelRequestError';
+    this.status = status;
+    this.data = data;
+  }
 }
 
 interface ModelsResult {
@@ -81,7 +96,7 @@ class ModelService {
           data 
         });
         
-        throw new Error(errorMessage);
+        throw new ModelRequestError(errorMessage, response.status, data);
       }
       
       // Log success
@@ -217,7 +232,12 @@ class ModelService {
     }
   }
 
-  async updateModel(model: Model): Promise<ModelResult> {
+  /**
+   * Multi-user mode (#575): the save names the version its editor opened
+   * (registered by the model editor's edit lease). When someone else saved in
+   * between, the result carries `conflict` and nothing is saved.
+   */
+  async updateModel(model: Model, options: { baseRevision?: string | null } = {}): Promise<ModelResult> {
     try {
       // First validate the model has required fields
       if (!model.id) {
@@ -237,6 +257,7 @@ class ModelService {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          ...baseRevisionHeaders('model', model.id, options.baseRevision),
         },
         body: JSON.stringify(model),
       });
@@ -260,6 +281,9 @@ class ModelService {
         displayName: model.displayName,
         error: error instanceof Error ? error.message : error 
       });
+
+      const conflict = error instanceof ModelRequestError ? editConflictFrom(error.status, error.data) : null;
+      if (conflict) return { success: false, error: conflict.message, conflict };
 
       // Return a user-friendly error message
       const errorMessage = error instanceof Error ? error.message : 'Failed to update model';

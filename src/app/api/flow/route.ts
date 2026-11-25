@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
+import { currentSharedEditor, recordChange } from '@/backend/services/sharedItems/guard';
 import { json } from './_helpers';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 
@@ -55,6 +56,8 @@ async function POST_handler(request: NextRequest) {
     if (!result.success) {
       return json({ error: result.error || 'Failed to create flow' }, 400);
     }
+    // Multi-user mode (#575): the change history starts with who made it.
+    await recordChange(await currentSharedEditor(), { kind: 'flow', itemId: flow.id, action: 'created', before: null, after: flow });
 
     return json(flow, 201);
   } catch (error) {

@@ -56,6 +56,10 @@ function json(body: Record<string, unknown>, status: number, headers: Record<str
 const DENIAL_MESSAGES: Readonly<Record<Exclude<AccessDenial, 'not-found'>, { error: string; code: string }>> = {
   'sign-in-required': { error: 'Sign in to continue.', code: 'ACCOUNT_SIGN_IN_REQUIRED' },
   'workspace-admin-required': { error: 'Only the owner of this workspace or an admin can do this.', code: 'WORKSPACE_ADMIN_REQUIRED' },
+  'view-only': {
+    error: 'You can look at this team workspace but not change or run anything in it. Ask a team owner to make you a member.',
+    code: 'TEAM_VIEW_ONLY',
+  },
   'host-access-required': {
     error: 'This runs programs or reads folders on the server computer. Only admins, or people an admin trusted with host access, can do it.',
     code: 'HOST_ACCESS_REQUIRED',

@@ -6,6 +6,8 @@ import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { formatErrorResponse } from '@/utils/mcp/utils';
+import { checkBaseRevision, currentSharedEditor, recordChange } from '@/backend/services/sharedItems/guard';
+import { loadSharedItem } from '@/backend/services/sharedItems/load';
 import { json, getServerConfigByName, validateServerName } from '../../_helpers';
 
 const log = createLogger('app/api/mcp/servers/[name]/route');
@@ -73,6 +75,13 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
       }
     }
 
+    // Multi-user mode (#575): refuse to silently replace a newer save by
+    // someone else. `editor` is null while the mode is off.
+    const editor = await currentSharedEditor();
+    const before = editor ? await loadSharedItem('mcp-server', name) : null;
+    const conflict = await checkBaseRevision(request, editor, 'mcp-server', name, before);
+    if (conflict) return conflict;
+
     const result = await mcpService.updateServerConfig(name, updates);
 
     if ('error' in result) {
@@ -84,6 +93,11 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
           : 400;
       log.warn(`Error updating config for ${name}:`, result.error);
       return json({ error: result.error }, status);
+    }
+    if (editor) {
+      const finalName = typeof updates.name === 'string' && updates.name ? updates.name : name;
+      await recordChange(editor, { kind: 'mcp-server', itemId: finalName, action: 'saved', before,
+        after: await loadSharedItem('mcp-server', finalName) });
     }
 
     log.info(`Successfully updated config for ${name}`);
@@ -109,6 +123,8 @@ async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
 
   try {
     const { name } = await params;
+    const editor = await currentSharedEditor();
+    const before = editor ? await loadSharedItem('mcp-server', name) : null;
     const result = await mcpService.deleteServerConfig(name);
 
     if (!result.success) {
@@ -118,6 +134,7 @@ async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
       return json({ success: false, error: result.error }, status);
     }
 
+    await recordChange(editor, { kind: 'mcp-server', itemId: name, action: 'deleted', before, after: null });
     log.info(`Successfully deleted config for ${name}`);
     return json({ success: true }, 200);
   } catch (error) {

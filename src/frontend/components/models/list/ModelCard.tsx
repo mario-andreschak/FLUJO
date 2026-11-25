@@ -37,6 +37,7 @@ import { createLogger } from '@/utils/logger';
 import ModelTestDialog from './ModelTestDialog';
 import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
+import CopyToTeamButton from '@/frontend/components/shared/CopyToTeamButton';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useThemeUtils } from '@/frontend/utils/theme';
@@ -541,6 +542,8 @@ export const ModelCard = ({
                 </IconButton>
               </Tooltip>
             )}
+            {/* Multi-user mode only (#575): renders nothing otherwise. */}
+            <CopyToTeamButton kind="model" itemId={model.id} itemName={model.displayName || model.name} sx={{ color: 'text.secondary' }} />
             <CopyLinkButton target={{ kind: 'model', id: model.id }} size="small" sx={{ color: 'text.secondary' }} />
             <Tooltip title={t('models.card.editAria')} arrow>
               <IconButton
@@ -598,6 +601,7 @@ export const ModelCard = ({
               </IconButton>
             </Tooltip>
           )}
+          <CopyToTeamButton kind="model" itemId={model.id} itemName={model.displayName || model.name} size="medium" />
           <CopyLinkButton target={{ kind: 'model', id: model.id }} />
           <IconButton aria-label={t('models.card.editAria')} onClick={onEdit}>
             <EditIcon />

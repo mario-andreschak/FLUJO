@@ -32,6 +32,7 @@ import { getNodeColor } from '@/frontend/components/Flow/FlowManager/FlowBuilder
 import { FlowValidationResult } from '@/utils/shared/flowValidation';
 import { getFlowCardMetrics } from '@/utils/shared/flowCardMetrics';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
+import CopyToTeamButton from '@/frontend/components/shared/CopyToTeamButton';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import AllowanceBar from '@/frontend/components/shared/AllowanceBar';
@@ -553,6 +554,9 @@ const FlowCard = ({
                 </IconButton>
               </Tooltip>
             )}
+
+            {/* Multi-user mode only (#575): renders nothing otherwise. */}
+            <CopyToTeamButton kind="flow" itemId={flow.id} itemName={flow.name} />
 
             {onSetFolder && (
               <Tooltip title={flow.folder ? t('flows.card.folder', { folder: flow.folder }) : t('flows.card.organize')}>

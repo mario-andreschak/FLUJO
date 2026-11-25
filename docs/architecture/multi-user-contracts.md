@@ -64,10 +64,15 @@ Rules for the store (#574):
   disabled. A browser session remembers the generation it was made with; a
   different current generation ends it. Role and host-access changes need no
   bump, because every request reads the current role.
-- A team has members with a role (`owner` or `member`) and a state (`invited`,
-  `member`, `removed`). Only `member` gives access. The team `generation` goes
-  up when a member is removed or changes role; #575's edit leases remember it
-  and die when it changes.
+- A team has members with a role (`owner`, `member` or `viewer`, #575) and a
+  state (`invited`, `member`, `removed`). Only the `member` state gives access.
+  The team `generation` goes up when a member is removed or changes role; edit
+  leases remember it and end when it changes.
+- Admins make and delete teams (a team that owns a workspace cannot be
+  deleted). Admins and the team's owners add, invite, remove and re-role people
+  and make team workspaces. An invited person answers their own invitation.
+  Asking about a team one is not in answers "No such team." (404), like a team
+  that does not exist.
 - While the mode is on there is always at least one active admin. The schema
   refuses a file without one; the server command line is the way back in.
 
@@ -139,6 +144,7 @@ What each kind of access may do in a workspace (`WORKSPACE_GRANT_ACTIONS`):
 | Personal owner | yes | yes | yes | yes |
 | Team owner | yes | yes | yes | yes |
 | Team member | yes | yes | yes | no |
+| Team viewer (#575) | yes | no | no | no |
 | Invited, removed, anyone else, disabled person | no | no | no | no |
 
 The workspace `admin` action covers: setting or changing the workspace
@@ -146,14 +152,14 @@ password, showing stored secrets in plain text, credential transfer and
 migration, whole-workspace backup and restore, renaming or deleting the
 workspace, and giving it a new owner.
 
-Kinds of route (`ROUTE_CAPABILITIES`, 235 routes on 2026-11-25):
+Kinds of route (`ROUTE_CAPABILITIES`, 249 routes after #575; the test counts them, these numbers only illustrate):
 
 | Kind | Count | Who may call it |
 |---|---|---|
-| `workspace` | 203 | Anyone with access to the selected workspace, for the action of the method (GET/HEAD/OPTIONS read, others edit) |
+| `workspace` | 212 | Anyone with access to the selected workspace, for the action of the method (GET/HEAD/OPTIONS read, others edit) |
 | `host` | 11 | People with host access (admins, or members an admin trusted), and only in a workspace they may use |
-| `admin` | 5 | Admins |
-| `account` | 3 | Any signed-in person; the sign-in routes also while signed out |
+| `admin` | 7 | Admins |
+| `account` | 6 | Any signed-in person; the sign-in routes also while signed out |
 | `protocol` | 13 | Anyone; the route checks the caller's own proof |
 
 - A path that matches no listed route counts as `admin`.
@@ -161,11 +167,21 @@ Kinds of route (`ROUTE_CAPABILITIES`, 235 routes on 2026-11-25):
   migration) need the workspace `admin` action for every change.
 - `WORKSPACE_ADMIN_STEPS` lists the admin steps a route only sees in its body
   or query (setting the workspace password, `includeSecrets=true`, renaming or
-  deleting a workspace). Those handlers ask for `admin` themselves.
+  deleting a workspace). Those handlers ask for `admin` themselves
+  (`workspaceAdminStepRefused` in `src/backend/services/accounts/`, enforced
+  since #575 and covered by `teamMatrix.test.ts`). The automatic default
+  encryption setup (`initialize_default`) stays open to members: it never
+  replaces an existing setup, and a new team workspace needs it before anyone
+  can store a key.
 - Unknown and forbidden workspaces both answer 404. The workspace is checked
   before host access, so a guess never learns more than "not found".
 - Denials map to HTTP status in `ACCESS_DENIAL_STATUS`: 401 to sign in again,
-  404 for workspaces, 403 for everything else.
+  404 for workspaces, 403 for everything else. A viewer who tries to change or
+  run something gets 403 `TEAM_VIEW_ONLY` with a plain message.
+- Background work in a team workspace runs while at least one active owner or
+  member (not only viewers) is in the team. A schedule or trigger stores
+  `startedBy` (the person who last set it up, never taken from the request
+  body) and pauses while that person lacks the `run` action there.
 
 Starting a program on the server is also checked where it starts, because a
 workspace route can lead there: a local (stdio) MCP server outside a container
@@ -210,7 +226,12 @@ owner when background work starts it (#574, step 574-4).
 8. **Copying into a team (#575).** Copies never carry ciphertext or keys from
    one workspace to another (the team keyring could not read them anyway). An
    allowlist removes secret fields, and the copy lists each missing value so the
-   person enters it in the team workspace.
+   person enters it in the team workspace. The field lists in
+   `src/backend/services/sharedItems/teamCopy.ts` name every field of today's
+   model, MCP server and flow types (`satisfies Record<keyof …>`), so a new
+   field fails the type check until someone decides whether it may travel. The
+   copy needs `edit` in the target; an unknown or forbidden target answers the
+   same 404.
 9. **Honest limits.** Without a workspace password the key is protected by a
    published password: that hides secrets from casual reading, nothing more.
    Anyone with host access, an admin, or anyone who can log in to the server
@@ -224,6 +245,15 @@ owner when background work starts it (#574, step 574-4).
     bearer (`protocol` routes).
 11. **Logs.** Logs and `audit.jsonl` never contain passwords, tokens or
     secrets. Audit details are short facts (`auditEventSchema`).
+12. **Shared editing (#575).** Change history lives in the workspace
+    (`db/history/<kind>/<id hash>.jsonl`), so backups carry it and other
+    workspaces never see it. Entries hold who, when, the version before and
+    after, and a snapshot with every secret masked as `********`; a restore puts
+    today's secrets back in. The version check on save (`x-flujo-base-revision`,
+    409 `EDIT_CONFLICT`) passes when the item is unchanged or every change since
+    was the same person's; anything else, including a change no route recorded,
+    is a visible conflict. Edit leases live in memory only (60 seconds, renewed
+    every 20).
 
 ## Sources
 

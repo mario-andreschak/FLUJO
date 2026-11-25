@@ -7,6 +7,7 @@ import { ensureBackendInitialized } from '@/backend/init';
 import { json } from './_helpers';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
+import { withAutomationStarter } from '@/backend/services/accounts/automationStarter';
 
 const log = createLogger('app/api/planned-executions/route');
 
@@ -70,7 +71,7 @@ async function POST_handler(request: NextRequest) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }
-    const result = await getSchedulerService().create(body);
+    const result = await getSchedulerService().create(withAutomationStarter(body));
     if (result.error || !result.execution) {
       // A client-supplied id that collides with an existing execution is a
       // conflict, not a bad request — mirror POST /api/flow's 409 so package

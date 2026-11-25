@@ -41,6 +41,39 @@ are copied to the first admin, so scripts and MCP clients keep working.
   at most 15 minutes. It clears after a successful sign-in, a quiet spell or a
   restart. There is never a permanent lockout.
 
+## Teams
+
+A team shares whole workspaces. Admins make teams in **Settings → Users and
+sign-in → Teams**; the admin and the team's owners then add people.
+
+| Role in the team | Can do in the team's workspaces |
+|---|---|
+| Owner | Everything, also manage the team, show stored keys, back up and restore |
+| Member | Look at, change and run flows, models, MCP servers, chats and runs; keys stay hidden (`********`) but work in runs |
+| Viewer | Only look; cannot change or run anything |
+
+- **Add or invite.** "Add now" puts the person in at once; "Invite" lets them
+  accept or decline first in their own Settings.
+- **Team workspaces.** A team owner (or admin) makes one with "New team
+  workspace". An admin can also give an existing workspace to a team.
+- **Remove someone.** They lose access at their next click, and open live views
+  close within a second.
+- **Two people editing.** When someone else has the same flow, model or MCP
+  server open, the editor says so ("Anna is editing this too"). If they save
+  first, your save is not lost and does not overwrite theirs silently: FLUJO
+  explains what happened and offers to load their version, compare the two, or
+  save yours over theirs.
+- **Change history.** Every change to a flow, model or MCP server in a team
+  workspace is recorded with who made it and when, and any older version can be
+  restored. Keys and passwords are never kept in the history; a restore keeps
+  today's keys. Each item keeps its newest 200 changes; older ones go by
+  themselves.
+- **Copy into a team.** "Copy to a team workspace" on a flow, model or MCP
+  server copies it without keys, tokens, passwords or private folders. The copy
+  lists what the team still has to enter (for example its own API key) and the
+  models or servers it uses that the team workspace does not have yet. A copied
+  MCP server starts turned off.
+
 ## Host access
 
 Some things run programs on the server computer: local (stdio) MCP servers
@@ -55,6 +88,12 @@ servers in the isolated container profile or remote MCP servers.
 Schedules, triggers and personas act for the workspace owner. When an admin
 turns an owner off, their automatic runs pause. They run again by themselves
 once the owner is turned on again, also after a restart.
+
+A schedule or trigger also remembers who set it up (the last person who created
+or changed it). Its automatic runs pause while that person may not run things
+in the workspace any more (removed from the team, made a viewer, turned off)
+and run again by themselves once they may, or after someone who may changes it.
+A team workspace keeps running while at least one owner or member is active.
 
 ## Manage people on the server
 
@@ -93,3 +132,9 @@ again.
   for public hosting for strangers.
 - The remote voice device (`FLUJO_AVATAR_REMOTE_ORIGIN`) still signs in with
   the owner policy and does not work while multi-user mode is on.
+- A team viewer cannot use pages that change something when they open. Only
+  flows, models and MCP servers have the "someone else saved first" check and
+  the change history; other things in a team workspace (chats, schedules,
+  personas) save as before.
+- The version check for models and MCP servers starts when you open their
+  editor, not when the list was loaded.

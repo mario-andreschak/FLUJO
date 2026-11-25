@@ -54,6 +54,11 @@ import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderAction
 const log = createLogger('frontend/components/models/modal');
 
 import { ModelResult } from '@/frontend/services/model';
+import { useEditLease } from '@/frontend/hooks/useEditLease';
+import { setEditBase, type EditConflict } from '@/frontend/services/sharedItems';
+import EditingNotice from '@/frontend/components/shared/sharedEditing/EditingNotice';
+import EditConflictDialog from '@/frontend/components/shared/sharedEditing/EditConflictDialog';
+import ChangeHistoryDialog from '@/frontend/components/shared/sharedEditing/ChangeHistoryDialog';
 
 const discoveredModelMetadata = (model: NormalizedModel, changed = false): Partial<Model> => ({
   ...(changed || model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
@@ -70,15 +75,23 @@ export interface ModelModalProps {
   model: Model;  // Never null: edit mode passes the loaded model, add mode an in-memory draft
   onSave: (model: Model) => Promise<ModelResult>;
   onClose: () => void;
+  /** Multi-user mode (#575): load the newest models again (after "Load their version" or a restore). */
+  onReload?: () => void | Promise<void>;
 }
 
-export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) => {
+export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModalProps) => {
   const { t } = useI18n();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const router = useRouter();
   const { globalEnvVars, settings } = useStorage();
   const [formState, setFormState] = useState<Partial<Model>>({});
+  // Multi-user mode (#575): "Anna is editing" notes, "someone else saved
+  // first", and who changed what. All stay off (no request) while it is off.
+  const editLease = useEditLease('model', model.id, open && Boolean(model.name));
+  const [editConflict, setEditConflict] = useState<{ conflict: EditConflict; mine: Model } | null>(null);
+  const [conflictBusy, setConflictBusy] = useState(false);
+  const [changeHistoryOpen, setChangeHistoryOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<string | null>(null);
   const [isApiKeyBound, setIsApiKeyBound] = useState(false);
@@ -524,7 +537,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       // formState.ApiKey is the masked placeholder, which the backend interprets as
       // "keep the existing key". A "${global:VAR}" binding or a freshly typed key is sent
       // through as-is. Encryption happens on the backend.
-      const result: ModelResult = await onSave({
+      const submitted = {
         id: model.id,
         name: formState.name!,
         displayName: formState.displayName!,
@@ -560,9 +573,12 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         ),
         maxTurns: formState.maxTurns,
         maxTokens: configurationCapabilities.maxOutputTokens ? formState.maxTokens : undefined,
-      } as Model);
+      } as Model;
+      const result: ModelResult = await onSave(submitted);
 
-      if (result.success) {
+      if (!result.success && result.conflict) {
+        setEditConflict({ conflict: result.conflict, mine: submitted });
+      } else if (result.success) {
         router.refresh();
       } else {
         setErrors({
@@ -575,6 +591,31 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         submit: error instanceof Error ? error.message : t('models.saveFailed'),
       });
     }
+  };
+
+  const saveMineAnyway = async () => {
+    const pending = editConflict;
+    if (!pending) return;
+    setConflictBusy(true);
+    // Start from their version on purpose; it stays in the change history.
+    setEditBase('model', model.id, pending.conflict.currentRevision);
+    const result = await onSave(pending.mine);
+    setConflictBusy(false);
+    if (!result.success && result.conflict) {
+      setEditConflict({ conflict: result.conflict, mine: pending.mine });
+      return;
+    }
+    setEditConflict(null);
+    if (result.success) router.refresh();
+    else setErrors({ submit: result.error || t('models.saveFailed') });
+  };
+
+  const loadTheirModel = async () => {
+    const pending = editConflict;
+    setEditConflict(null);
+    if (pending) setEditBase('model', model.id, pending.conflict.currentRevision);
+    if (onReload) await onReload();
+    else onClose();
   };
 
   const levelLabelKeys: Record<string, TranslationKey> = {
@@ -628,6 +669,11 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             <Alert severity="error" sx={{ mb: 2 }}>
               {errors.submit}
             </Alert>
+          )}
+          {editLease.others.length > 0 && (
+            <Box sx={{ mb: 2 }}>
+              <EditingNotice others={editLease.others} />
+            </Box>
           )}
           {info && (
             <Alert severity="info" sx={{ mb: 2 }}>
@@ -1199,12 +1245,35 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
           )}
         </DialogContent>
         <DialogActions sx={{ flexShrink: 0 }}>
+          {editLease.enabled && (
+            <Box sx={{ flexGrow: 1 }}>
+              <Button onClick={() => setChangeHistoryOpen(true)}>Who changed what</Button>
+            </Box>
+          )}
           <Button onClick={onClose}>{t('common.cancel')}</Button>
           <Button type="submit" variant="contained" color="primary">
             {t('models.modal.save')}
           </Button>
         </DialogActions>
       </form>
+      <EditConflictDialog
+        conflict={editConflict?.conflict ?? null}
+        mine={editConflict?.mine ?? null}
+        busy={conflictBusy}
+        onLoadTheirs={() => void loadTheirModel()}
+        onSaveMine={() => void saveMineAnyway()}
+        onClose={() => setEditConflict(null)}
+      />
+      {editLease.enabled && (
+        <ChangeHistoryDialog
+          open={changeHistoryOpen}
+          kind="model"
+          itemId={model.id}
+          itemLabel="model"
+          onClose={() => setChangeHistoryOpen(false)}
+          onRestored={() => { void onReload?.(); }}
+        />
+      )}
     </Dialog>
   );
 };

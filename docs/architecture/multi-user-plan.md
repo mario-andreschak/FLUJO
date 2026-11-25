@@ -153,8 +153,7 @@ Rules:
 | `src/app/api/workspaces/route.ts` | Mode on: list only accessible workspaces; a new workspace belongs to its creator (or a team in #575) | #574, #575 |
 | Installation-wide routes (`update`, `network-exposure`, `runtime-environment`, …) | Mode on: admin only | #574 |
 | Scheduler, triggers, personas, waves (startup sweep in `src/backend/init.ts`) | Mode on: before automatic work, check the workspace owner is still active; else pause and resume by itself when re-enabled | #574 |
-| `src/backend/services/editLocks/` (new) | In-memory edit leases with heartbeat and expiry | #575 |
-| `src/backend/services/history/` (new) | Append-only change history, view and restore | #575 |
+| `src/backend/services/sharedItems/` (new; planned as `editLocks/` and `history/`) | In-memory edit leases, the version check on save, append-only change history with restore, copying into a team workspace | #575 |
 | Sign-in (extend the existing `src/app/owner/login` page; no second login page), user admin and team pages under `src/app/settings` | UI, each with one `docs/feature-map/` entry | #574, #575 |
 
 The existing single-owner policy (`FLUJO_OWNER_AUTH_FILE`,
@@ -260,6 +259,38 @@ FLUJO](../guides/multi-user.md)). Where it differs from the steps below:
   in a throwaway FLUJO with the `verify-flujo` skill.
 
 ### #575: Tier 1, teams
+
+Built on 2026-11-25 (all five steps; user guide: the "Teams" part of [several
+people on one FLUJO](../guides/multi-user.md)). Where it differs from the steps
+below:
+
+- **Three team roles, not two.** `owner`, `member` (the editor: read, edit,
+  run) and `viewer` (read only, answered with 403 `TEAM_VIEW_ONLY`). The epic
+  brief asked for owner/editor/viewer; `member` keeps its #573 name.
+- **Team service and API:** `src/backend/services/accounts/teams.ts`,
+  `/api/accounts/teams` (an `account` route; every change checks the team).
+  Team workspaces come from `POST /api/workspaces` with `teamId`; admins give an
+  existing workspace to a team with `PUT /api/accounts/users` and
+  `ownerType: 'team'`. UI: the Teams panel in Settings → Users and sign-in.
+- **Shared items live in `src/backend/services/sharedItems/`** (one folder
+  instead of separate `editLocks/` and `history/`): `editLeases.ts` (in-memory
+  leases, `/api/edit-locks`), `guard.ts` (the version check and change
+  recording used by the flow, model and MCP server routes), `history.ts`
+  (`/api/history`), `restore.ts`, `teamCopy.ts` (`/api/team-copy`).
+- **Versions.** A flow's version is its `updatedAt` (`f<ms>`), which the
+  builder already has. Models and MCP servers have no such stamp; their version
+  is a hash of the stored item with keys masked, handed out by
+  `/api/edit-locks` when the editor opens. A save that names an older version
+  still passes when every change since was the same person's.
+- **Recording is per route.** Flow, model and MCP server saves through their
+  item routes are recorded. A change made another way (for example by an agent
+  through the FLUJO MCP tools) is not in the history, so the next editor save
+  over it is shown as a conflict: the safe side.
+- **`startedBy`** is stored on schedules and triggers (planned executions);
+  personas and waves still act for the workspace owner only.
+- **Not yet proven in a running FLUJO with two browsers.** The supervisor's
+  end-of-day run uses `scripts/check-multi-user.mjs`, which now includes the
+  two-person team journey.
 
 - **575-1 Teams and team workspaces.** Teams in `accounts.json`; admin and team
   owner manage members; create a workspace owned by a team; removing a member

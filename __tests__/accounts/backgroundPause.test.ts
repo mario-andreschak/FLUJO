@@ -106,6 +106,41 @@ describe('a turned-off owner\'s automatic runs', () => {
     expect(runFlowMock).toHaveBeenCalledTimes(1);
   });
 
+  it('pause while the person who set it up may not run things in a team workspace, and resume by themselves (#575)', async () => {
+    const team = { id: 't_sales0000000000000', name: 'Sales', generation: 1, createdAt: now, members: [
+      { userId: ids.anna, role: 'owner' as const, state: 'member' as const },
+      { userId: ids.ben, role: 'member' as const, state: 'member' as const },
+    ] };
+    await mutateAccounts(() => accounts({
+      teams: [team],
+      workspaces: { 'default-workspace': { ownerType: 'team', ownerId: team.id, assignedAt: now } },
+    }));
+    const { withAutomationStarter } = await import('@/backend/services/accounts/automationStarter');
+    const { runWithAccountPrincipal } = await import('@/backend/services/accounts/context');
+    const ben = { kind: 'session' as const, userId: ids.ben, sessionId: 's_ben_session_xxxxx', generation: 1 };
+    // A body cannot name someone else; the signed-in person is recorded.
+    const body = runWithAccountPrincipal(ben, () => withAutomationStarter({ ...schedule, startedBy: ids.anna }));
+    expect(body.startedBy).toBe(ids.ben);
+    expect(withAutomationStarter({ ...schedule, startedBy: ids.anna })).not.toHaveProperty('startedBy');
+
+    const scheduler = new SchedulerService();
+    const { execution } = await scheduler.create(body);
+    expect(execution?.startedBy).toBe(ids.ben);
+    expect((await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' })).status).not.toBe('skipped');
+
+    const setBenRole = (role: 'member' | 'viewer') => mutateAccounts(current => ({
+      ...current!, teams: current!.teams.map(item => ({ ...item, members: item.members.map(member =>
+        member.userId === ids.ben ? { ...member, role } : member) })),
+    }));
+    await setBenRole('viewer');
+    const paused = await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+    expect(paused).toMatchObject({ status: 'skipped', error: expect.stringMatching(/^Paused: the person who set this up/) });
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+    await setBenRole('member');
+    expect((await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' })).status).not.toBe('skipped');
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+  });
+
   it('pause in a workspace nobody owns', async () => {
     await mutateAccounts(() => accounts());
     expect(await backgroundWorkPause('loose-ws')).toMatchObject({ paused: true });
