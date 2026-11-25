@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useLayoutEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Box, Button, Paper, Typography, MobileStepper } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -92,18 +92,35 @@ export default function TourOverlay() {
   const [rect, setRect] = useState<Rect | null>(null);
 
   const step = isActive ? TOUR_STEPS[stepIndex] : undefined;
+  // The step whose page the tour last opened, and whether that navigation is still on its way.
+  const openedStep = useRef<TourStep | undefined>(undefined);
+  const awaitingStepPage = useRef(false);
 
-  // Navigate to the step's page if we're not already there.
+  // The tour opens a step's page once, when it moves to that step. When the user
+  // then leaves the page themselves (often by using the very control the step
+  // points at), the tour stops instead of pulling them back.
   useEffect(() => {
-    if (!step) return;
-    const destination = step.route ?? step.path;
-    const currentRoute = typeof window === 'undefined'
-      ? pathname
-      : `${pathname}${window.location.search}`;
-    if (pathname !== step.path || currentRoute !== destination) {
-      router.push(destination);
+    if (!step) {
+      openedStep.current = undefined;
+      awaitingStepPage.current = false;
+      return;
     }
-  }, [step, pathname, router]);
+    if (openedStep.current !== step) {
+      openedStep.current = step;
+      const destination = step.route ?? step.path;
+      const currentRoute = typeof window === 'undefined'
+        ? pathname
+        : `${pathname}${window.location.search}`;
+      awaitingStepPage.current = pathname !== step.path;
+      if (pathname !== step.path || currentRoute !== destination) router.push(destination);
+      return;
+    }
+    if (pathname === step.path) {
+      awaitingStepPage.current = false;
+    } else if (!awaitingStepPage.current) {
+      endTour();
+    }
+  }, [step, pathname, router, endTour]);
 
   // Track the target element's position. Polls while the step is active so the
   // spotlight follows layout shifts, scrolling, and post-navigation mounts.

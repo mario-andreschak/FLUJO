@@ -31,6 +31,26 @@ explains how to launch a throwaway FLUJO and drive these steps.
   POV), Driving it with flujo-drive, Gotchas. `npm run check:feature-map`
   enforces this, and that every page in `src/app` has exactly one entry.
 
+## First-use journey
+
+`npm run journey:first-use` walks the path a new user takes, in one browser
+session on a throwaway instance: Home → connect an AI by hand → test it (with
+its tool round-trip) → inspect the built-in `filesystem` app and test one tool →
+build an agent in the simple builder and try it → run it with tool approval on
+and approve the call → open the executed steps → call the agent through `/v1`
+→ expose the app and call it through the MCP proxy from an outside MCP client.
+It starts a free local stub model (`scripts/first-journey/stub-model.mjs`), so
+no account or key is needed; a pass proves the wiring, not the quality of a
+real AI. Each stage saves a screenshot and an ARIA snapshot, plus
+`report.json`, under `first-journey/<viewport>/` in the evidence folder. Run
+it after `launch` (and `warm models mcp flows chat`); `--viewport 390x844`
+checks the phone layout. A failed stage stops the run and saves
+`<stage>-failed.png`. Dev mode needs plenty of free memory for this many
+pages (about 8–10 GB): with a smaller `--max-old-space-size` Next restarts
+itself mid-run ("approaching the used memory threshold") and the stage that
+was loading fails with `ERR_CONNECTION_REFUSED`. That is the machine, not the
+journey; run it again with more memory.
+
 ## Features
 
 The order below doubles as the sweep order for a broad "did we break the app" pass.

@@ -36,6 +36,8 @@ Preconditions: a throwaway instance from the verify-flujo skill (`launch`); no m
 ## Gotchas
 
 - The tour auto-starts on `/` until it is closed or finished once; its overlay sits on top of the page and can catch clicks.
+- The tour opens a step's page only when it moves to that step. Following a highlighted button to another page (for example "Connect AI") ends the tour like "Skip tour" instead of sending you back.
+- On a fresh instance step 2 already says "1 created": the built-in "FLUJO" agent counts. It takes the first AI you connect (unless you chose another for it), so "Start talking" works right after step 1.
 - Step 1 says "Saved", not "tested". Saving a model does not prove it works; use "Test model" on AI Setup.
 - Dismissing a card is saved in settings and survives reloads. Replaying the tour can bring the setup cards back.
 - Never press "Send" in the feedback box during a run: it forwards the feedback to the hosted FLUJO registry.

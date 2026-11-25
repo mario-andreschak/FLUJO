@@ -64,6 +64,7 @@ workaround.
 | A package install runs only the install and build commands the person reviewed | `reviewDigest` in `installPackage.ts`; `__tests__/packages/installPackage.test.ts` |
 | Every shipped form (npm, Windows installer, Docker) runs the same backup, restart, upgrade and restore checks before release | `assertPackagedAcceptance` in `scripts/workflow-contract.mjs` |
 | App code reads website files only from `githubpages/oauth/client-metadata.json`; installers and the image leave the rest out | `tests/installer-repository.test.mjs` |
+| A new user can still connect an AI, test a tool, build and run an agent and reuse it | `npm run journey:first-use` on a throwaway FLUJO (`scripts/first-journey/run.mjs`) |
 | Persona runtime cleanup writes only with a grant from the rollout switches | `PersonaRuntimeRetentionWriteGrant` argument of the compactors in `compactRuntime.ts`; `personaRuntimeRetentionSweep.test.ts` |
 | The shareable diagnostic report holds only versions, counts and labels from fixed lists, never names, text, paths, addresses or keys | `normalizeDiagnosticReport` in `src/shared/types/diagnosticReport.ts`; `__tests__/diagnostics/diagnosticReport.test.ts` |
 | A subscription bar never shows a made-up 0% or 100%; every known provider answer has a fixture with the text and colour it must show | `__tests__/model/fixtures/claudeAllowanceFixtures.ts`; `__tests__/frontend/components/AllowanceFixtures.test.tsx` |

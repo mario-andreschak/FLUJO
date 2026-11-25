@@ -118,7 +118,7 @@ export function stopPlan(state, tempDir = os.tmpdir()) {
   return { pid, dataDir };
 }
 
-function readState() {
+export function readState() {
   try {
     return JSON.parse(readFileSync(STATE_FILE, 'utf8'));
   } catch {
@@ -273,7 +273,7 @@ function stop(log) {
   return 0;
 }
 
-async function loadChromium() {
+export async function loadChromium() {
   const { chromium } = await import('playwright');
   const executablePath = process.env.FLUJO_DRIVE_CHROMIUM || process.env.FEATURE_BROWSER_CHROMIUM_EXECUTABLE;
   return chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
@@ -281,7 +281,7 @@ async function loadChromium() {
 
 // FLUJO shows `.app-loading` while it opens the workspace; role="alert" marks a dead end (error, owner sign-in).
 // A dead end that offers "Retry" is retried a few times and reported, because dev mode answers slowly while it compiles.
-async function settle(page, log) {
+export async function settle(page, log) {
   await page.waitForLoadState('load');
   for (let attempt = 1; ; attempt += 1) {
     await page.waitForFunction(
@@ -310,7 +310,7 @@ async function settle(page, log) {
   ).catch(() => log('! A loading spinner was still showing after 60s.'));
 }
 
-async function gotoWithRetry(page, url, log) {
+export async function gotoWithRetry(page, url, log) {
   const deadline = Date.now() + 120_000;
   for (;;) {
     try {
@@ -324,7 +324,7 @@ async function gotoWithRetry(page, url, log) {
   }
 }
 
-async function save(page, kind, file, log) {
+export async function save(page, kind, file, log) {
   const target = evidencePath(file);
   mkdirSync(path.dirname(target), { recursive: true });
   if (kind === 'shot') await page.screenshot({ path: target, fullPage: true });
@@ -332,7 +332,7 @@ async function save(page, kind, file, log) {
   log(`Saved ${kind === 'shot' ? 'screenshot' : 'ARIA snapshot'}: ${target}`);
 }
 
-async function runStep(page, step, baseUrl, log) {
+export async function runStep(page, step, baseUrl, log) {
   switch (step.do) {
     case 'goto':
       await gotoWithRetry(page, routeUrl(baseUrl, step.route), log);

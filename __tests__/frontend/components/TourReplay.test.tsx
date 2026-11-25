@@ -235,6 +235,38 @@ describe('guided tour replay from Settings and Home', () => {
     expectSetupTargets();
   });
 
+  it('lets a user who follows the highlighted step leave Home instead of pulling them back', async () => {
+    const settings = initialSettings();
+    settings.onboarding = { ...settings.onboarding, completed: false };
+    window.history.replaceState({}, '', '/');
+    render(<Workspace initialSettings={settings} initialPath="/" />);
+    await waitFor(() => expect(screen.getByLabelText('guide active')).toHaveTextContent('true'));
+    expect(screen.getByText('Start with your AI setup')).toBeInTheDocument();
+    mockRouter.push.mockClear();
+
+    // The user uses the very control the first step points at.
+    act(() => mockNavigate('/models?add=1'));
+
+    await waitFor(() => expect(screen.getByLabelText('guide active')).toHaveTextContent('false'));
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/models');
+    await waitFor(() => expect(mockLatestSettings.onboarding?.completed).toBe(true));
+  });
+
+  it('still opens the page of each step the tour moves to', async () => {
+    render(<Workspace initialSettings={initialSettings()} initialPath="/" />);
+    const replay = screen.getByRole('button', { name: 'Open setup guide' });
+    await waitFor(() => expect(replay).toBeEnabled());
+    fireEvent.click(replay);
+    await waitFor(() => expect(screen.getByLabelText('guide active')).toHaveTextContent('true'));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/models'));
+    expect(window.location.pathname).toBe('/models');
+    expect(screen.getByLabelText('guide active')).toHaveTextContent('true');
+  });
+
   it('orders replay after an earlier Home dismissal that is still saving', async () => {
     let finishDismissal!: () => void;
     mockPersist.mockImplementationOnce(() => new Promise<void>((resolve) => { finishDismissal = resolve; }));

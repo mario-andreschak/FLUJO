@@ -39,7 +39,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. A fresh instanc
 
 - A new agent is only a draft until its first save. Each flujo-drive command is a fresh browser, so an unsaved draft's `?flow=<id>&mode=edit` link shows "Agent not found." Use `steps` for anything after "Start simple" or "Start expert".
 - The Save button's accessible name is "Save flow", even though it shows "Save".
-- When a model exists, the Easy view first asks "Yes, help me" or "No, I’ll build it myself". The goal field only appears after you answer.
+- When a model exists, the Easy view first asks "Yes, help me" or "No, I’ll build it myself". The goal field only appears after you answer. Either way, a new AI step gets the favourite (or first) connected AI; "No" only turns off AI help while building.
 - "Try it" / "Try my agent" stay disabled until each AI step has a model and the name is not "Untitled agent". Without a model, the Easy view warns "This step still needs an AI…".
 - The canvas is the slowest part. The first load in a dev instance compiles it, and nodes have no stable accessible names: drive the node list and the "Inspector", not canvas positions.
 - The node list sits beside the canvas only at 900 px wide or more. Below that, use "Add node".

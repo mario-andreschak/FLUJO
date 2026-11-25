@@ -9,6 +9,7 @@ jest.mock('@/backend/services/flow/index', () => ({
 }));
 
 import {
+  adoptFirstModelForDefaultAgent,
   buildDefaultFlujoAgent,
   DEFAULT_FLUJO_AGENT_ID,
   DEFAULT_FLUJO_AGENT_SERVERS,
@@ -121,5 +122,36 @@ describe('default FLUJO Agent', () => {
       ])))
       .toEqual(DEFAULT_FLUJO_AGENT_TOOLS);
     expect(saveFlowMock).toHaveBeenCalledWith(upgraded);
+  });
+
+  it('adopts the first connected AI so the shipped agent can answer', async () => {
+    const shipped = buildDefaultFlujoAgent();
+    getFlowMock.mockResolvedValueOnce(shipped);
+
+    expect(await adoptFirstModelForDefaultAgent({ id: 'first-ai' })).toBe(true);
+
+    const saved = saveFlowMock.mock.calls[0][0];
+    expect(saved.nodes.find((node: { type: string }) => node.type === 'process').data.properties)
+      .toMatchObject({ boundModel: 'first-ai', defaultAgentVersion: DEFAULT_FLUJO_AGENT_VERSION });
+    expect(saved.nodes.filter((node: { type: string }) => node.type === 'mcp')).toHaveLength(DEFAULT_FLUJO_AGENT_SERVERS.length);
+  });
+
+  it('keeps an AI the user already chose, and skips AIs that cannot use tools or a missing agent', async () => {
+    const chosen = buildDefaultFlujoAgent();
+    chosen.nodes.find((node) => node.type === 'process')!.data.properties!.boundModel = 'user-choice';
+    getFlowMock.mockResolvedValueOnce(chosen);
+    expect(await adoptFirstModelForDefaultAgent({ id: 'first-ai' })).toBe(false);
+
+    expect(await adoptFirstModelForDefaultAgent({ id: 'image-only', supportsTools: false })).toBe(false);
+
+    getFlowMock.mockResolvedValueOnce(null);
+    expect(await adoptFirstModelForDefaultAgent({ id: 'first-ai' })).toBe(false);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed save instead of claiming the agent adopted the AI', async () => {
+    getFlowMock.mockResolvedValueOnce(buildDefaultFlujoAgent());
+    saveFlowMock.mockResolvedValueOnce({ success: false, error: 'disk full' });
+    await expect(adoptFirstModelForDefaultAgent({ id: 'first-ai' })).rejects.toThrow('disk full');
   });
 });

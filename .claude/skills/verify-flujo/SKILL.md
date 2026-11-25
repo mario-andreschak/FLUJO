@@ -72,6 +72,14 @@ instance:
 node scripts/flujo-drive.mjs steps chat --file journey.json
 ```
 
+For anything on the path a new user takes (Home, AI Setup, Connected Apps,
+the simple builder, Talk, `/v1`, the MCP proxy), also run the whole first-use
+journey. It brings its own free stub model, so the reply steps can pass:
+
+```
+npm run journey:first-use                       # add --viewport 390x844 for the phone layout
+```
+
 Step kinds are `goto`, `click`, `fill`, `press`, `wait-for`, `expect-text`,
 `shot` and `aria`. `click`, `fill` and `wait-for` find visible elements by
 ARIA role and English name (part of the name is enough). `expect-text` waits

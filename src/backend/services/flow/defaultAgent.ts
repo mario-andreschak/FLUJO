@@ -6,6 +6,7 @@
  * allowlist from each of the four shipped MCP servers.
  */
 import type { Flow } from '@/shared/types/flow';
+import type { Model } from '@/shared/types/model';
 import { compileFlowSpec } from '@/utils/shared/flowSpecCompiler';
 import { flowService } from './index';
 
@@ -180,6 +181,26 @@ function upgradeToollessDefaultAgent(flow: Flow): Flow | null {
       };
     }),
   };
+}
+
+/**
+ * The shipped Agent has no AI until the user connects one, so "Start talking"
+ * would fail. When the first AI is connected, the Agent adopts it, unless the
+ * user already chose one or the AI cannot use tools. Returns whether it changed.
+ */
+export async function adoptFirstModelForDefaultAgent(model: Pick<Model, 'id' | 'supportsTools'>): Promise<boolean> {
+  if (!model.id || model.supportsTools === false) return false;
+  const flow = await flowService.getFlow(DEFAULT_FLUJO_AGENT_ID);
+  const processNodes = flow?.nodes.filter((node) => node.type === 'process') ?? [];
+  if (!flow || processNodes.length !== 1 || processNodes[0].data.properties?.boundModel) return false;
+  const saved = await flowService.saveFlow({
+    ...flow,
+    nodes: flow.nodes.map((node) => node.id === processNodes[0].id
+      ? { ...node, data: { ...node.data, properties: { ...(node.data.properties ?? {}), boundModel: model.id } } }
+      : node),
+  });
+  if (!saved.success) throw new Error(saved.error ?? 'The FLUJO Agent could not use the new AI');
+  return true;
 }
 
 /** Seed the shipped Agent when missing and apply narrow bundled-version repairs. */
