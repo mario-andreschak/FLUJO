@@ -67,7 +67,7 @@ describe('owned endurance fixture through the real SDK transport', () => {
       saved = Object.fromEntries(Object.keys(bindings).map(name => [name, process.env[name]]));
       Object.assign(process.env, bindings);
         expect(JSON.stringify(config)).not.toContain(token);
-        const transport = createStdioTransport(config);
+        const transport = await createStdioTransport(config);
         await client.connect(transport);
         expect((await client.listTools()).tools.map(tool => tool.name)).toContain('research_page');
         const research = await client.callTool({ name: 'research_page', arguments: {} });

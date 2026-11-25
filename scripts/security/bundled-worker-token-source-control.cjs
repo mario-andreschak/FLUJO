@@ -51,7 +51,7 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
    await consent.approveBundledHostConsent(request,approved.name,{runtimeHome:'host',reviewedDigest:reviewed.policyDigest,expiresAt:Date.now()+120000});
    process.env.FLUJO_WORKER_MODE='1';
    const current=(await store.loadServerConfigs()).find(item=>item.name===approved.name);
-   transport=era==='v1'?ordinary.createStdioTransport(current):beta.createBetaTransport(current);
+   transport=await (era==='v1'?ordinary.createStdioTransport(current):beta.createBetaTransport(current));
    const client=era==='v1'?ordinary.createNewClient(current):beta.createNewBetaClient(current);await client.connect(transport);
    const token=process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN='synthetic-rotated-worker-token';
    try{await assert.rejects(host.getManagedTrustedHost(transport).assertCurrent(current),error=>error.code==='HOST_CONSENT_REQUIRED');}finally{process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN=token;}

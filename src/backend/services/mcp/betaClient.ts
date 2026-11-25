@@ -276,13 +276,14 @@ function betaRequestInit(config: {
  * Websocket is NOT supported by the v2 SDK; callers must route websocket
  * configs to the v1 path (see connectServer).
  */
-export function createBetaTransport(
+export async function createBetaTransport(
   config: MCPServerConfig,
   options?: TransportCreationOptions,
-):
+): Promise<
   | BetaStdioClientTransport
   | BetaStreamableHTTPClientTransport
-  | BetaSSEClientTransport {
+  | BetaSSEClientTransport
+> {
   assertMcpTransport(config);
   if ((config.isolation !== undefined || config.trustedHost !== undefined) && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   if (config.transport === "websocket") {
@@ -352,7 +353,7 @@ export function createBetaTransport(
   }
 
   // Admission above leaves only explicit stdio after the remote branches.
-  const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
+  const { command, args, env, cwd, isolation } = await resolveStdioLaunch(config, options);
   let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
   let workload: PendingBundledFlujoWorkload | undefined;
   const workloadWorkspace = getCurrentWorkspace();

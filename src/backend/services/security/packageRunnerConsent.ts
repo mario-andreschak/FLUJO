@@ -14,7 +14,7 @@ export async function previewPackageRunnerConsent(stored: MCPStdioConfig, runtim
   let cwd = stored.cwd;
   if (runtimeHome === 'isolated') {
     const { isolatedStdioRuntime } = await import('../mcp/connection');
-    const runtime = isolatedStdioRuntime(stored.name);
+    const runtime = await isolatedStdioRuntime(stored.name);
     if (cwd !== runtime.cwd) throw new Error('Declare the private per-server working directory before review');
     for (const [name, value] of Object.entries(runtime.env)) {
       for (const key of Object.keys(environment)) if (key.toUpperCase() === name.toUpperCase()) delete environment[key];

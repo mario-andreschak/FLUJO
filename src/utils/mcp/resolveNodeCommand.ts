@@ -30,8 +30,8 @@ export interface ResolveNodeCommandDeps {
   dirname: (p: string) => string;
   /** path.join */
   joinPath: (...parts: string[]) => string;
-  /** fs.existsSync */
-  fileExists: (p: string) => boolean;
+  /** Resolves true when the path exists. */
+  fileExists: (p: string) => Promise<boolean>;
 }
 
 // Bare Node toolchain commands we know how to resolve.
@@ -42,7 +42,7 @@ function isBareCommand(command: string): boolean {
   return !command.includes('/') && !command.includes('\\');
 }
 
-export function resolveNodeCommand(command: string, deps: ResolveNodeCommandDeps): string {
+export async function resolveNodeCommand(command: string, deps: ResolveNodeCommandDeps): Promise<string> {
   if (!command || !isBareCommand(command)) {
     return command;
   }
@@ -68,7 +68,7 @@ export function resolveNodeCommand(command: string, deps: ResolveNodeCommandDeps
 
   for (const candidate of candidates) {
     const candidatePath = deps.joinPath(binDir, candidate);
-    if (deps.fileExists(candidatePath)) {
+    if (await deps.fileExists(candidatePath)) {
       return candidatePath;
     }
   }

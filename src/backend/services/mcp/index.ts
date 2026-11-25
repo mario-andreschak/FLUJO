@@ -1195,8 +1195,8 @@ export class MCPService {
       }) : createNewClient(config);
       if (executionExtensionContext) pendingProtectedClient = client;
       const transport = useBeta
-        ? createBetaTransport(config, transportOptions)
-        : createTransport(config, transportOptions);
+        ? await createBetaTransport(config, transportOptions)
+        : await createTransport(config, transportOptions);
       attemptClient = client;
       attemptTransport = transport;
       if (config.transport === "stdio") {
@@ -1657,7 +1657,7 @@ export class MCPService {
       }
 
       const stderrLogs = this.stderrLogs.get(config.name) || [];
-      const enhancedErrorMessage = enhanceConnectionErrorMessage(
+      const enhancedErrorMessage = await enhanceConnectionErrorMessage(
         error,
         config,
         stderrLogs,
@@ -1727,8 +1727,8 @@ export class MCPService {
     };
     let client: Client | null = null;
     let transport:
-      | ReturnType<typeof createTransport>
-      | ReturnType<typeof createBetaTransport>
+      | Awaited<ReturnType<typeof createTransport>>
+      | Awaited<ReturnType<typeof createBetaTransport>>
       | null = null;
 
     try {
@@ -1787,8 +1787,8 @@ export class MCPService {
         ? createNewBetaClient(connectConfig)
         : createNewClient(connectConfig);
       transport = useBeta
-        ? createBetaTransport(connectConfig, transportOptions)
-        : createTransport(connectConfig, transportOptions);
+        ? await createBetaTransport(connectConfig, transportOptions)
+        : await createTransport(connectConfig, transportOptions);
       if (connectConfig.transport === "stdio") {
         registerExternalAuthorizationClient(
           client,
@@ -1910,7 +1910,7 @@ export class MCPService {
         }
       }
 
-      const enhancedErrorMessage = enhanceConnectionErrorMessage(
+      const enhancedErrorMessage = await enhanceConnectionErrorMessage(
         error,
         config,
         stderrLogs.length ? [stderrLogs.join("")] : [],

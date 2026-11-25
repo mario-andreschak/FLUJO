@@ -1,6 +1,5 @@
 import path from 'path';
 import fs from 'fs/promises';
-import { lstatSync, readdirSync } from 'fs';
 import { AsyncLocalStorage } from 'async_hooks';
 import { randomUUID } from 'crypto';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -159,10 +158,10 @@ export function getWorkspaceUserdataDir(workspace?: string): string {
  * proves that its legacy owner moved into the default workspace. Ambiguous or
  * explicitly external paths are returned unchanged.
  */
-export function remapLegacyDefaultWorkspacePath(
+export async function remapLegacyDefaultWorkspacePath(
   candidate: string,
   subtree: WorkspaceSubtree,
-): string {
+): Promise<string> {
   if (
     typeof candidate !== 'string'
     || !path.isAbsolute(candidate)
@@ -179,18 +178,18 @@ export function remapLegacyDefaultWorkspacePath(
   const migratedOwner = path.join(getWorkspaceDataDir(DEFAULT_WORKSPACE), subtree, owner);
   let legacyOwnerHasAuthority = false;
   try {
-    const stat = lstatSync(legacyOwner);
+    const stat = await fs.lstat(legacyOwner);
     // A retained EBUSY/EXDEV mount can remain as an empty real directory. Any
     // other surviving object is still authoritative and therefore ambiguous.
     legacyOwnerHasAuthority = !stat.isDirectory()
       || stat.isSymbolicLink()
-      || readdirSync(legacyOwner).length > 0;
+      || (await fs.readdir(legacyOwner)).length > 0;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') legacyOwnerHasAuthority = true;
   }
   let migratedOwnerIsSafe = false;
   try {
-    const stat = lstatSync(migratedOwner);
+    const stat = await fs.lstat(migratedOwner);
     migratedOwnerIsSafe = !stat.isSymbolicLink() && (stat.isDirectory() || stat.isFile());
   } catch {
     migratedOwnerIsSafe = false;
@@ -200,18 +199,18 @@ export function remapLegacyDefaultWorkspacePath(
 }
 
 /** Remap complete path-bearing config values without parsing shell commands. */
-export function remapLegacyDefaultWorkspaceReference(
+export async function remapLegacyDefaultWorkspaceReference(
   candidate: string,
   subtree: WorkspaceSubtree,
-): string {
-  const direct = remapLegacyDefaultWorkspacePath(candidate, subtree);
+): Promise<string> {
+  const direct = await remapLegacyDefaultWorkspacePath(candidate, subtree);
   if (direct !== candidate) return direct;
 
   try {
     const url = new URL(candidate);
     if (url.protocol === 'file:') {
       const originalPath = fileURLToPath(url);
-      const remappedPath = remapLegacyDefaultWorkspacePath(originalPath, subtree);
+      const remappedPath = await remapLegacyDefaultWorkspacePath(originalPath, subtree);
       if (remappedPath !== originalPath) {
         const remappedUrl = pathToFileURL(remappedPath);
         remappedUrl.search = url.search;
@@ -236,7 +235,7 @@ export function remapLegacyDefaultWorkspaceReference(
     quote = value[0];
     value = value.slice(1, -1);
   }
-  const remappedValue = remapLegacyDefaultWorkspaceReference(value, subtree);
+  const remappedValue = await remapLegacyDefaultWorkspaceReference(value, subtree);
   return remappedValue === value
     ? candidate
     : `${prefix}${quote}${remappedValue}${quote}`;

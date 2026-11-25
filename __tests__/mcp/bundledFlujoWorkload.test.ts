@@ -393,7 +393,7 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
         expect(retireOwned).toThrow(McpRuntimeAuthorityRetirementError);
         expect(injected).toBe(1);
         expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).toThrow(McpRuntimeAuthorityRetirementError);
-        expect(() => createStdioTransport(approved.config)).toThrow(McpRuntimeAuthorityRetirementError);
+        await expect(createStdioTransport(approved.config)).rejects.toThrow(McpRuntimeAuthorityRetirementError);
         const unrelated = prepareBundledFlujoWorkload(approved.config);
         if (!unrelated) throw new Error('Genuine unrelated pending authority unavailable.');
         retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), unrelated, undefined);

@@ -100,27 +100,27 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
     type StoredServerConfig = Partial<MCPServerConfig> & Record<string, unknown>;
     const mcpServers = await loadItem<Record<string, StoredServerConfig>>(StorageKey.MCP_SERVERS, {});
     
-    const configs = Object.entries(mcpServers).map(([name, serverConfig]) => {
+    const configs = await Promise.all(Object.entries(mcpServers).map(async ([name, serverConfig]) => {
       // Legacy records may omit this tag; explicit malformed tags never mean stdio.
       const transport = storedMcpTransport(serverConfig.transport);
 
       // Layout-v2 compatibility: old GitHub installs persisted absolute paths
       // into the legacy managed MCP root. Normalize them in memory after the
       // clone has moved; never rewrite an explicit path that still exists.
-      const remapMcpPath = (value: unknown): string | undefined =>
+      const remapMcpPath = async (value: unknown): Promise<string | undefined> =>
         typeof value === 'string'
           ? remapLegacyDefaultWorkspaceReference(value, 'mcp-servers')
           : undefined;
-      const remapMcpStringList = (value: unknown): string[] | undefined =>
+      const remapMcpStringList = async (value: unknown): Promise<string[] | undefined> =>
         Array.isArray(value)
-          ? value.map(remapMcpPath).filter((entry): entry is string => entry !== undefined)
+          ? (await Promise.all(value.map(remapMcpPath))).filter((entry): entry is string => entry !== undefined)
           : undefined;
-      const remapMcpEnv = (record: unknown): Record<string, EnvVarValue> | undefined => {
+      const remapMcpEnv = async (record: unknown): Promise<Record<string, EnvVarValue> | undefined> => {
         if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined;
         const remapped: Record<string, EnvVarValue> = {};
         for (const [key, value] of Object.entries(record)) {
           if (typeof value === 'string') {
-            remapped[key] = remapMcpPath(value) ?? value;
+            remapped[key] = await remapMcpPath(value) ?? value;
             continue;
           }
           if (
@@ -130,7 +130,7 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
             && 'isSecret' in value.metadata && typeof value.metadata.isSecret === 'boolean'
           ) {
             remapped[key] = {
-              value: remapMcpPath(value.value) ?? value.value,
+              value: await remapMcpPath(value.value) ?? value.value,
               metadata: { isSecret: value.metadata.isSecret },
             };
           }
@@ -142,21 +142,21 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
         rawLaunch && typeof rawLaunch === 'object'
           ? {
               ...rawLaunch as Partial<MCPLaunchSpec>,
-              command: remapMcpPath((rawLaunch as Partial<MCPLaunchSpec>).command),
-              cwd: remapMcpPath((rawLaunch as Partial<MCPLaunchSpec>).cwd),
-              args: remapMcpStringList((rawLaunch as Partial<MCPLaunchSpec>).args),
-              env: remapMcpEnv((rawLaunch as Partial<MCPLaunchSpec>).env),
+              command: await remapMcpPath((rawLaunch as Partial<MCPLaunchSpec>).command),
+              cwd: await remapMcpPath((rawLaunch as Partial<MCPLaunchSpec>).cwd),
+              args: await remapMcpStringList((rawLaunch as Partial<MCPLaunchSpec>).args),
+              env: await remapMcpEnv((rawLaunch as Partial<MCPLaunchSpec>).env),
             }
           : undefined;
       serverConfig = {
         ...serverConfig,
         transport,
-        rootPath: remapMcpPath(serverConfig.rootPath),
-        cwd: remapMcpPath(serverConfig.cwd),
-        command: remapMcpPath(serverConfig.command),
-        args: remapMcpStringList(serverConfig.args),
-        roots: remapMcpStringList(serverConfig.roots),
-        env: remapMcpEnv(serverConfig.env),
+        rootPath: await remapMcpPath(serverConfig.rootPath),
+        cwd: await remapMcpPath(serverConfig.cwd),
+        command: await remapMcpPath(serverConfig.command),
+        args: await remapMcpStringList(serverConfig.args),
+        roots: await remapMcpStringList(serverConfig.roots),
+        env: await remapMcpEnv(serverConfig.env),
         ...(Object.prototype.hasOwnProperty.call(serverConfig, 'launch')
           ? { launch: remappedLaunch }
           : {}),
@@ -265,7 +265,7 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
           stderr: serverConfig.stderr || 'pipe'
         } as MCPStdioConfig;
       }
-    });
+    }));
 
     // Install-origin backfill (#193): any config that predates the `source` field
     // gets a best-effort origin inferred at read time. Computed-on-load (not

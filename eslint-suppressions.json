@@ -185,9 +185,6 @@
     "flujo/no-double-cast": {
       "count": 18
     },
-    "flujo/no-sync-fs": {
-      "count": 1
-    },
     "flujo/no-workaround-comment": {
       "count": 1
     }
@@ -240,16 +237,6 @@
   "src/backend/services/mcp/remoteTaskStore.ts": {
     "flujo/no-double-cast": {
       "count": 2
-    }
-  },
-  "src/backend/services/mcp/roots.ts": {
-    "flujo/no-sync-fs": {
-      "count": 1
-    }
-  },
-  "src/backend/services/mcp/runtimeDirectoryAdmission.ts": {
-    "flujo/no-sync-fs": {
-      "count": 8
     }
   },
   "src/backend/services/mcp/serverTasks.ts": {
@@ -1464,9 +1451,6 @@
   "src/utils/mcp/utils.ts": {
     "flujo/no-double-cast": {
       "count": 3
-    },
-    "flujo/no-sync-fs": {
-      "count": 4
     }
   },
   "src/utils/shared/decisionRules.ts": {
@@ -1487,9 +1471,6 @@
   "src/utils/workspace.ts": {
     "flujo/no-double-cast": {
       "count": 1
-    },
-    "flujo/no-sync-fs": {
-      "count": 3
     }
   },
   "src/vendor/avatar/client/Eyes.tsx": {

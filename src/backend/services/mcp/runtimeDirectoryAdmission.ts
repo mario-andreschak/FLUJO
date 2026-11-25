@@ -1,4 +1,5 @@
-import fs, { type BigIntStats } from 'node:fs';
+import fs from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import path from 'node:path';
 
 export class RuntimeDirectoryAdmissionError extends Error {
@@ -34,25 +35,28 @@ function validateDirectory(stat: BigIntStats, privateAnchor: boolean): void {
  * sandbox. The per-server anchor supplies privacy; shared containers may be0755.
  */
 export class RuntimeDirectoryAdmission {
-  private readonly root: string;
   private readonly directories = new Map<string, AdmittedDirectory>();
 
-  constructor(workspaceRoot: string) {
+  private constructor(private readonly root: string) {}
+
+  /** Admit an existing workspace root; never create it. */
+  static async open(workspaceRoot: string): Promise<RuntimeDirectoryAdmission> {
     try {
-      this.root = path.resolve(workspaceRoot);
-      const stat = fs.lstatSync(this.root, { bigint: true });
+      const admission = new RuntimeDirectoryAdmission(path.resolve(workspaceRoot));
+      const stat = await fs.lstat(admission.root, { bigint: true });
       validateDirectory(stat, false);
-      this.directories.set(this.root, { stat, canonical: fs.realpathSync(this.root), privateAnchor: false });
-      this.verify();
+      admission.directories.set(admission.root, { stat, canonical: await fs.realpath(admission.root), privateAnchor: false });
+      await admission.verify();
+      return admission;
     } catch {
       throw new RuntimeDirectoryAdmissionError();
     }
   }
 
   /** Create only a direct child of an admitted parent; never recreate the workspace. */
-  admit(directory: string, privateAnchor = false): void {
+  async admit(directory: string, privateAnchor = false): Promise<void> {
     try {
-      this.verify();
+      await this.verify();
       const candidate = path.resolve(directory);
       const parent = this.directories.get(path.dirname(candidate));
       if (candidate === this.root || !parent) throw new RuntimeDirectoryAdmissionError();
@@ -68,23 +72,23 @@ export class RuntimeDirectoryAdmission {
 
       let stat: BigIntStats | undefined;
       try {
-        stat = fs.lstatSync(candidate, { bigint: true });
+        stat = await fs.lstat(candidate, { bigint: true });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
       if (!stat) {
         // mkdir without recursive is exclusive. A concurrent winner gets the
         // same admission as our own publication; existing modes are not changed.
-        this.verify();
-        try { fs.mkdirSync(candidate, { mode: 0o700 }); }
+        await this.verify();
+        try { await fs.mkdir(candidate, { mode: 0o700 }); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-        stat = fs.lstatSync(candidate, { bigint: true });
+        stat = await fs.lstat(candidate, { bigint: true });
       }
       validateDirectory(stat, privateAnchor);
-      const canonical = fs.realpathSync(candidate);
+      const canonical = await fs.realpath(candidate);
       if (path.dirname(canonical) !== parent.canonical) throw new RuntimeDirectoryAdmissionError();
       this.directories.set(candidate, { stat, canonical, privateAnchor });
-      this.verify();
+      await this.verify();
     } catch {
       // Neither native path errors nor filesystem identities enter diagnostics.
       throw new RuntimeDirectoryAdmissionError();
@@ -92,16 +96,19 @@ export class RuntimeDirectoryAdmission {
   }
 
   /** Directory child creation changes size/timestamps/nlink, not admitted identity. */
-  verify(): void {
+  async verify(): Promise<void> {
     try {
-      for (const [directory, expected] of this.directories) {
-        const current = fs.lstatSync(directory, { bigint: true });
+      await Promise.all([...this.directories].map(async ([directory, expected]) => {
+        const [current, canonical] = await Promise.all([
+          fs.lstat(directory, { bigint: true }),
+          fs.realpath(directory),
+        ]);
         validateDirectory(current, expected.privateAnchor);
         for (const field of ['dev', 'ino', 'mode', 'uid', 'gid'] as const) {
           if (current[field] !== expected.stat[field]) throw new RuntimeDirectoryAdmissionError();
         }
-        if (fs.realpathSync(directory) !== expected.canonical) throw new RuntimeDirectoryAdmissionError();
-      }
+        if (canonical !== expected.canonical) throw new RuntimeDirectoryAdmissionError();
+      }));
     } catch {
       throw new RuntimeDirectoryAdmissionError();
     }

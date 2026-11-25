@@ -41,7 +41,7 @@ console.log(JSON.stringify(result===undefined?{jsonrpc:'2.0',id:q.id,error:{code
     env: { GRANTED_FIXTURE: 'synthetic fixture', UNRELATED_SECRET: 'must not forward' }, disabled: false,
     rootPath: '', _buildCommand: '', _installCommand: '', isolation: policy };
   const client = era === 'v1' ? createNewClient(config) : createNewBetaClient(config);
-  let transport: ReturnType<typeof createTransport> | ReturnType<typeof createBetaTransport> | undefined;
+  let transport: Awaited<ReturnType<typeof createTransport>> | Awaited<ReturnType<typeof createBetaTransport>> | undefined;
   try {
     process.env.FLUJO_OWNER_AUTH_FILE = path.join(directory, 'owner.json');
     process.env.FLUJO_MCP_ISOLATION_FILE = path.join(directory, 'approvals.json');
@@ -49,7 +49,7 @@ console.log(JSON.stringify(result===undefined?{jsonrpc:'2.0',id:q.id,error:{code
     fs.writeFileSync(process.env.FLUJO_MCP_ISOLATION_FILE, JSON.stringify({ schemaVersion: 1, ownerId: 'fixture-owner',
       approvals: [{ workspace: getCurrentWorkspace(), serverName: config.name, policyDigest: isolatedMcpPolicyDigest(policy), expiresAt: Date.now() + 30_000 }] }), { mode: 0o600 });
     jest.mocked(loadServerConfigs).mockResolvedValue([config]);
-    transport = era === 'v1' ? createTransport(config) : createBetaTransport(config);
+    transport = era === 'v1' ? await createTransport(config) : await createBetaTransport(config);
     await client.connect(transport);
     const listed = await listServerTools(client, config.name);
     expect(listed.error).toBeUndefined();
