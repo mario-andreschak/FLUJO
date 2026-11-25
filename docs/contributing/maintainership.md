@@ -1,135 +1,189 @@
-# Maintainer continuity and succession
+# Maintainership basics
 
-This is the proposed #576 program. #564 must approve its acceptance criteria.
-No additional human maintainer, permission grant or completed observation window
-is established by publishing it. Automated changes and test results remain
-separate from human evidence. Product adoption belongs to #577.
+> **Draft for Mario, written November 25, 2026 for
+> [#576](https://github.com/mario-andreschak/FLUJO/issues/576).** It describes how
+> FLUJO is maintained today and proposes the rest. Nothing marked
+> **Mario decides** is in force until Mario confirms it in #576. Publishing this
+> page does not make anyone a maintainer or give anyone access.
 
-## Roles and access register
+## Today in one paragraph
 
-Fill a role only after a named human consents to its scope and a repository owner
-approves the required access. Keep private account/recovery details outside Git.
-Record a redacted verification reference, verifier and date here or in the epic
-evidence ledger; listing a name or CODEOWNERS entry does not prove readiness.
+FLUJO has one human maintainer, Mario
+([@mario-andreschak](https://github.com/mario-andreschak)). He owns the GitHub
+repository and every account FLUJO is published through. AI coding agents do
+most of the day-to-day work under the `flujo-app` account, following his
+standing instructions. No second person can review a core change, publish a
+release or answer a private security report. If Mario is unavailable, those
+things stop. This is the "bus factor" gap in the
+[scorecard](../quality/scorecard-status.md) (row "Community / bus factor").
 
-| Duty | Required competence / minimal access | Accountable human | Trained backup / access evidence |
+## Who decides what
+
+| Kind of decision | Who decides today | Proposal |
+| --- | --- | --- |
+| Everyday change (bug fix, test, docs, small refactor) | Mario, or an agent under his standing instructions | One reviewer who is not the author approves |
+| Change in a `.github/CODEOWNERS` area (security, login, credentials, MCP process launch, install and update, releases, HTTP API) | Mario | Mario, or a trained backup for that area |
+| Product direction, breaking changes, licence, removing features | Mario | Mario, written down in the issue |
+| Who gets access, and how much | Mario | Mario; see [access](#access-and-rotation) |
+| Releases and their timing | Mario (agents release under his instructions) | Unchanged |
+| Private security reports | Mario | A named responder plus a backup (shared with [#565](https://github.com/mario-andreschak/FLUJO/issues/565)) |
+
+An AI agent can write and merge code for Mario, but it never counts as a
+reviewer, a backup or a maintainer.
+
+**Mario decides:** whether these decision levels are right.
+
+## How to escalate
+
+1. Discuss in the issue or pull request, with examples and the options you see.
+2. If it stays stuck, mention `@mario-andreschak` and say what decision you need.
+3. Security problems never go in public: use the private report described in
+   [SECURITY.md](../../SECURITY.md).
+
+Proposed answer times: a first reply to a contributor's pull request within
+7 days; a first reply to a private security report within 3 days.
+
+**Mario decides:** these answer times, and whether they go into SECURITY.md.
+
+## Supported releases
+
+Facts: FLUJO publishes often (eight releases between October 26 and
+November 21, 2026). Each release ships as the npm package `flujo-ai` plus four
+MCP server packages, a Windows installer on GitHub Releases, and the container
+image `ghcr.io/mario-andreschak/flujo`. Running from source is also possible.
+Every form needs Node.js 22.23.4+ or 24.22.1+.
+
+Proposal: **only the newest release is supported.** Fixes, security fixes
+included, ship in the next release; older versions get no separate fixes. Users
+update to stay supported. A version with a known serious problem is named in the
+release notes and in a GitHub security advisory.
+
+**Mario decides:** whether to adopt this, and whether to state it in
+SECURITY.md (SECURITY.md itself belongs to #565).
+
+## Access and rotation
+
+What exists today, from the repository and its workflows. Account and recovery
+details stay private and never go into Git.
+
+| What | Where | Held by | Backup |
 | --- | --- | --- | --- |
-| Core change review | Trace execution/ownership and reject a regression; review access first | Not recorded | Missing |
-| MCP/security boundary review | Assess process/grant/credential and client compatibility | Not recorded | Missing |
-| Release verification | Verify source, candidate integrity, required checks and consumer behavior; no publication permission needed for rehearsal | Not recorded | Missing |
-| Release publication / rollback decision | Understand existing exact-SHA release/resume procedure; owner-approved GitHub/npm authority | Not recorded | Missing |
-| Private vulnerability triage | Approved private channel, severity assessment and disclosure coordination | Not recorded | Missing |
-| Recovery / access rotation | Diagnose, restore synthetic data, verify owned-process shutdown and account recovery | Not recorded | Missing |
-| Contributor onboarding / evidence | Maintain starters, review setup friction, obtain consent and retain substantive work | Not recorded | Missing |
+| GitHub repository (admin) | `mario-andreschak/FLUJO`, owned by Mario's personal account | Mario | None |
+| Agent account (write) | GitHub user `flujo-app` | Controlled by Mario | None |
+| npm packages | `flujo-ai`, `@mario.andreschak/mcp-flujo`, `-filesystem`, `-bash`, `-browser`; published by GitHub Actions through npm trusted publishing, no npm token stored ([release guide](../npm-release.md)) | Mario as npm owner | None |
+| Container image | `ghcr.io/mario-andreschak/flujo`, published by GitHub Actions | Tied to Mario's GitHub account | None |
+| Windows installer | GitHub Releases, built by `installer.yml` | Repository | None |
+| Website | GitHub Pages from `githubpages/`, domain `flujo.com.co` | Mario (registrar and DNS account are private) | None |
+| Community | Discord server | Mario | None |
+| Private security reports | GitHub **Security** tab of the repository | Repository admins (Mario) | None |
 
-One person may hold several duties, but concentration stays visible. Critical
-areas require a second trained human with verified access; a bot is never that
-backup. Repository enforcement belongs to #565, security policy to #565's Security
-owner, and supported operating profiles/recovery to #570/#564.
+The workflows use only the built-in `GITHUB_TOKEN`; no long-lived publishing
+secret is stored in the repository. That keeps rotation simple.
 
-## Onboarding and promotion
+**Adding a person.** Grant the smallest role that fits, after the steps in
+[becoming a maintainer](#becoming-a-maintainer): GitHub **Triage**, then
+**Write**, then **Maintain**; **Admin** only as a planned successor. Add npm
+ownership only to someone trained to release. Check the access works with a
+harmless action (for example labelling an issue) and write down the date.
 
-1. Obtain consent for a bounded contributor task and for any retained evidence.
-2. Observe the [clean-clone setup](README.md) without the author's hidden files or
-   live coaching. Record setup failures and assistance, including unsuccessful attempts.
-3. Retain substantive accepted work and a meaningful review explaining boundary
-   behavior, compatibility, failure handling and tests. Authorship and review must
-   identify independent humans; bot-assisted work must still identify the actual
-   human contribution and accountability.
-4. Have the candidate review a core change and perform the [drill](maintainer-drill.md)
-   without the original author operating it. An observer may record evidence but
-   must record any intervention or coaching rather than calling that independent.
-5. A consenting accountable owner approves a role and minimal permissions only
-   after the evidence is reviewed. Verify access with a harmless authorized read
-   or disposable action; record what was verified, expiration/recheck date, and
-   private recovery reference. Publication access requires a separate decision.
+**Removing a person** (leaving, or account lost): remove their GitHub role, npm
+ownership, container package access and Discord admin rights; check open
+invitations; rotate anything they could read (today nothing, since no secrets
+are stored); write down what was removed and when.
 
-Promotion is a human decision, not a script output. Do not assign access, contact
-prospective humans, or enroll them in this program based on this document.
+**Review the list** every six months, and after anyone leaves.
 
-## Decision and emergency succession runbook
+**Mario decides:** the review interval, and when to add a second npm owner.
 
-For routine changes, the author proposes one bounded result and a qualified human
-reviews it. Record cross-area decisions in an issue with affected consumers and
-the accountable owner. A compatibility dispute or missing qualified reviewer
-keeps integration pending; escalation cannot manufacture an approval.
+## Emergency steps
 
-If the original maintainer is unavailable:
+If Mario cannot be reached:
 
-1. Identify the consenting duty owner and trained backup in the register. If
-   either is missing or unreachable, record the gap and keep affected releases
-   pending. Availability is not inferred from recent commits.
-2. Preserve the exact source/artifact/incident evidence and private backup before
-   acting. Identify supported release/profile using the current security and
-   project-status policies. Do not adopt an old "latest" claim as release evidence.
-3. Use only previously authorized account recovery/access routes. Two humans
-   verify the intended scope and retained incident evidence for security/release
-   decisions. Keep recovery codes, credentials and account identifiers private.
-4. Run the disposable diagnosis/recovery exercise first. Production recovery,
-   publication, revocation and controller changes require their actual operating
-   authorization and #570's applicable fences.
-5. Record who acted, what authority was used, exact revision/artifacts, failures,
-   result and next review. An unavailable backup stays an unresolved risk.
+- **Today**, with no backup, nobody else can publish a release, change
+  repository settings or read private security reports. Installed copies keep
+  running; they just stop receiving updates. The MIT licence lets anyone fork
+  FLUJO and continue it.
+- **Once a backup exists**, the backup:
+  1. waits the agreed time (proposal: 14 days without an answer on the private
+     contacts) before acting;
+  2. handles private security reports first;
+  3. uses only access that was granted and tested beforehand, never a guessed
+     or borrowed account;
+  4. publishes only through the normal [release procedure](../npm-release.md);
+  5. writes down who did what, when, and with which access, in a private note
+     and a short public issue.
 
-For planned access rotation or departure, inventory roles, repository/npm/provider
-permissions, trusted publisher settings and private recovery custody; arrange the
-approved replacement, verify its minimal access, then have the authorized owner
-revoke departed access and rotate affected credentials. Recheck the release
-verification path after changes. Record redacted receipts and any missed access;
-never commit recovery material or assume all sessions were revoked from one UI.
+Ways to make this real (all **Mario decides**):
+
+- Name a successor in GitHub (**Settings → Account → Successor settings**) so a
+  trusted person can keep the repository going if Mario's account is ever left
+  unattended.
+- Move the repository into a GitHub organization with two owners, so access does
+  not depend on one personal account.
+- Add a second owner to the five npm packages once someone is trained.
+- Keep recovery codes and a short private contact list somewhere a backup can
+  reach in an emergency.
+
+## Becoming a maintainer
+
+1. Get a few pull requests accepted (the [starter tasks](starter-backlog.md) are
+   a good start).
+2. Review a core change: explain what it changes for users, what could break, and
+   which test would catch it.
+3. Run the [release and recovery drill](maintainer-drill.md) yourself, without
+   the original author doing it for you.
+4. Mario decides on a role and grants the smallest access that fits it.
+
+Each step needs the person's consent, and only a human decides a promotion.
+Never contact possible contributors on FLUJO's behalf without Mario's approval.
 
 ## Security and release tabletop
 
-Use the current [security policy](../../SECURITY.md) and Security owner's
-private-reporting contract (tracked in #565).
-Reporting-channel availability, supported releases, response targets and real
-triage ownership must be verified there. Until available, ask the owner for a
-private channel without posting exploit details publicly.
-
-With synthetic information, exercise: private report intake, affected supported
-versions/profile, severity and escalation decision, reproduction, restricted fix
-review, candidate verification, advisory/release decision, and follow-up. Use
-[the existing release procedure](../npm-release.md), including exact artifact
-integrity and failed-job-only resume after partial publication. A checksum
-mismatch or missing exact-SHA check stops the release; do not publish a replacement
-version just to hide an unresolved partial failure. The rehearsal performs no
-publication or advisory creation. Retain operator/observer, decision times,
-redacted steps, missed targets and remaining account-access gaps. An actual private
-report and production incident remain separate evidence.
+A practice run with made-up data, so a backup has done it once before it
+matters: receive a private report, decide how bad it is and which versions it
+affects, reproduce it, review a fix privately, verify a release candidate, decide
+on an advisory, follow up. Use the [release procedure](../npm-release.md),
+including its rule to rerun only failed jobs after a partial publish. The
+practice run publishes nothing. Write down who took part, the decisions, the
+times and what was missing.
 
 ## Evidence record
 
-Proposed targets from #576: **two additional independent human maintainers** able
-to review a core change and perform a disposable release/recovery drill; **three
-non-author humans** with substantive accepted work/review across **90 elapsed
-days**; critical duties with trained, verified backups; a useful first PR from
-the published setup without hidden files/private knowledge. #564 must record
-agreement before these targets are treated as acceptance.
+The audit target in #576 counts people, not commits: two more maintainers who
+can review a core change and run the drill, and three or more people outside the
+author who make accepted contributions or reviews over 90 days. Automated
+commits, bots and stars do not count.
 
-Current measured count is **not collected**, not zero inferred from repository
-history. No observation start/end has been agreed or measured. A simulated window
-or a burst of PRs cannot establish elapsed sustained activity. Stars, posts,
-automated commits and test counts never substitute for these denominators.
-
-Copy this form per consenting participant/event into the agreed evidence ledger:
+Keep one line per event, with the person's consent, in the #576 issue or a
+private list:
 
 ```text
-Event ID / kind: onboarding | contribution | review | drill | access-verification
-Human identity/reference (consented public handle or private evidence ID):
-Original author? Independent human? Bot assistance and actual human scope:
-Consent date, retention scope and private reference:
-Role requested / accountable owner / trained backup:
-Observed at (UTC), observer, help/interventions, unsuccessful attempts:
-Source SHA / package version / artifact identity + checksum (where relevant):
-Accepted PR / substantive review URL and explanation of contribution:
-Commands / raw evidence location + checksum / failures / skips:
-Drill scope: source rehearsal | installed release | human-operated
-Access exercised, owner authorization, redacted receipt, recovery reference:
-Outcome, limitations, missing gates, next recheck:
-Observation start/end (actual elapsed time), eligible denominator and activity dates:
-Rubric agreement URL / independent reviewer decision (pending unless observed):
+Date | Person (public handle, with consent) | Kind: first PR, review, drill, access check | Link | Help they needed | Notes
 ```
 
-Review records monthly during the agreed window. Keep accepted changes, reviews,
-drills and sustained participation as separate measures; count each unique human
-once within the relevant denominator. The independent assessor decides the grade.
+Count each person once per measure. A gap stays visible until it is closed.
+
+## Mario's checklist
+
+Only Mario can do these. Tick them in
+[#576](https://github.com/mario-andreschak/FLUJO/issues/576).
+
+- [ ] Confirm or change this draft: decision levels, answer times, supported
+      releases.
+- [ ] Decide where to invite contributors (README, Discord, social posts) and
+      approve the invitation text below.
+- [ ] Find a second maintainer and a security backup; grant access only after
+      the steps above (also tracked in #565).
+- [ ] Name a GitHub account successor, or move the repository into an
+      organization with two owners.
+- [ ] Add a second npm owner once someone is trained.
+- [ ] Store recovery codes and emergency contacts where a backup can reach them.
+- [ ] Decide whether to add a code of conduct; it needs a contact person for
+      reports.
+
+Invitation draft (not sent):
+
+> FLUJO is looking for people who want to help. Start with a small task from
+> the starter list; you need no AI account. If you enjoy it, we would like to
+> train one or two people to review changes and run releases. Nothing is
+> granted until you agree to a role.

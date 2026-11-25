@@ -143,8 +143,11 @@ not kept current.
   `Flujo Agent`, 5 from Mario and 1 from one outside person. Of the 420 pull
   requests merged in that time, 349 came from `flujo-app`, 70 from Dependabot
   and 1 from that outside person. 674 stars,
-  92 forks, 6 watchers. Every role in the maintainer table reads "Not recorded".
-  No open issue carries a `good first issue` label.
+  92 forks, 6 watchers. No account or duty in the maintainer access table has a
+  backup person. On the cleanup branch (#576): the contributor guide was walked through on
+  Windows and fixed, five `good first issue` issues are open (#1438–#1442), and
+  the [maintainership basics](../contributing/maintainership.md) are a draft
+  waiting for Mario's decisions.
 - **Missing:** two more human maintainers and three or more outside contributors
   over 90 days. Automation cannot supply these.
 

@@ -1,7 +1,12 @@
 const path = require('node:path');
 const { realpathSync } = require('node:fs');
 const { spawn } = require('node:child_process');
-const { assertLocalTestDependencies } = require('./local-test-dependencies.cjs');
+const {
+  assertLocalTestDependencies,
+  assertSupportedTestRuntime,
+  formatUnbuiltMcpNote,
+  unbuiltMcpPackages,
+} = require('./local-test-dependencies.cjs');
 const EXPECTED_TEST_FILES_ENV = 'FLUJO_JEST_EXPECTED_TEST_FILES';
 
 const root = path.resolve(__dirname, '..');
@@ -134,11 +139,14 @@ class SelectionReporter {
 function main() {
   let dependencies;
   try {
+    assertSupportedTestRuntime();
     dependencies = assertLocalTestDependencies(root);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   }
+  const unbuilt = unbuiltMcpPackages(root);
+  if (unbuilt.length > 0) process.stderr.write(`${formatUnbuiltMcpNote(unbuilt)}\n`);
 
   const localBin = path.join(dependencies.nodeModules, '.bin');
   const { jestArgs, env: runnerEnv } = partitionRunnerFlags(

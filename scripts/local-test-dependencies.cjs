@@ -134,17 +134,80 @@ function assertLocalTestDependencies(rootDir) {
   return result;
 }
 
+const NODE_RUNTIME_MODULE = path.join(__dirname, '..', 'bin', 'node-runtime.mjs');
+
+function loadNodeRuntime() {
+  try {
+    return require(NODE_RUNTIME_MODULE);
+  } catch (error) {
+    // Node.js releases before 20.19 and 22.12 cannot load an ES module with require().
+    if (error && error.code === 'ERR_REQUIRE_ESM') return null;
+    throw error;
+  }
+}
+
+/**
+ * Tests run on the same Node.js versions as the app. An older Node.js only
+ * warns during `npm ci`, then breaks tests far away from the cause.
+ * Returns the reason and the fix, or null when this Node.js is supported.
+ */
+function unsupportedTestRuntime(version = process.versions.node, executable = process.execPath) {
+  const runtime = loadNodeRuntime();
+  if (runtime && runtime.isSupportedNodeRuntime(version)) return null;
+  const detail = runtime
+    ? `${runtime.nodeRuntimeDiagnostic(version, executable)}\n\n${runtime.nodeRuntimeManualSteps()}`
+    : `Node.js v${version} at ${executable} is too old. Use a version allowed by "engines" in package.json.`;
+  return `FLUJO tests need a supported Node.js.\n${detail}`;
+}
+
+function assertSupportedTestRuntime(version, executable) {
+  const reason = unsupportedTestRuntime(version, executable);
+  if (reason === null) return;
+  const error = new Error(reason);
+  error.code = 'UNSUPPORTED_NODE_RUNTIME';
+  throw error;
+}
+
+/** Bundled MCP packages under `mcp-servers/` whose `dist/index.js` has not been built yet. */
+function unbuiltMcpPackages(rootDir) {
+  const serversRoot = path.join(path.resolve(rootDir), 'mcp-servers');
+  let entries;
+  try {
+    entries = fs.readdirSync(serversRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(serversRoot, entry.name, 'package.json')))
+    .filter((entry) => !fs.existsSync(path.join(serversRoot, entry.name, 'dist', 'index.js')))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function formatUnbuiltMcpNote(names) {
+  return `Note: the bundled MCP packages are not built yet (${names.join(', ')}). `
+    + 'Tests that create a workspace fail with "ENOENT ... mcp-servers/<name>/dist" until you run `npm run build:mcp` once.';
+}
+
 module.exports = {
   REQUIRED_TEST_ARTIFACTS,
   assertLocalTestDependencies,
+  assertSupportedTestRuntime,
   formatDependencyError,
+  formatUnbuiltMcpNote,
   inspectLocalTestDependencies,
+  unbuiltMcpPackages,
+  unsupportedTestRuntime,
 };
 
 if (require.main === module) {
   try {
-    const result = assertLocalTestDependencies(path.resolve(__dirname, '..'));
+    const root = path.resolve(__dirname, '..');
+    assertSupportedTestRuntime();
+    const result = assertLocalTestDependencies(root);
     process.stdout.write(`Local test dependencies are complete in ${result.root}.\n`);
+    const unbuilt = unbuiltMcpPackages(root);
+    if (unbuilt.length > 0) process.stdout.write(`${formatUnbuiltMcpNote(unbuilt)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

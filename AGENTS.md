@@ -10,6 +10,12 @@ development checkout on `main`; remove temporary branches after delivery.
 
 `npm run check:repo-hygiene` enforces the file rules above.
 
+# Issues kept for newcomers
+
+Leave issues labelled `good first issue` to first-time human contributors. Do
+not fix them in an agent session unless Mario asks for that exact issue. When
+one closes, open a replacement and update `docs/contributing/starter-backlog.md`.
+
 # Corrections become checks
 
 When a mistake comes back, or a reviewer corrects one, fix it where it cannot
@@ -49,6 +55,7 @@ workaround.
 | Effects, refs and state follow React's rules | `react-hooks/*` in `eslint.config.mjs` |
 | `backend`, `frontend` and `shared` import only what their layer allows | `__tests__/architecture/importBoundaries.test.ts` |
 | Repository hygiene | `scripts/check-repo-hygiene.mjs` |
+| Tests run only on a Node.js version the app supports | `assertSupportedTestRuntime` in `scripts/local-test-dependencies.cjs`; `__tests__/scripts/localTestDependencies.test.ts` |
 | Every page has exactly one feature map entry | `scripts/check-feature-map.mjs` |
 | Every API route has one multi-user kind (`workspace`, `host`, `admin`, `account`, `protocol`); routes that start programs are `host` or `admin` | `__tests__/accounts/routeCapabilities.test.ts` |
 | Persona runtime cleanup writes only with a grant from the rollout switches | `PersonaRuntimeRetentionWriteGrant` argument of the compactors in `compactRuntime.ts`; `personaRuntimeRetentionSweep.test.ts` |
