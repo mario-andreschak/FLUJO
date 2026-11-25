@@ -21,8 +21,12 @@ jest.mock('@/backend/services/mcp', () => {
   };
   return { mcpService: new Proxy(known, { get: (target, name: string) => target[name] ?? (async () => ({})) }) };
 });
+const mockStoredFlows = new Map<string, unknown>();
 jest.mock('@/backend/services/flow', () => ({
-  flowService: { getFlow: async () => null, loadFlows: async () => [] },
+  flowService: {
+    getFlow: async (id: string) => mockStoredFlows.get(id) ?? null,
+    loadFlows: async () => [...mockStoredFlows.values()],
+  },
 }));
 jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowForRun: async () => ({ isRunnable: true, issues: [] }),
@@ -41,6 +45,9 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { getHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
 import { continueHumanTask } from '@/backend/services/humanTasks/continueHumanTask';
 import { sweepHumanTasks } from '@/backend/services/humanTasks/humanTaskSweep';
+import { getPendingApproval, putPendingApproval } from '@/backend/services/scheduler/pendingApprovals';
+import { flowToolsCallTool } from '@/backend/services/mcp/flowTools';
+import { buildFlowToolNameMap } from '@/shared/utils/flowToolNaming';
 
 jest.setTimeout(30_000);
 
@@ -421,6 +428,37 @@ describe('a Human step', () => {
       expect(result.status).toBe('error');
       expect(result.outputText).not.toMatch(/^Sent/);
     });
+  });
+
+  it('clears a scheduled run from the approval inbox once its answer lets it finish', async () => {
+    const conversationId = 'scheduled';
+    await start(conversationId, draftReviewSend(conversationId, { mode: 'approval', prompt: 'Send?' }, 'Sent.'), { source: 'schedule' });
+    await putPendingApproval({
+      approvalId: conversationId, conversationId, plannedExecutionId: 'exec-1', flowId: conversationId,
+      runId: 'run-1', triggerSummary: 'Schedule', pendingToolCalls: [], createdAt: new Date().toISOString(),
+    });
+    const { view } = waitingCall(conversationId);
+    const state = stateOf(conversationId);
+    decideHumanTask(state, { requestId: view.requestId, accept: true, answer: { digest: view.digest }, channel: 'api' });
+    await saveItem(`conversations/${conversationId}` as StorageKey, state);
+
+    expect(await continueHumanTask(conversationId, { requestId: view.requestId })).toMatchObject({ status: 'continued', runStatus: 'completed' });
+    expect(await getPendingApproval(conversationId)).toBeNull();
+  });
+
+  it('ends an MCP flow tool call with a plain error instead of an empty success', async () => {
+    const definition = draftReviewSend('mcp-tool', { mode: 'approval', prompt: 'Send?' });
+    mockStoredFlows.set(definition.id, definition);
+    try {
+      const toolName = buildFlowToolNameMap([{ id: definition.id, name: definition.name }]).get(definition.id)!;
+
+      const result = await flowToolsCallTool(toolName, { input: 'Go.' });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toMatch(/Human step/);
+    } finally {
+      mockStoredFlows.delete(definition.id);
+    }
   });
 
   it('counts as a step that needs a person, so automations save such a run', () => {

@@ -32,6 +32,9 @@ import { runFlow } from '@/backend/execution/flow/runFlow';
 import { GET as list } from '@/app/api/human-tasks/route';
 import { GET as read, POST as answer } from '@/app/api/human-tasks/[requestId]/route';
 import { parseHumanTaskCall } from '@/utils/shared/humanStep';
+import { getHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 jest.setTimeout(30_000);
 
@@ -171,6 +174,18 @@ describe('/api/human-tasks', () => {
 
     expect((await post(view.requestId, { action: 'decline' })).status).toBe(403);
     expect((await open(view.requestId)).status).toBe(403);
+  });
+
+  it('stops listing a step whose run ended, and remembers it as cancelled', async () => {
+    const view = await waitingStep('ended');
+    const state = FlowExecutor.conversationStates.get('ended')!;
+    state.status = 'error';
+    await saveItem('conversations/ended' as StorageKey, state);
+
+    const body = await (await list(new Request('http://localhost/api/human-tasks') as never)).json();
+
+    expect(body.tasks).toEqual([]);
+    expect(await getHumanTaskEntry(view.requestId)).toMatchObject({ status: 'cancelled' });
   });
 
   it('returns 404 for a step it does not know', async () => {

@@ -87,6 +87,15 @@ export interface HumanDecisionInput {
   now?: Date;
 }
 
+/**
+ * Whether a conversation still waits for this step, or holds an answer it has not used
+ * yet. A run that ended (cancelled, failed, finished) waits for nothing any more.
+ */
+export function isHumanTaskOpen(state: Pick<SharedState, 'humanTask' | 'status'> | undefined, requestId: string): boolean {
+  return state?.humanTask?.requestId === requestId
+    && (state.status === 'awaiting_tool_approval' || state.status === 'running');
+}
+
 /** The waiting Human step this answer is for, if any. */
 export function findHumanTask(state: Pick<SharedState, 'humanTask'>, ids: { toolCallId?: string; requestId?: string }): HumanTaskState | undefined {
   const task = state.humanTask;

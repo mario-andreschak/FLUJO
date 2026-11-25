@@ -5,6 +5,7 @@ import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { isHumanTaskOpen } from '@/backend/execution/flow/humanTask';
 import {
   listHumanTaskEntries,
   syncHumanTaskEntry,
@@ -47,7 +48,7 @@ async function GET_handler(request: Request) {
           continue;
         }
         if (!state || isPersonaOwnedConversationState(state)) strict = true;
-        if (state?.humanTask?.requestId !== entry.requestId) {
+        if (!isHumanTaskOpen(state, entry.requestId)) {
           const applied = state?.humanTaskLog?.find((record) => record.requestId === entry.requestId);
           await syncHumanTaskEntry(() => updateHumanTaskEntry(entry.requestId, applied
             ? { status: 'applied', outcome: applied.outcome, decisionId: applied.decisionId, decidedAt: applied.decidedAt, finishedAt: new Date().toISOString() }

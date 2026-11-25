@@ -2,6 +2,7 @@ import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { isEncryptionLocked } from '@/utils/encryption/secure';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isHumanTaskOpen } from '@/backend/execution/flow/humanTask';
 import { continueHumanTask } from './continueHumanTask';
 import {
   listHumanTaskEntries,
@@ -24,7 +25,7 @@ export interface HumanTaskSweepReport {
 /** Put a list entry right when its conversation no longer waits for that step. */
 async function repairEntry(entry: HumanTaskIndexEntry, now: Date): Promise<boolean> {
   const state = await loadConversationState(entry.conversationId).catch(() => undefined);
-  if (state?.humanTask?.requestId === entry.requestId) return false;
+  if (isHumanTaskOpen(state, entry.requestId)) return false;
   const applied = state?.humanTaskLog?.find((record) => record.requestId === entry.requestId);
   await syncHumanTaskEntry(() => updateHumanTaskEntry(entry.requestId, applied
     ? { status: 'applied', outcome: applied.outcome, decisionId: applied.decisionId, decidedAt: applied.decidedAt, finishedAt: now.toISOString() }
