@@ -30,7 +30,7 @@ jest.mock('@/utils/logger', () => ({
   createLogger: () => ({ verbose: jest.fn(), debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() }),
 }));
 
-type Block = { type: string; citations?: unknown[]; [key: string]: unknown };
+type Block = { type: string; citations?: unknown[] | null; [key: string]: unknown };
 type RequestBody = {
   model: string;
   stream?: boolean;
@@ -315,7 +315,9 @@ describe('streaming and prompt caching', () => {
     }));
     const choice = result.completion.choices[0];
     expect(choice.message.content).toBe('Hi 🌻');
-    expect(choice.message.tool_calls?.[0].function).toEqual({ name: 'lookup', arguments: '{"q":"x"}' });
+    expect(choice.message.tool_calls).toEqual([
+      { id: 'toolu_1', type: 'function', function: { name: 'lookup', arguments: '{"q":"x"}' } },
+    ]);
     expect(onModelDelta.mock.calls.map(([delta]) => delta.contentDelta).filter(Boolean)).toEqual(['Hi 🌻']);
     expect(result.completion.usage).toEqual({
       prompt_tokens: 112, completion_tokens: 4, total_tokens: 116,
