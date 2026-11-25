@@ -23,6 +23,7 @@ import BackupRoundedIcon from '@mui/icons-material/BackupRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import DnsRoundedIcon from '@mui/icons-material/DnsRounded';
+import GroupRoundedIcon from '@mui/icons-material/GroupRounded';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import LanguageRoundedIcon from '@mui/icons-material/LanguageRounded';
 import MicRoundedIcon from '@mui/icons-material/MicRounded';
@@ -48,11 +49,13 @@ import LanguageSettings from './LanguageSettings';
 import NetworkExposureSettings from './NetworkExposureSettings';
 import RuntimeEnvironmentSettings from './RuntimeEnvironmentSettings';
 import McpStartupSettings from './McpStartupSettings';
+import UserAccountsSettings from './UserAccountsSettings';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 
 type SettingsSectionId =
   | 'network'
+  | 'users'
   | 'modelAccess'
   | 'runtimeEnv'
   | 'mcpStartup'
@@ -89,6 +92,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     descriptionKey: 'settings.section.networkDescription',
     icon: PublicRoundedIcon,
     component: NetworkExposureSettings,
+  },
+  {
+    id: 'users',
+    titleKey: 'settings.section.users',
+    descriptionKey: 'settings.section.usersDescription',
+    icon: GroupRoundedIcon,
+    component: UserAccountsSettings,
   },
   {
     id: 'modelAccess',
@@ -188,7 +198,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: 'security',
     titleKey: 'settings.category.security',
     descriptionKey: 'settings.category.securityDescription',
-    sectionIds: ['network', 'modelAccess', 'runtimeEnv', 'globalEnv', 'encryption', 'backup'],
+    sectionIds: ['network', 'users', 'modelAccess', 'runtimeEnv', 'globalEnv', 'encryption', 'backup'],
   },
   {
     id: 'experience',

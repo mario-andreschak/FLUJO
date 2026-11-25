@@ -1,4 +1,4 @@
-import { isValidWorkspaceName } from '@/frontend/utils/workspaceSelection';
+import { DEFAULT_WORKSPACE, isValidWorkspaceName } from '@/frontend/utils/workspaceSelection';
 
 /** How long discovery keeps retrying slow or failing answers before it shows an error (AGENTS.md: resilience over refusal). */
 export const DISCOVERY_PATIENCE_MS = 60_000;
@@ -15,6 +15,10 @@ interface DiscoveryResponse {
 export type DiscoveryOutcome =
   | { kind: 'ready'; names: Set<string> }
   | { kind: 'owner-auth' }
+  /** Multi-user mode is on and this browser is not signed in. */
+  | { kind: 'account-sign-in' }
+  /** Multi-user mode is on but the accounts file on the server is damaged; `message` is the server's plain answer. */
+  | { kind: 'accounts-damaged'; message: string }
   | { kind: 'unavailable' }
   | { kind: 'cancelled' };
 
@@ -32,6 +36,26 @@ export interface DiscoveryOptions {
 
 export function pauseAfterFailure(failures: number): number {
   return Math.min(FIRST_PAUSE_MS * 2 ** Math.max(0, failures - 1), LONGEST_PAUSE_MS);
+}
+
+async function readPayload(response: DiscoveryResponse): Promise<{ workspaces?: Array<{ name?: unknown }>; code?: unknown; error?: unknown } | null> {
+  try {
+    const payload: unknown = await response.json();
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The workspace to open when the remembered one is not in the list: the
+ * default workspace when this person has it, otherwise the first one listed.
+ * `null` when they have none (possible in multi-user mode).
+ */
+export function fallbackWorkspace(names: ReadonlySet<string>): string | null {
+  if (names.has(DEFAULT_WORKSPACE)) return DEFAULT_WORKSPACE;
+  for (const name of names) return name;
+  return null;
 }
 
 function retryAfterMs(response: DiscoveryResponse): number {
@@ -55,8 +79,19 @@ export async function discoverWorkspaces({
   while (!isCancelled()) {
     try {
       const response = await request();
-      if (response.status === 401) return { kind: 'owner-auth' };
-      const payload = (await response.json()) as { workspaces?: Array<{ name?: unknown }>; code?: unknown };
+      if (response.status === 401) {
+        const denial = await readPayload(response);
+        return denial?.code === 'ACCOUNT_SIGN_IN_REQUIRED' ? { kind: 'account-sign-in' } : { kind: 'owner-auth' };
+      }
+      const payload = await readPayload(response);
+      if (response.status === 503 && payload?.code === 'ACCOUNTS_DAMAGED') {
+        return {
+          kind: 'accounts-damaged',
+          message: typeof payload.error === 'string' && payload.error
+            ? payload.error
+            : 'Sign-in is unavailable because the accounts file on the server is damaged. An admin must fix it on the server.',
+        };
+      }
       if (response.status === 503 && payload?.code === 'WORKSPACE_LAYOUT_PREPARING') {
         failures = 0;
         failingSince = undefined;
@@ -64,8 +99,8 @@ export async function discoverWorkspaces({
         await wait(retryAfterMs(response));
         continue;
       }
-      if (!response.ok) throw new Error(`Workspace discovery failed (${response.status})`);
-      const names = (Array.isArray(payload?.workspaces) ? payload.workspaces : [])
+      if (!response.ok || !payload) throw new Error(`Workspace discovery failed (${response.status})`);
+      const names = (Array.isArray(payload.workspaces) ? payload.workspaces : [])
         .map((item) => item?.name)
         .filter(isValidWorkspaceName);
       return { kind: 'ready', names: new Set(names) };

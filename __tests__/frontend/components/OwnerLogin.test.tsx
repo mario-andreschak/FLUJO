@@ -24,6 +24,7 @@ jest.mock('@/frontend/contexts/AskFlujoContext', () => ({ AskFlujoProvider: () =
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: jest.fn(), error: jest.fn() }) }));
 
 const savedFetch = global.fetch;
+const ownerSessionCalls = () => jest.mocked(global.fetch).mock.calls.filter(([url]) => url === '/api/owner/session');
 beforeEach(() => {
   jest.clearAllMocks();
   mockPathname = '/owner/login';
@@ -109,7 +110,7 @@ test('duplicate form submissions admit one session mutation before rendering bus
   fireEvent.change(input, { target: { value: 'private-owner-bearer' } });
   const form = input.closest('form')!;
   fireEvent.submit(form); fireEvent.submit(form);
-  expect(global.fetch).toHaveBeenCalledTimes(1);
+  expect(ownerSessionCalls()).toHaveLength(1);
   resolve({ ok: true } as Response);
   await waitFor(() => expect(mockReplace).toHaveBeenCalledTimes(1));
 });
@@ -119,9 +120,85 @@ test('leaving the sign-in page aborts the mutation and ignores a late success in
   const { unmount } = render(<OwnerLoginPage />);
   fireEvent.change(screen.getByLabelText('Owner credential'), { target: { value: 'private-owner-bearer' } });
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-  const options = jest.mocked(global.fetch).mock.calls[0][1]!;
+  const options = ownerSessionCalls()[0][1]!;
   unmount(); expect(options.signal!.aborted).toBe(true);
   resolve({ ok: true } as Response);
   await waitFor(() => expect(mockReplace).not.toHaveBeenCalled());
   expect(mockRefresh).not.toHaveBeenCalled();
+});
+
+describe('multi-user mode (#574)', () => {
+  const answer = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body } as Response);
+  function serve(routes: Record<string, (init?: RequestInit) => Response | Promise<Response>>) {
+    jest.mocked(global.fetch).mockImplementation(async (input, init) => {
+      const key = `${init?.method ?? 'GET'} ${String(input)}`;
+      const route = routes[key];
+      if (!route) throw new Error(`unexpected request ${key}`);
+      return route(init);
+    });
+  }
+
+  test('keeps the owner credential page while multi-user mode is off', async () => {
+    serve({ 'GET /api/accounts/session': () => answer(200, { mode: 'off', user: null }) });
+    render(<OwnerLoginPage />);
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/accounts/session', expect.objectContaining({ credentials: 'same-origin' })));
+    expect(screen.getByRole('heading', { name: 'Owner sign in' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Owner credential')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+  });
+
+  test('signs in with a name and password and goes back to the page the person came from', async () => {
+    window.history.replaceState({}, '', `/owner/login?returnTo=${encodeURIComponent('/flows?workspace=ada-private')}`);
+    const signIn = jest.fn((_init?: RequestInit) => answer(200, { user: { id: 'u_1', name: 'ada', displayName: 'Ada' } }));
+    serve({ 'GET /api/accounts/session': () => answer(200, { mode: 'on', user: null }), 'POST /api/accounts/session': signIn });
+    render(<OwnerLoginPage />);
+    expect(await screen.findByRole('heading', { name: 'Sign in to FLUJO' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Owner credential')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pair the first owner')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'ada' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'a long enough test password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/flows?workspace=ada-private'));
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(signIn).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'POST', credentials: 'same-origin', body: JSON.stringify({ name: 'ada', password: 'a long enough test password' }),
+    }));
+    expect(screen.getByLabelText('Password')).toHaveValue('');
+  });
+
+  test('shows the server message when sign-in is refused and clears the password', async () => {
+    serve({
+      'GET /api/accounts/session': () => answer(200, { mode: 'on', user: null }),
+      'POST /api/accounts/session': () => answer(401, { error: 'The name or password is not right.', code: 'SIGN_IN_FAILED' }),
+    });
+    render(<OwnerLoginPage />);
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'ada' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'wrong test password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('The name or password is not right.');
+    expect(screen.getByLabelText('Password')).toHaveValue('');
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  test('shows who is signed in and signs out', async () => {
+    serve({
+      'GET /api/accounts/session': () => answer(200, { mode: 'on', user: { id: 'u_1', name: 'ada', displayName: 'Ada' } }),
+      'DELETE /api/accounts/session': () => answer(200, { signedIn: false }),
+    });
+    render(<OwnerLoginPage />);
+    expect(await screen.findByText('Signed in as Ada.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Signed out.');
+    expect(screen.queryByText('Signed in as Ada.')).not.toBeInTheDocument();
+  });
+
+  test.each([
+    ['the session check says so', () => answer(200, { mode: 'damaged', user: null })],
+    ['the server refuses every request', () => answer(503, { error: 'damaged', code: 'ACCOUNTS_DAMAGED' })],
+  ])('explains that sign-in is unavailable when the accounts file is damaged (%s)', async (_case, reply) => {
+    serve({ 'GET /api/accounts/session': reply });
+    render(<OwnerLoginPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('An admin must fix that file on the server.');
+    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument();
+  });
 });

@@ -1,4 +1,4 @@
-import { DISCOVERY_PATIENCE_MS, discoverWorkspaces, pauseAfterFailure } from '@/frontend/utils/workspaceDiscovery';
+import { DISCOVERY_PATIENCE_MS, discoverWorkspaces, fallbackWorkspace, pauseAfterFailure } from '@/frontend/utils/workspaceDiscovery';
 
 const ok = (names: string[]) => ({ ok: true, status: 200, json: async () => ({ workspaces: names.map((name) => ({ name })) }) });
 const failing = (status = 500) => ({ ok: false, status, json: async () => ({}) });
@@ -84,5 +84,50 @@ describe('discoverWorkspaces (#1427)', () => {
 
   it('grows the pause after each failure up to five seconds', () => {
     expect([1, 2, 3, 4, 5, 6, 12].map(pauseAfterFailure)).toEqual([250, 500, 1000, 2000, 4000, 5000, 5000]);
+  });
+
+  it('tells a signed-out person in multi-user mode apart from owner sign-in (#574)', async () => {
+    const request = jest.fn().mockResolvedValue({
+      ok: false, status: 401, json: async () => ({ error: 'Sign in to continue.', code: 'ACCOUNT_SIGN_IN_REQUIRED' }),
+    });
+    expect(await discoverWorkspaces({ request })).toEqual({ kind: 'account-sign-in' });
+    expect(request).toHaveBeenCalledTimes(1);
+
+    const unreadable = jest.fn().mockResolvedValue({ ok: false, status: 401, json: async () => { throw new SyntaxError('not json'); } });
+    expect(await discoverWorkspaces({ request: unreadable })).toEqual({ kind: 'owner-auth' });
+  });
+
+  it('stops with the server message when the accounts file is damaged (#574)', async () => {
+    const request = jest.fn().mockResolvedValue({
+      ok: false, status: 503, headers: { get: () => '30' },
+      json: async () => ({ error: 'Sign-in is unavailable because the accounts file is damaged.', code: 'ACCOUNTS_DAMAGED' }),
+    });
+    expect(await discoverWorkspaces({ request })).toEqual({
+      kind: 'accounts-damaged', message: 'Sign-in is unavailable because the accounts file is damaged.',
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps trying when a successful answer is not readable instead of reporting no workspaces', async () => {
+    const { now, wait } = clock();
+    const request = jest.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => { throw new SyntaxError('half a body'); } })
+      .mockResolvedValueOnce(ok(['default-workspace']));
+    expect(await discoverWorkspaces({ request, wait, now })).toEqual({ kind: 'ready', names: new Set(['default-workspace']) });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('fallbackWorkspace (#574)', () => {
+  it('prefers the default workspace, as in single-user mode', () => {
+    expect(fallbackWorkspace(new Set(['team-b', 'default-workspace']))).toBe('default-workspace');
+  });
+
+  it('uses the first listed workspace when this person does not have the default one', () => {
+    expect(fallbackWorkspace(new Set(['ada-private', 'team-b']))).toBe('ada-private');
+  });
+
+  it('has nothing to offer a person without workspaces', () => {
+    expect(fallbackWorkspace(new Set())).toBeNull();
   });
 });
