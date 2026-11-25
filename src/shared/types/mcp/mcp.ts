@@ -4,6 +4,7 @@ import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.
 import { StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { MCPShutdownReceipt } from './shutdown';
+import type { McpbUserConfigValue } from './mcpb';
 
 // Constants
 export const SERVER_DIR_PREFIX = 'mcp-servers';
@@ -62,13 +63,25 @@ export type MCPRuntimeHomeMode = 'inherit' | 'isolated' | 'host';
  *  - `marketplace` — installed from a curated marketplace entry (reserved).
  *  - `remote`      — a hosted sse/streamable endpoint (`serverUrl` is the reference).
  *  - `local`       — a hand-configured local server; explicitly NOT packageable.
+ *  - `mcpb`        — unpacked from an MCP bundle file (#1230); a local file, so
+ *                    NOT packageable. `userConfig` keeps the non-secret settings
+ *                    and `secretEnv` names the env entry holding each secret, so
+ *                    an upgrade can keep them.
  */
 export type MCPServerSource =
   | { type: 'github'; repositoryUrl: string; ref?: string; subdirectory?: string }
   | { type: 'registry'; registryName: string; version?: string }
   | { type: 'marketplace'; id: string }
   | { type: 'remote' }
-  | { type: 'local' };
+  | { type: 'local' }
+  | {
+    type: 'mcpb';
+    bundleName: string;
+    version: string;
+    digest: string;
+    userConfig?: Record<string, McpbUserConfigValue>;
+    secretEnv?: Record<string, string>;
+  };
 
 /**
  * Optional host-path security contract for a persisted stdio server. It is

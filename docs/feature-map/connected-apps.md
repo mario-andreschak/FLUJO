@@ -14,6 +14,7 @@ Here the user gives agents extra abilities by connecting apps (MCP tool servers)
 - `connected-apps-shared-editing`: with sign-in for several people on, "Edit server" says "<name> is editing this too…" and offers "Who changed what" (with "Restore this version"; a restore never changes stored secrets). The editor closes when it saves, so a save after someone else's opens "Someone else saved first" on the page ("Compare", "Load their version", "Save mine anyway").
 - `connected-apps-bulk`: "Select", then "Select all" and enable or disable several servers at once.
 - `connected-apps-import-export`: "Import" and "Export" menus, each offering several config formats ("<name> format").
+- `connected-apps-bundle-install`: drop an MCP bundle file (`.mcpb`, or the older `.dxt`) anywhere on the page ("Drop the .mcpb file to install it"), or choose "Import" → "MCP bundle file (.mcpb)…". The dialog "Install an MCP bundle" (or "Update <name>" when that bundle is installed) shows the name, author, "What it will run", "Trust" (signature status and warnings), "Works on", "Tools it lists", "Name in FLUJO" and "Settings"; secret settings are password fields. Nothing is unpacked or started before "Install"/"Update". The bundle goes to `mcp-servers/mcpb/<name>` in the workspace; deleting the server deletes that folder.
 - `connected-apps-apps-dashboard`: "MCP Apps Dashboard" button (accessible name "Open MCP Apps Dashboard").
 - `connected-apps-journey`: first-run guide "Your first AI + app agent" with "Inspect and test tools" and "Hide this guide".
 
@@ -31,6 +32,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. Testing a real 
 - **Open the wizard**: `node scripts/flujo-drive.mjs click /mcp --role button --name "Connect App" --then-shot apps-wizard.png` → "Let’s connect an app" with four choices.
 - **Reach a setup path**: use `steps /mcp --file <steps.json>`: click button "Connect App", click "I have connection details", then `aria` → "Where does the app run?" with "At a remote URL", "In a GitHub repository", "On this computer".
 - **Inspect a server**: `node scripts/flujo-drive.mjs aria "/mcp?server=<name>"` → the details dialog with its tabs.
+- **Install a bundle**: build a tiny bundle outside the repository (a zip holding `manifest.json` with `server.type` `node`, `mcp_config.command` `node`, `args` `["${__dirname}/server/index.js"]`, and `server/index.js`), then `steps /mcp` with `{ "do": "drop-file", "role": "heading", "name": "MCP servers", "file": "<path>.mcpb" }` (or `{ "do": "click", "role": "button", "name": "Import" }` then `{ "do": "choose-file", "role": "menuitem", "name": "MCP bundle file", "file": "<path>.mcpb" }`) → "Install an MCP bundle" with "What it will run". Click "Install" → "<name> is installed and starting." and a new card.
 - **Proof**: an ARIA snapshot and a screenshot of the server list, the wizard, or a server's details.
 
 ## Gotchas
@@ -44,5 +46,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. Testing a real 
 - When "3) Test run" of a command on this computer fails because a Python script or package, or a Node.js file or package, is missing, the red message names that cause and the fix (for example "Python could not find the script …"). Other failures show "Connection test failed. See the console for details." The server's own error is always in the console. See `docs/features/mcp/local-servers.md`.
 - Installing apps from GitHub, the marketplace or AI-assisted setup downloads and runs third-party code on the machine. Do not do that in an unattended run.
 - The search box has only a placeholder, so `fill --label` will not find it.
+- A bundle file larger than the upload limit (about 99 MB, less on computers with under 3 GB of memory) is refused with its size and the limit. A bundle signature is detected but not checked yet; signed bundles show "Signed, but FLUJO cannot check signatures yet."
+- Installing a bundle is refused for people without host access in multi-user mode, and in protected setups that allow only reviewed, preinstalled servers.
 - The main button carries `data-tour="add-mcp-server"`; the "Marketplace" tab carries `data-tour="mcp-marketplace-tab"`.
 - "Copy to a team workspace: <name>" appears only while sign-in for several people is on (Settings → "Users and sign-in"). Its dialog lists only workspaces the person may change; keys, passwords and sign-ins stay behind and the result lists what to enter in the team workspace. A copied app starts turned off.

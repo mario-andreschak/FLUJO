@@ -86,6 +86,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/mcp/app-consent': 'workspace',
   '/api/mcp/app-sandbox': 'workspace',
   '/api/mcp/assistant': 'workspace',
+  '/api/mcp/bundles': 'host', // unpacks an MCP bundle that then runs as a program on the server
   '/api/mcp/cancel': 'workspace',
   '/api/mcp/flujo/authoring': 'workspace',
   '/api/mcp/flujo/automation': 'workspace',

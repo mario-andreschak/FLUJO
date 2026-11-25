@@ -24,7 +24,7 @@ export const HOME = defaultDriveHome();
 const STATE_FILE = path.join(HOME, 'instance.json');
 export const EVIDENCE_DIR = path.join(HOME, 'evidence');
 const RESERVED_PORTS = new Set([4200]);
-const STEP_KINDS = new Set(['goto', 'click', 'fill', 'press', 'wait-for', 'expect-text', 'shot', 'aria']);
+const STEP_KINDS = new Set(['goto', 'click', 'fill', 'press', 'wait-for', 'expect-text', 'drop-file', 'choose-file', 'shot', 'aria']);
 
 export const USAGE = `Usage: node scripts/flujo-drive.mjs <command> [options]
 
@@ -92,7 +92,10 @@ export function validateSteps(steps) {
   steps.forEach((step, index) => {
     const where = `step ${index + 1}`;
     if (!STEP_KINDS.has(step?.do)) throw new Error(`${where}: "do" must be one of ${[...STEP_KINDS].join(', ')}`);
-    const need = { goto: ['route'], click: ['role', 'name'], fill: ['label', 'value'], press: ['key'], 'wait-for': ['role', 'name'], 'expect-text': ['text'], shot: ['out'], aria: ['out'] }[step.do];
+    const need = {
+      goto: ['route'], click: ['role', 'name'], fill: ['label', 'value'], press: ['key'], 'wait-for': ['role', 'name'],
+      'expect-text': ['text'], 'drop-file': ['role', 'name', 'file'], 'choose-file': ['role', 'name', 'file'], shot: ['out'], aria: ['out'],
+    }[step.do];
     for (const field of need) {
       if (typeof step[field] !== 'string' || !step[field]) throw new Error(`${where} (${step.do}) needs "${field}"`);
     }
@@ -361,6 +364,28 @@ export async function runStep(page, step, baseUrl, log) {
         throw new Error(`"${step.text}" did not appear on the page within ${Number(step.timeout ?? 60_000) / 1000}s.`);
       });
       break;
+    case 'drop-file': {
+      // A real drag and drop of a local file onto the element, as a person would do from the file manager.
+      const bytes = [...readFileSync(step.file)];
+      const transfer = await page.evaluateHandle(({ bytes: content, name }) => {
+        const data = new DataTransfer();
+        data.items.add(new File([new Uint8Array(content)], name));
+        return data;
+      }, { bytes, name: path.basename(step.file) });
+      const target = page.getByRole(step.role, { name: step.name, exact: step.exact ?? false }).filter({ visible: true }).first();
+      for (const type of ['dragenter', 'dragover', 'drop']) await target.dispatchEvent(type, { dataTransfer: transfer });
+      await settle(page, log);
+      break;
+    }
+    case 'choose-file': {
+      const [chooser] = await Promise.all([
+        page.waitForEvent('filechooser', { timeout: 30_000 }),
+        page.getByRole(step.role, { name: step.name, exact: step.exact ?? false }).filter({ visible: true }).first().click(),
+      ]);
+      await chooser.setFiles(step.file);
+      await settle(page, log);
+      break;
+    }
     default:
       await save(page, step.do, step.out, log);
   }

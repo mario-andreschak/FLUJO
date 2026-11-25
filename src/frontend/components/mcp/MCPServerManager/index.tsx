@@ -13,6 +13,7 @@ import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerM
 import McpConnectionWizard from './McpConnectionWizard';
 import ServerDetailsModal from './ServerDetailsModal';
 import McpAgentJourney from './McpAgentJourney';
+import { useMcpBundleInstaller } from './McpBundleInstaller';
 import McpAppsDashboard, { type McpAppsDashboardSelection } from '../McpAppsDashboard';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
 import {
@@ -51,6 +52,7 @@ import {
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
@@ -115,6 +117,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setServerFavorite,
     saveEnv
   } = useServerStatus();
+  // #1230: drop a .mcpb file on this page, or pick it from the Import menu.
+  const bundleInstaller = useMcpBundleInstaller({ onInstalled: () => { void loadServers(); } });
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showConnectionWizard, setShowConnectionWizard] = useState(false);
@@ -826,7 +830,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   );
 
   return (
-    <Box sx={{ color: 'text.primary' }}>
+    <Box sx={{ color: 'text.primary' }} {...bundleInstaller.dropZoneProps}>
       <PageHeader
         eyebrowKey="mcp.server.eyebrow"
         titleKey="mcp.server.title"
@@ -852,6 +856,16 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             open={Boolean(importMenuAnchor)}
             onClose={() => setImportMenuAnchor(null)}
           >
+            <MenuItem
+              onClick={() => {
+                setImportMenuAnchor(null);
+                bundleInstaller.openFilePicker();
+              }}
+            >
+              <ListItemIcon><UploadFileIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary={t('mcp.bundle.importMenu')} secondary={t('mcp.bundle.importMenuHint')} />
+            </MenuItem>
+            <Divider />
             {MCP_FORMATS.map((format) => (
               <MenuItem key={format.id} onClick={() => openImportDialog(format.id)}>
                 <ListItemText primary={t('mcp.server.format', { name: format.label })} />
@@ -1242,6 +1256,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           </Button>
         </DialogActions>
       </Dialog>
+
+      {bundleInstaller.element}
 
       <ServerModal
         isOpen={showAddModal}

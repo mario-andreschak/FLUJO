@@ -81,8 +81,10 @@ npm run journey:first-use                       # add --viewport 390x844 for the
 ```
 
 Step kinds are `goto`, `click`, `fill`, `press`, `wait-for`, `expect-text`,
-`shot` and `aria`. `click`, `fill` and `wait-for` find visible elements by
-ARIA role and English name (part of the name is enough). `expect-text` waits
+`drop-file`, `choose-file`, `shot` and `aria`. `click`, `fill` and `wait-for` find visible elements by
+ARIA role and English name (part of the name is enough). `drop-file` drags the
+local `file` onto the element named by `role` and `name`; `choose-file` clicks
+that element and picks `file` in the file dialog it opens. `expect-text` waits
 for text a user can see, so screen-reader-only text does not count. Never use
 CSS classes or screen positions. Add `--viewport 360x800` to check the phone
 layout.

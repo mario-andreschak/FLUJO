@@ -1,0 +1,24 @@
+{
+  "manifest_version": "0.3",
+  "name": "hello-bundle",
+  "display_name": "Hello Bundle",
+  "version": "1.0.0",
+  "description": "A tiny MCP server that says hello. Used to test installing MCP bundles in FLUJO.",
+  "author": { "name": "FLUJO tests" },
+  "license": "MIT",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": { "GREETING": "${user_config.greeting}", "HELLO_TOKEN": "${user_config.token}" }
+    }
+  },
+  "tools": [{ "name": "hello", "description": "Say hello" }],
+  "user_config": {
+    "greeting": { "type": "string", "title": "Greeting", "description": "The word used to greet.", "default": "Hello" },
+    "token": { "type": "string", "title": "Token", "description": "Any text; stored as a secret.", "sensitive": true, "required": true }
+  },
+  "compatibility": { "platforms": ["darwin", "win32", "linux"], "runtimes": { "node": ">=18" } }
+}
