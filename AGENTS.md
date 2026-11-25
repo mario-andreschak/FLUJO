@@ -71,6 +71,8 @@ workaround.
 | The shareable diagnostic report holds only versions, counts and labels from fixed lists, never names, text, paths, addresses or keys | `normalizeDiagnosticReport` in `src/shared/types/diagnosticReport.ts`; `__tests__/diagnostics/diagnosticReport.test.ts` |
 | A subscription bar never shows a made-up 0% or 100%; every known provider answer has a fixture with the text and colour it must show | `__tests__/model/fixtures/claudeAllowanceFixtures.ts`; `__tests__/frontend/components/AllowanceFixtures.test.tsx` |
 | Private approval reads wait and read again after a short-lived Windows file lock, helper failure or torn read, using `src/utils/transientFileRetry.ts`, before they refuse | `__tests__/mcp/privateApprovalRetry.test.ts` |
+| The split MCP SDK packages and Apps share one `@modelcontextprotocol/core`; bump core with client and server | `__tests__/mcp/sdkPackageAlignment.test.ts` |
+| MCP sign-in follows the 2026-07-28 authorization rules in both SDK generations (challenge first, no made-up scope, S256 checked) | `__tests__/mcp/oauthAuthorizationConformance.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 
 # Resilience over refusal

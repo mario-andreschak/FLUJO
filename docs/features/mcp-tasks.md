@@ -17,7 +17,7 @@ deployment and authorization requirements. The legacy endpoint stays synchronous
 ## Pinned protocol contract
 
 Implemented against the repository's resolved
-`@modelcontextprotocol/sdk` **1.32.1** (`dist/esm/experimental/tasks/*`), which
+`@modelcontextprotocol/sdk` **1.32.2** (`dist/esm/experimental/tasks/*`), which
 provides the legacy contract; an isolated adapter also validates the newer extension. All
 unstable SDK surface is isolated in
 [`src/backend/services/mcp/tasksProtocol.ts`](../../src/backend/services/mcp/tasksProtocol.ts);
@@ -204,7 +204,7 @@ inputs and results are not.
 
 ## Interoperability
 
-The resolved reference is `@modelcontextprotocol/sdk` 1.32.1's experimental Tasks
+The resolved reference is `@modelcontextprotocol/sdk` 1.32.2's experimental Tasks
 implementation (`experimental/tasks/server.ts` +
 `experimental/tasks/stores/in-memory.ts`), which is what an end-to-end
 interoperability suite should be run against. Classic (non-Tasks) servers over

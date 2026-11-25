@@ -4,8 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
-import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
-import { createOAuthClientProvider } from '@/backend/services/mcp/oauth';
+import { createOAuthClientProvider, startOAuthAuthorization } from '@/backend/services/mcp/oauth';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { requestOrigin } from '@/utils/http/requestOrigin';
 
@@ -14,10 +13,10 @@ const log = createLogger('api/oauth/initiate');
 /**
  * Initiate OAuth authentication for an MCP server.
  *
- * Delegates the entire discovery -> registration -> authorization dance to the MCP SDK's
- * `auth()` orchestrator (RFC 9728 protected-resource discovery, RFC 8414 authorization-server
- * discovery, CIMD with a DCR fallback, PKCE) via MCPOAuthClientProvider, instead of hand-
- * rolling each step - so this stays correct as the SDK's auth implementation evolves.
+ * Reads the server's 401 challenge first (metadata address and scopes), then delegates
+ * discovery -> registration -> authorization to the MCP SDK's `auth()` orchestrator
+ * (RFC 9728 protected-resource discovery, RFC 8414 authorization-server discovery, CIMD
+ * with a DCR fallback, PKCE) via MCPOAuthClientProvider, instead of hand-rolling each step.
  */
 async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
@@ -62,7 +61,7 @@ async function POST_handler(request: NextRequest) {
     const provider = createOAuthClientProvider(serverConfig, redirectUri);
 
     try {
-      const result = await auth(provider, { serverUrl: serverConfig.serverUrl, fetchFn: provider.oauthFetch });
+      const result = await startOAuthAuthorization(provider, serverConfig.serverUrl);
 
       if (result === 'AUTHORIZED') {
         // We already held a usable (or successfully refreshed) token - no user interaction
@@ -86,6 +85,9 @@ async function POST_handler(request: NextRequest) {
 
       if (error instanceof Error && error.name === 'OAuthIssuerRequired') {
         return NextResponse.json({ error: rawMessage, needsClientCredentials: true, needsOAuthIssuer: true, serverName }, { status: 400 });
+      }
+      if (error instanceof Error && error.name === 'OAuthPkceUnsupported') {
+        return NextResponse.json({ error: rawMessage, serverName }, { status: 400 });
       }
       if (error instanceof Error && error.name === 'OAuthAuthorizationInProgress') {
         return NextResponse.json({ error: rawMessage, serverName }, { status: 409 });

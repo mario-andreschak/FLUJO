@@ -195,4 +195,25 @@ describe('probeOAuthSupport', () => {
     expect(requestMock.mock.calls.some(([url]) => String(url).includes('127.0.0.1') || String(url).includes('169.254.169.254'))).toBe(false);
     expect(new Set(requestMock.mock.calls.map(([, , signal]) => signal)).size).toBe(1);
   });
+
+  it('follows the MCP discovery order: path metadata first, then OAuth and OpenID path insertion', async () => {
+    const pathMetadata = 'https://mcp.example.com/.well-known/oauth-protected-resource/tenant/mcp';
+    mockFetch(url => {
+      if (url === 'https://mcp.example.com/tenant/mcp') return { status: 401, headers: { 'www-authenticate': 'Bearer' } };
+      if (url === pathMetadata) return { json: { resource: 'https://mcp.example.com/tenant/mcp', authorization_servers: ['https://auth.example.com/team'] } };
+      if (url === 'https://auth.example.com/.well-known/openid-configuration/team') {
+        return { json: { registration_endpoint: 'https://auth.example.com/team/register' } };
+      }
+      return { status: 404 };
+    });
+    await expect(probeOAuthSupport('https://mcp.example.com/tenant/mcp')).resolves.toMatchObject({
+      oauthCapable: true, resourceMetadataUrl: pathMetadata, registrationEndpoint: 'https://auth.example.com/team/register',
+    });
+    expect(requestMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://mcp.example.com/tenant/mcp',
+      pathMetadata,
+      'https://auth.example.com/.well-known/oauth-authorization-server/team',
+      'https://auth.example.com/.well-known/openid-configuration/team',
+    ]);
+  });
 });

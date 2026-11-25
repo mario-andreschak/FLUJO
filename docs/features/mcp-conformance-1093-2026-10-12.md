@@ -274,3 +274,63 @@ application build pass; the build takes 329.263s. The frozen BankingMCP and Slac
 preparation runs take 6.547s and 6.858s separately. Application and dependency
 inputs remain those of main 984c17a5. Zero model calls, remote/full CI, container
 builds or installed/release qualification are performed. #1093 remains open.
+
+## November 25, 2026 recheck against the current specification
+
+The audit was checked again against today's code, the 2026-07-28 specification
+(still the latest release) and the official SDKs. Dependencies now: SDK 1.32.2,
+split client/server/core 2.4.0 (one shared core copy instead of three), Apps
+2.0.4, Tasks 0.2.2. These changes sit on the `wip-cleanup` bundle, not yet in a
+release.
+
+### Audit checklist
+
+| Audit item | Status | Proof |
+| --- | --- | --- |
+| OAuth: remember the expected issuer with the sign-in | Fixed earlier | `oauth.ts` `state()`; `oauthIssuerCallback.test.ts` |
+| OAuth: compare `iss` exactly before codes or errors; refuse a missing `iss` when advertised (GET and POST) | Fixed earlier | `api/oauth/callback/route.ts`; `oauthIssuerCallback.test.ts` |
+| OAuth: `application_type` in registration | Fixed earlier | `oauth.ts`; `oauthIssuerCallback.test.ts` |
+| OAuth: client ID metadata documents (CIMD) | Fixed earlier (#1186) | `oauthCimd.test.ts` |
+| OAuth: "Authenticate" reads the server's 401 challenge first (metadata address and scopes) | **Fixed now** | `startOAuthAuthorization`; `oauthAuthorizationConformance.test.ts`, `oauthIssuerRecoveryRoute.test.ts` |
+| OAuth: no made-up `read` scope when the server names none | **Fixed now** | `configuredOAuthScope`; `oauthAuthorizationConformance.test.ts` (both SDKs) |
+| OAuth: step-up asks again for scopes the same server already granted | **Fixed now** | `redirectToAuthorization`; same test |
+| OAuth: refuse to start sign-in unless the server lists S256 PKCE (refresh of an existing grant still works) | **Fixed now** | `state()`; same test |
+| OAuth: servers without protected resource metadata whose issuer is the bare origin | **Fixed now** (was refused as an issuer mismatch) | `issuerMatchesDiscovery`; same test |
+| OAuth: `resource` in authorization, code and refresh requests | Checked (SDK behaviour, now locked by a test) | same test |
+| OAuth: discovery order (path metadata, then root; OAuth then OpenID) | SDK already correct; the capability preview probe **fixed now** | `oauthProbe.ts`; `oauthProbe.test.ts` |
+| OAuth: real code exchange and refresh with a third-party provider | **Open: needs Mario** | see "What is left" |
+| Sampling: requested, policy and model token caps; real stop reason | Fixed earlier (#1119, live check #1157) | `sampling.test.ts` |
+| Sampling/elicitation: v2 handlers keep request context | Fixed earlier | `betaClient.ts` |
+| Errors: same codes and data from both SDK generations | Fixed earlier | `protocolErrors.ts`; `conformanceAdapters.test.ts` |
+| Tool arguments: explicit `null` kept | Fixed earlier | `toolArguments.ts`; `conformanceAdapters.test.ts` |
+| Tasks: first-round input, opaque state, fresh IDs, no repeated effects | Fixed earlier | `tasksExtensionSession.test.ts`, `modernTasksDispatch.test.ts` |
+| Tasks: schema parameter headers and output validation | Fixed earlier | `conformanceAdapters.test.ts` |
+| Tasks: restart, owner revocation | Fixed earlier (#1156) | built-app receipt above |
+| Catalogs: every page of resources, templates, prompts and tools; repeated cursor stops | Fixed earlier | `catalogPagination.ts`, `toolDiscovery.ts`; `conformanceAdapters.test.ts`, `toolDiscoveryPagination.test.ts` |
+| Modern subscriptions | Fixed earlier (#1158) | `modernSubscriptions.test.ts` |
+| Cancellation and progress through routes and the proxy; total deadline | Fixed earlier | `proxyForward.test.ts`; `tools.ts` `maxTotalTimeout` |
+| Modern HTTP separate from Tasks; Skills Final in both clients; Apps docs and browser checks | Fixed earlier (#1119, #1153, #1155, #1160, #1161) | sections above |
+| One shared `@modelcontextprotocol/core` | **Fixed now** | `sdkPackageAlignment.test.ts` |
+| Modern-only stdio | Deliberately not supported until FLUJO owns that process lifecycle | boundary table above |
+| Installed Windows/Linux and combined release checks | **Open: release pre-flight** | not run in this bundle |
+
+### Deliberate choices
+
+- FLUJO sends the `resource` parameter only when the server publishes protected
+  resource metadata, like both official SDKs. Servers without it predate the
+  current rules, and an unexpected `resource` can break their sign-in.
+- The S256 check refuses only new sign-ins. A server that never listed S256 keeps
+  refreshing grants that already exist. All providers checked on November 25
+  (Slack, Asana, GitHub, Linear, Notion, Atlassian, Sentry, Stripe) list S256.
+- The official conformance tool (`@modelcontextprotocol/conformance` 0.1.16, MIT)
+  exists. Its client mode needs a FLUJO command-line client that drives the real
+  sign-in code with private storage; its server mode needs a running FLUJO. Neither
+  fits this bundle, so no script was added. The scripted tests above cover the same
+  authorization rules for both SDK generations.
+
+### What is left
+
+- Mario: finish one real sign-in and one refresh with a third-party provider
+  (the Slack "Allow" page is ready; it also accepts FLUJO's terms, so a person
+  must click it).
+- Release pre-flight: installed Windows/Linux and combined release checks.

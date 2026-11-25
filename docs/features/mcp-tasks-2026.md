@@ -2,7 +2,7 @@
 
 FLUJO supports the official Tasks extension on negotiated `2026-07-28` remote
 connections, with `@modelcontextprotocol/ext-tasks` pinned to **0.2.2** and the
-split client/server SDKs at **2.3.1**. The existing SDK1 adapter remains available
+split client/server/core SDKs at **2.4.0**. The existing SDK1 adapter remains available
 for 2025-era servers. Task creation is never retried after an ambiguous failure.
 
 The modern extension uses a host-owned raw dispatcher and request framing on

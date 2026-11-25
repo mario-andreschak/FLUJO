@@ -14,7 +14,8 @@ import { MCPOAuthClientProvider, MCP_OAUTH_STATE_TTL_MS } from '@/backend/servic
 const issuer = 'https://auth.example.test';
 const callback = 'http://localhost:4200/api/oauth/callback?workspace=default-workspace';
 const discovery: OAuthDiscoveryState = { authorizationServerUrl: issuer,
-  authorizationServerMetadata: { issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, response_types_supported: ['code'] } };
+  authorizationServerMetadata: { issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, response_types_supported: ['code'],
+    code_challenge_methods_supported: ['S256'] } };
 let fixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
 let stored: MCPStreamableConfig;
 beforeEach(async () => {
