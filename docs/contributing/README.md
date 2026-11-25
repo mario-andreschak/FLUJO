@@ -154,7 +154,7 @@ continuous integration (CI) runs the full suite on every pull request.
 | --- | --- |
 | Any code | The test files for it: `node scripts/run-local-jest.cjs <test files> --runInBand` |
 | Any code | Lint only your files: `npx eslint <files>`, then `npm run lint:ratchet` |
-| TypeScript | `npm run typecheck` (several minutes) |
+| TypeScript | `npm run typecheck` (about 3 minutes) |
 | A page in `src/app` | `npm run check:feature-map`, and update its entry in `docs/feature-map/` |
 | An API route added or removed | `node scripts/generate-api-inventory.mjs` |
 | `mcp-servers/` | `npm run build:mcp` and `npm run test:mcp-process-boundary` |
