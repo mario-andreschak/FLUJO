@@ -51,6 +51,18 @@ describe('runtime environment settings file', () => {
     });
   });
 
+  it('keeps Unicode line and paragraph separators escaped on one line', async () => {
+    const value = 'host\u2028one,host\u2029two';
+    await writeRuntimeEnvironmentFile({ FLUJO_EXTRA_LOCAL_HOSTS: value });
+
+    const contents = await fs.readFile(runtimeEnvironmentFile(), 'utf8');
+    expect(contents).not.toMatch(/[\u2028\u2029]/);
+    expect(contents).toContain('FLUJO_EXTRA_LOCAL_HOSTS="host\\u2028one,host\\u2029two"');
+    await expect(readRuntimeEnvironmentFile()).resolves.toMatchObject({
+      configured: { FLUJO_EXTRA_LOCAL_HOSTS: value },
+    });
+  });
+
   it('removes blank managed values and rejects unknown names', async () => {
     await writeRuntimeEnvironmentFile({ FLUJO_PORT: '4310' });
     await writeRuntimeEnvironmentFile({ FLUJO_PORT: '' });
