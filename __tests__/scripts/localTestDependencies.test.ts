@@ -4,18 +4,24 @@ import path from 'node:path';
 
 const {
   REQUIRED_TEST_ARTIFACTS,
+  assertSupportedTestRuntime,
   inspectLocalTestDependencies,
+  unbuiltMcpPackages,
+  unsupportedTestRuntime,
 } = require('../../scripts/local-test-dependencies.cjs') as {
   REQUIRED_TEST_ARTIFACTS: ReadonlyArray<{
     name: string;
     lockKey: string;
     relativePath: string;
   }>;
+  assertSupportedTestRuntime(version?: string, executable?: string): void;
   inspectLocalTestDependencies(root: string): {
     root: string;
     jestBin: string;
     issues: string[];
   };
+  unbuiltMcpPackages(root: string): string[];
+  unsupportedTestRuntime(version?: string, executable?: string): string | null;
 };
 
 const {
@@ -106,6 +112,35 @@ describe('local test dependency isolation', () => {
       .toEqual(['--runInBand', 'a.test.ts']);
     expect(jestArgsFromNpm(['a.test.ts'], { NODE_ENV: 'test', npm_config_runinband: 'false' }))
       .toEqual(['a.test.ts']);
+  });
+
+  it('refuses an older Node.js before any test runs and names the fix', () => {
+    const reason = unsupportedTestRuntime('22.13.1', '/usr/local/bin/node');
+
+    expect(reason).toContain('FLUJO tests need a supported Node.js.');
+    expect(reason).toContain('v22.13.1');
+    expect(reason).toContain('/usr/local/bin/node');
+    expect(reason).toContain('22.23.4+');
+    expect(() => assertSupportedTestRuntime('20.19.0', 'node')).toThrow(
+      expect.objectContaining({ code: 'UNSUPPORTED_NODE_RUNTIME' }),
+    );
+  });
+
+  it('accepts every Node.js version the app supports', () => {
+    expect(unsupportedTestRuntime('22.23.4', 'node')).toBeNull();
+    expect(unsupportedTestRuntime('24.22.1', 'node')).toBeNull();
+    expect(() => assertSupportedTestRuntime(process.versions.node, process.execPath)).not.toThrow();
+  });
+
+  it('lists bundled MCP packages that still need npm run build:mcp', () => {
+    const servers = path.join(tempRoot, 'mcp-servers');
+    for (const name of ['shared', 'flujo', 'bash']) writeJson(path.join(servers, name, 'package.json'), { name });
+    fs.mkdirSync(path.join(servers, 'shared', 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(servers, 'shared', 'dist', 'index.js'), '', 'utf8');
+    fs.mkdirSync(path.join(servers, 'notes'), { recursive: true });
+
+    expect(unbuiltMcpPackages(tempRoot)).toEqual(['bash', 'flujo']);
+    expect(unbuiltMcpPackages(path.join(tempRoot, 'missing'))).toEqual([]);
   });
 
   it('removes ancestor node_modules bins from the child PATH', () => {
