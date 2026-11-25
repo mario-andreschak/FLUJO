@@ -54,10 +54,11 @@ it('continues on the OpenAI route after handoff projection and archives unchange
     });
     expect(result).toMatchObject({ success: true });
     expect(requests).toHaveLength(1);
+    // A local server is not OpenAI's, so the system message stays first (issue #1367).
     expect(requests[0].messages).toEqual([
+      { role: 'system', content: 'Continue the parent after its children settle.' },
       { role: 'user', content: 'Review the project.' },
       { role: 'assistant', content: 'One child failed with HTTP 400.' },
-      { role: 'system', content: 'Continue the parent after its children settle.' },
     ]);
     const files = (await fs.readdir(path.join(root, 'archives', 'wire-parent'))).filter(name => name.endsWith('.v2.json.gz'));
     expect(files).toHaveLength(1);
