@@ -104,7 +104,9 @@ rebased, closed or deleted.
   workspaces/<name>/db/history/<kind>/<id>.jsonl   Tier 1 change history per object
 ```
 
-Sketch of `accounts.json` (#573 fixes the exact schema):
+Example of `accounts.json`. The exact schema is `accountsFileSchema` in
+`src/shared/types/accounts.ts` (#573); the security rules are in
+[multi-user contracts](multi-user-contracts.md).
 
 ```json
 {
@@ -112,13 +114,16 @@ Sketch of `accounts.json` (#573 fixes the exact schema):
   "enabled": true,
   "revision": 7,
   "users": [{ "id": "u_…", "name": "anna", "displayName": "Anna",
-              "passwordHash": "scrypt-v1$…", "role": "admin", "hostAccess": true,
-              "disabled": false, "generation": 1 }],
-  "teams": [{ "id": "t_…", "name": "Sales", "generation": 1,
-              "members": [{ "userId": "u_…", "role": "owner" }] }],
-  "workspaces": { "default-workspace": { "ownerType": "user", "ownerId": "u_…" } },
-  "apiTokens": [{ "id": "…", "userId": "u_…", "digest": "…", "scopes": ["openai:execute"],
-                  "expiresAt": 0, "revokedAt": null }]
+              "passwordHash": "scrypt-v1$17$8$1$<salt>$<hash>", "role": "admin",
+              "hostAccess": true, "disabled": false, "generation": 1,
+              "createdAt": 1764000000000 }],
+  "teams": [{ "id": "t_…", "name": "Sales", "generation": 1, "createdAt": 1764000000000,
+              "members": [{ "userId": "u_…", "role": "owner", "state": "member" }] }],
+  "workspaces": { "default-workspace": { "ownerType": "user", "ownerId": "u_…",
+                                         "assignedAt": 1764000000000 } },
+  "apiTokens": [{ "id": "…", "userId": "u_…", "digest": "<sha-256 hex>",
+                  "scopes": ["openai:execute"], "issuedAt": 1764000000000,
+                  "expiresAt": 1795536000000, "revokedAt": null }]
 }
 ```
 
@@ -141,7 +146,7 @@ Rules:
 |---|---|---|
 | `src/shared/types/accounts.ts` (new) | Types and zod schemas: user, team, workspace owner, signed-in principal, capability | #573 |
 | `src/backend/services/accounts/access.ts` (new) | Pure rules: may this principal use this workspace for this action; which capability a route needs | #573 (pure, tested), wired in #574 |
-| `src/backend/services/accounts/routeCapabilities.ts` (new) | Each route's needed capability: `workspace`, `host`, `admin`, `account` (own sign-in) or `protocol` (OAuth/webhook/worker, own checks) | #573, enforced by a test in #574 |
+| `src/backend/services/accounts/routeCapabilities.ts` (new) | Each route's needed capability: `workspace`, `host`, `admin`, `account` (own sign-in) or `protocol` (OAuth/webhook/worker, own checks) | #573 with its coverage test; checked on every request from #574 |
 | `src/backend/services/accounts/store.ts`, `passwords.ts`, `sessions.ts`, `tokens.ts` (new) | Read/write `accounts/`, hashing, sessions, API tokens, mode switch | #574 |
 | `src/app/api/_workspace.ts` | After `resolveWorkspace`: ask `access.ts`, carry the principal next to the workspace in AsyncLocalStorage | #574 |
 | `src/proxy.ts` | Mode on: pages need a session cookie (otherwise go to `/owner/login`); APIs answer 401 | #574 |
@@ -194,6 +199,9 @@ Each step ends with targeted tests, lint on touched files, a commit and an issue
 comment. No step may change single-user behaviour.
 
 ### #573: contracts (no behaviour change)
+
+Built on 2026-11-25: [multi-user contracts](multi-user-contracts.md) and the
+tests in `__tests__/accounts/`.
 
 - **573-1 Types and access rules.** `src/shared/types/accounts.ts` and
   `src/backend/services/accounts/access.ts` as pure code. Unit tests for two
@@ -284,5 +292,10 @@ comment. No step may change single-user behaviour.
 | Sessions | Random token in an HttpOnly, SameSite=Lax cookie (Secure over HTTPS); only its SHA-256 digest is stored. 8 hours, like today's owner sessions. Ended by logout, password change or disabling the user. |
 | Cross-site requests | Changes need a same-origin `Origin` header, like `ownerBrowserRequestAllowed` today. |
 | Default role of a new user | Member without host access. |
+| Accounts files (#573) | Exact formats: `accountsFileSchema`, `sessionsFileSchema` and `auditEventSchema` in `src/shared/types/accounts.ts`. Unknown fields are refused; the mode needs one active admin. |
+| Session cookie (#573) | `__Host-flujo-session` over HTTPS, `flujo-session` over HTTP; `flo_a1_` tokens; see [contracts](multi-user-contracts.md#browser-sessions). |
+| API tokens (#573) | Same format and scope names as owner tokens, stored as digests, default expiry one year, never more than their person; see [contracts](multi-user-contracts.md#api-tokens). |
+| Workspace actions (#573) | `read`, `edit`, `run`, `admin`. Team members get all but `admin`; `admin` covers the workspace password, showing secrets, backup, restore, credential transfer, rename, delete and owner change. |
+| Encryption keys (#573) | Unchanged per-workspace keyrings. The sign-in password is never a key. See [contracts](multi-user-contracts.md#encryption-keys-how-each-persons-secrets-are-protected). |
 | Edit locks | In-memory lease, 60 s, renewed every 20 s; the revision check on save is the real guard. |
 | Out of scope | Public hosting for strangers, per-user OS sandboxes, Tier 2 roles, single sign-on, billing, live links between workspaces. |

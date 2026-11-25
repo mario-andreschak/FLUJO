@@ -50,6 +50,7 @@ workaround.
 | `backend`, `frontend` and `shared` import only what their layer allows | `__tests__/architecture/importBoundaries.test.ts` |
 | Repository hygiene | `scripts/check-repo-hygiene.mjs` |
 | Every page has exactly one feature map entry | `scripts/check-feature-map.mjs` |
+| Every API route has one multi-user kind (`workspace`, `host`, `admin`, `account`, `protocol`); routes that start programs are `host` or `admin` | `__tests__/accounts/routeCapabilities.test.ts` |
 | Persona runtime cleanup writes only with a grant from the rollout switches | `PersonaRuntimeRetentionWriteGrant` argument of the compactors in `compactRuntime.ts`; `personaRuntimeRetentionSweep.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 
