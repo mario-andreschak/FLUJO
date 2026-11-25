@@ -240,11 +240,11 @@ export function withWorkspaceRoute<
     if (extensionResponse === undefined) {
       const denied = isWorkerMode()
         ? assertSnapshotBearer(transportRequest)
-        : assertOwnerRequest(transportRequest);
+        : await assertOwnerRequest(transportRequest);
       if (denied) return denied;
       if (!isWorkerMode() && process.env.FLUJO_OWNER_AUTH_FILE !== undefined
           && !isOwnerProtocolException(transportRequest)) {
-        const resolved = resolveOwnerRequest(transportRequest);
+        const resolved = await resolveOwnerRequest(transportRequest);
         if (!resolved.ok) return resolved.response;
         ownerAuthorization = resolved.authorization;
       }
@@ -262,7 +262,7 @@ export function withWorkspaceRoute<
         return run();
       });
       return ownerAuthorization && selected instanceof Response
-        ? bindOwnerStream(selected, ownerAuthorization, transportRequest.signal)
+        ? await bindOwnerStream(selected, ownerAuthorization, transportRequest.signal)
         : selected;
     });
   }) as unknown as H;

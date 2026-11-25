@@ -83,14 +83,14 @@ describe('owner credentials at real proxy and handler admission', () => {
     policy.credentials[0].revokedAt = Date.now();
     persist();
     expect((await proxy(request())).status).toBe(401);
-    expect(assertOwnerRequest(request())?.status).toBe(401);
+    expect((await assertOwnerRequest(request()))?.status).toBe(401);
   });
-  it('retains validity from durable policy in a fresh module runtime', () => {
-    jest.isolateModules(() => {
+  it('retains validity from durable policy in a fresh module runtime', async () => {
+    await jest.isolateModulesAsync(async () => {
       const fresh = jest.requireActual<typeof import('@/backend/services/security/ownerAccess')>(
         '@/backend/services/security/ownerAccess',
       );
-      expect(fresh.assertOwnerRequest(request())).toBeNull();
+      expect(await fresh.assertOwnerRequest(request())).toBeNull();
     });
   });
   it('authenticates and observes revocation/corruption across fresh OS processes', () => {

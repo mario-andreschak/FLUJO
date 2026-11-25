@@ -28,7 +28,7 @@ export interface ServerTaskView extends ServerTaskMetadata {
 export interface ServerTaskExecution {
   readonly signal: AbortSignal;
   /** Call immediately before each provider/tool/workspace effect, in addition to its own consent fence. */
-  assertAuthorized(): void;
+  assertAuthorized(): Promise<void>;
   requestInput(requests: InputRequestsV2): Promise<InputResponsesV2>;
 }
 export interface ServerTaskCreation {
@@ -115,17 +115,17 @@ export class ServerTaskStore {
   }
   private now() { return (this.options.now ?? Date.now)(); }
   private key(id: string) { return `${this.filename}:${id}`; }
-  private assertAuthority(auth: OwnerRequestAuthorization, workspace: string): void {
+  private async assertAuthority(auth: OwnerRequestAuthorization, workspace: string): Promise<void> {
     let refused = true;
-    try { refused = auth.recheck(this.now()) !== null; } catch { /* Authority uncertainty denies access. */ }
+    try { refused = (await auth.recheck(this.now())) !== null; } catch { /* Authority uncertainty denies access. */ }
     if (!isValidWorkspaceName(workspace) || workspace !== getCurrentWorkspace()
       || (auth.principal.workspaceId !== undefined && auth.principal.workspaceId !== workspace)
       || !(['mcp:access', 'control:admin', 'secrets:read'] as const).every(scope => auth.principal.scopes.includes(scope))
       || auth.principal.expiresAt <= this.now()
       || refused) fail('TASK_ACCESS_DENIED');
   }
-  private owned(ledger: Ledger, auth: OwnerRequestAuthorization, workspace: string, id: string): TaskRecord {
-    this.assertAuthority(auth, workspace);
+  private async owned(ledger: Ledger, auth: OwnerRequestAuthorization, workspace: string, id: string): Promise<TaskRecord> {
+    await this.assertAuthority(auth, workspace);
     if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) fail('TASK_NOT_FOUND');
     const task = ledger.tasks.find(value => value.taskId === id);
     if (!task || task.ownerId !== auth.principal.ownerId || task.credentialId !== auth.principal.credentialId
@@ -173,11 +173,11 @@ export class ServerTaskStore {
       throw error instanceof ServerTaskError ? error : new ServerTaskError('TASK_STORAGE_UNAVAILABLE');
     }
   }
-  private async write(ledger: Ledger, guard?: () => void): Promise<void> {
+  private async write(ledger: Ledger, guard?: () => Promise<void>): Promise<void> {
     const text = boundedJson(ledger, LIMITS.ledgerBytes);
     await fs.mkdir(path.dirname(this.filename), { recursive: true, mode: 0o700 });
     await assertLinkFreeFileParent(path.dirname(path.dirname(this.filename)), this.filename);
-    try { await writeFileAtomic(this.filename, text, async () => { guard?.();
+    try { await writeFileAtomic(this.filename, text, async () => { await guard?.();
       await assertLinkFreeFileParent(path.dirname(path.dirname(this.filename)), this.filename); }); }
     catch (error) { throw error instanceof ServerTaskError ? error : new ServerTaskError('TASK_STORAGE_UNAVAILABLE'); }
   }
@@ -246,12 +246,12 @@ export class ServerTaskStore {
   }
 
   async create(auth: OwnerRequestAuthorization, workspace: string, options: ServerTaskCreation): Promise<ServerTaskMetadata & { resultType: 'task' }> {
-    this.assertAuthority(auth, workspace);
+    await this.assertAuthority(auth, workspace);
     const ttlMs = options.ttlMs ?? 10 * 60 * 1000, pollIntervalMs = options.pollIntervalMs ?? 500;
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 1000 || ttlMs > LIMITS.ttlMs
       || !Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 100 || pollIntervalMs > 60_000) fail('TASK_INPUT_INVALID');
     const task = await this.transaction(workspace, async ledger => {
-      this.assertAuthority(auth, workspace);
+      await this.assertAuthority(auth, workspace);
       // Expired terminal metadata is pruned only under the global admission lock.
       ledger.tasks = ledger.tasks.filter(record => record.expiresAt > this.now() || record.executionPending);
       const active = ledger.tasks.filter(record => record.executionPending);
@@ -270,8 +270,12 @@ export class ServerTaskStore {
     });
     const live: LiveTask = { controller: new AbortController(), authorization: auth, busy: false };
     shared.live.set(this.key(task.taskId), live);
-    const assertAuthorized = () => { live.controller.signal.throwIfAborted(); this.assertAuthority(auth, workspace);
-      if (task.expiresAt <= this.now()) fail('TASK_RETIRED'); };
+    const assertAuthorized = async () => {
+      live.controller.signal.throwIfAborted();
+      await this.assertAuthority(auth, workspace);
+      live.controller.signal.throwIfAborted();
+      if (task.expiresAt <= this.now()) fail('TASK_RETIRED');
+    };
     live.monitor = setInterval(() => {
       if (live.busy) return;
       live.busy = true;
@@ -283,10 +287,10 @@ export class ServerTaskStore {
     void Promise.resolve().then(() => runWithWorkspace(workspace, async () => {
       let released = false;
       try {
-        assertAuthorized();
+        await assertAuthorized();
         const result = await options.run({ signal: live.controller.signal, assertAuthorized,
           requestInput: requests => this.requestInput(auth, workspace, task.taskId, live, requests) });
-        assertAuthorized();
+        await assertAuthorized();
         await this.finish(auth, workspace, task.taskId, result);
         released = true;
       } catch {
@@ -314,10 +318,10 @@ export class ServerTaskStore {
         return;
       }
       let permitted = true;
-      try { this.assertAuthority(auth, workspace); } catch { permitted = false; }
+      try { await this.assertAuthority(auth, workspace); } catch { permitted = false; }
       if (permitted && result !== undefined && isRecord(result)) {
         task.payload = await this.seal(task, { result });
-        this.assertAuthority(auth, workspace);
+        await this.assertAuthority(auth, workspace);
         task.status = 'completed';
       } else { task.status = 'failed'; task.errorCode = permitted ? 'TASK_FAILED' : 'TASK_AUTH_REVOKED'; delete task.payload; }
       task.lastUpdatedAt = new Date(this.now()).toISOString();
@@ -326,12 +330,12 @@ export class ServerTaskStore {
     });
   }
   async get(auth: OwnerRequestAuthorization, workspace: string, id: string): Promise<ServerTaskView> {
-    this.assertAuthority(auth, workspace);
+    await this.assertAuthority(auth, workspace);
     return this.transaction(workspace, async ledger => {
-      const task = this.owned(ledger, auth, workspace, id), payload = await this.open(task);
+      const task = await this.owned(ledger, auth, workspace, id), payload = await this.open(task);
       if ((task.status === 'completed' && !isRecord(payload.result))
         || (task.status === 'input_required' && !isRecord(payload.inputRequests))) fail('TASK_STORAGE_UNAVAILABLE');
-      this.assertAuthority(auth, workspace);
+      await this.assertAuthority(auth, workspace);
       return { ...metadata(task), resultType: 'complete',
         ...(task.status === 'completed' ? { result: payload.result ?? {} } : {}),
         ...(task.status === 'input_required' ? { inputRequests: payload.inputRequests ?? {} } : {}),
@@ -339,9 +343,9 @@ export class ServerTaskStore {
     });
   }
   async cancel(auth: OwnerRequestAuthorization, workspace: string, id: string): Promise<{ resultType: 'complete' }> {
-    this.assertAuthority(auth, workspace);
+    await this.assertAuthority(auth, workspace);
     await this.transaction(workspace, async ledger => {
-      const task = this.owned(ledger, auth, workspace, id);
+      const task = await this.owned(ledger, auth, workspace, id);
       if (!terminal(task.status)) {
         task.status = 'cancelled'; delete task.payload; task.lastUpdatedAt = new Date(this.now()).toISOString();
         await this.write(ledger, () => this.assertAuthority(auth, workspace));
@@ -351,12 +355,12 @@ export class ServerTaskStore {
     return { resultType: 'complete' };
   }
   async update(auth: OwnerRequestAuthorization, workspace: string, id: string, responses: InputResponsesV2): Promise<{ resultType: 'complete' }> {
-    this.assertAuthority(auth, workspace);
+    await this.assertAuthority(auth, workspace);
     boundedJson(responses, LIMITS.payloadBytes);
     const ids = Object.keys(responses);
     if (ids.length > LIMITS.inputCount || ids.some(key => key.length > 128 || !key.length)) fail('TASK_INPUT_INVALID');
     await this.transaction(workspace, async ledger => {
-      const task = this.owned(ledger, auth, workspace, id);
+      const task = await this.owned(ledger, auth, workspace, id);
       // The extension acknowledges unknown/already-satisfied keys. This includes
       // a retried update whose original operation completed before its ACK arrived.
       if (task.status !== 'input_required' || ids.every(key => task.acceptedInputIds.includes(key))) return;
@@ -383,7 +387,7 @@ export class ServerTaskStore {
     // Install rejection handling before a concurrent cancellation can settle it.
     void response.catch(() => undefined);
     await this.transaction(workspace, async ledger => {
-      const task = this.owned(ledger, auth, workspace, id);
+      const task = await this.owned(ledger, auth, workspace, id);
       if (task.status !== 'working' || live.pending || ids.some(key => task.acceptedInputIds.includes(key))) fail('TASK_INPUT_INVALID');
       task.payload = await this.seal(task, { inputRequests: requests });
       task.status = 'input_required'; task.lastUpdatedAt = new Date(this.now()).toISOString();
@@ -396,7 +400,7 @@ export class ServerTaskStore {
     await this.transaction(workspace, async ledger => {
       const task = ledger.tasks.find(record => record.taskId === id);
       if (!task || terminal(task.status)) { this.retire(id); return; }
-      try { this.assertAuthority(auth, workspace); }
+      try { await this.assertAuthority(auth, workspace); }
       catch {
         task.status = 'failed'; task.errorCode = 'TASK_AUTH_REVOKED'; delete task.payload;
         task.lastUpdatedAt = new Date(this.now()).toISOString();
@@ -407,7 +411,7 @@ export class ServerTaskStore {
       if (!ids.length || ids.some(key => !Object.hasOwn(payload.inputResponses ?? {}, key))) return;
       task.status = 'working'; delete task.payload; task.lastUpdatedAt = new Date(this.now()).toISOString();
       await this.write(ledger, () => this.assertAuthority(auth, workspace));
-      this.assertAuthority(auth, workspace);
+      await this.assertAuthority(auth, workspace);
       const pending = live.pending; live.pending = undefined;
       pending.resolve(payload.inputResponses ?? {});
     });

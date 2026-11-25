@@ -30,9 +30,9 @@ const request = (token?: string) => new NextRequest('http://localhost/api/operat
   headers: token ? { authorization: `Bearer ${token}` } : {},
 });
 beforeEach(() => {
-  read.mockReset().mockResolvedValue(undefined); inspect.mockClear(); recheck.mockReset().mockReturnValue(null);
+  read.mockReset().mockResolvedValue(undefined); inspect.mockClear(); recheck.mockReset().mockResolvedValue(null);
   unlock.mockReset().mockResolvedValue(null);
-  resolve.mockReset().mockReturnValue({ ok: true, authorization: { principal: { ownerId: 'owner-a', credentialId: 'credential-a' }, recheck } });
+  resolve.mockReset().mockResolvedValue({ ok: true, authorization: { principal: { ownerId: 'owner-a', credentialId: 'credential-a' }, recheck } });
   process.env.FLUJO_WORKER_MODE = '1'; process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'fixture-control';
   delete process.env.FLUJO_OPERATIONS_RSS_BUDGET_BYTES;
   setWorkerBootstrapStatus({ state: 'ready', workspace: 'fixture-workspace' });
@@ -159,7 +159,7 @@ it('refuses a profile switch during awaited observation without returning cached
   expect(await response.json()).not.toHaveProperty('schedules');
 });
 it('requires the scoped owner resolver without anonymous fallback once an owner policy is configured', async () => {
-  process.env.FLUJO_WORKER_MODE = '0'; process.env.FLUJO_OWNER_AUTH_FILE = 'PRIVATE_POLICY'; resolve.mockReturnValueOnce({ ok: false, response: Response.json({ error: 'refused' }, { status: 503 }) });
+  process.env.FLUJO_WORKER_MODE = '0'; process.env.FLUJO_OWNER_AUTH_FILE = 'PRIVATE_POLICY'; resolve.mockResolvedValueOnce({ ok: false, response: Response.json({ error: 'refused' }, { status: 503 }) });
   expect((await GET(request())).status).toBe(503); expect(read).not.toHaveBeenCalled();
   expect(resolve).toHaveBeenCalledWith(expect.any(Request), ['control:admin', 'secrets:read']);
 });
@@ -167,7 +167,7 @@ it('retains owner attribution and fences a revoked policy after observation', as
   process.env.FLUJO_WORKER_MODE = '0'; process.env.FLUJO_OWNER_AUTH_FILE = 'PRIVATE_POLICY';
   const response = await GET(request('owner-fixture'));
   expect(await response.json()).toMatchObject({ actor: { kind: 'owner', ownerId: 'owner-a', credentialId: 'credential-a' } });
-  recheck.mockReturnValueOnce(Response.json({ error: 'refused' }, { status: 401 }));
+  recheck.mockResolvedValueOnce(Response.json({ error: 'refused' }, { status: 401 }));
   expect((await GET(request('owner-fixture'))).status).toBe(401);
 });
 it('suppresses private exception text', async () => {
@@ -186,7 +186,7 @@ it('rechecks unlock and worker readiness after awaited observations', async () =
 
 it('refuses foreign bound owner workspace before observations', async () => {
   process.env.FLUJO_WORKER_MODE = '0';
-  resolve.mockReturnValueOnce({ ok: true, authorization: { principal: {
+  resolve.mockResolvedValueOnce({ ok: true, authorization: { principal: {
     ownerId: 'owner-a', credentialId: 'credential-a', workspaceId: 'other-workspace' }, recheck } });
   expect((await GET(request('owner-fixture'))).status).toBe(403);
   expect(read).not.toHaveBeenCalled();
@@ -219,7 +219,7 @@ describe('localhost install without an owner policy', () => {
   });
   it.each(['network', 'public'])('keeps owner authentication when exposure is %s', async mode => {
     process.env.FLUJO_EXPOSURE_MODE = mode;
-    resolve.mockReturnValue({ ok: false, response: Response.json({ error: 'Unauthorized' }, { status: 401 }) });
+    resolve.mockResolvedValue({ ok: false, response: Response.json({ error: 'Unauthorized' }, { status: 401 }) });
     expect((await GET(local({ host: 'localhost:4200' }))).status).toBe(401);
     expect(resolve).toHaveBeenCalledTimes(1);
   });

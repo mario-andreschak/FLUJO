@@ -34,8 +34,8 @@ function ordinaryTaskProfile(): boolean {
     && getAuthorizedBundledFlujoWorkloadToolNames() === undefined;
 }
 
-function admitted(auth: OwnerRequestAuthorization, workspace: string): void {
-  if (workspace !== getCurrentWorkspace() || auth.recheck()) {
+async function admitted(auth: OwnerRequestAuthorization, workspace: string): Promise<void> {
+  if (workspace !== getCurrentWorkspace() || await auth.recheck()) {
     throw new ServerTaskError('TASK_ACCESS_DENIED');
   }
 }
@@ -75,28 +75,28 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
   if (!isLocalRequest(request.headers.get('host'), request.headers.get('origin'))) {
     return Response.json({ error: 'Forbidden.' }, { status: 403 });
   }
-  const resolved = resolveOwnerRequest(request, OWNER_SCOPES, { requireBearer: true });
+  const resolved = await resolveOwnerRequest(request, OWNER_SCOPES, { requireBearer: true });
   if (!resolved.ok) return resolved.response;
   const auth = resolved.authorization;
   const workspace = getCurrentWorkspace();
   const assertAuthorized = () => admitted(auth, workspace);
   const enabled = FEATURES.ENABLE_MCP_TASKS_SERVER === true && ordinaryTaskProfile();
-  const assertTasks = (ctx: ServerContext) => {
-    assertAuthorized();
+  const assertTasks = async (ctx: ServerContext) => {
+    await assertAuthorized();
     if (!enabled || FEATURES.ENABLE_MCP_TASKS_SERVER !== true || !ordinaryTaskProfile()
         || !taskCapability(ctx)) throw new ServerTaskError('TASK_ACCESS_DENIED');
   };
 
-  const handler = createMcpHandler(() => {
-    assertAuthorized();
+  const handler = createMcpHandler(async () => {
+    await assertAuthorized();
     const server = new Server({ name: 'flujo-flows', version: '3.46.3' }, {
       capabilities: { tools: {}, ...(enabled ? { extensions: { [TASKS_EXTENSION]: {} } } : {}) },
     });
     server.setRequestHandler('tools/list', async () => {
-      assertAuthorized();
+      await assertAuthorized();
       const authoring = authoringToolDefinitions();
       const listed = await flowToolsListTools();
-      assertAuthorized();
+      await assertAuthorized();
       const result = await specTypeSchemas.ListToolsResult['~standard'].validate({
         tools: [...authoring, ...listed.tools.filter(tool => !isAuthoringTool(tool.name))],
       });
@@ -108,69 +108,69 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
     // validates only synchronous results and cannot return extension task types.
     server.fallbackRequestHandler = async (rpc, ctx): Promise<Result> => {
       if (rpc.method !== 'tools/call') throw new ProtocolError(ProtocolErrorCode.MethodNotFound, 'Method not found');
-      assertAuthorized();
+      await assertAuthorized();
       const parsed = await specTypeSchemas.CallToolRequestParams['~standard'].validate(rpc.params);
       if (parsed.issues) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Invalid tool call.');
       const { name, arguments: args = {} } = parsed.value;
-      assertAuthorized();
+      await assertAuthorized();
       if (isAuthoringTool(name)) {
         const result = await authoringCallTool(name, args);
-        assertAuthorized();
+        await assertAuthorized();
         return CallToolResultV2Schema.parse({ ...result, resultType: 'complete' });
       }
 
       // Resolve an actual authored tool before creating a durable task. Unknown
       // names keep the existing synchronous business error and create no work.
       const listed = await flowToolsListTools();
-      assertAuthorized();
+      await assertAuthorized();
       const knownFlow = listed.tools.some(tool => tool.name === name);
       if (enabled && knownFlow && taskCapability(ctx)) {
         try {
-          assertTasks(ctx);
+          await assertTasks(ctx);
           if (args.confirm === true && !formCapability(ctx)) return {
             resultType: 'complete', isError: true,
             content: [{ type: 'text', text: 'Confirmation requires negotiated form elicitation.' }],
           };
           const task = await serverTaskStore.create(auth, workspace, {
             run: async (execution) => {
-              const assertTaskAuthorized = () => {
-                execution.assertAuthorized();
-                assertTasks(ctx);
+              const assertTaskAuthorized = async () => {
+                await execution.assertAuthorized();
+                await assertTasks(ctx);
               };
-              assertTaskAuthorized();
+              await assertTaskAuthorized();
               const result = await flowToolsCallTool(name, args, {
                 abortSignal: execution.signal,
                 assertAuthorized: assertTaskAuthorized,
                 requestInput: async (requests) => {
-                  assertTaskAuthorized();
+                  await assertTaskAuthorized();
                   if (!formCapability(ctx) || Object.values(requests).some(entry =>
                     entry.method !== 'elicitation/create' || entry.params.mode !== 'form')) {
                     throw new ServerTaskError('TASK_INPUT_INVALID');
                   }
                   const responses = await execution.requestInput(requests);
-                  assertTaskAuthorized();
+                  await assertTaskAuthorized();
                   return responses;
                 },
               });
-              assertTaskAuthorized();
+              await assertTaskAuthorized();
               return CallToolResultV2Schema.parse({ ...result, resultType: 'complete' });
             },
           });
-          assertTasks(ctx);
+          await assertTasks(ctx);
           return CreateTaskResultV2Schema.parse(task);
         } catch (error) { return taskFailure(error); }
       }
       const result = await flowToolsCallTool(name, args, { abortSignal: request.signal, assertAuthorized });
-      assertAuthorized();
+      await assertAuthorized();
       return CallToolResultV2Schema.parse({ ...result, resultType: 'complete' });
     };
 
     if (enabled) {
       server.setRequestHandler('tasks/get', { params: GetTaskRequestV2Schema.shape.params }, async (params, ctx) => {
         try {
-          assertTasks(ctx);
+          await assertTasks(ctx);
           const task = await serverTaskStore.get(auth, workspace, params.taskId);
-          assertTasks(ctx);
+          await assertTasks(ctx);
           if (task.status === 'input_required' && task.inputRequests && !formCapability(ctx)) {
             throw new ProtocolError(ProtocolErrorCode.MissingRequiredClientCapability,
               'Form elicitation capability is required.', { requiredCapabilities: { elicitation: { form: {} } } });
@@ -184,7 +184,7 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
         params: UpdateTaskRequestV2Schema.shape.params.omit({ inputResponses: true }),
       }, async (params, ctx) => {
         try {
-          assertTasks(ctx);
+          await assertTasks(ctx);
           const input = UpdateTaskRequestV2Schema.shape.params.safeParse({
             ...params, inputResponses: ctx.mcpReq.inputResponses,
           });
@@ -192,15 +192,15 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
             throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Invalid task input.');
           }
           const result = await serverTaskStore.update(auth, workspace, input.data.taskId, input.data.inputResponses);
-          assertTasks(ctx);
+          await assertTasks(ctx);
           return UpdateTaskResultV2Schema.parse(result);
         } catch (error) { return taskFailure(error); }
       });
       server.setRequestHandler('tasks/cancel', { params: CancelTaskRequestV2Schema.shape.params }, async (params, ctx) => {
         try {
-          assertTasks(ctx);
+          await assertTasks(ctx);
           const result = await serverTaskStore.cancel(auth, workspace, params.taskId);
-          assertTasks(ctx);
+          await assertTasks(ctx);
           return CancelTaskResultV2Schema.parse(result);
         } catch (error) { return taskFailure(error); }
       });
@@ -208,9 +208,9 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
     return server;
   }, { legacy: 'reject', maxRequestBodySize: 256 * 1024 });
   try {
-    assertAuthorized();
+    await assertAuthorized();
     const response = await handler.fetch(request);
-    const denied = auth.recheck();
+    const denied = await auth.recheck();
     if (denied) { await response.body?.cancel().catch(() => undefined); return denied; }
     return response;
   } finally {

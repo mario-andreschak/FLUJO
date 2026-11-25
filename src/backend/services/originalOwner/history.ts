@@ -13,9 +13,9 @@ const historyAccess = root.__flujoOriginalOwnerHistoryAccess ??= new AsyncLocalS
  * This scope carries no runtime, model, tool, mutation or Worker authority. */
 export async function withOriginalOwnerHistoryAccess<T>(request: Request, task: () => Promise<T>): Promise<T> {
   if (request.method !== 'GET' || isWorkerMode()) return historyAccess.run(undefined, task);
-  const resolved = resolveOwnerRequest(request, ['control:admin', 'secrets:read']);
+  const resolved = await resolveOwnerRequest(request, ['control:admin', 'secrets:read']);
   const workspace = getCurrentWorkspace();
-  if (!resolved.ok || resolved.authorization.recheck()
+  if (!resolved.ok || await resolved.authorization.recheck()
     || (resolved.authorization.principal.workspaceId && resolved.authorization.principal.workspaceId !== workspace)) {
     return historyAccess.run(undefined, task);
   }
@@ -29,7 +29,7 @@ export async function withOriginalOwnerHistoryAccess<T>(request: Request, task: 
 export async function assertOriginalOwnerHistoryAccess(state: unknown, conversationId: string): Promise<boolean> {
   const access = historyAccess.getStore();
   if (!access?.active || isWorkerMode() || access.workspace !== getCurrentWorkspace()
-    || access.authorization.recheck() || !state || typeof state !== 'object' || Array.isArray(state)) return false;
+    || await access.authorization.recheck() || !state || typeof state !== 'object' || Array.isArray(state)) return false;
   const saved = state as {
     conversationId?: unknown; logicalRunId?: unknown; flowId?: unknown;
     flowSnapshot?: { id?: unknown };
@@ -54,6 +54,7 @@ export async function assertOriginalOwnerHistoryAccess(state: unknown, conversat
       || enrollment.modelId !== run.modelId || account.modelId !== run.modelId || account.modelDigest !== run.modelDigest) return false;
     // Revoked enrollments/accounts still describe legitimate history. Only the
     // requesting owner's current authorization controls its inspection.
-    return access.active && access.workspace === getCurrentWorkspace() && !access.authorization.recheck();
+    const denied = await access.authorization.recheck();
+    return access.active && access.workspace === getCurrentWorkspace() && !denied;
   } catch { return false; }
 }
