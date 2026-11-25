@@ -87,6 +87,7 @@ workaround.
 | A file added to a chat is never dropped silently: the model gets its content or a short note, and a model that cannot read a format gets a note or the PDF's text | `__tests__/frontend/components/ChatInputAttachments.test.tsx`, `__tests__/model/chatAttachmentModelInput.test.ts`, `__tests__/model/mediaHandoff.test.ts` |
 | Every place that hands a tool result to a model sizes it with `resolveToolResultBound` (`src/shared/toolResultLimit.ts`), and a shortened result never keeps `structuredContent` (`withBoundedToolText`) | `__tests__/architecture/toolResultBoundSingleRule.test.ts`; `__tests__/model/codexAdapter.test.ts`, `__tests__/model/claudeSubscriptionBuiltinTools.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
+| MCP App settings set where FLUJO starts win over Localhost mode's local default for requests through a front door; this computer keeps `<app>.localhost`, a Settings-page Localhost choice ignores leftovers, and a wrong value falls back with one startup line | `__tests__/mcp/sandboxLocalhostFrontDoor.test.ts` |
 
 # Resilience over refusal
 

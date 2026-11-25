@@ -82,10 +82,24 @@ export function sandboxAllowAllContent(): boolean {
   return value === '1' || value === 'true' || value === 'yes' || value === 'on';
 }
 
+/**
+ * Whether the hosted sandbox settings are read at all.
+ *
+ *  - Local Network, Public, legacy installs and starts without the launcher:
+ *    always.
+ *  - Localhost set by the operator where FLUJO is started
+ *    (`FLUJO_EXPOSURE_MODE=localhost`): yes. FLUJO then sits behind a trusted
+ *    front door on the same machine, and the settings apply only to requests
+ *    that arrive through it (see {@link deriveSandboxPublicUrl}).
+ *  - Localhost chosen on the Settings page, or forced by the launcher's secure
+ *    default: no. Variables left over from an older hosted setup must not
+ *    outlive the narrower choice.
+ */
 function shouldUseSandboxEndpointConfiguration(): boolean {
   const source = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
   return !source
     || source === 'legacy'
+    || source === 'runtime'
     || getExposureMode() !== 'localhost';
 }
 
@@ -124,6 +138,8 @@ interface SandboxRuntimeState {
    * Insertion-ordered and bounded; oldest entries are dropped first.
    */
   hostOrigins: string[];
+  /** The startup line about hosted sandbox settings has been written. */
+  endpointConfigurationLogged?: boolean;
 }
 
 /**
@@ -297,8 +313,15 @@ export function getConfiguredSandboxHostOrigins(): string[] {
   return origins;
 }
 
-function hasConfiguredSandboxHostOrigins(): boolean {
+/**
+ * Whether the configured host origins REPLACE the built-in embedder defaults.
+ * In Local Network and Public mode they do, and a present-but-malformed list
+ * stays fail-closed. In Localhost mode they only ADD the front door's
+ * dashboard origins: this computer's own dashboard keeps working unchanged.
+ */
+function configuredHostOriginsReplaceDefaults(): boolean {
   return shouldUseSandboxEndpointConfiguration()
+    && getExposureMode() !== 'localhost'
     && Boolean(process.env[SANDBOX_HOST_ORIGINS_ENV]?.trim());
 }
 
@@ -390,6 +413,125 @@ export function hasValidSandboxAppUrlTemplate(): boolean {
 }
 
 /**
+ * One plain startup line saying which hosted sandbox settings are used or
+ * ignored, and why. Undefined when neither variable is set. Raw values are
+ * never echoed (a malformed URL may carry credentials); only parsed, validated
+ * addresses are.
+ */
+export function describeSandboxEndpointConfiguration():
+  { level: 'info' | 'warn'; message: string } | undefined {
+  const rawUrl = process.env[SANDBOX_PUBLIC_URL_ENV]?.trim();
+  const rawOrigins = process.env[SANDBOX_HOST_ORIGINS_ENV]?.trim();
+  if (!rawUrl && !rawOrigins) return undefined;
+  const mode = getExposureMode();
+  const prefix = `MCP Apps sandbox (${mode} mode):`;
+
+  if (!shouldUseSandboxEndpointConfiguration()) {
+    const names = [rawUrl && SANDBOX_PUBLIC_URL_ENV, rawOrigins && SANDBOX_HOST_ORIGINS_ENV]
+      .filter(Boolean)
+      .join(' and ');
+    const reason = process.env.FLUJO_EXPOSURE_MODE_SOURCE === 'settings'
+      ? 'Localhost was chosen on the Settings page'
+      : 'the saved network setting could not be read, so FLUJO started in safe Localhost mode';
+    return {
+      level: 'warn',
+      message: `${prefix} ignoring ${names} because ${reason}; `
+        + 'app views use <app>.localhost on this computer. Behind a trusted front door on '
+        + 'this machine, also set FLUJO_EXPOSURE_MODE=localhost where FLUJO is started.',
+    };
+  }
+
+  const used: string[] = [];
+  const ignored: string[] = [];
+  if (rawUrl) {
+    const shared = getSharedSandboxPublicUrl();
+    if (hasValidSandboxAppUrlTemplate()) used.push(`per-app address ${getSandboxPublicUrl()}`);
+    else if (shared) used.push(`shared address ${shared}`);
+    else {
+      ignored.push(`${SANDBOX_PUBLIC_URL_ENV} (it must be a plain http(s) address; `
+        + '{app} may only be one whole part of the host name)');
+    }
+  }
+  if (rawOrigins) {
+    const valid = getConfiguredSandboxHostOrigins();
+    const invalid = rawOrigins.split(',')
+      .map(value => value.trim())
+      .filter(value => value && !parseHttpOrigin(value)).length;
+    if (valid.length > 0) {
+      used.push(`${mode === 'localhost' ? 'extra ' : ''}dashboard origins ${valid.join(', ')}`);
+    }
+    if (invalid > 0) {
+      ignored.push(`${invalid} ${SANDBOX_HOST_ORIGINS_ENV} entr${invalid === 1 ? 'y' : 'ies'} `
+        + '(each must be an exact http(s) origin such as https://flujo.example.com)');
+    }
+  }
+
+  const parts = [prefix];
+  if (used.length > 0) {
+    parts.push(mode === 'localhost'
+      ? `requests through the front door use ${used.join(' and ')}; this computer keeps <app>.localhost.`
+      : `using ${used.join(' and ')}.`);
+  }
+  if (ignored.length > 0) {
+    parts.push(`Ignoring ${ignored.join(' and ')}; `
+      + (mode === 'localhost'
+        ? 'app views keep the local <app>.localhost address.'
+        : 'app views fall back to the automatic address, which HTTPS dashboards cannot load.'));
+  }
+  return { level: ignored.length > 0 ? 'warn' : 'info', message: parts.join(' ') };
+}
+
+function logSandboxEndpointConfigurationOnce(state: SandboxRuntimeState): void {
+  if (state.endpointConfigurationLogged) return;
+  state.endpointConfigurationLogged = true;
+  const description = describeSandboxEndpointConfiguration();
+  if (!description) return;
+  if (description.level === 'warn') log.warn(description.message);
+  else log.info(description.message);
+}
+
+/**
+ * Shared hosted origin: a configured public URL WITHOUT an `{app}` placeholder
+ * names ONE TLS-terminated browser origin for every app, so a hosted install
+ * needs a single DNS record and certificate instead of a wildcard pair. A URL
+ * that still CONTAINS `{app}` but failed template validation is a
+ * configuration error and must keep failing closed rather than silently
+ * collapsing per-app origins into a shared one. The URL parser percent-encodes
+ * `{app}` outside the hostname, so a misplaced placeholder is rejected in
+ * either spelling.
+ */
+function getSharedSandboxPublicUrl(): string | undefined {
+  const configured = getSandboxPublicUrl();
+  if (!configured || configured.includes('{app}') || /%7Bapp%7D/i.test(configured)) {
+    return undefined;
+  }
+  return configured;
+}
+
+/**
+ * The operator-configured hosted address for one app: the `{app}` template, or
+ * the shared origin with the verified key in the authenticated URL (exactly
+ * like the LAN fallback; each proxy token stays scoped to that key and
+ * untrusted App HTML still renders in the nested sandboxed View).
+ */
+function configuredSandboxUrlFor(originKey: string): string | undefined {
+  const template = getValidSandboxAppUrlTemplate();
+  if (template) {
+    const labels = template.hostname.toLowerCase().split('.');
+    template.hostname = labels
+      .map(label => label === '{app}' ? originKey : label)
+      .join('.');
+    return template.href;
+  }
+
+  const shared = getSharedSandboxPublicUrl();
+  if (!shared) return undefined;
+  const sharedUrl = new URL(shared);
+  sharedUrl.searchParams.set('originKey', originKey);
+  return sharedUrl.href;
+}
+
+/**
  * Derive the browser-visible sandbox URL for a given originKey. Resolution is
  * automatic for normal installs:
  *   - Local requests use a stable `<originKey>.localhost` browser origin.
@@ -400,6 +542,12 @@ export function hasValidSandboxAppUrlTemplate(): boolean {
  *   - Plain-HTTP LAN requests reuse the already-working request hostname and
  *     sandbox port. The scoped key travels in the authenticated URL because a
  *     server cannot create DNS records for invented LAN subdomains.
+ *
+ * In Localhost mode this computer always gets `<originKey>.localhost`. Only a
+ * request whose browser-facing origin is NOT loopback (it came through a
+ * trusted front door that reports it in `X-Forwarded-Host`) may use the
+ * operator's configured hosted address; without a valid one it keeps the local
+ * address, as before.
  *
  * The LAN fallback shares the outer proxy origin. Untrusted App HTML remains in
  * the nested sandboxed View, while the query key keeps proxy tokens app-scoped.
@@ -423,47 +571,15 @@ export function deriveSandboxPublicUrl(
     return undefined;
   }
 
-  if (
-    getExposureMode() === 'localhost'
-    || (hostUrl.protocol === 'http:' && isLoopbackHostname(hostUrl.hostname))
-  ) {
-    return `http://${originKey}.localhost:${port}/sandbox.html`;
+  const localUrl = `http://${originKey}.localhost:${port}/sandbox.html`;
+  const loopbackHost = isLoopbackHostname(hostUrl.hostname);
+  if (getExposureMode() === 'localhost') {
+    return (loopbackHost ? undefined : configuredSandboxUrlFor(originKey)) ?? localUrl;
   }
+  if (hostUrl.protocol === 'http:' && loopbackHost) return localUrl;
 
-  const template = getValidSandboxAppUrlTemplate();
-  if (template) {
-    const labels = template.hostname.toLowerCase().split('.');
-    template.hostname = labels
-      .map(label => label === '{app}' ? originKey : label)
-      .join('.');
-    return template.href;
-  }
-
-  // Shared hosted origin: a configured public URL WITHOUT an `{app}`
-  // placeholder names ONE TLS-terminated browser origin for every app, so a
-  // hosted install needs a single DNS record and certificate instead of a
-  // wildcard pair. The verified key travels in the authenticated URL exactly
-  // like the LAN fallback below and each proxy token stays scoped to that
-  // key; untrusted App HTML still renders in the nested sandboxed View on an
-  // opaque origin. A URL that still CONTAINS `{app}` but failed template
-  // validation is a configuration error and must keep failing closed rather
-  // than silently collapsing per-app origins into a shared one.
-  // Note: the URL parser percent-encodes `{app}` outside the hostname, so a
-  // misplaced placeholder must be rejected in either spelling.
-  const configuredShared = getSandboxPublicUrl();
-  if (
-    configuredShared
-    && !configuredShared.includes('{app}')
-    && !/%7Bapp%7D/i.test(configuredShared)
-  ) {
-    try {
-      const sharedUrl = new URL(configuredShared);
-      sharedUrl.searchParams.set('originKey', originKey);
-      return sharedUrl.href;
-    } catch {
-      return undefined;
-    }
-  }
+  const configured = configuredSandboxUrlFor(originKey);
+  if (configured) return configured;
 
   // Browsers block an HTTP iframe inside an HTTPS page. HTTPS deployments need
   // a real TLS endpoint, but ordinary HTTP LAN use needs no DNS/proxy config.
@@ -738,7 +854,7 @@ function buildInnerCspMeta(csp?: ResourceCsp): string {
  */
 export function buildSandboxProxyHtml(
   configuredHostOrigins: readonly string[] = getConfiguredSandboxHostOrigins(),
-  hostAllowlistConfigured = hasConfiguredSandboxHostOrigins(),
+  hostAllowlistConfigured = configuredHostOriginsReplaceDefaults(),
   csp?: ResourceCsp,
   allowAll = false,
 ): string {
@@ -1133,7 +1249,9 @@ function isTrustedEmbedderOrigin(origin: string, req: http.IncomingMessage): boo
  * listener (`http://localhost:4203`). Deriving the directive from the request's
  * `Host`/`X-Forwarded-Host` header therefore named the sandbox itself and the
  * browser blocked every frame. Sources, in order of trust:
- *   1. `FLUJO_MCP_APP_HOST_ORIGINS` (explicit allowlist, needed for nested chains)
+ *   1. `FLUJO_MCP_APP_HOST_ORIGINS` (explicit allowlist, needed for nested
+ *      chains; in Localhost mode it adds to sources 2 and 3 instead of
+ *      replacing them)
  *   2. Origins registered when the host minted a sandbox token (authenticated)
  *   3. The request's `Referer` origin, when it passes {@link isTrustedEmbedderOrigin}
  * An empty result stays fail-closed (`'none'`) in {@link sanitizeFrameAncestors}.
@@ -1153,8 +1271,11 @@ export function getAllowedFrameAncestors(req: http.IncomingMessage): string[] {
 
   for (const origin of state.configuredHostOrigins) add(origin);
 
-  // A configured allowlist is authoritative and stays fail-closed.
-  if (state.configuredHostOrigins.length > 0) return ancestors;
+  // A configured allowlist is authoritative and stays fail-closed, except in
+  // Localhost mode, where it only adds a trusted front door's dashboard.
+  if (state.configuredHostOrigins.length > 0 && getExposureMode() !== 'localhost') {
+    return ancestors;
+  }
 
   for (const origin of state.hostOrigins) add(origin);
 
@@ -1234,8 +1355,13 @@ function handleSandboxRequest(
 
   const hostOriginKey = deriveOriginKeyFromHost(req.headers.host);
   const queryOriginKey = url.searchParams.get('originKey');
+  // Localhost mode keeps one browser origin per App (`<app>.localhost`); only an
+  // operator-configured shared address behind a front door carries the key in
+  // the URL instead.
+  const queryKeyAllowed = getExposureMode() !== 'localhost'
+    || getSharedSandboxPublicUrl() !== undefined;
   const effectiveOriginKey = hostOriginKey || (
-    getExposureMode() !== 'localhost' && isValidSandboxOriginKey(queryOriginKey)
+    queryKeyAllowed && isValidSandboxOriginKey(queryOriginKey)
       ? queryOriginKey
       : undefined
   );
@@ -1294,7 +1420,7 @@ function handleSandboxRequest(
   ]));
   res.end(buildSandboxProxyHtml(
     embedderOrigins,
-    hasConfiguredSandboxHostOrigins(),
+    configuredHostOriginsReplaceDefaults(),
     csp,
     sandboxAllowAllContent(),
   ));
@@ -1319,6 +1445,7 @@ function handleSandboxUpgrade(
  * origin. Called from instrumentation-node.ts at startup; fire-and-forget.
  */
 export function startSandboxServer(): void {
+  logSandboxEndpointConfigurationOnce(getOrInitRuntimeState());
   // Kick off the default listener in the background; don't await.
   ensureSandboxForOriginKey('')
     .then((result) => {
