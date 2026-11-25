@@ -2900,9 +2900,7 @@ export class ModelHandler {
         ? await preparePagedCanonicalArchive(opts.conversationId, canonicalSource, opts.durableContext,
           // Same opt-in as the dispatch archive below: page preparation of one
           // large history must wait for concurrent writes rather than refuse.
-          !opts.nativeBrokerAuthority && !opts.durableContext?.executionAuthority
-            && !opts.durableContext?.executionExtensionContext && !opts.durableContext?.personaAttribution
-            ? { wait: true, signal: abortController.signal } : undefined)
+          !opts.nativeBrokerAuthority ? { wait: true, signal: abortController.signal } : undefined)
         : undefined;
       if (opts?.archiveModelTurns) {
         archiveSnapshotReservation = reserveArchiveSnapshot(pagedCanonical ? [] : canonicalSource);
@@ -3237,9 +3235,7 @@ export class ModelHandler {
                       const archiveInput = {
                         ...(nativeReceipt ? { id: nativeReceipt.invocationId } : {}),
                         durableContext: opts?.durableContext,
-                        ...(!nativeReceipt && !opts?.durableContext?.executionAuthority
-                          && !opts?.durableContext?.executionExtensionContext && !opts?.durableContext?.personaAttribution
-                          ? { writeAdmission: { wait: true, signal: abortController.signal } } : {}),
+                        ...(!nativeReceipt ? { writeAdmission: { wait: true, signal: abortController.signal } } : {}),
                         conversationId: opts!.conversationId!, runId: opts?.runId,
                         nodeId: opts!.nodeId!, nodeName: opts?.nodeName,
                         modelId: routingModel.id, modelName: routingModel.displayName || routingModel.name,

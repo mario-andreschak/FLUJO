@@ -75,6 +75,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await settle();
   server.closeAllConnections();
   await new Promise<void>(resolve => server.close(() => resolve()));
   const { flushStatisticsEvents } = await import('@/backend/services/statistics');
@@ -88,6 +89,12 @@ afterAll(async () => {
   });
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
+
+/** Runs keep saving their state briefly after the reply ends; let them finish. */
+async function settle() {
+  const { getFlowRunAdmissionDiagnostics } = await import('@/backend/execution/flow/runAdmission');
+  for (let wait = 0; wait < 200 && getFlowRunAdmissionDiagnostics().activeRuns > 0; wait++) await new Promise(resolve => setTimeout(resolve, 50));
+}
 
 function percentile(values: number[], fraction: number): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -124,7 +131,7 @@ it(`answers all ${BURST} parallel streamed chats without refusing any`, async ()
   const { executionStreamAdmission } = await import('@/backend/execution/flow/engine/executionStream');
   const { getChatIngressDiagnostics } = await import('@/utils/http/chatIngress');
   const { runWithWorkspace } = await import('@/utils/workspace');
-  for (let wait = 0; wait < 100 && getFlowRunAdmissionDiagnostics().activeRuns > 0; wait++) await new Promise(resolve => setTimeout(resolve, 50));
+  await settle();
   runWithWorkspace('default-workspace', () => {
     expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 0, waitingRuns: 0, reservedBytes: 0 });
   });
@@ -139,5 +146,6 @@ it(`answers all ${BURST} parallel streamed chats without refusing any`, async ()
   console.info('CHAT_BURST', JSON.stringify({ count, statuses, answered: results.filter(result => result.answered).length,
     firstModelCallMs: { p50: percentile(firstCalls, 0.5), p95: percentile(firstCalls, 0.95), max: percentile(firstCalls, 1) },
     elapsedMs }));
+  await settle();
   expect(results.filter(result => result.answered)).toHaveLength(count);
 });

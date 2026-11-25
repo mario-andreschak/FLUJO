@@ -46,13 +46,15 @@ it.each(methods)('refuses excessive parameter work before the $method workspace 
 });
 
 it.each(methods)('refuses overload before the $method workspace decoding hook without releasing held owners', async ({ method, handler }) => {
-  const held = [acquireChatIngress(new NextRequest(url)), acquireChatIngress(new NextRequest(url))];
+  const held: ChatIngressPermit[] = [];
+  try { for (;;) held.push(acquireChatIngress(new NextRequest(url))); } catch { /* every parse slot is taken */ }
+  process.env.FLUJO_CHAT_ADMISSION_WAIT_MS = '50';
   try {
     const response = await handler(new NextRequest(`${url}?workspace=default-workspace`, { method }));
     expect(response.status).toBe(429); expect(response.headers.get('retry-after')).toBe('5');
     expect(wrapperHook).not.toHaveBeenCalled(); expect(processChatCompletion).not.toHaveBeenCalled();
-    expect(getChatIngressDiagnostics()).toMatchObject({ active: 2, reservedBytes: 2 * CHAT_INGRESS_LIMITS.parsingBytes });
-  } finally { held.forEach(permit => permit.release()); }
+    expect(getChatIngressDiagnostics()).toMatchObject({ active: held.length, reservedBytes: held.length * CHAT_INGRESS_LIMITS.parsingBytes });
+  } finally { held.forEach(permit => permit.release()); delete process.env.FLUJO_CHAT_ADMISSION_WAIT_MS; }
 });
 
 it.each(methods)('holds exactly one permit through the accepted $method wrapper and handler', async ({ method, handler }) => {

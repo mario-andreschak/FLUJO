@@ -20,17 +20,19 @@ already received by the HTTP stack are outside this allocation estimate.
 | JSON nesting / lexical values including object keys | 64 / 100,000 |
 | Body chunks / body read deadline | 100,000 / 30 seconds |
 | Simultaneous parses (admitted chats keep only their parsed byte charge) | 16 |
-| Initial decode/parse reservation | 96 MiB per request |
-| Process input reservations | 256 MiB |
+| Initial decode/parse reservation | What the declared Content-Length needs, at most 96 MiB (96 MiB without one) |
+| Process input reservations | One eighth of the RSS ceiling, at least 256 MiB |
 | Application RSS admission ceiling | Shared with run admission: 75% of usable memory, at least 2 GiB |
-| Wait for parsing capacity or memory before answering busy | 10 seconds |
+| Wait for parsing capacity or memory before answering busy | 60 seconds (`FLUJO_CHAT_ADMISSION_WAIT_MS`), in arrival order |
 | IP rate registry | 4,096 keys, 1 MiB estimated key storage |
 | Forwarded-IP header inspected | 1,024 characters |
 | Per-IP quota | 6,000 requests per minute |
 
-The initial reservation covers a single 8 MiB byte buffer, UTF-16 decoding,
-JSON strings and graph metadata, parser copies, and bounded metadata JSON
-parsing. Two maximum reservations can read concurrently. After parsing, the
+The initial reservation covers one byte buffer of the declared size (8 MiB
+without a Content-Length), UTF-16 decoding, JSON strings and graph metadata,
+parser copies, and bounded metadata JSON parsing. A request with a declared
+size reserves `5 * bytes + 192 * min(2 * bytes, 200,000) + 1 MiB`, so a burst
+of ordinary chats is read together instead of two at a time (#757). After parsing, the
 charge becomes `max(2 * rawBytes, 2 * decodedCharacters) +
 2 * decodedCharacters + 192 * lexicalValues + 1 MiB`. This deliberately retains
 the source-text charge: a short unescaped field may pin an otherwise mostly
@@ -42,9 +44,12 @@ to percent-encoded URL characters, so encoding overhead counts.
 
 A byte lexer checks depth and work before UTF-8 decoding and `JSON.parse`.
 The parser remains the JSON syntax authority. Malformed JSON returns a safe
-400 without embedding source text; oversize input returns 413; owner or
-reservation capacity returns 429; process headroom returns 503. Retryable
-responses include `Retry-After: 5` in the existing OpenAI error envelope.
+400 without embedding source text; oversize input returns 413. A request that
+finds parsing capacity or memory full waits in arrival order and is admitted
+the moment an earlier request frees room (`src/utils/capacityWaitQueue.ts`);
+only after the wait does owner or reservation capacity return 429 and process
+headroom 503. Retryable responses include `Retry-After: 5` in the existing
+OpenAI error envelope.
 There is no unbounded `request.json()` fallback for incomplete test objects.
 Refusal happens before conversation loading, stream-reader admission, or
 provider/Flow invocation. Existing running, paused, approval and uncertain-effect

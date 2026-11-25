@@ -63,8 +63,10 @@ Already admitted local-media I/O keeps the reservation until its handle closes,
 even if its outer callback settles early. A settled scope cannot start further
 media reads or allocate another read buffer.
 
-Journalled native, execution-authority, extension and Persona dispatches retain their
-existing immediate-refusal behavior. The queue does not bypass workspace
+Journalled native dispatches retain their existing immediate-refusal behavior.
+Execution-authority, extension and Persona dispatches wait like ordinary ones:
+once concurrent model calls stopped queueing on the model catalog lock, a burst
+of 16 of them met the four-writer limit and was refused at once (#757). The queue does not bypass workspace
 capture or durable ownership fences, and it does not change canonical history.
 Local workspace writer registrations coalesce in batches of at most eight under
 one physical capture-admission lease. Independent writer locks are published
