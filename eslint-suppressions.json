@@ -1201,11 +1201,6 @@
       "count": 2
     }
   },
-  "src/frontend/components/WorkspaceBootstrap.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
   "src/frontend/components/mcp/MCPCapabilitiesManager/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
