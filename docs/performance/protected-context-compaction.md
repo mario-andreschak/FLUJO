@@ -11,6 +11,20 @@ keep their original wording, roles and order. System and developer instructions 
 instructions, unresolved calls or unrecoverable observations cannot fit, the
 request fails with `context_budget_exceeded`; it does not shorten the contract.
 
+When a provider rejects a request as too long, including Claude's own
+`Prompt is too long` frame and `prompt_too_long` result, FLUJO retries once
+with a smaller history, and only while nothing visible has happened yet: no
+answer text and no tool activity. The rejection counts even when the model
+catalogue says the request fits, so the retry aims at 70% of the rejected size.
+Before shortening, the exact rejected request is stored as a searchable archive
+(original roles and message IDs; `read_resource` with `search_text`), and the
+shortened request points to it. If that archive cannot be written, the retry
+still runs without the pointer; the saved conversation is unchanged either way.
+These parts come from PR #1327. Two of its parts were not taken: a fixed
+96,000-token budget for models without a known window, which would refuse
+requests a larger model accepts, and capturing every small tool result on every
+refit, which rewrites them each turn without an idempotency key.
+
 Completed tool groups can leave an emergency wire only when runtime-captured
 resource metadata is bound to each exact call ID. A URI mentioned in a tool
 result is insufficient. The retained receipt includes the call ID, tool name,
@@ -34,8 +48,34 @@ When retaining every old user turn would exceed 35% of the input budget, the
 summarizer selects exact original user message IDs for standing instructions,
 restrictions, corrections and unfinished requests. The runtime validates those
 IDs against the source and retains the selected originals verbatim. Other old
-user turns remain in the immutable archive. Selection quality is model-dependent;
-this is not a proof that every applicable instruction was selected.
+user turns remain in the immutable archive.
+
+The model cannot drop an instruction on its own. Before it is asked, fixed word
+rules (`compaction/standingInstructions.ts`) mark user turns that contain a
+correction, a negation or prohibition, a permission change or a standing rule
+("always", "only", "from now on"), in English, Spanish, German, French,
+Portuguese and Italian. Turns sent while a run was already working (`injected`)
+always count as corrections. Marked turns always stay verbatim and in their
+original order; the model selection only adds to them. This follows the
+Knowledge Triage cascade in the Compaction Cliff study (arXiv 2608.22752):
+cheap surface rules first, a model second, constraints kept word for word.
+The rules favour keeping too much over missing a prohibition, and they cannot
+recognise every possible wording, so the model selection and the archive remain.
+
+Model-selected turns fill the rest of the 35% share, newest first; an oversized
+selection is trimmed instead of abandoning the summary. When the marked turns
+alone exceed that share, no summary is made: the request keeps the full
+canonical wire, whose last-resort refit retains every user turn or stops with
+`context_budget_exceeded`.
+
+Execution receipts carry the exact call ID, tool name, observed-result state and
+the exact argument text (up to 1,024 characters; longer arguments keep a SHA-256
+digest and length, and the full text stays in the archive). Receipts are rebuilt
+from the source on every rewrite and carried forward from an earlier summary on
+the same wire, so a summary of a summary keeps them too. A cached summary whose
+receipts differ from the source is regenerated rather than reused.
+`__tests__/model/compactionFidelity.test.ts` checks these guarantees over ten
+rounds with a summarizer that deliberately drops and contradicts everything.
 
 Summaries must contain the five anchored sections and reduce the restored wire.
 Provider length/content-filter/tool termination is rejected. Tool observations
@@ -109,6 +149,19 @@ resume and native compaction behavior on their final integration. Codex and
 Claude SDK session prefixes bind the text-projection policy version. A session
 created with the older lossy policy restarts with the corrected full projection
 before later turns can use delta-only resume.
+
+### Who compacts which route (checked November 25, 2026)
+
+| Route | FLUJO summary and masking | Provider's own compaction | When saved native state is dropped |
+|---|---|---|---|
+| Chat Completions, Anthropic Messages, Gemini, Ollama | Yes, plus the last-resort refit | Not used. The Anthropic adapter does not send `compact_20260112` | No reusable native window; per-message signatures stay with their messages |
+| Responses (`openai-responses`, `openrouter-agent`) | A new summary starts only with a new user request; tool follow-ups of the same request reuse it or stay unsummarized, so signed output can be replayed | Compaction items the provider returns are kept and replayed unchanged; FLUJO does not ask for server-side compaction | Connection, model, provider, endpoint, credential, tool or source-prefix change |
+| Codex | Yes, capped at 220,000 tokens, plus the 980,000-character transport refit | Codex's own `contextCompaction` items are accepted; `thread/compact/start` is allowed but FLUJO never starts it by itself | Prefix hash (`native-history-v2`) or endpoint change starts a new thread |
+| Claude Agent SDK | Yes, on the text projection | The SDK manages its own session; FLUJO does not control it | Prefix hash (`native-history-v2`) change starts a new session |
+
+Only one owner rewrites a given request: FLUJO's summary replaces history on
+the wire it sends, and native windows are reused only while their recorded
+prefix still matches that wire.
 
 Visual compaction remains experimental and disabled by default. It preserves
 trusted instructions and complete pairing and must beat the estimated shortened
