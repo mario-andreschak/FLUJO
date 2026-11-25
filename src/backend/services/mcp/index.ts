@@ -227,6 +227,7 @@ import {
 import { encryptApiKey } from "@/backend/services/model/encryption";
 import { isSecretEnvVar } from "@/utils/shared/common";
 import { mcpValueRecord } from "@/utils/mcp/values";
+import { removeMcpbServerFiles } from "./mcpb/files";
 import {
   normalizeHeaderValue,
   isMaskedHeaderValue,
@@ -3766,7 +3767,7 @@ export class MCPService {
     }
 
     // Remove the config from the array
-    configs.splice(index, 1);
+    const [removed] = configs.splice(index, 1);
 
     // Save updated configs
     log.debug(
@@ -3779,6 +3780,8 @@ export class MCPService {
 
     if (saveResult.success) {
       log.info(`deleteServerConfig: Successfully deleted server ${serverName}`);
+      // An MCP bundle's unpacked files belong to its server (#1230).
+      await removeMcpbServerFiles(removed);
     } else {
       log.warn(
         `deleteServerConfig: Error saving configs after deleting ${serverName}:`,

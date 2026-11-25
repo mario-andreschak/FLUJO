@@ -111,6 +111,7 @@ describe('route guard drift', () => {
     'api/restore',
     'api/update',
     'api/encryption/secure',
+    'api/mcp/bundles',
     'api/mcp/servers',
     'api/mcp/servers/[name]',
     'api/mcp/test-connection',

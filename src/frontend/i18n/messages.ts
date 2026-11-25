@@ -8,6 +8,7 @@ import { modelsMessageRows } from './catalogs/models';
 import { automationsMessageRows } from './catalogs/automations';
 import { packagesMessageRows } from './catalogs/packages';
 import { mcpMessageRows } from './catalogs/mcp';
+import { mcpBundleMessageRows } from './catalogs/mcpBundles';
 import { flowMessageRows } from './catalogs/flows';
 import { chatMessageRows } from './catalogs/chat';
 import { chatSlashMessageRows } from './catalogs/chatSlash';
@@ -226,6 +227,7 @@ const messageRows = {
   ...automationsMessageRows,
   ...packagesMessageRows,
   ...mcpMessageRows,
+  ...mcpBundleMessageRows,
   ...flowMessageRows,
   ...chatMessageRows,
   ...chatSlashMessageRows,
