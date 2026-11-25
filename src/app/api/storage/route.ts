@@ -16,6 +16,7 @@ const log = createLogger('app/api/storage/route');
 const RESERVED_INTERNAL_KEYS = new Set<StorageKey>([
   StorageKey.PLANNED_EXECUTIONS,
   StorageKey.PENDING_APPROVALS,
+  StorageKey.HUMAN_TASKS,
   StorageKey.PACKAGE_INSTALLS,
   StorageKey.CHAT_HISTORY,
 ]);

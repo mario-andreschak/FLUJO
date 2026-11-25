@@ -1,7 +1,7 @@
 // Local implementation of PocketFlow for debugging
 import { Flow, BaseNode } from './pocketflow';
 import type { Flow as ReactFlow, FlowNode } from '@/shared/types/flow/flow';
-import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode, ResourceNode, SignalNode, StaticNode } from './nodes';
+import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode, ResourceNode, SignalNode, StaticNode, HumanNode } from './nodes';
 import { createLogger } from '@/utils/logger';
 import {
   NodeParams,
@@ -20,6 +20,7 @@ import {
   StaticNodeProperties
 } from './types';
 import { isEdgeCondition } from '@/utils/shared/edgeConditions';
+import type { HumanStepProperties } from '@/utils/shared/humanStep';
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/FlowConverter');
@@ -445,6 +446,16 @@ export class FlowConverter {
             // mutate/persist a stale runtime copy on the authored Static node.
             mcpNodes: [],
           }
+        };
+        break;
+      case 'human':
+        // Human step (#1095): waits for a person, then routes on ordinary successor edges.
+        pocketNode = new HumanNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'human',
+          properties: (node.data.properties as HumanStepProperties | undefined) ?? { name: node.data.label },
         };
         break;
       default:

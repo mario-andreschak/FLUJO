@@ -1,6 +1,7 @@
 import type { DecisionRule, FlowDecision } from '@/utils/shared/decisionRules';
 import type { EdgeConditionTarget, RecordedVariableSource } from '@/utils/shared/edgeConditions';
 import type { DecisionQuestion } from '@/utils/shared/modelDecision';
+import type { HumanField, HumanNoChoice, HumanOutcome, HumanStepMode, HumanStepProperties } from '@/utils/shared/humanStep';
 import type { ModelInputSnapshot } from '@/shared/types/execution/modelInput';
 import type { DebuggerStateView } from '@/shared/types/execution/debuggerState';
 export type {
@@ -683,6 +684,55 @@ export interface StaticNodeParams extends BaseNodeParams<StaticNodeProperties> {
     type: 'static';
 }
 
+export interface HumanNodeParams extends BaseNodeParams<HumanStepProperties> {
+    /** Routing conditions on this node's outgoing edges, keyed by edge id. */
+    edgeConditions?: Record<string, EdgeCondition>;
+    /** Outgoing control edges in author order, so the first match is deterministic. */
+    orderedOutgoingEdges?: string[];
+    type: 'human';
+}
+
+/** A person's saved answer to a Human step. */
+export interface HumanTaskDecision {
+    decisionId: string;
+    outcome: HumanOutcome;
+    /** The typed answers or the changed text, already checked. */
+    value?: unknown;
+    /** Digest of `value`, so a changed text is a new version with its own identity. */
+    valueDigest?: string;
+    decidedAt: string;
+    /** Where the answer came from. `expiry` is the deadline, never a person. */
+    channel: 'chat' | 'api' | 'approvals' | 'expiry' | 'evaluation';
+    idempotencyKey?: string;
+}
+
+/**
+ * A Human step that is waiting, frozen when the wait began (#1095). Saved with the
+ * conversation, so the wait, its content and its deadline survive a restart. What the
+ * person sees is fixed here and covered by `digest`; the node's later edits do not change it.
+ */
+export interface HumanTaskState {
+    requestId: string;
+    toolCallId: string;
+    nodeId: string;
+    logicalRunId?: string;
+    mode: HumanStepMode;
+    title: string;
+    prompt: string;
+    candidate?: string;
+    format?: 'text' | 'json';
+    fields?: HumanField[];
+    outputVariable: string;
+    onReject: HumanNoChoice;
+    onTimeout: HumanNoChoice;
+    rejectedText?: string;
+    timedOutText?: string;
+    digest: string;
+    createdAt: string;
+    expiresAt: string;
+    decision?: HumanTaskDecision;
+}
+
 export interface StaticAttachment {
     id?: string;
     type: 'document' | 'audio' | 'image' | 'video';
@@ -780,7 +830,7 @@ export interface StaticNodeProperties {
 }
 
 // Union type for all node params
-export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams | ResourceNodeParams | SignalNodeParams | StaticNodeParams;
+export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams | ResourceNodeParams | SignalNodeParams | StaticNodeParams | HumanNodeParams;
 
 // Resource node (Tier 3) — a config-holder like the MCP node: it represents a
 // data artifact in the graph and is never executed. FlowConverter folds its
@@ -1149,6 +1199,14 @@ export interface SharedState extends DebuggerStateView {
       argumentsJson: string;
       decision?: 'approved' | 'rejected';
     };
+    /** A Human step that waits for a person, or whose answer the node has not applied yet. */
+    humanTask?: HumanTaskState;
+    /** The latest Human step answers of this conversation, newest last, for the record. */
+    humanTaskLog?: Array<Pick<HumanTaskDecision, 'decisionId' | 'outcome' | 'decidedAt' | 'channel' | 'valueDigest'> & {
+      requestId: string;
+      nodeId: string;
+      candidateDigest: string;
+    }>;
     /**
      * Synthetic tools (`read_resource`, `list_mcp_resources`) that have been
      * armed at any point in this conversation.

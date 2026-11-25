@@ -818,7 +818,9 @@ export function repairDanglingToolCalls(
     || !!state.handoffRequested
     // A person decided on a Static node's wait. The node answers the call when it
     // resumes, and a crash before that leaves this decision to be picked up.
-    || !!state.staticHold?.decision;
+    || !!state.staticHold?.decision
+    // The same for a Human step: the node applies the saved answer when it resumes.
+    || !!state.humanTask?.decision;
   if (intentionallyPending) return [];
 
   const messages = state.messages ?? [];

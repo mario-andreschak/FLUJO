@@ -7,9 +7,10 @@ export const HUMAN_GATE_REJECTED_RESULT = 'tool denied';
 
 /** Whether any step of a flow requires a person to decide something during a run. */
 export function flowRequiresStepApproval(flow: {
-  nodes?: ReadonlyArray<{ data?: { properties?: Record<string, unknown> | object | null } | null }> | null;
+  nodes?: ReadonlyArray<{ type?: string; data?: { properties?: Record<string, unknown> | object | null } | null }> | null;
 } | null | undefined): boolean {
   return (flow?.nodes ?? []).some((node) => {
+    if (node.type === 'human') return true;
     const properties = node.data?.properties as {
       requireApprovalFor?: unknown;
       requireApprovalForWrites?: unknown;

@@ -36,6 +36,8 @@ export enum StorageKey {
   MCP_REMOTE_TASK_SETTINGS = 'mcp_remote_task_settings',
   KV_STORE_SETTINGS = 'kv_store_settings',
   PENDING_APPROVALS = 'pending_approvals',
+  /** Human steps that wait or recently finished: ids, titles and times only (#1095). */
+  HUMAN_TASKS = 'human_tasks',
   // Legacy per-internal-server overrides retained only as migration input.
   MCP_INTERNAL_OVERRIDES = 'mcp_internal_overrides',
   // Durable marker for the one-time migration of shipped internal MCP servers
@@ -115,6 +117,7 @@ export const StorageKeys = {
   MCP_REMOTE_TASK_SETTINGS: StorageKey.MCP_REMOTE_TASK_SETTINGS,
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
+  HUMAN_TASKS: StorageKey.HUMAN_TASKS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
   MCP_INTERNAL_SERVERS_MIGRATION_V1: StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1,
   MCP_INTERNAL_CAPABILITIES_MIGRATION_V2: StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2,

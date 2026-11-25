@@ -84,7 +84,7 @@ export const CONDITION_SOURCE_NODE_TYPES: readonly string[] = ['process', 'start
 /** The message a condition tests when it names no target, by the node it leaves. */
 export function defaultConditionTarget(sourceNodeType: string | undefined): EdgeConditionTarget {
   if (sourceNodeType === 'start') return 'last-user';
-  if (sourceNodeType === 'static') return 'last-message';
+  if (sourceNodeType === 'static' || sourceNodeType === 'human') return 'last-message';
   return 'last-assistant';
 }
 

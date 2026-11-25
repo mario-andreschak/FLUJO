@@ -16,7 +16,8 @@ import { resolvePendingApproval, listPendingToolCalls } from '@/backend/executio
 import { cancelToolCall } from '@/backend/execution/flow/toolCancelRegistry';
 import { resolveConversationElicitation, InvalidElicitationResponseError } from '@/backend/services/mcp/elicitationRegistry';
 import { resolvePendingQuestion, declinePendingQuestion, InvalidQuestionAnswerError } from '@/backend/services/questionRegistry';
-import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
+import { applyApprovalDecision, refusedHumanStepAnswer } from '@/backend/execution/flow/resumeAfterApproval';
+import type { HumanAnswer } from '@/utils/shared/humanStep';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
@@ -62,7 +63,7 @@ async function personaResumeResponse(
 }
 
 type RespondRequestBody =
-  | { action: 'approve' | 'reject'; toolCallId: string }
+  | { action: 'approve' | 'reject'; toolCallId: string; human?: HumanAnswer }
   | { action: 'elicitation-submit'; elicitationId: string; content: Record<string, string | number | boolean | string[]> }
   | { action: 'elicitation-cancel'; elicitationId: string }
   | { action: 'question-answer'; questionId: string; answers: string[][] }
@@ -114,6 +115,10 @@ async function POST_handler(
     if (typeof id !== 'string' || !id.trim() || id.length > 256) throw new Error('A valid input ID is required');
     if (requestBody.action === 'elicitation-submit' && (!requestBody.content
       || typeof requestBody.content !== 'object' || Array.isArray(requestBody.content))) throw new Error('Elicitation content must be an object');
+    if ((requestBody.action === 'approve' || requestBody.action === 'reject') && requestBody.human !== undefined
+      && (!requestBody.human || typeof requestBody.human !== 'object' || Array.isArray(requestBody.human))) {
+      throw new Error('human must be an object with the digest and the answer');
+    }
     if (requestBody.action === 'question-answer' && (!Array.isArray(requestBody.answers)
       || requestBody.answers.some(answer => !Array.isArray(answer) || answer.some(value => typeof value !== 'string')))) {
       throw new Error('Question answers must be arrays of strings');
@@ -234,7 +239,8 @@ async function POST_handler(
     return NextResponse.json({ status: 'running', conversation_id: conversationId });
   }
 
-  const { action, toolCallId } = requestBody as { action: 'approve' | 'reject'; toolCallId: string };
+  const { action, toolCallId, human } = requestBody as { action: 'approve' | 'reject'; toolCallId: string; human?: HumanAnswer };
+  const humanContext = { answer: human, channel: 'chat' as const };
   log.info(`Processing response action`, { requestId, conversationId, action, toolCallId });
 
   // In-request agentic approval (Claude subscription): the run is still live and
@@ -301,6 +307,10 @@ async function POST_handler(
       if (!sharedState.pendingToolCalls.some((toolCall) => toolCall.id === toolCallId)) {
         return NextResponse.json({ error: `Pending tool call with ID ${toolCallId} not found` }, { status: 404 });
       }
+      const refused = refusedHumanStepAnswer(sharedState, toolCallId, action, humanContext);
+      if (refused) {
+        return NextResponse.json({ error: refused.error, fieldErrors: refused.fieldErrors }, { status: refused.status });
+      }
       // Approval decisions are intentionally limited to the persisted action and
       // target call. Persona resumes must not accept ambient policy overrides.
       const dispatch = await resumePersonaFlowDispatch({
@@ -322,10 +332,12 @@ async function POST_handler(
             sharedState,
             toolCallId,
             action,
+            humanContext,
           );
           if (decision.outcome === 'tool_not_found') {
             throw new Error(`Pending tool call with ID ${toolCallId} disappeared during resume.`);
           }
+          if (decision.outcome === 'human_refused') throw new Error(decision.error);
           sharedState.lastResponse = undefined;
           sharedState.lastError = undefined;
           sharedState.errorEventEmitted = false;
@@ -345,10 +357,13 @@ async function POST_handler(
     // flip back to 'running' when done). Shared with the headless approval
     // inbox (POST /api/approvals/:id) via applyApprovalDecision so both paths
     // behave identically (issue #115).
-    const decision = await applyApprovalDecision(sharedState, toolCallId, action);
+    const decision = await applyApprovalDecision(sharedState, toolCallId, action, humanContext);
     if (decision.outcome === 'tool_not_found') {
       log.warn(`Pending tool call not found`, { requestId, conversationId, toolCallId });
       return NextResponse.json({ error: `Pending tool call with ID ${toolCallId} not found` }, { status: 404 });
+    }
+    if (decision.outcome === 'human_refused') {
+      return NextResponse.json({ error: decision.error, fieldErrors: decision.fieldErrors }, { status: decision.status });
     }
     const appendedMessages: FlujoChatMessage[] = decision.appendedMessages;
 
