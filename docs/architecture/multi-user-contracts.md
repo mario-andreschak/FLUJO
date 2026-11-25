@@ -167,7 +167,12 @@ Kinds of route (`ROUTE_CAPABILITIES`, 244 routes after #575; the test counts the
   migration) need the workspace `admin` action for every change.
 - `WORKSPACE_ADMIN_STEPS` lists the admin steps a route only sees in its body
   or query (setting the workspace password, `includeSecrets=true`, renaming or
-  deleting a workspace). Those handlers ask for `admin` themselves.
+  deleting a workspace). Those handlers ask for `admin` themselves
+  (`workspaceAdminStepRefused` in `src/backend/services/accounts/`, enforced
+  since #575 and covered by `teamMatrix.test.ts`). The automatic default
+  encryption setup (`initialize_default`) stays open to members: it never
+  replaces an existing setup, and a new team workspace needs it before anyone
+  can store a key.
 - Unknown and forbidden workspaces both answer 404. The workspace is checked
   before host access, so a guess never learns more than "not found".
 - Denials map to HTTP status in `ACCESS_DENIAL_STATUS`: 401 to sign in again,

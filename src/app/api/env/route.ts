@@ -9,6 +9,7 @@ import {
 } from '@/utils/encryption/secure';
 import { isSecretEnvVar } from '@/utils/shared';
 import { createLogger } from '@/utils/logger';
+import { workspaceAdminStepRefused } from '@/backend/services/accounts/workspaceAdminStep';
 import { v4 } from 'uuid';
 const uuidv4 = v4;
 
@@ -92,6 +93,13 @@ async function GET_handler(req: NextRequest) {
 
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
+
+  // Multi-user mode (#575): plain-text secrets are a workspace `admin` step.
+  // Team members use the keys in runs but see them masked. No-op while off.
+  if (new URL(req.url).searchParams.get('includeSecrets') === 'true') {
+    const refused = await workspaceAdminStepRefused();
+    if (refused) return refused;
+  }
 
   const requestId = uuidv4();
   log.debug(`Handling GET request [${requestId}]`);

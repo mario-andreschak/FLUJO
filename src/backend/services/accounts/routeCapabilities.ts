@@ -302,8 +302,9 @@ export const WORKSPACE_ADMIN_ROUTES: ReadonlySet<RoutePattern> = new Set<RoutePa
  * before doing them (#574). Everything else in these routes keeps its normal
  * action, so team members can still unlock, check status and save secrets.
  */
+// The handlers call `workspaceAdminStepRefused` (accounts/workspaceAdminStep.ts); `teamMatrix.test.ts` checks each step.
 export const WORKSPACE_ADMIN_STEPS: ReadonlyArray<{ readonly route: RoutePattern; readonly step: string }> = Object.freeze([
-  { route: '/api/encryption/secure', step: 'POST with action initialize, initialize_default or change_password (sets the workspace password)' },
+  { route: '/api/encryption/secure', step: 'POST with action initialize or change_password (sets the workspace password; initialize_default never replaces a setup and stays open)' },
   { route: '/api/env', step: 'GET with includeSecrets=true (shows stored secrets in plain text)' },
   { route: '/api/workspaces', step: 'PATCH and DELETE (rename or delete the named workspace)' },
 ]);

@@ -271,6 +271,32 @@ describe('three-role team matrix', () => {
     });
   });
 
+  describe('team keys work in runs but stay hidden from members and viewers', () => {
+    it('only the team owner (or an admin) sees secrets in plain text or sets the workspace password', async () => {
+      const { GET: envRoute } = await import('@/app/api/env/route');
+      const { POST: encryptionRoute } = await import('@/app/api/encryption/secure/route');
+      const reveal = (person: Person) => envRoute(request('GET', '/api/env?includeSecrets=true', person));
+      for (const person of ['ben', 'vera'] as const) {
+        const refused = await reveal(person);
+        expect([person, refused.status, (await refused.json()).code]).toEqual([person, 403, 'WORKSPACE_ADMIN_REQUIRED']);
+      }
+      expect((await reveal('anna')).status).toBe(200);
+      expect((await reveal('admin')).status).toBe(200);
+      expect((await envRoute(request('GET', '/api/env?includeSecrets=false', 'ben'))).status).toBe(200);
+      await expectOutcome(await reveal('cleo'), 'not-found', 'cleo reveals');
+
+      const encryption = (person: Person, body: Record<string, unknown>) => encryptionRoute(new NextRequest(
+        `http://${HOST}/api/encryption/secure?workspace=sales-ws`,
+        { method: 'POST', headers: { host: HOST, cookie: cookies[person], 'content-type': 'application/json' }, body: JSON.stringify(body) },
+      ));
+      const change = await encryption('ben', { action: 'change_password', oldPassword: 'x', newPassword: 'y' });
+      expect([change.status, (await change.json()).code]).toEqual([403, 'WORKSPACE_ADMIN_REQUIRED']);
+      const choose = await encryption('ben', { action: 'initialize', password: 'a team password for sales' });
+      expect(choose.status).toBe(403);
+      expect((await encryption('ben', { action: 'status' })).status).toBe(200);
+    });
+  });
+
   describe('background work in a team workspace', () => {
     it('runs while someone who may run things is active, and pauses for a starter who lost access', async () => {
       const accounts = (await loadEnabledAccounts())!;
