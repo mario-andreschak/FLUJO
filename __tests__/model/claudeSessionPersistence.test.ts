@@ -35,6 +35,19 @@ it('recovers metadata after a backend restart and rejects same-length edits', as
   expect(await findReusableSession('conversation::node', prefix, history, 1)).toBeUndefined();
 });
 
+it('ignores a durable session record above its size bound', async () => {
+  const next = [...history, { role: 'user', content: 'new' }];
+  await recordSession('large::node', { sessionId: 'session-large', prefixHash: prefix,
+    seenMessageCount: history.length, leadingSystemMessageCount: 1, historyHash: computeHistoryHash(history, 1),
+    usageCheckpoint: { modelUsage: {} } });
+  _reloadClaudeSessionsForTests();
+  expect((await findReusableSession('large::node', prefix, next, 1))?.sessionId).toBe('session-large');
+  const file = path.join(root, 'db', 'claude-sessions-v2', `${sessionValueHash('large::node')}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), padding: 'x'.repeat(1024 * 1024) }));
+  _reloadClaudeSessionsForTests();
+  expect(await findReusableSession('large::node', prefix, next, 1)).toBeUndefined();
+});
+
 it('allows prompt-only change under per-turn policy but rejects schema/configuration or stable-prompt changes', () => {
   const tools = [{ name: 'tool', parameters: { type: 'object' } }];
   expect(computePrefixHash('A', tools, { systemPromptPolicy: 'per-turn' })).toBe(computePrefixHash('B', tools, { systemPromptPolicy: 'per-turn' }));

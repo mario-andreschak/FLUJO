@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
-import fsp from 'fs/promises';
+import fsp, { type FileHandle } from 'fs/promises';
 import path from 'path';
 import { StringDecoder } from 'string_decoder';
 import * as nodeModule from 'node:module';
@@ -53,11 +53,28 @@ function metadataPath(): string | undefined {
 
 type SessionRecord = { version: number; workspace: string; key: string; entry: StoredSession };
 
+const MAX_SESSION_RECORD_BYTES = 1024 * 1024;
+
+/** Reads one open file: the checked file is the one read, and a link is never followed. */
 async function readSessionRecord(target: string): Promise<SessionRecord | undefined> {
+  let handle: FileHandle | undefined;
   try {
-    if ((await fsp.lstat(target)).isSymbolicLink() || (await fsp.stat(target)).size > 1024 * 1024) return undefined;
-    return JSON.parse(await fsp.readFile(target, 'utf8'));
+    handle = await fsp.open(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = await handle.stat({ bigint: true });
+    const named = await fsp.lstat(target, { bigint: true });
+    if (named.isSymbolicLink() || !opened.isFile() || opened.dev !== named.dev || opened.ino !== named.ino
+      || opened.size > BigInt(MAX_SESSION_RECORD_BYTES)) return undefined;
+    const bytes = Buffer.alloc(Number(opened.size) + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length !== Number(opened.size)) return undefined;
+    return JSON.parse(bytes.subarray(0, length).toString('utf8'));
   } catch { return undefined; }
+  finally { await handle?.close().catch(() => undefined); }
 }
 
 export async function loadClaudeSessions(): Promise<Map<string, StoredSession>> {
