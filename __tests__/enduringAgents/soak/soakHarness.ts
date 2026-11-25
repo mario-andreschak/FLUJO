@@ -58,6 +58,7 @@ import {
   getBehaviorCallPinRetentionPolicy,
 } from '@/backend/services/enduringAgents/compactRuntime';
 import { createBehaviorCallPin, completeBehaviorCallPin, listBehaviorCallPins } from '@/backend/services/enduringAgents/behaviorCallPins';
+import { acquirePersonaRuntimeRetentionWriteGrant } from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
 import { applyRetention } from '@/backend/services/enduringAgents/retention';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { FEATURES } from '@/config/features';
@@ -708,17 +709,34 @@ async function completeWorkloadBatch(
   }));
 }
 
+const SOAK_RUNTIME_RETENTION_CONFIG = {
+  mode: 'active',
+  rolloutBasisPoints: 10_000,
+  cohortVersion: 'persona-soak',
+  criticalPersonaIds: [],
+} as const;
+
 async function compactRuntime(personaId: string, now: number) {
-  await withPersonaRuntimeLock(personaId, async (lock) => {
-    await compactPersonaMailboxItems(personaId, now);
-    await compactPersonaActivities(personaId, now);
-    await compactPersonaFlowDispatches(personaId, now);
-    await applyRetention(
-      await listBehaviorCallPins(personaId),
-      getBehaviorCallPinRetentionPolicy(await listPersonaActivities(personaId), lock),
-      now,
-    );
-  });
+  const previousRetention = FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION;
+  FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
+  try {
+    await withPersonaRuntimeLock(personaId, async (lock) => {
+      const grant = await acquirePersonaRuntimeRetentionWriteGrant(personaId, lock, {
+        config: SOAK_RUNTIME_RETENTION_CONFIG,
+      });
+      if (!grant) throw new Error('The soak harness could not obtain a runtime retention grant.');
+      await compactPersonaMailboxItems(grant, now);
+      await compactPersonaActivities(grant, now);
+      await compactPersonaFlowDispatches(grant, now);
+      await applyRetention(
+        await listBehaviorCallPins(personaId),
+        getBehaviorCallPinRetentionPolicy(await listPersonaActivities(personaId), lock),
+        now,
+      );
+    });
+  } finally {
+    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = previousRetention;
+  }
 
   const before = await listPersonaLeaseRecords(personaId);
   const proofRecords = before

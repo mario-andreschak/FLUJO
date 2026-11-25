@@ -1,6 +1,6 @@
 import { z, type ZodType } from 'zod';
 
-import { FEATURES } from '@/config/features';
+import type { PersonaRuntimeRetentionMode } from '@/config/features';
 import {
   EnduringAgentIdSchema,
   PersonaActivitySchema,
@@ -21,6 +21,7 @@ import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { BEHAVIOR_CALL_PINS_COLLECTION, BehaviorCallPinSchema, type BehaviorCallPin } from './behaviorCallPins';
 import { PersonaFlowDispatchRecordSchema } from './personaFlowDispatchSchema';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
+import { getPersonaRuntimeRetentionDecision } from './personaRuntimeRetentionControl';
 import { getPersonaRuntimeClock } from './runtimeClock';
 import {
   getPersona,
@@ -43,7 +44,10 @@ export interface PersonaStorageKindStats {
 
 export interface PersonaStorageStats {
   personaId: string;
+  /** True while retention cleans up this Persona's old records (`active`). */
   retentionEnabled: boolean;
+  /** `shadow` only measures; `disabled` neither measures nor cleans up. */
+  retentionMode: PersonaRuntimeRetentionMode;
   collectedAt: number;
   kinds: {
     mailboxItems: PersonaStorageKindStats;
@@ -280,10 +284,12 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
   ]);
   const kinds = { mailboxItems, activities, flowDispatches, leaseHistory, behaviorCallPins };
   const values = Object.values(kinds);
+  const retention = await getPersonaRuntimeRetentionDecision(validatedPersonaId);
 
   return {
     personaId: validatedPersonaId,
-    retentionEnabled: FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION,
+    retentionEnabled: retention.mode === 'active',
+    retentionMode: retention.mode,
     collectedAt: runtimeClock.now(),
     kinds,
     totals: {

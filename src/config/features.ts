@@ -81,12 +81,25 @@ export interface PersonaRuntimeRetentionConfig {
   criticalPersonaIds: readonly string[];
 }
 
+/**
+ * Out of the box FLUJO measures what runtime retention would remove for every
+ * Persona and never removes anything (issue #481). Real cleanup (`active`) is
+ * an explicit choice through the workspace setting or the environment.
+ */
 export const PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG:
   PersonaRuntimeRetentionConfig = Object.freeze({
-    mode: 'disabled',
-    rolloutBasisPoints: 0,
+    mode: 'shadow',
+    rolloutBasisPoints: 10_000,
     cohortVersion: 'persona-runtime-retention-v1',
     criticalPersonaIds: Object.freeze([]),
+  });
+
+/** What any unreadable or malformed retention configuration resolves to. */
+export const PERSONA_RUNTIME_RETENTION_DISABLED_CONFIG:
+  PersonaRuntimeRetentionConfig = Object.freeze({
+    ...PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG,
+    mode: 'disabled',
+    rolloutBasisPoints: 0,
   });
 
 const PERSONA_RUNTIME_RETENTION_MODES = new Set<PersonaRuntimeRetentionMode>([
@@ -125,31 +138,54 @@ export function validatePersonaRuntimeRetentionConfig(
   };
 }
 
+export interface PersonaRuntimeRetentionEnvironment {
+  config: PersonaRuntimeRetentionConfig;
+  /** The mode named by FLUJO_PERSONA_RUNTIME_RETENTION_MODE, or null when unset. */
+  mode: PersonaRuntimeRetentionMode | null;
+  /** False when any retention variable is malformed; `config` is then disabled. */
+  valid: boolean;
+}
+
 /**
- * Read the deployment rollout contract. Any malformed value fails closed to the
- * disabled default; values are never clamped or inferred from Persona behavior.
+ * Read the deployment rollout contract. Any malformed value fails closed to
+ * disabled; values are never clamped or inferred from Persona behavior.
  */
-export function readPersonaRuntimeRetentionConfig(
+export function readPersonaRuntimeRetentionEnvironment(
   env: Readonly<Record<string, string | undefined>> = process.env,
-): PersonaRuntimeRetentionConfig {
-  const mode = env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE ?? 'disabled';
-  const basisPointsText = env.FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS ?? '0';
+): PersonaRuntimeRetentionEnvironment {
+  const modeText = env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE;
+  const basisPointsText = env.FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS
+    ?? String(PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG.rolloutBasisPoints);
   const cohortVersion = env.FLUJO_PERSONA_RUNTIME_RETENTION_COHORT_VERSION
     ?? PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG.cohortVersion;
   const criticalText = env.FLUJO_PERSONA_RUNTIME_RETENTION_CRITICAL_PERSONA_IDS ?? '';
+  const invalid: PersonaRuntimeRetentionEnvironment = {
+    config: { ...PERSONA_RUNTIME_RETENTION_DISABLED_CONFIG },
+    mode: null,
+    valid: false,
+  };
 
-  if (!/^\d+$/.test(basisPointsText)) {
-    return { ...PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG };
-  }
+  if (!/^\d+$/.test(basisPointsText)) return invalid;
   const candidate = validatePersonaRuntimeRetentionConfig({
-    mode: mode as PersonaRuntimeRetentionMode,
+    mode: (modeText ?? PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG.mode) as PersonaRuntimeRetentionMode,
     rolloutBasisPoints: Number(basisPointsText),
     cohortVersion,
     criticalPersonaIds: criticalText === ''
       ? []
       : criticalText.split(',').map((id) => id.trim()),
   });
-  return candidate ?? { ...PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG };
+  if (!candidate) return invalid;
+  return {
+    config: candidate,
+    mode: modeText === undefined ? null : candidate.mode,
+    valid: true,
+  };
+}
+
+export function readPersonaRuntimeRetentionConfig(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): PersonaRuntimeRetentionConfig {
+  return readPersonaRuntimeRetentionEnvironment(env).config;
 }
 
 export const FEATURES = {
@@ -220,8 +256,14 @@ export const FEATURES = {
   /** Enable conflict detection and linking of contradictory memory facts (issue #452). */
   ENABLE_MEMORY_CONFLICT_SURFACING: true,
 
-  /** Enable soft retention/compaction of Persona mailbox, activities, and dispatches (issue #453). */
-  ENABLE_PERSONA_RUNTIME_RETENTION: false,
+  /**
+   * Code-level ceiling for soft retention/compaction of Persona mailbox,
+   * activities, dispatches and specialist calls (issues #453, #481). While true,
+   * the mode comes from the workspace setting and
+   * FLUJO_PERSONA_RUNTIME_RETENTION_MODE, and defaults to measuring only
+   * (`shadow`). False turns every retention read and write off.
+   */
+  ENABLE_PERSONA_RUNTIME_RETENTION: true,
 
   /**
    * Irreversibly delete verified dead Persona lease-history records (issue #478).

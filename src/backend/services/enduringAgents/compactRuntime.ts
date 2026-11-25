@@ -4,21 +4,24 @@
  * plugging into the shared retention algorithm from retention.ts.
  */
 
-import { createHash } from 'crypto';
 import type {
   PersonaActivity,
   PersonaLease,
   PersonaMailboxItem,
 } from '@/shared/types/enduringAgent';
-import { canonicalJson } from './behaviorRevisions';
 import { compactBehaviorCallPin, saveCompactedBehaviorCallPin, type BehaviorCallPin } from './behaviorCallPins';
+import { personaMailboxAdmission, personaMailboxAdmissionDigest } from './mailboxAdmission';
 import type { PersonaRuntimeLock } from './runtimeLock';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
 import {
   listPersonaFlowDispatchRecordsForRetention,
   savePersonaFlowDispatchForRetention,
 } from './personaFlowDispatchRetention';
-import { applyRetention, type RetentionPolicy } from './retention';
+import {
+  assertPersonaRuntimeRetentionWriteGrant,
+  type PersonaRuntimeRetentionWriteGrant,
+} from './personaRuntimeRetentionControl';
+import { executeRetentionPlan, planRetention, type RetentionPolicy } from './retention';
 import {
   listPersonaActivities,
   listPersonaLeaseRecords,
@@ -62,10 +65,6 @@ export const PERSONA_RUNTIME_RETENTION_POLICY = {
 } as const;
 
 export const PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP = 100;
-
-function digest(value: unknown): string {
-  return createHash('sha256').update(canonicalJson(value)).digest('hex');
-}
 
 /** A child may finish before its parent; retain all detail until that Activity is terminal. */
 export function getBehaviorCallPinRetentionPolicy(
@@ -113,13 +112,7 @@ export function getMailboxItemRetentionPolicy(): RetentionPolicy<PersonaMailboxI
         ...item,
         summary: undefined,
         payloadRef: undefined,
-        admissionDigest: digest({
-          idempotencyKey: item.idempotencyKey,
-          personaId: item.personaId,
-          status: item.status,
-          deliveredAt: item.deliveredAt,
-          completedAt: item.completedAt,
-        }),
+        admissionDigest: personaMailboxAdmissionDigest(personaMailboxAdmission(item)),
         compactedAt,
       } as unknown as PersonaMailboxItem
     ),
@@ -238,56 +231,73 @@ export function getLeaseHistoryRetentionPolicy(): RetentionPolicy<PersonaLease> 
   };
 }
 
+export interface PersonaRuntimeCompactionResult {
+  compacted: number;
+  remaining: number;
+  /** Planned writes not made because the grant was withdrawn mid-run. */
+  unauthorized: number;
+}
+
+async function compactWithGrant<T extends { id: string }>(
+  grant: PersonaRuntimeRetentionWriteGrant,
+  records: readonly T[],
+  policy: RetentionPolicy<T>,
+  now: number,
+): Promise<PersonaRuntimeCompactionResult> {
+  const plan = planRetention(records, policy, now);
+  const result = await executeRetentionPlan(plan, policy, {
+    authorizeWrite: () => grant.authorize(),
+  });
+  return {
+    compacted: result.compacted,
+    remaining: result.remaining,
+    unauthorized: result.unauthorized,
+  };
+}
+
 /**
- * Compact mailbox items for a specific Persona.
- * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
+ * Compact mailbox items for the grant's Persona. The grant proves the runtime
+ * lock is held and retention is active; it is re-checked before every write.
  */
 export async function compactPersonaMailboxItems(
-  personaId: string,
+  grant: PersonaRuntimeRetentionWriteGrant,
   now = Date.now(),
-): Promise<{ compacted: number; remaining: number }> {
-  const items = await listPersonaMailboxItems(personaId);
-  const policy = getMailboxItemRetentionPolicy();
-  return applyRetention(items, policy, now);
+): Promise<PersonaRuntimeCompactionResult> {
+  assertPersonaRuntimeRetentionWriteGrant(grant);
+  const items = await listPersonaMailboxItems(grant.personaId);
+  return compactWithGrant(grant, items, getMailboxItemRetentionPolicy(), now);
 }
 
-/**
- * Compact activities for a specific Persona.
- * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
- */
+/** Compact Activities for the grant's Persona; see compactPersonaMailboxItems. */
 export async function compactPersonaActivities(
-  personaId: string,
+  grant: PersonaRuntimeRetentionWriteGrant,
   now = Date.now(),
-): Promise<{ compacted: number; remaining: number }> {
-  const items = await listPersonaActivities(personaId);
-  const policy = getActivityRetentionPolicy();
-  return applyRetention(items, policy, now);
+): Promise<PersonaRuntimeCompactionResult> {
+  assertPersonaRuntimeRetentionWriteGrant(grant);
+  const items = await listPersonaActivities(grant.personaId);
+  return compactWithGrant(grant, items, getActivityRetentionPolicy(), now);
 }
 
-/**
- * Compact Flow dispatches for a specific Persona.
- * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
- */
+/** Compact Flow dispatches for the grant's Persona; see compactPersonaMailboxItems. */
 export async function compactPersonaFlowDispatches(
-  personaId: string,
+  grant: PersonaRuntimeRetentionWriteGrant,
   now = Date.now(),
-): Promise<{ compacted: number; remaining: number }> {
-  const items = await listPersonaFlowDispatchRecordsForRetention(personaId);
-  const policy = getFlowDispatchRetentionPolicy();
-  return applyRetention(items, policy, now);
+): Promise<PersonaRuntimeCompactionResult> {
+  assertPersonaRuntimeRetentionWriteGrant(grant);
+  const items = await listPersonaFlowDispatchRecordsForRetention(grant.personaId);
+  return compactWithGrant(grant, items, getFlowDispatchRetentionPolicy(), now);
 }
 
 /**
  * Legacy compatibility adapter. This does not prune records and is not scheduled.
- * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
  */
 export async function compactPersonaLeaseHistory(
-  personaId: string,
+  grant: PersonaRuntimeRetentionWriteGrant,
   now = Date.now(),
-): Promise<{ compacted: number; remaining: number }> {
-  const items = await listPersonaLeaseRecords(personaId);
-  const policy = getLeaseHistoryRetentionPolicy();
-  return applyRetention(items, policy, now);
+): Promise<PersonaRuntimeCompactionResult> {
+  assertPersonaRuntimeRetentionWriteGrant(grant);
+  const items = await listPersonaLeaseRecords(grant.personaId);
+  return compactWithGrant(grant, items, getLeaseHistoryRetentionPolicy(), now);
 }
 
 // Backward-compatible direct-module exports; the implementation lives in the dedicated service.

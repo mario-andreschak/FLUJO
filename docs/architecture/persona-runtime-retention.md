@@ -25,11 +25,15 @@ Every completion-triggered soft-retention sweep is capped at 100 writes. Partial
 
 ## Execution and persistence
 
-Mailbox, activity, and dispatch sweeps run after an Activity completion, under the Persona runtime lock and behind `ENABLE_PERSONA_RUNTIME_RETENTION`. The gate defaults off. The dispatch adapter uses the shared schema-validating persistence path, so compacted records reload through the same schema used by dispatch and reconciliation.
+Retention runs in one of three modes: `disabled`, `shadow` (measure only, the default since #481) or `active`. The mode, the switches and the rollout stages are described in [persona-runtime-retention-rollout.md](./persona-runtime-retention-rollout.md).
+
+In `active` mode, mailbox, activity, and dispatch sweeps run after an Activity completion and in the hourly sweep, under the Persona runtime lock. Every write needs a grant from the rollout control, which re-checks the live mode before each record. The dispatch adapter uses the shared schema-validating persistence path, so compacted records reload through the same schema used by dispatch and reconciliation.
+
+A compacted mailbox item keeps `admissionDigest`, a SHA-256 digest of the admitted request (the fields an idempotency key promises not to change). A retry is compared with that digest, so it is still recognised as the same request after `summary` and `payloadRef` were removed, while different work under the same key is still refused.
 
 The completion path passes one timestamp to all three collection sweeps. Work is bounded per collection and happens after terminal Activity persistence; it is not performed synchronously by mailbox admission or delivery.
 
-Failures are reported per collection and do not make a partially completed sweep unsafe to retry. Disabling the gate prevents new soft-retention sweeps.
+Failures are reported per collection and do not make a partially completed sweep unsafe to retry. Turning retention off stops a running sweep before its next write.
 
 ## Lease-history boundary
 
@@ -42,7 +46,7 @@ This separation prevents the reversible soft-retention gate from silently author
 
 ## Rollout and rollback
 
-Both feature gates remain off by default. Before production enablement:
+Cleanup (`active`) and lease pruning remain off by default; measuring (`shadow`) is on. Before enabling cleanup by default:
 
 - run the focused boundary, rank, schema, idempotency, crash-recovery, and reconciliation suites;
 - run the 10,000-Activity bounded-growth workload to sweep convergence;

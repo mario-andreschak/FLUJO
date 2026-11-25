@@ -176,6 +176,10 @@ import {
 import {
   listPersonaFlowDispatchRecordsForReconciliation,
 } from './personaFlowDispatchRetention';
+import {
+  acquirePersonaRuntimeRetentionWriteGrant,
+  getPersonaRuntimeRetentionDecision,
+} from './personaRuntimeRetentionControl';
 import { getCoreMemory } from './memoryKernel';
 import {
   MemoryMaintenancePlanSchema,
@@ -2138,6 +2142,17 @@ export class PersonaFlowDispatcher {
       );
       return undefined;
     }
+    // Measuring (`shadow`) belongs to the hourly sweep; only `active` cleanup
+    // runs here, for Personas inside the rollout cohort.
+    try {
+      const decision = await this.inWorkspace(
+        () => getPersonaRuntimeRetentionDecision(personaId),
+      );
+      if (decision.mode !== 'active') return undefined;
+    } catch (error) {
+      log.warn(`Skipped Persona runtime retention for Activity ${activity.id}:`, error);
+      return undefined;
+    }
     const now = runtimeClock.now();
     const context = `Persona ${personaId}, Activity ${activity.id}, dispatch ${dispatch.id}`;
     const observation: PersonaRuntimeCompactionObservation = {
@@ -2153,40 +2168,25 @@ export class PersonaFlowDispatcher {
       log.warn(`Failed to collect pre-retention storage stats for ${context}:`, error);
     }
 
-    try {
-      observation.compactors.mailboxItems = await this.inWorkspace(
-        () => withPersonaRuntimeLock(
-          personaId,
-          () => this.dependencies.compactPersonaMailboxItems(personaId, now),
-        ),
-      );
-    } catch (error) {
-      observation.failures.push('mailboxItems');
-      log.warn(`Failed to compact mailbox items for ${context}:`, error);
-    }
-
-    try {
-      observation.compactors.activities = await this.inWorkspace(
-        () => withPersonaRuntimeLock(
-          personaId,
-          () => this.dependencies.compactPersonaActivities(personaId, now),
-        ),
-      );
-    } catch (error) {
-      observation.failures.push('activities');
-      log.warn(`Failed to compact Activities for ${context}:`, error);
-    }
-
-    try {
-      observation.compactors.flowDispatches = await this.inWorkspace(
-        () => withPersonaRuntimeLock(
-          personaId,
-          () => this.dependencies.compactPersonaFlowDispatches(personaId, now),
-        ),
-      );
-    } catch (error) {
-      observation.failures.push('flowDispatches');
-      log.warn(`Failed to compact Flow dispatches for ${context}:`, error);
+    const collections = [
+      ['mailboxItems', this.dependencies.compactPersonaMailboxItems],
+      ['activities', this.dependencies.compactPersonaActivities],
+      ['flowDispatches', this.dependencies.compactPersonaFlowDispatches],
+    ] as const;
+    for (const [kind, compact] of collections) {
+      try {
+        const result = await this.inWorkspace(
+          () => withPersonaRuntimeLock(personaId, async (lock) => {
+            const grant = await acquirePersonaRuntimeRetentionWriteGrant(personaId, lock);
+            return grant ? compact(grant, now) : null;
+          }),
+        );
+        if (!result) break;
+        observation.compactors[kind] = result;
+      } catch (error) {
+        observation.failures.push(kind);
+        log.warn(`Failed to compact ${kind} for ${context}:`, error);
+      }
     }
 
     // Lease history is intentionally excluded: its small records gain nothing

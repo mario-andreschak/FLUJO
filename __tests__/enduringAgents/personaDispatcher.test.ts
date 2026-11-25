@@ -539,7 +539,8 @@ function makeHarness(
   const appendConversationMessage = jest.fn(async () => undefined);
   const getPersonaStorageStats = jest.fn(async (id: string): Promise<PersonaStorageStats> => ({
     personaId: id,
-    retentionEnabled: FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION,
+    retentionEnabled: process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE === 'active',
+    retentionMode: process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE === 'active' ? 'active' : 'shadow',
     collectedAt: Date.now(),
     kinds: {
       mailboxItems: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
@@ -551,9 +552,9 @@ function makeHarness(
     totals: { records: 0, compacted: 0, uncompacted: 0, approxBytes: 0 },
   }));
   const observePersonaRuntimeCompaction = jest.fn(async () => {});
-  const compactPersonaMailboxItems = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
-  const compactPersonaActivities = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
-  const compactPersonaFlowDispatches = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
+  const compactPersonaMailboxItems = jest.fn(async () => ({ compacted: 0, remaining: 0, unauthorized: 0 }));
+  const compactPersonaActivities = jest.fn(async () => ({ compacted: 0, remaining: 0, unauthorized: 0 }));
+  const compactPersonaFlowDispatches = jest.fn(async () => ({ compacted: 0, remaining: 0, unauthorized: 0 }));
   const runFlow = jest.fn(async (input: FlowRunInput) => successfulResult(input));
 
   const dependencies: PersonaFlowDispatcherDependencies = {
@@ -692,7 +693,8 @@ describe('Persona Flow dispatcher', () => {
 
   afterEach(() => {
     _setPersonaRuntimeLockProcessBirthProbeForTests(undefined);
-    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
+    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
+    delete process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE;
     FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
     jest.restoreAllMocks();
   });
@@ -750,8 +752,13 @@ describe('Persona Flow dispatcher', () => {
     expect(await harness.dispatcher.list('persona_test')).toHaveLength(0);
   });
 
-  it('does not invoke runtime retention when its rollout gate is disabled', async () => {
-    const harness = makeHarness(workspace('retention-disabled'));
+  it.each([
+    ['the code switch is off', 'code', () => { FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false; }],
+    ['retention only measures, the default', 'shadow', () => undefined],
+    ['the environment turns it off', 'env', () => { process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE = 'disabled'; }],
+  ])('does not clean up after an Activity when %s', async (_label, id, arrange) => {
+    arrange();
+    const harness = makeHarness(workspace(`retention-off-${id}`));
 
     const submission = await harness.dispatcher.submit(
       dispatchInput('persona_test', 'retention-disabled'),
@@ -767,7 +774,7 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('isolates retention failures and supplies every sweep the same Persona and cutoff', async () => {
-    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
+    process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE = 'active';
     const harness = makeHarness(workspace('retention-enabled'));
     const baseline = await harness.dependencies.getPersonaStorageStats('persona_test');
     (harness.dependencies.getPersonaStorageStats as jest.Mock)
@@ -811,7 +818,7 @@ describe('Persona Flow dispatcher', () => {
     ] as jest.Mock[];
     for (const compactor of compactors) {
       expect(compactor).toHaveBeenCalledTimes(1);
-      expect(compactor.mock.calls[0][0]).toBe('persona_test');
+      expect(compactor.mock.calls[0][0]).toMatchObject({ personaId: 'persona_test' });
     }
     const cutoffs = compactors.map((compactor) => compactor.mock.calls[0][1]);
     expect(new Set(cutoffs)).toHaveProperty('size', 1);
@@ -833,7 +840,7 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('invokes runtime retention for errored and cancelled terminal Activities', async () => {
-    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
+    process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE = 'active';
 
     const errored = makeHarness(workspace('retention-error'));
     (errored.dependencies.runFlow as jest.Mock).mockImplementation(async (input: FlowRunInput) => ({

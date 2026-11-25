@@ -1,115 +1,151 @@
 # Persona runtime retention rollout
 
-Issue #481 introduces rollout control for the soft-compaction policy documented
-in [persona-runtime-retention.md](./persona-runtime-retention.md). It does not
-enable lease-history deletion, which remains independently gated and default-off.
+Issue #481 controls how the soft cleanup described in
+[persona-runtime-retention.md](./persona-runtime-retention.md) reaches real
+installations. It does not touch lease-history deletion, which stays separately
+gated and off by default.
 
-## Safety contract
+## Decision (November 2026)
 
-`FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION` is the emergency master switch and
-remains `false` by default. The deployment configuration is read from:
+FLUJO now **measures by default and cleans up nothing**. Every hour it works out,
+for every Persona, which old records cleanup would shrink and by how much, and
+stores the numbers. Real cleanup (`active`) stays an explicit choice.
 
-- `FLUJO_PERSONA_RUNTIME_RETENTION_MODE`: `disabled`, `shadow`, or `active`.
-- `FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS`: integer `0..10000`.
-- `FLUJO_PERSONA_RUNTIME_RETENTION_COHORT_VERSION`: versioned cohort salt.
-- `FLUJO_PERSONA_RUNTIME_RETENTION_CRITICAL_PERSONA_IDS`: comma-separated,
-  deployment-managed Persona IDs excluded from every rollout cohort.
+Why measuring is on: it is proven to write no Persona record (a test compares
+every file's time stamp and content before and after a sweep), it never runs on
+the path that finishes an Activity, and it produces the evidence the stages
+below need.
 
-Missing or malformed configuration resolves to disabled/zero. Criticality is
-only the explicit deployment list; `priority`, `autonomyLevel`, roles, and
-other behavior fields never imply criticality.
+Why cleanup stays off by default:
 
-Cohorts are SHA-256 buckets of the framed cohort version, workspace ID, and
-Persona ID. The stable bucket range is `0..9999`; a Persona is selected when
-its bucket is below the configured basis-point threshold. Changing the cohort
-version is an explicit reshuffle and requires the same review as increasing the
-threshold.
+1. It has never run on real data. Until #481, a retried request whose mailbox
+   item had been cleaned up was refused as "reused with different work". This
+   is fixed and tested now, but it shows the active path had no real use.
+2. Mailbox cleanup keeps every record and can make small ones bigger: the kept
+   fingerprint is longer than a short summary. In the test fixture three
+   cleaned-up mailbox items would grow from 1,698 to 1,947 bytes. Real summaries
+   may be longer; the measurements will show it.
+3. Cleanup permanently removes detail that can still be shown in FLUJO
+   (summaries, error text, instructions) for work older than 30 days or beyond
+   the newest 200–500 records.
+4. In `active` mode the cleanup after each finished Activity re-reads all of
+   that Persona's records. The soak harness turns it off for this reason. It
+   needs measuring on large histories before it runs everywhere.
 
-A sweep returns before listing Personas when the master switch is off, mode is
-disabled, or the threshold is zero. Shadow mode uses the same pure plans as
-active mode and performs no retention saves. Active work holds the Persona
-runtime lock across list, plan, and save. Immediately before every save it
-asserts lock ownership and re-reads the master switch, mode, cohort version,
-threshold, and critical list. Disabling or changing the rollout therefore stops
-remaining writes in an in-flight sweep; already completed atomic saves remain
-valid and a later sweep converges idempotently.
+## Switches
 
-The hourly scheduler runs at minute 47. It is safe to arm while disabled because
-the runner performs no Persona/storage reads in the disabled path. Sweeps do not
-overlap within a workspace and Persona work has bounded concurrency.
+Retention has three modes: `disabled` (nothing), `shadow` (measure only) and
+`active` (clean up).
 
-## Rollout stages
+| Switch | Where | Takes effect |
+|---|---|---|
+| Workspace setting `persona_runtime_retention_settings` | Generic storage API, see below | Within 5 seconds, no restart |
+| `FLUJO_PERSONA_RUNTIME_RETENTION_MODE` | Environment | On restart |
+| `FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION` | `src/config/features.ts` | On rebuild; `false` turns everything off |
 
-### Stage 0 — disabled baseline
+**Whoever turns it down wins.** The mode is the lower of the setting and the
+environment variable (`disabled` < `shadow` < `active`); the default `shadow`
+applies only when neither is set. A malformed environment variable or an
+unreadable setting means `disabled`. A setting whose content cannot be
+understood is rewritten as `disabled`, so it is valid again and is not re-read
+every few seconds.
 
-- Master switch: off.
-- Mode: `disabled`; basis points: `0`.
-- Capture seven days of baseline mailbox scan latency, runtime storage, and
-  reconciliation error rate.
-- Exit only after dashboards/queries can report the gates below.
+Turn cleanup on, off, or back to the default in the selected workspace:
 
-### Stage 1 — shadow
+```powershell
+$body = @{ key = 'persona_runtime_retention_settings'; value = @{ mode = 'active' } } | ConvertTo-Json -Depth 3
+Invoke-RestMethod -Method Post -Uri http://localhost:4200/api/storage -ContentType 'application/json' -Body $body
+```
 
-- Master switch: on.
-- Mode: `shadow`; begin at 100 basis points (1%) of non-critical Personas.
-- Observe at least seven days and at least 10,000 planned candidates.
-- There must be zero retention saves and zero file-mtime changes attributable to
-  the sweep.
-- Promote only when candidate/audit-identity and admission-digest validation has
-  zero failures.
+Use `mode = 'disabled'` to stop retention, or delete the key to go back to the
+default:
 
-### Stage 2 — 1% active non-critical
+```powershell
+Invoke-RestMethod -Method Delete -Uri 'http://localhost:4200/api/storage?key=persona_runtime_retention_settings'
+```
 
-- Mode: `active`; basis points: `100`; keep the same cohort version.
-- Observe for at least seven days and 10,000 attempted candidates.
-- Error/write-failure rate must be below 0.1%, with zero audit-identity,
-  admission-digest, crash-recovery, or reconciliation correctness failures.
-- Mailbox scan p95 may regress by at most 10% from baseline and p99 by at most
-  15%; no individual retention-held lock may exceed 1 second.
-- Actual serialized storage for compacted collections must fall by at least 20%
-  for Personas having eligible bulky records.
+Deployment-only variables (unchanged): `FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS`
+(`0..10000`, default `10000` = every Persona),
+`FLUJO_PERSONA_RUNTIME_RETENTION_COHORT_VERSION` and
+`FLUJO_PERSONA_RUNTIME_RETENTION_CRITICAL_PERSONA_IDS` (comma-separated Personas
+never included). Cohorts are SHA-256 buckets of cohort version, workspace and
+Persona id; a Persona is included when its bucket is below the basis points.
 
-### Stage 3 — 50% active
+## How it stays safe
 
-- Mode: `active`; basis points: `5000`; keep the same cohort version.
-- Observe for at least fourteen days.
-- Apply the Stage 2 gates, plus no sustained increase above 5% in aggregate
-  Persona runtime lock wait p95.
-- Run the full Activity runtime, Behavior maintenance, idempotency retry,
-  crash-recovery, and reconciliation gates with the master switch enabled.
+- Every write needs a grant from `acquirePersonaRuntimeRetentionWriteGrant`
+  (`personaRuntimeRetentionControl.ts`). It is issued only in `active` mode, for
+  a Persona inside the cohort, to a caller holding that Persona's runtime lock.
+  The compactors in `compactRuntime.ts` take the grant as a required argument
+  and refuse one that was not issued there.
+- Before every single write the grant re-checks the lock, the live mode and the
+  cohort. Turning retention off stops a running sweep before its next write.
+- The hourly sweep (minute 47) never raises the mode it started with, holds the
+  Persona lock while it reads and plans, and runs at most two Personas at once.
+- The cleanup after a finished Activity runs only in `active` mode.
+- Each record is written atomically. A crash leaves every record either old or
+  cleaned up, and the next sweep finishes the rest once; a half-written
+  temporary file is ignored.
+- A sweep still running after two hours is treated as stuck, and the next
+  trigger starts a fresh one instead of waiting for a restart.
 
-### Stage 4 — manual 100% decision
+## What is measured
 
-A named backend owner and operations owner must review the Stage 3 evidence.
-Moving to 10,000 basis points or changing the checked-in master-switch default is
-a separate reviewed change. This issue does not authorize default-on.
+Each sweep that runs stores a summary in the workspace item
+`persona_runtime_retention_reports`: the newest 168 sweeps (one week) plus
+running totals. It holds counts, sizes and timings only, never Persona ids,
+payloads, keys, digests or error text. Read it with:
 
-## Required observations
+```powershell
+Invoke-RestMethod 'http://localhost:4200/api/storage?key=persona_runtime_retention_reports'
+```
 
-Each sweep result contains a random sweep ID, mode, cohort version and threshold,
-Persona counts, duration, and per-collection scanned/candidate/write/failure
-counts. Per-Persona observations contain only identifiers and numeric metadata;
-they never include payloads, instruction context, idempotency keys, digests,
-secrets, or raw error text.
+Per sweep: mode and which switch decided it, cohort and basis points, start
+time and duration, Personas examined, selected, skipped and failed, the longest
+wait for and hold of a Persona lock, and per collection (mailbox items,
+Activities, Flow dispatches, specialist calls): records scanned, candidates,
+planned and done writes, failures, writes stopped by the switch, and bytes
+before and projected after. `active` sweeps also measure the stored size before
+and after. One summary line is also logged (`info`, or `warn` on failures).
 
-For active mode, `actualBytesBefore` and `actualBytesAfter` use measured
-persisted collection sizes. `bytesBefore` and `projectedBytesAfter` report the
-pure planner's serialized-record projection. Shadow mode reports the unchanged
-actual size alongside that projection.
+Per-Persona storage statistics (`GET /v1/personas/{id}/storage-stats`) report
+`retentionMode` and `retentionEnabled` (true only while cleanup is active for
+that Persona).
 
-Acceptance evidence must also validate:
+## Evidence
 
-- retries remain coalesced after mailbox compaction;
-- `admissionDigest` is present and correct where required;
-- record IDs, Persona/workspace ownership, lifecycle state, timestamps, and
-  audit linkage survive compaction;
-- interrupted and repeated sweeps converge without duplicate effects.
+| Gate | Status |
+|---|---|
+| Measuring writes no Persona record | Proven: `personaRuntimeRetentionSweep.test.ts` |
+| Off switch works without restart, mid-run | Proven: same file |
+| Crash in the middle of a cleanup run | Proven: records stay valid, next sweep finishes once, kept time stamps unchanged |
+| Retry after cleanup is still treated as the same request (AC2) | Fixed and proven; different work under the same key is still refused |
+| Audit identity survives cleanup (AC3) | Proven for mailbox items and Activities in the crash test, plus `compactRuntime.test.ts` |
+| Measuring never runs after a finished Activity | Proven: `personaDispatcher.test.ts` |
+| Real storage savings per collection | Missing: needs a week of `shadow` reports from real installs |
+| Lock hold and mailbox latency on large histories | Missing: reports now record lock wait and hold; mailbox scan latency still needs a baseline |
+| Active cleanup on real data, 1% then 50% | Missing: Mario's rollout checklist below |
 
-## Rollback
+## Rollout on real installations
 
-Set the checked-in/emergency master switch to `false` and deployment mode to
-`disabled` with basis points `0`. A running sweep stops before its next save.
-Do not enable the independent lease-history pruning flag as part of this
-rollback or rollout. Retention is additive optional-field compaction with no
-schema-version bump; rollback does not attempt to restore intentionally removed
-bulky detail.
+1. **Measure (now the default).** Leave the default for at least seven days.
+   Check the reports: no failed Personas, the longest lock hold stays well under
+   one second, and the projected savings per collection. If mailbox items do
+   not shrink, mailbox cleanup should be dropped from the policy rather than
+   switched on.
+2. **Clean up a small cohort.** On one installation set
+   `FLUJO_PERSONA_RUNTIME_RETENTION_MODE=active` and
+   `FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS=100` (or, on a single-user
+   install where 1% may select nobody, the setting `active` for one test
+   workspace). Watch for seven days: zero failed writes, retries still
+   coalesced, actual bytes after below before, nothing missing that a user
+   needs to see.
+3. **Half the Personas.** Basis points `5000`, same cohort version, fourteen
+   days, same checks plus no rise in Persona lock waits.
+4. **Default decision.** Changing the default mode to `active` is a reviewed
+   code change to `PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG`.
+
+**Rollback** at any stage: set the workspace setting to `disabled` (seconds, no
+restart) or the environment variable to `disabled` (restart). Writes stop before
+the next record. Cleanup is not undone: removed detail stays removed. Do not
+switch on lease-history pruning as part of this rollout.
