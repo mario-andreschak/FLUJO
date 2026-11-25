@@ -4,7 +4,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { simpleGit } from 'simple-git';
 import path from 'path';
 import fs from 'fs/promises';
-import { realpathSync } from 'fs';
 import { execSync, spawn, ExecSyncOptionsWithStringEncoding } from 'child_process';
 import { createLogger } from '@/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
@@ -63,29 +62,33 @@ async function assertRepoHostInstallationAllowed(
   // Existing clients identify the server by its working directory. Read raw
   // records: config normalization can perform Git probes before admission.
   const stored = await loadItem<Record<string, StoredInstallerProfile>>(StorageKey.MCP_SERVERS, {});
-  // No asynchronous work follows this current snapshot and global-policy check.
-  assertMcpHostInstallationAllowed(selection);
-  const canonicalPath = (value: string) => {
+  const canonicalPath = async (value: string) => {
     const absolute = path.isAbsolute(value) ? value : path.resolve(getWorkspaceDataDir(), value);
-    try { return realpathSync(absolute); } catch { return absolute; }
+    return fs.realpath(absolute).catch(() => absolute);
   };
   const requested = typeof savePath === 'string' && savePath.trim()
-    ? canonicalPath(path.resolve(savePath)) : undefined;
+    ? await canonicalPath(path.resolve(savePath)) : undefined;
   const contains = (parent: string, child: string) => {
     const relative = path.relative(parent, child);
     return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
   };
-  for (const [name, config] of Object.entries(stored)) {
-    if (!config || typeof config !== 'object') continue;
-    if (config.isolation === undefined && config.trustedHost === undefined) continue;
+  const governed = await Promise.all(Object.entries(stored)
+    .filter(([, config]) => config && typeof config === 'object'
+      && (config.isolation !== undefined || config.trustedHost !== undefined))
+    .map(async ([name, config]) => {
+      const launch = config.launch && typeof config.launch === 'object' && 'cwd' in config.launch
+        ? config.launch.cwd : undefined;
+      const locations = requested ? [config.rootPath, config.cwd, launch]
+        .filter((location): location is string => typeof location === 'string' && location.trim() !== '') : [];
+      return { name, config, roots: await Promise.all(locations.map(canonicalPath)) };
+    }));
+  // No asynchronous work follows this current snapshot and global-policy check.
+  assertMcpHostInstallationAllowed(selection);
+  for (const { name, config, roots } of governed) {
     if (name === selection.serverName) assertMcpHostInstallationAllowed(config);
-    const launch = config.launch && typeof config.launch === 'object' && 'cwd' in config.launch
-      ? config.launch.cwd : undefined;
-    for (const location of [config.rootPath, config.cwd, launch]) {
-      if (!requested || typeof location !== 'string' || !location.trim()) continue;
-      const root = canonicalPath(location);
-      // Cover both the server subtree and source-tree install/build parents.
-      if (contains(root, requested) || contains(requested, root)) assertMcpHostInstallationAllowed(config);
+    // Cover both the server subtree and source-tree install/build parents.
+    if (requested && roots.some(root => contains(root, requested) || contains(requested, root))) {
+      assertMcpHostInstallationAllowed(config);
     }
   }
 }

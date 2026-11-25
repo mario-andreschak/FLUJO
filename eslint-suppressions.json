@@ -7,9 +7,6 @@
   "src/app/api/git/route.ts": {
     "flujo/no-double-cast": {
       "count": 1
-    },
-    "flujo/no-sync-fs": {
-      "count": 1
     }
   },
   "src/app/api/mcp-registry/route.ts": {
@@ -76,11 +73,6 @@
       "count": 1
     }
   },
-  "src/backend/execution/flow/conversationLogSequence.ts": {
-    "flujo/no-sync-fs": {
-      "count": 5
-    }
-  },
   "src/backend/execution/flow/decisionModel.ts": {
     "flujo/no-workaround-comment": {
       "count": 1
@@ -126,11 +118,6 @@
   },
   "src/backend/execution/flow/toolCancelRegistry.ts": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/backend/execution/flow/turnTrace.ts": {
-    "flujo/no-sync-fs": {
       "count": 1
     }
   },
@@ -363,11 +350,6 @@
   "src/backend/services/ollama/modelRegistry.ts": {
     "flujo/no-double-cast": {
       "count": 1
-    }
-  },
-  "src/backend/services/originalOwner/configuredNativeParent.ts": {
-    "flujo/no-sync-fs": {
-      "count": 5
     }
   },
   "src/backend/services/originalOwner/nativeToolEffects.ts": {

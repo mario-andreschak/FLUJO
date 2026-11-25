@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { appendFileSync } from 'node:fs';
+import { appendFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 
 /**
@@ -40,20 +40,26 @@ export function isTurnTraceEnabled(): boolean {
   return store !== undefined;
 }
 
+// Lines are appended one after another, in the order the traces finished.
+let pendingWrite: Promise<void> = Promise.resolve();
+
 function write(trace: TurnTrace): void {
   if (trace.written || !traceFile) return;
   trace.written = true;
-  try {
-    appendFileSync(traceFile, `${JSON.stringify({
-      label: trace.label,
-      startedAt: trace.startedAt,
-      durationMs: Math.round((performance.now() - trace.origin) * 10) / 10,
-      spans: trace.spans,
-      marks: trace.marks,
-    })}\n`);
-  } catch {
-    // Diagnostics never affect a turn.
-  }
+  const line = `${JSON.stringify({
+    label: trace.label,
+    startedAt: trace.startedAt,
+    durationMs: Math.round((performance.now() - trace.origin) * 10) / 10,
+    spans: trace.spans,
+    marks: trace.marks,
+  })}\n`;
+  // Diagnostics never affect a turn.
+  pendingWrite = pendingWrite.then(() => appendFile(traceFile, line)).catch(() => undefined);
+}
+
+/** Resolves once every finished trace is on disk. */
+export function flushTurnTraces(): Promise<void> {
+  return pendingWrite;
 }
 
 function release(trace: TurnTrace): void {

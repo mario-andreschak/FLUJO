@@ -67,6 +67,7 @@ describe('turnTrace', () => {
     await background; // outside any trace: not recorded
     release();
     release(); // idempotent
+    await trace.flushTurnTraces();
 
     const lines = readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(lines).toHaveLength(2);
