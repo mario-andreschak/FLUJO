@@ -48,6 +48,11 @@ when their applicability to a specific model is not established.
   the previous observation. Runtime preparation is drained if it cannot cancel;
   an expired request cannot subsequently start a child, and owned shutdown is
   drained before returning.
+- Codex subscriptions, during runs: Codex sends `account/rateLimits/updated`
+  while a conversation runs, with the current windows of one limit bucket.
+  FLUJO lays those windows over the last full reading, so the bar moves without
+  pressing Refresh. The update usually has no display name, so the window keeps
+  the name from the last full reading. A failed update never stops the run.
 - Antigravity CLI signed in with a Google account is a subscription, but it
   offers no usage reading to other apps. Its segment says "FLUJO can't read
   usage" and never triggers a check. With an API key it is API billing.
@@ -101,7 +106,7 @@ live reader gives the same result for each recorded usage-page answer.
 |---|---|---|
 | Claude subscription | Usage page `GET api.anthropic.com/api/oauth/usage` (what the official CLI's `/usage` reads; needs the login's profile scope, which `claude setup-token` tokens may lack). Agent SDK `usage_EXPERIMENTAL…()` returns the same windows. Since SDK 0.3.x the page also sends `limits[]` rows and per-model weekly rows (for example "Fable"). | Yes |
 | Claude subscription, during runs | Rate-limit response headers (`anthropic-ratelimit-unified-5h-utilization`, `-7d-…`, `-status`, `-reset`), repeated by the SDK as `rate_limit_event`. The CLI status line also gets `rate_limits.five_hour` / `seven_day` (`used_percentage` 0 to 100, `resets_at` in epoch seconds) since Claude Code 2.1.80, but only inside the terminal. | Yes (SDK event) |
-| Codex / ChatGPT plan | Codex app-server `account/rateLimits/read`: `primary` and `secondary` windows with `usedPercent`, `windowDurationMins`, `resetsAt`; newer CLIs add `rateLimitsByLimitId` buckets. The app-server also sends `account/rateLimits/updated` during turns. | Yes (read on check; the update notice is not used yet) |
+| Codex / ChatGPT plan | Codex app-server `account/rateLimits/read`: `primary` and `secondary` windows with `usedPercent`, `windowDurationMins`, `resetsAt`; newer CLIs add `rateLimitsByLimitId` buckets. The app-server also sends `account/rateLimits/updated` during turns (one bucket, recorded from CLI 0.166.0 in `__tests__/model/fixtures/codexAppServerProtocol.json`). | Yes (read on check, and updated during runs) |
 | Antigravity CLI (Google login) | No public usage reading. | Says so plainly |
 | Gemini API key, Anthropic API key, OpenAI API key | Pay per use, no "allowance left". Only per-minute rate-limit headers, and spend reports through admin-only APIs. | API billing |
 | OpenRouter | Prepaid credit, not a subscription: `GET /api/v1/key` returns the key's `limit`, `limit_remaining` and `limit_reset`; `GET /api/v1/credits` returns account `total_credits` and `total_usage`. | Not yet (API billing) |

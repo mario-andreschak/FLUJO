@@ -11,14 +11,15 @@ import { readPlainFile } from '@/utils/readPlainFile';
 import { bundledCodexExecutable } from './codexRestrictedProfile';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, CodexAppServerRpcError } from './codexAppServerProcess';
 import { admitCodexDirectory, readCodexRuntimeFile, writeCodexRuntimeFile } from './codexRuntimeFiles';
-import { CODEX_APP_SERVER_CONTRACT } from './codexProtocol';
+import { CODEX_APP_SERVER_CONTRACT, assertSupportedCodexServer } from './codexProtocol';
 
 const log = createLogger('backend/services/model/adapters/codexRuntimeUpdate');
 const run = promisify(execFile);
 const DAY = 24 * 60 * 60 * 1000;
 const VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 // Bump when the admitted catalogue/error schema or SDK argument contract changes.
-const QUALIFICATION_CONTRACT = 'flujo-codex-runtime-qualification-v2';
+// v3: the running app-server's own version must match --version and be supported.
+const QUALIFICATION_CONTRACT = 'flujo-codex-runtime-qualification-v3';
 export interface CodexRuntimeCompatibility {
   cliVersion: string;
   sdkVersion: string;
@@ -142,7 +143,11 @@ export async function qualifyCodexUpdate(executable: string, home: string): Prom
     register: async registration => { assertCodexOwnedProcessRegistration(registration, owner); },
   });
   try {
-    await child.request('initialize', { clientInfo: { name: 'flujo_codex_update', version: '1' } }, 10000);
+    const initialized = await child.request('initialize', { clientInfo: { name: 'flujo_codex_update', version: '1' } }, 10000);
+    // The running server must be the program just checked, and new enough for
+    // FLUJO's conversation path. A server that does not say is judged by --version.
+    const reported = assertSupportedCodexServer(initialized);
+    if (reported !== undefined && reported !== compatibility.cliVersion) throw new Error('Codex app-server reported a different version');
     child.notify('initialized');
     let cursor: string | undefined, count = 0, pages = 0;
     const cursors = new Set<string>();

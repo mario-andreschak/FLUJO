@@ -21,7 +21,14 @@ version, initialize over real stdio, return every catalogue page within bounded
 page/model counts, reject invalid parameters with the expected JSON-RPC error
 frame, and parse the installed public SDK's start/resume execution options. The
 SDK's `--experimental-json` spelling is checked even when it is a hidden CLI
-alias. These probes request no thread, turn or tool execution.
+alias. These probes request no thread, turn or tool execution. The running
+app-server must also name the same version in its `initialize` answer.
+
+FLUJO needs Codex 0.162.1 or newer for ordinary conversations (steering, fork,
+live text, token totals and questions). Every ordinary conversation reads the
+version from `initialize` and stops a too-old program before any thread or
+turn exists, with a plain message. A server that does not name its version is
+allowed, because update qualification already checked it.
 
 An atomic receipt records the binary version and digest, installed SDK version,
 app-server protocol contract and qualification contract. A receipt from an older
@@ -58,6 +65,23 @@ required verification gates. This keeps the SDK wrapper moving independently of
 manual model-name edits. Application releases and deployments still follow the
 normal release gates; an older deployed image must first receive this change.
 
+### Recorded protocol check
+
+`npm run record:codex-protocol` starts the bundled CLI in an empty temporary
+Codex home, points it at a small local stand-in for the model service on
+127.0.0.1, and records every app-server message to
+`__tests__/model/fixtures/codexAppServerProtocol.json`. No login, account or
+real model call is used. It records a new conversation, a resume after restart,
+a turn refused because the plan's limit is used up, and a fork after the first
+turn. Machine name, install id and paths are replaced by placeholders.
+
+`__tests__/model/codexAppServerProtocolReplay.test.ts` plays that recording
+through FLUJO's real conversation code. It fails when the installed CLI or SDK
+no longer matches the recording, so every Codex update (including Dependabot's)
+must re-record and pass these checks: text deltas, final answer, token totals,
+plan limits, resume without double counting, the plain usage-limit message, and
+the fork checks. The recording uses the same request fields FLUJO sends.
+
 The optional experimental host catalogue snapshot checks compatibility against
 the selected executable's actual version instead of a hardcoded CLI generation.
 It remains an explicitly enabled, per-invocation immutable override.
@@ -88,6 +112,20 @@ bridge. Current CodeModeOnly models use Codex's computational wrapper to call
 those offered tools. Native shell, agent, browser and computer feature flags are
 disabled at startup; unsupported operations and server requests are refused.
 The effective tool policy participates in session compatibility.
+
+FLUJO's approval setting is the only approval gate. If Codex asks for approval
+anyway, FLUJO answers in Codex's own format instead of with an error: command,
+file-change, extra-permission and unknown-tool prompts are declined (an empty
+permission grant adds nothing). Codex's approval prompt for a FLUJO tool
+(`mcpServer/elicitation/request` from the `flujo` server marked
+`codex_approval_kind: mcp_tool_call`) is accepted only for the active turn, so
+the call reaches FLUJO's tool handler, where FLUJO's own approval decides. Any
+other MCP form or link is declined.
+
+When Codex reports an error or a failed turn, FLUJO shows a plain sentence for
+the kind of problem (for example a used-up plan, an expired sign-in or an
+unavailable model) followed by Codex's own words, such as when a limit resets.
+The input is never sent again automatically.
 Ordinary instructions also require code-mode scripts to emit the relevant
 returned tool content after awaiting it, including when a long call yields and
 resumes. This keeps the actual result available for the model's final response.
@@ -108,8 +146,13 @@ waiting. Invalid answers retain the prompt for correction; resolved, stopped or
 obsolete requests reject later answers. An application restart discards pending
 mailboxes and clears stale forms without replaying the submitted turn.
 
-The ordinary lifecycle batch does not claim issue #1097 complete. Native fork,
-advertised service-tier controls, native compaction integration and packaged
-runtime acceptance retain their separate criteria.
+The ordinary lifecycle batch does not claim issue #1097 complete. Advertised
+service-tier controls, native compaction integration and packaged runtime
+acceptance retain their separate criteria.
+
+Known upstream change: since CLI 0.164 Codex says full-history resume and fork
+answers are deprecated for its new paged threads (`excludeTurns: true` with
+`thread/turns/list`). 0.166.0 still returns the turns FLUJO checks; the recorded
+protocol check will fail when that stops.
 
 Protocol reference: [Codex app-server models](https://learn.chatgpt.com/docs/app-server).

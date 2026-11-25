@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AllowanceSnapshot, AllowanceWindow } from '@/shared/types/model/allowance';
-import { allowanceAccountKey } from './store';
+import { allowanceAccountKey, readAllowanceSnapshot, recordAllowanceSignal } from './store';
 import { readCodexAuthForTransfer } from '../adapters/codexAuth';
 import { prepareCodexRuntimeEnvironment, type CodexRuntimeEnvironment } from '../adapters/codexRuntimeHome';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration } from '../adapters/codexAppServerProcess';
@@ -35,6 +35,26 @@ export function normalizeCodexAllowance(value: unknown, observedAt = new Date().
     }
   }
   return { provider: 'codex', source: 'codex-app-server', observedAt, windows };
+}
+
+/**
+ * Codex sends `account/rateLimits/updated` during a run with the current
+ * windows of one limit bucket (recorded from CLI 0.166.0). Lay it over the last
+ * full reading, so the allowance bar moves without a manual refresh. A full
+ * reading made later replaces it; it ages out like every other reading.
+ */
+export function recordCodexRateLimitUpdate(accountKey: string, rateLimits: unknown, observedAt = new Date().toISOString()): void {
+  const bucket = record(rateLimits);
+  if (!bucket) return;
+  const signal = normalizeCodexAllowance({ rateLimits: bucket }, observedAt);
+  if (!signal.windows.length) return;
+  // Updates usually omit the bucket's display name. Keep the name the last
+  // full reading gave the same window instead of falling back to its id.
+  if (typeof bucket.limitName !== 'string' || !bucket.limitName.trim()) {
+    const known = new Map(readAllowanceSnapshot(accountKey)?.windows.map(window => [window.id, window.label]) ?? []);
+    signal.windows = signal.windows.map(window => known.has(window.id) ? { ...window, label: known.get(window.id)! } : window);
+  }
+  recordAllowanceSignal(accountKey, signal);
 }
 
 async function loginIdentity() {

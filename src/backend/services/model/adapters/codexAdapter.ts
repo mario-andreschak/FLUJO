@@ -37,6 +37,7 @@ import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
 import { acquireOrdinaryCodexExecutable, readCodexRuntimeCompatibility } from './codexRuntimeUpdate';
 import { createCodexAppServerThread } from './codexAppServerThread';
+import { readCodexAllowanceAccountKey, recordCodexRateLimitUpdate } from '@/backend/services/model/allowance/codex';
 import { answerCodexUserInput, answerCodexAsyncUserInput } from './codexUserInput';
 import { mapCodexUsage, subtractCodexUsage, subtractKnownCodexUsage, type CodexUsageLike } from './codexUsage';
 import { readCodexTokenSnapshot, type CodexTokenSnapshot } from './codexContextUsage';
@@ -831,6 +832,7 @@ export class CodexAdapter implements CompletionAdapter {
     let sessionBefore: ReturnType<typeof findReusableCodexSession>;
     let unknownForkUsage = false;
     let ordinaryThread: ReturnType<typeof createCodexAppServerThread> | undefined;
+    let allowanceAccount: Promise<string | undefined> | undefined;
     let ordinarySessionCompatible = true;
     let contextUsage: CompletionResult['contextUsage'] = null;
     let privateRuntimeCleanup: (() => Promise<void>) | undefined;
@@ -1060,6 +1062,14 @@ export class CodexAdapter implements CompletionAdapter {
             return result;
           },
         } : {}),
+        // The ordinary path always uses the ChatGPT login, so plan limits sent
+        // during the run belong to the same account as the allowance bar. The
+        // account key is read once, on the first update, off the event path.
+        onRateLimits: rateLimits => {
+          allowanceAccount ??= readCodexAllowanceAccountKey().catch(() => undefined);
+          void allowanceAccount.then(key => { if (key) recordCodexRateLimitUpdate(key, rateLimits); })
+            .catch(() => log.warn('Could not record a Codex allowance update'));
+        },
         onUsage: (total, context) => {
           protocolTotal = total;
           usage = forkCandidate ? subtractKnownCodexUsage(total, protocolBaseline)
