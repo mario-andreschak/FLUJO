@@ -86,6 +86,8 @@ export interface ModelCallInput {
   requireToolApproval?: boolean;
   /** Headless approval behavior for self-orchestrating adapters. */
   onApprovalRequired?: 'auto' | 'fail' | 'pause';
+  /** A sub-flow's approval card shows in this conversation (the one the person views). */
+  approvalConversationId?: string;
   /** Issue #239: bound MCP node references for native resource tools. Forwarded to
    *  localToolExecutors so self-orchestrating adapters can execute list_mcp_resources
    *  and native-URI read_resource in-loop. */

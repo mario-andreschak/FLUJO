@@ -14,6 +14,7 @@ import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index'; // Import flowService
 import { normalizeChatError } from '@/backend/execution/flow/normalizeError';
 import { resumePersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/continue/route');
 
@@ -86,7 +87,7 @@ async function POST_handler(
         reason: 'debug',
         flowInputPatch: {
           messages: sharedState.messages,
-          requireApproval: sharedState.requireApproval ?? false,
+          requireApproval: requireApprovalOf(sharedState.requireApproval),
           debug: false,
           continueDebug: true,
           userTurn: false,
@@ -157,7 +158,7 @@ async function POST_handler(
 
     // 5. Call processChatCompletion with debugger stepping disabled.
     // Use the conversation's persisted requireApproval setting.
-    const useRequireApproval = sharedState.requireApproval ?? false; // Default to false if not set
+    const useRequireApproval = requireApprovalOf(sharedState.requireApproval);
     log.info(`Calling processChatCompletion to continue execution`, {
         requestId,
         conversationId,

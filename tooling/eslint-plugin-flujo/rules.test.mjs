@@ -102,3 +102,51 @@ tester.run('no-adhoc-startup-error-match', rules['no-adhoc-startup-error-match']
     { code: "const isMissing = codes.includes('MODULE_NOT_FOUND');", errors: [{ messageId: 'adhocMatch' }] },
   ],
 });
+
+tester.run('single-tool-approval-gate', rules['single-tool-approval-gate'], {
+  valid: [
+    'const on = requireApprovalOf(state.requireApproval);',
+    'setRequireApproval(conversation.requireApproval ?? false);',
+    'if (requireApproval || held.length > 0) hold();',
+    "import { listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';",
+    {
+      code: "import { registerPendingApproval } from '@/backend/execution/flow/toolApprovalRegistry';",
+      filename: '/repo/src/backend/execution/flow/toolApprovalGate.ts',
+    },
+    {
+      code: "import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';",
+      filename: '/repo/src/app/api/approvals/[id]/route.ts',
+    },
+    { code: "sharedState.status = 'awaiting_tool_approval';", filename: '/repo/src/backend/execution/flow/runFlow.ts' },
+  ],
+  invalid: [
+    { code: 'run({ requireApproval: state.requireApproval ?? true });', errors: [{ messageId: 'fallback', data: { name: 'requireApproval' } }] },
+    { code: 'const gate = input.requireToolApproval ?? defaults.gate;', errors: [{ messageId: 'fallback', data: { name: 'requireToolApproval' } }] },
+    { code: 'const gate = requireApproval || true;', errors: [{ messageId: 'fallback' }] },
+    {
+      code: "import { registerPendingApproval } from '@/backend/execution/flow/toolApprovalRegistry';",
+      filename: '/repo/src/backend/services/model/adapters/newAdapter.ts',
+      errors: [{ messageId: 'decisionPoint', data: { name: 'registerPendingApproval' } }],
+    },
+    {
+      code: "import { applyApprovalDecision } from '../flow/resumeAfterApproval';",
+      filename: '/repo/src/backend/services/scheduler/autoApprove.ts',
+      errors: [{ messageId: 'decisionPoint', data: { name: 'applyApprovalDecision' } }],
+    },
+    {
+      code: "state.status = 'awaiting_tool_approval';",
+      filename: '/repo/src/backend/execution/flow/nodes/NewNode.ts',
+      errors: [{ messageId: 'pauseWriter' }],
+    },
+    {
+      code: "import * as approvals from '@/backend/execution/flow/toolApprovalRegistry';",
+      filename: '/repo/src/backend/services/newService.ts',
+      errors: [{ messageId: 'decisionPoint' }],
+    },
+    {
+      code: "const { applyApprovalDecision } = await import('@/backend/execution/flow/resumeAfterApproval');",
+      filename: '/repo/src/backend/services/newService.ts',
+      errors: [{ messageId: 'decisionPoint' }],
+    },
+  ],
+});

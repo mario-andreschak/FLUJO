@@ -91,6 +91,28 @@ beforeEach(() => {
 });
 
 describe('SubflowNode', () => {
+  it('gives the child the parent approval setting and asks in the conversation on screen (#1284)', async () => {
+    const node = makeNode({ subflowId: 'inner-flow', saveConversation: false }, 'edge-next');
+    const state = makeState({ requireApproval: true, onApprovalRequired: 'pause' });
+
+    await node.run(state);
+
+    expect(runFlowMock.mock.calls[0][0]).toMatchObject({
+      requireApproval: true,
+      approvalConversationId: 'parent-conv',
+      onApprovalRequired: 'pause',
+    });
+  });
+
+  it('keeps asking in the outermost conversation from a nested child (#1284)', async () => {
+    const node = makeNode({ subflowId: 'inner-flow', saveConversation: false }, 'edge-next');
+    const state = makeState({ conversationId: 'child-conv', ephemeral: true, approvalConversationId: 'root-conv' });
+
+    await node.run(state);
+
+    expect(runFlowMock.mock.calls[0][0]).toMatchObject({ requireApproval: false, approvalConversationId: 'root-conv' });
+  });
+
   it('runs the child flow ephemerally at depth+1 and hands off to its successor', async () => {
     // Explicit opt-out keeps this ephemeral: since #138 the canonical default is
     // ON (absent saveConversation persists), so this contract test pins the

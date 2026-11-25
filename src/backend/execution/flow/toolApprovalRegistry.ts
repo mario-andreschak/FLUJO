@@ -58,6 +58,18 @@ export function resolvePendingApproval(
   return true;
 }
 
+/**
+ * Take a pending approval back without answering it, for a wait that ended
+ * (it expired or the run stopped). Returns true when it was still pending.
+ */
+export function withdrawPendingApproval(conversationId: string, toolCallId: string): boolean {
+  const key = workspaceCacheKey(conversationId);
+  const perConv = registry.get(key);
+  if (!perConv?.delete(toolCallId)) return false;
+  if (perConv.size === 0) registry.delete(key);
+  return true;
+}
+
 /** The tool calls currently awaiting approval for a conversation. */
 export function listPendingToolCalls(
   conversationId: string

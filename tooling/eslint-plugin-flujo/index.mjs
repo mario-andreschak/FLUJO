@@ -6,6 +6,7 @@ import noDoubleCast from './rules/no-double-cast.mjs';
 import noRawTimers from './rules/no-raw-timers.mjs';
 import noSyncFs from './rules/no-sync-fs.mjs';
 import noWorkaroundComment from './rules/no-workaround-comment.mjs';
+import singleToolApprovalGate from './rules/single-tool-approval-gate.mjs';
 
 export default {
   meta: { name: 'eslint-plugin-flujo' },
@@ -16,5 +17,6 @@ export default {
     'no-raw-timers': noRawTimers,
     'no-sync-fs': noSyncFs,
     'no-workaround-comment': noWorkaroundComment,
+    'single-tool-approval-gate': singleToolApprovalGate,
   },
 };

@@ -15,11 +15,14 @@ jest.mock('@/utils/encryption/lockGate', () => ({
 
 const listPendingApprovalsMock = jest.fn();
 const getPendingApprovalMock = jest.fn();
-const putPendingApprovalMock = jest.fn(async () => {});
+const putPendingApprovalMock = jest.fn(async (_entry?: unknown): Promise<unknown> => undefined);
 const removePendingApprovalMock = jest.fn(async () => {});
+const putPendingApprovalImpl = async (saved?: unknown): Promise<unknown> => saved;
 jest.mock('@/backend/services/scheduler/pendingApprovals', () => ({
   listPendingApprovals: (...a: unknown[]) => listPendingApprovalsMock(...(a as [])),
-  getPendingApproval: (...a: unknown[]) => getPendingApprovalMock(...(a as [])),
+  // The route finds an entry by the receipt a caller sends (#1284).
+  findPendingApprovalByReceipt: (...a: unknown[]) => getPendingApprovalMock(...(a as [])),
+  approvalReceiptOf: (entry: { receipt?: string; approvalId: string }) => entry.receipt ?? entry.approvalId,
   putPendingApproval: (...a: unknown[]) => putPendingApprovalMock(...(a as [])),
   removePendingApproval: (...a: unknown[]) => removePendingApprovalMock(...(a as [])),
 }));
@@ -121,7 +124,7 @@ beforeEach(() => {
   assertLocalRequestMock.mockReset().mockReturnValue(null);
   listPendingApprovalsMock.mockReset();
   getPendingApprovalMock.mockReset();
-  putPendingApprovalMock.mockReset().mockResolvedValue(undefined);
+  putPendingApprovalMock.mockReset().mockImplementation(putPendingApprovalImpl);
   removePendingApprovalMock.mockReset().mockResolvedValue(undefined);
   loadConversationStateMock.mockReset();
   processToolCallsMock.mockClear();
@@ -458,5 +461,141 @@ describe('POST /api/approvals/:id (#115)', () => {
     }));
     expect(updateRunRecordMock).not.toHaveBeenCalled();
     expect(JSON.stringify(state)).not.toContain('executionAuthority');
+  });
+});
+
+describe('one approval gate (#1284)', () => {
+  const twoCallState = () => ({
+    ...awaitingState(),
+    pendingToolCalls: [
+      { id: 'call_1', type: 'function', function: { name: 'send_email', arguments: '{}' } },
+      { id: 'call_2', type: 'function', function: { name: 'post_message', arguments: '{}' } },
+    ],
+  });
+
+  it.each([
+    ['missing', undefined, false],
+    ['off', false, false],
+    ['on', true, true],
+  ])('resumes with the saved setting when it is %s (missing means off)', async (_label, saved, expected) => {
+    getPendingApprovalMock.mockResolvedValue(entry());
+    const state: Record<string, unknown> = { ...awaitingState() };
+    if (saved === undefined) delete state.requireApproval; else state.requireApproval = saved;
+    loadConversationStateMock
+      .mockResolvedValueOnce(state)
+      .mockResolvedValueOnce({ status: 'completed', messages: [] });
+
+    const res = await makePost('conv-1', { action: 'approve' });
+
+    expect(res.status).toBe(200);
+    expect(processChatCompletionMock).toHaveBeenCalledTimes(1);
+    expect((processChatCompletionMock.mock.calls[0] as unknown[])[2]).toBe(expected);
+  });
+
+  it('never lets an old receipt decide a later batch', async () => {
+    getPendingApprovalMock.mockResolvedValue({ ...entry(), receipt: 'apr_old' });
+    loadConversationStateMock.mockResolvedValue({
+      ...awaitingState(),
+      pendingToolCalls: [{ id: 'call_later', type: 'function', function: { name: 'delete_all', arguments: '{}' } }],
+    });
+
+    const res = await makePost('apr_old', { action: 'approve' });
+
+    expect(res.status).toBe(404);
+    expect(processToolCallsMock).not.toHaveBeenCalled();
+    expect(processChatCompletionMock).not.toHaveBeenCalled();
+    // The inbox now points at the batch that waits, under a new receipt.
+    expect(putPendingApprovalMock).toHaveBeenCalledWith(expect.objectContaining({
+      pendingToolCalls: [{ id: 'call_later', name: 'delete_all' }],
+    }));
+  });
+
+  it('decides every call of the receipt batch when toolCallId is omitted, never a call made after it', async () => {
+    getPendingApprovalMock.mockResolvedValue({
+      ...entry(),
+      receipt: 'apr_first',
+      pendingToolCalls: [{ id: 'call_1', name: 'send_email' }, { id: 'call_2', name: 'post_message' }],
+    });
+    loadConversationStateMock
+      .mockResolvedValueOnce(twoCallState())
+      .mockResolvedValueOnce({
+        ...awaitingState(),
+        pendingToolCalls: [{ id: 'call_3', type: 'function', function: { name: 'send_email', arguments: '{}' } }],
+      });
+    putPendingApprovalMock.mockImplementation(async (saved) => ({ ...(saved as object), receipt: 'apr_second' }));
+
+    const res = await makePost('apr_first', { action: 'approve' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(processToolCallsMock).toHaveBeenCalledTimes(2);
+    const decided = processToolCallsMock.mock.calls.map(
+      (call) => ((call as unknown[])[0] as { toolCalls: Array<{ id: string }> }).toolCalls[0].id,
+    );
+    expect(decided).toEqual(['call_1', 'call_2']);
+    expect(body).toMatchObject({
+      status: 'awaiting_tool_approval',
+      approvalId: 'apr_second',
+      pendingToolCalls: [{ id: 'call_3', name: 'send_email' }],
+    });
+  });
+
+  it('decides one call and keeps the batch receipt for the rest', async () => {
+    getPendingApprovalMock.mockResolvedValue({
+      ...entry(),
+      receipt: 'apr_batch',
+      pendingToolCalls: [{ id: 'call_1', name: 'send_email' }, { id: 'call_2', name: 'post_message' }],
+    });
+    loadConversationStateMock.mockResolvedValueOnce(twoCallState());
+    putPendingApprovalMock.mockImplementation(async (saved) => ({ ...(saved as object), receipt: 'apr_batch' }));
+
+    const res = await makePost('apr_batch', { action: 'deny', toolCallId: 'call_2' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(processToolCallsMock).not.toHaveBeenCalled();
+    expect(processChatCompletionMock).not.toHaveBeenCalled();
+    expect(body).toMatchObject({
+      status: 'awaiting_tool_approval',
+      approvalId: 'apr_batch',
+      pendingToolCalls: [{ id: 'call_1', name: 'send_email' }],
+    });
+  });
+
+  it('refuses a call id that is not part of the receipt batch', async () => {
+    getPendingApprovalMock.mockResolvedValue({ ...entry(), receipt: 'apr_batch' });
+    loadConversationStateMock.mockResolvedValue(twoCallState());
+
+    const res = await makePost('apr_batch', { action: 'approve', toolCallId: 'call_2' });
+
+    expect(res.status).toBe(404);
+    expect(processToolCallsMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps an inbox entry whose conversation could not be read', async () => {
+    listPendingApprovalsMock.mockResolvedValue([entry()]);
+    loadConversationStateMock.mockRejectedValue(Object.assign(new Error('busy'), { code: 'EBUSY' }));
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    expect(removePendingApprovalMock).not.toHaveBeenCalled();
+  });
+
+  it('lists the batch that waits now under a new receipt when the run moved on', async () => {
+    listPendingApprovalsMock.mockResolvedValue([{ ...entry(), receipt: 'apr_old' }]);
+    loadConversationStateMock.mockResolvedValue({
+      ...awaitingState(),
+      pendingToolCalls: [{ id: 'call_later', type: 'function', function: { name: 'delete_all', arguments: '{"x":1}' } }],
+    });
+    putPendingApprovalMock.mockImplementation(async (saved) => ({ ...(saved as object), receipt: 'apr_new' }));
+
+    const body = await (await GET()).json();
+
+    expect(body.approvals).toEqual([expect.objectContaining({
+      approvalId: 'apr_new',
+      pendingToolCalls: [{ id: 'call_later', name: 'delete_all' }],
+    })]);
+    expect(JSON.stringify(body)).not.toContain('arguments');
   });
 });

@@ -1,3 +1,4 @@
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 import { recordVariableSource } from '@/utils/shared/edgeConditions';
 import { BaseNode } from '../pocketflow';
 import { createHash } from 'node:crypto';
@@ -974,6 +975,13 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       // depth and maxChainDepth stays effective for nested signals (issue #117).
       chainDepth: sharedState.chainDepth ?? 0,
       parentRunId: sharedState.conversationId,
+      // One approval gate (#1284): a child follows the parent's setting and,
+      // since it cannot pause on its own, asks live in the conversation the
+      // person is viewing instead of running tools unasked.
+      requireApproval: requireApprovalOf(sharedState.requireApproval),
+      approvalConversationId: sharedState.approvalConversationId
+        ?? (sharedState.ephemeral ? undefined : sharedState.conversationId),
+      onApprovalRequired: sharedState.onApprovalRequired,
       // Wave lineage (issue #220): carry the parent run's planned-execution id
       // down to each persisted child run so a sub-flow conversation inherits the
       // parent's wave membership instead of being bucketed as "Ad-hoc". Absent
@@ -1345,7 +1353,9 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       // persistConversationState call-site bypass). Default stays ephemeral.
       mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',
       flujo: true,
-      requireApproval: false,
+      requireApproval: requireApprovalOf(prepResult.requireApproval),
+      approvalConversationId: prepResult.approvalConversationId,
+      onApprovalRequired: prepResult.onApprovalRequired,
       debug: false,
       depth: prepResult.depth,
       chainDepth: prepResult.chainDepth,
@@ -2128,7 +2138,9 @@ async function runSubflowLanesAdmitted(
           ...(resumedVisit ? { resumeAsNewTurn: true } : {}),
           ...(prepResult.persistConversation && laneTitle ? { title: laneTitle } : {}),
           flujo: true,
-          requireApproval: false,
+          requireApproval: requireApprovalOf(prepResult.requireApproval),
+          approvalConversationId: prepResult.approvalConversationId,
+          onApprovalRequired: prepResult.onApprovalRequired,
           debug: false,
           depth: prepResult.depth,
           chainDepth: prepResult.chainDepth,

@@ -1,6 +1,6 @@
 # Single-gate tool approval proposal
 
-Status: Design accepted for implementation planning under user-delegated judgment; runtime acceptance pending
+Status: Implemented for #1284 (see "Implementation record" at the end); browser acceptance pending
 
 Design issue: [#469](https://github.com/mario-andreschak/FLUJO/issues/469)
 
@@ -394,3 +394,37 @@ must preserve decision records and avoid replaying any completed or uncertain
 effect; reverting code alone is insufficient if a storage format has changed.
 Runtime acceptance remains open in that follow-up; this document ships no runtime
 or UI changes.
+
+## Implementation record (#1284, November 25, 2026)
+
+Rechecked on the implementation revision. What changed, and the calls made
+where the design left room:
+
+| Topic | Implementation |
+| --- | --- |
+| One reader for the setting (R1) | `requireApprovalOf()` in `src/backend/execution/flow/toolApprovalGate.ts`; only `true` is on. The four `?? true` resume sites (chat respond, approval API) and two more copied into the Human step continuation now read missing as off. |
+| One gate | Runs that can pause use runFlow's pause; runs that own their tool loop (Claude, Codex, Antigravity, native broker) and sub-flows ask live through `createLiveToolApproval` / `waitForLiveToolDecision`. Both show the same card and are answered by the same `/respond` route. |
+| Sub-flows | Before: a child ran with approval off, so tools ran unasked under a checked box. Now a child gets the parent's setting and no-approver outcome and asks live in the conversation the person views (`approvalConversationId`). A step rule inside a sub-flow asks instead of failing. |
+| Nobody answers | A saved pause waits without limit (it holds no process). A live wait ends after `LIVE_APPROVAL_WAIT_MS` (30 minutes): the card is taken back, the tool does not run, and the run ends with a plain message; sending a message asks again. A run with approval on and no conversation to ask in now fails instead of running the tool. |
+| Decision before invocation (crash window) | `applyApprovalDecision` saves a `tool:before` recovery checkpoint before an approved call starts and `tool:after` / `tool:unknown` after it. A call that still has an open checkpoint on the next decision is settled with a fixed "interrupted, not run again" tool result instead of running twice. Read-only tools have no checkpoint and may run again. Persona fences (`executionAuthority`, attribution) are passed to the approved call as runFlow does. |
+| Batch receipts | Inbox entries carry an opaque `receipt` per batch (`apr_<uuid>`), assigned inside the inbox lock: a batch that goes on keeps it, a new batch gets a new one, a caller cannot choose it. `GET /api/approvals` returns it as `approvalId`. Entries saved before have no receipt and answer to the conversation id for their current batch only. An omitted `toolCallId` decides only the receipt batch's waiting calls, captured under the conversation lock. A stale receipt returns 404 and the inbox is moved to the batch that waits now. |
+| Inbox safety | A failed inbox read is retried for short-lived file errors and otherwise refuses the change; it never writes an empty inbox over the real one. A conversation that cannot be read no longer prunes its inbox entry. |
+| Checkbox save failure (R15) | Saves run one after another; a failed save (other than the harmless 404 of a not-yet-saved conversation) puts the box back to the last saved value and shows the existing chat error line, unless the person already switched conversation or made a newer choice. No other UI was added. |
+| Flow step rules | `requireApprovalFor` / `requireApprovalForWrites` (added November 4, after this design) feed the same gate; they decide whether a call asks, never how it is answered. |
+| Check | `flujo/single-tool-approval-gate` fails on a fallback other than `false` for the setting, on new importers of the decision points (`registerPendingApproval`, `withdrawPendingApproval`, `resolvePendingApproval`, `clearPendingApprovals`, `applyApprovalDecision`) and on any code other than runFlow setting `awaiting_tool_approval`. |
+
+Left open, with reasons:
+
+- **R2 for `/v1` callers.** The chat UI sends the saved value with each run.
+  API callers still opt in per request (`metadata.requireApproval`), as the
+  API documents; making the saved value override it would silently change
+  existing callers.
+- **R8 inside one live run.** An agent SDK run reads the setting when it
+  starts; a change applies from the next run, not from the next tool call of
+  the same live run.
+- **R12 accessibility.** The approval card was not changed; keyboard, focus and
+  status checks belong to the browser acceptance run.
+- **Rollback.** The only new stored field is the optional inbox `receipt`;
+  older code ignores it and still finds entries by conversation id. Older code
+  does not read the `tool:before` checkpoint as "do not run again", so after a
+  rollback an interrupted approved call could run again, as before this change.

@@ -158,7 +158,7 @@ import {
   rethrowFlowExecutionAuthorityError,
   type FlowDurableMutationContext,
 } from '@/backend/execution/flow/executionAuthority';
-import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
+import { createLiveToolApproval, requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
@@ -1422,13 +1422,7 @@ export class ModelHandler {
       nodeId // Log nodeId
     });
 
-    // When approval is required and we have a conversation to surface it on, build
-    // a human-in-the-loop gate for self-orchestrating adapters (Claude
-    // subscription). It registers each tool call in the shared approval registry,
-    // announces it on the conversation's event stream (the existing
-    // run:awaiting_approval UI), and blocks until the /respond route resolves it.
-    // One emit function bound to this conversation, reused for the approval gate
-    // and the live transcript sink below.
+    // One emit function bound to this conversation, for the live transcript sink below.
     const emit = conversationId ? executionEventBus.emitterFor(conversationId) : undefined;
 
     const stepApprovalTools = Object.values(toolNameMap ?? {}).filter((tool) => tool.requiresApproval);
@@ -1441,31 +1435,16 @@ export class ModelHandler {
       return stepApprovalTools.some((tool) => name.includes(tool.tool));
     };
 
-    const requestToolApproval =
-      (requireToolApproval || stepApprovalTools.length > 0) && emit && conversationId
-        ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<boolean> => {
-            if (!requireToolApproval && !stepRequiresApproval(call.name)) return true;
-            if (input.onApprovalRequired === 'fail') {
-              // Self-orchestrating adapters own the tool loop, so waiting on
-              // the ordinary approval registry would deadlock an unattended
-              // meeting. Throwing aborts the participant turn without running
-              // the unresolved tool, matching runFlow's request/response path.
-              throw new Error(
-                `Headless run requires approval for tool "${call.name}" but no approver is available (approvalPolicy: fail).`,
-              );
-            }
-
-            const toolCall: OpenAI.ChatCompletionMessageFunctionToolCall = {
-              id: call.id,
-              type: 'function',
-              function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
-            };
-            return new Promise<boolean>((resolve) => {
-              registerPendingApproval(conversationId, toolCall, resolve);
-              emit({ type: 'run:awaiting_approval', pendingToolCalls: listPendingToolCalls(conversationId) });
-            });
-          }
-        : undefined;
+    // Self-orchestrating adapters (agent SDKs) own the tool loop, so they ask
+    // through FLUJO's one gate and wait for the answer on the conversation's
+    // approval card. A sub-flow asks in the conversation the person is viewing.
+    const requestToolApproval = createLiveToolApproval({
+      conversationId: input.approvalConversationId ?? conversationId,
+      requireApproval: requireApprovalOf(requireToolApproval),
+      stepRequiresApproval: stepApprovalTools.length > 0 ? stepRequiresApproval : undefined,
+      onApprovalRequired: input.onApprovalRequired,
+      signal: input.signal ?? input.executionAuthority?.signal,
+    });
 
     // Live sink for self-orchestrating adapters (Claude subscription): surface
     // each assistant/tool message on the conversation's event stream AS it is

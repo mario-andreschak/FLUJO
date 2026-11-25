@@ -53,6 +53,7 @@ import {
 } from '@/backend/execution/flow/types';
 import cloneDeep from 'lodash/cloneDeep';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import { requireApprovalOf, waitForLiveToolDecision } from './toolApprovalGate';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
@@ -437,6 +438,9 @@ export interface FlowRunInput extends FlowReplayInputs {
    *  run as awaiting_tool_approval so it can be resumed via /api/approvals.
    *  Only consulted when `requireApproval` is true. Default 'auto'. */
   onApprovalRequired?: 'auto' | 'fail' | 'pause';
+  /** Sub-flows: ask for approval live in this conversation instead of pausing
+   *  (a child run cannot pause on its own). See toolApprovalGate.ts. */
+  approvalConversationId?: string;
   /** External owner cancellation (for example MeetingEngine). Runtime-only. */
   abortSignal?: AbortSignal;
 
@@ -777,7 +781,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const startTime = Date.now();
 
   const flujo = input.flujo ?? true;
-  const requireApproval = input.requireApproval ?? false;
+  const requireApproval = requireApprovalOf(input.requireApproval);
   const flujodebug = input.debug ?? false;
   const continueDebug = input.continueDebug ?? false;
   const userTurn = input.userTurn ?? false;
@@ -1284,6 +1288,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // there is no interactive approver. Persisted on the state so a resumed
   // 'pause' run keeps re-pausing (not failing) on later tool calls.
   sharedState.onApprovalRequired = input.onApprovalRequired ?? sharedState.onApprovalRequired ?? 'auto';
+  sharedState.approvalConversationId = input.approvalConversationId;
 
   const previousLogicalRunId = sharedState.logicalRunId;
   if (!resumingPausedLogicalRun) {
@@ -2328,6 +2333,40 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     emit({ type: 'run:awaiting_approval', pendingToolCalls: heldCalls });
   };
 
+  /**
+   * A sub-flow cannot pause on its own, so it asks the person live, in the
+   * conversation they are viewing (#1284), on the same approval card as any
+   * other call. Returns the ids of rejected calls, which get the fixed
+   * `tool denied` result; the other calls may run. Undefined when this run
+   * pauses or fails instead (it is not a sub-flow, or policy `fail`).
+   */
+  const decideHeldCallsLive = async (
+    heldCalls: OpenAI.ChatCompletionMessageFunctionToolCall[],
+  ): Promise<Set<string> | undefined> => {
+    const approvalConversationId = sharedState.approvalConversationId;
+    if (!approvalConversationId || sharedState.onApprovalRequired === 'fail') return undefined;
+    const decisions = await Promise.allSettled(heldCalls.map((call) =>
+      waitForLiveToolDecision(approvalConversationId, call, { signal: runtimeAbortSignal })));
+    const failed = decisions.find((decision): decision is PromiseRejectedResult => decision.status === 'rejected');
+    if (failed) throw failed.reason;
+    const rejected = new Set(heldCalls
+      .filter((_call, index) => (decisions[index] as PromiseFulfilledResult<boolean>).value !== true)
+      .map((call) => call.id));
+    for (const call of heldCalls) {
+      if (!rejected.has(call.id)) continue;
+      sharedState.messages.push({
+        id: crypto.randomUUID(),
+        role: 'tool',
+        tool_call_id: call.id,
+        content: 'tool denied',
+        timestamp: Date.now(),
+        processNodeId: sharedState.currentNodeId,
+      } as FlujoChatMessage);
+    }
+    emitNewMessages();
+    return rejected;
+  };
+
   const hasAttachRequest = () =>
     !!sharedState.debugPauseRequested
     || !!sharedState.breakpoints?.includes(ATTACH_BREAKPOINT);
@@ -3027,13 +3066,17 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               }
               // --- Flujo=true: Handle optional approval ---
               const heldCalls = requireApproval ? ordinaryToolCalls : ordinaryToolCalls.filter(stepRequiresApproval);
-              if (requireApproval || heldCalls.length > 0) {
+              const rejectedLive = heldCalls.length > 0 ? await decideHeldCallsLive(heldCalls) : undefined;
+              if ((requireApproval || heldCalls.length > 0) && !rejectedLive) {
                 await holdForApproval(heldCalls, ordinaryToolCalls);
                 break;
               } else {
-                log.info(`[flujo=true, requireApproval=false] Processing ${ordinaryToolCalls.length} tools internally for conv ${effectiveConvId}`);
+                const runnableCalls = rejectedLive
+                  ? ordinaryToolCalls.filter((call) => !rejectedLive.has(call.id))
+                  : ordinaryToolCalls;
+                log.info(`[flujo=true] Processing ${runnableCalls.length} tools internally for conv ${effectiveConvId}`);
                 const toolProcessingResult = await processToolCallsRecoverably({
-                  toolCalls: ordinaryToolCalls, toolNameMap: sharedState.toolNameMap, offeredToolNames: sharedState.offeredToolNames, emit,
+                  toolCalls: runnableCalls, toolNameMap: sharedState.toolNameMap, offeredToolNames: sharedState.offeredToolNames, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   runId: logicalRunId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,

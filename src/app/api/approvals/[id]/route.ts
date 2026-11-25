@@ -17,9 +17,11 @@ import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionS
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
 import {
-  getPendingApproval,
+  approvalReceiptOf,
+  findPendingApprovalByReceipt,
   putPendingApproval,
   removePendingApproval,
+  type PendingApprovalEntry,
 } from '@/backend/services/scheduler/pendingApprovals';
 import { updateRunRecord } from '@/backend/services/scheduler/runHistory';
 import { resolvePendingQuestion, declinePendingQuestion } from '@/backend/services/questionRegistry';
@@ -30,6 +32,7 @@ import {
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { getSchedulerService } from '@/backend/services/scheduler';
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 
 const log = createLogger('app/api/approvals/[id]/route');
 
@@ -62,6 +65,16 @@ function pendingToolCallsMeta(state: SharedState): Array<{ id: string; name: str
   }));
 }
 
+/**
+ * The calls of the receipt's batch that still wait. Empty when the receipt is
+ * for a batch that was already decided, so an old receipt can never decide a
+ * later batch (#1284).
+ */
+function waitingCallsOfBatch(entry: PendingApprovalEntry, state: SharedState): string[] {
+  const batch = new Set(entry.pendingToolCalls.map((call) => call.id));
+  return (state.pendingToolCalls ?? []).filter((call) => batch.has(call.id)).map((call) => call.id);
+}
+
 function deriveOutputText(state: SharedState | undefined): string | undefined {
   if (!state) return undefined;
   const last = state.messages[state.messages.length - 1];
@@ -77,10 +90,14 @@ function deriveOutputText(state: SharedState | undefined): string | undefined {
  * POST /api/approvals/:id  (issue #115)
  *
  * Resolve a paused HEADLESS run from the approval inbox. `:id` is the
- * approvalId (== the paused run's conversationId). Body:
+ * approvalId that GET /api/approvals lists: an opaque receipt for one batch of
+ * waiting tool calls (entries saved before #1284 use the conversationId).
+ * Body:
  *   { "action": "approve" | "deny", "toolCallId"?: "<id>" }
- * When `toolCallId` is omitted every pending tool call is resolved with the
- * same action. `deny` maps to the existing reject semantics.
+ * When `toolCallId` is omitted every call of that batch that still waits is
+ * resolved with the same action; calls the run makes after it continues are
+ * never included. `deny` maps to the existing reject semantics. A receipt
+ * stops working once its batch is decided; a later batch has a new one.
  *
  * The tool decision is applied via the SAME helper the interactive chat
  * `/respond` route uses (applyApprovalDecision), then the run is resumed via
@@ -155,7 +172,7 @@ async function POST_handler(
   log.info('Resolving approval', { requestId, approvalId: id, action: body.action, toolCallId: body.toolCallId });
 
   try {
-    const candidateEntry = await getPendingApproval(id);
+    const candidateEntry = await findPendingApprovalByReceipt(id);
     if (!candidateEntry) {
       return json({ error: `No pending approval with id "${id}"` }, 404);
     }
@@ -164,7 +181,7 @@ async function POST_handler(
     // Re-read both receipt and conversation under the conversation lease. A
     // pre-lock snapshot must never authorize legacy tool execution after the
     // Persona deletion workflow has anonymized the durable state.
-    const entry = await getPendingApproval(id);
+    const entry = await findPendingApprovalByReceipt(id);
     if (!entry || entry.conversationId !== candidateEntry.conversationId) {
       return json({ error: `No pending approval with id "${id}"` }, 404);
     }
@@ -227,7 +244,7 @@ async function POST_handler(
             personaAttribution: { personaId, activityId, behaviorRevisionId },
             terminalPublication: entry.terminalPublication,
           });
-          await removePendingApproval(id);
+          await removePendingApproval(entry.approvalId);
           return json({
             status: finalStatus,
             approvalId: id,
@@ -256,14 +273,23 @@ async function POST_handler(
         }, 202);
       }
       // Already resolved (or the conversation is gone): idempotent no-op.
-      await removePendingApproval(id).catch(() => { /* best-effort */ });
+      await removePendingApproval(entry.approvalId).catch(() => { /* best-effort */ });
       return json({ error: 'This approval is no longer awaiting a decision' }, 404);
     }
 
-    // Which pending tool call(s) to resolve.
-    const targetIds = body.toolCallId
-      ? [body.toolCallId]
-      : state.pendingToolCalls.map(tc => tc.id);
+    // Which pending tool call(s) to resolve: only calls of the receipt's batch,
+    // captured here under the conversation lock.
+    const waiting = waitingCallsOfBatch(entry, state);
+    if (waiting.length === 0) {
+      // The receipt is for a batch that was already decided, for example in the
+      // chat. Point the inbox at the batch that waits now, under a new receipt.
+      await putPendingApproval({ ...entry, pendingToolCalls: pendingToolCallsMeta(state) });
+      return json({ error: 'This approval is no longer awaiting a decision' }, 404);
+    }
+    if (body.toolCallId && !waiting.includes(body.toolCallId)) {
+      return json({ error: `Pending tool call with ID ${body.toolCallId} not found` }, 404);
+    }
+    const targetIds = body.toolCallId ? [body.toolCallId] : waiting;
 
     if (state.personaAttribution) {
       const { personaId, activityId, behaviorRevisionId } = state.personaAttribution;
@@ -271,9 +297,6 @@ async function POST_handler(
         return json({
           error: 'Persona conversation attribution is incomplete; refusing an unfenced approval resume.',
         }, 409);
-      }
-      if (body.toolCallId && !state.pendingToolCalls.some((toolCall) => toolCall.id === body.toolCallId)) {
-        return json({ error: `Pending tool call with ID ${body.toolCallId} not found` }, 404);
       }
       for (const toolCallId of targetIds) {
         const refused = refusedHumanStepAnswer(state, toolCallId, mappedAction, humanContext);
@@ -287,7 +310,7 @@ async function POST_handler(
         reason: 'approval',
         flowInputPatch: {
           messages: state.messages,
-          requireApproval: state.requireApproval ?? true,
+          requireApproval: requireApprovalOf(state.requireApproval),
           debug: state.debugMode ?? false,
           continueDebug: false,
           userTurn: false,
@@ -341,10 +364,10 @@ async function POST_handler(
       const finalState = await loadConversationState(entry.conversationId);
       if (finalState?.status === 'awaiting_tool_approval') {
         const remaining = pendingToolCallsMeta(finalState);
-        await putPendingApproval({ ...resumedEntry, pendingToolCalls: remaining });
+        const saved = await putPendingApproval({ ...resumedEntry, pendingToolCalls: remaining });
         return json({
           status: 'awaiting_tool_approval',
-          approvalId: id,
+          approvalId: approvalReceiptOf(saved),
           conversationId: entry.conversationId,
           pendingToolCalls: remaining,
           dispatchId: dispatch.id,
@@ -388,7 +411,7 @@ async function POST_handler(
             ?? `Run ended with status "${finalState?.status ?? dispatch.state}" after approval`,
         terminalPublication: entry.terminalPublication,
       });
-      await removePendingApproval(id);
+      await removePendingApproval(entry.approvalId);
       return json({
         status: finalStatus,
         approvalId: id,
@@ -428,10 +451,10 @@ async function POST_handler(
     // Still awaiting (a specific toolCallId was resolved but others remain).
     if (state.status === 'awaiting_tool_approval') {
       const remaining = pendingToolCallsMeta(state);
-      await putPendingApproval({ ...entry, pendingToolCalls: remaining });
+      const saved = await putPendingApproval({ ...entry, pendingToolCalls: remaining });
       return json({
         status: 'awaiting_tool_approval',
-        approvalId: id,
+        approvalId: approvalReceiptOf(saved),
         conversationId: entry.conversationId,
         pendingToolCalls: remaining,
       });
@@ -451,7 +474,7 @@ async function POST_handler(
     await processChatCompletion(
       simulatedRequestData,
       true, // flujo
-      state.requireApproval ?? true,
+      requireApprovalOf(state.requireApproval),
       false, // flujodebug
       entry.conversationId
     );
@@ -460,12 +483,13 @@ async function POST_handler(
     const finalState = await loadConversationState(entry.conversationId);
 
     if (finalState?.status === 'awaiting_tool_approval') {
-      // The resumed run paused again on a later tool: keep it in the inbox.
+      // The resumed run paused again on a later tool: keep it in the inbox,
+      // under a new receipt for the new batch.
       const remaining = pendingToolCallsMeta(finalState);
-      await putPendingApproval({ ...entry, pendingToolCalls: remaining });
+      const saved = await putPendingApproval({ ...entry, pendingToolCalls: remaining });
       return json({
         status: 'awaiting_tool_approval',
-        approvalId: id,
+        approvalId: approvalReceiptOf(saved),
         conversationId: entry.conversationId,
         pendingToolCalls: remaining,
       });
@@ -485,7 +509,7 @@ async function POST_handler(
           : `Run ended with status "${finalState?.status ?? 'unknown'}" after approval`,
       pendingApproval: undefined,
     });
-    await removePendingApproval(id);
+    await removePendingApproval(entry.approvalId);
 
     return json({
       status: finalStatus,
