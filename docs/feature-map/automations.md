@@ -9,6 +9,7 @@ On the Triggers page a user makes a flow run by itself, without opening chat: on
 - `automations-list`: cards for every trigger, each showing whether it is armed (for example "Next run: …" or "Paused (global)") and its last run.
 - `automations-create`: "Add trigger" (or "New trigger" on the empty page) opens the "New trigger" dialog with three tabs: "1 · When should it run?", "2 · What should it run?", "3 · Start restrictions".
 - `automations-trigger-types`: seven kinds to pick from: "On a schedule", "When called (webhook)", "When files change", "Watch a tool", "A tool server reports an event", "When a website changes", "When another flow finishes".
+- `automations-event-steer`: on "A tool server reports an event", the optional "Send to a running conversation (optional)" field takes a conversation id or a pasted chat link. While that conversation runs, each event shows up in it as a message labelled "Event from <server>"; otherwise a run starts as usual.
 - `automations-target`: run "A Flow" (picked with the "Select an agent" button) or "A Persona", with a "What should the flow do?" message sent on every run.
 - `automations-restrictions`: what happens if a run is already going ("Already running" choice) and exclusive or emergency starts.
 - `automations-pause-all`: the "Run schedules" switch, labelled "Active" or "Paused", stops or arms every trigger.

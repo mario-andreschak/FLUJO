@@ -14,6 +14,9 @@ import {
   requeueSteeringMessages,
   clearSteeringInbox,
   subscribeSteeringMessages,
+  withdrawSteeringMessage,
+  watchSteeringDelivery,
+  markSteeringDelivered,
 } from '@/backend/execution/flow/steeringInbox';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 
@@ -107,4 +110,38 @@ it('notifies subscribers only in their workspace and deduplicates requeued IDs',
   runWithWorkspace('steering-test-a', () => enqueueSteeringMessage(CONV, msg('late')));
   await Promise.resolve();
   expect(notified).not.toHaveBeenCalled();
+});
+
+describe('delivery tracking for senders that must know a message landed (#1401)', () => {
+  it('takes back only a message that is still waiting', () => {
+    enqueueSteeringMessage(CONV, msg('a'));
+    enqueueSteeringMessage(CONV, msg('b'));
+    expect(withdrawSteeringMessage(CONV, 'a')).toBe(true);
+    expect(peekSteeringMessages(CONV).map(m => m.id)).toEqual(['b']);
+    expect(withdrawSteeringMessage(CONV, 'a')).toBe(false);
+    takeSteeringMessages(CONV);
+    expect(withdrawSteeringMessage(CONV, 'b')).toBe(false);
+  });
+
+  it('wakes a watcher when its message is delivered, in the same workspace only', async () => {
+    const watch = runWithWorkspace('steering-test-a', () => watchSteeringDelivery(CONV, 'x'));
+    let delivered = false;
+    void watch.delivered.then(() => { delivered = true; });
+    runWithWorkspace('steering-test-b', () => markSteeringDelivered(CONV, ['x']));
+    await Promise.resolve();
+    expect(delivered).toBe(false);
+    runWithWorkspace('steering-test-a', () => markSteeringDelivered(CONV, ['other', 'x']));
+    await Promise.resolve();
+    expect(delivered).toBe(true);
+  });
+
+  it('forgets a cancelled watch', async () => {
+    const watch = watchSteeringDelivery(CONV, 'y');
+    let delivered = false;
+    void watch.delivered.then(() => { delivered = true; });
+    watch.cancel();
+    markSteeringDelivered(CONV, ['y']);
+    await Promise.resolve();
+    expect(delivered).toBe(false);
+  });
 });

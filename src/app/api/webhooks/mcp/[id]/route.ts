@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { receiveMcpEvent } from '@/backend/services/scheduler/mcpEventDelivery';
+import { steerEventWithRuntime } from '@/backend/services/scheduler/eventSteering';
 import { loadExecutionState, updateExecutionState } from '@/backend/services/scheduler/state';
 import { ensureBackendInitialized } from '@/backend/init';
 import { isLocalRequest } from '@/backend/services/mcp/proxyForward';
@@ -28,6 +29,7 @@ async function POST_handler(request: NextRequest, { params }: { params: Promise<
       scheduler: getSchedulerService(),
       loadState: loadExecutionState,
       updateState: (executionId, update) => updateExecutionState(executionId, update),
+      steer: steerEventWithRuntime,
       onBackgroundError: (message, error) => log.warn(`${message} for ${id}:`, error),
     }, {
       id,

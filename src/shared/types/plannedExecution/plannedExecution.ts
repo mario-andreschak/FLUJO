@@ -113,12 +113,32 @@ export interface McpPollTriggerConfig {
 export interface McpEventTriggerConfig {
   type: 'mcp-event';
   serverName: string;
-  /** An event name from the server's `events/list`. */
+  /**
+   * Where events come from (#1401). Absent or 'events': the MCP events
+   * extension over signed webhooks, which the server retries until accepted.
+   * 'claude-channel': `notifications/claude/channel` messages on the open MCP
+   * connection. Those have no acknowledgement or replay, so a message sent
+   * while FLUJO or the server is off is lost.
+   */
+  source?: McpEventSource;
+  /** An event name from the server's `events/list`. Unused for channel messages. */
   eventName: string;
   /** Subscription arguments, as described by the event's `inputSchema`. */
   arguments?: Record<string, unknown>;
   /** Signing secret (`whsec_...`). Generated on save; never exported. */
   secret: string;
+  /**
+   * Optional conversation to steer (#1401). While it is running, an event is
+   * added to it as a new message at its next safe point instead of starting a
+   * run. When it is not running, the automation starts a run as usual.
+   */
+  steerConversationId?: string;
+}
+
+export type McpEventSource = 'events' | 'claude-channel';
+
+export function mcpEventSource(trigger: Pick<McpEventTriggerConfig, 'source'>): McpEventSource {
+  return trigger.source === 'claude-channel' ? 'claude-channel' : 'events';
 }
 
 export interface UrlWatchTriggerConfig {

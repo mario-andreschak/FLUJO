@@ -353,6 +353,7 @@ export const chatMessageRows = {
   'chat.messages.agent': ['Agent', 'Agente', 'Agent', 'Agent', 'Agente', 'Agente', '智能体'],
   'chat.messages.agentMessage': ['Message from {sender}', 'Mensaje de {sender}', 'Nachricht von {sender}', 'Message de {sender}', 'Messaggio da {sender}', 'Mensagem de {sender}', '来自 {sender} 的消息'],
   'chat.messages.agentCompletion': ['Result from {sender}', 'Resultado de {sender}', 'Ergebnis von {sender}', 'Résultat de {sender}', 'Risultato da {sender}', 'Resultado de {sender}', '来自 {sender} 的结果'],
+  'chat.messages.triggerEvent': ['Event from {server}', 'Evento de {server}', 'Ereignis von {server}', 'Événement de {server}', 'Evento da {server}', 'Evento de {server}', '来自 {server} 的事件'],
   'chat.messages.tool': ['Tool', 'Herramienta', 'Tool', 'Outil', 'Strumento', 'Ferramenta', '工具'],
   'chat.messages.system': ['System', 'Sistema', 'System', 'Système', 'Sistema', 'Sistema', '系统'],
   'chat.messages.processId': ['Process node ID: {id}', 'ID del nodo de proceso: {id}', 'Prozessknoten-ID: {id}', 'ID du nœud de traitement : {id}', 'ID nodo di elaborazione: {id}', 'ID do nó de processo: {id}', '处理节点 ID：{id}'],

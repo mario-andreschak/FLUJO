@@ -1,12 +1,16 @@
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type {
+  McpEventTriggerConfig,
   PlannedExecution,
   PlannedExecutionState,
   RunRecord,
   TriggerFirePayload,
 } from '@/shared/types/plannedExecution';
+import { mcpEventSource } from '@/shared/types/plannedExecution';
 import { mcpEventFingerprint, verifyMcpEventSignature } from './triggers/mcpEvent';
+import { composeTriggerPrompt } from './triggerPrompt';
+import type { EventSteeringOutcome, EventSteeringRequest } from './eventSteering';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_SEEN_IDS = 1000;
@@ -30,6 +34,8 @@ export interface McpEventDeliveryDeps {
   scheduler: McpEventScheduler;
   loadState: (id: string) => Promise<PlannedExecutionState>;
   updateState: (id: string, update: (current: PlannedExecutionState) => PlannedExecutionState) => Promise<unknown>;
+  /** Hands an event to a running conversation (#1401). Absent: events always start runs. */
+  steer?: (request: EventSteeringRequest) => Promise<EventSteeringOutcome>;
   onBackgroundError?: (message: string, error: unknown) => void;
   now?: () => number;
 }
@@ -49,30 +55,48 @@ export interface McpEventDeliveryResult {
   retryAfterSeconds?: number;
 }
 
+export type McpEventExecution = PlannedExecution & { trigger: McpEventTriggerConfig };
+
+/** One event on its way in, with the key that recognises it again. */
+export interface McpEventItem<T = unknown> {
+  key: string;
+  /** Older keys that also mean "already seen". */
+  aliases?: string[];
+  payload: T;
+}
+
 const busy = (error: string, retryAfterSeconds: number): McpEventDeliveryResult =>
   ({ status: 503, body: { error }, retryAfterSeconds });
 
-/**
- * Accepts one signed event. The sender keeps a durable log and retries, so this
- * says 503 instead of queueing in memory: anything FLUJO could not start stays
- * safely with the sender. 410 tells the sender to stop for good.
- */
-export async function receiveMcpEvent(
-  deps: McpEventDeliveryDeps,
-  input: McpEventDeliveryInput,
-): Promise<McpEventDeliveryResult> {
-  const { scheduler } = deps;
-  const execution = await scheduler.get(input.id);
+export const GONE: McpEventDeliveryResult = { status: 410, body: { error: 'This subscription is no longer in use' } };
+
+/** The execution, if it still takes events of this kind. */
+export function activeMcpEventExecution(
+  execution: PlannedExecution | null | undefined,
+  source: 'events' | 'claude-channel',
+): McpEventExecution | null {
   if (
     !execution
     || execution.trigger.type !== 'mcp-event'
     || !execution.enabled
     || execution.personaRetired
     || execution.personaArchived
-    || input.fingerprint !== mcpEventFingerprint(execution.trigger)
-  ) {
-    return { status: 410, body: { error: 'This subscription is no longer in use' } };
-  }
+    || mcpEventSource(execution.trigger) !== source
+  ) return null;
+  return execution as McpEventExecution;
+}
+
+/**
+ * Accepts one signed event. The sender keeps a durable log and retries, so this
+ * says 503 instead of queueing in memory: anything FLUJO could not start stays
+ * safely with the sender. 410 refuses this delivery for good.
+ */
+export async function receiveMcpEvent(
+  deps: McpEventDeliveryDeps,
+  input: McpEventDeliveryInput,
+): Promise<McpEventDeliveryResult> {
+  const execution = activeMcpEventExecution(await deps.scheduler.get(input.id), 'events');
+  if (!execution || input.fingerprint !== mcpEventFingerprint(execution.trigger)) return GONE;
   const trigger = execution.trigger;
 
   if (Buffer.byteLength(input.body) > MAX_BODY_BYTES) return { status: 413, body: { error: 'Payload too large' } };
@@ -83,7 +107,7 @@ export async function receiveMcpEvent(
     deps.now?.(),
   );
   if (!signed) return { status: 401, body: { error: 'Invalid signature' } };
-  const eventId = input.webhookId!;
+  const webhookId = input.webhookId!;
 
   let event: { eventId?: unknown; name?: unknown; timestamp?: unknown; data?: unknown };
   try {
@@ -93,25 +117,80 @@ export async function receiveMcpEvent(
   }
   if (event.name !== trigger.eventName) return { status: 400, body: { error: 'Unexpected event name' } };
 
+  return admitMcpEvents(deps, execution, [{ key: webhookId, payload: event }], ([item]) => ({
+    summary: `${trigger.serverName}: ${trigger.eventName}`,
+    context: {
+      event: {
+        eventId: item.key,
+        name: item.payload.name,
+        timestamp: item.payload.timestamp,
+        data: item.payload.data,
+      },
+    },
+  }));
+}
+
+/**
+ * Starts work for events that passed their source's checks: a steered message
+ * in a running conversation, a durable Persona admission, or a new run. Seen
+ * keys are remembered only after that worked, so nothing is lost on the way.
+ */
+export async function admitMcpEvents<T>(
+  deps: McpEventDeliveryDeps,
+  execution: McpEventExecution,
+  items: McpEventItem<T>[],
+  describe: (fresh: McpEventItem<T>[]) => { summary: string; context: Record<string, unknown> },
+): Promise<McpEventDeliveryResult> {
+  const { scheduler } = deps;
+  const trigger = execution.trigger;
   const state = await deps.loadState(execution.id);
-  if (state.seenIds?.includes(eventId)) return { status: 200, body: { accepted: true, duplicate: true } };
+  const seen = new Set(state.seenIds ?? []);
+  const fresh = items.filter(item => !seen.has(item.key) && !item.aliases?.some(alias => seen.has(alias)));
+  if (fresh.length === 0) return { status: 200, body: { accepted: true, duplicate: true } };
 
   if (await scheduler.isPaused()) return busy('Planned executions are paused', PAUSED_RETRY_SECONDS);
   if (scheduler.exclusiveGateFor(execution)) return busy('Another automation holds the scheduler', BUSY_RETRY_SECONDS);
 
+  const keys = fresh.map(item => item.key);
   const digest = createHash('sha256')
-    .update(`${execution.id}\0${execution.generationId ?? execution.createdAt}\0${eventId}`)
+    .update(`${execution.id}\0${execution.generationId ?? execution.createdAt}\0${keys.join('\0')}`)
     .digest('hex');
-  const payload: TriggerFirePayload = {
-    kind: 'mcp-event',
-    summary: `${trigger.serverName}: ${trigger.eventName}`,
-    context: { event: { eventId, name: event.name, timestamp: event.timestamp, data: event.data } },
-    ...(execution.personaId ? { deliveryId: `mcp-event-${digest}` } : {}),
-  };
+  const { summary, context } = describe(fresh);
   const remember = () => deps.updateState(execution.id, current => ({
     ...current,
-    seenIds: [...(current.seenIds ?? []), eventId].slice(-MAX_SEEN_IDS),
+    seenIds: [...(current.seenIds ?? []), ...keys].slice(-MAX_SEEN_IDS),
   }));
+
+  if (trigger.steerConversationId && deps.steer) {
+    const outcome = await deps.steer({
+      conversationId: trigger.steerConversationId,
+      messageId: `mcp-event-${digest.slice(0, 40)}`,
+      content: composeTriggerPrompt(execution.prompt, { context }, {
+        executionName: execution.name,
+        trigger: 'mcp-event',
+        now: new Date(deps.now?.() ?? Date.now()).toISOString(),
+      }),
+      provenance: {
+        executionId: execution.id,
+        executionName: execution.name,
+        serverName: trigger.serverName,
+        source: mcpEventSource(trigger),
+      },
+    });
+    if (outcome.kind === 'delivered') {
+      await remember();
+      return { status: 200, body: { accepted: true, steered: true, conversationId: trigger.steerConversationId } };
+    }
+    if (outcome.kind === 'busy') return busy(outcome.reason, BUSY_RETRY_SECONDS);
+    // Not running: start a run as usual.
+  }
+
+  const payload: TriggerFirePayload = {
+    kind: 'mcp-event',
+    summary,
+    context,
+    ...(execution.personaId ? { deliveryId: `mcp-event-${digest}` } : {}),
+  };
 
   if (execution.personaId) {
     try {

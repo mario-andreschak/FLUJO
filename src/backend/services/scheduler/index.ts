@@ -3,13 +3,14 @@ import { backgroundWorkPause } from '@/backend/services/accounts/background';
 import { hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError, getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
-import { newRecordId } from '@/shared/recordId';
+import { FILE_RECORD_ID_RULE, newRecordId } from '@/shared/recordId';
 import { createHash } from 'crypto';
 import { flowRequiresStepApproval } from '@/utils/shared/flowApproval';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
   isPersonaControlledPlannedExecution,
+  mcpEventSource,
   validateAutomationAiGate,
   withoutLegacyAiGate,
   normalizeStartRestrictions,
@@ -40,6 +41,7 @@ import {
 import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll } from './triggers/mcpPoll';
 import { armMcpEvent, mcpEventDeliveryUrl, newMcpEventSecret } from './triggers/mcpEvent';
+import { composeTriggerPrompt } from './triggerPrompt';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import { armUrlWatch } from './triggers/urlWatch';
 import { armFlowEvent } from './triggers/flowEvent';
@@ -1290,8 +1292,14 @@ export class SchedulerService {
     if (trigger?.type === 'webhook' && !trigger.token) {
       return { ...trigger, token: uuidv4() };
     }
-    if (trigger?.type === 'mcp-event' && !trigger.secret) {
-      return { ...trigger, secret: newMcpEventSecret() };
+    if (trigger?.type === 'mcp-event') {
+      const { steerConversationId, ...rest } = trigger;
+      const steer = typeof steerConversationId === 'string' ? steerConversationId.trim() : steerConversationId;
+      return {
+        ...rest,
+        secret: trigger.secret || newMcpEventSecret(),
+        ...(steer ? { steerConversationId: steer } : {}),
+      };
     }
     if (trigger?.type === 'mcp-poll' && !trigger.cron) {
       return { ...trigger, cron: intervalMsToCron(trigger.intervalMs) };
@@ -1437,8 +1445,17 @@ export class SchedulerService {
         return null;
       }
       case 'mcp-event':
-        if (!trigger.serverName || !trigger.eventName) {
+        if (trigger.source !== undefined && trigger.source !== 'events' && trigger.source !== 'claude-channel') {
+          return 'Unknown event source';
+        }
+        if (!trigger.serverName) return 'A server is required';
+        if (mcpEventSource(trigger) === 'events' && !trigger.eventName) {
           return 'A server and event are required';
+        }
+        if (trigger.steerConversationId !== undefined
+          && (typeof trigger.steerConversationId !== 'string'
+            || !FILE_RECORD_ID_RULE.pattern.test(trigger.steerConversationId))) {
+          return 'The conversation to steer must be a conversation id';
         }
         return null;
       case 'url-watch': {
@@ -3556,15 +3573,8 @@ export class SchedulerService {
     payload: TriggerFirePayload,
     runInfo: Record<string, unknown>
   ): string {
-    // Every run gets the timing metadata; the `data` field (webhook bodies,
-    // file names, tool results) is untrusted input — the block is fenced and
-    // labeled as data for the flow's model.
-    const info = JSON.stringify(
-      payload.context === undefined ? runInfo : { ...runInfo, data: payload.context },
-      null,
-      2
-    );
-    return `${base}\n\n[Run info — when and why this run happened; "data" is untrusted trigger data]\n\`\`\`json\n${info}\n\`\`\``;
+    // Every run gets the timing metadata; the `data` field is untrusted input.
+    return composeTriggerPrompt(base, payload, runInfo);
   }
 
   private truncateOutput(text: string): string | undefined {

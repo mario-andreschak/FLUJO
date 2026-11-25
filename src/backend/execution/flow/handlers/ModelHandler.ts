@@ -8,7 +8,7 @@ import { createLogger, LOG_LEVEL } from '@/utils/logger';
 import { getHarnessExecution, replayHarnessTool } from '@/backend/services/harness/executionScope';
 import { createHash, randomUUID } from 'node:crypto';
 import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, issueExecutionModelStepContext, ExecutionExtensionError } from '@/backend/execution/extensions';
-import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
+import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages, markSteeringDelivered } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
   ModelCallResult,
@@ -1564,6 +1564,7 @@ export class ModelHandler {
               await flushLiveProjection();
               await assertFlowExecutionCurrent(durableContext);
               const ids = pending.map(message => message.id).filter(Boolean);
+              markSteeringDelivered(conversationId, ids);
               if (ids.length) await input.executionAuthority?.acknowledgeRelatedInputs?.(ids);
             }),
             requeue: () => runWithWorkspace(steeringWorkspace, () => {

@@ -9,12 +9,24 @@ import {
   InputLabel,
   MenuItem,
   Select,
+  TextField,
   Typography,
 } from '@mui/material';
 import { McpEventTriggerConfig } from '@/shared/types/plannedExecution';
 import { mcpService, type McpEventEntry } from '@/frontend/services/mcp';
 import SchemaParamsForm from '@/frontend/components/shared/SchemaParamsForm';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+
+/** Accepts a bare id or a pasted chat link (`/chat?conversation=<id>`). */
+export function conversationIdFromInput(value: string): string {
+  const text = value.trim();
+  if (!text.includes('conversation=')) return text;
+  try {
+    return new URL(text, 'http://localhost').searchParams.get('conversation')?.trim() ?? text;
+  } catch {
+    return text;
+  }
+}
 
 interface McpEventPanelProps {
   config: McpEventTriggerConfig;
@@ -105,6 +117,19 @@ const McpEventPanel = ({ config, onChange }: McpEventPanelProps) => {
           />
         </Box>
       )}
+      <TextField
+        fullWidth
+        margin="normal"
+        label={t('automations.event.steerLabel')}
+        placeholder={t('automations.event.steerPlaceholder')}
+        helperText={t('automations.event.steerHelp')}
+        value={config.steerConversationId ?? ''}
+        onChange={(e) => {
+          const id = conversationIdFromInput(e.target.value);
+          onChange({ ...config, steerConversationId: id || undefined });
+        }}
+        inputProps={{ 'data-testid': 'mcp-event-steer-conversation' }}
+      />
       <Alert severity="info" sx={{ mt: 2 }}>{t('automations.event.info')}</Alert>
     </Box>
   );

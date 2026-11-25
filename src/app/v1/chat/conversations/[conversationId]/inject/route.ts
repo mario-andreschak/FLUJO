@@ -1,5 +1,4 @@
 import { createHash } from 'crypto';
-import { ConversationLogReadPressureError } from '@/backend/execution/flow/conversationLogReadAdmission';
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
@@ -7,41 +6,16 @@ import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import type { SharedState } from '@/backend/execution/flow/types';
 import { enqueueSteeringMessage } from '@/backend/execution/flow/steeringInbox';
 import { submitPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
 import { FlujoChatMessage } from '@/shared/types/chat';
-import type { StorageKey } from '@/shared/types/storage';
-import { assertSafeCollectionId, loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import {
+  loadPersistedConversationState as loadPersistedState,
+  personaRelatedAction,
+} from '@/backend/execution/flow/conversationSteeringTarget';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/inject/route');
-
-type PersonaRelatedAction = 'steer' | 'coalesce';
-
-async function loadPersistedState(conversationId: string): Promise<SharedState | undefined> {
-  try {
-    assertSafeCollectionId(conversationId);
-    return await loadItemBackend<SharedState>(
-      `conversations/${conversationId}` as StorageKey,
-      undefined as never,
-    );
-  } catch (error) {
-    if (error instanceof ConversationLogReadPressureError) throw error;
-    // Keep the route's existing not-running boundary for unsafe ids and storage
-    // failures. In particular, do not adopt a persisted legacy state into the
-    // live map: only an executing local loop may drain the legacy inbox.
-    return undefined;
-  }
-}
-
-function personaRelatedAction(state: SharedState): PersonaRelatedAction | undefined {
-  if (state.status === 'running') return 'steer';
-  if (state.status === 'awaiting_tool_approval' || state.status === 'paused_debug') {
-    return 'coalesce';
-  }
-  return undefined;
-}
 
 function injectionIdempotencyKey(
   conversationId: string,

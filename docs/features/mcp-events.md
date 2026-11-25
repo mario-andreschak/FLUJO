@@ -32,8 +32,8 @@ The sender owns reliability. FLUJO never holds an unstarted event in memory:
 | FLUJO answers | Meaning | The sender |
 |---|---|---|
 | `202` | The run started | Moves on |
-| `200` | Already seen (`webhook-id` is remembered) | Moves on |
-| `503` + `Retry-After` | A run is going, or automations are paused | Tries the same event again |
+| `200` | Already seen (`webhook-id` is remembered), or added to the running conversation | Moves on |
+| `503` + `Retry-After` | A run is going, automations are paused, or the steered conversation has not reached a safe point yet | Tries the same event again |
 | `410` | Automation deleted, disabled or changed | Stops this subscription |
 | `401` | Bad signature | Retries with backoff |
 | `413` | Over 256 KB | Skips the event |
@@ -45,6 +45,25 @@ the sender was told it arrived.
 While the automation is armed, FLUJO pins the server so it is not closed for being idle.
 
 The endpoint only accepts calls from this computer.
+
+## Steer a running conversation
+
+Fill in **Send to a running conversation (optional)** with a conversation id or a
+pasted chat link (`/chat?conversation=<id>`). While that conversation is running, each
+event is added to it as a new message instead of starting a run. When it is not running,
+the automation starts a run as usual.
+
+- The message is the automation's prompt plus the event in the same labelled block a run
+  gets, so the content stays untrusted data. The chat shows it as "Event from <server>".
+- It takes the same path as a message typed into a running chat, so every model picks it up
+  at its next safe point. Like those messages, it is kept word for word when a long chat is
+  summarized, so its "untrusted" label is never lost in a summary.
+- The event counts as delivered only once it is part of the conversation. Until then FLUJO
+  answers `503` and the event stays queued in the conversation; the sender's retry is told
+  `200` once it landed. Each event has a fixed message id, so retries never add it twice.
+- If the conversation stops before the event landed, FLUJO takes the waiting copy back and
+  starts a run instead.
+- Persona conversations take the event through the Persona's durable mailbox.
 
 ## Writing a server
 

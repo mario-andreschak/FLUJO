@@ -30,6 +30,7 @@ import {
   steeringCount,
   takeSteeringMessages,
   requeueSteeringMessages,
+  markSteeringDelivered,
 } from '@/backend/execution/flow/steeringInbox';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { HUMAN_STEP_TOOL_NAME } from '@/utils/shared/humanStep';
@@ -2220,6 +2221,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       const stableIds = injected
         .map((message) => message.id)
         .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      // Every id is now in the transcript (newly or from an earlier fold), so
+      // a sender waiting for delivery (an MCP event) may acknowledge it.
+      markSteeringDelivered(effectiveConvId, stableIds);
       if (stableIds.length > 0) {
         await sharedState.executionAuthority?.acknowledgeRelatedInputs?.(stableIds);
       }

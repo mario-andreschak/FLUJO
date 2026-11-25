@@ -28,11 +28,14 @@ import { workspaceCacheKey } from '@/utils/workspace';
 const globalForInbox = globalThis as unknown as {
   __flujoSteeringInbox?: Map<string, FlujoChatMessage[]>;
   __flujoSteeringListeners?: Map<string, Set<() => void>>;
+  __flujoSteeringDeliveryWaiters?: Map<string, Map<string, Set<() => void>>>;
 };
 const inbox: Map<string, FlujoChatMessage[]> =
   globalForInbox.__flujoSteeringInbox ?? (globalForInbox.__flujoSteeringInbox = new Map());
 const listeners = globalForInbox.__flujoSteeringListeners
   ?? (globalForInbox.__flujoSteeringListeners = new Map<string, Set<() => void>>());
+const deliveryWaiters = globalForInbox.__flujoSteeringDeliveryWaiters
+  ?? (globalForInbox.__flujoSteeringDeliveryWaiters = new Map<string, Map<string, Set<() => void>>>());
 
 function notify(key: string): void {
   for (const listener of listeners.get(key) ?? []) {
@@ -116,4 +119,67 @@ export function requeueSteeringMessages(conversationId: string, messages: FlujoC
 /** Drop a conversation's whole inbox (cancel / delete). */
 export function clearSteeringInbox(conversationId: string): void {
   inbox.delete(workspaceCacheKey(conversationId));
+}
+
+/**
+ * Take one message back out of the inbox before the run folded it in. Returns
+ * false when it is not waiting there (already taken by a drain, or cleared).
+ * A sender that gives up waiting uses this so a late fold can never duplicate
+ * a delivery it then makes another way.
+ */
+export function withdrawSteeringMessage(conversationId: string, messageId: string): boolean {
+  const key = workspaceCacheKey(conversationId);
+  const pending = inbox.get(key);
+  const index = pending?.findIndex(message => message.id === messageId) ?? -1;
+  if (!pending || index < 0) return false;
+  pending.splice(index, 1);
+  if (pending.length === 0) inbox.delete(key);
+  return true;
+}
+
+/**
+ * Called by the run loop once messages are part of the transcript (or accepted
+ * by a self-orchestrating model adapter). Wakes anyone waiting for those ids.
+ */
+export function markSteeringDelivered(conversationId: string, messageIds: readonly string[]): void {
+  const key = workspaceCacheKey(conversationId);
+  const waiting = deliveryWaiters.get(key);
+  if (!waiting) return;
+  for (const id of messageIds) {
+    const resolvers = waiting.get(id);
+    if (!resolvers) continue;
+    waiting.delete(id);
+    for (const resolve of resolvers) resolve();
+  }
+  if (waiting.size === 0) deliveryWaiters.delete(key);
+}
+
+/**
+ * Wait until a steering message has been folded into the run. Register the
+ * watch BEFORE enqueueing, so a fold that happens at once is not missed.
+ * `cancel` removes the watch (always call it when giving up).
+ */
+export function watchSteeringDelivery(conversationId: string, messageId: string): {
+  delivered: Promise<void>;
+  cancel: () => void;
+} {
+  const key = workspaceCacheKey(conversationId);
+  let resolver: (() => void) | undefined;
+  const delivered = new Promise<void>((resolve) => { resolver = resolve; });
+  const waiting = deliveryWaiters.get(key) ?? new Map<string, Set<() => void>>();
+  const resolvers = waiting.get(messageId) ?? new Set<() => void>();
+  resolvers.add(resolver!);
+  waiting.set(messageId, resolvers);
+  deliveryWaiters.set(key, waiting);
+  return {
+    delivered,
+    cancel: () => {
+      const current = deliveryWaiters.get(key);
+      const set = current?.get(messageId);
+      if (!current || !set) return;
+      set.delete(resolver!);
+      if (set.size === 0) current.delete(messageId);
+      if (current.size === 0) deliveryWaiters.delete(key);
+    },
+  };
 }

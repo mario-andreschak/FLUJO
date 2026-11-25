@@ -136,6 +136,8 @@ function packPlannedExecution(pe: PlannedExecution): PackagedPlannedExecution {
   }
   if (copy.trigger && copy.trigger.type === 'mcp-event') {
     delete (copy.trigger as { secret?: string }).secret;
+    // A conversation id only means something on this installation.
+    delete copy.trigger.steerConversationId;
   }
   return copy as unknown as PackagedPlannedExecution;
 }
