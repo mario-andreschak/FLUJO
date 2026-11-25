@@ -22,7 +22,7 @@ The measurable targets behind each row are in the
 | Security | C+ | Credentials and login are protected only if the owner opts in; shared use is not isolated; scanner alerts in MCP code; no outside security review | **No owner** for the defaults (see below), [#565](https://github.com/mario-andreschak/FLUJO/issues/565), [#573](https://github.com/mario-andreschak/FLUJO/issues/573)–[#575](https://github.com/mario-andreschak/FLUJO/issues/575), [#578](https://github.com/mario-andreschak/FLUJO/issues/578) | Mostly yes, except the outside review |
 | Maturity / stability | C | Long real-model runs; installed restart and backup checks; experimental features still experimental; open bug reports | [#570](https://github.com/mario-andreschak/FLUJO/issues/570), [#578](https://github.com/mario-andreschak/FLUJO/issues/578), single bug issues | Yes, but long runs need elapsed time and a provider budget |
 | Community / bus factor | D | Two more human maintainers; three or more outside contributors over 90 days | [#576](https://github.com/mario-andreschak/FLUJO/issues/576), [#577](https://github.com/mario-andreschak/FLUJO/issues/577), [#661](https://github.com/mario-andreschak/FLUJO/issues/661) | No: needs people |
-| Docs honesty | A | Keep README, status, security and changelog in step with the code; publish evidence for one exact release | [#565](https://github.com/mario-andreschak/FLUJO/issues/565), [#578](https://github.com/mario-andreschak/FLUJO/issues/578) | Yes |
+| Docs honesty | A | Keep README, status, security and changelog in step with the code; an outside review of the published [release evidence](release-evidence/README.md) | [#565](https://github.com/mario-andreschak/FLUJO/issues/565), [#578](https://github.com/mario-andreschak/FLUJO/issues/578) | Yes, except the outside review |
 | Production readiness | C− | Installed operation checked on each install method; multi-user and team isolation | [#570](https://github.com/mario-andreschak/FLUJO/issues/570), [#573](https://github.com/mario-andreschak/FLUJO/issues/573)–[#575](https://github.com/mario-andreschak/FLUJO/issues/575) under deferred [#212](https://github.com/mario-andreschak/FLUJO/issues/212) | Mostly yes, but #212 is deferred by the owner |
 
 **Honest overall picture:** no row that started below A− can be shown at A−
@@ -165,8 +165,17 @@ not kept current.
 - **Delivered:** [project status](../project-status.md) names experimental
   features and limits; the foundation contract separates definitions from
   results; this page.
-- **Missing:** Evidence bound to one exact release is not published (#578).
-  SECURITY.md was corrected on the cleanup branch (#565). This row drops if pages go stale, so
+- **Delivered on the cleanup branch (#578):** [release evidence](release-evidence/README.md)
+  for 3.48.10, the latest release. One page ties the release to its commit and
+  tree, CI and test counts, signed npm, image and installer builds, SBOMs and
+  the alerts open at release. `npm run evidence:release` collects it; a test
+  rebuilds the page from the saved answers, so it cannot be edited by hand.
+  Gaps it shows for 3.48.10: the SBOM was not attached to the release page,
+  the full checks and the clean-Windows first-launch job did not run, and the
+  installer workflow has no code-signing step.
+- **Missing:** an outside reviewer's grades (#578; see the
+  [reassessment package](independent-reassessment.md)). SECURITY.md was
+  corrected on the cleanup branch (#565). This row drops if pages go stale, so
   refresh this page whenever a child issue changes state.
 
 ### Production readiness (C−)
@@ -201,7 +210,9 @@ not kept current.
 - [ ] Find two more human maintainers and outside contributors (#576).
 - [ ] Run the product-fit pilot with real users (#577).
 - [ ] Run the human maintenance exercise (#661).
-- [ ] Ask an independent reviewer to regrade one exact release (#578).
+- [ ] Ask an independent reviewer to regrade one exact release (#578). What to
+      send, who counts as independent and the steps are in the
+      [reassessment package](independent-reassessment.md).
 - [ ] Decide whether shared or team use (#212) stays deferred. While it does, the
       production-readiness row can only be graded for single-owner use.
 

@@ -60,6 +60,7 @@ workaround.
 | Every API route has one multi-user kind (`workspace`, `host`, `admin`, `account`, `protocol`); routes that start programs are `host` or `admin` | `__tests__/accounts/routeCapabilities.test.ts` |
 | A workflow job that can publish or sign first requires the exact-commit `main` verification run | `assertReleaseVerificationGates` in `scripts/workflow-contract.mjs` (its exception list only shrinks) |
 | Every open security alert is fixed or has a written reason that expires | `npm run check:security-response` with `docs/security/alert-triage.json` |
+| Release evidence pages come from the collector, never from hand edits | `npm run evidence:release`; `scripts/collect-release-evidence.test.mjs` rebuilds each page in `docs/quality/release-evidence/` from its saved answers |
 | A package install runs only the install and build commands the person reviewed | `reviewDigest` in `installPackage.ts`; `__tests__/packages/installPackage.test.ts` |
 | Every shipped form (npm, Windows installer, Docker) runs the same backup, restart, upgrade and restore checks before release | `assertPackagedAcceptance` in `scripts/workflow-contract.mjs` |
 | App code reads website files only from `githubpages/oauth/client-metadata.json`; installers and the image leave the rest out | `tests/installer-repository.test.mjs` |
