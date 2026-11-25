@@ -82,6 +82,8 @@ import {
   refitCodexMessagesForInputLimit,
 } from '@/backend/services/model/adapters/codexInputCompaction';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
+import { isContextOverflowText } from '@/backend/services/model/adapters/contextOverflow';
+import { archiveContextForRefit } from './archiveContextForRefit';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
 import { prepareOpenAiPromptCacheWire } from '@/backend/services/model/adapters/openaiPromptCaching';
@@ -1060,21 +1062,8 @@ export class ModelHandler {
     } catch {
       /* circular/huge body — the message + code below are enough to decide */
     }
-    const haystack =
-      `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`.toLowerCase();
-    return (
-      haystack.includes('context_length_exceeded') ||
-      haystack.includes('character transport budget') ||
-      haystack.includes('maximum context length') ||
-      haystack.includes('context length is') ||
-      haystack.includes('maximum context') ||
-      haystack.includes('reduce the length') ||
-      haystack.includes('too many tokens') ||
-      haystack.includes('exceeds the context') ||
-      haystack.includes('input_too_large') ||
-      haystack.includes('input exceeds the maximum length') ||
-      /(?:image|pixel|patch).{0,80}(?:too large|exceed|maximum|limit)/.test(haystack) ||
-      /(?:too many|maximum).{0,40}(?:pixels|patches)/.test(haystack)
+    return isContextOverflowText(
+      `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`,
     );
   }
 
@@ -3938,19 +3927,36 @@ export class ModelHandler {
           ? Math.max(1, Math.floor(rejectedImageCosts.reduce((least, cost) => Math.min(least, cost), 16384) / 2)) : 8192;
         let retryMessages = await prepareImages(refitMessages, retryImageTokens);
         let retryTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
-        const retryTarget = inputBudget ?? Math.max(
-          1_024,
+        // The provider has just said the request is too long, so the retry must
+        // be materially smaller even when the catalogue window says it fits.
+        const retryTarget = Math.min(inputBudget ?? Infinity, Math.max(
+          1,
           Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model) * 0.7),
-        );
+        ));
         let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools, model);
         const priorSourceIds = apiSourceIds;
         let retrySourceIds = apiSourceIds;
         if (retryEstimate > retryTarget) {
+          // Omitted decisions stay searchable. Without the archive the retry
+          // keeps today's behaviour: canonical history is unchanged either way.
+          let sourceArchiveUri: string | undefined;
+          try {
+            sourceArchiveUri = await archiveContextForRefit(
+              apiMessages, apiSourceIds, opts?.conversationId, opts?.nodeId, opts?.durableContext,
+            );
+          } catch (error) {
+            rethrowFlowExecutionAuthorityError(error);
+            log.warn('Could not archive the rejected request before the smaller retry; retrying without it', { error });
+          }
+          if (sourceArchiveUri) {
+            retryTools = ModelHandler.ensureReadResourceArmed([{ role: 'assistant', content: sourceArchiveUri }], retryTools);
+          }
           let emergency = emergencyRefitMessages(retryMessages, {
             target: retryTarget,
             measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
             keepRecentMessages,
             resourceMarkers: refitMarkers,
+            sourceArchiveUri,
           });
           if (emergency.after > retryTarget && (retryTools?.length ?? 0) > 0) {
             retryTools = ModelHandler.ensureReadResourceArmed(emergency.messages, undefined);
@@ -3959,6 +3965,7 @@ export class ModelHandler {
               measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
               keepRecentMessages,
               resourceMarkers: refitMarkers,
+              sourceArchiveUri,
             });
           }
           if (emergency.after <= retryTarget) {

@@ -11,6 +11,20 @@ keep their original wording, roles and order. System and developer instructions 
 instructions, unresolved calls or unrecoverable observations cannot fit, the
 request fails with `context_budget_exceeded`; it does not shorten the contract.
 
+When a provider rejects a request as too long, including Claude's own
+`Prompt is too long` frame and `prompt_too_long` result, FLUJO retries once
+with a smaller history, and only while nothing visible has happened yet: no
+answer text and no tool activity. The rejection counts even when the model
+catalogue says the request fits, so the retry aims at 70% of the rejected size.
+Before shortening, the exact rejected request is stored as a searchable archive
+(original roles and message IDs; `read_resource` with `search_text`), and the
+shortened request points to it. If that archive cannot be written, the retry
+still runs without the pointer; the saved conversation is unchanged either way.
+These parts come from PR #1327. Two of its parts were not taken: a fixed
+96,000-token budget for models without a known window, which would refuse
+requests a larger model accepts, and capturing every small tool result on every
+refit, which rewrites them each turn without an idempotency key.
+
 Completed tool groups can leave an emergency wire only when runtime-captured
 resource metadata is bound to each exact call ID. A URI mentioned in a tool
 result is insufficient. The retained receipt includes the call ID, tool name,
