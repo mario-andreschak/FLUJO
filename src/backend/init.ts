@@ -7,7 +7,7 @@ import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import { reconcileOrphanedTasks, sweepOldSubflowTasks } from '@/backend/services/subflowTasks';
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
-import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
+import { describeWorkerEncryptionLock, isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
 import { ensureDefaultFlujoAgent } from '@/backend/services/flow/defaultAgent';
 import {
@@ -466,7 +466,7 @@ async function runInitialization(): Promise<void> {
   // startup must be DEFERRED until the user unlocks (see onUnlocked). In DEFAULT
   // mode — or once already unlocked — it runs immediately, exactly as before.
   if (await isEncryptionLocked()) {
-    setWorkerBootstrapStatus({ state: 'locked', error: 'Worker workspace encryption is locked. Unlock this workspace before running jobs.' });
+    if (isWorkerMode()) setWorkerBootstrapStatus({ state: 'locked', error: await describeWorkerEncryptionLock() });
     log.info(
       'Encryption locked — deferring MCP/scheduler startup until unlock'
     );

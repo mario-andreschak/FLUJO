@@ -152,6 +152,12 @@ the worker and after restart. Locked workspaces must be unlocked before capture.
 The archive therefore contains sensitive credentials and must be encrypted before
 it leaves the local control plane.
 
+A workspace that never stored a secret has no key file (`db/encryption_key.json`).
+Its snapshot needs none: the worker starts unlocked and creates the default key file
+the first time it saves a secret, just as the source would. A worker whose files hold
+encrypted secrets but no key file stays `locked`, and its status names the file with
+the secrets and says to put the key file back or capture a new snapshot.
+
 ## Worker bootstrap
 
 Configure a fresh worker volume before starting the existing FLUJO image:

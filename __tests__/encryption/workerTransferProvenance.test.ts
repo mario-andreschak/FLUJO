@@ -104,7 +104,12 @@ test.each(['mode', 'root', 'workspace', 'revision', 'key', 'pending'])('revalida
       await expect(encryptWithPassword('must-deny')).rejects.toThrow();
       await expect(getOperatorWorkerBootstrapKey(metadata)).rejects.toThrow();
     };
-    if (variant === 'workspace') await runWithWorkspace('other', check); else await check();
+    // Another workspace holding the transferred secret without its key file must
+    // not borrow this workspace's transfer (an empty one has nothing to unlock).
+    if (variant === 'workspace') await runWithWorkspace('other', async () => {
+      await saveItem(StorageKey.MODELS, [{ id: 'copied', ApiKey: `encrypted:${ciphertext}` }]);
+      await check();
+    }); else await check();
   });
 });
 

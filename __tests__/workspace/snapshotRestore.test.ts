@@ -12,7 +12,7 @@ import { getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMod
 import { WORKSPACE_SUBTREES, runWithWorkspace } from '@/utils/workspace';
 import { getServerDek } from '@/utils/encryption/session';
 import { metadataRevision, newKeyring, seal, serializeKeyring, wrapKeyring } from '@/utils/encryption/format';
-import { decryptWithPassword, isEncryptionLocked } from '@/utils/encryption/secure';
+import { decryptWithPassword, describeWorkerEncryptionLock, isEncryptionLocked } from '@/utils/encryption/secure';
 
 const digest = (content: Buffer | string) => createHash('sha256').update(content).digest('hex');
 const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKER_MODE',
@@ -237,6 +237,27 @@ describe('worker snapshot restore', () => {
       mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
     const result = (await restoreConfiguredWorkerSnapshot())!;
     await expect(runWithWorkspace('research', () => unlockWorkerSnapshot(result))).rejects.toThrow();
+  });
+
+  it('a snapshot of a workspace that never stored a secret restores unlocked without key metadata', async () => {
+    await archive();
+    const result = (await restoreConfiguredWorkerSnapshot())!;
+    await runWithWorkspace('research', async () => {
+      await unlockWorkerSnapshot(result);
+      expect(await isEncryptionLocked()).toBe(false);
+    });
+    await expect(fs.lstat(path.join(destination, 'db/encryption_key.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('a snapshot with encrypted secrets but no key metadata stays locked and names the missing file', async () => {
+    const ciphertext = seal('orphaned-credential', newKeyring().activeKey, 'flujo:secret:v2');
+    await archive({ files: { 'db/models.json': JSON.stringify([{ id: 'credential', ApiKey: `encrypted:${ciphertext}` }]) } });
+    const result = (await restoreConfiguredWorkerSnapshot())!;
+    await runWithWorkspace('research', async () => {
+      await unlockWorkerSnapshot(result);
+      expect(await isEncryptionLocked()).toBe(true);
+      expect(await describeWorkerEncryptionLock()).toContain('db/models.json');
+    });
   });
 
   it('unlocks a verified transferred operator profile on a worker with no source mount configured', async () => {

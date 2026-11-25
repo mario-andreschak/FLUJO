@@ -19,6 +19,7 @@ import { invalidateOperatorKeyring, OperatorKeyringContextChangedError, verified
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { getDataDir } from '@/utils/paths';
 import { assertLinkFreeFileParent } from '@/backend/services/workspace/backupRestoreFs';
+import { findStoredCiphertext } from './storedCiphertext';
 export { isValidEncryptionSessionKey } from './format';
 
 const log = createLogger('utils/encryption/secure');
@@ -116,13 +117,22 @@ async function persist(ring: Keyring, type: EncryptionType, password: string,
   return metadata;
 }
 
+function missingMetadataMessage(file: string): string {
+  return `Encrypted secrets were found in ${file}, but this workspace's key file db/encryption_key.json is missing, `
+    + 'so they cannot be read. Put back db/encryption_key.json from the source workspace or a matching backup, '
+    + 'or capture a new worker snapshot from a source that still has it.';
+}
+
 async function metadataOrInitialize(): Promise<EncryptionMetadata> {
   const existing = await readMetadata();
   if (existing) return existing;
-  const secret = readOperatorSecret();
-  if (!secret && isWorkerMode()) {
-    throw new EncryptionLockedError('Restore the worker workspace encryption metadata before accessing credentials');
+  if (isWorkerMode()) {
+    // A restored worker that never stored a secret gets the key its source would
+    // create on first use. A new key must never hide secrets that are unreadable.
+    const file = await findStoredCiphertext({ fresh: true });
+    if (file) throw new EncryptionLockedError(missingMetadataMessage(file));
   }
+  const secret = readOperatorSecret();
   // A custom password is optional. Explicit operator provisioning still fails
   // closed in readOperatorSecret; ordinary local use keeps default encryption.
   return secret ? persist(newKeyring(), 'user', secret, 'operator-file', true)
@@ -368,7 +378,12 @@ async function encryptionLockState(): Promise<boolean> {
   if (!metadata && process.env.FLUJO_ENCRYPTION_SECRET_FILE !== undefined) {
     try { metadata = await withMetadataLock(metadataOrInitialize); } catch { return true; }
   }
-  if (!metadata) { invalidateOperatorKeyring(); return isWorkerMode(); }
+  if (!metadata) {
+    invalidateOperatorKeyring();
+    // Without key metadata there is nothing to unlock. Only a worker that already
+    // holds secrets it cannot read stays locked; see describeWorkerEncryptionLock.
+    return isWorkerMode() && (await findStoredCiphertext()) !== null;
+  }
   const cached = getServerDek();
   if (cached) {
     try {
@@ -391,6 +406,13 @@ async function encryptionLockState(): Promise<boolean> {
 export async function isEncryptionLocked(): Promise<boolean> {
   try { return await encryptionLockState(); }
   catch (error) { invalidateOperatorKeyring(); throw error; }
+}
+
+/** Plain words for a locked worker's status: what is missing and how to fix it. */
+export async function describeWorkerEncryptionLock(): Promise<string> {
+  const file = await readMetadata().then(metadata => metadata ? null : findStoredCiphertext()).catch(() => null);
+  return file ? missingMetadataMessage(file)
+    : 'Worker workspace encryption is locked. Unlock this workspace before running jobs.';
 }
 
 export async function getEncryptionType(): Promise<EncryptionType | null> {
