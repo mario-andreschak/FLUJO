@@ -6,26 +6,34 @@ Issue [#571](https://github.com/mario-andreschak/FLUJO/issues/571), part of
 This is a map of existing responsibilities and a contract for incremental
 changes. It does not establish installed-release acceptance or award a grade.
 
+Every file and test named on this page was checked against the code again on
+November 25, 2026 ([#661](https://github.com/mario-andreschak/FLUJO/issues/661)).
+The splitting work in #571 will move code out of `runFlow.ts`, `ModelHandler.ts`
+and the MCP service `index.ts` after that check, so re-run the
+[path check](#before-you-start) before relying on a file name here.
+
 ## Where to change a behavior
 
-Paths below are relative to the repository root. A module owns the indicated
+Paths starting with `src/` are relative to the repository root. Shorter paths
+are relative to `src/backend/execution/flow/`, except in the two MCP rows, where
+they are relative to `src/backend/services/mcp/`. A module owns the indicated
 responsibility; its callers must use that boundary rather than duplicate its
 state or enforcement. The topic owner is the integration owner for epic #563,
 not a claim that an additional human maintainer has accepted responsibility.
 
 | Responsibility | Existing entry point and state owner | Contract to preserve | Integration owner |
 | --- | --- | --- | --- |
-| Run lifecycle | `src/backend/execution/flow/runFlow.ts`; `FlowExecutor.ts` holds live `conversationStates` | `runFlow` acquires the workspace/conversation execution lock, validates loaded/input state, registers cancellation, and drives graph steps. Preserve explicit invocation source, terminal/paused distinction, and run-owned cleanup. | Maturity for behavior; Code health for sequenced extraction |
+| Run lifecycle | `src/backend/execution/flow/runFlow.ts`; `runAdmission.ts` reserves run capacity; the live state map lives in `conversationStateRegistry.ts` and `FlowExecutor.conversationStates` reads it | `runFlow` claims run admission, acquires the workspace/conversation execution lock, validates loaded/input state, registers cancellation, and drives graph steps. Preserve explicit invocation source, terminal/paused distinction, and run-owned cleanup. | Maturity for behavior; Code health for sequenced extraction |
 | Persona instruction/snapshot decisions | `personaRunContract.ts`, called by `runFlow.ts`; [contract](./persona-run-contract.md) | Keep the attribution triple, root/hash binding and same-Activity comparison at their existing caller sites. Schema parsing, context cloning, top-level admission, live authority and all operation ordering remain in `runFlow`. | Code health for extraction; Maturity/Security own behavioral enforcement |
 | Conversation serialization | `conversationExecutionLock.ts` | One process-global, workspace-keyed queue; async-local reentry must not deadlock. A failed predecessor does not poison later runs. | Maturity |
 | Execution authority | `executionAuthority.ts`; `src/backend/execution/extensions/` | Assert the current fence before effects; durable mutations use `commitFlowDurableMutation` and the authority's atomic commit capability. Authority failures escape best-effort catches. Loading a snapshot never reconstructs a runtime capability. | Security/Production consume original authority; Code health preserves interfaces |
 | Cancellation | `cancellationCoordinator.ts`, `cancellation.ts`, `toolCancelRegistry.ts` | Admission-barrier check and run registration are atomic in one event-loop step. Cancellation aborts active work and respects ancestry/tombstones; release each registration. | Maturity; Production owns worker recovery |
 | Approval and debugger pause | `toolApprovalRegistry.ts`, `resumeAfterApproval.ts`, `runFlow.ts` | A pause keeps the live state owned. Resume applies the decision to the pending call before continuing; do not dispatch an unapproved tool while extracting code. | Maturity; Security owns permission changes |
-| Subflows | `nodes/SubflowNode.ts`, `subflowCommunication.ts`, `subflowRecovery.ts`, `handlers/subflowToolInvocation.ts` | Parent/child and lane identities include logical-run lineage. Queued messages are consumed at safe boundaries. Ephemeral children do not become durable sidebar conversations. Unknown external tool effects are not automatically replayed. | Maturity; Production owns restart policy |
-| Conversation persistence | `persistConversationState.ts`, `conversationLog.ts`, `loadConversationState.ts`, `recoveryCheckpoint.ts` | Canonical log, snapshot and checkpoint are distinct. Reject unsafe IDs, deleted and ephemeral snapshots; strip trace/runtime capabilities; retain authority checks. Recovery reconciliation cannot grant permission to repeat uncertain effects. | Maturity; Security owns privacy/crypto |
-| Conversation cache | `conversationStateCache.ts` around `FlowExecutor.conversationStates` | Keep one live-state registry. Only persistently terminal, unowned entries may be evicted; persistence failure must retain the state. | Maturity (#569) |
+| Subflows | `nodes/SubflowNode.ts`, `subflowCommunication.ts`, `subflowRecovery.ts`, `handlers/subflowToolInvocation.ts`, `handlers/subflowDetachedInvocation.ts` | Parent/child and lane identities include logical-run lineage. Queued messages are consumed at safe boundaries. Ephemeral children do not become durable sidebar conversations. Unknown external tool effects are not automatically replayed. | Maturity; Production owns restart policy |
+| Conversation persistence | `persistConversationState.ts`, `conversationPublication.ts`, `conversationLog.ts`, `loadConversationState.ts`, `recoveryCheckpoint.ts` | Canonical log, snapshot and checkpoint are distinct. Snapshot and log writes for one conversation go through `conversationPublication.ts` in order; a write whose outcome is uncertain leaves a fence that the next complete write clears, and the fence never blocks later writes. Reject unsafe IDs, deleted and ephemeral snapshots; strip trace/runtime capabilities; retain authority checks. Recovery reconciliation cannot grant permission to repeat uncertain effects. | Maturity; Security owns privacy/crypto |
+| Conversation cache | `conversationStateCache.ts` around the map in `conversationStateRegistry.ts` | Keep one live-state registry. Only persistently terminal, unowned entries may be evicted; persistence failure must retain the state. | Maturity (#569) |
 | Provider dispatch | `handlers/ModelHandler.ts`; `src/backend/services/model/adapters/` | The handler assembles input and selects the adapter; the adapter owns the actual SDK boundary. An intended turn is not an observed SDK dispatch. Preserve approval/authority/abort checks and each actual attempt marker. | Maturity; external streams own SDK/history consumers |
-| Dispatch archive | `modelTurnArchive.ts` invoked by SDK callbacks in `ModelHandler.ts` | When archiving is enabled, persist the SDK request before emitting `model:dispatch`; update its outcome before `model:dispatch-result`. Preserve exact dispatch ID/ordinal and canonical versus wire context. Ordinary archive I/O failures may warn and continue; authority failures must propagate. | Maturity (#569) |
+| Dispatch archive | `modelTurnArchive.ts` invoked by SDK callbacks in `handlers/ModelHandler.ts` | When archiving is enabled, persist the SDK request before emitting `model:dispatch`; update its outcome before `model:dispatch-result`. Preserve exact dispatch ID/ordinal and canonical versus wire context. Ordinary archive I/O failures may warn and continue; authority failures must propagate. | Maturity (#569) |
 | Execution events | `engine/ExecutionEventBus.ts` and `src/shared/types/execution/events.ts` | Event sequence allocation/log append and UI delivery are separate responsibilities. UI retention changes cannot remove canonical history or synthesize provider dispatches. | Maturity; history/Brain consumers own their adapters |
 | MCP connection ownership | `src/backend/services/mcp/index.ts` and `lifecycleCoordinator.ts` | Client/transport maps are process-global and workspace-scoped. The coordinator owns connect/teardown promises, generation and demand bookkeeping; it does not duplicate the clients. Old transport callbacks must not remove a replacement client. | Security owns isolation; Production owns #547 receipts |
 | MCP demand/teardown | `mcpLeasePool.ts`, `connection.ts`, `ownerScope.ts` | Fold concurrent connect/teardown; keep leases/pins live until release. Await graceful close and verified descendant teardown. Server name alone is not an identity across workspaces. Derive Bash owner scope from the run. | Production for shutdown/recovery; Security for execution capabilities |
@@ -128,57 +136,238 @@ they cover every required installed scenario:
 
 ## A second maintainer's exercise
 
-Use a consenting second human and an identified independent observer on a
-disposable checkout of an exact reviewed source. Record operator acceptance,
-observer identity and their relationship to the original author in
-[#661](https://github.com/mario-andreschak/FLUJO/issues/661) before beginning.
-Nomination or assignment does not establish consent or independence. Community
-owns arranging and recording the exercise through #576.
+**Status on November 25, 2026: not done.** It needs two people; an agent or a
+CI run cannot do it. It is tracked in
+[#661](https://github.com/mario-andreschak/FLUJO/issues/661). A passed exercise
+ticks the #571 item "a second human contributor can locate and change one
+execution behavior and one MCP lifecycle behavior using the architecture guide"
+and counts as one entry in the people record of #576.
 
-The operator must locate, explain and repair a production execution behavior
-and a production MCP lifecycle behavior. Changing only a test fixture, running
-an author-prepared repair script, or checking out the original file does not
-demonstrate that ability. The observer records the clean base revision, then
-supplies a separately recorded small seeded production regression for each
-task. The original author must not operate the participant's checkout or write
-their repair; retain all hints and interventions.
+**Do it after #571 lands.** #571 splits `runFlow.ts`, `ModelHandler.ts` and the
+MCP service `index.ts` into smaller files. Before that, the exercise tests a map
+that is about to change. Either way, start with the path check below.
 
-- **Execution:** start with `src/shared/types/execution/invocation.ts` and its
-  `runFlow` caller. Diagnose direct API execution incorrectly classified as
-  unattended. Explain why explicit invocation context governs drive-forward
-  rather than the legacy Flow flag. Repair the production decision and preserve
-  all other source classifications and the existing expectations in
-  `flow/invocationSource.test.ts` and `flow/unattendedDriveForward.test.ts`.
-  The latter uses real orchestration with a controlled graph engine; it does
-  not invoke a provider or external tool.
-- **MCP:** start with `src/backend/services/mcp/index.ts` and
-  `lifecycleCoordinator.ts`. Diagnose a late close from a replaced transport
-  removing the healthy client or scheduling another connection. Repair the
-  production ownership decision in `transport.onclose`. Explain workspace,
-  active-transport and generation ownership, including `beginConnect` and
-  `beginTeardown`. Preserve unexpected-live-close reconnection and intentional
-  disconnect behavior. Keep the expectations in `mcp/mcpRestartLoop.test.ts`,
-  which controls connection/configuration collaborators and fake timers; it
-  is not an installed process-shutdown observation.
+### Who does what
 
-Install locked dependencies locally in the disposable checkout and retain the
-complete focused suites, without a test-name filter:
+- **Operator** (Mario, as nominated in #661): finds, explains and fixes two
+  small planted faults in production code. Does not read the
+  [seeds](#seeds-for-the-observer) or the git history of the seed commits.
+- **Observer:** a person, not an AI agent. Plants the faults, watches (in the
+  room or on a video call), writes down every hint and judges the result. Write
+  down who they are and how they know the operator or the project.
+- Nobody else writes or suggests the fix. Reading this page and searching the
+  code is allowed. Asking an AI assistant for the fix counts as a hint.
+
+### Time box: 2 hours
+
+| Step | Time box |
+| --- | --- |
+| Path check, setup and baseline | 30 minutes (the install alone takes 4 to 8 minutes) |
+| Task A: execution | 40 minutes |
+| Task B: MCP | 40 minutes |
+| Write-up | 10 minutes |
+
+When a task reaches its time box, stop, write down how far you got and move on.
+An unfinished task is recorded as unfinished.
+
+### Before you start
+
+In a fresh clone (full history, see the
+[contributor guide](../contributing/README.md#1-get-your-own-copy)), switch to
+the exact commit you will use and check that the code is still where this page
+says (PowerShell or any shell):
 
 ```sh
-node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts --json --outputFile=maintainer-core-results.json
-node scripts/check-import-boundaries.cjs
+git ls-files --error-unmatch src/shared/types/execution/invocation.ts src/backend/execution/flow/runFlow.ts src/backend/services/mcp/index.ts src/backend/services/mcp/lifecycleCoordinator.ts __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts scripts/check-import-boundaries.cjs
+git grep -n "isUnattendedFlowInvocation(input.source)" -- src
+git grep -n "transport.onclose = bindToCurrentWorkspace" -- src/backend/services/mcp
 ```
 
-For the clean baseline, each seeded fault and each human-authored repair, retain
-the source SHA/diff, file hashes, raw logs, result JSON, commands, natural exit
-statuses and pending/skipped/todo counts. Retain OS/Node/npm, start/end times,
-setup friction, the operator's ownership explanation, the observer's review
-and every assistance event using the
-[maintainership evidence form](../contributing/maintainership.md#evidence-record).
-Link the human record from #661, #571 and #576. Do not weaken expectations,
-skip cases or restore author-written repairs to manufacture a pass. A failed
-or incomplete attempt remains such; AI rehearsal and CI cannot supply the
-independent human operation or review required by #571.
+The first command must list all eight files without an error. The other two
+must each print one line. If a line points to a different file than below, use
+that file in the tasks. If a command finds nothing, the code has moved: fix this
+page in a small pull request first, then start.
+
+### Step 1: set up and record the baseline
+
+1. Install as in the contributor guide, steps
+   [2](../contributing/README.md#2-install) and
+   [3](../contributing/README.md#3-check-that-it-works): `npm ci --include=dev`,
+   `npm run build:mcp`, `npm run test:dependencies`.
+2. Write down: the commit (`git rev-parse HEAD`), `node --version`,
+   `npm --version`, the operating system, the start time and any setup trouble.
+3. In the same PowerShell window, create a results folder outside the clone and
+   the check you will run after every change:
+
+   ```powershell
+   $out = (New-Item -ItemType Directory -Force ..\exercise-661).FullName
+   function Invoke-ExerciseCheck([string]$Name) {
+     git rev-parse HEAD | Tee-Object "$out\$Name.log"
+     node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts --json "--outputFile=$out\$Name.json" 2>&1 | Tee-Object -Append "$out\$Name.log"
+     "tests exit code: $LASTEXITCODE" | Tee-Object -Append "$out\$Name.log"
+     node scripts/check-import-boundaries.cjs 2>&1 | Tee-Object -Append "$out\$Name.log"
+     "import check exit code: $LASTEXITCODE" | Tee-Object -Append "$out\$Name.log"
+     Get-Content "$out\$Name.json" | ConvertFrom-Json | Select-Object numPassedTests, numFailedTests, numPendingTests, numTodoTests | Tee-Object -Append "$out\$Name.log"
+   }
+   ```
+
+   On Linux or macOS, run the same two `node` commands and save their output
+   with `| tee`.
+4. Run `Invoke-ExerciseCheck baseline`. Both exit codes must be 0, and
+   `numFailedTests`, `numPendingTests` and `numTodoTests` must be 0. If not,
+   the base is broken: stop, record it and open an issue.
+
+The commit printed at the top of each log identifies the exact files, so no
+separate file hashes are needed.
+
+### Step 2: task A, execution
+
+Observer, out of the operator's sight:
+
+1. `git switch -c task-a`, then make one small change to production code (not
+   under `__tests__`) that makes a run started through the API count as
+   unattended. Use a [seed](#seeds-for-the-observer) or write your own of the
+   same size. A remote observer can send it as a patch file that the operator
+   applies with `git apply` without opening it.
+2. `git commit -am "task A"`, then `git diff HEAD~1 > "$out\seed-a.diff"` and
+   `Invoke-ExerciseCheck seed-a`. At least one test must fail. If all pass, the
+   seed is too weak; pick another.
+
+Operator, with the clock running:
+
+3. The bug report: "A flow started through the API carries on by itself after
+   the model answers in plain text, as if nobody were watching. Chat runs behave
+   correctly." Start from `src/shared/types/execution/invocation.ts` and the
+   place in `runFlow.ts` that uses it.
+4. Explain out loud what you found ([what the observer listens for](#what-the-observer-listens-for)).
+5. Fix production code only: do not change, skip or delete tests, and do not
+   bring the old file back with `git checkout` or `git restore`. Then
+   `git commit -am "fix A"`, `git diff HEAD~1 > "$out\repair-a.diff"` and
+   `Invoke-ExerciseCheck repair-a`. Both exit codes must be 0.
+
+### Step 3: task B, MCP
+
+Observer: `git switch -c task-b <base commit>` (start from the clean base, not
+from task A), plant a fault that makes a late close event from an old connection
+drop the working connection, then `git commit -am "task B"`,
+`git diff HEAD~1 > "$out\seed-b.diff"` and `Invoke-ExerciseCheck seed-b`. At
+least one test must fail.
+
+Operator: the bug report is "After FLUJO replaces an MCP server's connection
+(for example after a settings change), the old server process exits a little
+later. FLUJO then drops the working connection and starts yet another one."
+Start from `transport.onclose` in `src/backend/services/mcp/index.ts` and from
+`lifecycleCoordinator.ts`. Explain out loud, fix production code only, then
+`git commit -am "fix B"`, `git diff HEAD~1 > "$out\repair-b.diff"` and
+`Invoke-ExerciseCheck repair-b`. Both exit codes must be 0.
+
+These tests replace the real MCP connection and the clock with test doubles.
+They do not watch a real server process shut down.
+
+### What the observer listens for
+
+Task A:
+
+- `isUnattendedFlowInvocation` treats only `chat` and `api` as attended; the
+  other six sources (`schedule`, `trigger`, `subflow`, `mcp`, `internal`,
+  `meeting`) run unattended.
+- `runFlow` keeps the conversation's first `source`, but works out `unattended`
+  fresh for every run from that run's own source.
+- The old `unattended` flag in a flow's file decides nothing, because a flow
+  cannot know who started this run. The tests "does NOT drive forward for
+  attended api runs" and "ignores legacy unattended:false for a scheduled run"
+  check this.
+- What unattended changes: when the model ends a turn without handing off, the
+  run is pushed on to the single next step instead of stopping.
+- Why the fix leaves the other seven sources as they were.
+
+Task B:
+
+- Each server has one current connection in `activeTransports`, shared by every
+  copy of the module and kept per workspace. A close event acts only when it
+  comes from that current connection.
+- FLUJO's own closes (disconnect, reconnect, settings change) remove the
+  connection first (`deregisterClient`), so their close events are ignored and
+  do not reconnect.
+- An unexpected close of the current connection removes the client and
+  schedules a retry, if the server is still enabled.
+- `beginConnect` and `beginTeardown` in `lifecycleCoordinator.ts` merge
+  parallel calls into one and wait for each other. The generation number goes
+  up with each new connection, so old callbacks can tell they are out of date.
+  Workspace plus server name identify a server; the name alone does not.
+- Why the fix keeps both the retry after an unexpected close and the "no
+  retry" after an intentional disconnect.
+
+### How the result is judged
+
+- **Passed:** in both tasks the operator found the fault, explained the points
+  above in their own words and fixed production code. The repair check shows
+  both exit codes 0 and no failed, skipped or todo tests. No hint named the
+  line or the fix. Small nudges ("look at the close handler again") are allowed
+  and recorded.
+- **Partly passed:** only one task passed, a hint named the line or the fix, or
+  a task was finished after its time box.
+- **Not passed:** a test was changed, skipped or deleted; the fix only brought
+  back the original file; somebody other than the operator wrote the fix; or
+  neither task was finished.
+
+Only "Passed" ticks the #571 item. The other results are still posted, as they
+are.
+
+### What to post on #661
+
+The observer posts one comment:
+
+```text
+Exercise #661, date:
+Operator:            Observer:            How the observer knows the operator or project:
+Base commit:         OS / Node / npm:     Start / end:          Setup trouble:
+Task A: seed commit:      failing tests (seed-a.log):
+        fix commit:       exit codes (repair-a.log):      minutes:      hints:
+        operator's explanation, short:
+Task B: seed commit:      failing tests (seed-b.log):
+        fix commit:       exit codes (repair-b.log):      minutes:      hints:
+        operator's explanation, short:
+Observer's review of the two fixes:
+Result: Passed / Partly passed / Not passed, because:
+```
+
+Attach the four `.diff` files and the five `.log` files from the results folder.
+The diffs are the change to review; no pull request is needed. Then add one
+line for the operator to the [people record](../contributing/maintainership.md#evidence-record)
+in #576 and link the comment from #571. Delete the clone and the results folder
+once the comment is posted.
+
+### Seeds for the observer
+
+Operator: skip this part.
+
+Task A, pick one:
+
+1. In `src/shared/types/execution/invocation.ts`, make
+   `isUnattendedFlowInvocation` return `source !== 'chat'`. Aimed at the `api`
+   cases in `invocationSource.test.ts` and `unattendedDriveForward.test.ts`.
+2. In `runFlow.ts`, change
+   `sharedState.unattended = isUnattendedFlowInvocation(input.source);` to
+   `sharedState.unattended = input.source !== 'chat';`. Aimed at the `api`
+   cases in `unattendedDriveForward.test.ts` only: the shared helper still looks
+   right, so the operator has to follow it to its caller.
+
+Task B, pick one:
+
+1. In `transport.onclose` in `src/backend/services/mcp/index.ts`, change the
+   check `this.activeTransports.get(config.name) !== transport` to
+   `!this.activeTransports.has(config.name)`. Aimed at "ignores a late close
+   event from a replaced (zombie) transport"; an intentional disconnect still
+   behaves.
+2. In the same handler, move `this.deregisterClient(config.name);` above that
+   check. Aimed at the zombie test and at "still schedules a reconnect for an
+   unexpected close of the live transport".
+
+These seeds were worked out by reading the tests on November 25, 2026, not by
+running them; the seed check in steps 2 and 3 confirms them on the day. After
+#571 the lines may sit in another file; change the same decision wherever it
+now lives.
 
 ## Size inventory and evidence limits
 
