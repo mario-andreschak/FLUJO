@@ -13,6 +13,13 @@ import type {
   StepToolSuggestion,
   StepToolSuggestionResult,
 } from '@/shared/types/flow/assistance';
+import {
+  FLOW_IN_USE_CODE,
+  type FlowDeletePlan,
+  type FlowDeleteSummary,
+  type FlowInUseResponse,
+  type FlowUsage,
+} from '@/shared/types/flow/flowUsage';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/flow/index');
@@ -49,6 +56,16 @@ export interface CreateModelAgentSelection {
 export interface CreatedModelAgent {
   flowId: string;
   name: string;
+}
+
+export interface FlowDeleteResult {
+  success: boolean;
+  error?: string;
+  /** Places that still use the flow; the page asks what happens to each (#1389). */
+  usage?: FlowUsage;
+  /** The places changed since the choices were made. */
+  usageChanged?: boolean;
+  summary?: FlowDeleteSummary;
 }
 
 /**
@@ -577,35 +594,45 @@ class FlowService {
   }
 
   /**
-   * Delete a flow by ID
+   * Delete a flow by ID. While Personas, automations or other flows still use
+   * it, the answer carries `usage` so the page can ask what happens to each
+   * place; send the answers as `plan` to switch them and delete (#1389).
    */
-  async deleteFlow(flowId: string): Promise<{ success: boolean; error?: string }> {
+  async deleteFlow(flowId: string, plan?: FlowDeletePlan): Promise<FlowDeleteResult> {
     log.debug('deleteFlow: Entering method', { flowId });
     try {
       // Call the API to delete the flow
       const response = await fetch(`/api/flow/${encodeURIComponent(flowId)}`, {
         method: 'DELETE',
+        ...(plan ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }) } : {}),
       });
 
       if (!response.ok) {
         // A proxy or crash can answer with a non-JSON body. The refusal itself
         // still has to reach the caller as a readable failure.
-        const errorData = await response.json().catch(() => null) as { error?: unknown } | null;
+        const errorData = await response.json().catch(() => null) as Partial<FlowInUseResponse> | { error?: unknown } | null;
+        const inUse = errorData && 'code' in errorData && errorData.code === FLOW_IN_USE_CODE && errorData.usage
+          ? errorData as FlowInUseResponse
+          : null;
         return {
           success: false,
           error: typeof errorData?.error === 'string' && errorData.error
             ? errorData.error
-            : 'Failed to delete flow'
+            : 'Failed to delete flow',
+          ...(inUse ? { usage: inUse.usage, usageChanged: inUse.changed === true } : {}),
         };
       }
 
-      // Update cache
-      if (this.flowsCache) {
-        this.flowsCache = this.flowsCache.filter(flow => flow.id !== flowId);
-      }
-      
+      const body = response.status === 200
+        ? await response.json().catch(() => null) as { summary?: FlowDeleteSummary } | null
+        : null;
+      // Flows that called the deleted one may have changed too; reload them next time.
+      this.flowsCache = body?.summary?.flows.length
+        ? null
+        : this.flowsCache?.filter(flow => flow.id !== flowId) ?? null;
+
       log.debug('deleteFlow: Flow deleted successfully', { flowId });
-      return { success: true };
+      return { success: true, ...(body?.summary ? { summary: body.summary } : {}) };
     } catch (error) {
       log.warn('deleteFlow: Failed to delete flow:', error);
       return { 

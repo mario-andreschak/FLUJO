@@ -198,7 +198,7 @@ The Flow API manages flow definitions. It follows standard REST resource convent
 - **POST /api/flow**: Create a flow (request body is the `Flow` object; a duplicate id is rejected with `409`)
 - **GET /api/flow/{id}**: Get a specific flow
 - **PUT /api/flow/{id}**: Update a flow (request body is the `Flow`; the path `{id}` is authoritative; `404` if it does not exist)
-- **DELETE /api/flow/{id}**: Delete a flow
+- **DELETE /api/flow/{id}**: Delete a flow (`204`). While Personas, switched-on automations or other flows still use it, the answer is `409` with `code: "FLOW_IN_USE"` and `usage.uses` (one entry per place, each with a `key`). Send `{ "plan": { "choices": { "<key>": { "replaceWith": "<flow id>" } | { "remove": true } } } }` to switch or release every place first; the flow is deleted last (`200` with a `summary`). Changing a Persona needs a request from this computer, like the Persona routes
 - **POST /api/flow/prompt-renderer**: Render a node's prompt within a flow
 
 ### Git Operations API

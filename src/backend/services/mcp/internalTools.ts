@@ -53,6 +53,7 @@ import { scheduleNextRuns } from '@/backend/services/scheduler/triggers/schedule
 import type { PlannedExecution, TriggerConfig } from '@/shared/types/plannedExecution';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
+import { deleteFlowAndMoveUses, findFlowUsage, flowInUseBody } from '@/backend/services/flow/flowDeletion';
 import { explainCompiledFlow } from '@/backend/services/flow/explainFlow';
 import { truncate, MAX_FLOW_DESCRIPTION_CHARS } from '@/backend/services/flow/generationContext';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
@@ -408,11 +409,15 @@ export function internalToolDefinitions(): Tool[] {
     {
       name: 'delete_flow',
       description:
-        'PERMANENTLY delete a FLUJO flow (by name or id). This cannot be undone — the flow\'s version history is deleted with it. Verify the target with list_flow_building_blocks first.',
+        'PERMANENTLY delete a FLUJO flow (by name or id). This cannot be undone — the flow\'s version history is deleted with it. Verify the target with list_flow_building_blocks first. A flow that Personas, automations or other flows still use is not deleted unless replace_with names a flow to use there instead.',
       inputSchema: {
         type: 'object',
         properties: {
           flow: { type: 'string', description: 'Flow name or flow id.' },
+          replace_with: {
+            type: 'string',
+            description: 'Optional flow name or id. Every Persona, automation and flow that uses the deleted flow switches to this one first.',
+          },
         },
         required: ['flow'],
       },
@@ -693,12 +698,30 @@ async function deleteFlow(args: Record<string, unknown>): Promise<CallToolResult
   if (!flow) {
     return textResult({ error: `No flow named or with id "${ref}".` }, true);
   }
-  await assertBundledFlujoWorkloadEffectCurrent();
-  const result = await flowService.deleteFlow(flow.id);
-  if (!result.success) {
-    return textResult({ error: result.error ?? `Failed to delete flow "${flow.name}".` }, true);
+  const replacementRef = String(args?.replace_with ?? '').trim();
+  const replacement = replacementRef ? await resolveFlow(replacementRef) : undefined;
+  if (replacementRef && !replacement) {
+    return textResult({ error: `No flow named or with id "${replacementRef}" to use instead.` }, true);
   }
-  return textResult({ deleted: true, flowId: flow.id, flowName: flow.name });
+  await assertBundledFlujoWorkloadEffectCurrent();
+  const usage = await findFlowUsage(flow.id);
+  const plan = replacement && usage
+    ? { choices: Object.fromEntries(usage.uses.map((use) => [use.key, { replaceWith: replacement.id }])) }
+    : null;
+  const outcome = await deleteFlowAndMoveUses(flow.id, plan, null);
+  switch (outcome.status) {
+    case 'deleted':
+      return textResult({ deleted: true, flowId: flow.id, flowName: flow.name, ...(plan ? { switched: outcome.summary } : {}) });
+    case 'not-found':
+      return textResult({ error: `No flow named or with id "${ref}".` }, true);
+    case 'in-use':
+      return textResult({
+        error: `${flowInUseBody(outcome.usage, outcome.changed).error} Call delete_flow again with replace_with (a flow name or id) to switch every place to that flow first, or ask the person to delete it on the Flows page, where they can choose for each place.`,
+        usedBy: outcome.usage.uses.map((use) => use.place),
+      }, true);
+    case 'refused':
+      return textResult({ error: outcome.error }, true);
+  }
 }
 
 /**

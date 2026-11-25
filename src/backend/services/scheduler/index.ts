@@ -912,6 +912,11 @@ export class SchedulerService {
     return file.executions.find(e => e.id === id) ?? null;
   }
 
+  /** Every saved automation's settings, without run status or history. */
+  async listConfigs(): Promise<PlannedExecution[]> {
+    return (await this.loadFile()).executions;
+  }
+
   private async refreshWorkerRecoveryStatus(execution: PlannedExecution, paused: boolean) {
     let status = await inspectWorkerRecovery(execution, paused, this.workerLocalClaims);
     if (status?.pending && !this.workerLocalClaims.has(status.pending.runId)

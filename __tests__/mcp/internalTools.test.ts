@@ -59,6 +59,12 @@ jest.mock('@/backend/services/mcp/personaCompositionTools', () => ({
     content: [{ type: 'text', text: 'persona composition' }],
   })),
 }));
+// delete_flow moves the Personas, automations and flows that use a flow first (#1389).
+jest.mock('@/backend/services/flow/flowDeletion', () => ({
+  ...jest.requireActual('@/backend/services/flow/flowDeletion'),
+  findFlowUsage: jest.fn(),
+  deleteFlowAndMoveUses: jest.fn(),
+}));
 // update_flow goes through compileSpec, which pulls gatherGenerationContext -> mcpService.
 jest.mock('@/backend/services/flow/compileFlow', () => ({
   compileSpec: jest.fn(),
@@ -630,13 +636,46 @@ describe('flow version tools', () => {
 });
 
 describe('delete_flow', () => {
+  const deletion = jest.requireMock('@/backend/services/flow/flowDeletion') as {
+    findFlowUsage: jest.Mock;
+    deleteFlowAndMoveUses: jest.Mock;
+  };
+  const usedByJim = {
+    flowId: 'f1',
+    flowName: 'My Flow',
+    uses: [{ key: 'persona:jim:core', place: { kind: 'persona-core', personaId: 'jim', personaName: 'Jim' }, canRemove: true, removePauses: true }],
+    copySources: [],
+  };
+
   it('resolves by name and deletes by id', async () => {
     flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
-    flows.deleteFlow.mockResolvedValue({ success: true });
+    deletion.findFlowUsage.mockResolvedValue({ ...usedByJim, uses: [] });
+    deletion.deleteFlowAndMoveUses.mockResolvedValue({ status: 'deleted', summary: {} });
     const r = await internalCallTool(makeService(), 'delete_flow', { flow: 'My Flow' });
-    expect(flows.deleteFlow).toHaveBeenCalledWith('f1');
+    expect(deletion.deleteFlowAndMoveUses).toHaveBeenCalledWith('f1', null, null);
     expect(r.isError).toBeUndefined();
     expect(text(r)).toContain('"deleted": true');
+  });
+
+  it('says who still uses the flow and how to move them, instead of deleting it (#1389)', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
+    deletion.findFlowUsage.mockResolvedValue(usedByJim);
+    deletion.deleteFlowAndMoveUses.mockResolvedValue({ status: 'in-use', usage: usedByJim, changed: false });
+    const r = await internalCallTool(makeService(), 'delete_flow', { flow: 'My Flow' });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('Persona \\"Jim\\"');
+    expect(text(r)).toContain('replace_with');
+  });
+
+  it('switches every place to replace_with before deleting', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }, { id: 'f2', name: 'New Flow' }]);
+    deletion.findFlowUsage.mockResolvedValue(usedByJim);
+    deletion.deleteFlowAndMoveUses.mockResolvedValue({ status: 'deleted', summary: { personas: ['Jim'] } });
+    const r = await internalCallTool(makeService(), 'delete_flow', { flow: 'My Flow', replace_with: 'New Flow' });
+    expect(deletion.deleteFlowAndMoveUses).toHaveBeenCalledWith('f1', {
+      choices: { 'persona:jim:core': { replaceWith: 'f2' } },
+    }, null);
+    expect(r.isError).toBeUndefined();
   });
 });
 
