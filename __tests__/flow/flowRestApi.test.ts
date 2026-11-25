@@ -124,9 +124,21 @@ describe('Flow REST API', () => {
     expect(collections.flows.f1).not.toHaveProperty('unattended');
   });
 
-  it('POST /api/flow rejects a missing id with 400', async () => {
+  it('POST /api/flow gives a flow without an id a new one (#1350)', async () => {
     const res = await createFlow(req(flowFixture({ id: undefined })));
+    expect(res.status).toBe(201);
+    const { id } = await res.json();
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect((await getFlow(req(), ctx(id))).status).toBe(200);
+  });
+
+  it.each(['', '../evil', 'my flow', 'a'.repeat(65), 7])('POST /api/flow refuses the id %p with a plain 400', async (id) => {
+    const res = await createFlow(req(flowFixture({ id: id as string })));
     expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error: 'The id must be 1 to 64 letters, digits, underscores or hyphens. Leave it out and FLUJO makes one.',
+    });
+    expect(collections.flows ?? {}).toEqual({});
   });
 
   it('POST /api/flow rejects a duplicate id with 409', async () => {

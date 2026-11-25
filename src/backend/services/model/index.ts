@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { Model, isOwnerCredentialBoundModel, normalizeMaxTokens, validateOwnerCredentialBinding } from '@/shared/types/model';
-import { saveItem, loadItem } from '@/utils/storage/backend';
+import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { fetchCodexModels } from './adapters/codexDiscovery';
@@ -47,6 +47,9 @@ import { hasOwnerBoundFallbackMember, materializeFallbackPolicy, validateFallbac
 import { FallbackRoutingError } from './adapters/fallbackAdapter';
 import { withModelCatalogWriteLease } from './catalogAdmission';
 import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtimeLock';
+import { loadStoredModels } from './storedModels';
+import { newRecordId } from '@/shared/recordId';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 function catalogWriteFailure(error: unknown): ModelServiceResponse {
   return {
@@ -79,6 +82,10 @@ export type DirectCompletionResult =
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/index');
 
+/** How long to wait before trying again to write back healed model ids. */
+const MODEL_ID_HEAL_RETRY_MS = 5_000;
+const modelIdHeals = new Map<string, { running?: Promise<void>; retryAt: number }>();
+
 /**
  * ModelService class provides a clean interface for model-related operations
  * This is the core backend service that handles all model operations
@@ -90,12 +97,46 @@ class ModelService {
   async loadModels(): Promise<Model[]> {
     log.debug('loadModels: Entering method');
     try {
-      const models = await loadItem<Model[]>(StorageKey.MODELS, []);
+      const { models, healed } = await loadStoredModels();
+      if (healed > 0) void this.saveHealedModelIds();
       return models;
     } catch (error) {
       log.warn('loadModels: Failed to load models:', error);
       return [];
     }
+  }
+
+  /**
+   * Writes back the ids that loading gave to models saved without one (#1350).
+   * While a model call or catalog edit holds the catalog, the next load tries
+   * again (an edit saves the ids itself); a failed write waits a few seconds.
+   * Until then every reader still sees the same ids.
+   */
+  saveHealedModelIds(): Promise<void> {
+    const workspace = getCurrentWorkspace();
+    const state = modelIdHeals.get(workspace);
+    if (state?.running) return state.running;
+    if (state && Date.now() < state.retryAt) return Promise.resolve();
+    const heal = async () => {
+      try {
+        await withModelCatalogWriteLease(async () => {
+          const { models, healed } = await loadStoredModels();
+          if (healed > 0) await saveItem(StorageKey.MODELS, models);
+        });
+        modelIdHeals.delete(workspace);
+      } catch (error) {
+        if (error instanceof ModelCatalogBusyError) {
+          modelIdHeals.delete(workspace);
+          log.debug('Model ids are saved once the model catalog is free');
+          return;
+        }
+        modelIdHeals.set(workspace, { retryAt: Date.now() + MODEL_ID_HEAL_RETRY_MS });
+        log.warn('Could not save the ids of models stored without one; trying again on a later load', error);
+      }
+    };
+    const running = Promise.resolve().then(heal);
+    modelIdHeals.set(workspace, { running, retryAt: 0 });
+    return running;
   }
 
   /**
@@ -135,9 +176,12 @@ class ModelService {
     }
   }
 
-  private async addModelWithinLease(model: Model): Promise<ModelOperationResponse> {
+  private async addModelWithinLease(requested: Model): Promise<ModelOperationResponse> {
     log.debug('addModel: Entering method');
     try {
+      const newId = newRecordId(requested.id);
+      if (!newId.ok) return { success: false, error: newId.error };
+      const model: Model = { ...requested, id: newId.id };
       const configurationError = validateModelConfiguration(model);
       if (configurationError) {
         return { success: false, error: configurationError };
@@ -153,7 +197,9 @@ class ModelService {
 
       const policyError = validateFallbackPolicy(model, models);
       if (policyError) return { success: false, error: policyError };
-      if (models.some(item => item.id === model.id)) return { success: false, error: 'Model ID already exists' };
+      if (models.some(item => item.id === model.id)) {
+        return { success: false, error: `A model with the id "${model.id}" already exists` };
+      }
 
       // Duplicate detection is by DISPLAY name only (case-insensitive). The technical
       // `name` is the provider's model id and is intentionally allowed to repeat — e.g.

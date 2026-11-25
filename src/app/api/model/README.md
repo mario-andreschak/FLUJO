@@ -76,13 +76,15 @@ The model API follows standard REST resource conventions:
 | Method | Path | Description | Success |
 |--------|------|-------------|---------|
 | `GET` | `/api/model` | List all models | `200` + `Model[]` |
-| `POST` | `/api/model` | Create a model (body = `Model`) | `201` + `Model` |
+| `POST` | `/api/model` | Create a model (body = `Model`; leave out `id` and FLUJO makes one) | `201` + `Model` (with its `id`) |
 | `GET` | `/api/model/{id}` | Get a single model | `200` + `Model` |
 | `PUT` | `/api/model/{id}` | Update a model (body = `Model`; path `{id}` is authoritative) | `200` + `Model` |
 | `DELETE` | `/api/model/{id}` | Delete a model | `204` (no body) |
 
-Errors return `{ "error": string }` with an appropriate status (`400` invalid input,
-`404` not found, `409` duplicate name on create, `500` server error). All returned models
+Errors return `{ "error": string }` with an appropriate status (`400` invalid input or
+an id that is not 1 to 128 letters, digits, dots, underscores, colons or hyphens,
+`404` not found, `409` duplicate id or name on create, `500` server error). A model
+that was saved without an id gets one the next time models are loaded. All returned models
 are sanitized by the adapter layer (API keys masked) before leaving the server.
 
 ### Provider Endpoints

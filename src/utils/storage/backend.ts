@@ -7,6 +7,7 @@ import { readPlainFile } from '@/utils/readPlainFile';
 import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
 import { PersonaShardIdentityError } from './personaShardIdentity';
 import { StorageKey } from '../../shared/types/storage';
+import { FILE_RECORD_ID_RULE } from '@/shared/recordId';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
@@ -520,7 +521,7 @@ export async function clearItem(key: StorageKey): Promise<void> {
 // flow POSTed to the public API), so they MUST be validated before being used
 // to build a path — otherwise an id like `../../evil` would escape the
 // collection directory (path traversal).
-const SAFE_COLLECTION_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const SAFE_COLLECTION_ID = FILE_RECORD_ID_RULE.pattern;
 export function assertSafeCollectionId(id: string): void {
   if (typeof id !== 'string' || !SAFE_COLLECTION_ID.test(id)) {
     throw new Error(`Unsafe collection item id: ${JSON.stringify(id)}`);

@@ -7,6 +7,7 @@ This directory contains the implementation of an OpenAI-compatible Chat Completi
 - OpenAI-compatible API endpoint for chat completions
 - Support for both GET and POST request methods
 - Flow-based execution using the `flow-[FlowName]` model format
+- Direct calls to one saved model using the `model-[name]` format (see below)
 - Rate limiting to prevent abuse
 - Detailed logging for monitoring and debugging
 - Error handling with appropriate status codes
@@ -97,6 +98,20 @@ while (true) {
 const response = await fetch('/v1/chat/completions?model=flow-MyCustomFlow&message=Hello&temperature=0.7');
 const result = await response.json();
 ```
+
+## Calling a saved model directly
+
+`model: "model-<name>"` sends the messages straight to one saved model, without
+a flow. FLUJO looks the name up the same way every time:
+
+1. the model's **display name** (for example `model-Video Reviewer`);
+2. if no display name matches, its **technical name** (for example
+   `model-google/gemini-4-argon`).
+
+Upper and lower case do not matter. The model's `id` is not used here. When a
+technical name belongs to more than one model, the call fails with
+`model_ambiguous`; use the display name instead. `GET /v1/models` lists the
+names you can use.
 
 ## Request Format
 

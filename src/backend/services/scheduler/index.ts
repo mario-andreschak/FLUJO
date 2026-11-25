@@ -3,6 +3,7 @@ import { backgroundWorkPause } from '@/backend/services/accounts/background';
 import { hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError, getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
+import { newRecordId } from '@/shared/recordId';
 import { createHash } from 'crypto';
 import { flowRequiresStepApproval } from '@/utils/shared/flowApproval';
 import { saveItem, loadItem } from '@/utils/storage/backend';
@@ -1110,25 +1111,17 @@ export class SchedulerService {
     }
     const personaTargetError = await this.validatePersonaTarget(normalizedInput);
     if (personaTargetError) return { error: personaTargetError };
-    if (input.id !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(input.id)) {
-      return {
-        error:
-          'The id must be 1-128 characters of letters, digits, dot, underscore, colon or hyphen',
-      };
-    }
-    // The charset above permits `.`, so a bare `.`/`..` would still pass and could
-    // be used to walk out of the per-run storage folder (planned-execution-state/<id>.json).
-    // Reject the dot-only path segments explicitly before any storage key is built.
-    if (input.id === '.' || input.id === '..') {
-      return { error: 'The id must be a safe identifier, not "." or ".."' };
-    }
+    // newRecordId also refuses `.` and `..`, so an id can never walk out of the
+    // per-run storage folder (planned-execution-state/<id>.json).
+    const newId = newRecordId(input.id);
+    if (!newId.ok) return { error: newId.error };
     const now = new Date().toISOString();
     const execution = omitUndefinedPersonaTargetFields({
       ...normalizedInput,
       // Treat a blank folder as "unfiled" and keep folder names tidy at the
       // persistence boundary, regardless of whether the caller is the UI/API.
       folder: input.folder?.trim() || undefined,
-      id: input.id ?? uuidv4(),
+      id: newId.id,
       generationId: uuidv4(),
       createdAt: now,
       updatedAt: now,

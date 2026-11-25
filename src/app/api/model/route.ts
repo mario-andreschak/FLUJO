@@ -53,7 +53,8 @@ async function adoptAsFirstAi(model: Model) {
 
 /**
  * POST /api/model
- * Create a new model. The request body is the model object itself.
+ * Create a new model. The request body is the model object itself. A model
+ * without an id gets a new one, returned in the 201 body.
  */
 async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
