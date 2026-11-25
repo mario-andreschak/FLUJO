@@ -16,6 +16,7 @@ describe('getProviderFromBaseUrl', () => {
     ['https://my-resource.openai.azure.com', 'azure'],
     ['https://openrouter.ai/api/v1', 'openrouter'],
     ['https://router.requesty.ai/v1', 'requesty'],
+    ['https://api.martllm.com/v1', 'martllm'],
     ['https://api.x.ai/v1', 'xai'],
     ['https://generativelanguage.googleapis.com/v1beta/openai/', 'gemini'],
     ['https://api.anthropic.com/v1/', 'anthropic'],
@@ -23,6 +24,20 @@ describe('getProviderFromBaseUrl', () => {
     ['http://localhost:11434/v1', 'ollama'],
   ])('recognises %s as %s', (url, expected) => {
     expect(getProviderFromBaseUrl(url)).toBe(expected);
+  });
+
+  it('recognises MartLLM and its old UberLLM addresses', () => {
+    for (const url of [
+      'https://api.martllm.com/v1',
+      'https://API.MartLLM.com./v1/',
+      'https://api.uberllm.dev/v1',
+      'https://uberllm.dev/v1',
+    ]) {
+      expect(getProviderFromBaseUrl(url)).toBe('martllm');
+    }
+    // Look-alike hosts are not MartLLM.
+    expect(getProviderFromBaseUrl('https://notmartllm.com/v1')).toBe('ollama');
+    expect(getProviderFromBaseUrl('https://api.martllm.com.example/v1')).toBe('ollama');
   });
 
   it('recognises the default LiteLLM proxy URL', () => {

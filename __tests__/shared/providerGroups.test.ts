@@ -17,6 +17,9 @@ describe('provider grouping (#1278)', () => {
     expect(providerGroupOf('claude-subscription')).toBe('anthropic');
     expect(providerGroupOf('gemini-native')).toBe('google');
     expect(providerGroupOf('openrouter-agent')).toBe('gateway');
+    expect(providerGroupOf('martllm')).toBe('gateway');
+    expect(groupProviderProfiles(PROVIDER_PROFILES).find(entry => entry.group === 'gateway')?.profiles
+      .map(profile => profile.id)).toContain('martllm');
     expect(providerGroupOf('ollama')).toBe('local');
     expect(providerGroupOf('some-new-provider')).toBe('other');
   });

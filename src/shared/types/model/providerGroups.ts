@@ -12,7 +12,7 @@ const GROUP_BY_PROFILE: Readonly<Record<string, ProviderGroupId>> = {
   'anthropic-native': 'anthropic', 'anthropic-openai': 'anthropic', 'claude-subscription': 'anthropic',
   'gemini-native': 'google', 'gemini-openai': 'google', 'antigravity-cli': 'google',
   openrouter: 'gateway', 'openrouter-messages': 'gateway', 'openrouter-agent': 'gateway',
-  orcarouter: 'gateway', requesty: 'gateway', litellm: 'gateway', 'litellm-chat-completions': 'gateway',
+  orcarouter: 'gateway', requesty: 'gateway', martllm: 'gateway', litellm: 'gateway', 'litellm-chat-completions': 'gateway',
   ollama: 'local',
 };
 

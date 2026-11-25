@@ -1,0 +1,204 @@
+{
+  "data": [
+    {
+      "architecture": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "available": true,
+      "context_length": 1048576,
+      "created": 1792414712,
+      "display_name": "DeepSeek V4.1 Flash",
+      "endpoints": [
+        "/v1/chat/completions",
+        "/v1/messages",
+        "/v1/responses"
+      ],
+      "id": "deepseek/deepseek-v4.1-flash",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 384000,
+      "nsfw": false,
+      "object": "model",
+      "output_modalities": [
+        "text"
+      ],
+      "owned_by": "DeepSeek",
+      "pricing": {
+        "cache_read_usd": 0.000506,
+        "cache_write_usd": 0.015176,
+        "completion": "0.000000065041",
+        "input_cache_read": "0.000000000506",
+        "input_cache_write": "0.000000015176",
+        "input_usd": 0.015176,
+        "list_input_usd": 0.21,
+        "list_output_usd": 0.9,
+        "max_cache_read_usd": 0.001544,
+        "max_cache_write_usd": 0.046305,
+        "max_input_usd": 0.046305,
+        "max_output_usd": 0.19845,
+        "output_usd": 0.065041,
+        "paid_7d_accounts": 66,
+        "paid_7d_calls": 262371,
+        "price_basis": "paid_7d",
+        "prompt": "0.000000015176",
+        "unit": "1M tokens"
+      },
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "reasoning_effort",
+        "response_format",
+        "stop",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_logprobs",
+        "top_p"
+      ],
+      "supports_reasoning": true,
+      "supports_tools": true,
+      "supports_vision": true,
+      "top_provider": {
+        "context_length": 1048576,
+        "max_completion_tokens": 384000
+      },
+      "type": "chat"
+    },
+    {
+      "architecture": {
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "available": true,
+      "context_length": 128000,
+      "created": 1784894838,
+      "display_name": "Aion 2.0",
+      "endpoints": [
+        "/v1/chat/completions",
+        "/v1/messages",
+        "/v1/responses"
+      ],
+      "id": "aion-labs/aion-2.0",
+      "input_modalities": [
+        "text"
+      ],
+      "max_output_tokens": 32768,
+      "nsfw": false,
+      "object": "model",
+      "output_modalities": [
+        "text"
+      ],
+      "owned_by": "Aion Labs",
+      "pricing": {
+        "cache_read_usd": 0.1974,
+        "cache_write_usd": 0.7896,
+        "completion": "0.0000015792",
+        "input_cache_read": "0.0000001974",
+        "input_cache_write": "0.0000007896",
+        "input_usd": 0.7896,
+        "list_input_usd": 0.8,
+        "list_output_usd": 1.6,
+        "max_cache_read_usd": 0.1974,
+        "max_cache_write_usd": 0.7896,
+        "max_input_usd": 0.7896,
+        "max_output_usd": 1.5792,
+        "output_usd": 1.5792,
+        "price_basis": "listed",
+        "prompt": "0.0000007896",
+        "unit": "1M tokens"
+      },
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "stop",
+        "temperature",
+        "top_p"
+      ],
+      "supports_reasoning": true,
+      "supports_tools": false,
+      "supports_vision": false,
+      "top_provider": {
+        "context_length": 128000,
+        "max_completion_tokens": 32768
+      },
+      "type": "chat"
+    },
+    {
+      "architecture": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "available": true,
+      "context_length": 131072,
+      "created": 1795532367,
+      "display_name": "Gemini Omni 1.2 Flash",
+      "endpoints": [
+        "/v1/chat/completions",
+        "/v1/messages",
+        "/v1/responses"
+      ],
+      "id": "google/gemini-omni-1.2-flash",
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "pdf"
+      ],
+      "nsfw": false,
+      "object": "model",
+      "output_modalities": [
+        "text"
+      ],
+      "owned_by": "Google",
+      "pricing": {
+        "completion": "0.0000051975",
+        "input_usd": 0.86625,
+        "max_input_usd": 0.86625,
+        "max_output_usd": 5.1975,
+        "output_usd": 5.1975,
+        "price_basis": "listed",
+        "prompt": "0.00000086625",
+        "unit": "1M tokens"
+      },
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "stop",
+        "reasoning",
+        "include_reasoning"
+      ],
+      "supports_reasoning": true,
+      "supports_tools": false,
+      "supports_vision": true,
+      "top_provider": {
+        "context_length": 131072
+      },
+      "type": "chat"
+    }
+  ],
+  "object": "list"
+}

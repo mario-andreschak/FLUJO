@@ -25,6 +25,8 @@ jest.mock('@/utils/logger', () => ({
   }),
 }));
 
+import { readFileSync } from 'fs';
+import path from 'path';
 import {
   fetchGeminiModels,
   fetchModelsFromProvider,
@@ -255,6 +257,70 @@ describe('fetchOpenAIModels with a custom LiteLLM base URL', () => {
     await fetchOpenAIModels('sk-key', 'https://gateway.corp.io/litellm/v1');
 
     expect(mockFetch.mock.calls[0][0]).toBe('https://gateway.corp.io/litellm/v1/models');
+  });
+});
+
+describe('fetchModelsFromProvider (martllm)', () => {
+  // Recorded from MartLLM's public GET https://api.martllm.com/v1/models on
+  // 2026-11-25 (no key needed for the listing), trimmed to three entries.
+  const recordedCatalogue = JSON.parse(
+    readFileSync(path.join(__dirname, 'fixtures', 'martllmModels.json'), 'utf8'),
+  ) as unknown;
+
+  it('reads the recorded catalogue with context, output, tool and image details', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => recordedCatalogue });
+
+    const models = await fetchModelsFromProvider('martllm', 'https://api.martllm.com/v1', 'test-key');
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0]).toBe('https://api.martllm.com/v1/models');
+    expect(mockFetch.mock.calls[0][1]).toEqual({
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+      redirect: 'error',
+    });
+    expect(models.map(model => model.id)).toEqual([
+      'deepseek/deepseek-v4.1-flash',
+      'aion-labs/aion-2.0',
+      'google/gemini-omni-1.2-flash',
+    ]);
+    expect(models[0]).toEqual({
+      id: 'deepseek/deepseek-v4.1-flash',
+      name: 'deepseek/deepseek-v4.1-flash',
+      description: 'Model deepseek/deepseek-v4.1-flash',
+      contextWindow: 1048576,
+      maxTokens: 384000,
+      supportedParameters: expect.arrayContaining(['tools', 'tool_choice', 'temperature']),
+      supportsTools: true,
+      inputModalities: ['text', 'image'],
+      visionInputCapability: 'supported',
+      outputModalities: ['text'],
+    });
+    expect(models[1]).toMatchObject({
+      id: 'aion-labs/aion-2.0',
+      contextWindow: 128000,
+      maxTokens: 32768,
+      supportsTools: false,
+      visionInputCapability: 'unsupported',
+    });
+    // An entry without an output limit keeps the rest of its details.
+    expect(models[2]).toMatchObject({ id: 'google/gemini-omni-1.2-flash', contextWindow: 131072, supportsTools: false });
+    expect(models[2]).not.toHaveProperty('maxTokens');
+  });
+
+  it('lists models through the old UberLLM address too', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => recordedCatalogue });
+
+    const models = await fetchOpenAIModels('test-key', 'https://api.uberllm.dev/v1');
+
+    expect(mockFetch.mock.calls[0][0]).toBe('https://api.uberllm.dev/v1/models');
+    // A gateway catalogue is not narrowed to OpenAI "gpt" names.
+    expect(models).toHaveLength(3);
+  });
+
+  it('returns an empty array (not throw) when MartLLM cannot be reached', async () => {
+    mockFetch.mockRejectedValue(new Error('ECONNRESET'));
+
+    await expect(fetchModelsFromProvider('martllm', 'https://api.martllm.com/v1', 'test-key')).resolves.toEqual([]);
   });
 });
 

@@ -105,6 +105,9 @@ export function getProviderFromBaseUrl(baseUrl: string): ModelProvider {
     return 'openrouter';
   } else if (belongsTo('requesty.ai')) {
     return 'requesty';
+  } else if (belongsTo('martllm.com') || belongsTo('uberllm.dev')) {
+    // MartLLM was called UberLLM until November 2026; its old addresses still work.
+    return 'martllm';
   } else if (hostname === 'api.x.ai') {
     return 'xai';
   } else if (hostname === 'generativelanguage.googleapis.com') {

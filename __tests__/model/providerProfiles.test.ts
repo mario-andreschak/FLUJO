@@ -1,5 +1,6 @@
 import {
   GEMINI_NATIVE_FALLBACK_MODELS,
+  PROVIDER_INFO,
   PROVIDER_PROFILES,
   getProviderProfile,
   getProviderProfileById,
@@ -20,6 +21,7 @@ describe('provider profiles', () => {
       'openrouter-messages',
       'openrouter-agent',
       'requesty',
+      'martllm',
       'xai',
       'ollama',
       'litellm',
@@ -73,6 +75,26 @@ describe('provider profiles', () => {
     expect(getProviderProfile('litellm', 'openai-responses').id).toBe('litellm');
     expect(getProviderProfile('litellm', 'openai').id).toBe('litellm-chat-completions');
     expect(resolveModelAdapter('litellm', 'openai')).toBe('openai');
+  });
+
+  it('offers MartLLM as an OpenAI Chat Completions gateway with its API base URL', () => {
+    expect(getProviderProfileById('martllm')).toEqual({
+      id: 'martllm',
+      label: 'MartLLM',
+      provider: 'martllm',
+      adapter: 'openai',
+      sdkLabel: 'OpenAI SDK',
+      baseUrl: 'https://api.martllm.com/v1',
+      showBaseUrl: true,
+    });
+    expect(PROVIDER_INFO.martllm).toEqual({ label: 'MartLLM', baseUrl: 'https://api.martllm.com/v1' });
+    // Saved connections with or without an adapter stay on Chat Completions.
+    for (const adapter of [undefined, 'openai'] as const) {
+      expect(resolveModelAdapter('martllm', adapter)).toBe('openai');
+      expect(getProviderProfile('martllm', adapter).id).toBe('martllm');
+    }
+    // The catalogue comes from {baseUrl}/models, so discovery follows the URL field.
+    expect(supportsProviderModelDiscovery(getProviderProfileById('martllm')!, 'https://api.martllm.com/v1')).toBe(true);
   });
 
   it('puts legacy OpenAI last and uses Responses for gateway profiles and saved connections', () => {

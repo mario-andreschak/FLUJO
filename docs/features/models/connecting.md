@@ -20,6 +20,14 @@ Continue with [your first conversation](../../getting-started/README.md) or [mod
 
 For a new connection, **LiteLLM** uses Responses. If your proxy only supports Chat Completions, choose **LiteLLM Chat Completions**. Existing saved connections keep their selected format; older connections without a saved format keep Chat Completions. Use **Test model** to check your proxy before running an agent.
 
+## MartLLM
+
+[MartLLM](https://martllm.com) is a paid service that gives you many models with one key. In the manual form, open **Provider**, choose **MartLLM** under **Routers & gateways**, and paste your MartLLM API key. The base URL is filled in for you: `https://api.martllm.com/v1`. FLUJO talks to it in the OpenAI Chat Completions format.
+
+The technical name has the form `vendor/model`, for example `deepseek/deepseek-v4.1-flash`. FLUJO loads MartLLM's model list, so you can pick a name from the suggestions. Prices are listed at [martllm.com/models](https://martllm.com/models).
+
+MartLLM was called UberLLM until November 2026. Connections that still use an `uberllm.dev` address keep working, and FLUJO recognises them as MartLLM. Use **Test model** to check your key before running an agent.
+
 ## Codex
 
 Codex models are discovered from the running server's workspace login instead of

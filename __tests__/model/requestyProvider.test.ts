@@ -74,7 +74,7 @@ describe('getProviderDefaultHeaders', () => {
   });
 
   it('returns undefined for every other provider (wire behaviour unchanged)', () => {
-    for (const p of ['openai', 'ollama', 'xai', 'litellm', undefined]) {
+    for (const p of ['openai', 'ollama', 'xai', 'litellm', 'martllm', undefined]) {
       expect(getProviderDefaultHeaders(p)).toBeUndefined();
     }
   });
