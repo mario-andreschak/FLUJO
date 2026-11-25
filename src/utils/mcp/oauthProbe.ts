@@ -59,13 +59,24 @@ async function fetchResourceMetadata(metadataUrl: string, signal: AbortSignal): 
   return { authorizationServers };
 }
 
+/** MCP authorization server discovery order: OAuth then OpenID, path inserted before appended. */
 function authorizationMetadataUrls(issuer: string): string[] {
   const url = publicOAuthUrl(issuer);
   const issuerPath = url.pathname.replace(/\/$/, '');
   return Array.from(new Set([
     new URL(`/.well-known/oauth-authorization-server${issuerPath}`, url.origin).toString(),
-    new URL(`${issuerPath}/.well-known/oauth-authorization-server`, url.origin).toString(),
+    new URL(`/.well-known/openid-configuration${issuerPath}`, url.origin).toString(),
     new URL(`${issuerPath}/.well-known/openid-configuration`, url.origin).toString(),
+    new URL(`${issuerPath}/.well-known/oauth-authorization-server`, url.origin).toString(),
+  ]));
+}
+
+/** RFC 9728 well-known addresses: the endpoint's own path first, then the root. */
+function protectedResourceMetadataUrls(server: URL): string[] {
+  const path = server.pathname.replace(/\/$/, '');
+  return Array.from(new Set([
+    new URL(`/.well-known/oauth-protected-resource${path}`, server.origin).toString(),
+    new URL('/.well-known/oauth-protected-resource', server.origin).toString(),
   ]));
 }
 
@@ -114,7 +125,7 @@ export async function probeOAuthSupport(serverUrl: string, _options: OAuthProbeO
     });
     const candidates = new Set<string>();
     if (challenge.resourceMetadataUrl) candidates.add(challenge.resourceMetadataUrl);
-    candidates.add(new URL('/.well-known/oauth-protected-resource', server.origin).toString());
+    for (const metadataUrl of protectedResourceMetadataUrls(server)) candidates.add(metadataUrl);
     for (const metadataUrl of candidates) {
       const meta = await fetchResourceMetadata(metadataUrl, signal).catch(() => undefined);
       if (!meta) continue;

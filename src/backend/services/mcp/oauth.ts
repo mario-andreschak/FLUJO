@@ -1,4 +1,4 @@
-import { OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
+import { auth, extractWWWAuthenticateParams, OAuthClientProvider, type AuthResult, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens, OAuthClientInformationMixed } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
@@ -53,6 +53,67 @@ function validOAuthState(state: string): boolean {
   return OAUTH_NONCE_PATTERN.test(state) || oauthStateWorkspace(state) !== undefined;
 }
 
+/**
+ * FLUJO stores exactly ['read'] when it switches OAuth on by itself. No server asked for
+ * that scope, so it must never reach an authorization server (MCP scope selection order:
+ * challenge scope, then `scopes_supported`, else no scope parameter at all).
+ */
+export function configuredOAuthScope(scopes: readonly string[] | undefined): string | undefined {
+  const named = scopes?.map(scope => scope.trim()).filter(Boolean) ?? [];
+  if (named.length === 0 || (named.length === 1 && named[0] === 'read')) return undefined;
+  return named.join(' ');
+}
+
+/** Token responses list scopes with spaces; Slack uses commas. */
+function splitScope(scope: string | undefined): string[] {
+  return scope?.split(/[ ,]+/).filter(Boolean) ?? [];
+}
+
+/** MCP requires S256 PKCE and says to verify it from the authorization server metadata. */
+function assertPkceSupported(discovery: OAuthDiscoveryState | undefined): void {
+  const methods = discovery?.authorizationServerMetadata?.code_challenge_methods_supported;
+  if (Array.isArray(methods) && methods.includes('S256')) return;
+  const error = new Error('This server\'s sign-in service does not confirm the S256 code check (PKCE) that MCP requires, so FLUJO did not open its sign-in page. Ask the server\'s provider to support S256.');
+  error.name = 'OAuthPkceUnsupported';
+  throw error;
+}
+
+const OAUTH_CHALLENGE_TIMEOUT_MS = 10_000;
+
+export interface OAuthChallenge { resourceMetadataUrl?: URL; scope?: string }
+
+/**
+ * Read the server's own 401 challenge, which MCP clients must prefer over well-known
+ * addresses for the metadata location and the scopes to request. It is sent without
+ * credentials and never follows redirects. Any other answer or failure returns nothing,
+ * and the SDK falls back to the well-known addresses.
+ */
+export async function readOAuthChallenge(serverUrl: string, fetchFn: typeof fetch = fetch): Promise<OAuthChallenge> {
+  try {
+    const response = await fetchFn(serverUrl, {
+      method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(OAUTH_CHALLENGE_TIMEOUT_MS),
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'flujo-oauth-challenge', method: 'ping' }),
+    });
+    await response.body?.cancel().catch(() => undefined);
+    if (response.status !== 401 && response.status !== 403) return {};
+    const { resourceMetadataUrl, scope } = extractWWWAuthenticateParams(response);
+    return { ...(resourceMetadataUrl ? { resourceMetadataUrl } : {}), ...(scope ? { scope } : {}) };
+  } catch {
+    return {};
+  }
+}
+
+/** Start or resume a person-initiated sign-in the way a connection's 401 would. */
+export async function startOAuthAuthorization(
+  provider: MCPOAuthClientProvider,
+  serverUrl: string,
+  fetchFn: typeof fetch = provider.oauthFetch,
+): Promise<AuthResult> {
+  const challenge = await readOAuthChallenge(serverUrl, fetchFn);
+  return auth(provider, { serverUrl, fetchFn, ...challenge });
+}
+
 /** Legacy credentials must complete a fresh authorization before they can be reused. */
 export function hasOAuthIssuer(credential: { issuer?: unknown } | undefined): boolean {
   return typeof credential?.issuer === 'string' && credential.issuer.trim().length > 0;
@@ -102,7 +163,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     stableCallback.searchParams.delete('workspace');
     this.cimdRedirectUrl = stableCallback.toString();
     
-    // Build client metadata from config
+    const scope = configuredOAuthScope(config.oauthScopes);
     this._clientMetadata = {
       redirect_uris: [redirectUrl],
       application_type: ['localhost', '127.0.0.1', '[::1]'].includes(new URL(redirectUrl).hostname) ? 'native' : 'web',
@@ -111,7 +172,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'client_secret_post',
-      scope: config.oauthScopes?.join(' ') || 'read',
+      ...(scope ? { scope } : {}),
     };
 
     log.info(`Created OAuth client provider for ${config.name}`);
@@ -135,6 +196,8 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
 
   /** CIMD keeps the callback stable; its state carries a workspace plus a random nonce. */
   state(): string {
+    // The SDK asks for state only when it starts a new authorization, never for refresh.
+    assertPkceSupported(this.discovery);
     const nonce = randomBytes(32).toString('base64url');
     const workspace = getCurrentWorkspace();
     const state = this.usingCimd ? `${workspace}.${nonce}` : nonce;
@@ -164,8 +227,8 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
 
   /** Keep discovery only for the current transaction, never as a cross-issuer cache. */
   saveDiscoveryState(state: OAuthDiscoveryState): void {
-    if (state.authorizationServerMetadata?.issuer !== undefined
-        && state.authorizationServerMetadata.issuer !== String(state.authorizationServerUrl)) {
+    const issuer = state.authorizationServerMetadata?.issuer;
+    if (issuer !== undefined && !this.issuerMatchesDiscovery(issuer, String(state.authorizationServerUrl))) {
       throw new Error('OAuth authorization metadata issuer does not match discovery');
     }
     this.discovery = this.observedIssuer === state.authorizationServerMetadata?.issuer
@@ -173,7 +236,30 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       : state;
   }
 
+  /**
+   * RFC 8414 §3.3: the issuer must equal the identifier the metadata address was built
+   * from. Servers without protected resource metadata make the SDK build it from the
+   * server origin as "https://host/"; the same address belongs to issuer "https://host".
+   */
+  private issuerMatchesDiscovery(issuer: string, discovered: string): boolean {
+    if (issuer === discovered) return true;
+    const server = new URL(this.config.serverUrl);
+    return discovered === new URL('/', server).href && issuer === server.origin;
+  }
+
   discoveryState(): OAuthDiscoveryState | undefined { return this.discovery; }
+
+  /** Scopes this authorization server already granted, so a step-up keeps them. */
+  private async grantedScopes(): Promise<string[]> {
+    const issuer = this.discovery?.authorizationServerUrl;
+    if (issuer === undefined) return [];
+    try {
+      const previous = await readOAuthTokens(this.config) as (OAuthTokens & { issuer?: string }) | undefined;
+      return previous?.issuer === String(issuer) ? splitScope(previous.scope) : [];
+    } catch {
+      return [];
+    }
+  }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
     const storedClient = await readOAuthClientInformation(this.config);
@@ -357,12 +443,17 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     // their existing grant instead of expanding to every scope advertised today.
     // Only scope names are reused; unbound access/refresh tokens stay withheld.
     if (knownOAuthIssuer(this.config.serverUrl)) {
-      const configured = this.config.oauthScopes?.filter(Boolean);
       const previous = await readOAuthTokens(this.config);
-      const scope = configured?.length && !(configured.length === 1 && configured[0] === 'read')
-        ? configured.join(' ')
-        : previous?.scope?.split(/[ ,]+/).filter(Boolean).join(' ');
+      const scope = configuredOAuthScope(this.config.oauthScopes) ?? splitScope(previous?.scope).join(' ');
       if (scope) authorizationUrl.searchParams.set('scope', scope);
+    }
+
+    // Step-up: request the challenged scopes together with those this authorization
+    // server already granted, so one more permission does not drop the others.
+    const requested = authorizationUrl.searchParams.get('scope')?.split(' ').filter(Boolean) ?? [];
+    if (requested.length > 0) {
+      const added = [...new Set(await this.grantedScopes())].filter(scope => !requested.includes(scope));
+      if (added.length > 0) authorizationUrl.searchParams.set('scope', [...requested, ...added].join(' '));
     }
     
     // Persist the URL with its nonce/verifier, so another reconnect can reuse the
