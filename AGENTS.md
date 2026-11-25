@@ -73,6 +73,7 @@ workaround.
 | Team roles give exactly their actions: owner all, member read/edit/run, viewer read; outsiders get "not found" | `__tests__/accounts/teamMatrix.test.ts` |
 | Persona runtime cleanup writes only with a grant from the rollout switches | `PersonaRuntimeRetentionWriteGrant` argument of the compactors in `compactRuntime.ts`; `personaRuntimeRetentionSweep.test.ts` |
 | The shareable diagnostic report holds only versions, counts and labels from fixed lists, never names, text, paths, addresses or keys | `normalizeDiagnosticReport` in `src/shared/types/diagnosticReport.ts`; `__tests__/diagnostics/diagnosticReport.test.ts` |
+| A workspace without its key file (`db/encryption_key.json`) is locked only when it holds encrypted secrets, never just because it runs on a worker | `findStoredCiphertext` in `src/utils/encryption/storedCiphertext.ts`; `__tests__/encryption/missingMetadataLock.test.ts` |
 | A subscription bar never shows a made-up 0% or 100%; every known provider answer has a fixture with the text and colour it must show | `__tests__/model/fixtures/claudeAllowanceFixtures.ts`; `__tests__/frontend/components/AllowanceFixtures.test.tsx` |
 | Private approval reads wait and read again after a short-lived Windows file lock, helper failure or torn read, using `src/utils/transientFileRetry.ts`, before they refuse | `__tests__/mcp/privateApprovalRetry.test.ts` |
 | The split MCP SDK packages and Apps share one `@modelcontextprotocol/core`; bump core with client and server | `__tests__/mcp/sdkPackageAlignment.test.ts` |

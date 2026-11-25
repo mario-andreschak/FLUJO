@@ -31,6 +31,7 @@ const refreshSpotlightMock = jest.fn();
 const schedulerStartMock = jest.fn();
 const isEncryptionLockedMock = jest.fn();
 const isUserEncryptionEnabledMock = jest.fn();
+const describeWorkerEncryptionLockMock = jest.fn();
 const ensureDefaultFlujoAgentMock = jest.fn();
 const listPersonasMock = jest.fn();
 const reconcilePersonaRoleBehaviorsMock = jest.fn();
@@ -100,6 +101,7 @@ jest.mock('@/backend/services/scheduler', () => ({
 jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: (...a: unknown[]) => isEncryptionLockedMock(...a),
   isUserEncryptionEnabled: (...a: unknown[]) => isUserEncryptionEnabledMock(...a),
+  describeWorkerEncryptionLock: (...a: unknown[]) => describeWorkerEncryptionLockMock(...a),
 }));
 jest.mock('@/backend/services/flow/defaultAgent', () => ({
   ensureDefaultFlujoAgent: (...a: unknown[]) => ensureDefaultFlujoAgentMock(...a),
@@ -383,6 +385,16 @@ describe('backend init startup gating (#78)', () => {
     await onUnlocked();
     expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
     expect(reconcilePersonaSchedulerProjectionsMock).not.toHaveBeenCalled();
+  });
+
+  it('a locked worker reports why it is locked and how to fix it', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    isEncryptionLockedMock.mockResolvedValue(true);
+    describeWorkerEncryptionLockMock.mockResolvedValue('Encrypted secrets were found in db/models.json, but the key file is missing.');
+    await ensureBackendInitialized();
+    expect(getWorkerBootstrapStatus()).toMatchObject({ state: 'locked',
+      error: 'Encrypted secrets were found in db/models.json, but the key file is missing.' });
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
   });
 
   it('worker startup failure stays unready and can be retried', async () => {
