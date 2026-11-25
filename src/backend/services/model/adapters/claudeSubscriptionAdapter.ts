@@ -356,8 +356,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const key = input.sessionResume && !input.nativeToolPort && !input.executionExtensionContext && input.conversationId && input.nodeId ? sessionKey(input.conversationId, input.nodeId) : undefined;
     const release = key ? await acquireClaudeSession(key, input.signal) : undefined;
     try { return await this.createSerializedCompletion(input); }
-    catch (error) { if (key) invalidateSession(key); throw error; }
-    finally { release?.(); }
+    catch (error) { if (key) await invalidateSession(key); throw error; }
+    finally { await release?.(); }
   }
 
   private async createSerializedCompletion({
@@ -421,7 +421,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // references the adapter factory.
     const { query, createSdkMcpServer, tool, prewarm } = await import('@anthropic-ai/claude-agent-sdk');
     const runtime = await prepareClaudeRuntimeEnvironment();
-    const runtimeIdentity = claudeSdkRuntimeIdentity();
+    const runtimeIdentity = await claudeSdkRuntimeIdentity();
     let runResourceSettings: RunResourceSettings | undefined;
     if (conversationId && !nativeToolPort) {
       try {
@@ -481,7 +481,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     let reusableSessionAvailable = false;
     let userContent: string | Anthropic.ContentBlockParam[] = '';
     if (sessionResume && sessionTracking) {
-      const reusable = findReusableSession(
+      const reusable = await findReusableSession(
         sessionTracking.key,
         sessionTracking.prefixHash,
         messages as unknown as Array<{ role: string; [key: string]: unknown }>,
@@ -514,7 +514,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // Remove the old checkpoint before mutating an SDK transcript. A backend
     // crash during this invocation must start fresh, never replay a partially
     // consumed delta against the previous successful watermark.
-    if (sessionTracking) invalidateSession(sessionTracking.key);
+    if (sessionTracking) await invalidateSession(sessionTracking.key);
 
     const usedNames = new Set<string>();
     const mcpToolUiByReadableName = new Map<string, {
@@ -1768,7 +1768,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // Drop any tracked session on a genuine error/cancellation so a later
         // turn never resumes a corrupted or half-torn-down session (#154 — the
         // "drop the cached session on error" contract coordinated with #151).
-        if (sessionTracking) invalidateSession(sessionTracking.key);
+        if (sessionTracking) await invalidateSession(sessionTracking.key);
         throw toolAuthorityFailure ?? err;
       }
     } finally {
@@ -1908,9 +1908,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       const transcriptCheckpoint = capturedSessionId && !endedByCaller && !handoffCalls.length && !ambientTasks
         ? await captureClaudeSessionTranscript(runtime.home, capturedSessionId) : undefined;
       if (endedByCaller || handoffCalls.length > 0 || ambientTasks > 0 || !capturedSessionId || !transcriptCheckpoint || !usageTracker.getCheckpoint()) {
-        invalidateSession(sessionTracking.key);
+        await invalidateSession(sessionTracking.key);
       } else {
-        recordSession(sessionTracking.key, {
+        await recordSession(sessionTracking.key, {
           sessionId: capturedSessionId,
           prefixHash: sessionTracking.prefixHash,
           seenMessageCount: messages.length + transcript.length,

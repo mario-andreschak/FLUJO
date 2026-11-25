@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import { StringDecoder } from 'string_decoder';
 import * as nodeModule from 'node:module';
@@ -11,6 +12,9 @@ export const CLAUDE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_SESSIONS = 200;
 
 export interface ClaudeTranscriptCheckpoint { bytes: number; records: number; sha256: string }
+
+const errorCode = (error: unknown) => (error as NodeJS.ErrnoException).code ?? '';
+const exists = (file: string) => fsp.access(file).then(() => true, () => false);
 
 /** Canonicalize object keys, retaining array order and every provider-visible value. */
 export function canonicalSessionValue(value: unknown): string {
@@ -27,13 +31,13 @@ export function sessionValueHash(value: unknown): string {
   return createHash('sha256').update(canonicalSessionValue(value)).digest('hex');
 }
 
-export function claudeSdkRuntimeIdentity(installationRoot = process.cwd()): { sdkVersion: string; bundledRuntimeVersion?: string } {
+export async function claudeSdkRuntimeIdentity(installationRoot = process.cwd()): Promise<{ sdkVersion: string; bundledRuntimeVersion?: string }> {
   // Keep resolution native, as the existing runtime discovery helpers do.
   // Webpack rejects static CommonJS resolution of this ESM-only SDK and can
   // rewrite a direct createRequire call to a build-host-dependent shim.
   const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
   const resolver = nativeCreateRequire(path.join(installationRoot, 'package.json'));
-  const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(resolver.resolve('@anthropic-ai/claude-agent-sdk')), 'package.json'), 'utf8'));
+  const manifest = JSON.parse(await fsp.readFile(path.join(path.dirname(resolver.resolve('@anthropic-ai/claude-agent-sdk')), 'package.json'), 'utf8'));
   if (manifest.name !== '@anthropic-ai/claude-agent-sdk' || typeof manifest.version !== 'string') throw new Error('Claude SDK identity is unavailable.');
   return { sdkVersion: manifest.version, ...(typeof manifest.claudeCodeVersion === 'string' ? { bundledRuntimeVersion: manifest.claudeCodeVersion } : {}) };
 }
@@ -47,19 +51,25 @@ function metadataPath(): string | undefined {
   return path.join(root, 'db', 'claude-sessions-v2');
 }
 
-export function loadClaudeSessions(): Map<string, StoredSession> {
+type SessionRecord = { version: number; workspace: string; key: string; entry: StoredSession };
+
+async function readSessionRecord(target: string): Promise<SessionRecord | undefined> {
+  try {
+    if ((await fsp.lstat(target)).isSymbolicLink() || (await fsp.stat(target)).size > 1024 * 1024) return undefined;
+    return JSON.parse(await fsp.readFile(target, 'utf8'));
+  } catch { return undefined; }
+}
+
+export async function loadClaudeSessions(): Promise<Map<string, StoredSession>> {
   const result = new Map<string, StoredSession>();
   const file = metadataPath();
   if (!file) return result;
   try {
-    for (const name of fs.readdirSync(file)) {
-      if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
-      let data: { version: number; workspace: string; key: string; entry: StoredSession };
-      try {
-        const target = path.join(file, name);
-        if (fs.lstatSync(target).isSymbolicLink() || fs.statSync(target).size > 1024 * 1024) continue;
-        data = JSON.parse(fs.readFileSync(target, 'utf8'));
-      } catch { continue; }
+    const names = (await fsp.readdir(file)).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const records = await Promise.all(names.map(name => readSessionRecord(path.join(file, name))));
+    for (const [index, name] of names.entries()) {
+      const data = records[index];
+      if (!data) continue;
       if (data.version !== VERSION || data.workspace !== getCurrentWorkspace()) continue;
       const { key, entry } = data;
       if (typeof key !== 'string' || name !== `${sessionValueHash(key)}.json`) continue;
@@ -98,40 +108,40 @@ function validTranscriptCheckpoint(value: unknown): value is ClaudeTranscriptChe
 }
 
 /** No prompt, conversation text, token, or tool arguments are persisted here. */
-export function saveClaudeSession(key: string, entry: StoredSession): void {
+export async function saveClaudeSession(key: string, entry: StoredSession): Promise<void> {
   const directory = metadataPath();
   if (!directory || !entry.historyHash) return;
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
   const file = path.join(directory, `${sessionValueHash(key)}.json`);
-  const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify({ version: VERSION, workspace: getCurrentWorkspace(), key, entry }), { mode: 0o600 });
-  fs.renameSync(temporary, file);
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  await fsp.writeFile(temporary, JSON.stringify({ version: VERSION, workspace: getCurrentWorkspace(), key, entry }), { mode: 0o600 });
+  await fsp.rename(temporary, file);
   // Other session owners may remove entries between enumeration and stat. GC
   // is best effort and must never discard a successfully written checkpoint.
   try {
-    const files = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
-      .flatMap(name => {
-        try { return [{ path: path.join(directory, name), modified: fs.statSync(path.join(directory, name)).mtimeMs }]; }
-        catch { return []; }
-      }).sort((a, b) => b.modified - a.modified);
-    for (const [index, item] of files.entries()) {
+    const names = (await fsp.readdir(directory)).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const files = (await Promise.all(names.map(async name => {
+      try { return [{ path: path.join(directory, name), modified: (await fsp.stat(path.join(directory, name))).mtimeMs }]; }
+      catch { return []; }
+    }))).flat().sort((a, b) => b.modified - a.modified);
+    await Promise.all(files.map(async (item, index) => {
       if (index >= MAX_SESSIONS || Date.now() - item.modified > CLAUDE_SESSION_TTL_MS) {
-        try { fs.rmSync(item.path, { force: true }); } catch { /* Retry GC on the next successful turn. */ }
+        try { await fsp.rm(item.path, { force: true }); } catch { /* Retry GC on the next successful turn. */ }
       }
-    }
+    }));
   } catch { /* A checkpoint is usable even if directory GC is unavailable. */ }
 }
 
-export function removeClaudeSession(key: string): void {
+export async function removeClaudeSession(key: string): Promise<void> {
   const directory = metadataPath();
-  if (directory) fs.rmSync(path.join(directory, `${sessionValueHash(key)}.json`), { force: true });
+  if (directory) await fsp.rm(path.join(directory, `${sessionValueHash(key)}.json`), { force: true });
 }
 
 /** Cross-process lock for the same SDK session; distinct keys stay independent. */
-export async function acquireDurableClaudeSession(key: string, signal?: AbortSignal): Promise<() => void> {
+export async function acquireDurableClaudeSession(key: string, signal?: AbortSignal): Promise<() => Promise<void>> {
   const directory = metadataPath();
-  if (!directory) return () => {};
-  fs.mkdirSync(path.join(directory, 'leases'), { recursive: true, mode: 0o700 });
+  if (!directory) return async () => {};
+  await fsp.mkdir(path.join(directory, 'leases'), { recursive: true, mode: 0o700 });
   const lease = path.join(directory, 'leases', `${sessionValueHash(key)}.lock`);
   const nonce = randomUUID();
   const ownerName = `${process.pid}.${nonce}.json`;
@@ -141,33 +151,33 @@ export async function acquireDurableClaudeSession(key: string, signal?: AbortSig
   // Publish a nonempty directory atomically. A crash during preparation leaves
   // only an unowned candidate, never an empty/partial active lease. Rename
   // cannot replace a nonempty directory on Windows or POSIX.
-  fs.mkdirSync(candidate, { mode: 0o700 });
+  await fsp.mkdir(candidate, { mode: 0o700 });
   try {
-    fs.writeFileSync(path.join(candidate, ownerName), JSON.stringify({ pid: process.pid, nonce }), { flag: 'wx', mode: 0o600 });
+    await fsp.writeFile(path.join(candidate, ownerName), JSON.stringify({ pid: process.pid, nonce }), { flag: 'wx', mode: 0o600 });
     while (true) {
       signal?.throwIfAborted();
       try {
-        fs.renameSync(candidate, lease);
-        return () => {
-          const owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+        await fsp.rename(candidate, lease);
+        return async () => {
+          const owner = JSON.parse(await fsp.readFile(ownerFile, 'utf8'));
           if (owner.nonce !== nonce) throw new Error('Claude session lease ownership changed.');
-          fs.unlinkSync(ownerFile);
-          try { fs.rmdirSync(lease); }
+          await fsp.unlink(ownerFile);
+          try { await fsp.rmdir(lease); }
           catch (error) {
             // A waiter can publish its nonempty generation after our unlink.
             // Our ownership is already released; never remove that replacement.
-            if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+            if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(errorCode(error))) throw error;
           }
         };
       } catch (error) {
-        if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(errorCode(error))) throw error;
         try {
-          const owners = fs.readdirSync(lease);
+          const owners = await fsp.readdir(lease);
           if (owners.length === 0) {
             // A previous release/recovery may have crashed after unlink. Every
             // new owner is already nonempty when it becomes visible, so rmdir
             // cannot remove a newly published ownership generation.
-            fs.rmdirSync(lease); continue;
+            await fsp.rmdir(lease); continue;
           }
           const identity = owners.length === 1 && /^([1-9][0-9]*)\.([a-f0-9-]{36})\.json$/.exec(owners[0]);
           if (!identity) throw new Error('Unknown Claude session lease ownership.');
@@ -180,8 +190,8 @@ export async function acquireDurableClaudeSession(key: string, signal?: AbortSig
                 // Remove only the generation we observed. A competing recoverer
                 // that already removed it gets ENOENT and cannot delete a new
                 // owner's directory or nonce file.
-                fs.unlinkSync(observedFile);
-                fs.rmdirSync(lease);
+                await fsp.unlink(observedFile);
+                await fsp.rmdir(lease);
                 continue;
               }
             }
@@ -199,8 +209,8 @@ export async function acquireDurableClaudeSession(key: string, signal?: AbortSig
   } finally {
     // Acquisition renamed this candidate away; cancellation/error removes only
     // our private unpublished generation, with no recursive deletion.
-    try { fs.unlinkSync(path.join(candidate, ownerName)); } catch { /* Already published or not written. */ }
-    try { fs.rmdirSync(candidate); } catch { /* Already published or preserve unknown contents. */ }
+    try { await fsp.unlink(path.join(candidate, ownerName)); } catch { /* Already published or not written. */ }
+    try { await fsp.rmdir(candidate); } catch { /* Already published or preserve unknown contents. */ }
   }
 }
 
@@ -209,14 +219,14 @@ export async function captureClaudeSessionTranscript(home: string, sessionId: st
   if (!/^[a-zA-Z0-9_-]{1,256}$/.test(sessionId)) return undefined;
   try {
     const projects = path.join(home, 'projects');
-    const projectsStat = fs.lstatSync(projects);
+    const projectsStat = await fsp.lstat(projects);
     if (!projectsStat.isDirectory() || projectsStat.isSymbolicLink()) return undefined;
     let checkpoint: ClaudeTranscriptCheckpoint | undefined;
-    for (const project of fs.readdirSync(projects, { withFileTypes: true })) {
+    for (const project of await fsp.readdir(projects, { withFileTypes: true })) {
       if (!project.isDirectory() || project.isSymbolicLink()) continue;
       const file = path.join(projects, project.name, `${sessionId}.jsonl`);
-      if (!fs.existsSync(file)) continue;
-      const stat = fs.lstatSync(file);
+      if (!await exists(file)) continue;
+      const stat = await fsp.lstat(file);
       if (!stat.isFile() || stat.isSymbolicLink() || !stat.size || checkpoint) return undefined;
       // Validate JSONL in bounded chunks without loading a large transcript into
       // memory. The SDK remains responsible for native transcript semantics.
@@ -247,7 +257,7 @@ export async function captureClaudeSessionTranscript(home: string, sessionId: st
           if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined;
           records++;
         }
-        const after = fs.lstatSync(file);
+        const after = await fsp.lstat(file);
         if (!records || after.isSymbolicLink() || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs
           || after.ino !== stat.ino || after.dev !== stat.dev) return undefined;
         checkpoint = { bytes: stat.size, records, sha256: hash.digest('hex') };
