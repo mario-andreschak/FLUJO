@@ -19,6 +19,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
+import { FILE_RECORD_ID_RULE } from '@/shared/recordId';
 import { fileErrorCode, retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { deleteCollectionItem, runInWriteChain, writeFileAtomic } from '@/utils/storage/backend';
 import {
@@ -37,7 +38,7 @@ const log = createLogger('backend/services/projects/chatProjectBindings');
 
 const COLLECTION = 'chat-projects';
 /** The same rule chat files follow, so every stored chat can keep a folder. */
-const CHAT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const CHAT_ID_PATTERN = FILE_RECORD_ID_RULE.pattern;
 const LEGACY_FIELD = 'chatProjects';
 const LEGACY_BACKUP_FILE = '.workspace.chat-projects.backup.json';
 const MIGRATION_WORKERS = 8;
