@@ -407,15 +407,39 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     const { getRunResourceSettings } = jest.requireMock('@/backend/services/runResources') as {
       getRunResourceSettings: jest.Mock;
     };
-    getRunResourceSettings.mockResolvedValueOnce({ toolResultMaxBytes: 900_000 });
+    getRunResourceSettings.mockResolvedValueOnce({
+      toolResultTruncationEnabled: true, toolResultLimitMode: 'custom', toolResultMaxBytes: 900_000,
+    });
 
     await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      model: { ...baseInput().model, contextWindow: 1_000_000 },
       conversationId: 'conv-1',
       tools: [],
     }));
 
     const env = capturedOptions().env as Record<string, string>;
     expect(env.MAX_MCP_OUTPUT_TOKENS).toBe('900000');
+  });
+
+  it.each([
+    // Off: FLUJO still moves results over half the window, so the valve sits there (#1226).
+    ['off', { toolResultTruncationEnabled: false }, '400000'],
+    // Automatic: an eighth of a 200,000-token window is 100,000 bytes; the valve never goes below 64K.
+    ['automatic', { toolResultTruncationEnabled: true, toolResultLimitMode: 'auto' }, '100000'],
+  ])('sizes the SDK persistence limit from the model window when the limit is %s', async (_label, settings, expected) => {
+    const { getRunResourceSettings } = jest.requireMock('@/backend/services/runResources') as {
+      getRunResourceSettings: jest.Mock;
+    };
+    getRunResourceSettings.mockResolvedValueOnce(settings);
+
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      model: { ...baseInput().model, contextWindow: 200_000 },
+      conversationId: 'conv-1',
+      tools: [],
+    }));
+
+    const env = capturedOptions().env as Record<string, string>;
+    expect(env.MAX_MCP_OUTPUT_TOKENS).toBe(expected);
   });
 
   it('disables all built-in tools on the query options for a tools-less node', async () => {
@@ -860,6 +884,35 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
     expect(boundToolResultMock).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.not.stringContaining('BASE64_IMAGE'),
     }));
+  });
+
+  it('drops structuredContent from a bounded result and sizes the limit from the model window (#1226)', async () => {
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'x'.repeat(60_000) }], structuredContent: { rows: 'x'.repeat(60_000) } },
+    });
+    boundToolResultMock.mockResolvedValueOnce({ spilled: true, content: '[bounded text preview]' });
+    let sdkResult: unknown;
+    queryMock.mockImplementation(() => (async function* () {
+      sdkResult = await runAutoApprovedTool({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      model: { ...baseInput().model, contextWindow: 200_000 },
+      conversationId: 'conv-1',
+      tools: [mcpAppTool],
+      toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+    }));
+
+    expect(sdkResult).toEqual({ content: [{ type: 'text', text: '[bounded text preview]' }] });
+    expect(boundToolResultMock).toHaveBeenCalledWith(expect.objectContaining({ contextWindow: 200_000 }));
   });
 
   it('preserves the advertised UI, ignores a result redirect, and propagates abort', async () => {

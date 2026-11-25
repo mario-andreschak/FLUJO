@@ -3,8 +3,9 @@ import path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
-import { loadItem, writeFileAtomic, runInWriteChain } from '@/utils/storage/backend';
+import { loadItem, saveItem, writeFileAtomic, runInWriteChain } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
+import { normalizeRunResourceSettings, type ToolResultLimitPatch } from '@/shared/toolResultLimit';
 import {
   RUN_RESOURCE_SCHEME,
   RunResourceEntry,
@@ -142,14 +143,33 @@ export async function getRunResourceSettings(): Promise<RunResourceSettings> {
       StorageKey.RUN_RESOURCE_SETTINGS,
       DEFAULT_RUN_RESOURCE_SETTINGS
     );
-    // Merge so a hand-edited partial settings file keeps sane defaults.
-    value = { ...DEFAULT_RUN_RESOURCE_SETTINGS, ...stored };
+    // Merge so a hand-edited partial settings file keeps sane defaults, and a
+    // broken value falls back instead of breaking every tool call.
+    value = normalizeRunResourceSettings(stored);
   } catch (error) {
     log.warn('Failed to load run-resource settings; using defaults', error);
     value = DEFAULT_RUN_RESOURCE_SETTINGS;
   }
   settingsCache.set(settingsKey, { value, at: Date.now() });
   return value;
+}
+
+/**
+ * Save the tool result size limit from the Settings page (issue #1226). The
+ * patch must already be validated (`validateToolResultLimitPatch`). Other
+ * stored fields are kept as they are, and the next tool call sees the change.
+ */
+export async function updateToolResultLimitSettings(patch: ToolResultLimitPatch): Promise<RunResourceSettings> {
+  return runInWriteChain(StorageKey.RUN_RESOURCE_SETTINGS, async () => {
+    const stored = await loadItem<Partial<RunResourceSettings>>(StorageKey.RUN_RESOURCE_SETTINGS, {});
+    const current = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+    const normalized = normalizeRunResourceSettings(current);
+    // Keep the mode explicit from now on so a later default change cannot flip it.
+    const next = { ...current, toolResultLimitMode: normalized.toolResultLimitMode, ...patch };
+    await saveItem(StorageKey.RUN_RESOURCE_SETTINGS, next);
+    settingsCache.delete(workspaceCacheKey('run-resource-settings'));
+    return normalizeRunResourceSettings(next);
+  });
 }
 
 /** Test seam: drop the settings cache. */

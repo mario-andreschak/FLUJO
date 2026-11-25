@@ -13,6 +13,7 @@ import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { withBoundedToolText } from '@/backend/services/runResources/toolResultBound';
 import { combineAbortSignals } from '../combineAbortSignals';
 import { isNativeHandoffProtocol, type NativeHandoffProtocol } from './nativeHandoffProtocol';
 import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, type NativeOriginalProcessHost } from './nativeOriginalHost';
@@ -120,6 +121,8 @@ export interface NativeBrokerInput {
   terminationProtocol?: NativeHandoffProtocol;
   originalProcessHost?: NativeOriginalProcessHost;
   executionExtensionContext?: ExecutionExtensionContext;
+  /** Context window (tokens) of the model on this attempt; sizes the tool result size limit (#1226). */
+  contextWindow?: number;
 }
 
 /** Freeze exactly the tools on this provider attempt; retain executors only here. */
@@ -299,23 +302,27 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       }
       const { mediaItems, textResult } = splitToolResultMedia(result);
       let transcriptText = JSON.stringify(textResult);
-      if (kind === 'mcp') {
+      const overTransport = () => Buffer.byteLength(transcriptText, 'utf8') > MAX_TRANSCRIPT_BYTES
+        || Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_PORT_RESULT_BYTES;
+      // A result over the fixed transport bound is stored once, by that bound
+      // below; the user's limit (#1226) decides only for results under it.
+      if (kind === 'mcp' && !overTransport()) {
         const settings = await getRunResourceSettings();
         const bounded = await boundToolResult({
           conversationId: input.receipt.owner.conversationId,
           toolCallId: toolInvocationId,
           server: bound[name].server, toolName: bound[name].tool,
           nodeId: bound[name].nodeId, content: transcriptText, settings,
+          contextWindow: input.contextWindow,
         });
         if (bounded.spilled) {
           transcriptText = bounded.content;
-          result = { ...result, content: [...mediaItems, { type: 'text', text: transcriptText }] };
+          result = withBoundedToolText(result, mediaItems, transcriptText);
         }
       }
       // Configurable context bounds may be disabled. The broker's transport
       // boundary is fixed and never forwards an unbounded text/media payload.
-      if (Buffer.byteLength(transcriptText, 'utf8') > MAX_TRANSCRIPT_BYTES
-        || Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_PORT_RESULT_BYTES) {
+      if (overTransport()) {
         // A returned response resolves the tool effect. Preserve that response
         // privately and bound its representation instead of turning a large
         // successful read/write into an unknown effect that kills the Original.
@@ -327,7 +334,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
           nodeId: kind === 'mcp' ? bound[name].nodeId : input.receipt.owner.nodeId,
           content: JSON.stringify(result),
           settings: {
-            ...await getRunResourceSettings(), toolResultTruncationEnabled: true,
+            ...await getRunResourceSettings(), toolResultTruncationEnabled: true, toolResultLimitMode: 'custom',
             // JSON control-character escaping can expand a preview sixfold.
             // Leave room for that, the resource URI and the enclosing result.
             toolResultMaxBytes: 8 * 1024, toolResultMaxLines: 200,

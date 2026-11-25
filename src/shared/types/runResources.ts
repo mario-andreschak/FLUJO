@@ -145,20 +145,34 @@ export interface RunResourceSettings {
    */
   replaceLargeTextWithStub: boolean;
   /**
-   * Master switch for tool-result truncation/conversion to resource-URI.
-   * When disabled (default), tool results are never truncated or converted
-   * to resource URIs at the tool boundary, regardless of size limits.
-   * When enabled, tool results exceeding toolResultMaxLines or toolResultMaxBytes
-   * are truncated to a head+tail preview with a resource URI.
+   * Master switch for the tool result size limit (Settings → Experimental
+   * features → Context management, issue #1226). Off by default.
+   *
+   * On: a result over the limit (see `toolResultLimitMode`) is stored as a run
+   * resource and the model sees a head+tail preview carrying its URI.
+   * Off: results stay inline EXCEPT one too large for the model's context
+   * window (over half of it, see `resolveToolResultBound` in
+   * `src/shared/toolResultLimit.ts`), which is still moved, with a note saying
+   * why, so the run degrades instead of failing.
    */
   toolResultTruncationEnabled: boolean;
+  /**
+   * How the byte limit is chosen while the switch is on (issue #1226):
+   *  - 'auto' (default): an eighth of the model's context window, the share
+   *    Claude Code's own 25,000-token MCP output cap gives a 200k model.
+   *  - 'custom': `toolResultMaxBytes`.
+   * Missing on a stored settings file that set `toolResultMaxBytes` by hand ⇒
+   * treated as 'custom' when loaded (see `normalizeRunResourceSettings`).
+   */
+  toolResultLimitMode?: ToolResultLimitMode;
   /**
    * Tool-boundary bound (issue #251). Every tool result whose text form exceeds
    * EITHER of these limits is truncated to a head+tail preview and the full
    * content is spilled unconditionally to a run resource on the very turn it is
    * produced — so a 5 MB result never reaches the wire in full, even on the
    * first turn, and both ends of a long log survive. Set a limit to 0 to
-   * disable that dimension of the bound.
+   * disable that dimension of the bound. `toolResultMaxBytes` applies in
+   * 'custom' mode only; the line limit applies whenever the switch is on.
    */
   toolResultMaxLines?: number; // default 10,000
   toolResultMaxBytes?: number; // default 256 * 1024 (256 KiB)
@@ -168,6 +182,8 @@ export interface RunResourceSettings {
    */
   retentionAgeDays?: number; // default 7 (0 = disable)
 }
+
+export type ToolResultLimitMode = 'auto' | 'custom';
 
 export const DEFAULT_TOOL_RESULT_MAX_LINES = 10_000;
 export const DEFAULT_TOOL_RESULT_MAX_BYTES = 256 * 1024;
@@ -179,6 +195,7 @@ export const DEFAULT_RUN_RESOURCE_SETTINGS: RunResourceSettings = {
   maxConversationBytes: 256 * 1024 * 1024,
   replaceLargeTextWithStub: false,
   toolResultTruncationEnabled: false,
+  toolResultLimitMode: 'auto',
   toolResultMaxLines: DEFAULT_TOOL_RESULT_MAX_LINES,
   toolResultMaxBytes: DEFAULT_TOOL_RESULT_MAX_BYTES,
   retentionAgeDays: 7,

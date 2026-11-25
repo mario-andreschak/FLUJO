@@ -6,6 +6,8 @@ This section provides detailed documentation for Flujo's features.
 
 - **[Chat commands and dynamic tool parameters](./dynamic-references.md)**: Current context, entity pickers, tool/resource references, and hidden parameter presets
 
+- **[Tool result size limit](./tool-result-size-limit.md)**: Move very large tool results to a run resource, automatically sized to the model or with your own limit, with a safety net that keeps runs going.
+
 ## Reach a model without a flow
 
 Direct model calls on the `/v1` API and Quick Chat let a person talk to a model without a saved flow, so a flow's checks do not apply to them. A workspace can switch off either one under **Settings > Model access**. Both are on by default.

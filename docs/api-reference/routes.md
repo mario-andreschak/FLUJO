@@ -4,10 +4,14 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 236.
+Route files: 241.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
+| `/api/accounts/mode` | POST | [source](../../src/app/api/accounts/mode/route.ts) |
+| `/api/accounts/session` | DELETE, GET, POST | [source](../../src/app/api/accounts/session/route.ts) |
+| `/api/accounts/tokens` | DELETE, GET, POST | [source](../../src/app/api/accounts/tokens/route.ts) |
+| `/api/accounts/users` | GET, PATCH, POST, PUT | [source](../../src/app/api/accounts/users/route.ts) |
 | `/api/approvals` | GET | [source](../../src/app/api/approvals/route.ts) |
 | `/api/approvals/{id}` | POST | [source](../../src/app/api/approvals/[id]/route.ts) |
 | `/api/automation-map` | GET | [source](../../src/app/api/automation-map/route.ts) |
@@ -154,6 +158,7 @@ Route files: 236.
 | `/api/telemetry/daily-active` | GET, POST | [source](../../src/app/api/telemetry/daily-active/route.ts) |
 | `/api/tickets` | DELETE, GET, POST | [source](../../src/app/api/tickets/route.ts) |
 | `/api/tickets/{id}` | DELETE, GET, PATCH | [source](../../src/app/api/tickets/[id]/route.ts) |
+| `/api/tool-result-limit` | GET, PATCH | [source](../../src/app/api/tool-result-limit/route.ts) |
 | `/api/transcription` | POST | [source](../../src/app/api/transcription/route.ts) |
 | `/api/update` | GET, POST | [source](../../src/app/api/update/route.ts) |
 | `/api/waves` | GET | [source](../../src/app/api/waves/route.ts) |

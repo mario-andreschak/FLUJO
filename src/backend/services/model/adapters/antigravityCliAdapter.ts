@@ -8,6 +8,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { withBoundedToolText } from '@/backend/services/runResources/toolResultBound';
 import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import {
   resolveInvokedToolUiLink,
@@ -472,6 +473,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                       nodeId: callerNodeId,
                       content: resultContent,
                       settings,
+                      contextWindow: model.contextWindow,
                     });
                   } catch (err) {
                     rethrowFlowExecutionAuthorityError(err);
@@ -484,13 +486,9 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                   : await bound();
                 if (bounded?.spilled) {
                   resultContent = bounded.content;
-                  callResult = {
-                    ...callResult,
-                    content: [...mediaItems, { type: 'text', text: bounded.content }],
-                  };
                   // The resource receipt replaces the text payload in both MCP
                   // representations; retaining structuredContent would resend it.
-                  delete callResult.structuredContent;
+                  callResult = withBoundedToolText(callResult, mediaItems, bounded.content);
                 }
               }
             } else {

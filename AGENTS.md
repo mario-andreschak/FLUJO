@@ -81,6 +81,7 @@ workaround.
 | A burst of chat requests waits its turn (`src/utils/capacityWaitQueue.ts`); none is refused because others arrived together | `__tests__/chat/parallelChatBurst.test.ts` |
 | A Codex SDK/CLI bump re-records the real app-server messages (`npm run record:codex-protocol`, no account) and FLUJO's conversation code must still accept them | `__tests__/model/codexAppServerProtocolReplay.test.ts` |
 | A resumed Claude session gets each turn's per-turn instructions exactly once and keeps its conversation; changed stable instructions start a new session; a resumed turn leaves parked Claude processes alone. Re-check on every Agent SDK upgrade | `__tests__/model/claudeSessionPromptResume.test.ts` (installed SDK with its bundled Claude Code and a stand-in model service on this machine) |
+| Every place that hands a tool result to a model sizes it with `resolveToolResultBound` (`src/shared/toolResultLimit.ts`), and a shortened result never keeps `structuredContent` (`withBoundedToolText`) | `__tests__/architecture/toolResultBoundSingleRule.test.ts`; `__tests__/model/codexAdapter.test.ts`, `__tests__/model/claudeSubscriptionBuiltinTools.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 
 # Resilience over refusal

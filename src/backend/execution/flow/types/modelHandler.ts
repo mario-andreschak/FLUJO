@@ -171,6 +171,12 @@ export interface ToolCallProcessingInput {
    * (e.g. ephemeral subflow-child runs, or legacy call sites).
    */
   conversationId?: string;
+  /**
+   * Context window (tokens) of the model that will read these results. Sizes
+   * the tool result size limit's 'auto' value and its safety ceiling (#1226);
+   * unknown ⇒ a 128K-token window is assumed.
+   */
+  modelContextWindow?: number;
   /** Metadata-only logical run id for tool attribution. */
   runId?: string;
   /** Process node driving these calls — recorded as resource lineage producer. */

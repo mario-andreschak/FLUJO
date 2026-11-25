@@ -19,6 +19,7 @@ import { ExperimentalSettings } from '@/shared/types/storage/storage';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import SnapshotStorageSettings from './SnapshotStorageSettings';
+import ToolResultLimitSettings from './ToolResultLimitSettings';
 
 const log = createLogger('frontend/components/Settings/ExperimentalFeaturesSettings');
 
@@ -491,6 +492,7 @@ export default function ExperimentalFeaturesSettings() {
           id="context-management"
           title={t('settings.experimental.group.contextManagement')}
         >
+          <ToolResultLimitSettings />
           <ExperimentalToggle
             checked={experimental.compactionEnabled ?? false}
             description={t('settings.experimental.summarizingCompactionDescription')}

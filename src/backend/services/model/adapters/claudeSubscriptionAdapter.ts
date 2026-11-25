@@ -20,6 +20,8 @@ import { allowanceAccountKey, recordAllowanceSnapshot, recordAllowanceSignal } f
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { withBoundedToolText } from '@/backend/services/runResources/toolResultBound';
+import { resolveToolResultBound } from '@/shared/toolResultLimit';
 import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import {
   resolveInvokedToolUiLink,
@@ -29,7 +31,6 @@ import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import {
   DEFAULT_RUN_RESOURCE_SETTINGS,
-  DEFAULT_TOOL_RESULT_MAX_BYTES,
   type RunResourceSettings,
 } from '@/shared/types/runResources';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker, type SteeringDelivery } from './types';
@@ -149,18 +150,15 @@ const MAX_TOOL_NAME_LEN = 110;
 // Claude Code otherwise persists MCP results after roughly 10k tokens (~50 KB)
 // and gives the model a private runtime path that FLUJO's read_resource cannot
 // resolve. FLUJO owns this boundary via boundToolResult. Raise the SDK valve to
-// at least FLUJO's configured BYTE limit: content below the FLUJO limit remains
-// inline, while content at/above it is replaced by FLUJO with a registered URI.
-// A byte can tokenize to at most one byte-level token, so using the byte count
-// as a token count is deliberately conservative. If the FLUJO byte dimension is
-// disabled, effectively disable the SDK valve too; the configured line bound
-// (if any) remains authoritative.
+// at least FLUJO's effective BYTE limit for this model (#1226: the user's limit
+// when the switch is on, the context-window safety ceiling when it is off):
+// content below it remains inline, while content above it is replaced by FLUJO
+// with a registered URI. A byte can tokenize to at most one byte-level token,
+// so using the byte count as a token count is deliberately conservative.
 const MIN_CLAUDE_MCP_OUTPUT_TOKENS = 64 * 1024;
-const DISABLED_CLAUDE_MCP_OUTPUT_TOKENS = 2_147_483_647;
 
-function claudeMcpOutputTokens(settings: RunResourceSettings | undefined): number {
-  const maxBytes = settings?.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
-  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return DISABLED_CLAUDE_MCP_OUTPUT_TOKENS;
+function claudeMcpOutputTokens(settings: RunResourceSettings | undefined, contextWindow?: number): number {
+  const { maxBytes } = resolveToolResultBound(settings ?? DEFAULT_RUN_RESOURCE_SETTINGS, contextWindow);
   return Math.max(MIN_CLAUDE_MCP_OUTPUT_TOKENS, Math.ceil(maxBytes));
 }
 
@@ -930,6 +928,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   nodeId: callerNodeId,
                   content: resultContent,
                   settings,
+                  contextWindow: model.contextWindow,
                 });
                 if (bounded.spilled) {
                   resultContent = bounded.content;
@@ -938,10 +937,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   // still sees the full result on this path. Media blocks are
                   // re-attached verbatim: the text was too big, the picture was
                   // never the problem.
-                  callResult = {
-                    ...callResult,
-                    content: [...mediaItems, { type: 'text', text: bounded.content }],
-                  };
+                  callResult = withBoundedToolText(callResult, mediaItems, bounded.content);
                 }
               } catch (err) {
                 log.warn('boundToolResult failed on subscription path; keeping full result', err);
@@ -1030,7 +1026,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     childEnv.CLAUDE_CODE_OAUTH_TOKEN = apiKey;
     childEnv.CLAUDE_CODE_STARTUP_FAILURE_RESULTS = '1';
     childEnv.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
-    childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings));
+    childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings, model.contextWindow));
     delete childEnv.ANTHROPIC_API_KEY;
 
     // #1408 opt-in warm process: a request that starts a fresh Claude session
