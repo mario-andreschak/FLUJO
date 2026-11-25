@@ -162,6 +162,12 @@ function stepDetails(flow: Flow, node: FlowNode, flowsById: Map<string, Flow>): 
   } else if (type === 'static' && Array.isArray(props.rules) && props.rules.length > 0) {
     const rules = props.rules as Array<{ id?: unknown; outcome?: unknown }>;
     lines.push(`Decides by ${rules.length} fixed rule(s), first match wins, with no model: ${rules.map((rule) => `\`${text(rule.id)}\` → ${text(rule.outcome)}`).join('; ')}.`);
+  } else if (type === 'human') {
+    const outcome = props.mode === 'input' ? 'the answers are in' : props.mode === 'edit' ? 'the result is checked or changed' : 'it is approved';
+    lines.push(props.onReject === 'continue' || props.onTimeout === 'continue'
+      ? 'Waits for a person; where the flow goes next depends on the answer.'
+      : `Waits for a person and goes on only once ${outcome}; otherwise the run stops.`);
+    if (oneLine(props.prompt)) lines.push(`Asks: “${oneLine(props.prompt)}”`);
   } else if (type === 'trigger') {
     lines.push('Represents an internal trigger/routing point in the graph.');
   } else if (type === 'finish') {

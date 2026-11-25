@@ -60,9 +60,11 @@ export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges'>): b
     // Any node type NOT in this list — including 'static', 'resource', 'signal', 'trigger' — flags the
     // flow as advanced. This is intentional: those types are Advanced/FlowSpec-only by design, not an
     // oversight, so do not "fix" this list by adding them without updating the policy doc first.
-    if (!['start', 'process', 'finish', 'subflow', 'mcp'].includes(node.type ?? '')) return true;
+    // 'human' is Guided only while a no or a time-out stops the run (checked below).
+    if (!['start', 'process', 'finish', 'subflow', 'mcp', 'human'].includes(node.type ?? '')) return true;
     const properties = node.data?.properties ?? {};
     const keys = Object.keys(properties);
+    if (node.type === 'human' && (properties.onReject === 'continue' || properties.onTimeout === 'continue')) return true;
     if (node.type === 'process' && keys.some((key) => ADVANCED_PROCESS_PROPERTIES.has(key))) return true;
     if (node.type === 'subflow' && keys.some((key) => ADVANCED_SUBFLOW_PROPERTIES.has(key))) return true;
     if (

@@ -8,7 +8,18 @@
  */
 import type { EdgeCondition, EdgeConditionKind } from './edgeConditions';
 import {
+  HUMAN_FIELD_TYPES,
+  HUMAN_STEP_MODES,
+  MAX_HUMAN_FIELDS,
+  MAX_HUMAN_OPTIONS,
+  MAX_HUMAN_TEXT_CHARS,
+  MAX_HUMAN_TIMEOUT_MINUTES,
+  MIN_HUMAN_TIMEOUT_MINUTES,
+  type HumanStepProperties,
+} from './humanStep';
+import {
   compileFlowSpec,
+  humanStepFields,
   type CompileContext,
   type CompileIssue,
   type CompileOptions,
@@ -21,11 +32,20 @@ import {
 
 export const SIMPLE_FLOW_SPEC_VERSION = 1 as const;
 
+/**
+ * A Human step in a guided flow (#1095). Guided flows stay a straight line, so there is
+ * no `onReject` or `onTimeout`: approve or submit goes on, anything else stops the run.
+ */
+export type SimpleHumanStep = Pick<HumanStepProperties, 'title' | 'review' | 'fields' | 'outputVariable'
+  | 'timeoutMinutes' | 'rejectedText' | 'timedOutText'> & Required<Pick<HumanStepProperties, 'mode' | 'prompt'>>;
+
 export interface SimpleFlowStep {
   /** Stable local identifier used by optional routes. */
   id: string;
-  /** Plain-language instruction for this step. */
-  task: string;
+  /** Plain-language instruction for this step. A Human step may leave it out. */
+  task?: string;
+  /** Makes this step wait for a person instead of running a model. */
+  human?: SimpleHumanStep;
   /** Human-facing label. Defaults to a title derived from id. */
   label?: string;
   /** Optional per-step model override. Defaults to the top-level model. */
@@ -58,6 +78,8 @@ export interface SimpleFlowSpec {
   routes?: SimpleFlowRoute[];
 }
 
+const RUN_VAR_PATTERN = '^[A-Za-z_][A-Za-z0-9_-]*$';
+
 /**
  * JSON Schema used by MCP tools and model structured-output adapters. Keeping
  * it next to the TypeScript contract prevents giant prose descriptions from
@@ -79,7 +101,8 @@ export const SIMPLE_FLOW_SPEC_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'task'],
+        required: ['id'],
+        anyOf: [{ required: ['task'] }, { required: ['human'] }],
         properties: {
           id: { type: 'string', minLength: 1, pattern: '^[A-Za-z][A-Za-z0-9_-]*$' },
           task: { type: 'string', minLength: 1 },
@@ -91,6 +114,56 @@ export const SIMPLE_FLOW_SPEC_SCHEMA = {
             items: { type: 'string', minLength: 1 },
           },
           flow: { type: 'string', minLength: 1 },
+          human: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['mode', 'prompt'],
+            properties: {
+              mode: { type: 'string', enum: HUMAN_STEP_MODES },
+              prompt: { type: 'string', minLength: 1 },
+              title: { type: 'string', minLength: 1 },
+              review: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['source'],
+                properties: {
+                  source: { type: 'string', enum: ['last-assistant', 'variable'] },
+                  variable: { type: 'string', pattern: RUN_VAR_PATTERN },
+                  format: { type: 'string', enum: ['text', 'json'] },
+                },
+              },
+              fields: {
+                type: 'array',
+                minItems: 1,
+                maxItems: MAX_HUMAN_FIELDS,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['name', 'type'],
+                  properties: {
+                    name: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_-]{0,63}$' },
+                    label: { type: 'string', minLength: 1 },
+                    type: { type: 'string', enum: HUMAN_FIELD_TYPES },
+                    required: { type: 'boolean' },
+                    options: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: MAX_HUMAN_OPTIONS,
+                      uniqueItems: true,
+                      items: { type: 'string', minLength: 1 },
+                    },
+                    min: { type: 'number' },
+                    max: { type: 'number' },
+                    maxLength: { type: 'integer', minimum: 1, maximum: MAX_HUMAN_TEXT_CHARS },
+                  },
+                },
+              },
+              outputVariable: { type: 'string', pattern: RUN_VAR_PATTERN },
+              timeoutMinutes: { type: 'number', minimum: MIN_HUMAN_TIMEOUT_MINUTES, maximum: MAX_HUMAN_TIMEOUT_MINUTES },
+              rejectedText: { type: 'string' },
+              timedOutText: { type: 'string' },
+            },
+          },
         },
       },
     },
@@ -175,6 +248,7 @@ export function lowerSimpleFlowSpec(simple: SimpleFlowSpec): LowerSimpleFlowResu
   for (const candidate of inputSteps) {
     const id = typeof candidate?.id === 'string' ? candidate.id.trim() : '';
     const task = typeof candidate?.task === 'string' ? candidate.task.trim() : '';
+    const human: unknown = candidate?.human;
     if (!id || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(id)) {
       issues.push({
         severity: 'error',
@@ -192,14 +266,31 @@ export function lowerSimpleFlowSpec(simple: SimpleFlowSpec): LowerSimpleFlowResu
       });
       continue;
     }
-    if (!task) {
+    if (human !== undefined && (!human || typeof human !== 'object' || Array.isArray(human))) {
+      issues.push({
+        severity: 'error',
+        code: 'simple-human-invalid',
+        nodeKey: id,
+        message: `Step "${id}": "human" must be an object with a mode and a prompt.`,
+      });
+      continue;
+    }
+    if (!task && !human) {
       issues.push({
         severity: 'error',
         code: 'simple-step-task-missing',
         nodeKey: id,
-        message: `Step "${id}" needs a non-empty task.`,
+        message: `Step "${id}" needs a non-empty task, or a human part that asks a person.`,
       });
       continue;
+    }
+    if (human && (candidate.flow !== undefined || candidate.model !== undefined || candidate.tools !== undefined)) {
+      issues.push({
+        severity: 'warning',
+        code: 'simple-human-extra',
+        nodeKey: id,
+        message: `Step "${id}" waits for a person, so its flow, model and tools are ignored.`,
+      });
     }
     seen.add(id);
     steps.push({ ...candidate, id, task });
@@ -218,15 +309,27 @@ export function lowerSimpleFlowSpec(simple: SimpleFlowSpec): LowerSimpleFlowResu
     const label = typeof step.label === 'string' && step.label.trim()
       ? step.label.trim()
       : titleFromId(step.id);
+    if (step.human) {
+      // Approve or submit goes on and anything else stops, so a guided flow stays a line.
+      nodes.push({
+        key: step.id,
+        type: 'human',
+        label,
+        ...(step.task ? { description: step.task } : {}),
+        ...humanStepFields(step.human, ['onReject', 'onTimeout']),
+      });
+      continue;
+    }
+    const task = step.task ?? '';
     const flow = typeof step.flow === 'string' ? step.flow.trim() : '';
     if (flow) {
       nodes.push({
         key: step.id,
         type: 'subflow',
         label,
-        description: step.task,
+        description: task,
         flow,
-        prompt: step.task,
+        prompt: task,
         inputMode: 'full-history',
         outputMode: 'final-only',
       });
@@ -241,8 +344,8 @@ export function lowerSimpleFlowSpec(simple: SimpleFlowSpec): LowerSimpleFlowResu
       key: step.id,
       type: 'process',
       label,
-      description: step.task,
-      prompt: step.task,
+      description: task,
+      prompt: task,
       ...(model ? { model } : {}),
       servers: serversFromTools(step.tools, step.id, issues),
       inputMode: 'full-history',

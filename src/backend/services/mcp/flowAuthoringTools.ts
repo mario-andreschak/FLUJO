@@ -459,6 +459,7 @@ export async function authoringCallTool(
           'Each step needs id and task. model overrides the top-level default.',
           'Tools use server/tool references from list_flow_building_blocks.',
           'Set flow on a step to run an existing flow instead of a model.',
+          'Set human on a step (mode and prompt) to wait for a person instead; it needs no task. A yes goes on, anything else stops the run.',
           'Omit routes for a linear flow. Routes are only for branches; omit when for the fallback.',
           'Start, Finish, layout, data handoff, and ordinary defaults are inferred.',
           'Use ${var:NAME} only for values passed within this run. Generated flows must not use captureKv or ${kv:...}; persistent state needs an explicit Advanced authoring decision.',

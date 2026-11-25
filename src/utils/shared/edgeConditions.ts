@@ -79,7 +79,7 @@ export const VALUELESS_CONDITION_KINDS: readonly EdgeConditionKind[] = ['always'
 export const EDGE_CONDITION_TARGETS: readonly EdgeConditionTarget[] = ['last-assistant', 'last-message', 'last-user', 'variable'];
 
 /** Node types whose outgoing edges may carry a routing condition. */
-export const CONDITION_SOURCE_NODE_TYPES: readonly string[] = ['process', 'start', 'static'];
+export const CONDITION_SOURCE_NODE_TYPES: readonly string[] = ['process', 'start', 'static', 'human'];
 
 /** The message a condition tests when it names no target, by the node it leaves. */
 export function defaultConditionTarget(sourceNodeType: string | undefined): EdgeConditionTarget {
