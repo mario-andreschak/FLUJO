@@ -292,14 +292,27 @@ export function browserToolDefinitions(): Tool[] {
     },
     {
       name: 'browser_record_start',
-      description: 'Start a sturdy browser recording and immediately return a sessionId. Optionally load source first and auto-stop after durationMs. Unsupported resolutions fall back automatically and are reported in warnings/effectiveResolution.',
+      description: 'Start a sturdy browser recording and immediately return a sessionId. Optionally load source first and auto-stop after durationMs. '
+        + 'There is no fixed time limit: video and audio are written to disk as they are recorded, so the limit is free disk space. '
+        + 'The result reports maxDurationMs (how long the free space lasts at this size) and diskWarning if durationMs is longer; '
+        + 'a recording only stops early when the disk really runs low, and keeps what it recorded. '
+        + 'Stopping keeps the page open, so pass this sessionId again to record the next part on the same page, or to change when a running recording stops. '
+        + 'Unsupported resolutions fall back automatically and are reported in warnings/effectiveResolution.',
       inputSchema: {
         type: 'object',
         properties: {
+          sessionId: {
+            ...SESSION_PROPERTY,
+            description: 'Optional. A session from an earlier browser_record_start: records the next part on the same page (its state is kept). If that session is still recording, durationMs instead sets when it stops, counted from now.',
+          },
           source: { type: 'string', description: 'Optional URL, localhost address, local path, or inline HTML to load before returning.' },
           resolution: { type: 'string', description: 'Preset or WIDTHxHEIGHT, for example 720p, 1080p, 4k, or 1600x900.' },
           audio: { type: 'boolean', default: true, description: 'Capture page audio into a WAV sidecar (and mux it in if ffmpeg is available).' },
-          durationMs: { type: 'number', description: 'Optional auto-stop delay. The start call still returns immediately; retrieve the artifact with stop or status.' },
+          durationMs: {
+            type: 'number',
+            description: 'Optional auto-stop after this many milliseconds, honoured as given (for example 360000 for six minutes). '
+              + 'The start call still returns immediately; get the video with stop or status. Leave it out to stop the recording yourself.',
+          },
           outputPath: { type: 'string', description: 'Optional destination path for the finished artifact, confined to the FLUJO data directory.' },
         },
         additionalProperties: true,
@@ -309,13 +322,15 @@ export function browserToolDefinitions(): Tool[] {
     },
     {
       name: 'browser_record_stop',
-      description: 'Stop and finalize a recording, or retrieve one that just auto-stopped. Returns usable artifact paths, recovery warnings, and the video itself as MCP media when small enough.',
+      description: 'Stop and finalize a recording, or retrieve one that just auto-stopped. Returns usable artifact paths, recovery warnings, and the video itself as MCP media when small enough. '
+        + 'The browser session stays open with its page state unless closeSession is true, so browser_record_start with the same sessionId can record the next part.',
       inputSchema: {
         type: 'object',
         properties: {
-          recordingId: { ...SESSION_PROPERTY, description: 'Recording id returned by browser_record_start (same as its sessionId). Omit when exactly one recording is running.' },
-          sessionId: SESSION_PROPERTY,
+          recordingId: { ...SESSION_PROPERTY, description: 'Recording id returned by browser_record_start. Omit when exactly one recording is running.' },
+          sessionId: { ...SESSION_PROPERTY, description: 'Session id returned by browser_record_start; stops the recording running on it.' },
           outputPath: { type: 'string', description: 'Optional destination path for the finished artifact, confined to the FLUJO data directory.' },
+          closeSession: { type: 'boolean', default: false, description: 'Also close the browser session. By default it stays open so the page keeps its state.' },
         },
         additionalProperties: false,
       },
@@ -917,6 +932,7 @@ export async function browserCallTool(
     if (name === 'browser_record_start') {
       return recordingResult(await startRecording(
         {
+          sessionId: args.sessionId,
           source: args.source,
           resolution: args.resolution,
           width: args.width,
@@ -938,6 +954,7 @@ export async function browserCallTool(
         recordingId: args.recordingId,
         sessionId: args.sessionId,
         outputPath: args.outputPath,
+        closeSession: args.closeSession,
       }, ownerScope));
     }
     if (name === 'browser_record_status') {

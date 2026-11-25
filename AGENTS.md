@@ -101,6 +101,7 @@ workaround.
 | Anthropic Messages requests never send `temperature`, `top_p` or `top_k` (API version 2026-10-21 refuses them on every model); a saved Creativity is kept but not sent. An SDK major that moves to another API version fails until its rules are reviewed | `__tests__/model/anthropicApiVersion20261021.test.ts` (installed SDK, stand-in server with that version's request rules) |
 | Resilience over refusal | Prose: needs judgment |
 | MCP App settings set where FLUJO starts win over Localhost mode's local default for requests through a front door; this computer keeps `<app>.localhost`, a Settings-page Localhost choice ignores leftovers, and a wrong value falls back with one startup line | `__tests__/mcp/sandboxLocalhostFrontDoor.test.ts` |
+| A browser recording runs as long as asked, or is refused with a reason; it is never shortened silently. Its limit follows free disk space, it stops early only when the disk really runs low, and stopping keeps the page open | `__tests__/mcp/browserRecordingDuration.test.ts`; `__tests__/mcp/browserCaptureRecording.test.ts` (real browser) |
 
 # Resilience over refusal
 

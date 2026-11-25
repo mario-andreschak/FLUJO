@@ -17,6 +17,7 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export type BrowserErrorCode =
   | 'BROWSER_UNAVAILABLE'
   | 'CANCELLED'
+  | 'DISK_LOW'
   | 'INVALID_ARGUMENT'
   | 'NAVIGATION_BLOCKED'
   | 'NOT_FOUND'
@@ -72,6 +73,8 @@ export type BrowserSession = {
   configuredVideoResolution?: BrowserGeometry;
   deviceScaleFactor?: number;
   onExpire?: () => void;
+  /** While this returns true, idle cleanup leaves the session open (for example while it is recording). */
+  keepAlive?: () => boolean;
   context: BrowserContext;
   page: Page;
   touchedAt: number;
@@ -641,11 +644,15 @@ async function shutdownSession(session: BrowserSession): Promise<void> {
 function purgeUnavailableSessions(): void {
   const now = Date.now();
   for (const session of sessions.values()) {
-    if (session.page.isClosed() || (session.expiresAt ?? (session.touchedAt + sessionIdleMs())) <= now) {
-      removeSessionEntry(session);
-      if (session.onExpire) session.onExpire();
-      else void shutdownSession(session);
+    const closed = session.page.isClosed();
+    if (!closed && (session.expiresAt ?? (session.touchedAt + sessionIdleMs())) > now) continue;
+    if (!closed && session.keepAlive?.()) {
+      session.expiresAt = now + sessionIdleMs();
+      continue;
     }
+    removeSessionEntry(session);
+    if (session.onExpire) session.onExpire();
+    else void shutdownSession(session);
   }
   for (const [id, reservation] of reservations) {
     if (reservation.expiresAt <= now) reservations.delete(id);

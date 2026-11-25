@@ -189,4 +189,63 @@ describe('browser capture and recording process boundary', () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it('keeps the page and its state open after stop, then records a second part on the same page', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-browser-record-parts-'));
+    const page = await localPage(`<!doctype html>
+      <button id="count" onclick="this.textContent = String(Number(this.textContent) + 1)">0</button>`);
+    let client: Client | undefined;
+    try {
+      client = await connectBrowser(root);
+      const started = await client.callTool({
+        name: 'browser_record_start',
+        arguments: { source: page.url, resolution: '720p', audio: false, durationMs: 360_000 },
+      });
+      expect(started.isError).not.toBe(true);
+      const first = started.structuredContent as {
+        sessionId: string; recordingId: string; durationMs: number; maxDurationMs: number | null; warnings: string[];
+      };
+      expect(first).toMatchObject({ status: 'recording', sourceLoaded: true, durationMs: 360_000 });
+      expect(first.warnings.join(' ')).not.toMatch(/adjusted/i);
+      const { sessionId } = first;
+
+      for (let click = 0; click < 3; click += 1) {
+        await client.callTool({ name: 'browser_click', arguments: { sessionId, selector: '#count' } });
+      }
+      const firstStop = await client.callTool(
+        { name: 'browser_record_stop', arguments: { recordingId: first.recordingId } },
+        undefined,
+        { timeout: 30_000 },
+      );
+      expect(firstStop.isError).not.toBe(true);
+      const firstResult = firstStop.structuredContent as { outputPath: string; warnings: string[] };
+      expect(firstStop.structuredContent).toMatchObject({ success: true, status: 'stopped', sessionClosed: false, segment: 1 });
+      expect(firstResult.warnings.join(' ')).not.toMatch(/raw recording file|temporary copy/);
+      expect((await fs.stat(firstResult.outputPath)).size).toBeGreaterThan(0);
+
+      const snapshot = await client.callTool({ name: 'browser_snapshot', arguments: { sessionId } });
+      expect(snapshot.isError).not.toBe(true);
+      expect((snapshot.structuredContent as { text: string }).text.trim()).toBe('3');
+
+      const second = await client.callTool({ name: 'browser_record_start', arguments: { sessionId, audio: false } });
+      expect(second.isError).not.toBe(true);
+      expect(second.structuredContent).toMatchObject({ status: 'recording', sessionId, segment: 2 });
+      await client.callTool({ name: 'browser_click', arguments: { sessionId, selector: '#count' } });
+      const secondStop = await client.callTool(
+        { name: 'browser_record_stop', arguments: { sessionId, closeSession: true } },
+        undefined,
+        { timeout: 30_000 },
+      );
+      expect(secondStop.structuredContent).toMatchObject({ success: true, sessionClosed: true, segment: 2 });
+      const secondResult = secondStop.structuredContent as { outputPath: string };
+      expect(secondResult.outputPath).not.toBe(firstResult.outputPath);
+      expect((await fs.stat(secondResult.outputPath)).size).toBeGreaterThan(0);
+      const listed = await client.callTool({ name: 'browser_list_sessions', arguments: {} });
+      expect((listed.structuredContent as { sessions: unknown[] }).sessions).toEqual([]);
+    } finally {
+      await client?.close().catch(() => undefined);
+      await closeServer(page.server);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
