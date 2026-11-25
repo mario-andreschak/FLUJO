@@ -5,7 +5,7 @@ import type { ExecutionBoundModelIdentity, ExecutionOwnerModelDispatchRequest } 
 import type { Model } from '@/shared/types/model';
 import type { OriginalOwnerAuthority, OriginalOwnerBinding } from '@/backend/services/originalOwner/authority';
 import { assertOriginalOwnerAuthority } from '@/backend/services/originalOwner/authority';
-import { assertOriginalApproval } from '@/backend/services/originalOwner/administration';
+import { assertOriginalApproval, readOriginalApprovalCheck } from '@/backend/services/originalOwner/administration';
 import { modelService } from '@/backend/services/model';
 import { decryptWithPassword } from '@/utils/encryption/secure';
 import { mutateOriginalOwnerBook, readOriginalOwnerBook, flushOriginalOwnerBook } from '@/backend/services/originalOwner/store';
@@ -23,7 +23,9 @@ jest.mock('@/backend/execution/extensions/configuredAdapter', () => ({ configure
 jest.mock('@/backend/services/model/openaiClient', () => ({ PROTECTED_OPENAI_DEFAULT_BASE_URL: 'https://api.openai.com/v1' }));
 jest.mock('@/backend/services/model', () => ({ modelService: { getModel: jest.fn() } }));
 jest.mock('@/utils/encryption/secure', () => ({ decryptWithPassword: jest.fn() }));
-jest.mock('@/backend/services/originalOwner/administration', () => ({ assertOriginalApproval: jest.fn() }));
+jest.mock('@/backend/services/originalOwner/administration', () => ({
+  assertOriginalApproval: jest.fn(), readOriginalApprovalCheck: jest.fn(),
+}));
 jest.mock('@/backend/services/originalOwner/authority', () => ({ assertOriginalOwnerAuthority: jest.fn() }));
 jest.mock('@/backend/services/originalOwner/store', () => ({
   mutateOriginalOwnerBook: jest.fn(), readOriginalOwnerBook: jest.fn(), flushOriginalOwnerBook: jest.fn(),
@@ -37,6 +39,7 @@ const mockedModel = jest.mocked(modelService.getModel);
 const mockedDecrypt = jest.mocked(decryptWithPassword);
 const mockedAuthority = jest.mocked(assertOriginalOwnerAuthority);
 const mockedApproval = jest.mocked(assertOriginalApproval);
+const mockedApprovalCheck = jest.mocked(readOriginalApprovalCheck);
 const fixtureCredential = 'sender-regression-private-key';
 const data = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
 const bytes = (value: string) => new TextEncoder().encode(value);
@@ -154,7 +157,8 @@ describe('original owner sender contract regressions (authority/store fixtures)'
     mockedAuthority.mockImplementation(value => {
       if (!value || typeof value !== 'object' || !genuine.has(value)) throw new OriginalOwnerError('original_owner_runtime_authority_required');
     });
-    mockedApproval.mockImplementation(() => {});
+    mockedApproval.mockResolvedValue(undefined);
+    mockedApprovalCheck.mockResolvedValue(() => {});
     mockedModel.mockImplementation(async () => model);
     mockedDecrypt.mockResolvedValue(fixtureCredential);
     mockedRead.mockImplementation(async () => book);
@@ -381,6 +385,18 @@ describe('original owner sender contract regressions (authority/store fixtures)'
     });
     await expect(dispatchOriginalOwnerModelRequest(step, request())).rejects.toMatchObject({ code: 'regression_lease_expired' });
     expect(owner.state.fenceChecks).toBe(1);
+    expect(book.steps[0]).toMatchObject({ state: 'rejected', senderId: undefined });
+    expect(mockedFetch).not.toHaveBeenCalled();
+  });
+  it('reads owner approval before the final fence and refuses the socket when it was revoked', async () => {
+    const owner = authority(), step = await issue(owner.value);
+    const compare = jest.fn(() => { throw new OriginalOwnerError('original_owner_approval_revoked'); });
+    mockedApprovalCheck.mockResolvedValue(compare);
+    await expect(dispatchOriginalOwnerModelRequest(step, request())).rejects.toMatchObject({ code: 'original_owner_approval_revoked' });
+    const [read] = mockedApprovalCheck.mock.invocationCallOrder, [compared] = compare.mock.invocationCallOrder;
+    const fence = jest.mocked(owner.value.assertCurrent).mock.invocationCallOrder.filter(order => order < compared).at(-1)!;
+    expect(read).toBeLessThan(fence);
+    expect(fence).toBeLessThan(compared);
     expect(book.steps[0]).toMatchObject({ state: 'rejected', senderId: undefined });
     expect(mockedFetch).not.toHaveBeenCalled();
   });

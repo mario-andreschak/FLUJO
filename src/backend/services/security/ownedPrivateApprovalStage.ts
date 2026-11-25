@@ -36,7 +36,7 @@ export async function createOwnedPrivateApprovalStage(filename: string, value: u
   } catch (error) { await dispose(); throw error; }
   return {
     path: stage,
-    async publish(destination: string, beforeEffect?: () => void) {
+    async publish(destination: string, beforeEffect?: () => Promise<void>) {
       if (path.dirname(destination) !== path.dirname(stage) || signal.aborted) throw new Error('Approval publication retired.');
       await readPrivateApprovalAsync(stage, signal);
       if (!same(identity, await handle.stat({ bigint: true })) || !await owned()) throw new Error('Owned approval stage changed.');
@@ -47,7 +47,8 @@ export async function createOwnedPrivateApprovalStage(filename: string, value: u
             || !same(identity, await handle.stat({ bigint: true })) || !same(identity, await fs.promises.lstat(stage, { bigint: true }))) throw new Error('Owned approval bytes changed.');
       } finally { bytes.fill(0); }
       if (signal.aborted) throw new Error('Approval publication retired.');
-      beforeEffect?.();
+      await beforeEffect?.();
+      if (signal.aborted) throw new Error('Approval publication retired.');
       await fs.promises.rename(stage, destination); published = true;
     },
     dispose,

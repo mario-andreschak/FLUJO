@@ -13,10 +13,10 @@ const response = (body: unknown, status = 200) => Response.json(body, {
 async function admitted(request: Request, task: () => Promise<unknown>): Promise<Response> {
   const locked = await assertUnlocked();
   if (locked) return locked;
-  const auth = resolveOwnerRequest(request, ['control:admin', 'secrets:read'], { requireBearer: true });
+  const auth = await resolveOwnerRequest(request, ['control:admin', 'secrets:read'], { requireBearer: true });
   if (!auth.ok) return auth.response;
   try {
-    const denied = auth.authorization.recheck();
+    const denied = await auth.authorization.recheck();
     if (denied) return denied;
     return response(await task());
   } catch (error) {

@@ -8,20 +8,21 @@ without implementing a browser session or replacing local voice admission.
 
 `resolveOwnerRequest(request, scopes?, options?)` in
 `src/backend/services/security/ownerAccess.ts` is the strict handler boundary.
-It reads the configured private policy before body parsing or storage selection.
+It reads the configured private policy without blocking the server, before body
+parsing or storage selection; callers await it.
 Missing configuration is a 503, invalid/missing bearer is a 401, and insufficient
 scope or missing required workspace is a 403. Responses contain fixed messages
 and `no-store`. Protocol callback exemptions and anonymous localhost compatibility
 do not apply to this resolver.
 
-Successful resolution returns `{ ok: true, authorization }`. The frozen
+Successful resolution resolves to `{ ok: true, authorization }`. The frozen
 `authorization.principal` contains `ownerId`, `credentialId`, frozen `scopes`,
 optional `workspaceId`, `expiresAt`, and `policyRevision`. Identity and workspace
 come exclusively from the validated policy record. Query, cookie, forwarded,
 client-correlation and claimed owner/workspace headers cannot set them. Principal
 metadata is evidence/correlation, not a transferable authentication token.
 
-`authorization.recheck()` re-reads durable policy and returns either null or a
+`authorization.recheck()` re-reads durable policy and resolves to either null or a
 fixed denial Response. The callback captures the credential digest and authenticated
 principal, not the bearer token. Expiry, revocation, credential removal/rotation,
 owner/workspace changes, any new policy revision, invalid policy, or configured

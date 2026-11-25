@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { resolveOwnerRequest } from '@/backend/services/security/ownerAccess';
+import { resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
 import { readOwnerPolicy, ownerPolicyRevision } from '@/backend/services/security/ownerPolicy';
-import { ownerHasScopes } from '@/backend/services/security/ownerCredentials';
+import { ownerHasScopes, type OwnerPolicy } from '@/backend/services/security/ownerCredentials';
 import { modelService } from '@/backend/services/model';
 import { encryptApiKey, resolveAndDecryptApiKey } from '@/backend/services/model/encryption';
 import { resolveCompletionAdapterRoute } from '@/backend/services/model/adapters/completionRoute';
@@ -20,35 +20,43 @@ export const EnrollmentInput = z.object({ personaId: ownerId, taskId: ownerId, a
   budget: BudgetSchema, allowedTools: z.array(z.enum(['worker_read_file','worker_write_file','worker_list_dir','worker_command'])),
   commands: z.array(z.string().min(1).max(16384)), directory: z.string().optional(),
 }).strict();
-function administration(request: Request) {
-  const resolved = resolveOwnerRequest(request, ['control:admin', 'secrets:read'], { requireBearer: true });
+async function administration(request: Request): Promise<OwnerRequestAuthorization> {
+  const resolved = await resolveOwnerRequest(request, ['control:admin', 'secrets:read'], { requireBearer: true });
   if (!resolved.ok) refuse('original_owner_administration_required');
   if (resolved.authorization.principal.workspaceId
     && resolved.authorization.principal.workspaceId !== getCurrentWorkspace()) refuse('original_owner_workspace_mismatch');
   return resolved.authorization;
 }
-function assertAdministrator(auth: ReturnType<typeof administration>) {
-  if (auth.recheck()) refuse('original_owner_administrator_revoked');
+async function assertAdministrator(auth: OwnerRequestAuthorization) {
+  if (await auth.recheck()) refuse('original_owner_administrator_revoked');
 }
-export function assertOriginalApproval(approval: OriginalOwnerAccount['approval']): void {
+/** One owner policy read; the returned check needs no further I/O, so it can run right before an effect. */
+export async function readOriginalApprovalCheck(): Promise<(approval: OriginalOwnerAccount['approval']) => void> {
   const filename = process.env.FLUJO_OWNER_AUTH_FILE;
-  if (!filename) refuse('original_owner_policy_required');
-  const policy = readOwnerPolicy(filename);
-  const credential = policy.credentials.find(value => value.id === approval.credentialId);
-  if (policy.ownerId !== approval.ownerId || ownerPolicyRevision(policy) !== approval.policyRevision
-    || !credential || credential.revokedAt !== null || credential.expiresAt <= Date.now()
-    || credential.issuedAt > Date.now()
-    || (credential.workspaceId && credential.workspaceId !== getCurrentWorkspace())
-    || !ownerHasScopes({ ownerId: policy.ownerId, credentialId: credential.id, scopes: credential.scopes },
-      ['control:admin', 'secrets:read'])) refuse('original_owner_approval_revoked');
+  if (!filename) return () => refuse('original_owner_policy_required');
+  let policy: OwnerPolicy;
+  try { policy = await readOwnerPolicy(filename); }
+  catch (error) { return () => { throw error; }; }
+  return approval => {
+    const credential = policy.credentials.find(value => value.id === approval.credentialId);
+    if (policy.ownerId !== approval.ownerId || ownerPolicyRevision(policy) !== approval.policyRevision
+      || !credential || credential.revokedAt !== null || credential.expiresAt <= Date.now()
+      || credential.issuedAt > Date.now()
+      || (credential.workspaceId && credential.workspaceId !== getCurrentWorkspace())
+      || !ownerHasScopes({ ownerId: policy.ownerId, credentialId: credential.id, scopes: credential.scopes },
+        ['control:admin', 'secrets:read'])) refuse('original_owner_approval_revoked');
+  };
+}
+export async function assertOriginalApproval(approval: OriginalOwnerAccount['approval']): Promise<void> {
+  (await readOriginalApprovalCheck())(approval);
 }
 /** Transfer one actual configured model credential into the private owner account. */
 export async function createOriginalOwnerAccount(request: Request, input: unknown) {
-  const auth = administration(request), parsed = AccountInput.parse(input);
+  const auth = await administration(request), parsed = AccountInput.parse(input);
   // Catalog writers take the catalog lock before the owner journal. Model
   // dispatch already holds its read lease before claiming the owner step.
   return modelService.withOwnerCatalogUpdate(updateModel => mutateOriginalOwnerBook(async book => {
-    assertAdministrator(auth);
+    await assertAdministrator(auth);
     const model = await modelService.getModel(parsed.modelId);
     if (!model || model.fallbackPolicy) refuse('original_owner_model_unavailable');
     const native = model.adapter === 'codex-cli';
@@ -60,7 +68,7 @@ export async function createOriginalOwnerAccount(request: Request, input: unknow
     if (native) {
       if (Object.keys(parsed.routingHeaders).length) refuse('original_owner_native_routing_forbidden');
       const attestation = await originalNativeAccountAttestation(model);
-      assertAdministrator(auth);
+      await assertAdministrator(auth);
       if (previous) {
         if (previous.kind !== 'codex' || previous.modelDigest !== ownerDigest(accountModelPlan(model))
           || ownerDigest(previous.nativeProfile) !== ownerDigest(attestation.nativeProfile)
@@ -93,11 +101,11 @@ export async function createOriginalOwnerAccount(request: Request, input: unknow
           || await resolveAndDecryptApiKey(model.ApiKey) !== await resolveAndDecryptApiKey(previous.credential)) {
           refuse('original_owner_pending_credential_changed');
         }
-        assertAdministrator(auth);
+        await assertAdministrator(auth);
         const saved = await updateModel(bound);
         if (!saved.success) refuse('original_owner_model_binding_failed');
       }
-      assertAdministrator(auth);
+      await assertAdministrator(auth);
       previous.approval = approval; previous.state = 'active'; previous.updatedAt = Date.now();
       return { id: previous.id, modelId: model.id, kind: previous.kind, state: previous.state };
     }
@@ -113,10 +121,10 @@ export async function createOriginalOwnerAccount(request: Request, input: unknow
       credential: await encryptApiKey(key), routingHeaders: parsed.routingHeaders,
       state: 'pending', approval, createdAt: now, updatedAt: now };
     book.accounts.push(account); await flushOriginalOwnerBook();
-    assertAdministrator(auth);
+    await assertAdministrator(auth);
     const result = await updateModel(bound);
     if (!result.success) refuse('original_owner_model_binding_failed');
-    assertAdministrator(auth);
+    await assertAdministrator(auth);
     const current = await modelService.getModel(model.id);
     if (!current || ownerDigest(accountModelPlan(current)) !== account.modelDigest
       || current.ApiKey !== '') refuse('original_owner_model_binding_changed');
@@ -125,16 +133,16 @@ export async function createOriginalOwnerAccount(request: Request, input: unknow
   }));
 }
 export async function enrollOriginalOwnerTask(request: Request, input: unknown) {
-  const auth = administration(request), parsed = EnrollmentInput.parse(input);
+  const auth = await administration(request), parsed = EnrollmentInput.parse(input);
   return mutateOriginalOwnerBook(async book => {
-    assertAdministrator(auth);
+    await assertAdministrator(auth);
     const task = await getPersonaWorkItem(parsed.personaId, parsed.taskId);
     const account = book.accounts.find(value => value.id === parsed.accountId && value.state === 'active');
     if (!task || task.personaId !== parsed.personaId || (!task.goal && !task.parentGoalId)
       || ['completed','cancelled'].includes(task.status) || !account || account.ownerId !== auth.principal.ownerId) {
       refuse('original_owner_enrollment_refused');
     }
-    assertOriginalApproval(account.approval);
+    await assertOriginalApproval(account.approval);
     // The restricted CLI does not expose a hard output-token limit or an
     // owner-fenced per-inference counter. Never silently ignore a finite budget.
     if (account.kind === 'codex'
@@ -155,21 +163,21 @@ export async function enrollOriginalOwnerTask(request: Request, input: unknown) 
       workerAuthorizationDigest: bytesDigest(`Bearer ${secret}`), state: 'active',
       approval: { ownerId: auth.principal.ownerId, credentialId: auth.principal.credentialId,
         policyRevision: auth.principal.policyRevision }, createdAt: now, updatedAt: now };
-    book.enrollments.push(enrollment); assertAdministrator(auth);
+    book.enrollments.push(enrollment); await assertAdministrator(auth);
     return { id: enrollment.id, workerAuthorization: `Bearer ${secret}` };
   });
 }
 export async function revokeOriginalOwnerRecord(request: Request, id: string) {
-  ownerId.parse(id); const auth = administration(request);
+  ownerId.parse(id); const auth = await administration(request);
   return mutateOriginalOwnerBook(async book => {
-    assertAdministrator(auth);
+    await assertAdministrator(auth);
     const value = book.enrollments.find(item => item.id === id) ?? book.accounts.find(item => item.id === id);
     if (!value || value.ownerId !== auth.principal.ownerId) refuse('original_owner_record_not_found');
     value.state = 'revoked'; value.updatedAt = Date.now(); return { id, state: value.state };
   });
 }
 export async function listOriginalOwnerRecords(request: Request) {
-  const auth = administration(request), book = await readOriginalOwnerBook(); assertAdministrator(auth);
+  const auth = await administration(request), book = await readOriginalOwnerBook(); await assertAdministrator(auth);
   return { accounts: book.accounts.filter(value => value.ownerId === auth.principal.ownerId)
     .map(({id, modelId, kind, state}) => ({id, modelId, kind, state})),
   enrollments: book.enrollments.filter(value => value.ownerId === auth.principal.ownerId)

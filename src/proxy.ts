@@ -77,7 +77,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     // This narrow route authenticates independently again in its handler.
     if (/^\/api\/mcp\/servers\/[^/]+\/host-consent$/.test(pathname)
         && ['GET', 'POST', 'DELETE'].includes(request.method)) {
-      const owner = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
+      const owner = await resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
       return owner.ok ? NextResponse.next() : new NextResponse(owner.response.body, {
         status: owner.response.status, headers: owner.response.headers,
       });
@@ -101,7 +101,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const ownerDenied = assertOwnerRequest(request);
+  const ownerDenied = await assertOwnerRequest(request);
   if (ownerDenied) return new NextResponse(ownerDenied.body, {
     status: ownerDenied.status, headers: ownerDenied.headers,
   });
@@ -109,7 +109,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   // The private BFF may differ from this host. Only exact voice routes with a
   // strict workspace-bound voice principal and explicitly approved Origin pass.
   if (isRemoteAvatarVoiceRequest(request)) {
-    const admitted = resolveOwnerRequest(request, ['avatar:voice']);
+    const admitted = await resolveOwnerRequest(request, ['avatar:voice']);
     const denied = admitted.ok ? assertRemoteAvatarVoiceOrigin(request) : admitted.response;
     return denied ? new NextResponse(denied.body, { status: denied.status, headers: denied.headers }) : NextResponse.next();
   }

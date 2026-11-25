@@ -1,9 +1,9 @@
 import type { OwnerRequestAuthorization } from './ownerAccess';
 
 /** Keep an established SSE subscription bound to its original durable grant. */
-export function bindOwnerStream(response: Response, authorization: OwnerRequestAuthorization,
-  signal: AbortSignal): Response {
-  const denied = authorization.recheck();
+export async function bindOwnerStream(response: Response, authorization: OwnerRequestAuthorization,
+  signal: AbortSignal): Promise<Response> {
+  const denied = await authorization.recheck();
   if (denied) {
     void response.body?.cancel().catch(() => undefined);
     return denied;
@@ -14,6 +14,7 @@ export function bindOwnerStream(response: Response, authorization: OwnerRequestA
   const reader = response.body.getReader();
   let finished = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let polling: Promise<boolean> | undefined;
   let controller: ReadableStreamDefaultController<Uint8Array>;
   const dispose = () => {
     if (finished) return false;
@@ -29,25 +30,26 @@ export function bindOwnerStream(response: Response, authorization: OwnerRequestA
     void reader.cancel().catch(() => undefined);
   };
   const abort = () => stop();
-  const valid = () => {
+  const valid = async () => {
     if (finished) return false;
-    if (signal.aborted || authorization.recheck()) { stop(); return false; }
-    return true;
+    if (signal.aborted || await authorization.recheck()) { stop(); return false; }
+    return !finished;
   };
+  const poll = () => { polling ??= valid().finally(() => { polling = undefined; }); };
   const body = new ReadableStream<Uint8Array>({
-    start(value) {
+    async start(value) {
       controller = value;
       signal.addEventListener('abort', abort, { once: true });
-      if (!valid()) return;
+      if (!(await valid())) return;
       // Idle subscriptions must revoke even when the consumer applies backpressure.
-      timer = setInterval(valid, 1000);
+      timer = setInterval(poll, 1000);
       timer.unref?.();
     },
     async pull() {
-      if (!valid()) return;
+      if (!(await valid())) return;
       try {
         const next = await reader.read();
-        if (!valid()) return;
+        if (!(await valid())) return;
         if (next.done) {
           dispose();
           controller.close();

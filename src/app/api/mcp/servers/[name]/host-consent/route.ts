@@ -14,7 +14,7 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 const scopes = ['control:admin', 'mcp:access', 'secrets:read'] as const;
 
 async function GET_handler(request: NextRequest, { params }: RouteContext) {
-  const owner = resolveOwnerRequest(request, scopes, { requireBearer: true });
+  const owner = await resolveOwnerRequest(request, scopes, { requireBearer: true });
   if (!owner.ok) return owner.response;
   const locked = await assertUnlocked(); if (locked) return locked;
   const runtimeHome = request.nextUrl.searchParams.get('runtimeHome');
@@ -22,7 +22,7 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
   try {
     const { name } = await params;
     const preview = await previewBundledHostConsent(name, { runtimeHome });
-    const revoked = owner.authorization.recheck(); if (revoked) return revoked;
+    const revoked = await owner.authorization.recheck(); if (revoked) return revoked;
     const policy = trustedHostMcpPolicySchema.parse(preview.config.trustedHost);
     const reviewedWorkload = policy.bundledInstallation?.workload;
     const workload = reviewedWorkload ? { ...reviewedWorkload, capabilities: {
@@ -33,13 +33,13 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
       cwd: preview.config.cwd, sourceRoot: policy.sourceRoot, packageRunner: policy.packageRunner,
       runtimeHome, environmentNames: policy.environmentNames, workload, revision: preview.revision });
   } catch (error) {
-    if (!owner.authorization.recheck()) console.warn(`[bundled-consent-preview] ${consentDiagnosticCode(error)}`);
+    if (!(await owner.authorization.recheck())) console.warn(`[bundled-consent-preview] ${consentDiagnosticCode(error)}`);
     return json({ error: 'A fixed installed package proposal is unavailable.' }, 409);
   }
 }
 
 async function POST_handler(request: NextRequest, { params }: RouteContext) {
-  const owner = resolveOwnerRequest(request, scopes, { requireBearer: true });
+  const owner = await resolveOwnerRequest(request, scopes, { requireBearer: true });
   if (!owner.ok) return owner.response;
   const locked = await assertUnlocked(); if (locked) return locked;
   try {
@@ -52,7 +52,7 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
     return json({ approved: true, serverName: name, policyDigest: result.policyDigest, expiresAt });
   } catch (error) {
     if (error instanceof BundledConsentError) return error.response;
-    if (!owner.authorization.recheck()) console.warn(`[bundled-consent-approval] ${consentDiagnosticCode(error)}`);
+    if (!(await owner.authorization.recheck())) console.warn(`[bundled-consent-approval] ${consentDiagnosticCode(error)}`);
     return json({ error: 'The proposal or private owner approval changed. Review it again.' }, 409);
   }
 }
@@ -63,7 +63,7 @@ function operatorWorkspace(handler: (request: NextRequest, context: RouteContext
   return async (request: NextRequest, context: RouteContext) => {
     const execution = authorizeExecutionTransport(request);
     if (execution !== undefined) return execution ?? json({ error: 'A private operator owner bearer is required.' }, 403);
-    const owner = resolveOwnerRequest(request, scopes, { requireBearer: true }); if (!owner.ok) return owner.response;
+    const owner = await resolveOwnerRequest(request, scopes, { requireBearer: true }); if (!owner.ok) return owner.response;
     try {
       const workspace = await resolveWorkspace(request);
       if (isWorkerMode() && getWorkerBootstrapStatus().workspace !== workspace) return json({ error: 'Worker package preparation is unavailable for this workspace.' }, 409);
@@ -75,7 +75,7 @@ function operatorWorkspace(handler: (request: NextRequest, context: RouteContext
 export const GET = operatorWorkspace(GET_handler);
 export const POST = operatorWorkspace(POST_handler);
 export const DELETE = operatorWorkspace(async (request: NextRequest, { params }: RouteContext) => {
-  const owner = resolveOwnerRequest(request, scopes, { requireBearer: true }); if (!owner.ok) return owner.response;
+  const owner = await resolveOwnerRequest(request, scopes, { requireBearer: true }); if (!owner.ok) return owner.response;
   try { return json(await revokeBundledHostConsent(request, (await params).name)); }
   catch (error) { if (error instanceof BundledConsentError) return error.response; return json({ error: 'Private consent revocation failed.' }, 409); }
 });

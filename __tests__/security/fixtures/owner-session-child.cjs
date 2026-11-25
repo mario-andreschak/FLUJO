@@ -10,7 +10,9 @@ require.extensions['.ts'] = (module, filename) => {
 const { resolveOwnerRequest } = require(process.argv[2]);
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const origin = new URL(process.env.FLUJO_OWNER_BROWSER_ORIGIN);
-const result = resolveOwnerRequest(new Request(`${origin.origin}/api/models`, {
-  headers: { host: origin.host, origin: origin.origin, cookie: input.cookie },
-}), undefined, { now: input.now });
-process.stdout.write(String(result.ok ? 200 : result.response.status));
+(async () => {
+  const result = await resolveOwnerRequest(new Request(`${origin.origin}/api/models`, {
+    headers: { host: origin.host, origin: origin.origin, cookie: input.cookie },
+  }), undefined, { now: input.now });
+  process.stdout.write(String(result.ok ? 200 : result.response.status));
+})();

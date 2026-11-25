@@ -80,9 +80,9 @@ it('reads genuine Original history with a current owner after account and enroll
 });
 
 it('accepts a real current owner browser cookie as well as a bearer', async () => {
-  const resolved = resolveOwnerRequest(request(), ['control:admin', 'secrets:read'], { requireBearer: true });
+  const resolved = await resolveOwnerRequest(request(), ['control:admin', 'secrets:read'], { requireBearer: true });
   if (!resolved.ok) throw new Error('Fixture owner authorization failed');
-  const cookie = createOwnerSession(request('POST'), resolved.authorization.principal).split(';')[0];
+  const cookie = (await createOwnerSession(request('POST'), resolved.authorization.principal)).split(';')[0];
   await withOriginalOwnerHistoryAccess(request('GET', { cookie }), async () => {
     await expect(assertExecutionStateAccess(state, conversationId)).resolves.toBeUndefined();
   });

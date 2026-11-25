@@ -70,7 +70,7 @@ require.extensions['.ts'] = function(module, filename) {
 const { ServerTaskStore } = require('@/backend/services/mcp/serverTasks');
 const { runWithWorkspace } = require('@/utils/workspace');
 const auth = { principal: { ownerId: 'owner', credentialId: 'credential', policyRevision: 'revision',
-  expiresAt: Number(process.env.TASK_TEST_EXPIRY), scopes: ['mcp:access', 'control:admin', 'secrets:read'] }, recheck: () => null };
+  expiresAt: Number(process.env.TASK_TEST_EXPIRY), scopes: ['mcp:access', 'control:admin', 'secrets:read'] }, recheck: async () => null };
 const keepAlive = setInterval(() => {}, 1000);
 let remaining = Number(process.env.TASK_TEST_COUNT);
 runWithWorkspace('tasks-workspace', async () => {
@@ -107,7 +107,7 @@ describe('durable MCP server Tasks', () => {
     now = Date.now(); revoked = false;
     auth = { principal: { ownerId: 'owner', credentialId: 'credential', policyRevision: 'revision',
       expiresAt: now + 3600000, scopes: ['mcp:access', 'control:admin', 'secrets:read'] },
-      recheck: () => revoked ? new Response(null, { status: 401 }) : null };
+      recheck: async () => revoked ? new Response(null, { status: 401 }) : null };
     store = new ServerTaskStore({ directory: root, now: () => now });
   });
   afterEach(async () => {
@@ -136,7 +136,7 @@ describe('durable MCP server Tasks', () => {
     const gate = deferred<Record<string, unknown>>();
     let executed = false;
     const created = await inWorkspace(() => store.create(auth, 'tasks-workspace', { run: async ctx => {
-      ctx.assertAuthorized();
+      await ctx.assertAuthorized();
       const ledger = await fs.readFile(path.join(root, '.mcp-server-tasks', 'ledger.json'), 'utf8');
       expect(ledger).toContain('"status":"working"'); executed = true;
       return gate.promise;
@@ -220,7 +220,7 @@ describe('durable MCP server Tasks', () => {
   it('delivers concurrent keyed input only once and keeps input private on disk', async () => {
     const accepted = jest.fn();
     const created = await inWorkspace(() => store.create(auth, 'tasks-workspace', { run: async ctx => {
-      const input = await ctx.requestInput(inputRequests); ctx.assertAuthorized(); accepted(input); return { ok: true };
+      const input = await ctx.requestInput(inputRequests); await ctx.assertAuthorized(); accepted(input); return { ok: true };
     } }));
     const pending = await waitFor(created.taskId, 'input_required');
     expect(pending.inputRequests).toEqual(inputRequests);
@@ -247,7 +247,7 @@ describe('durable MCP server Tasks', () => {
   it('cancels an input waiter without fulfilling it; cancellation cannot overwrite completion', async () => {
     const effect = jest.fn();
     const created = await inWorkspace(() => store.create(auth, 'tasks-workspace', { run: async ctx => {
-      await ctx.requestInput(inputRequests); ctx.assertAuthorized(); effect(); return {};
+      await ctx.requestInput(inputRequests); await ctx.assertAuthorized(); effect(); return {};
     } }));
     await waitFor(created.taskId, 'input_required');
     expect(await inWorkspace(() => store.cancel(auth, 'tasks-workspace', created.taskId))).toEqual({ resultType: 'complete' });
@@ -329,7 +329,7 @@ describe('durable MCP server Tasks', () => {
     const effect = jest.fn(), aborted = deferred<void>();
     const created = await inWorkspace(() => store.create(auth, 'tasks-workspace', { run: async ctx => {
       ctx.signal.addEventListener('abort', () => aborted.resolve());
-      await ctx.requestInput(inputRequests); ctx.assertAuthorized(); effect(); return {};
+      await ctx.requestInput(inputRequests); await ctx.assertAuthorized(); effect(); return {};
     } }));
     await waitFor(created.taskId, 'input_required'); revoked = true;
     await expect(inWorkspace(() => store.update(auth, 'tasks-workspace', created.taskId, response))).rejects.toMatchObject({ code: 'TASK_ACCESS_DENIED' });

@@ -9,7 +9,7 @@ import { resolveCompletionAdapterRoute } from '@/backend/services/model/adapters
 import { PROTECTED_OPENAI_DEFAULT_BASE_URL } from '@/backend/services/model/openaiClient';
 import { decryptWithPassword } from '@/utils/encryption/secure';
 import type { Model } from '@/shared/types/model';
-import { assertOriginalApproval } from './administration';
+import { assertOriginalApproval, readOriginalApprovalCheck } from './administration';
 import { assertOriginalOwnerAuthority, type OriginalOwnerAuthority } from './authority';
 import { mutateOriginalOwnerBook, flushOriginalOwnerBook, readOriginalOwnerBook } from './store';
 import {
@@ -93,7 +93,7 @@ async function currentRecords(book: OriginalOwnerBook, authority: OriginalOwnerA
     || enrollment.modelId !== binding.modelId || !account || account.state !== 'active'
     || account.kind !== 'openai' || account.ownerId !== binding.ownerId || account.modelId !== binding.modelId
     || account.modelDigest !== binding.modelDigest) refuse('original_owner_account_changed');
-  assertOriginalApproval(enrollment.approval); assertOriginalApproval(account.approval);
+  await assertOriginalApproval(enrollment.approval); await assertOriginalApproval(account.approval);
   const saved = await modelService.getModel(binding.modelId);
   if (!saved || saved.ApiKey !== '' || saved.fallbackPolicy || resolveCompletionAdapterRoute(saved) !== 'openai'
     || saved.ownerCredentialBinding?.ownerId !== account.ownerId
@@ -394,8 +394,9 @@ export async function dispatchOriginalOwnerModelRequest(value: unknown, input: E
       // The Original capability recognizes this exact active Persona fence and
       // refreshes persisted joins without acquiring that Persona lock again.
       // In particular, a lease can expire while the durability barrier waits.
+      const assertApproval = await readOriginalApprovalCheck();
       await step.authority.assertCurrent();
-      assertOriginalApproval(enrollment.approval); assertOriginalApproval(account.approval);
+      assertApproval(enrollment.approval); assertApproval(account.approval);
       if (abortSignal.aborted) {
         row.state = 'aborted'; row.senderId = undefined; row.updatedAt = Date.now(); await flushOriginalOwnerBook();
         refuse('original_owner_model_aborted');

@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, type BigIntStats } from 'node:fs';
+import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { ownerPolicySchema, type OwnerPolicy } from './ownerCredentials';
@@ -17,34 +17,34 @@ function assertPrivateFile(stat: BigIntStats): void {
         || stat.uid !== BigInt(process.getuid?.() ?? -1)))) throw new Error('Invalid owner policy file');
 }
 
-export function readOwnerPolicy(filename: string): OwnerPolicy {
+export async function readOwnerPolicy(filename: string): Promise<OwnerPolicy> {
   if (!path.isAbsolute(filename)) throw new Error('Invalid owner policy path');
   const resolved = path.resolve(filename);
-  const before = lstatSync(resolved, { bigint: true });
+  const before = await fs.lstat(resolved, { bigint: true });
   assertPrivateFile(before);
-  const canonical = realpathSync(resolved);
+  const canonical = await fs.realpath(resolved);
   if (path.relative(canonical, resolved) !== '') throw new Error('Invalid owner policy path');
-  const fd = openSync(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  const handle = await fs.open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
-    const stat = fstatSync(fd, { bigint: true });
+    const stat = await handle.stat({ bigint: true });
     assertPrivateFile(stat);
     if (!sameFile(before, stat)) throw new Error('Owner policy changed');
     const bytes = Buffer.alloc(MAX_OWNER_POLICY_BYTES + 1);
     let length = 0;
     while (length < bytes.length) {
-      const count = readSync(fd, bytes, length, bytes.length - length, null);
-      if (count === 0) break;
-      length += count;
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, null);
+      if (bytesRead === 0) break;
+      length += bytesRead;
     }
-    const finalNamed = lstatSync(resolved, { bigint: true });
+    const finalNamed = await fs.lstat(resolved, { bigint: true });
     if (length > MAX_OWNER_POLICY_BYTES || BigInt(length) !== stat.size
-        || !sameFile(stat, fstatSync(fd, { bigint: true })) || !sameFile(stat, finalNamed)
-        || finalNamed.isSymbolicLink() || path.relative(canonical, realpathSync(resolved)) !== '') {
+        || !sameFile(stat, await handle.stat({ bigint: true })) || !sameFile(stat, finalNamed)
+        || finalNamed.isSymbolicLink() || path.relative(canonical, await fs.realpath(resolved)) !== '') {
       throw new Error('Owner policy changed');
     }
     return ownerPolicySchema.parse(JSON.parse(bytes.subarray(0, length).toString('utf8')));
   } finally {
-    closeSync(fd);
+    await handle.close();
   }
 }
 
