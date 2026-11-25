@@ -17,6 +17,7 @@ const mockSynthesizeQuickChat = jest.fn();
 const mockUpdateConversationPersonaTarget = jest.fn();
 const mockGetModelTurns = jest.fn();
 const mockGetModelTurnInspection = jest.fn();
+const mockUpdateConversationApproval = jest.fn();
 
 async function inspectionFixture(value: unknown) {
   const bytes = Buffer.from(JSON.stringify(value));
@@ -90,7 +91,7 @@ jest.mock('@/frontend/services/chat', () => {
       subscribeToSidebarEvents: (...args: unknown[]) => mockSubscribeToSidebarEvents(...args),
       subscribeToEvents: (...args: unknown[]) => mockSubscribeToEvents(...args),
       updateConversationFlow: jest.fn(),
-      updateConversationApproval: jest.fn(),
+      updateConversationApproval: (...args: unknown[]) => mockUpdateConversationApproval(...args),
       updateConversationTitle: jest.fn(),
       createConversation: (...args: unknown[]) => mockCreateConversation(...args),
       updateConversationPersonaTarget: (...args: unknown[]) => mockUpdateConversationPersonaTarget(...args),
@@ -182,7 +183,11 @@ jest.mock('@/frontend/components/Chat/ChatMessages', () => ({
 }));
 jest.mock('@/frontend/components/Chat/ChatInput', () => {
   const React = jest.requireActual<typeof import('react')>('react');
-  const MockChatInput = ({ disabled }: { disabled?: boolean }) => {
+  const MockChatInput = ({ disabled, requireApproval, onRequireApprovalChange }: {
+    disabled?: boolean;
+    requireApproval?: boolean;
+    onRequireApprovalChange?: (value: boolean) => void;
+  }) => {
     const [draft, setDraft] = React.useState('');
     return (
       <div data-testid="chat-input" data-disabled={String(Boolean(disabled))}>
@@ -191,6 +196,16 @@ jest.mock('@/frontend/components/Chat/ChatInput', () => {
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
         />
+        {onRequireApprovalChange && (
+          <label>
+            <input
+              type="checkbox"
+              checked={Boolean(requireApproval)}
+              onChange={(event) => onRequireApprovalChange(event.target.checked)}
+            />
+            Require tool approvals
+          </label>
+        )}
       </div>
     );
   };
@@ -279,6 +294,39 @@ describe('Talk conversation Agent switch terminology', () => {
     mockSubscribeToEvents.mockReset().mockImplementation(() => ({ close: jest.fn() }));
     mockSubscribeToSidebarEvents.mockReset().mockImplementation(() => ({ close: jest.fn() }));
     mockStartCompletion.mockReset();
+    mockUpdateConversationApproval.mockReset().mockResolvedValue(conversationSummary);
+  });
+
+  const approvalBox = () => screen.getByRole('checkbox', { name: translate('en', 'chat.input.requireApprovals') });
+
+  it('puts the tool approval box back and says so when saving it fails (#1284)', async () => {
+    mockUpdateConversationApproval.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(<Chat />);
+    // Toggle after the conversation has loaded, as a person would.
+    await waitFor(() => expect(mockGetConversation).toHaveBeenCalled());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const box = approvalBox();
+    expect(box).not.toBeChecked();
+
+    fireEvent.click(box);
+
+    await waitFor(() => expect(mockUpdateConversationApproval).toHaveBeenCalledWith('conversation-current', true));
+    expect(await screen.findByText(translate('en', 'chat.page.approvalSaveFailed'))).toBeInTheDocument();
+    expect(approvalBox()).not.toBeChecked();
+  });
+
+  it('keeps the tool approval box quietly when the save works (#1284)', async () => {
+    render(<Chat />);
+    // Toggle after the conversation has loaded, as a person would.
+    await waitFor(() => expect(mockGetConversation).toHaveBeenCalled());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const box = approvalBox();
+
+    fireEvent.click(box);
+
+    await waitFor(() => expect(mockUpdateConversationApproval).toHaveBeenCalledWith('conversation-current', true));
+    await waitFor(() => expect(approvalBox()).toBeChecked());
+    expect(screen.queryByText(translate('en', 'chat.page.approvalSaveFailed'))).not.toBeInTheDocument();
   });
 
   it('recovers the viewed snapshot before reconnecting and cancels recovery on unmount', async () => {
