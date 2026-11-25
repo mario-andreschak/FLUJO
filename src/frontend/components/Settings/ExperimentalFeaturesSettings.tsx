@@ -458,6 +458,13 @@ export default function ExperimentalFeaturesSettings() {
             onChange={handleClaudeSessionResumeChange}
           />
           <ExperimentalToggle
+            checked={experimental.antigravitySessionResume ?? false}
+            description={t('settings.experimental.antigravityResumeDescription')}
+            label={t('settings.experimental.antigravityResume')}
+            name="antigravitySessionResume"
+            onChange={(event) => { void updateSettings({ ...settings, experimental: { ...experimental, antigravitySessionResume: event.target.checked } }); }}
+          />
+          <ExperimentalToggle
             checked={experimental.claudeWarmProcess ?? false}
             description={t('settings.experimental.claudeWarmProcessDescription')}
             label={t('settings.experimental.claudeWarmProcess')}

@@ -21,7 +21,7 @@ One page for everything that shapes the whole installation. Sections are grouped
 - `settings-updates`: "Updates": installed version and automatic update checks.
 - `settings-privacy`: "Privacy & usage": which anonymous usage signals may be shared.
 - `settings-diagnostic-report`: under "Privacy & usage", "Diagnostic report" → "Create report" shows a read-only "Report (read it before you share it)" with "Copy" and "Save as file". It holds versions, counts and error counts only and is never sent (`GET /api/diagnostics/report`). Testers in the user pilot share it by hand (`docs/pilots/product-fit/tester-guide.md`).
-- `settings-experimental`: "Experimental features" with "Enable experimental features", "Enable Harness Lab", "Show models without tool capabilities" and more switches grouped by topic.
+- `settings-experimental`: "Experimental features" with "Enable experimental features", "Enable Harness Lab", "Show models without tool capabilities", "Continue the Antigravity CLI conversation across turns (reduce token usage)" and more switches grouped by topic.
 
 ## How to get to it (user POV)
 

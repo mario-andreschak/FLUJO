@@ -117,7 +117,10 @@ export interface ModelTestResult {
   /** Synthetic FLUJO tool using the production schema/adapter conversion path. */
   tool?: ModelTestAttempt;
   /** Package-owned runtime status; no executable or credential paths. */
-  antigravityRuntime?: { configuredVersion: string; installed: boolean; verified: boolean; actualVersion: string | null };
+  antigravityRuntime?: {
+    configuredVersion: string; installed: boolean; verified: boolean; actualVersion: string | null;
+    problem?: { code: 'missing' | 'outdated' | 'unsupported' | 'incompatible' | 'unavailable'; message: string };
+  };
 }
 
 /**

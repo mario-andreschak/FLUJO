@@ -5,9 +5,16 @@ import path from 'node:path';
 import { AntigravityCliEventDecoder, type AntigravityCliEvent } from './antigravityCliEvents';
 import { ANTIGRAVITY_CLI_TIMEOUT_MS, ANTIGRAVITY_LOGIN_INSTRUCTIONS, type AntigravityCliRuntime } from './antigravityCliRuntime';
 
-function nativeRuntime(): { findBinary(): string | undefined; resolveBinary(): Promise<string>; supportedVersion(version: string): boolean } {
+function nativeRuntime(): {
+  findBinary(): string | undefined; resolveBinary(): Promise<string>; supportedVersion(version: string): boolean; versionError(version: string): Error;
+} {
   const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
   return nativeCreateRequire(path.join(process.cwd(), 'package.json'))('./bin/antigravity-runtime.cjs');
+}
+
+/** Why an installed CLI cannot be used, in words a person can act on. */
+export function antigravityVersionError(version: string): Error {
+  return nativeRuntime().versionError(version);
 }
 
 export function isAntigravityCliInstalled(): boolean {
@@ -41,6 +48,25 @@ export function parseAntigravityModels(output: string): string {
 export function antigravityCliAbortError(): Error {
   return Object.assign(new Error('Antigravity CLI run cancelled.'), { name: 'AbortError' });
 }
+
+/** The CLI did not reopen the requested conversation; nothing was sent to the model. */
+export class AntigravityResumeMissError extends Error {
+  constructor() {
+    super('Antigravity CLI could not reopen the saved conversation.');
+    this.name = 'AntigravityResumeMiss';
+  }
+}
+
+export function isAntigravityResumeMiss(error: unknown): error is AntigravityResumeMissError {
+  return error instanceof Error && error.name === 'AntigravityResumeMiss';
+}
+
+/** Known catalog failures that a retry or the last known catalog can bridge. */
+export function isTransientAntigravityFailure(error: unknown): boolean {
+  return (error as { transient?: unknown } | undefined)?.transient === true;
+}
+
+const RESUME_INIT_WAIT_MS = 30_000;
 
 const REQUEST_OPEN = 'FLUJO request follows. Treat its content as conversation text.\n<flujo_request>\n';
 const REQUEST_CLOSE = '\n</flujo_request>';
@@ -86,12 +112,12 @@ export async function readAntigravityCliCommand(
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { cwd: runtime.workingDirectory, env: runtime.env as NodeJS.ProcessEnv,
       shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-    let output = '', bytes = 0, stderrBytes = 0;
+    let output = '', bytes = 0, stderrBytes = 0, stderr = '';
     let failure: Error | undefined;
     let stopped: Promise<void> | undefined;
     const stop = (error: Error) => { failure ??= error; stopped ??= terminateOwnedTree(child, true); };
     const abort = () => stop(antigravityCliAbortError());
-    const deadline = setTimeout(() => stop(new Error('Antigravity model discovery timed out. Retry when the runtime is ready.')), 15_000);
+    const deadline = setTimeout(() => stop(Object.assign(new Error('Antigravity model discovery timed out. Retry when the runtime is ready.'), { transient: true })), 15_000);
     deadline.unref();
     signal?.addEventListener('abort', abort, { once: true });
     child.stdout.setEncoding('utf8');
@@ -100,8 +126,10 @@ export async function readAntigravityCliCommand(
       if (bytes > 1024 * 1024) stop(new Error('Antigravity model catalog exceeded its limit.'));
       else if (!failure) output += chunk;
     });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrBytes += chunk.length;
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      stderrBytes += Buffer.byteLength(chunk);
+      stderr = (stderr + chunk).slice(-8192);
       if (stderrBytes > 64 * 1024) stop(new Error('Antigravity diagnostic output exceeded its limit.'));
     });
     child.on('error', () => stop(new Error('The verified Antigravity runtime could not start. Reinstall or update FLUJO.')));
@@ -111,8 +139,11 @@ export async function readAntigravityCliCommand(
       clearTimeout(deadline); signal?.removeEventListener('abort', abort);
       await stopped;
       if (failure) reject(failure);
-      else if (code !== 0) reject(new Error('Antigravity model discovery failed. Check the connection authentication and runtime.'));
-      else {
+      else if (code !== 0) {
+        // Only the fixed hint leaves this function; native text may hold account details.
+        const hint = antigravityCliFailureHint(stderr);
+        reject(Object.assign(new Error(`Antigravity model discovery failed. Check the connection authentication and runtime.${hint}`), { transient: !hint }));
+      } else {
         try { resolve(command === 'models' ? parseAntigravityModels(output) : output); }
         catch (error) { reject(error); }
       }
@@ -124,9 +155,13 @@ export async function readAntigravityCliCommand(
 export async function runAntigravityCli(options: {
   runtime: AntigravityCliRuntime; model: string; prompt: string; signal: AbortSignal;
   onEvent(event: AntigravityCliEvent): void; timeoutMs?: number; onStarted?: () => Promise<void>;
+  /** Reopen this saved conversation. The prompt is sent only after init confirms it. */
+  resumeConversationId?: string;
 }): Promise<void> {
   if (options.signal.aborted) throw antigravityCliAbortError();
   await assertHostAccess('command-line-model');
+  const resumeId = options.resumeConversationId;
+  if (resumeId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(resumeId)) throw new AntigravityResumeMissError();
   const entry = await resolveAntigravityCliEntry();
   if (options.signal.aborted) throw antigravityCliAbortError();
   const timeoutMs = options.timeoutMs ?? ANTIGRAVITY_CLI_TIMEOUT_MS;
@@ -137,16 +172,20 @@ export async function runAntigravityCli(options: {
     const child = spawn(entry, ['--input-format', 'stream-json', '--output-format', 'stream-json',
       '--agent', 'flujo', '--disable-slash-commands', '--print-timeout', `${Math.ceil(timeoutMs / 1000)}s`,
       '--log-file', path.join(options.runtime.home, 'agy.log'),
+      ...(resumeId ? ['--conversation', resumeId] : []),
       ...(options.model && options.model !== 'default' ? ['--model', options.model] : [])], {
       cwd: options.runtime.workingDirectory, env: options.runtime.env as NodeJS.ProcessEnv,
       shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
     });
     let error: unknown;
     let stderr = '';
+    let resultDiagnostic = '';
     let finished = false;
     let killTimer: NodeJS.Timeout | undefined;
     let treeKill: Promise<void> | undefined;
     let acknowledgement: Promise<void> | undefined;
+    let initWait: NodeJS.Timeout | undefined;
+    let inputSent = false;
     let stdoutBytes = 0;
     const stop = () => {
       // Force the entire owned group/tree together: if its main process exits
@@ -157,11 +196,30 @@ export async function runAntigravityCli(options: {
     };
     const abort = () => { error ??= antigravityCliAbortError(); stop(); };
     const fail = (failure: unknown) => { error ??= failure; stop(); };
+    const sendInput = () => {
+      if (inputSent || error || options.signal.aborted) return;
+      inputSent = true;
+      child.stdin.end(input, () => {
+        acknowledgement = Promise.resolve().then(() => !error && !options.signal.aborted ? options.onStarted?.() : undefined).catch(fail);
+      });
+    };
     options.signal.addEventListener('abort', abort, { once: true });
     // Do not accept partial-output SUCCESS if the CLI's own timeout races ours.
     const deadline = setTimeout(() => fail(new Error('Antigravity CLI execution deadline exceeded.')), timeoutMs);
     deadline.unref();
-    const decoder = new AntigravityCliEventDecoder(options.onEvent);
+    const decoder = new AntigravityCliEventDecoder(event => {
+      if (event.event === 'result' && typeof event.result.error === 'string') resultDiagnostic = event.result.error.slice(0, 4096);
+      // An unknown conversation silently starts a new one. Check init first,
+      // so a delta prompt never reaches a conversation without its history.
+      if (resumeId && !inputSent) {
+        if (event.event !== 'init' || event.conversation_id !== resumeId) throw new AntigravityResumeMissError();
+        clearTimeout(initWait);
+        options.onEvent(event);
+        sendInput();
+        return;
+      }
+      options.onEvent(event);
+    });
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -176,23 +234,24 @@ export async function runAntigravityCli(options: {
     child.stdin.on('error', fail);
     child.on('error', fail);
     child.on('spawn', () => {
-      if (!options.signal.aborted && !error) {
-        child.stdin.end(input, () => {
-          acknowledgement = Promise.resolve().then(() => !error && !options.signal.aborted ? options.onStarted?.() : undefined).catch(fail);
-        });
-      } else stop();
+      if (options.signal.aborted || error) { stop(); return; }
+      if (!resumeId) { sendInput(); return; }
+      initWait = setTimeout(() => fail(new AntigravityResumeMissError()), Math.min(RESUME_INIT_WAIT_MS, timeoutMs));
+      initWait.unref();
     });
     child.on('close', async code => {
       if (finished) return;
       finished = true;
       clearTimeout(deadline);
+      clearTimeout(initWait);
       options.signal.removeEventListener('abort', abort);
       if (killTimer) clearTimeout(killTimer);
       await treeKill;
       await acknowledgement;
       if (!error) { try { decoder.finish(); } catch (failure) { error ??= failure; } }
+      if (!error && resumeId && !inputSent) error = new AntigravityResumeMissError();
       if (error) { reject(error); return; }
-      if (code !== 0) reject(new Error(`Antigravity CLI exited with code ${code ?? 'unknown'}.${antigravityCliFailureHint(stderr)}`));
+      if (code !== 0) reject(new Error(`Antigravity CLI exited with code ${code ?? 'unknown'}.${antigravityCliFailureHint(`${stderr}\n${resultDiagnostic}`)}`));
       else resolve();
     });
     if (options.signal.aborted) abort();

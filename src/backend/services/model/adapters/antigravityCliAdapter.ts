@@ -25,8 +25,18 @@ import { classifyStatisticsError, createStatisticsEvent, recordStatisticsEvent }
 import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import { prepareAntigravityCliRuntime, ANTIGRAVITY_CLI_TIMEOUT_MS, type AntigravityCliRuntime } from './antigravityCliRuntime';
-import { runAntigravityCli, antigravityCliAbortError, prepareAntigravityCliPrompt, antigravityCliFailureHint } from './antigravityCliProcess';
-import { mapAntigravityCliUsage, type AntigravityCliEvent } from './antigravityCliEvents';
+import { runAntigravityCli, antigravityCliAbortError, prepareAntigravityCliPrompt, antigravityCliFailureHint, isAntigravityResumeMiss } from './antigravityCliProcess';
+import { mapAntigravityCliUsage, subtractAntigravityUsage, type AntigravityCliEvent, type AntigravityCliStats } from './antigravityCliEvents';
+import {
+  antigravityHistoryHash, antigravitySessionPrefix, countLeadingSystemMessages, findAntigravityResume, openAntigravitySession,
+  type AntigravityResume, type AntigravitySession, type AntigravitySessionUsage,
+} from './antigravityCliSession';
+
+const USAGE_COUNTERS = ['total_tokens', 'input_tokens', 'output_tokens', 'thinking_tokens', 'cache_read_tokens'];
+function reportedCounters(stats: AntigravityCliStats | undefined): Record<string, number> {
+  return Object.fromEntries(Object.entries(stats ?? {})
+    .filter(([key, value]) => USAGE_COUNTERS.includes(key) && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0));
+}
 
 const log = createLogger('backend/services/model/adapters/antigravityCliAdapter');
 const MAX_TOOL_NAME_LEN = 110;
@@ -108,6 +118,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
       runId,
       nodeId,
       runResourceMarkers,
+      sessionResume,
     } = input;
     const fullInput = normalizeMessageInput(messages, runResourceMarkers);
     const attachments = messages.flatMap(message => message.role === 'user' ? extractMediaParts(message.content) : []);
@@ -608,14 +619,47 @@ export class AntigravityCliAdapter implements CompletionAdapter {
     let usageKnown = true;
     const reportedUsage: Array<Record<string, number>> = [];
     const runMessages: OpenAI.ChatCompletionMessageParam[] = [...messages];
+    // Session continuity keeps one native conversation per conversation node.
+    // Any change to what that conversation was built from replays in full.
+    const leadingSystemMessageCount = countLeadingSystemMessages(messages);
+    const sessionPrefix = sessionResume && conversationId && nodeId ? antigravitySessionPrefix({
+      systemPrompt: fullInput.systemPrompt ?? '', model: model.name, maxTurns,
+      tools: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+      bindings: toolNameMap ?? {}, localExecutors: Object.keys(localToolExecutors ?? {}).sort(),
+      credential: apiKey || 'account',
+    }) : undefined;
+    let session: AntigravitySession | undefined;
+    let resume: AntigravityResume | undefined;
+    let completedConversation: string | undefined;
+    let completedUsage: AntigravitySessionUsage | undefined;
+    const openSession = async (prefixHash: string): Promise<{ session: AntigravitySession; resume?: AntigravityResume } | undefined> => {
+      let opened: AntigravitySession | undefined;
+      try {
+        opened = await openAntigravitySession(conversationId!, nodeId!);
+        if (!opened) return undefined;
+        let found = findAntigravityResume(opened.record, { prefixHash, messages, leadingSystemMessageCount });
+        if (found && !normalizeMessageInput(found.delta, runResourceMarkers).text.trim()) found = undefined;
+        await opened.forget();
+        if (!found) await opened.reset();
+        return { session: opened, ...(found ? { resume: found } : {}) };
+      } catch {
+        await opened?.release().catch(() => {});
+        log.warn('Antigravity session is unavailable; replaying the full conversation');
+        return undefined;
+      }
+    };
     try {
       if (abortController.signal.aborted) throw antigravityCliAbortError();
       if (shouldEndAgenticTurn?.()) endedByCaller = true;
       if (!endedByCaller) {
+        const opened = sessionPrefix ? await openSession(sessionPrefix) : undefined;
+        session = opened?.session;
+        resume = opened?.resume;
         if (bridgeTools.length) bridge = await startCodexToolBridge(bridgeTools);
         runtime = await prepareAntigravityCliRuntime({
           model: model.name, apiKey, maxTurns,
           ...(bridge ? { bridge: { url: bridge.url, tools: bridgeTools.map(tool => tool.name), definitions: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) } } : {}),
+          ...(session ? { sessionHome: session.home } : {}),
         });
         let remainingTurns = maxTurns;
         while (!endedByCaller && !endSpawning && !handoffCalls.length) {
@@ -623,22 +667,28 @@ export class AntigravityCliAdapter implements CompletionAdapter {
           if (fatalError) throw fatalError;
           if (remainingTurns-- <= 0) throw new Error('Antigravity CLI exceeded the steering turn limit.');
           activeChild = new AbortController();
-          const normalized = normalizeMessageInput(runMessages, runResourceMarkers);
+          const resumed = resume;
+          resume = undefined;
+          completedConversation = undefined;
+          const wireMessages = resumed ? resumed.delta : runMessages;
+          const normalized = normalizeMessageInput(wireMessages, runResourceMarkers);
           const prompt = prepareAntigravityCliPrompt([normalized.systemPrompt ? `<system_instructions>\n${normalized.systemPrompt}\n</system_instructions>` : '', normalized.text].filter(Boolean).join('\n\n'));
           let finalResult: Extract<AntigravityCliEvent, { event: 'result' }>['result'] | undefined;
           let cliConversationId: string | undefined;
           let streamError = false;
           let textSinceTool = false;
           let producedAssistantOutput = false;
+          let replayInFull = false;
           const dispatchesBeforeRun = bridgeDispatches;
           const transcriptStart = transcript.length;
           try {
             await observeSdkRequest(input, {
               adapter: 'antigravity-cli', operation: 'agy --input-format stream-json --output-format stream-json',
-              request: { model: model.name, prompt, toolDispatchBudget: maxTurns, stepBudget: maxTurns * 8 + 16, tools: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) },
-              wireMessages: [...runMessages],
+              request: { model: model.name, prompt, toolDispatchBudget: maxTurns, stepBudget: maxTurns * 8 + 16, conversation: resumed ? 'resumed' : 'new', tools: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) },
+              wireMessages: [...wireMessages],
             }, () => runAntigravityCli({
               runtime: runtime!, model: model.name, prompt, signal: activeChild!.signal, timeoutMs: deadlineAt - Date.now(),
+              ...(resumed ? { resumeConversationId: resumed.conversationId } : {}),
               onStarted: async () => { startedChild = true; await activeDelivery?.acknowledge(); activeDelivery = undefined; },
               onEvent: event => {
                 if (fatalError) throw fatalError;
@@ -689,10 +739,14 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                     pendingText += suffix;
                     if (suffix) onModelDelta?.({ messageId: pendingMessageId, contentDelta: suffix });
                   }
-                  reportedUsage.push(Object.fromEntries(Object.entries(event.result.usage ?? {})
-                    .filter(([key, value]) => ['total_tokens', 'input_tokens', 'output_tokens', 'thinking_tokens', 'cache_read_tokens'].includes(key)
-                      && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)));
-                  const turnUsage = mapAntigravityCliUsage(event.result.usage);
+                  const numTurns = event.result.num_turns;
+                  completedUsage = event.result.usage ? {
+                    ...reportedCounters(event.result.usage),
+                    ...(typeof numTurns === 'number' && Number.isSafeInteger(numTurns) && numTurns >= 0 ? { num_turns: numTurns } : {}),
+                  } : undefined;
+                  const runStats = resumed ? subtractAntigravityUsage(event.result.usage, resumed.baseline, numTurns) : event.result.usage;
+                  reportedUsage.push(reportedCounters(runStats));
+                  const turnUsage = mapAntigravityCliUsage(runStats);
                   if (!turnUsage) { usageKnown = false; return; }
                   usage.prompt_tokens += turnUsage.prompt_tokens;
                   usage.completion_tokens += turnUsage.completion_tokens;
@@ -710,21 +764,31 @@ export class AntigravityCliAdapter implements CompletionAdapter {
             if (!producedAssistantOutput && bridgeDispatches === dispatchesBeforeRun && !handoffCalls.length && !endedByCaller) {
               throw new Error('Antigravity CLI failed to complete a valid response: no assistant output or tool dispatch was returned.');
             }
+            completedConversation = cliConversationId;
           } catch (error) {
-            if (!steeringDelivery) closingTools.abort();
-            if (!finalResult) usageKnown = false;
-            if (fatalError) throw fatalError;
-            if (abortController.signal.aborted) throw antigravityCliAbortError();
-            // Plain handoffs now require normal native finalization. Preserve
-            // protocol/deadline/provider failures instead of masking them as
-            // the intentional abort used by parallel spawn routing.
-            if (finalizingPlainHandoff && !endedByCaller) throw error;
-            if (!steeringDelivery && !endSpawning && !handoffCalls.length && !endedByCaller) throw error;
+            // A missed reopen happens before any prompt is sent; replay in full.
+            replayInFull = Boolean(resumed) && isAntigravityResumeMiss(error) && !fatalError && !abortController.signal.aborted;
+            if (!replayInFull) {
+              if (!steeringDelivery) closingTools.abort();
+              if (!finalResult) usageKnown = false;
+              if (fatalError) throw fatalError;
+              if (abortController.signal.aborted) throw antigravityCliAbortError();
+              // Plain handoffs now require normal native finalization. Preserve
+              // protocol/deadline/provider failures instead of masking them as
+              // the intentional abort used by parallel spawn routing.
+              if (finalizingPlainHandoff && !endedByCaller) throw error;
+              if (!steeringDelivery && !endSpawning && !handoffCalls.length && !endedByCaller) throw error;
+            }
           } finally {
             startedChild = false;
             await waitForTools();
             flushText();
             settlePendingTools('tool cancelled');
+          }
+          if (replayInFull) {
+            log.warn('Antigravity CLI could not reopen the saved conversation; replaying the full conversation');
+            remainingTurns++;
+            continue;
           }
           if (!steeringDelivery) break;
           activeDelivery = steeringDelivery;
@@ -735,6 +799,18 @@ export class AntigravityCliAdapter implements CompletionAdapter {
             runMessages.push(message as OpenAI.ChatCompletionMessageParam);
           }
           await activeDelivery.beforeSend();
+        }
+        if (session && completedConversation && !endedByCaller && !endSpawning && !handoffCalls.length && !fatalError) {
+          try {
+            await session.save({
+              conversationId: completedConversation, prefixHash: sessionPrefix!,
+              seenMessageCount: messages.length + transcript.length, leadingSystemMessageCount,
+              historyHash: antigravityHistoryHash([...messages, ...transcript] as OpenAI.ChatCompletionMessageParam[], leadingSystemMessageCount),
+              ...(completedUsage ? { usage: completedUsage } : {}),
+            });
+          } catch {
+            log.warn('Antigravity session checkpoint was not saved; the next turn replays the full conversation');
+          }
         }
       }
     } finally {
@@ -747,7 +823,9 @@ export class AntigravityCliAdapter implements CompletionAdapter {
       steeringDelivery?.requeue();
       flushText();
       settlePendingTools('tool cancelled');
-      try { await bridge?.close(); } finally { await runtime?.cleanup(); }
+      try {
+        try { await bridge?.close(); } finally { await runtime?.cleanup(); }
+      } finally { await session?.release(); }
     }
     if (fatalError) throw fatalError;
     if (abortController.signal.aborted) throw antigravityCliAbortError();

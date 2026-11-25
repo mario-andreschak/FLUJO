@@ -484,7 +484,7 @@ async function testModelTransports(params: ModelTestParams): Promise<ModelTestRe
   if (adapter && adapter !== 'openai' && adapter !== 'openai-responses' && model) {
     const antigravityRuntime = adapter === 'antigravity-cli' ? await inspectAntigravityRuntime() : undefined;
     const sdk: ModelTestAttempt = antigravityRuntime && !antigravityRuntime.verified
-      ? { ok: false, durationMs: 0, error: { message: 'FLUJO could not start a compatible Antigravity CLI. Check internet access and installation permissions, or repair the official agy installation, then retry.' } }
+      ? { ok: false, durationMs: 0, error: { message: antigravityRuntime.problem?.message ?? 'FLUJO could not start a compatible Antigravity CLI. Check internet access and installation permissions, or repair the official agy installation, then retry.' } }
       : await attemptViaAdapter(model, apiKey);
     const naAxios: ModelTestAttempt = {
       ok: false,

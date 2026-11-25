@@ -31,6 +31,8 @@ test('isolates concurrent invocations, billing/config env, exact flow permission
   expect(await fs.readFile(path.join(one.workingDirectory, '.git', 'HEAD'), 'utf8')).toBe('ref: refs/heads/flujo\n');
   const settings = JSON.parse(await fs.readFile(path.join(one.home, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8'));
   expect(settings.modelProvider).toBe('gemini');
+  // Auto mode, the newer CLI default, ignores toolPermission.
+  expect(settings).toMatchObject({ agentMode: 'default', toolPermission: 'request-review' });
   expect(settings.permissions).toEqual({ allow: ['mcp(flujo/safe_tool)'], deny: ANTIGRAVITY_NATIVE_DENIES, ask: [] });
   const agent = await fs.readFile(path.join(one.workingDirectory, '.agents', 'agents', 'flujo.md'), 'utf8');
   expect(agent).toContain('inheritCustomizations: false'); expect(agent).toContain('tools: []'); expect(agent).toContain('subagent: false');
@@ -52,6 +54,23 @@ test('seeds only official account cache, strips selector and leaves source intac
   expect(runtime.env.ANTIGRAVITY_CLI_HOME).toBeUndefined(); expect(runtime.env.GEMINI_API_KEY).toBeUndefined();
   await expect(fs.access(path.join(runtime.home, '.gemini', 'GEMINI.md'))).rejects.toThrow();
   await runtime.cleanup(); expect(await fs.readFile(path.join(hostCli, 'antigravity-oauth-token'), 'utf8')).toBe(credentials);
+});
+
+test('a kept session home keeps native conversations but never the account cache copy', async () => {
+  const host = path.join(temporary, 'host'), hostCli = path.join(host, '.gemini', 'antigravity-cli');
+  await fs.mkdir(hostCli, { recursive: true });
+  await fs.writeFile(path.join(hostCli, 'antigravity-oauth-token'), JSON.stringify({ token: { refresh_token: 'synthetic-refresh', access_token: 'synthetic-access' } }));
+  process.env.ANTIGRAVITY_CLI_HOME = host;
+  const sessionHome = path.join(mockDataDir, 'db', 'antigravity-cli-runtime', 'sessions', 'a'.repeat(40));
+  const runtime = await prepareAntigravityCliRuntime({ model: 'default', apiKey: '', maxTurns: 1, sessionHome });
+  expect(runtime.home).toBe(sessionHome);
+  const conversation = path.join(sessionHome, '.gemini', 'antigravity-cli', 'brain', 'saved');
+  await fs.mkdir(conversation, { recursive: true });
+  await runtime.cleanup();
+  await expect(fs.access(conversation)).resolves.toBeUndefined();
+  await expect(fs.access(path.join(sessionHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'))).rejects.toThrow();
+  await expect(prepareAntigravityCliRuntime({ model: 'default', apiKey: 'key', maxTurns: 1, sessionHome: path.join(mockDataDir, 'elsewhere') }))
+    .rejects.toThrow('Invalid Antigravity session home.');
 });
 
 test('missing file cache permits native keyring authentication and invalid cache fails without secret diagnostics', async () => {

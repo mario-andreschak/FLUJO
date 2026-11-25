@@ -481,11 +481,20 @@ export class ModelHandler {
    * disabled, so the adapter keeps its always-correct full-flatten behaviour.
    */
   static async isClaudeSessionResumeEnabled(): Promise<boolean> {
+    return ModelHandler.isExperimentalFlagEnabled('claudeSessionResume');
+  }
+
+  /** Antigravity CLI conversation reuse (issue #1094); off unless the setting is on. */
+  static async isAntigravitySessionResumeEnabled(): Promise<boolean> {
+    return ModelHandler.isExperimentalFlagEnabled('antigravitySessionResume');
+  }
+
+  private static async isExperimentalFlagEnabled(name: 'claudeSessionResume' | 'antigravitySessionResume'): Promise<boolean> {
     try {
       const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      return Boolean(settings?.experimental?.claudeSessionResume);
+      return Boolean(settings?.experimental?.[name]);
     } catch (err) {
-      log.warn('Failed to read claudeSessionResume setting; defaulting to disabled', { err });
+      log.warn(`Failed to read ${name} setting; defaulting to disabled`, { err });
       return false;
     }
   }
@@ -1387,7 +1396,8 @@ export class ModelHandler {
       (modelAdapter !== 'claude-cli' || !input.executionExtensionContext) &&
       !wireMessages &&
       (modelAdapter === 'codex-cli' ||
-        (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()));
+        (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()) ||
+        (modelAdapter === 'antigravity-cli' && await ModelHandler.isAntigravitySessionResumeEnabled()));
 
     // Resolve the effective agentic-turn cap. Precedence: per-node override →
     // bound-model setting → system default (50). This replaces the former
