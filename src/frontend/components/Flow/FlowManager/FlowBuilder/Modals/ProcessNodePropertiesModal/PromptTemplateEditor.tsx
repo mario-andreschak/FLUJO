@@ -5,6 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { PromptReferenceSuggestion } from '@/utils/shared/promptRefs';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { ProcessNodeData } from './types';
+import type { FlujoSystemPromptSectionId } from '@/shared/utils/flujoSystemPrompt';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/PromptTemplateEditor');
 
@@ -16,6 +17,7 @@ interface PromptTemplateEditorProps {
   excludeModelPrompt: boolean;
   excludeStartNodePrompt: boolean;
   excludeSystemPrompt: boolean;
+  excludeSystemPromptSections?: FlujoSystemPromptSectionId[];
   nodeData: Pick<ProcessNodeData, 'id'> | null;
   flowId?: string;
   suggestions?: PromptReferenceSuggestion[];
@@ -40,6 +42,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     excludeModelPrompt,
     excludeStartNodePrompt,
     excludeSystemPrompt,
+    excludeSystemPromptSections,
     nodeData,
     flowId,
     suggestions,
@@ -93,7 +96,8 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
             includeConversationHistory: false,
             excludeModelPrompt,
             excludeStartNodePrompt,
-            excludeSystemPrompt
+            excludeSystemPrompt,
+            excludeSystemPromptSections: excludeSystemPromptSections ?? [],
           },
         }),
       });
@@ -128,7 +132,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     if (promptBuilderRef.current && promptBuilderRef.current.getMode() === 'preview') {
       fetchRenderedPrompt();
     }
-  }, [promptTemplate, excludeModelPrompt, excludeStartNodePrompt, excludeSystemPrompt, flowId, nodeData?.id]);
+  }, [promptTemplate, excludeModelPrompt, excludeStartNodePrompt, excludeSystemPrompt, excludeSystemPromptSections, flowId, nodeData?.id]);
 
   // Custom renderer for preview mode that shows the complete rendered prompt
   const customPreviewRenderer = () => {

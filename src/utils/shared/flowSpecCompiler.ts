@@ -44,6 +44,7 @@ import { isValidRunVarName } from './resolveRunVars';
 import { humanStepIssues, type HumanStepProperties } from './humanStep';
 import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TARGETS, EdgeCondition, EdgeConditionTarget, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
+import { normalizeExcludedSystemPromptSections } from '@/shared/utils/flujoSystemPrompt';
 
 // ---------------------------------------------------------------------------
 // Recursion bounds (issue #94) — token/latency + loop guards
@@ -227,8 +228,10 @@ export interface FlowSpecNode extends FlowSpecHumanFields {
   excludeModelPrompt?: boolean;
   /** process only: drop the start node's prompt from this step's rendered prompt. */
   excludeStartNodePrompt?: boolean;
-  /** process only: suppress the hardcoded workflow/handoff guidance block. */
+  /** process only: leave out all of FLUJO's own system sections. */
   excludeSystemPrompt?: boolean;
+  /** process only: leave out single FLUJO system sections (`workflow`, `agents`, …). */
+  excludeSystemPromptSections?: string[];
   /**
    * process only: a step-level tool allowlist, independent of the per-MCP-node
    * `servers[].tools` (enabledTools). Only these tool names are offered to the model.
@@ -870,6 +873,8 @@ export function compileFlowSpec(
         if (typeof specNode.excludeModelPrompt === 'boolean') properties.excludeModelPrompt = specNode.excludeModelPrompt;
         if (typeof specNode.excludeStartNodePrompt === 'boolean') properties.excludeStartNodePrompt = specNode.excludeStartNodePrompt;
         if (typeof specNode.excludeSystemPrompt === 'boolean') properties.excludeSystemPrompt = specNode.excludeSystemPrompt;
+        const excludedSections = normalizeExcludedSystemPromptSections(specNode.excludeSystemPromptSections);
+        if (excludedSections.length > 0) properties.excludeSystemPromptSections = excludedSections;
 
         // allowedTools (1d): step-level tool allowlist (strings only).
         if (Array.isArray(specNode.allowedTools)) {
@@ -1792,6 +1797,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (props.excludeModelPrompt === true) specNode.excludeModelPrompt = true;
       if (props.excludeStartNodePrompt === true) specNode.excludeStartNodePrompt = true;
       if (props.excludeSystemPrompt === true) specNode.excludeSystemPrompt = true;
+      const excludedSections = normalizeExcludedSystemPromptSections(props.excludeSystemPromptSections);
+      if (excludedSections.length > 0) specNode.excludeSystemPromptSections = excludedSections;
       if (Array.isArray(props.allowedTools) && props.allowedTools.length > 0) {
         specNode.allowedTools = props.allowedTools.filter((t: unknown): t is string => typeof t === 'string' && !!t);
       }

@@ -84,6 +84,7 @@ const PROPERTY_SPECS: Record<NodeType, readonly PropertySpec[]> = {
     { key: 'excludeModelPrompt', label: 'Exclude model prompt', defaultValue: false },
     { key: 'excludeStartNodePrompt', label: 'Exclude start prompt', defaultValue: false },
     { key: 'excludeSystemPrompt', label: 'Exclude system prompt', defaultValue: false },
+    { key: 'excludeSystemPromptSections', label: 'Left-out system prompt parts' },
     { key: 'enableTodoTool', label: 'Enable todo tool', defaultValue: false },
     { key: 'captureVariable', label: 'Capture variable' },
     { key: 'captureResource', label: 'Capture resource' },

@@ -5,7 +5,7 @@ FlowBuilder flows follow execution edges between steps. App and resource connect
 | Node type | Purpose | Reference |
 |---|---|---|
 | Start | Defines where a flow begins. | — |
-| Process | Sends conversation context to a model. | — |
+| Process | Sends conversation context to a model. | [What FLUJO tells the AI](./system-prompt.md) |
 | MCP | Connects an MCP server's tools to an AI step. | [Connected apps](../mcp/overview.md) |
 | Resource | Shares a temporary result within a run or reads a resource exposed by an MCP server. | — |
 | Subflow | Runs another flow as a child step. | — |

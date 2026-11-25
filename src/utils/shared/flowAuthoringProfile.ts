@@ -12,6 +12,7 @@ const ADVANCED_PROCESS_PROPERTIES = new Set([
   'excludeModelPrompt',
   'excludeStartNodePrompt',
   'excludeSystemPrompt',
+  'excludeSystemPromptSections',
   'allowedTools',
   'isolatedPrompt',
   'allowCallerPrompt',
