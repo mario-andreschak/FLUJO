@@ -26,8 +26,13 @@ export function runtimeEnvironmentFile(): string {
   return path.join(root, '.env.local');
 }
 
+/**
+ * JSON keeps the Unicode line and paragraph separators as raw characters, and
+ * dotenv readers treat them as line breaks. Escape them so a value stays on
+ * its own line; JSON.parse in the reader turns the escapes back.
+ */
 function dotenvValue(value: string): string {
-  return JSON.stringify(value).replaceAll('\\u2028', '\\u2028').replaceAll('\\u2029', '\\u2029');
+  return JSON.stringify(value).replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
 }
 
 function parseManagedBlock(contents: string): Record<string, string> {

@@ -139,6 +139,8 @@ class PackageService {
       plannedExecutions?: Record<string, string>;
     };
     consentGranted?: boolean;
+    /** The preview's `reviewDigest`; the install refuses a changed package. */
+    reviewDigest?: string;
   }): Promise<InstallSummary> {
     const response = await fetch('/api/packages/install', {
       method: 'POST',

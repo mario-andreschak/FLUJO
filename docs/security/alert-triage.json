@@ -1,0 +1,766 @@
+{
+  "schemaVersion": 1,
+  "about": "Written reasons for open security alerts that are fixed but not yet scanned, by design, false positives, or waiting for an upstream release. Checked by scripts/security-response-check.mjs; see docs/security/vulnerability-response.md. Nobody dismisses alerts on GitHub from here.",
+  "alerts": [
+    {
+      "source": "code-scanning",
+      "number": 136,
+      "rule": "js/identity-replacement",
+      "location": "src/backend/services/runtimeEnvironment.ts",
+      "decision": "fixed-pending-scan",
+      "reason": "Real bug fixed in #565: the escape replaced a text with itself, so Unicode line separators were not escaped in .env.local. The alert closes once the fix reaches main and is scanned.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "code-scanning",
+      "number": 137,
+      "rule": "js/identity-replacement",
+      "location": "src/backend/services/runtimeEnvironment.ts",
+      "decision": "fixed-pending-scan",
+      "reason": "Real bug fixed in #565: the escape replaced a text with itself, so Unicode line separators were not escaped in .env.local. The alert closes once the fix reaches main and is scanned.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "code-scanning",
+      "number": 145,
+      "rule": "js/stack-trace-exposure",
+      "location": "scripts/persona-goal-acceptance/public-fixture-server.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It is a local test fixture server for automated tests; the error text helps debug the test.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 217,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/services/model/testConnection.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 218,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/services/model/testConnection.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 219,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/services/model/testConnection.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 220,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/services/ollama/index.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 221,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/services/ollama/index.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 222,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/services/telemetry/index.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 224,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/utils/packageRegistryClient.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 225,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/utils/packageRegistryClient.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 228,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/utils/packageRegistryClient.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 348,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/calendar-browser-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 353,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/prompt-editor-browser-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 359,
+      "rule": "js/xss-through-exception",
+      "location": "scripts/mcp-apps-browser-fixture.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It is a local test fixture server for automated tests; the error text helps debug the test.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 360,
+      "rule": "js/xss-through-exception",
+      "location": "scripts/smoke-mcp-sampling.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It is a local test fixture server for automated tests; the error text helps debug the test.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 361,
+      "rule": "js/xss-through-exception",
+      "location": "scripts/smoke-mcp-subscriptions.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It is a local test fixture server for automated tests; the error text helps debug the test.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 362,
+      "rule": "js/stack-trace-exposure",
+      "location": "scripts/mcp-apps-browser-fixture.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It is a local test fixture server for automated tests; the error text helps debug the test.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 363,
+      "rule": "js/stack-trace-exposure",
+      "location": "scripts/smoke-mcp-subscriptions.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It is a local test fixture server for automated tests; the error text helps debug the test.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 364,
+      "rule": "js/stack-trace-exposure",
+      "location": "scripts/smoke-mcp-subscriptions.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It is a local test fixture server for automated tests; the error text helps debug the test.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 365,
+      "rule": "js/bad-code-sanitization",
+      "location": "scripts/operations-acceptance/migration-equipment.test.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). This is a test file; the generated code is test input only.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 366,
+      "rule": "js/insufficient-password-hash",
+      "location": "src/backend/execution/flow/compaction/digest.ts",
+      "decision": "false-positive",
+      "reason": "Not password storage. SHA-256 or a keyed HMAC makes a fingerprint that tells whether a configuration, policy or request changed. API keys are long random values, so a slow password hash would add nothing.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 367,
+      "rule": "js/insufficient-password-hash",
+      "location": "src/backend/execution/flow/compaction/digest.ts",
+      "decision": "false-positive",
+      "reason": "Not password storage. SHA-256 or a keyed HMAC makes a fingerprint that tells whether a configuration, policy or request changed. API keys are long random values, so a slow password hash would add nothing.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 368,
+      "rule": "js/insufficient-password-hash",
+      "location": "src/backend/execution/flow/compaction/digest.ts",
+      "decision": "false-positive",
+      "reason": "Not password storage. SHA-256 or a keyed HMAC makes a fingerprint that tells whether a configuration, policy or request changed. API keys are long random values, so a slow password hash would add nothing.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 369,
+      "rule": "js/insufficient-password-hash",
+      "location": "src/backend/services/mcp/connection.ts",
+      "decision": "false-positive",
+      "reason": "Not password storage. SHA-256 or a keyed HMAC makes a fingerprint that tells whether a configuration, policy or request changed. API keys are long random values, so a slow password hash would add nothing.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 371,
+      "rule": "js/file-system-race",
+      "location": "scripts/compaction-recovery-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 372,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/build-evidence.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 373,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/build-evidence.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 374,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/build-evidence.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 375,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/installation-restore.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 376,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/migration-recovery.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 377,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/installation-restore.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 378,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/operator-upgrade.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 379,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/operator-upgrade.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 380,
+      "rule": "js/file-system-race",
+      "location": "scripts/operations-acceptance/worker-recovery.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 381,
+      "rule": "js/file-system-race",
+      "location": "scripts/responses-terminal-status-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 382,
+      "rule": "js/file-system-race",
+      "location": "scripts/smoke-operations-recovery.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It works in a throwaway folder it created itself; a race needs someone who can already write there.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 384,
+      "rule": "js/file-system-race",
+      "location": "src/backend/services/model/adapters/codexContextUsage.ts",
+      "decision": "false-positive",
+      "reason": "Already race-safe: the file is opened without following links, and the opened file's device and inode are compared with the checked file before anything is read.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 385,
+      "rule": "js/file-access-to-http",
+      "location": "scripts/worker-phone-host.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It sends local test data to a FLUJO or worker address it was pointed at on purpose.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 386,
+      "rule": "js/file-access-to-http",
+      "location": "scripts/worker-phone-host.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It sends local test data to a FLUJO or worker address it was pointed at on purpose.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 387,
+      "rule": "js/file-access-to-http",
+      "location": "src/backend/services/model/allowance/claudeAccount.ts",
+      "decision": "by-design",
+      "reason": "Sends a saved setting, such as an API key or registry token, to the service it belongs to at the configured address. Telemetry sends only an anonymous daily id, version, platform and install method.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 388,
+      "rule": "js/user-controlled-bypass",
+      "location": "src/backend/execution/flow/executionAuthority.ts",
+      "decision": "false-positive",
+      "reason": "The checked values are in-process authority objects with methods, attached by the server-side Persona and meeting runners. Request JSON cannot create them, and Persona-attributed work without one is refused.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 389,
+      "rule": "js/user-controlled-bypass",
+      "location": "src/backend/execution/flow/executionAuthority.ts",
+      "decision": "false-positive",
+      "reason": "The checked values are in-process authority objects with methods, attached by the server-side Persona and meeting runners. Request JSON cannot create them, and Persona-attributed work without one is refused.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 390,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/codex-native-lifecycle-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 391,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/compaction-action-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 392,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/compaction-action-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 393,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/compaction-action-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 394,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/compaction-recovery-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 395,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/compaction-recovery-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 396,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/compaction-semantic-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 397,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/meeting-transcript-browser-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 398,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/persona-goal-runtime-read-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 399,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/responses-compaction-capability.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 400,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/responses-live-state-acceptance.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 401,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/smoke-operations-recovery.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It saves a local test server's reply as a proof file in its own output folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 402,
+      "rule": "js/file-system-race",
+      "location": "src/backend/services/workspace/migration.ts",
+      "decision": "false-positive",
+      "reason": "Reads package.json inside the user's own data folder to recognise an older FLUJO checkout. Anyone who can swap that file can already change the user's data; the worst case is a wrong yes or no answer.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 414,
+      "rule": "js/remote-property-injection",
+      "location": "src/backend/execution/flow/nodes/StaticNode.ts",
+      "decision": "false-positive",
+      "reason": "The id is used as a key in a new object literal ({ [id]: value }). A computed key in a literal always creates an own property, so it cannot change the object prototype.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 415,
+      "rule": "js/remote-property-injection",
+      "location": "src/backend/execution/flow/nodes/StaticNode.ts",
+      "decision": "false-positive",
+      "reason": "The id is used as a key in a new object literal ({ [id]: value }). A computed key in a literal always creates an own property, so it cannot change the object prototype.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 418,
+      "rule": "js/file-access-to-http",
+      "location": "scripts/flow-turn-benchmark.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It sends local test data to a FLUJO or worker address it was pointed at on purpose.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 419,
+      "rule": "js/insufficient-password-hash",
+      "location": "src/backend/services/security/isolatedMcp.ts",
+      "decision": "false-positive",
+      "reason": "Not password storage. SHA-256 or a keyed HMAC makes a fingerprint that tells whether a configuration, policy or request changed. API keys are long random values, so a slow password hash would add nothing.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 420,
+      "rule": "js/command-line-injection",
+      "location": "src/backend/services/mcp/githubInstall.ts",
+      "decision": "by-design",
+      "reason": "Installing a package runs the install and build commands the person reviewed in the install wizard; that is the feature. Since #565 the install refuses a package that differs from the reviewed one (reviewDigest) and installs the reviewed version, so only reviewed commands run.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 421,
+      "rule": "js/command-line-injection",
+      "location": "src/backend/services/security/isolatedMcp.ts",
+      "decision": "by-design",
+      "reason": "The Docker program path comes from the owner-approved isolation policy, and the launch is refused unless the private owner approval file holds the exact policy digest. Since #565 only a program named docker or docker.exe is accepted, and arguments are passed without a shell.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 422,
+      "rule": "js/command-line-injection",
+      "location": "src/backend/services/security/isolatedMcp.ts",
+      "decision": "by-design",
+      "reason": "The Docker program path comes from the owner-approved isolation policy, and the launch is refused unless the private owner approval file holds the exact policy digest. Since #565 only a program named docker or docker.exe is accepted, and arguments are passed without a shell.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 423,
+      "rule": "js/remote-property-injection",
+      "location": "src/backend/services/security/isolatedMcp.ts",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed in #565: granted environment names are kept in a Map instead of object properties. The alert closes once the fix reaches main and is scanned.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "code-scanning",
+      "number": 424,
+      "rule": "js/file-access-to-http",
+      "location": "scripts/flujo-drive.mjs",
+      "decision": "false-positive",
+      "reason": "Developer or acceptance script. It is not in the npm package and the app never runs it (the Docker image copies the scripts folder, but only the launcher and health check run). It sends local test data to a FLUJO or worker address it was pointed at on purpose.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 425,
+      "rule": "js/insecure-temporary-file",
+      "location": "scripts/flujo-drive.mjs",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed on the integration branch (commit 0b5b9500): flujo-drive keeps its state and evidence in the user's own cache folder. The alert closes once the fix reaches main and is scanned.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "code-scanning",
+      "number": 426,
+      "rule": "js/insecure-temporary-file",
+      "location": "scripts/flujo-drive.mjs",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed on the integration branch (commit 0b5b9500): flujo-drive keeps its state and evidence in the user's own cache folder. The alert closes once the fix reaches main and is scanned.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "code-scanning",
+      "number": 427,
+      "rule": "js/insecure-temporary-file",
+      "location": "scripts/flujo-drive.mjs",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed on the integration branch (commit 0b5b9500): flujo-drive keeps its state and evidence in the user's own cache folder. The alert closes once the fix reaches main and is scanned.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "code-scanning",
+      "number": 429,
+      "rule": "js/insufficient-password-hash",
+      "location": "src/backend/services/model/adapters/claudeSessionPersistence.ts",
+      "decision": "false-positive",
+      "reason": "Not password storage. SHA-256 or a keyed HMAC makes a fingerprint that tells whether a configuration, policy or request changed. API keys are long random values, so a slow password hash would add nothing.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "code-scanning",
+      "number": 432,
+      "rule": "js/http-to-file-access",
+      "location": "scripts/check-formal.mjs",
+      "decision": "false-positive",
+      "reason": "Developer tool for the formal model checks. It writes the downloaded TLA+ tools only after their SHA-256 matches the pinned official value, into the user's cache folder.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-05-24"
+    },
+    {
+      "source": "dependabot",
+      "number": 60,
+      "rule": "GHSA-g3hv-75wg-m249",
+      "location": "minimatch",
+      "decision": "waiting-for-upstream",
+      "reason": "Development only (Jest, typescript-eslint and coverage tools); patterns come from our own config files, not from users. The newest Jest 30.5.2 and test-exclude 8.0.0 still need minimatch 10 and glob 13. The fixed minimatch 11 and glob 14 change their matching API, so forcing them could break the test runner. Revisit when Jest moves to glob 14.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2027-01-24"
+    },
+    {
+      "source": "dependabot",
+      "number": 61,
+      "rule": "GHSA-4h7h-rv7c-7m2v",
+      "location": "hono",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed in #565: the lockfile moves hono from 4.13.13 to 4.13.18 (the same change as Dependabot PR #1403). The alert closes once the fix reaches main.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "dependabot",
+      "number": 62,
+      "rule": "GHSA-h7mg-cq63-vhpq",
+      "location": "hono",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed in #565: the lockfile moves hono from 4.13.13 to 4.13.18 (the same change as Dependabot PR #1403). The alert closes once the fix reaches main.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "dependabot",
+      "number": 63,
+      "rule": "GHSA-3gg2-335m-rxc6",
+      "location": "hono",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed in #565: the lockfile moves hono from 4.13.13 to 4.13.18 (the same change as Dependabot PR #1403). The alert closes once the fix reaches main.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "dependabot",
+      "number": 64,
+      "rule": "GHSA-4m76-xfj5-7975",
+      "location": "hono",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed in #565: the lockfile moves hono from 4.13.13 to 4.13.18 (the same change as Dependabot PR #1403). The alert closes once the fix reaches main.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "dependabot",
+      "number": 65,
+      "rule": "GHSA-46wx-v44x-9hh2",
+      "location": "hono",
+      "decision": "fixed-pending-scan",
+      "reason": "Fixed in #565: the lockfile moves hono from 4.13.13 to 4.13.18 (the same change as Dependabot PR #1403). The alert closes once the fix reaches main.",
+      "reviewed": "2026-11-25",
+      "revisitBy": "2026-12-25"
+    }
+  ]
+}

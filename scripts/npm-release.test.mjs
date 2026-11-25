@@ -8,6 +8,7 @@ import YAML from 'yaml';
 import { diagnoseOidc, redactDiagnostic } from './npm-oidc-diagnostic.mjs';
 import {
   PUBLIC_PACKAGES,
+  RELEASE_INVENTORY_ASSETS,
   assertCurrentMain,
   assertOidcOnly,
   assertReleaseContext,
@@ -645,6 +646,7 @@ function finalizationRunner(manifest, { missing = false, tag = null, existingRun
       const headBranch = workflow === 'installer.yml' ? `v${VERSION}` : 'main';
       return JSON.stringify(id ? [{ databaseId: id, headSha: SHA, headBranch, event: 'workflow_dispatch' }] : (existingRuns[workflow] ?? []));
     }
+    if (args[0] === 'release' && args[1] === 'upload') return '';
     assert.ok(args[0] === 'run' && args[1] === 'watch' && args.includes('--exit-status'));
     return '';
   };
@@ -669,6 +671,30 @@ test('GitHub tags, installer and image runs begin only after all registry artifa
   const firstWatch = github.commands.findIndex(({ args }) => args[0] === 'run' && args[1] === 'watch');
   assert.equal(github.commands.slice(0, firstWatch).filter(({ args }) => args[0] === 'workflow' && args[1] === 'run').length, 2,
     'both builds must be dispatched before a synchronous wait can block the second dispatch');
+});
+
+test('every release gets the signed dependency inventory after the installer and image succeed', async (t) => {
+  const candidate = fixture(t);
+  const github = finalizationRunner(candidate.manifest);
+  await finalizeCandidate({ run: github.run, directory: candidate.directory, sha: SHA, version: VERSION });
+  const uploads = github.commands.filter(({ args }) => args[0] === 'release' && args[1] === 'upload');
+  assert.equal(uploads.length, 1);
+  const lastWatch = github.commands.findLastIndex(({ args }) => args[0] === 'run' && args[1] === 'watch');
+  assert.ok(github.commands.indexOf(uploads[0]) > lastWatch, 'the installer run creates the release before files are attached');
+  const { args } = uploads[0];
+  assert.equal(args[2], `v${VERSION}`);
+  assert.deepEqual(args.slice(3, 3 + RELEASE_INVENTORY_ASSETS.length),
+    RELEASE_INVENTORY_ASSETS.map((file) => path.join(candidate.directory, file)));
+  assert.deepEqual(RELEASE_INVENTORY_ASSETS, ['source-lock.sbom.cdx.json', 'release-evidence.json', 'SHA256SUMS']);
+  assert.ok(args.includes('--clobber') && args[args.indexOf('--repo') + 1] === REPOSITORY);
+
+  const failed = finalizationRunner(candidate.manifest);
+  await assert.rejects(finalizeCandidate({ directory: candidate.directory, sha: SHA, version: VERSION, run: (command, commandArgs) => {
+    const result = failed.run(command, commandArgs);
+    if (commandArgs[0] === 'run' && commandArgs[1] === 'watch') throw new Error('Child workflow failed');
+    return result;
+  } }), /Child workflow failed/);
+  assert.equal(failed.commands.some(({ args: commandArgs }) => commandArgs[0] === 'release'), false);
 });
 
 test('a missing npm package stops finalization before any GitHub mutation', async (t) => {
