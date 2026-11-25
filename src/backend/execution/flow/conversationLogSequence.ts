@@ -277,6 +277,7 @@ export function scanConversationLogSequence(file: string, options: SequenceScanO
   const started = settings.now();
   const settleScan = admitColdScan(true);
   let descriptor: number;
+  // eslint-disable-next-line flujo/no-sync-fs -- the bus emits synchronously; run paths warm this counter with the async scan first
   try { descriptor = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); }
   catch (error) {
     settleScan(); // A failed open supplied no descriptor.
@@ -284,6 +285,7 @@ export function scanConversationLogSequence(file: string, options: SequenceScanO
     throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_IO', 'the log could not be opened; restore storage access before retrying', { cause: error });
   }
   try {
+    // eslint-disable-next-line flujo/no-sync-fs -- same synchronous cold-start fallback as the open above
     const initial = fstatSync(descriptor, { bigint: true });
     const size = assertScannable(initial);
     const parser = new SequenceLines(settings.maxDepth, settings.maxTokensPerLine);
@@ -291,12 +293,14 @@ export function scanConversationLogSequence(file: string, options: SequenceScanO
     let offset = 0;
     while (offset < size) {
       if (overBudget(settings, started)) budgetExceeded();
+      // eslint-disable-next-line flujo/no-sync-fs -- same synchronous cold-start fallback as the open above
       const count = readSync(descriptor, buffer, 0, Math.min(buffer.length, size - offset), offset);
       if (!count) throw new ConversationSequenceSafetyError('CONVERSATION_SEQUENCE_CHANGED', 'the log shrank during its sequence scan; retry against a stable history');
       offset += count;
       for (let index = 0; index < count; index++) parser.accept(buffer[index]);
     }
     parser.finishLine();
+    // eslint-disable-next-line flujo/no-sync-fs -- same synchronous cold-start fallback as the open above
     assertUnchanged(initial, fstatSync(descriptor, { bigint: true }));
     if (overBudget(settings, started)) budgetExceeded();
     return parser.maximum;
@@ -305,6 +309,7 @@ export function scanConversationLogSequence(file: string, options: SequenceScanO
   } finally {
     // Never retry the numeric descriptor: close may have succeeded before
     // reporting failure. A completed scan result stays valid either way.
+    // eslint-disable-next-line flujo/no-sync-fs -- same synchronous cold-start fallback as the open above
     try { closeSync(descriptor); } catch { /* released with the process */ }
     settleScan();
   }

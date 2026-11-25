@@ -5,6 +5,7 @@ import { NativeAccountProfileSchema } from './types';
 
 /** Select this trusted producer with FLUJO_NATIVE_PARENT_MODULE at build and
  * startup. All values are server-only; no saved model/Flow can select them. */
+/* eslint-disable flujo/no-sync-fs -- read once while this build-selected module loads, before the Native Parent serves anything */
 function configuration() {
   const filename = process.env.FLUJO_NATIVE_CODEX_PROFILE;
   const sourceOrigin = process.env.FLUJO_NATIVE_SOURCE_ORIGIN;
@@ -23,5 +24,6 @@ function configuration() {
     return { sourceOrigin, toolOrigin, codexProfile: profile };
   } finally { closeSync(descriptor); }
 }
+/* eslint-enable flujo/no-sync-fs */
 
 export const nativeSourceParent = createOriginalOwnerNativeParent(configuration());
