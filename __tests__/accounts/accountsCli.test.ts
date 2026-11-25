@@ -48,7 +48,7 @@ describe('users command line', () => {
     await new Promise(resolve => probe.on('close', resolve));
     const raw = JSON.parse(text) as Record<string, unknown>;
     const regex = (value: unknown) => new RegExp((value as { regex: string }).regex);
-    const cli = { ...raw, USER_NAME_PATTERN: regex(raw.USER_NAME_PATTERN), WORKSPACE_NAME_PATTERN: regex(raw.WORKSPACE_NAME_PATTERN) };
+    const cli: Record<string, unknown> = { ...raw, USER_NAME_PATTERN: regex(raw.USER_NAME_PATTERN), WORKSPACE_NAME_PATTERN: regex(raw.WORKSPACE_NAME_PATTERN) };
     expect(cli.USER_NAME_PATTERN).toEqual(USER_NAME_PATTERN);
     expect(cli.WORKSPACE_NAME_PATTERN).toEqual(WORKSPACE_NAME_PATTERN);
     expect(cli.PASSWORD_MIN_LENGTH).toBe(PASSWORD_MIN_LENGTH);
