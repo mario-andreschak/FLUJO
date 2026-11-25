@@ -177,15 +177,90 @@ it('retains signatures for text-only history without leaking them to other provi
   expect((await toInteractionInput([message], 'another-model')).input).toEqual([signedSteps[1]]);
 });
 
-it.each(['incomplete', 'failed', 'cancelled'])('does not execute tools from a %s response or retry it', async status => {
+it.each([
+  ['failed', 'failed on Google\'s side'],
+  ['cancelled', 'cancelled this answer'],
+])('does not execute tools from a %s response or retry it', async (status, message) => {
   respond = response => send(response, { id: 'failed', status, steps: signedSteps });
-  await expect(new GeminiAdapter().createCompletion(input())).rejects.toThrow('did not complete');
+  await expect(new GeminiAdapter().createCompletion(input())).rejects.toThrow(message);
   expect(receipts).toHaveLength(1);
+});
+
+// Issue #1227: Gemini reports `incomplete` when an answer reaches a limit such
+// as max_output_tokens. That is a finished, shorter answer, not a failed run.
+it.each(['incomplete', 'requires_continuation'])('keeps a %s answer as a cut-off reply but never runs its tool calls', async status => {
+  respond = response => send(response, { id: 'cut', status, steps: signedSteps, usage,
+    errors: [{ code: 'MAX_TOKENS', message: 'max_output_tokens reached' }] });
+  const result = await new GeminiAdapter().createCompletion(input());
+  const [choice] = result.completion.choices;
+  expect(choice.finish_reason).toBe('length');
+  expect(choice.message.content).toBe('Checking.');
+  expect(choice.message.tool_calls).toBeUndefined();
+  expect(result.providerMetadata?.geminiInteraction?.steps).toEqual(signedSteps.slice(0, 2));
+  expect(receipts).toHaveLength(1);
+});
+
+it('keeps the streamed text of an answer cut off by the length limit', async () => {
+  respond = response => sendEvents(response, [
+    { event_type: 'interaction.created', interaction: { id: 'cut', status: 'in_progress' } },
+    { event_type: 'step.start', index: 0, step: { type: 'thought' } },
+    { event_type: 'step.delta', index: 0, delta: { type: 'thought_signature', signature: 'opaque-signature' } },
+    { event_type: 'step.stop', index: 0 },
+    { event_type: 'step.start', index: 1, step: { type: 'model_output', content: [] } },
+    { event_type: 'step.delta', index: 1, delta: { type: 'text', text: 'Astra, here is my long ' } },
+    { event_type: 'step.delta', index: 1, delta: { type: 'text', text: 'answer that stops mid' } },
+    { event_type: 'step.stop', index: 1 },
+    { event_type: 'step.start', index: 2, step: { type: 'function_call', id: 'call-cut', name: 'lookup', arguments: {} } },
+    { event_type: 'step.delta', index: 2, delta: { type: 'arguments_delta', arguments: '{"query":"hal' } },
+    { event_type: 'step.stop', index: 2 },
+    { event_type: 'step.start', index: 3, step: { type: 'model_output', content: [] } },
+    { event_type: 'interaction.status_update', interaction_id: 'cut', status: 'incomplete', usage },
+    { event_type: 'interaction.completed', interaction: { id: 'cut', status: 'incomplete', usage } },
+  ]);
+  const onModelDelta = jest.fn();
+  const result = await new GeminiAdapter().createStreamCompletion(input({ onModelDelta }));
+  const [choice] = result.completion.choices;
+  expect(choice.finish_reason).toBe('length');
+  expect(choice.message.content).toBe('Astra, here is my long answer that stops mid');
+  expect(choice.message.tool_calls).toBeUndefined();
+  expect(result.providerMetadata?.geminiInteraction?.steps).toEqual([
+    { type: 'thought', signature: 'opaque-signature' },
+    { type: 'model_output', content: [{ type: 'text', text: 'Astra, here is my long answer that stops mid' }] },
+    { type: 'model_output', content: [] },
+  ]);
+  expect(onModelDelta.mock.calls.map(([delta]) => delta.contentDelta ?? '').join('')).toBe('Astra, here is my long answer that stops mid');
+  expect(receipts).toHaveLength(1);
+});
+
+it('joins an answer the SDK continued across hops into one complete reply', async () => {
+  const hopUsage = { total_input_tokens: 100, total_output_tokens: 8, total_thought_tokens: 2, total_tokens: 110 };
+  respond = response => receipts.length === 1 ? sendEvents(response, [
+    { event_type: 'interaction.created', interaction: { id: 'hop-1', status: 'in_progress' } },
+    { event_type: 'step.start', index: 0, step: { type: 'model_output', content: [] } },
+    { event_type: 'step.delta', index: 0, delta: { type: 'text', text: 'First half, ' } },
+    { event_type: 'step.stop', index: 0 },
+    { event_type: 'interaction.completed', interaction: { id: 'hop-1', status: 'requires_continuation',
+      continuation_token: 'resume-here', usage: hopUsage } },
+  ]) : sendEvents(response, [
+    { event_type: 'interaction.created', interaction: { id: 'hop-2', status: 'in_progress' } },
+    { event_type: 'step.start', index: 0, step: { type: 'model_output', content: [] } },
+    { event_type: 'step.delta', index: 0, delta: { type: 'text', text: 'second half.' } },
+    { event_type: 'step.stop', index: 0 },
+    { event_type: 'interaction.completed', interaction: { id: 'hop-2', status: 'completed', usage: hopUsage } },
+  ]);
+  const result = await new GeminiAdapter().createStreamCompletion(input());
+  const [choice] = result.completion.choices;
+  expect(choice.finish_reason).toBe('stop');
+  expect(choice.message.content).toBe('First half, second half.');
+  expect(result.completion.usage).toMatchObject({ prompt_tokens: 200, completion_tokens: 20, total_tokens: 220 });
+  expect(result.contextUsage).toMatchObject({ promptTokens: 100 });
+  expect(receipts).toHaveLength(2);
+  expect(receipts[1].body).toMatchObject({ continuation_token: 'resume-here' });
 });
 
 it('rejects an abruptly ended stream, even after a complete function-call step', async () => {
   respond = response => sendEvents(response, events().slice(0, -1));
-  await expect(new GeminiAdapter().createStreamCompletion(input())).rejects.toThrow('before completion');
+  await expect(new GeminiAdapter().createStreamCompletion(input())).rejects.toThrow('closed before the answer was finished');
   expect(receipts).toHaveLength(1);
 });
 

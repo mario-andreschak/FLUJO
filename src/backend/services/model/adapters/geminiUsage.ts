@@ -15,8 +15,11 @@ export function mapInteractionUsage(usage?: Interactions.Usage): OpenAI.Completi
   };
 }
 
+/** Continuation hops sum their billing; the input window uses the first hop's prompt. */
 export function interactionContextUsage(usage?: Interactions.Usage, contextWindow?: number) {
-  return contextUsageFromCompletion(mapInteractionUsage(usage), contextWindow, true);
+  const snapshot = mapInteractionUsage(usage);
+  if (snapshot && usage?.initial_input_tokens !== undefined) snapshot.prompt_tokens = usage.initial_input_tokens;
+  return contextUsageFromCompletion(snapshot, contextWindow, true);
 }
 
 /** Gemini's cached input is included in promptTokenCount; thoughts are separate from candidates. */

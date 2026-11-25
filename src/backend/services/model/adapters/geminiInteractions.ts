@@ -102,11 +102,29 @@ export async function interactionRequest(input: CompletionInput): Promise<Intera
   };
 }
 
+/**
+ * `incomplete` is a finished answer that hit a limit such as max_output_tokens;
+ * `requires_continuation` is one the SDK could not continue. Both keep the text
+ * written so far as a cut-off reply. Their tool calls may be partial, so they
+ * are never run or replayed.
+ */
+const CUT_OFF_STATUSES = new Set(['incomplete', 'requires_continuation']);
+
+function stoppedMessage(status: string | undefined): string {
+  if (status === 'failed') return 'Gemini could not finish this answer because the request failed on Google\'s side. Try again.';
+  if (status === 'cancelled') return 'Gemini cancelled this answer before it finished. Try again.';
+  return `Gemini stopped before finishing this answer (status "${status || 'missing'}"). Try again.`;
+}
+
+const STREAM_ENDED_MESSAGE = 'The connection to Gemini closed before the answer was finished. Try again.';
+
 export function interactionResult(model: CompletionInput['model'], response: Interactions.Interaction): CompletionResult {
-  if (!['completed', 'requires_action'].includes(response.status) || response.errors?.length) {
-    throw new Error(`Gemini interaction did not complete (${response.status || 'missing status'}).`);
+  const cutOff = CUT_OFF_STATUSES.has(response.status);
+  if (!cutOff && (!['completed', 'requires_action'].includes(response.status) || response.errors?.length)) {
+    throw new Error(stoppedMessage(response.status));
   }
-  const steps = (response.steps ?? []).filter(step => !['user_input', 'function_result'].includes(step.type));
+  const steps = (response.steps ?? []).filter(step => !['user_input', 'function_result'].includes(step.type)
+    && !(cutOff && step.type === 'function_call'));
   const calls: FlujoFunctionToolCall[] = [];
   const media: ModelMediaPart[] = [];
   let text = '';
@@ -116,7 +134,7 @@ export function interactionResult(model: CompletionInput['model'], response: Int
         || calls.some(call => call.id === step.id)) throw new Error('Gemini returned an invalid function call.');
       calls.push({ id: step.id, type: 'function', function: { name: step.name, arguments: JSON.stringify(step.arguments) } });
     } else if (step.type === 'model_output') {
-      if (step.error) throw new Error('Gemini could not generate this response.');
+      if (step.error && !cutOff) throw new Error('Gemini could not generate this response.');
       for (const content of step.content ?? []) {
         if (content.type === 'text') text += content.text ?? '';
         else if (['image', 'audio', 'video', 'document'].includes(content.type) && ('data' in content || 'uri' in content)) {
@@ -142,27 +160,61 @@ export function interactionResult(model: CompletionInput['model'], response: Int
   message.providerMetadata = providerMetadata;
   return {
     completion: { id: response.id || `gemini_${randomUUID()}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000),
-      model: model.name, choices: [{ index: 0, finish_reason: calls.length ? 'tool_calls' : 'stop', logprobs: null, message }],
+      model: model.name, choices: [{ index: 0, finish_reason: cutOff ? 'length' : calls.length ? 'tool_calls' : 'stop', logprobs: null, message }],
       usage: mapInteractionUsage(response.usage) },
     media, providerMetadata, contextUsage: interactionContextUsage(response.usage, model.contextWindow),
   };
 }
 
-/** Assemble typed SSE steps before exposing any executable calls to the flow. */
+const HOP_USAGE_TOTALS = ['total_input_tokens', 'total_output_tokens', 'total_thought_tokens',
+  'total_cached_tokens', 'total_tool_use_tokens', 'total_tokens'] as const;
+
+/** Each continuation hop bills on its own; the context window uses the first hop's input. */
+function mergeHopUsage(hops: Interactions.Usage[]): Interactions.Usage | undefined {
+  if (hops.length <= 1) return hops[0];
+  const merged: Interactions.Usage = { initial_input_tokens: hops[0].initial_input_tokens ?? hops[0].total_input_tokens };
+  for (const key of HOP_USAGE_TOTALS) {
+    const values = hops.map(hop => hop[key]).filter((value): value is number => typeof value === 'number');
+    if (values.length) merged[key] = values.reduce((sum, value) => sum + value, 0);
+  }
+  return merged;
+}
+
+/**
+ * Assemble typed SSE steps before exposing any executable calls to the flow.
+ * The SDK continues long answers across hops in one stream: every hop starts
+ * with its own `interaction.created` and numbers its steps from its own start.
+ */
 export async function readInteractionStream(stream: AsyncIterable<Interactions.InteractionSSEEvent>, input: CompletionInput): Promise<CompletionResult> {
   const liveMessageId = `stream_${randomUUID()}`;
   const steps = new Map<number, Interactions.Step>();
   const argumentsByIndex = new Map<number, string>();
   const callIndexes = new Map<number, number>();
   const open = new Set<number>();
+  const brokenCalls = new Set<number>();
+  const hopUsages: Interactions.Usage[] = [];
+  let hopBase = 0;
+  let nextStepIndex = 0;
+  let hops = 1;
   let interaction: Interactions.Interaction | undefined;
   let usage: Interactions.Usage | undefined;
   let terminal = false;
   const emitText = (text: string) => { if (text) input.onModelDelta?.({ messageId: liveMessageId, contentDelta: text }); };
+  const startHop = () => {
+    // Text written before the hop boundary stays; a call still open there is partial.
+    for (const index of open) if (steps.get(index)?.type === 'function_call') brokenCalls.add(index);
+    open.clear();
+    if (usage) hopUsages.push(usage);
+    usage = undefined;
+    hopBase = nextStepIndex;
+    hops++;
+    terminal = false;
+  };
   for await (const event of stream) {
     input.signal?.throwIfAborted();
-    if (event.event_type === 'error') throw new Error('Gemini interaction stream failed.');
+    if (event.event_type === 'error') throw new Error('Gemini reported an error while writing this answer. Try again.');
     if (event.event_type === 'interaction.created' || event.event_type === 'interaction.completed') {
+      if (event.event_type === 'interaction.created' && interaction) startHop();
       interaction = event.interaction;
       usage = interaction.usage ?? usage;
       if (event.event_type === 'interaction.completed') terminal = true;
@@ -170,25 +222,28 @@ export async function readInteractionStream(stream: AsyncIterable<Interactions.I
       usage = event.usage ?? usage;
       if (interaction) interaction.status = event.status;
     } else if (event.event_type === 'step.start') {
-      if (steps.has(event.index)) throw new Error('Gemini repeated a streamed step.');
+      const stepIndex = hopBase + event.index;
+      if (steps.has(stepIndex)) throw new Error('Gemini repeated a streamed step.');
       const step = structuredClone(event.step);
-      steps.set(event.index, step);
-      open.add(event.index);
+      steps.set(stepIndex, step);
+      nextStepIndex = Math.max(nextStepIndex, stepIndex + 1);
+      open.add(stepIndex);
       if (step.type === 'model_output') for (const part of step.content ?? []) { if (part.type === 'text') emitText(part.text ?? ''); }
       if (step.type === 'function_call') {
         const index = callIndexes.size;
-        callIndexes.set(event.index, index);
+        callIndexes.set(stepIndex, index);
         input.onModelDelta?.({ messageId: liveMessageId, toolCallDelta: { index, id: step.id, nameDelta: step.name } });
       }
     } else if (event.event_type === 'step.delta') {
       usage = event.metadata?.total_usage ?? usage;
-      const step = steps.get(event.index);
+      const stepIndex = hopBase + event.index;
+      const step = steps.get(stepIndex);
       const delta = event.delta;
-      if (!step || !open.has(event.index)) throw new Error('Gemini streamed a delta outside its step.');
+      if (!step || !open.has(stepIndex)) throw new Error('Gemini streamed a delta outside its step.');
       if (delta.type === 'arguments_delta' && step.type === 'function_call') {
-        argumentsByIndex.set(event.index, (argumentsByIndex.get(event.index) ?? '') + (delta.arguments ?? ''));
+        argumentsByIndex.set(stepIndex, (argumentsByIndex.get(stepIndex) ?? '') + (delta.arguments ?? ''));
         input.onModelDelta?.({ messageId: liveMessageId,
-          toolCallDelta: { index: callIndexes.get(event.index)!, argumentsDelta: delta.arguments ?? '' } });
+          toolCallDelta: { index: callIndexes.get(stepIndex)!, argumentsDelta: delta.arguments ?? '' } });
       } else if (delta.type === 'thought_signature' && step.type === 'thought') {
         step.signature = (step.signature ?? '') + (delta.signature ?? '');
       } else if (delta.type === 'thought_summary' && step.type === 'thought') {
@@ -221,22 +276,30 @@ export async function readInteractionStream(stream: AsyncIterable<Interactions.I
         throw new Error(`Gemini returned an unsupported streamed delta: ${delta.type}.`);
       }
     } else if (event.event_type === 'step.stop') {
-      if (!open.delete(event.index)) throw new Error('Gemini stopped an unknown streamed step.');
+      const stepIndex = hopBase + event.index;
+      if (!open.delete(stepIndex)) throw new Error('Gemini stopped an unknown streamed step.');
       usage = event.usage ?? usage;
-      const step = steps.get(event.index)!;
+      const step = steps.get(stepIndex)!;
       if (step.type === 'function_call') {
-        const args = argumentsByIndex.get(event.index);
-        if (args !== undefined) step.arguments = JSON.parse(args);
-        else input.onModelDelta?.({ messageId: liveMessageId, toolCallDelta: {
-          index: callIndexes.get(event.index)!, argumentsDelta: JSON.stringify(step.arguments ?? {}),
+        const args = argumentsByIndex.get(stepIndex);
+        if (args !== undefined) {
+          try { step.arguments = JSON.parse(args); } catch { brokenCalls.add(stepIndex); }
+        } else input.onModelDelta?.({ messageId: liveMessageId, toolCallDelta: {
+          index: callIndexes.get(stepIndex)!, argumentsDelta: JSON.stringify(step.arguments ?? {}),
         } });
       }
     }
   }
   input.signal?.throwIfAborted();
-  if (!terminal || !interaction || open.size) throw new Error('Gemini interaction stream ended before completion.');
-  const result = interactionResult(input.model, { ...interaction, usage,
-    steps: interaction.steps?.length ? interaction.steps : [...steps.entries()].sort(([a], [b]) => a - b).map(([, step]) => step),
+  if (!terminal || !interaction) throw new Error(STREAM_ENDED_MESSAGE);
+  if (!CUT_OFF_STATUSES.has(interaction.status)) {
+    if (open.size) throw new Error(STREAM_ENDED_MESSAGE);
+    if (brokenCalls.size) throw new Error('Gemini returned a tool call that could not be read. Try again.');
+  }
+  const result = interactionResult(input.model, { ...interaction,
+    usage: mergeHopUsage([...hopUsages, ...(usage ? [usage] : [])]),
+    steps: interaction.steps?.length && hops === 1 ? interaction.steps
+      : [...steps.entries()].sort(([a], [b]) => a - b).map(([, step]) => step),
   });
   for (const media of result.media ?? []) input.onModelDelta?.({ messageId: liveMessageId, mediaPart: media });
   return { ...result, liveMessageId };
