@@ -4,16 +4,17 @@
  * A workspace is the configuration (models, MCP servers, agents, chats); a
  * project is a plain folder anywhere on disk — usually a Git repository — that
  * those agents work on. Projects are the workspace's `roots` (so every MCP
- * server keeps receiving them), plus two fields stored beside them in
- * `.workspace.json`:
+ * server keeps receiving them), plus `activeProject` stored beside them in
+ * `.workspace.json`: the project new chats start in (the sidebar selection).
  *
- *  - `activeProject` — the project new chats start in (the sidebar selection);
- *  - `chatProjects`  — per-chat bindings `{ project, path }`, where `path` is the
- *                      project's main checkout or one of its Git worktrees.
- *
- * A chat without a binding is pinned to the active project the first time an
- * agent needs its folder, so changing the sidebar selection later never moves
- * an existing chat to another folder.
+ * Each chat keeps its own binding `{ project, path }` in a small file beside
+ * it (see chatProjectBindings), where `path` is the project's main checkout or
+ * one of its Git worktrees. A chat without a binding is pinned to the active
+ * project the first time an agent needs its folder, so changing the sidebar
+ * selection later never moves an existing chat to another folder. A binding
+ * to a removed project is kept on purpose: it marks the chat as bound, so it
+ * is never silently re-pinned elsewhere (and it revives if the project is
+ * re-added).
  */
 import fs from 'fs/promises';
 import path from 'path';
@@ -31,61 +32,24 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 import { shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServers';
 import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 import { worktreeContainerFor } from './projectGit';
+import {
+  isStorableChatId,
+  readChatProjectRecord,
+  writeChatProjectRecord,
+  writeChatProjectRecordIfUnset,
+  type ChatProjectBinding,
+  type StoredChatProject,
+} from './chatProjectBindings';
 
-/** Bindings kept per workspace; the least recently used are dropped first. */
-const MAX_CHAT_BINDINGS = 2000;
-/** Agent use refreshes a binding's recency at most this often (avoids a write per tool call). */
-const BINDING_TOUCH_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
+export type { ChatProjectBinding } from './chatProjectBindings';
 
-export interface ChatProjectBinding {
-  /** The project (one of the workspace roots) the chat belongs to. */
-  project: string;
-  /** The folder the chat's agents work in: the project or one of its worktrees. */
-  path: string;
-}
-
-interface StoredBinding extends ChatProjectBinding {
-  at: number;
-}
-
+/** Ids of stored chats; only these can keep a folder of their own. */
 export function isValidConversationId(value: unknown): value is string {
-  return typeof value === 'string' && CONVERSATION_ID_PATTERN.test(value);
+  return isStorableChatId(value);
 }
 
 function rootsOf(metadata: WorkspaceMetadata): string[] {
   return assertWorkspaceRoots(metadata.roots ?? []);
-}
-
-/**
- * The stored bindings as a Map, so a conversation id is never looked up or
- * written as a plain-object property (ids like `constructor` would otherwise
- * read Object.prototype members).
- */
-function bindingsOf(metadata: WorkspaceMetadata): Map<string, StoredBinding> {
-  const bindings = new Map<string, StoredBinding>();
-  const raw = metadata.chatProjects;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bindings;
-  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
-    const entry = value as Partial<StoredBinding> | null;
-    if (!isValidConversationId(id) || !entry || typeof entry.project !== 'string' || typeof entry.path !== 'string') continue;
-    if (!path.isAbsolute(entry.project) || !path.isAbsolute(entry.path)) continue;
-    bindings.set(id, { project: entry.project, path: entry.path, at: typeof entry.at === 'number' ? entry.at : 0 });
-  }
-  return bindings;
-}
-
-/**
- * The bindings to store, capped least recently used first. Bindings to a
- * removed project are kept on purpose: they mark the chat as bound, so it is
- * never silently re-pinned to another project (and they revive if the project
- * is re-added).
- */
-function storedBindings(bindings: Map<string, StoredBinding>): Record<string, StoredBinding> {
-  const kept = [...bindings]
-    .sort(([, a], [, b]) => b.at - a.at)
-    .slice(0, MAX_CHAT_BINDINGS);
-  return Object.fromEntries(kept);
 }
 
 async function isDirectory(candidate: string): Promise<boolean> {
@@ -172,28 +136,16 @@ export async function getChatProject(conversationId: string): Promise<ChatProjec
  */
 export async function readChatBinding(conversationId: string): Promise<{
   /** Whether the chat was ever bound, even to a project that is gone now. */
-  stored: StoredBinding | undefined;
+  stored: StoredChatProject | undefined;
   binding: ChatProjectBinding | undefined;
 }> {
   if (!isValidConversationId(conversationId)) return { stored: undefined, binding: undefined };
   const metadata = await readWorkspaceMetadata();
-  const roots = rootsOf(metadata);
-  const stored = bindingsOf(metadata).get(conversationId);
-  if (!stored) return { stored, binding: undefined };
-  const project = roots.find(root => sameFilesystemPath(root, stored.project));
+  const stored = await readChatProjectRecord(conversationId, metadata);
+  if (!stored || stored === 'unreadable') return { stored, binding: undefined };
+  const project = rootsOf(metadata).find(root => sameFilesystemPath(root, stored.project));
   if (!project) return { stored, binding: undefined };
   return { stored, binding: { project, path: await isDirectory(stored.path) ? stored.path : project } };
-}
-
-/** Mark a binding as used so eviction drops the least recently used chats. */
-async function touchChatBinding(conversationId: string): Promise<void> {
-  await updateWorkspaceMetadata(getCurrentWorkspace(), current => {
-    const bindings = bindingsOf(current);
-    const binding = bindings.get(conversationId);
-    if (!binding) return current;
-    bindings.set(conversationId, { ...binding, at: Date.now() });
-    return { ...current, chatProjects: storedBindings(bindings) };
-  });
 }
 
 /**
@@ -204,16 +156,10 @@ export async function bindChatProject(conversationId: string, project: unknown, 
   if (!isValidConversationId(conversationId)) {
     throw new WorkspaceMutationError('WORKSPACE_INVALID_ROOTS', 'Invalid conversation id.');
   }
-  let bound: ChatProjectBinding | undefined;
-  await updateWorkspaceMetadata(getCurrentWorkspace(), current => {
-    const roots = rootsOf(current);
-    const match = requireProject(roots, project);
-    bound = { project: match, path: folder ? path.resolve(folder) : match };
-    const bindings = bindingsOf(current);
-    bindings.set(conversationId, { ...bound, at: Date.now() });
-    return { ...current, chatProjects: storedBindings(bindings) };
-  });
-  return bound!;
+  const match = requireProject(rootsOf(await readWorkspaceMetadata()), project);
+  const bound = { project: match, path: folder ? path.resolve(folder) : match };
+  await writeChatProjectRecord(conversationId, bound);
+  return bound;
 }
 
 /**
@@ -233,7 +179,7 @@ function ownerConversationOf(conversationId: string): string {
  */
 export async function readEffectiveChatBinding(conversationId: string): Promise<{
   owner: string;
-  stored: StoredBinding | undefined;
+  stored: StoredChatProject | undefined;
   binding: ChatProjectBinding | undefined;
 }> {
   const own = await readChatBinding(conversationId);
@@ -243,16 +189,14 @@ export async function readEffectiveChatBinding(conversationId: string): Promise<
 }
 
 /**
- * Pin an unbound chat to `project`. The check runs inside the serialized write,
- * so a binding the user chose meanwhile is never overwritten by a first use.
+ * Pin an unbound chat to `project`. The check runs inside the chat's write
+ * queue, so a binding the user chose meanwhile is never overwritten by a first
+ * use. A project removed meanwhile leaves the chat unbound.
  */
 async function pinChatProject(conversationId: string, project: string): Promise<void> {
-  await updateWorkspaceMetadata(getCurrentWorkspace(), current => {
-    const bindings = bindingsOf(current);
-    if (bindings.has(conversationId)) return current;
-    const match = requireProject(rootsOf(current), project);
-    bindings.set(conversationId, { project: match, path: match, at: Date.now() });
-    return { ...current, chatProjects: storedBindings(bindings) };
+  await writeChatProjectRecordIfUnset(conversationId, metadata => {
+    const match = rootsOf(metadata).find(root => sameFilesystemPath(root, project));
+    return match ? { project: match, path: match } : undefined;
   });
 }
 
@@ -266,12 +210,7 @@ async function pinChatProject(conversationId: string, project: string): Promise<
  */
 export async function resolveConversationProjectDir(conversationId: string): Promise<string | undefined> {
   const { owner, stored, binding } = await readEffectiveChatBinding(conversationId);
-  if (binding) {
-    if (Date.now() - stored!.at > BINDING_TOUCH_INTERVAL_MS) {
-      await touchChatBinding(owner).catch(() => undefined);
-    }
-    return binding.path;
-  }
+  if (binding) return binding.path;
   if (stored) return undefined;
   const { activeProject } = await loadProjectState();
   if (!activeProject || !isValidConversationId(owner)) return activeProject;

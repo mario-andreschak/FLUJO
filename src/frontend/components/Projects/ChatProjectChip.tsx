@@ -33,6 +33,7 @@ import {
   FolderCopyOutlined,
   FolderOutlined,
   SwapHorizRounded,
+  WarningAmberRounded,
 } from '@mui/icons-material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { folderName, useProjects, type ProjectAction, type ProjectGitInfo } from '@/frontend/hooks/useProjects';
@@ -82,6 +83,36 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
     }
   };
 
+  const folderPicker = (
+    <FolderPickerDialog
+      open={pickerOpen}
+      title={t('projects.chooseFolder')}
+      onClose={() => setPickerOpen(false)}
+      onSelect={folder => void (async () => {
+        setError(null);
+        try {
+          // The added folder becomes the active project; move this chat there too.
+          const next = await act('add', { path: folder });
+          if (conversationId && next.activeProject) await act('bindChat', { project: next.activeProject });
+        } catch (failure) {
+          setError(failure instanceof Error ? failure.message : String(failure));
+        }
+      })()}
+    />
+  );
+
+  // The menu is closed during the folder-picker flow, so its failures show here.
+  const pickerError = (
+    <Snackbar
+      open={Boolean(error) && !anchorEl}
+      autoHideDuration={8000}
+      onClose={(_event, reason) => { if (reason !== 'clickaway') setError(null); }}
+      anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+    >
+      <Alert severity="error" onClose={() => setError(null)} sx={{ wordBreak: 'break-word' }}>{error}</Alert>
+    </Snackbar>
+  );
+
   if (!state) return null;
 
   if (!chat) {
@@ -106,7 +137,7 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
         <Menu
           anchorEl={anchorEl}
           open={Boolean(anchorEl)}
-          onClose={() => setAnchorEl(null)}
+          onClose={() => { setAnchorEl(null); setError(null); }}
           anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
           transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
           slotProps={{ paper: { sx: { width: 320, maxWidth: 'calc(100vw - 24px)' } } }}
@@ -129,33 +160,18 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
             <ListItemText primary={t('projects.add')} />
           </MenuItem>
         </Menu>
-        <FolderPickerDialog
-          open={pickerOpen}
-          title={t('projects.chooseFolder')}
-          onClose={() => setPickerOpen(false)}
-          onSelect={folder => void (async () => {
-            setError(null);
-            try {
-              // The added folder becomes the active project; move this chat there too.
-              const next = await act('add', { path: folder });
-              if (conversationId && next.activeProject) await act('bindChat', { project: next.activeProject });
-            } catch (failure) {
-              setError(failure instanceof Error ? failure.message : String(failure));
-            }
-          })()}
-        />
-        {/* The menu is closed during the folder-picker flow, so its failures show here. */}
-        <Snackbar
-          open={Boolean(error) && !anchorEl}
-          autoHideDuration={8000}
-          onClose={(_event, reason) => { if (reason !== 'clickaway') setError(null); }}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        >
-          <Alert severity="error" onClose={() => setError(null)} sx={{ wordBreak: 'break-word' }}>{error}</Alert>
-        </Snackbar>
+        {folderPicker}
+        {pickerError}
       </>
     );
   }
+
+  // Agents cannot use this folder: say so instead of showing it as if they did.
+  const warning = chat.missing
+    ? t('projects.chip.missing', { path: chat.path })
+    : chat.agentsCanWork === false
+      ? t('projects.chip.outsideRoots', { path: chat.path })
+      : null;
 
   const branchLabel = git ? (git.branch ?? git.head ?? '') : null;
   const label = (
@@ -217,13 +233,13 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
 
   return (
     <>
-      <Tooltip title={t('projects.chip.tooltip', { path: chat.path })}>
+      <Tooltip title={warning ?? t('projects.chip.tooltip', { path: chat.path })}>
         <Chip
-          icon={inWorktree ? <FolderCopyOutlined /> : <FolderOutlined />}
+          icon={warning ? <WarningAmberRounded /> : inWorktree ? <FolderCopyOutlined /> : <FolderOutlined />}
           label={label}
           size={large ? 'medium' : 'small'}
           variant="outlined"
-          color={inWorktree ? 'secondary' : 'default'}
+          color={warning ? 'warning' : inWorktree ? 'secondary' : 'default'}
           onClick={event => { setError(null); setAnchorEl(event.currentTarget); }}
           aria-haspopup="menu"
           aria-expanded={anchorEl ? 'true' : undefined}
@@ -235,7 +251,7 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
       <Menu
         anchorEl={anchorEl}
         open={Boolean(anchorEl)}
-        onClose={() => setAnchorEl(null)}
+        onClose={() => { setAnchorEl(null); setError(null); }}
         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         slotProps={{ paper: { sx: { width: 360, maxWidth: 'calc(100vw - 24px)', maxHeight: '70vh' } } }}
@@ -255,6 +271,7 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
               ].filter(Boolean).join(' · ')}
             </Typography>
           )}
+          {warning && <Alert severity="warning" sx={{ mt: 1, wordBreak: 'break-word' }}>{warning}</Alert>}
           {error && <Alert severity="error" sx={{ mt: 1, wordBreak: 'break-word' }}>{error}</Alert>}
         </Box>
 
@@ -309,6 +326,12 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
         ]}
 
         <Divider />
+        {warning && (
+          <MenuItem dense onClick={() => { setAnchorEl(null); setPickerOpen(true); }}>
+            <ListItemIcon><AddRounded fontSize="small" /></ListItemIcon>
+            <ListItemText primary={t('projects.add')} />
+          </MenuItem>
+        )}
         <MenuItem dense onClick={() => { void navigator.clipboard?.writeText(chat.path); setAnchorEl(null); }}>
           <ListItemIcon><ContentCopyRounded fontSize="small" /></ListItemIcon>
           <ListItemText primary={t('projects.menu.copyPath')} />
@@ -328,6 +351,9 @@ export function ChatProjectChip({ conversationId, large = false }: ChatProjectCh
           setAnchorEl(null);
         }}
       />
+
+      {folderPicker}
+      {pickerError}
 
       <Dialog open={Boolean(removeTarget)} onClose={() => setRemoveTarget(null)} fullWidth maxWidth="xs">
         <DialogTitle>{t('projects.dialog.removeWorktreeTitle')}</DialogTitle>

@@ -30,6 +30,10 @@ export interface ChatProjectInfo {
   /** False while the chat still follows the workspace's active project. */
   pinned: boolean;
   git: ProjectGitInfo | null;
+  /** The folder cannot be found: deleted, renamed or on a drive that is not connected. */
+  missing?: boolean;
+  /** False when folder restrictions keep the agents out of this folder. */
+  agentsCanWork?: boolean;
 }
 
 export interface ProjectsState {

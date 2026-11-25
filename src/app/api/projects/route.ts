@@ -25,6 +25,7 @@ import {
   removeProject,
   setActiveProject,
 } from '@/backend/services/projects/projectStore';
+import { assertAgentsCanWorkIn, chatFolderUse, type ChatFolderUse } from '@/backend/services/projects/projectAccess';
 
 const log = createLogger('app/api/projects/route');
 
@@ -44,7 +45,7 @@ interface ProjectEntry {
   git: ProjectGitStatus | null;
 }
 
-interface ChatProjectEntry {
+interface ChatProjectEntry extends ChatFolderUse {
   project: string;
   path: string;
   /** False while the chat still follows the workspace's active project. */
@@ -79,14 +80,13 @@ async function payload(conversationId?: string) {
   const chatPath = binding?.path ?? (stored ? undefined : activeProject);
   if (chatProject && chatPath) {
     const sameAsProject = sameFilesystemPath(chatProject, chatPath);
-    chat = {
-      project: chatProject,
-      path: chatPath,
-      pinned: Boolean(binding),
-      git: sameAsProject
+    const [git, use] = await Promise.all([
+      sameAsProject
         ? entries.find(entry => entry.path === chatProject)?.git ?? null
-        : await gitOrNull(chatPath),
-    };
+        : gitOrNull(chatPath),
+      chatFolderUse(chatPath),
+    ]);
+    chat = { project: chatProject, path: chatPath, pinned: Boolean(binding), git, ...use };
   }
   return { projects: entries, activeProject: activeProject ?? null, chat };
 }
@@ -176,6 +176,7 @@ async function POST_handler(request: NextRequest) {
       case 'bindChat': {
         if (!conversationId) throw new WorkspaceMutationError('WORKSPACE_INVALID_ROOTS', 'A conversation is required.');
         const project = folder ? await projectOwning(folder) : stringField(body, 'project');
+        if (folder) await assertAgentsCanWorkIn(path.resolve(folder));
         await bindChatProject(conversationId, project, folder);
         break;
       }

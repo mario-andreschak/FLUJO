@@ -27,6 +27,7 @@ import { createHash } from 'node:crypto';
 import readline from 'node:readline';
 import type { Tool, CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import {
+  assertProjectDirAvailable,
   createLogger,
   loadEffectiveRoots,
   workingBaseDir,
@@ -248,6 +249,7 @@ async function resolvePath(input: unknown, roots: string[]): Promise<string> {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new Error('Provide "path".');
   const normalized = _normalizeSlashDrivePathForTests(raw);
+  if (!path.isAbsolute(normalized)) await assertProjectDirAvailable();
   // The chat's project folder when FLUJO sent one inside the roots, else the data dir.
   const base = workingBaseDir(roots);
   const resolved = path.isAbsolute(normalized)

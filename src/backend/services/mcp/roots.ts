@@ -51,7 +51,8 @@ export function unrestrictedHostRoots(): Root[] {
   return [{ uri: pathToFileURL(fallback).href, name: fallback }];
 }
 
-async function loadMcpRootsRestriction(): Promise<boolean> {
+/** Whether the user turned on "Restrict MCP filesystem access to configured roots". */
+export async function loadMcpRootsRestriction(): Promise<boolean> {
   try {
     const { loadItem } = await import('@/utils/storage/backend');
     const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);

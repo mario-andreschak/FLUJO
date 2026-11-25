@@ -16,6 +16,7 @@ jest.mock('@/backend/execution/flow/steeringInbox', () => ({ enqueueSteeringMess
 jest.mock('@/backend/execution/flow/conversationLog', () => ({ deleteConversationLog: jest.fn(), repairDanglingToolCalls: jest.fn(), appendRawForState: jest.fn() }));
 jest.mock('@/backend/services/runResources', () => ({ deleteRunResources: jest.fn() }));
 jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({ deleteConversationSummary: jest.fn() }));
+jest.mock('@/backend/services/projects/chatProjectBindings', () => ({ deleteChatProject: jest.fn() }));
 jest.mock('@/backend/services/flow', () => ({ flowService: {} }));
 jest.mock('@/backend/services/enduringAgents', () => ({}));
 jest.mock('@/frontend/components/Chat', () => ({}));
@@ -32,6 +33,7 @@ import { enqueueSteeringMessage } from '@/backend/execution/flow/steeringInbox';
 import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
 import { deleteRunResources } from '@/backend/services/runResources';
 import { deleteConversationSummary } from '@/backend/execution/flow/conversationSummaryStore';
+import { deleteChatProject } from '@/backend/services/projects/chatProjectBindings';
 import { isConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 
 const ids = Array.from({ length: 11 }, (_, i) => `pressure-delete-${i}`);
@@ -83,6 +85,7 @@ it('bulk deletion drains more than four cold records with at most four concurren
     expect(deleteConversationLog).toHaveBeenCalledWith(id);
     expect(deleteRunResources).toHaveBeenCalledWith(id);
     expect(deleteConversationSummary).toHaveBeenCalledWith(id);
+    expect(deleteChatProject).toHaveBeenCalledWith(id);
     expect(isConversationDeleted(id)).toBe(true);
   }
 });
@@ -104,6 +107,7 @@ it('bulk pressure preserves successful deletions and reports only pressure ids a
     expect(isConversationDeleted(id)).toBe(false);
     expect(deleteCollectionItem).not.toHaveBeenCalledWith('conversations', id);
     expect(deleteConversationLog).not.toHaveBeenCalledWith(id);
+    expect(deleteChatProject).not.toHaveBeenCalledWith(id);
   }
   expect(deleteCollectionItem).toHaveBeenCalledTimes(9);
 });

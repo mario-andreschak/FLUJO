@@ -38,6 +38,7 @@ import {
   persistConversationSummaryStrict,
 } from '@/backend/execution/flow/conversationSummaryStore';
 import { flowService } from '@/backend/services/flow';
+import { deleteChatProject } from '@/backend/services/projects/chatProjectBindings';
 import {
   getPersona,
   getPersonaDeletionTombstone,
@@ -953,6 +954,7 @@ async function DELETE_handler(req: NextRequest) {
         await deleteConversationLog(id);
         await deleteRunResources(id);
         await deleteConversationSummary(id);
+        await deleteChatProject(id);
         FlowExecutor.clearFlowCache(quickChatFlowId(id));
         deleted++;
       });
