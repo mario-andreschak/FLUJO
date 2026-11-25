@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 
 const loadItemMock = jest.fn();
 
+jest.mock('@/utils/encryption/lockGate', () => ({ assertUnlocked: async () => null }));
 jest.mock('@/app/api/_workspace', () => ({
   withWorkspaceRoute: <T,>(handler: T): T => handler,
 }));
