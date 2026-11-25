@@ -133,6 +133,24 @@ describe('claudeSessionStore (#154)', () => {
       expect(sessionCount()).toBe(0);
     });
 
+    it('says why a stored session cannot be continued (#1096)', () => {
+      const reasonFor = (...args: [string, Array<{ role: string; content: string }>, number]) => {
+        let reason: string | undefined;
+        findReusableSession(key, args[0], args[1], args[2], value => { reason = value; });
+        return reason;
+      };
+      expect(reasonFor(prefixHash, history(4, 1), 1)).toBe('no-session');
+      recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
+      expect(reasonFor(prefixHash, history(4, 1), 1)).toBeUndefined();
+      expect(reasonFor(computePrefixHash('sys v2', ['t']), history(4, 1), 1)).toBe('instructions-tools-or-settings-changed');
+      expect(reasonFor(prefixHash, history(4, 2), 2)).toBe('leading-system-messages-changed');
+      expect(reasonFor(prefixHash, history(2, 1), 1)).toBe('history-shrank');
+      expect(reasonFor(prefixHash, history(4, 1).map((message, index) => index === 1 ? { ...message, content: 'edited' } : message), 1))
+        .toBe('history-changed');
+      recordSession(key, { sessionId: 'stale', prefixHash, seenMessageCount: 3 } as never);
+      expect(reasonFor(prefixHash, history(4, 1), 1)).toBe('outdated-record');
+    });
+
     it('keeps sessions for different (conversation,node) keys independent', () => {
       const keyA = sessionKey('conv', 'node-a');
       const keyB = sessionKey('conv', 'node-b');
