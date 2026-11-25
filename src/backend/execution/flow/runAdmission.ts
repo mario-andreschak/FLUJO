@@ -70,7 +70,7 @@ interface AdmissionRuntime {
   waiting?: CapacityWaitQueue;
 }
 const globalRuntime = globalThis as typeof globalThis & { __flujoFlowRunAdmission?: AdmissionRuntime };
-const runtime = globalRuntime.__flujoFlowRunAdmission ??= {
+const runtime: AdmissionRuntime = globalRuntime.__flujoFlowRunAdmission ??= {
   active: 0, bytes: 0, workspaces: new Map(), reservations: new WeakMap(), scope: new AsyncLocalStorage(),
   rejectedBusy: 0, rejectedMemory: 0, rejectedInput: 0,
 };
