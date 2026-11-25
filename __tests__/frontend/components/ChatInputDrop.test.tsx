@@ -61,6 +61,8 @@ describe('ChatInput file drop', () => {
 
     expect(await screen.findByText('notes.txt')).toBeInTheDocument();
     expect(await screen.findByText('diagram.png')).toBeInTheDocument();
+    // Chips appear at once; sending waits until both files have been read.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     await waitFor(() => expect(onSendMessage).toHaveBeenCalledTimes(1));

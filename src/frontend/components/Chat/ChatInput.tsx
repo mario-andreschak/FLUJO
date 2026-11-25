@@ -42,6 +42,9 @@ import BugReportIcon from '@mui/icons-material/BugReport';
 import FlowNodePicker from './FlowNodePicker';
 import { v4 as uuidv4 } from 'uuid';
 import type { Attachment } from './chatApiContent';
+import { filesToAttachments, pendingAttachment, resolveIntakeLimits } from './attachmentIntake';
+import { attachmentStatusText } from './attachmentStatus';
+import { isNameOnlyNote } from '@/shared/chatAttachments/limits';
 import GlobalReferenceEditor, { GlobalReferenceEditorRef } from '@/frontend/components/shared/GlobalReferenceEditor';
 import { mcpService } from '@/frontend/services/mcp';
 import {
@@ -122,7 +125,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onCancelEdit,
   projectControl,
 }) => {
-  const { t } = useI18n();
+  const { t, tp } = useI18n();
   const theme = useTheme();
   const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const { settings, globalEnvVars } = useStorage();
@@ -135,6 +138,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   );
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const attachmentsPending = attachments.some(attachment => attachment.pending);
   const composerRef = useRef<HTMLDivElement>(null);
   const [preferredEditorHeight, setPreferredEditorHeight] = useState<number | null>(null);
   const [editorMetrics, setEditorMetrics] = useState({ height: MIN_EDITOR_HEIGHT, maxHeight: 240 });
@@ -408,7 +412,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const handleSend = () => {
     // The textbox stays editable while `disabled` (so the user can type ahead while a
     // conversation loads or a run is in flight), so sending is gated here instead.
-    if (disabled) return;
+    if (disabled || attachmentsPending) return;
     if (message.trim() || attachments.length > 0) {
       log.debug('Sending message', { messageLength: message.length, attachmentsCount: attachments.length });
       onSendMessage(message, attachments);
@@ -435,42 +439,40 @@ const ChatInput: React.FC<ChatInputProps> = ({
     }
   };
 
-  // Handle pasting images (e.g. Ctrl+V of a screenshot) into the input. Each
-  // pasted image is read as a data URL and added as an image attachment; when
-  // images are found we preventDefault so the data URL text isn't also dumped
-  // into the textbox. Non-image pastes fall through to the default behavior.
+  // Every way of adding files (drop, paste, the attach button) ends here, so
+  // they all accept the same formats (#1224). Each file shows a chip at once;
+  // the chip fills in when the file has been read or converted.
+  const addFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    log.debug('Adding attachment(s)', { count: files.length });
+    const pendings = files.map(pendingAttachment);
+    setAttachments(prev => [...prev, ...pendings]);
+    const limits = await resolveIntakeLimits(settings.chatAttachments);
+    await filesToAttachments(files, limits, (pendingId, attachment) => {
+      if (!mountedRef.current) return;
+      setAttachments(prev => prev.map(item => (item.id === pendingId ? attachment : item)));
+    }, undefined, pendings);
+  };
+
+  // Pasted files (a screenshot, files copied in the file manager) become
+  // attachments, and the paste is stopped so no file text lands in the
+  // textbox. A paste without files is ordinary text.
   const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
-    const imageFiles: File[] = [];
+    const files: File[] = [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
+      if (item.kind === 'file') {
         const file = item.getAsFile();
-        if (file) imageFiles.push(file);
+        if (file) files.push(file);
       }
     }
-    if (imageFiles.length === 0) return; // let normal text paste proceed
+    if (files.length === 0) return;
     e.preventDefault();
-    log.debug('Pasting image attachment(s)', { count: imageFiles.length });
-    imageFiles.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const dataUrl = ev.target?.result;
-        if (typeof dataUrl !== 'string') return;
-        const ext = (file.type.split('/')[1] || 'png').split('+')[0];
-        setAttachments(prev => [...prev, {
-          id: uuidv4(),
-          type: 'image',
-          content: dataUrl,
-          originalName: file.name && !/^image\.\w+$/i.test(file.name) ? file.name : `Pasted image.${ext}`,
-        }]);
-      };
-      reader.onerror = () => log.error('Failed to read pasted image');
-      reader.readAsDataURL(file);
-    });
+    void addFiles(files);
   };
-  
+
   // Handle file selection
   const handleFileSelect = () => {
     log.debug('File selection triggered');
@@ -515,89 +517,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
     setIsDraggingFiles(false);
     if (disabled || isEditing) return;
 
-    const files = Array.from(e.dataTransfer.files ?? []);
-    if (files.length === 0) return;
-    log.debug('Adding dropped attachment(s)', { count: files.length });
+    void addFiles(Array.from(e.dataTransfer.files ?? []));
+  };
 
-    const results = await Promise.allSettled(files.map(fileToAttachment));
-    const nextAttachments = results.flatMap((result, index) => {
-      if (result.status === 'fulfilled') return [result.value];
-      log.error(`Failed to read dropped file: ${files[index]?.name ?? 'unknown'}`, result.reason);
-      return [];
-    });
-    if (nextAttachments.length > 0) {
-      setAttachments(prev => [...prev, ...nextAttachments]);
-    }
-  };
-  
-  // Process selected file
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    
-    const file = files[0];
-    log.debug('File selected', { fileName: file.name, fileSize: file.size, fileType: file.type });
-    try {
-      const mimeType = file.type || 'application/octet-stream';
-      const isText =
-        mimeType.startsWith('text/') ||
-        /\.(txt|md|json|csv|html?|xml|js|ts|jsx|tsx|css|scss)$/i.test(file.name);
-      if (!isText) {
-        const dataUrl = await readFileAsDataUrl(file);
-        const type: Attachment['type'] =
-          mimeType.startsWith('image/') ? 'image'
-            : mimeType.startsWith('audio/') ? 'audio'
-              : mimeType.startsWith('video/') ? 'video'
-                : 'document';
-        setAttachments(prev => [...prev, {
-          id: uuidv4(),
-          type,
-          content: dataUrl,
-          originalName: file.name,
-          mimeType,
-        }]);
-      } else {
-        setDialogTitle(t('chat.input.processingFile', { file: file.name }));
-        setDialogType('document');
-        setDialogContent('');
-        setIsProcessing(true);
-        setDialogOpen(true);
-        const text = await readFileAsText(file);
-        log.debug('File read successfully', { contentLength: text.length });
-        setDialogContent(text);
-        setIsProcessing(false);
-      }
-    } catch (error) {
-      log.error('Error reading file:', error);
-      setDialogContent(t('chat.input.readFailed'));
-      setIsProcessing(false);
-    }
-    
-    // Reset file input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-  
-  // Read file as text
-  const readFileAsText = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      
-      reader.onload = (event) => {
-        if (typeof event.target?.result === 'string') {
-          resolve(event.target.result as string);
-        } else {
-          reject(new Error('Failed to read file'));
-        }
-      };
-      
-      reader.onerror = () => {
-        reject(new Error('Error reading file'));
-      };
-      
-      reader.readAsText(file);
-    });
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    // Clear the picker so choosing the same file again still fires a change.
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    void addFiles(files);
   };
 
   const readFileAsDataUrl = (file: Blob): Promise<string> =>
@@ -611,33 +538,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
       reader.readAsDataURL(file);
     });
 
-  const fileToAttachment = async (file: File): Promise<Attachment> => {
-    const mimeType = file.type || 'application/octet-stream';
-    const isText =
-      mimeType.startsWith('text/') ||
-      /\.(txt|md|json|csv|html?|xml|js|ts|jsx|tsx|css|scss)$/i.test(file.name);
-    const content = isText
-      ? await readFileAsText(file)
-      : await readFileAsDataUrl(file);
-    const type: Attachment['type'] = isText
-      ? 'document'
-      : mimeType.startsWith('image/')
-        ? 'image'
-        : mimeType.startsWith('audio/')
-          ? 'audio'
-          : mimeType.startsWith('video/')
-            ? 'video'
-            : 'document';
-
-    return {
-      id: uuidv4(),
-      type,
-      content,
-      originalName: file.name,
-      mimeType,
-    };
-  };
-  
   const stopRecordingResources = () => {
     const stream = recordingStreamRef.current;
     recordingStreamRef.current = null;
@@ -981,7 +881,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         : {}),
     };
     
-    setAttachments([...attachments, newAttachment]);
+    setAttachments(prev => [...prev, newAttachment]);
     transcriptionAbortRef.current?.abort();
     transcriptionAbortRef.current = null;
     pendingAudioBlobRef.current = null;
@@ -994,7 +894,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   // Remove attachment
   const handleRemoveAttachment = (id: string) => {
     log.debug('Removing attachment', { id });
-    setAttachments(attachments.filter(att => att.id !== id));
+    setAttachments(prev => prev.filter(att => att.id !== id));
   };
   
   return (
@@ -1088,19 +988,29 @@ const ChatInput: React.FC<ChatInputProps> = ({
         {/* Attachments display */}
         {attachments.length > 0 && (
           <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            {attachments.map((attachment) => (
+            {attachments.map((attachment) => {
+              const name = attachment.originalName || t('chat.input.attachment', { type: attachment.type });
+              const status = attachment.pending
+                ? t('chat.attachments.reading')
+                : attachment.note ? attachmentStatusText(attachment.note, t, tp) : undefined;
+              const nameOnly = isNameOnlyNote(attachment.note);
+              return (
               <Paper
                 key={attachment.id}
                 variant="outlined"
-                sx={{ 
-                  p: 1, 
-                  display: 'flex', 
+                data-testid="chat-attachment-chip"
+                sx={{
+                  p: 1,
+                  display: 'flex',
                   alignItems: 'center',
                   borderRadius: 1,
-                  bgcolor: 'background.default'
+                  bgcolor: 'background.default',
+                  ...(nameOnly && { borderColor: 'warning.main' }),
                 }}
               >
-                {attachment.type === 'image' ? (
+                {attachment.pending ? (
+                  <CircularProgress size={18} sx={{ mr: 1 }} />
+                ) : attachment.type === 'image' ? (
                   <Box
                     component="img"
                     src={attachment.content}
@@ -1118,18 +1028,35 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 ) : (
                   <MicIcon fontSize="small" sx={{ mr: 1 }} />
                 )}
-                <Typography variant="body2" noWrap sx={{ maxWidth: 150 }}>
-                  {attachment.originalName || t('chat.input.attachment', { type: attachment.type })}
-                </Typography>
-                <IconButton 
-                  size="small" 
+                <Tooltip title={status ? `${name} · ${status}` : name}>
+                  <Box sx={{ minWidth: 0, maxWidth: 220 }}>
+                    <Typography variant="body2" noWrap>
+                      {name}
+                    </Typography>
+                    {status && (
+                      <Typography
+                        variant="caption"
+                        noWrap
+                        component="div"
+                        data-testid="chat-attachment-status"
+                        color={nameOnly ? 'warning.main' : 'text.secondary'}
+                      >
+                        {status}
+                      </Typography>
+                    )}
+                  </Box>
+                </Tooltip>
+                <IconButton
+                  size="small"
+                  aria-label={t('chat.attachments.remove', { name })}
                   onClick={() => handleRemoveAttachment(attachment.id)}
                   sx={{ ml: 1 }}
                 >
                   <CloseIcon fontSize="small" />
                 </IconButton>
               </Paper>
-            ))}
+              );
+            })}
           </Box>
         )}
         
@@ -1192,7 +1119,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
             ref={fileInputRef}
             onChange={handleFileChange}
             style={{ display: 'none' }}
-            accept="image/*,audio/*,video/*,.pdf,.txt,.md,.json,.csv,.html,.xml,.js,.ts,.jsx,.tsx,.css,.scss"
+            multiple
+            data-testid="chat-attach-input"
           />
 
           {/* Audio recording button */}
@@ -1262,7 +1190,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 <IconButton
                   color="primary"
                   onClick={handleSend}
-                  disabled={disabled || (!message.trim() && attachments.length === 0)}
+                  disabled={disabled || attachmentsPending || (!message.trim() && attachments.length === 0)}
                   aria-label={t('chat.input.send')}
                   sx={{
                     width: 44,

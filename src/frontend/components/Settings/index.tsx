@@ -19,6 +19,7 @@ import {
   Typography,
 } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
+import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded';
 import BackupRoundedIcon from '@mui/icons-material/BackupRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
@@ -49,6 +50,7 @@ import LanguageSettings from './LanguageSettings';
 import NetworkExposureSettings from './NetworkExposureSettings';
 import RuntimeEnvironmentSettings from './RuntimeEnvironmentSettings';
 import McpStartupSettings from './McpStartupSettings';
+import ChatFilesSettings from './ChatFilesSettings';
 import UserAccountsSettings from './UserAccountsSettings';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
@@ -65,6 +67,7 @@ type SettingsSectionId =
   | 'theme'
   | 'language'
   | 'speech'
+  | 'chatFiles'
   | 'onboarding'
   | 'updates'
   | 'privacy'
@@ -164,6 +167,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     component: SpeechRecognitionSettings,
   },
   {
+    id: 'chatFiles',
+    titleKey: 'settings.section.chatFiles',
+    descriptionKey: 'settings.section.chatFilesDescription',
+    icon: AttachFileRoundedIcon,
+    component: ChatFilesSettings,
+  },
+  {
     id: 'onboarding',
     titleKey: 'settings.section.onboarding',
     descriptionKey: 'settings.section.onboardingDescription',
@@ -204,7 +214,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: 'experience',
     titleKey: 'settings.category.experience',
     descriptionKey: 'settings.category.experienceDescription',
-    sectionIds: ['theme', 'language', 'speech', 'onboarding'],
+    sectionIds: ['theme', 'language', 'speech', 'chatFiles', 'onboarding'],
   },
   {
     id: 'system',

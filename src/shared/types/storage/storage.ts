@@ -1,3 +1,5 @@
+import type { ChatAttachmentSettings } from '@/shared/chatAttachments/limits';
+
 /**
  * Enum for storage keys used in the application
  */
@@ -468,4 +470,6 @@ export interface Settings {
   experimental?: ExperimentalSettings;
   modelAccess?: ModelAccessSettings;
   mcp?: McpStartupSettings;
+  /** Size limits for files added to a chat (#1224). Missing values use defaults. */
+  chatAttachments?: ChatAttachmentSettings;
 }

@@ -48,10 +48,10 @@ import { modelService } from '@/backend/services/model';
 import { assertCatalogAdmissionCurrent, assertModelCatalogLeaseOwned, withModelCatalogLease, type ModelCatalogAdmission } from '@/backend/services/model/catalogAdmission';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import {
-  filterUnsupportedMediaInputs,
   hydrateRunResourceMedia,
   materializeRunResourceMediaPaths,
 } from '@/backend/services/model/mediaHandoff';
+import { adaptMediaInputsForModel } from '@/backend/services/chatAttachments/modelInput';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
 import { estimateWireInputTokens, imageTokens } from './wireTokenEstimate';
@@ -2391,7 +2391,7 @@ export class ModelHandler {
       // check and allow a response from a model that never received the image.
       let apiMessages: OpenAI.ChatCompletionMessageParam[] = resolveModelAdapter(model.provider, model.adapter) === 'antigravity-cli'
         ? projectedMessages
-        : filterUnsupportedMediaInputs(projectedMessages, model.inputModalities);
+        : await adaptMediaInputsForModel(projectedMessages, model);
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
       const modelInputForArchive = cloneModelInputSnapshot(opts?.modelInputForArchive);
       const inputSourceIds = opts?.wireMessageIds?.length === messagesWithMaterializedMedia.length

@@ -2,7 +2,7 @@
 
 Routes: `/chat`
 
-Here a user chats. They can talk to one of their saved agents, or start a Quick Chat straight with an AI model, which finds connected apps and saved agents on its own. A "Conversations" sidebar lists past chats; they can be searched, filtered, pinned, renamed, stopped or deleted. While a chat runs, the user can watch the steps the agent carried out, approve tool use, attach documents, and open a debugger.
+Here a user chats. They can talk to one of their saved agents, or start a Quick Chat straight with an AI model, which finds connected apps and saved agents on its own. A "Conversations" sidebar lists past chats; they can be searched, filtered, pinned, renamed, stopped or deleted. While a chat runs, the user can watch the steps the agent carried out, approve tool use, attach files of almost any kind, and open a debugger.
 
 ## Sub-features
 
@@ -10,7 +10,8 @@ Here a user chats. They can talk to one of their saved agents, or start a Quick 
 - `talk-new-conversation`: the "New" button starts a chat with the last picked, favorite or first agent.
 - `talk-choose-agent`: the "Select an agent or Persona" button opens a picker with "Agents" and "Personas" tabs. With no agents it says "No agents available. Create an agent first."
 - `talk-quick-chat`: the "Quick" button opens the "Quick Chat" dialog with an "AI" choice, "Instructions (optional)", "Apps (optional)" and "Start chat".
-- `talk-send`: the "Message" box ("Type a message…") and the "Send message" button; "Attach document" adds files.
+- `talk-send`: the "Message" box ("Type a message…") and the "Send message" button.
+- `talk-attach-files`: "Attach files", dropping files on the message box, or pasting them adds one chip per file. Under each name the chip says what is sent: "Sent as text", "Text extracted" (Word, Excel, PowerPoint, OpenDocument), "PDF, N pages", "N files listed, text read" (ZIP, TAR, TAR.GZ), "Sent as image", "Converted to a common image format" (HEIC, AVIF, TIFF, BMP, SVG), "Not converted: only Gemini models can see it" (iPhone HEIC photos this computer cannot decode), sound and video, or a warning such as "Can’t be read: only the name is sent", "Old format: save it as .docx, .xlsx or .pptx" or "Too large (limit … MB): not sent". "Reading…" shows while a file is converted; "Send message" waits for it. Limits are in Settings → "Chat files".
 - `talk-run-options`: "Run options" holds "Require tool approvals" and "Debugger".
 - `talk-executed-steps`: the "Toggle executed steps panel" button (tooltip "Show executed steps" / "Hide executed steps") shows the steps the agent ran.
 - `talk-rename`: "Rename conversation" changes the chat title.
@@ -33,6 +34,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. A fresh instanc
 - **Quick Chat without a model**: `node scripts/flujo-drive.mjs click /chat --role button --name "Quick Chat: your AI" --then-shot talk-quick.png` → the "Quick Chat" dialog. It says "Connect an AI to start" and offers a "Connect AI" link to `/models?add=1`.
 - **Agent picker**: `node scripts/flujo-drive.mjs click /chat --role button --name "Select an agent or Persona" --then-aria talk-picker.aria` → the "Agents" and "Personas" tabs.
 - **Chat with an agent** (needs a model and an agent): `node scripts/flujo-drive.mjs steps /chat --file talk-send.json`. The steps: click button "New"; fill "Message"; click button "Send message"; expect-text for a word from the reply; then shot and aria.
+- **Attach files**: `steps /chat`: click button "New", upload `sample.docx`, `sample.xlsx`, `sample.pdf`, `sample.zip`, `sample.heic` and `sample.bin` from `__tests__/fixtures/chat-attachments/` into the "Attach files" file field, wait for "Reading…" to go, then shot and aria → one chip per file: "Text extracted" (twice), "PDF, 2 pages", "5 files listed, text read", "Converted to a common image format" and "Can’t be read: only the name is sent".
 - **Proof**: an ARIA snapshot and a screenshot of the conversation showing the sent message and the reply, or of the Quick Chat dialog when no model exists.
 
 ## Gotchas
@@ -41,6 +43,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. A fresh instanc
 - Quick Chat can be switched off in Settings (model access). Then the Quick button is not shown.
 - "New" with no saved agent does not create a chat. It shows the agent/Persona picker instead.
 - Each flujo-drive command is a fresh browser. Open a chat by its `?conversation=<id>` link, or do the whole thing in one `steps` run.
+- File chips need no AI model; only the reply to a message with files does. The hidden file field behind "Attach files" has `data-testid="chat-attach-input"`.
 - Replies stream in over time. Wait for text from the reply (expect-text) rather than taking a screenshot right after sending.
 - To see the cut-off note, set a very small "Max output tokens" on the model (for example 20) and ask for a long answer. The note appears once the run has finished, under the reply (role `note`).
 - The guided tour starts on its own only on the home page `/`, so opening `/chat` directly avoids it.

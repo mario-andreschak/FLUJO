@@ -42,7 +42,7 @@ export async function materializeRunResourceMediaPaths(
   return changed ? resolved : parts;
 }
 
-function partInputModality(part: WirePart): string | undefined {
+export function partInputModality(part: WirePart): 'image' | 'audio' | 'video' | 'file' | undefined {
   if (part.type === 'image_url' || part.type === 'input_image') return 'image';
   if (part.type === 'audio_url' || part.type === 'input_audio') return 'audio';
   if (part.type === 'video_url' || part.type === 'input_video') return 'video';
@@ -50,29 +50,59 @@ function partInputModality(part: WirePart): string | undefined {
   return undefined;
 }
 
+/** The input kinds a model's catalogue entry says it reads; empty when unknown. */
+export function supportedInputModalities(inputModalities?: string[]): Set<string> {
+  const supported = new Set((inputModalities ?? []).map(value => value.toLowerCase()));
+  if (supported.has('vision')) supported.add('image');
+  if (supported.has('document') || supported.has('pdf')) supported.add('file');
+  return supported;
+}
+
+export function attachedFileName(part: WirePart): string | undefined {
+  const file = nestedPart(part.file) ?? part;
+  const name = file.filename ?? file.name;
+  return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+}
+
+const MODALITY_WORDS: Record<string, string> = {
+  image: 'images',
+  audio: 'audio',
+  video: 'video',
+  file: 'files of this type',
+};
+
+/** What the model reads instead of an attachment it cannot take. */
+export function unsupportedMediaNote(part: WirePart, modality: string): string {
+  const name = attachedFileName(part);
+  return `[Attachment${name ? ` "${name}"` : ''} not sent: this model cannot read ${MODALITY_WORDS[modality] ?? modality}.]`;
+}
+
 /**
  * Respect explicit provider capability metadata. Unknown catalogues stay
- * permissive for backward compatibility; a model that explicitly advertises
- * text-only input does not receive stale generated binary attachments.
+ * permissive for backward compatibility. A model that explicitly advertises
+ * text-only input gets a short note in place of each attachment it cannot
+ * read, so neither the model nor the person is left guessing (#1224).
  */
 export function filterUnsupportedMediaInputs(
   messages: OpenAI.ChatCompletionMessageParam[],
   inputModalities?: string[],
 ): OpenAI.ChatCompletionMessageParam[] {
   if (!inputModalities?.length) return messages;
-  const supported = new Set(inputModalities.map(value => value.toLowerCase()));
-  if (supported.has('vision')) supported.add('image');
-  if (supported.has('document') || supported.has('pdf')) supported.add('file');
+  const supported = supportedInputModalities(inputModalities);
 
   return messages.map(message => {
     if (!Array.isArray(message.content)) return message;
-    const content = message.content.filter(rawPart => {
-      const modality = partInputModality(rawPart as unknown as WirePart);
-      return !modality || supported.has(modality);
+    let changed = false;
+    const content = message.content.map(rawPart => {
+      const part = rawPart as unknown as WirePart;
+      const modality = partInputModality(part);
+      if (!modality || supported.has(modality)) return rawPart;
+      changed = true;
+      return { type: 'text', text: unsupportedMediaNote(part, modality) } as typeof rawPart;
     });
-    return content.length === message.content.length
-      ? message
-      : { ...message, content } as OpenAI.ChatCompletionMessageParam;
+    return changed
+      ? { ...message, content } as OpenAI.ChatCompletionMessageParam
+      : message;
   });
 }
 

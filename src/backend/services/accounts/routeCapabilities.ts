@@ -40,6 +40,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/backup': 'workspace',
   '/api/browse': 'host', // lists folders on the server machine
   '/api/bugs/enhance': 'workspace',
+  '/api/chat/attachments': 'workspace',
   '/api/cloud/instance': 'protocol', // local instance challenge
   '/api/credential-migration': 'workspace',
   '/api/credential-transfer': 'workspace',
