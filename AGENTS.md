@@ -73,6 +73,7 @@ workaround.
 | Private approval reads wait and read again after a short-lived Windows file lock, helper failure or torn read, using `src/utils/transientFileRetry.ts`, before they refuse | `__tests__/mcp/privateApprovalRetry.test.ts` |
 | The split MCP SDK packages and Apps share one `@modelcontextprotocol/core`; bump core with client and server | `__tests__/mcp/sdkPackageAlignment.test.ts` |
 | MCP sign-in follows the 2026-07-28 authorization rules in both SDK generations (challenge first, no made-up scope, S256 checked) | `__tests__/mcp/oauthAuthorizationConformance.test.ts` |
+| Claude Agent SDK runs keep FLUJO's approval as the only tool gate: default permission mode, no settings files, no allow list, and every tool handler checks FLUJO's decision | `__tests__/model/claudeSdkAuthorityArgs.test.ts` (installed SDK, fake Claude Code); `__tests__/model/claudeSubscriptionSdkBoundary.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 
 # Resilience over refusal

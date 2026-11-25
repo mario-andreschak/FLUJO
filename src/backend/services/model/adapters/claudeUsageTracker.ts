@@ -1,5 +1,6 @@
 import type { ModelContextUsage } from '@/shared/types/model/contextUsage';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
+import { isClaudeSyntheticModel } from './claudeSyntheticFrame';
 
 const fields = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'] as const;
 type Counts = Record<typeof fields[number], number>;
@@ -72,7 +73,7 @@ export class ClaudeUsageTracker {
       } else if (event?.type === 'message_stop') {
         this.activeSteps.delete(parent);
       }
-    } else if (message.type === 'assistant' && message.message?.usage) {
+    } else if (message.type === 'assistant' && message.message?.usage && !isClaudeSyntheticModel(message.message.model)) {
       const assistant = message.message;
       const id = assistant.id ?? this.activeSteps.get(parent) ?? message.uuid ?? `anonymous-${++this.anonymousId}`;
       // Assistant frames repeat the API message_start output placeholder. The

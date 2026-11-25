@@ -411,6 +411,27 @@ describe('ClaudeSubscriptionAdapter — session resume (#154)', () => {
     expect(await promptContentOf(1)).toBe('follow-up question');
   });
 
+  it('never counts a forked session as the resumed one and starts fresh afterwards', async () => {
+    const adapter = new ClaudeSubscriptionAdapter();
+    queryMock.mockImplementationOnce(() => successStream('parent-session', 'first answer'));
+    await adapter.createCompletion(baseInput({ sessionResume: true, messages: [{ role: 'user', content: 'hello' }] }));
+    const history: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'user', content: 'hello' }, { role: 'assistant', content: 'first answer' }, { role: 'user', content: 'next' },
+    ];
+    const accounting: Array<{ partial?: boolean }> = [];
+    // The SDK answers a resume with another root session id (a fork).
+    queryMock.mockImplementationOnce(() => successStream('forked-session', 'second answer'));
+    await expect(adapter.createCompletion(baseInput({ sessionResume: true, messages: history,
+      onSessionEvent: event => { if (event.kind === 'accounting') accounting.push(event.accounting as { partial?: boolean }); },
+    }))).rejects.toThrow('lineage changed');
+    expect(optionsOf(1)).toMatchObject({ resume: 'parent-session' });
+    expect(optionsOf(1).forkSession).toBeUndefined();
+    expect(accounting).toEqual([expect.objectContaining({ partial: true })]);
+    queryMock.mockImplementationOnce(() => successStream('fresh-session'));
+    await adapter.createCompletion(baseInput({ sessionResume: true, messages: [...history, { role: 'user', content: 'again' }] }));
+    expect(optionsOf(2).resume).toBeUndefined();
+  });
+
   it('resumes when the contiguous leading system-message count is unchanged', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
     const system = { role: 'system', content: 'be concise' } as OpenAI.ChatCompletionMessageParam;

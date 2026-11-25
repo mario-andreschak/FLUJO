@@ -44,6 +44,7 @@ import { embedSchemaInDescription } from './jsonSchemaToZod';
 import { createOwnedToolSchemaBuilder } from './ownedArchiveSchema';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import { ClaudeUsageTracker } from './claudeUsageTracker';
+import { claudeSyntheticFrameError } from './claudeSyntheticFrame';
 import { hasClaudeSessionTranscript, captureClaudeSessionTranscript, canonicalSessionValue, sessionValueHash, claudeSdkRuntimeIdentity } from './claudeSessionPersistence';
 import { ClaudeResultCorrelation } from './claudeResultCorrelation';
 import {
@@ -345,8 +346,8 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
  * records the handoff and ends the run, surfacing EVERY handoff call of the
  * routing turn as a tool_call so FLUJO's edge routing fires — repeated calls to
  * a spawnable sub-agent become parallel briefed lanes (issue #156).
- * `canUseTool` auto-approves FLUJO's tools (the seam for an interactive approval
- * UI); `maxTurns` bounds the loop.
+ * FLUJO's approval decides every tool call: `canUseTool` asks for it and each
+ * tool handler checks it again; `maxTurns` bounds the loop.
  *
  * Input is delivered through the SDK's streaming-input channel (an
  * `AsyncIterable<SDKUserMessage>`) rather than a flat string prompt, so a
@@ -627,6 +628,44 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
       return callId;
     };
+    // FLUJO's decision is the only approval gate. canUseTool normally asks for
+    // it first; a handler the SDK starts without asking (a permission mode, an
+    // allow rule or a saved consent resolved the call) asks here before
+    // anything runs, so no SDK default can skip the person.
+    const approvalDecisions = new Map<string, Promise<boolean>>();
+    const recordedDenials = new Set<string>();
+    let toolAuthorityFailure: unknown;
+    const approvedByFlujo = async (callId: string, name: string, args: Record<string, unknown>): Promise<boolean> => {
+      if (!requestToolApproval) return true;
+      try {
+        let decision = approvalDecisions.get(callId);
+        if (!decision) {
+          decision = requestToolApproval({ id: callId, name, args });
+          approvalDecisions.set(callId, decision);
+        }
+        return await decision;
+      } catch (error) {
+        // The SDK turns a handler error into an ordinary tool error and goes
+        // on. A failed approval service must end the invocation instead.
+        if (!abortController.signal.aborted) {
+          toolAuthorityFailure ??= error;
+          abortController.abort();
+        }
+        throw error;
+      }
+    };
+    const deniedByFlujo = (callId: string, name: string, args: Record<string, unknown>, ui?: ToolUi): CallToolResult => {
+      const rejectionText = 'tool denied';
+      if (!recordedDenials.has(callId)) {
+        recordedDenials.add(callId);
+        if (!recordedToolCallIds.has(callId)) {
+          recordToolCall({ id: callId, name, argsJson: canonicalSessionValue(args) });
+          recordedToolCallIds.add(callId);
+        }
+        recordToolResult({ id: callId, resultContent: rejectionText, ...(ui ? { ui } : {}) });
+      }
+      return { content: [{ type: 'text', text: rejectionText }], isError: true };
+    };
     const takeNativeToolCall = (name: string, args: Record<string, unknown>): string => {
       const queue = queuedToolCalls.get(name);
       const argsJson = canonicalSessionValue(args ?? {});
@@ -676,10 +715,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // splitting work calls the same spawn tool once per brief, and
             // dropping the extras silently discarded its work.
             const toolStartedAt = Date.now();
+            const callId = takeToolCall(fnName, args);
+            if (!await approvedByFlujo(callId, fnName, args ?? {})) return deniedByFlujo(callId, fnName, args ?? {});
             abortController.signal.throwIfAborted();
             await beforeToolDispatch?.();
             abortController.signal.throwIfAborted();
-            const callId = takeToolCall(fnName, args);
             handoffCalls.push({ id: callId, name: fnName, args: args ?? {} });
             if (runId) {
               recordStatisticsEvent(createStatisticsEvent({
@@ -721,6 +761,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             if (toolScopeClosed || shouldEndAgenticTurn?.()) return endedToolResult();
             log.debug('Claude subscription local tool call', { tool: fnName });
             const callId = takeToolCall(fnName, args);
+            if (!await approvedByFlujo(callId, fnName, args ?? {})) return deniedByFlujo(callId, fnName, args ?? {});
             const toolStartedAt = Date.now();
             let resultContent: string;
             let localMedia: CallToolResult['content'] = [];
@@ -786,6 +827,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           if (toolScopeClosed || shouldEndAgenticTurn?.()) return endedToolResult();
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
           const callId = takeToolCall(readableName, args);
+          if (!await approvedByFlujo(callId, readableName, args ?? {})) {
+            const uiLink = await resolveInvokedToolUiLink(server, originalTool, uiResourceUri, undefined, args ?? {});
+            return deniedByFlujo(callId, readableName, args ?? {},
+              uiLink ? { ...uiLink, cancelledReason: 'tool denied', isError: true } : undefined);
+          }
           const toolStartedAt = Date.now();
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
@@ -1066,9 +1112,6 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
     }
 
-    const approvalDecisions = new Map<string, Promise<boolean>>();
-    const recordedDenials = new Set<string>();
-    let toolAuthorityFailure: unknown;
     const prepareToolAuthority = async (toolName: string, input: Record<string, unknown>, opts: { toolUseID: string; signal?: AbortSignal }) => {
       if (toolScopeClosed || abortController.signal.aborted || opts.signal?.aborted) return { behavior: 'deny' as const, message: 'Tool decision cancelled.' };
           if (!toolName.startsWith(`mcp__${SDK_SERVER_NAME}__`)) {
@@ -1175,7 +1218,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // NOTE: deliberately NOT setting `allowedTools` — entries there are
         // auto-allowed and BYPASS canUseTool, which would skip the approval gate.
         // PreToolUse always enforces node/broker authority and binds tool ids.
-        // canUseTool supplies human decisions after that mandatory gate.
+        // canUseTool supplies human decisions after that mandatory gate, and
+        // each tool handler checks that decision again (approvedByFlujo).
         ...(mcpServers ? { mcpServers } : {}),
         hooks: {
           PreToolUse: [{ hooks: [async (hook, _id, options) => {
@@ -1389,6 +1433,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     });
 
     let resultText = '';
+    // The latest frame Claude Code wrote itself (see claudeSyntheticFrame).
+    // It names the failure when the stream ends without a result.
+    let sdkDiagnostic: { error: string; text: string } | undefined;
     let backgroundTasks = 0;
     let ambientTasks = 0;
     let foregroundSettled = false;
@@ -1608,6 +1655,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         } else if (message.type === 'assistant') {
           if (assistantFrameIds.has(message.uuid)) continue;
           assistantFrameIds.add(message.uuid);
+          const syntheticError = claudeSyntheticFrameError(message);
+          if (syntheticError) {
+            const blocks = Array.isArray(message.message?.content) ? message.message.content : [];
+            sdkDiagnostic = { error: syntheticError,
+              text: blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('').trim() };
+            onSessionEvent?.({ kind: 'api_error', state: syntheticError });
+            continue;
+          }
           const assistant = (message as { message?: { id?: string; content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
           let turnText = '';
@@ -1760,6 +1815,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       if (toolAuthorityFailure) throw toolAuthorityFailure;
       if (!handoffCalls.length && !endedByCaller && (!nativeSdkTerminal || !foregroundSettled || backgroundTasks > 0
         || resultCorrelation.pendingCount > 0 || queuedDelivery || activeDelivery || unansweredTools.size > 0)) {
+        if (sdkDiagnostic) {
+          const detail = sdkDiagnostic.text || sdkDiagnostic.error;
+          throw new Error(`Claude subscription run failed: ${apiKey ? detail.split(apiKey).join('[credential redacted]') : detail}`);
+        }
         throw new Error('Claude stream ended before a terminal result settled all submitted turns, tools and background work.');
       }
     } catch (err) {

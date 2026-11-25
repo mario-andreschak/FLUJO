@@ -101,6 +101,30 @@ describe('Claude Agent SDK usage scope', () => {
     expect(tracker.getContextUsage(1000000)).toBeNull();
   });
 
+  it('meters a resumed turn from the saved checkpoint, not from per-query fields the SDK has only been asked for', () => {
+    // anthropics/claude-agent-sdk-typescript#469 proposes per-query fields.
+    // No released SDK sends them; if one ever does, the checkpoint stays the source.
+    const resumed = new ClaudeUsageTracker({ modelUsage: { sonnet: {
+      inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+    } }, totalCostUsd: 0.05 });
+    resumed.observe({ type: 'result', uuid: 'resumed', total_cost_usd: 0.08,
+      modelUsage: { sonnet: { inputTokens: 150, outputTokens: 16 } },
+      turn_cost_usd: 99, turnModelUsage: { sonnet: { inputTokens: 999999, outputTokens: 999999 } } });
+    expect(mapSdkUsage(resumed.getUsage())).toMatchObject({ promptTokens: 50, completionTokens: 6 });
+    expect(resumed.getAccounting().estimatedCostUsd).toBeCloseTo(0.03);
+  });
+
+  it('keeps frames Claude Code writes itself out of usage and the context meter', () => {
+    const tracker = new ClaudeUsageTracker();
+    request(tracker, 'root', { input_tokens: 400, output_tokens: 20 });
+    tracker.observe({ type: 'assistant', parent_tool_use_id: null, error: 'max_output_tokens', message: {
+      id: 'synthetic-notice', model: '<synthetic>',
+      usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    } });
+    expect(tracker.getContextUsage(200000)).toMatchObject({ promptTokens: 400, completionTokens: 20 });
+    expect(mapSdkUsage(tracker.getUsage())).toMatchObject({ promptTokens: 400, completionTokens: 20 });
+  });
+
   it('reports input alone when the last request has no exact output count', () => {
     const tracker = new ClaudeUsageTracker();
     tracker.observe({ type: 'assistant', message: {
