@@ -1,0 +1,103 @@
+import { act, renderHook } from '@testing-library/react';
+import { useDebouncedCallback, useDebouncedValue, useInterval, useTimeout } from '@/frontend/hooks/timing';
+
+describe('timing hooks', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('useTimeout fires once with the latest callback and clears on unmount', () => {
+    const first = jest.fn();
+    const second = jest.fn();
+    const { rerender, unmount } = renderHook(({ callback, delay }) => useTimeout(callback, delay), {
+      initialProps: { callback: first, delay: 100 as number | null },
+    });
+    rerender({ callback: second, delay: 100 });
+    act(() => jest.advanceTimersByTime(100));
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+
+    rerender({ callback: second, delay: 50 });
+    unmount();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('useTimeout is disarmed by null and restarted by a new restart key', () => {
+    const callback = jest.fn();
+    const { rerender } = renderHook(({ delay, key }) => useTimeout(callback, delay, key), {
+      initialProps: { delay: null as number | null, key: 0 },
+    });
+    expect(jest.getTimerCount()).toBe(0);
+
+    rerender({ delay: 100, key: 0 });
+    act(() => jest.advanceTimersByTime(60));
+    rerender({ delay: 100, key: 1 });
+    act(() => jest.advanceTimersByTime(60));
+    expect(callback).not.toHaveBeenCalled();
+    act(() => jest.advanceTimersByTime(40));
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it('useInterval repeats until paused', () => {
+    const callback = jest.fn();
+    const { rerender } = renderHook(({ delay }) => useInterval(callback, delay), {
+      initialProps: { delay: 10 as number | null },
+    });
+    act(() => jest.advanceTimersByTime(35));
+    expect(callback).toHaveBeenCalledTimes(3);
+    rerender({ delay: null });
+    act(() => jest.advanceTimersByTime(100));
+    expect(callback).toHaveBeenCalledTimes(3);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('useDebouncedValue settles after changes stop', () => {
+    const { result, rerender } = renderHook(({ value }) => useDebouncedValue(value, 100), {
+      initialProps: { value: 'a' },
+    });
+    rerender({ value: 'ab' });
+    act(() => jest.advanceTimersByTime(50));
+    rerender({ value: 'abc' });
+    act(() => jest.advanceTimersByTime(99));
+    expect(result.current).toBe('a');
+    act(() => jest.advanceTimersByTime(1));
+    expect(result.current).toBe('abc');
+  });
+
+  it('useDebouncedCallback keeps one stable function, uses the last arguments, and supports cancel and flush', () => {
+    const callback = jest.fn();
+    const { result, rerender, unmount } = renderHook(() => useDebouncedCallback(callback, 100));
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+
+    act(() => {
+      result.current('a');
+      result.current('b');
+      jest.advanceTimersByTime(100);
+    });
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenLastCalledWith('b');
+
+    act(() => {
+      result.current('c');
+      result.current.cancel();
+      jest.advanceTimersByTime(200);
+    });
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current('d');
+      result.current.flush();
+    });
+    expect(callback).toHaveBeenLastCalledWith('d');
+
+    result.current('e');
+    unmount();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+});

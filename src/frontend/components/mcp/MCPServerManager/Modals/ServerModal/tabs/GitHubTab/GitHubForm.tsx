@@ -104,7 +104,7 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
                   <IconButton
                     onClick={async () => {
                       try {
-                        // @ts-ignore - window.showDirectoryPicker is experimental
+                        if (!window.showDirectoryPicker) throw new Error('This browser cannot pick folders');
                         const dirHandle = await window.showDirectoryPicker();
                         
                         // Use the mcp-servers directory path from the API + the selected directory name

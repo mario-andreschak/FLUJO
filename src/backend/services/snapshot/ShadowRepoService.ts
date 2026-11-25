@@ -56,9 +56,7 @@ export function _setShadowRepoDirForTests(dir: string | null): string | null {
 
 function resolveShadowRootDir(): string {
   if (shadowRootDir) return shadowRootDir;
-  // Lazy require so importing this module never eagerly touches paths/env.
-  // Snapshots are workspace-owned user data (#406).
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy, so importing this module never touches workspace paths (#406)
   const { getWorkspaceDataDir } = require('@/utils/workspace');
   return path.join(getWorkspaceDataDir(), 'snapshots');
 }

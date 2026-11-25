@@ -51,8 +51,7 @@ export function _setSnapshotStoreDirForTests(dir: string | null): string | null 
 
 function snapshotRoot(): string {
   if (snapshotRootForTests) return snapshotRootForTests;
-  // Lazy to keep this service safe to import during client-side module analysis.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy, so client-side module analysis can import this service
   const { getWorkspaceDataDir } = require('@/utils/workspace');
   return path.join(getWorkspaceDataDir(), 'snapshots');
 }

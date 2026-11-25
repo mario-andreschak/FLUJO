@@ -1,0 +1,1543 @@
+{
+  "src/app/api/_workspace.ts": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/app/api/git/route.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "flujo/no-sync-fs": {
+      "count": 1
+    }
+  },
+  "src/app/api/mcp-registry/route.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/app/flows/page.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/immutability": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/models/ModelClient.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/app/page.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/app/v1/chat/completions/chatCompletionService.ts": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/app/v1/chat/conversations/[conversationId]/debug/continue/route.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/app/v1/chat/conversations/route.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/buildNodeContext.ts": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/backend/execution/flow/cancellationCoordinator.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/combineAbortSignals.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/compaction/digest.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/conversationLogSequence.ts": {
+    "flujo/no-sync-fs": {
+      "count": 5
+    }
+  },
+  "src/backend/execution/flow/decisionModel.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/engine/ExecutionEventBus.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/handlers/ModelHandler.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/handlers/nativeOriginalHost.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "flujo/no-sync-fs": {
+      "count": 8
+    }
+  },
+  "src/backend/execution/flow/nodes/ProcessNode.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/retryAfter.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/steeringInbox.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/toolApprovalRegistry.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/toolCancelRegistry.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/turnTrace.ts": {
+    "flujo/no-sync-fs": {
+      "count": 1
+    }
+  },
+  "src/backend/execution/flow/validateFlowForRun.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/enduringAgents/compactRuntime.ts": {
+    "flujo/no-double-cast": {
+      "count": 4
+    }
+  },
+  "src/backend/services/enduringAgents/indexing.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/enduringAgents/personaRecoveryGraph.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/enduringAgents/personaRecoveryPlan.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/enduringAgents/personaRecoveryRecords.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/enduringAgents/personaRecoveryZip.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/enduringAgents/runtimeLock.ts": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/backend/services/flow/generationGuard.ts": {
+    "flujo/no-double-cast": {
+      "count": 3
+    }
+  },
+  "src/backend/services/flow/modelReach.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/betaClient.ts": {
+    "flujo/no-double-cast": {
+      "count": 9
+    }
+  },
+  "src/backend/services/mcp/clientTasks.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/connection.ts": {
+    "flujo/no-double-cast": {
+      "count": 18
+    },
+    "flujo/no-sync-fs": {
+      "count": 1
+    },
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/directInstall.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/elicitationContext.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/elicitationRegistry.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/externalAuthorization.ts": {
+    "flujo/no-double-cast": {
+      "count": 3
+    }
+  },
+  "src/backend/services/mcp/githubInstall.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/index.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/internalTools.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/listQuery.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/quality/providers/npmDownloads.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/remoteTaskStore.ts": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/backend/services/mcp/roots.ts": {
+    "flujo/no-sync-fs": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/runtimeDirectoryAdmission.ts": {
+    "flujo/no-sync-fs": {
+      "count": 8
+    }
+  },
+  "src/backend/services/mcp/serverTasks.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/taskInputRegistry.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/mcp/tasksProtocol.ts": {
+    "flujo/no-double-cast": {
+      "count": 9
+    }
+  },
+  "src/backend/services/mcp/tools.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/model/adapters/anthropicAdapter.ts": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/backend/services/model/adapters/claudeSessionPersistence.ts": {
+    "flujo/no-sync-fs": {
+      "count": 30
+    }
+  },
+  "src/backend/services/model/adapters/claudeSubscriptionAdapter.ts": {
+    "flujo/no-double-cast": {
+      "count": 4
+    }
+  },
+  "src/backend/services/model/adapters/codexAdapter.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/model/adapters/codexModelCatalog.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/backend/services/model/adapters/fallbackAdapter.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/model/adapters/openaiAdapter.ts": {
+    "flujo/no-double-cast": {
+      "count": 4
+    }
+  },
+  "src/backend/services/model/adapters/openaiResponsesAdapter.ts": {
+    "flujo/no-double-cast": {
+      "count": 8
+    }
+  },
+  "src/backend/services/model/adapters/openrouterAgentAdapter.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/model/adapters/types.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/model/index.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/model/mediaHandoff.ts": {
+    "flujo/no-double-cast": {
+      "count": 3
+    }
+  },
+  "src/backend/services/model/openaiClient.ts": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/backend/services/model/testConnection.ts": {
+    "flujo/no-double-cast": {
+      "count": 4
+    }
+  },
+  "src/backend/services/model/testToolConnection.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/ollama/modelRegistry.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/originalOwner/configuredNativeParent.ts": {
+    "flujo/no-sync-fs": {
+      "count": 5
+    }
+  },
+  "src/backend/services/originalOwner/nativeToolEffects.ts": {
+    "flujo/no-sync-fs": {
+      "count": 4
+    }
+  },
+  "src/backend/services/originalOwner/sender.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/packages/buildPackage.ts": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/backend/services/packages/deriveSecrets.ts": {
+    "flujo/no-double-cast": {
+      "count": 3
+    }
+  },
+  "src/backend/services/packages/installPackage.ts": {
+    "flujo/no-double-cast": {
+      "count": 3
+    }
+  },
+  "src/backend/services/questionRegistry.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/scheduler/index.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/security/bundledFlujoWorkload.ts": {
+    "flujo/no-sync-fs": {
+      "count": 55
+    }
+  },
+  "src/backend/services/security/bundledMcpDependencyGraph.ts": {
+    "flujo/no-sync-fs": {
+      "count": 2
+    }
+  },
+  "src/backend/services/security/isolatedMcp.ts": {
+    "flujo/no-sync-fs": {
+      "count": 13
+    }
+  },
+  "src/backend/services/security/ownerBootstrap.ts": {
+    "flujo/no-sync-fs": {
+      "count": 14
+    }
+  },
+  "src/backend/services/security/ownerPolicy.ts": {
+    "flujo/no-sync-fs": {
+      "count": 9
+    }
+  },
+  "src/backend/services/security/ownerSession.ts": {
+    "flujo/no-sync-fs": {
+      "count": 14
+    }
+  },
+  "src/backend/services/security/protectedPackageRunner.ts": {
+    "flujo/no-sync-fs": {
+      "count": 16
+    }
+  },
+  "src/backend/services/security/trustedHostMcp.ts": {
+    "flujo/no-sync-fs": {
+      "count": 27
+    }
+  },
+  "src/backend/services/security/windowsPrivateAuthority.ts": {
+    "flujo/no-sync-fs": {
+      "count": 1
+    }
+  },
+  "src/backend/services/workspace/migrationLandscape.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/workspace/migrationProgress.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/services/workspace/snapshotRestore.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/backend/utils/PromptRenderer.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/AmbientWorld/RiverWorld.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/AppWrapper.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/AskFlujo/AskFlujoDock.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/AvatarWorld/ConnectionSetup.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/AvatarWorld/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/refs": {
+      "count": 4
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/AvatarWorld/useAvatarWork.ts": {
+    "react-hooks/immutability": {
+      "count": 1
+    },
+    "react-hooks/refs": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/AvatarWorld/useWorldPanel.ts": {
+    "react-hooks/refs": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/BugReport/BugReportButton.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Chat/ChatHistory.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Chat/ChatInput.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/refs": {
+      "count": 5
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/Chat/ChatMessages.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    },
+    "react-hooks/error-boundaries": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 6
+    }
+  },
+  "src/frontend/components/Chat/ChatTargetSelector.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/Chat/DebuggerCanvas.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
+  "src/frontend/components/Chat/DebuggerConversation.tsx": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Chat/DevCanvasDock.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Chat/ExecutedFlowPanel.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Chat/LiveRunIndicator.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Chat/McpAppFrame.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 7
+    },
+    "react-hooks/refs": {
+      "count": 4
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Chat/ModelTurnInspector.tsx": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Chat/ModelTurnJsonPreview.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Chat/QuickChatDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Chat/RevertPreviewDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Chat/chatApiContent.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Chat/floatingPanel.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Chat/hooks/useChatScrollNav.ts": {
+    "react-hooks/refs": {
+      "count": 10
+    }
+  },
+  "src/frontend/components/Chat/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 10
+    },
+    "react-hooks/immutability": {
+      "count": 4
+    },
+    "react-hooks/purity": {
+      "count": 3
+    },
+    "react-hooks/refs": {
+      "count": 5
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 14
+    }
+  },
+  "src/frontend/components/Chat/mcpAppClient.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/ClientOnly.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/ConversationChainGraph/ChainConversationCard.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/ConversationChainGraph/ChainFlowTree.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/ConversationChainGraph/ChainTranscriptPopover.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/ConversationChainGraph/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 4
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/CredentialMigrationRecovery.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Docs/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/EncryptionAuthDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowDashboard/FlowDashboard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowDashboard/QuickChangeModelsDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/Canvas.tsx": {
+    "react-hooks/immutability": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/FlowAssistanceDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/FlowPreview.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/FlowValidationButton.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/InspectorPanel.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ConvertProcessToSubflowDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/EdgePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/FinishNodePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/FlowVersionHistoryDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/MCPNodePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/NodePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 3
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools/ServerResources.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools/ServerTools.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useHandoffTools.ts": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useModelManagement.ts": {
+    "react-hooks/immutability": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useNodeData.ts": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useServerConnection.ts": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ResourceNodePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/SignalNodePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/StartNodePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/StaticNodePropertiesModal.tsx": {
+    "flujo/no-double-cast": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/SubflowNodePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/TriggerNodePropertiesModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/NodePalette.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/FlowBuilder/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 5
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/GenerateFlowDialog.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Flow/FlowManager/ImproveFlowDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/HarnessLab/TargetVersions.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/HarnessLab/index.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Meetings/MeetingTranscript.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Meetings/MeetingWizard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 8
+    }
+  },
+  "src/frontend/components/Meetings/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/Navigation/QuickActionsMenu.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/Packages/InstallPackageCard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Packages/InstalledPackagesList.tsx": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Packages/PackageFlowPreview.tsx": {
+    "flujo/no-double-cast": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Packages/PackageInstallWizard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Packages/PackageWizard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Packages/RegistryAccountSettings.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Personas/PersonaAppToolsDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Personas/PersonaCreationWizard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/Personas/PersonaFlowsArea.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Personas/PersonaGoalCard.tsx": {
+    "react-hooks/purity": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Personas/PersonaImprovementsArea.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Personas/PersonaMemoryArea.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Personas/PersonaSetup.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Personas/PersonasGallery.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Personas/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
+  "src/frontend/components/Personas/settings/PersonaSettings.tsx": {
+    "react-hooks/refs": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/PhoneHostBoundary.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/PlannedExecutions/AiGatePanel.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/PlannedExecutions/ExecutionCard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/PlannedExecutions/ExecutionModal.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 3
+    },
+    "react-hooks/immutability": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 5
+    }
+  },
+  "src/frontend/components/PlannedExecutions/McpEventPanel.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/PlannedExecutions/SchedulePanel.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/PlannedExecutions/WatchToolPanel.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/PlannedExecutions/WebhookPanel.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/PlannedExecutions/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/refs": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Projects/BranchDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Roles/RoleDetail.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Roles/RolesGallery.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Settings/EncryptionSettings.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Settings/ExperimentalFeaturesSettings.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Settings/GlobalEnvSettings.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Settings/PersonaRecoverySettings.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Settings/RuntimeEnvironmentSettings.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Settings/SnapshotStorageSettings.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Settings/SpeechRecognitionSettings.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Settings/UpdateSettings.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Statistics/index.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Tickets/AllTicketsDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Tickets/TicketsSection.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Tour/BigTutorialOverlay.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 5
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/Tour/TourOverlay.tsx": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Waves/DayView.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Waves/DayViewMiniMonth.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Waves/FactoryObservatoryPanel.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Waves/PlaygroundCanvas.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Waves/PlaygroundNodes.tsx": {
+    "flujo/no-double-cast": {
+      "count": 5
+    }
+  },
+  "src/frontend/components/Waves/TriggerChainNode.tsx": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/Waves/WaveCanvas.tsx": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/Waves/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/WorkspaceBootstrap.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/mcp/MCPCapabilitiesManager/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPEnvManager/EnvEditor.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/McpAiConnectionPanel.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/McpConnectionWizard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/index.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/BuildTools.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/hooks/useLocalServerState.ts": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/index.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/MarketplaceTab/index.tsx": {
+    "react-hooks/refs": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ReferenceServersTab/index.tsx": {
+    "react-hooks/immutability": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/ServerCard.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 5
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/ServerDetailsModal.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/ServerUpdateDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/mcp/MCPServerManager/index.tsx": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/mcp/MCPSkillsManager/index.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/MCPToolManager/ToolTester.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/mcp/McpAppsDashboard.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/mcp/McpModelRiskAssessmentPanel.tsx": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "react-hooks/refs": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/mcp/McpSecurityReviewPanel.tsx": {
+    "react-hooks/refs": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/components/mcp/useMcpAppsDiscovery.ts": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/models/ModelConnectionWizard.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/models/modal/index.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 3
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/components/shared/CardPickerGrid.tsx": {
+    "react-hooks/immutability": {
+      "count": 2
+    },
+    "react-hooks/refs": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/shared/CopyLinkButton.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/shared/FolderPickerDialog.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/components/shared/GlobalReferenceEditor.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    },
+    "react-hooks/immutability": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/contexts/AllowanceContext.tsx": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/frontend/contexts/AskFlujoContext.tsx": {
+    "react-hooks/refs": {
+      "count": 2
+    }
+  },
+  "src/frontend/contexts/I18nContext.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/contexts/TourContext.tsx": {
+    "react-hooks/refs": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
+  "src/frontend/hooks/useAutoFocusSearch.ts": {
+    "flujo/no-raw-timers": {
+      "count": 2
+    }
+  },
+  "src/frontend/hooks/useAutoHideOnIdle.ts": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/hooks/useProjects.ts": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/refs": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/hooks/useScrollNav.ts": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/frontend/hooks/useScrollRestoration.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/hooks/useServerTools.ts": {
+    "flujo/no-raw-timers": {
+      "count": 1
+    },
+    "react-hooks/refs": {
+      "count": 5
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/frontend/services/model/index.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/frontend/services/packages/index.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/frontend/services/registry/index.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/shared/types/enduringAgent/schemas.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/shared/types/mcp/mcp.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/shared/types/package/package.serialize.ts": {
+    "flujo/no-double-cast": {
+      "count": 4
+    }
+  },
+  "src/utils/encryption/operatorSecret.ts": {
+    "flujo/no-sync-fs": {
+      "count": 10
+    }
+  },
+  "src/utils/logger/logger.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/utils/mcp/utils.ts": {
+    "flujo/no-double-cast": {
+      "count": 3
+    },
+    "flujo/no-sync-fs": {
+      "count": 4
+    }
+  },
+  "src/utils/shared/decisionRules.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/utils/shared/edgeConditions.ts": {
+    "flujo/no-workaround-comment": {
+      "count": 1
+    }
+  },
+  "src/utils/shared/flowValidation.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/utils/workspace.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    },
+    "flujo/no-sync-fs": {
+      "count": 3
+    }
+  },
+  "src/vendor/avatar/client/Eyes.tsx": {
+    "react-hooks/refs": {
+      "count": 1
+    }
+  },
+  "src/vendor/avatar/client/nativeRouterPlayback.ts": {
+    "flujo/no-double-cast": {
+      "count": 1
+    }
+  },
+  "src/vendor/avatar/client/useNativeRouterVoice.ts": {
+    "react-hooks/refs": {
+      "count": 6
+    }
+  },
+  "src/vendor/avatar/client/usePocketSpeech.ts": {
+    "react-hooks/refs": {
+      "count": 1
+    }
+  }
+}
