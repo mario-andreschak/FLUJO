@@ -19,10 +19,10 @@ Draft → Human step (edit) → Send → Finish.
 ## How FLUJO does it
 
 FLUJO already saves a run that waits for a tool approval and continues it after
-a restart. The Static node's `humanGate` entry uses that same path (#1095's
-earlier groundwork). The Human step uses it too, so it shows up wherever a
-waiting approval shows up today: the chat, the scheduled-run inbox and the
-existing answer endpoints.
+a restart, and the Static node's `humanGate` entry already uses that path for a
+plain yes or no. The Human step uses it too, so it shows up wherever a waiting
+approval shows up today: the chat, the scheduled-run inbox and the existing
+answer endpoints.
 
 1. **Waiting.** When a run reaches the step, the node freezes what the person
    will see: the question, the result to review, the form fields. It stores this
@@ -62,7 +62,12 @@ existing answer endpoints.
 6. **Inbox.** `db/human_tasks.json` lists waiting steps with ids, flow, step
    title, mode and times only, never the content. The conversation state is the
    source of truth; the list repairs itself from it and forgets finished entries
-   after 7 days.
+   after 7 days. The sweep at start-up opens every waiting step once, because
+   FLUJO may have stopped between saving an answer and updating the list.
+7. **Ending without an answer.** A new chat message replaces a waiting step, as
+   it does a Static wait. Cancelling the run drops the step and any saved answer
+   that was not used, so neither a late answer nor the deadline can bring the run
+   back.
 
 ## Where an answer comes from
 
@@ -91,7 +96,18 @@ its dispatcher with fresh authority.
 - **Runs that are not saved** (MCP flow tools, `mode: ephemeral` API runs,
   subflows) cannot come back to a wait. A Human step there fails at once with
   `approval_required` and a plain message instead of pretending to finish.
-  MCP Tasks `input_required` needs a saved MCP-started run first (issue #1095,
-  slice 4).
+- **MCP Tasks `input_required`.** The Tasks extension can ask the MCP client for
+  form input, and `serverTasks.ts` already supports it for a live task. Using it
+  for a Human step would keep the flow run and its run slot busy until someone
+  answers, and the task fails when FLUJO restarts. Both break the rules above
+  (release everything while waiting, survive a restart). It needs flow runs
+  started over MCP to be saved first, so a task can point at a saved wait
+  (#1095, slice 4).
+- **Persona runs through the new API.** `POST /api/human-tasks/{id}` refuses a
+  Persona's step (409, `persona_owned`), because only the Persona dispatcher may
+  continue those runs. The chat card falls back to the chat answer route, which
+  goes through the dispatcher.
+- **Outcome handles on the canvas.** Routing on the answer uses ordinary edge
+  conditions on `review.outcome`; there are no separate "yes" and "no" handles.
 - **Who may answer** is the owner of this FLUJO, as for approvals today. Named
   reviewers come later.
