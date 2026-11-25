@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { windowsPrivateAuthorityStamp } from '@/backend/services/security/windowsPrivateAuthority';
 import { assertIsolatedMcpContainerInspection } from '@/backend/services/security/isolatedMcpInspection';
 import {
-  createIsolatedMcpLaunch, isolatedMcpPolicyDigest, McpIsolationError,
+  createIsolatedMcpLaunch, isDockerCliPath, isolatedMcpPolicyDigest, McpIsolationError,
   type IsolatedMcpPolicy,
 } from '@/backend/services/security/isolatedMcp';
 
@@ -146,7 +146,7 @@ test('the digest is independent of set ordering and binds command, image, mounts
   const digest = isolatedMcpPolicyDigest(policy);
   expect(isolatedMcpPolicyDigest({ ...policy, environmentNames: [...policy.environmentNames].reverse(), mounts: [...policy.mounts].reverse() })).toBe(digest);
   for (const change of [{ command: ['other'] }, { image: `sha256:${'b'.repeat(64)}` }, { mounts: [] },
-    { daemon: 'unix:///different.sock' }, { dockerExecutable: path.join(workspace, 'other-docker') }]) {
+    { daemon: 'unix:///different.sock' }, { dockerExecutable: path.join(workspace, 'other', 'docker') }]) {
     expect(isolatedMcpPolicyDigest({ ...policy, ...change })).not.toBe(digest);
   }
 });
@@ -155,6 +155,10 @@ test.each([
   ['mutable image', { image: 'node:latest' }],
   ['remote daemon', { daemon: 'tcp://example.com:2375' }],
   ['relative Docker executable', { dockerExecutable: 'docker' }],
+  ['shell instead of Docker', { dockerExecutable: path.resolve('/bin/sh') }],
+  ['Windows command shell instead of Docker', { dockerExecutable: path.resolve('/Windows/System32/cmd.exe') }],
+  ['look-alike Docker name', { dockerExecutable: path.resolve('/opt/docker-helper') }],
+  ['Docker name with a hidden suffix', { dockerExecutable: path.resolve('/opt/docker.exe.cmd') }],
   ['host traversal grant', { mounts: [{ name: 'bad', source: 'storage/mcp-grants/../../secret' }] }],
   ['absolute host grant', { mounts: [{ name: 'bad', source: 'C:/private' }] }],
   ['Docker control environment', { environmentNames: ['DOCKER_HOST'] }],
@@ -169,6 +173,18 @@ test.each([
 ])('rejects %s before Docker launch', (_description, change) => {
   expect(() => isolatedMcpPolicyDigest({ ...policy, ...change })).toThrow(McpIsolationError);
   expect(execute).not.toHaveBeenCalled();
+});
+
+test('accepts only the Docker program itself as the host executable', () => {
+  expect(isDockerCliPath(path.join(workspace, 'docker'))).toBe(true);
+  expect(isDockerCliPath(path.join(workspace, 'Docker.EXE'))).toBe(true);
+  expect(isDockerCliPath(path.join(workspace, 'docker.cmd'))).toBe(false);
+  expect(isDockerCliPath(path.join(workspace, 'podman'))).toBe(false);
+  expect(isDockerCliPath(`${path.join(workspace, 'docker')}\0`)).toBe(false);
+  const result = launch();
+  expect(new Set(execute.mock.calls.map(([command]) => command))).toEqual(new Set([policy.dockerExecutable]));
+  expect(result.command).toBe(policy.dockerExecutable);
+  result.close();
 });
 
 test.each([undefined, 'a\0b', 'a\rB=bad', 'a\nB=bad', 'a'.repeat(16 * 1024 + 1)])('rejects missing or invalid environment grant values', value => {

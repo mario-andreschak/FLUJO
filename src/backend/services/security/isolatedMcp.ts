@@ -8,6 +8,15 @@ import { windowsPrivateAuthorityStamp } from './windowsPrivateAuthority';
 import { assertIsolatedMcpContainerInspection, assertIsolatedMcpDaemonInfo } from './isolatedMcpInspection';
 
 const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
+/**
+ * The policy names the host program FLUJO runs, so only an absolute path to a
+ * Docker command line program is accepted. Any other program, even one the
+ * owner approved by mistake, never runs with the Docker arguments below.
+ */
+export function isDockerCliPath(value: string): boolean {
+  return path.isAbsolute(value) && !/[\0\r\n]/.test(value)
+    && /^docker(?:\.exe)?$/i.test(path.basename(value));
+}
 const mountSchema = z.object({
   name: identifier,
   source: z.string().max(256).regex(/^storage\/mcp-grants\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)*$/)
@@ -19,7 +28,7 @@ export const isolatedMcpPolicySchema = z.object({
   schemaVersion: z.literal(1),
   kind: z.literal('docker-deny-egress'),
   image: z.string().regex(/^(?:[a-z0-9][a-z0-9./:_-]*@)?sha256:[a-f0-9]{64}$/),
-  dockerExecutable: z.string().min(1).max(1024),
+  dockerExecutable: z.string().min(1).max(1024).refine(isDockerCliPath),
   daemon: z.string().max(1024).refine(value =>
     /^unix:\/\/\/[A-Za-z0-9_./-]+\.sock$/.test(value)
     || /^npipe:\/\/\/\/\.\/pipe\/[A-Za-z0-9_-]+$/.test(value)),
@@ -43,14 +52,14 @@ export class McpIsolationError extends Error {
   constructor(readonly code: 'ISOLATION_POLICY_INVALID' | 'ISOLATION_RECONSENT_REQUIRED' | 'ISOLATION_UNAVAILABLE') {
     super(code === 'ISOLATION_RECONSENT_REQUIRED' ? 'MCP isolation capabilities changed. Review and approve the new policy.'
       : code === 'ISOLATION_UNAVAILABLE' ? 'MCP isolation is unavailable. Check the local Linux Docker daemon, supported resource limits, preinstalled image and private grant files; host fallback is disabled.'
-        : 'MCP isolation policy is invalid. Review the image, local daemon, mounts, single-line environment grants and limits.');
+        : 'MCP isolation policy is invalid. Review the Docker program path, image, local daemon, mounts, single-line environment grants and limits.');
     this.name = 'McpIsolationError';
   }
 }
 
 function parsedPolicy(value: unknown): IsolatedMcpPolicy {
   const result = isolatedMcpPolicySchema.safeParse(value);
-  if (!result.success || !path.isAbsolute(result.data.dockerExecutable)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
+  if (!result.success || !isDockerCliPath(result.data.dockerExecutable)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   return result.data;
 }
 
@@ -103,7 +112,7 @@ function safeMount(workspaceRoot: string, relative: string): string {
 }
 
 /** Container grants must never become loader/runtime options for the host CLI. */
-function privateEnvironmentFile(control: string, environment: Readonly<Record<string, string>>) {
+function privateEnvironmentFile(control: string, environment: ReadonlyMap<string, string>) {
   const filename = path.join(control, 'container.env');
   const fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
     | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
@@ -132,7 +141,7 @@ function privateEnvironmentFile(control: string, environment: Readonly<Record<st
       throw new McpIsolationError('ISOLATION_UNAVAILABLE');
     }
     assertOwned();
-    content = Buffer.from(Object.entries(environment).map(([name, value]) => `${name}=${value}\n`).join(''));
+    content = Buffer.from([...environment].map(([name, value]) => `${name}=${value}\n`).join(''));
     fs.writeFileSync(fd, content);
     assertOwned();
     return { filename, dispose };
@@ -152,12 +161,13 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
   if (approvedDigest !== isolatedMcpPolicyDigest(policy)) throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
   if (!path.isAbsolute(workspaceRoot)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   if (ownership && !/^[a-f0-9]{64}$/.test(ownership.key)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
-  const containerEnvironment: Record<string, string> = {};
+  // A Map keeps granted names out of object property lookups entirely.
+  const containerEnvironment = new Map<string, string>();
   for (const name of policy.environmentNames) {
-    const provided = environment[name];
+    const provided = Object.hasOwn(environment, name) ? environment[name] : undefined;
     if (typeof provided !== 'string' || provided.length > 16 * 1024 || /[\0\r\n]/.test(provided)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
     if (name === 'NODE_ENV' && provided !== 'production') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
-    containerEnvironment[name] = provided;
+    containerEnvironment.set(name, provided);
   }
   const generation = randomUUID();
   // Docker's atomic name uniqueness also fences other processes and restarts.
