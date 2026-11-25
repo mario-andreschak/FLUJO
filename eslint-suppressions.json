@@ -424,7 +424,7 @@
   },
   "src/backend/services/security/trustedHostMcp.ts": {
     "flujo/no-sync-fs": {
-      "count": 27
+      "count": 23
     }
   },
   "src/backend/services/security/windowsPrivateAuthority.ts": {
