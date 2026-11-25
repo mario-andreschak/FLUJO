@@ -94,6 +94,33 @@ function Assert-InstallerRepository {
     if (-not $decision.CanProceed) { throw $decision.Reason }
 }
 
+function Test-InstallerPartialClone {
+    $version = (& git --version 2>$null) -join ' '
+    if ($LASTEXITCODE -ne 0 -or $version -notmatch '(\d+)\.(\d+)') { return $false }
+    $major = [int]$Matches[1]
+    return ($major -gt 2) -or ($major -eq 2 -and [int]$Matches[2] -ge 25)
+}
+
+# A new install downloads only the files of the chosen version, not the whole
+# history, and leaves out the website folder (githubpages/, mostly video and
+# audio) except the OAuth metadata the app builds in. The Docker image leaves
+# out the same files (.dockerignore). `git sparse-checkout disable` brings the
+# website back. Older Git without partial clone downloads the full history.
+function Install-InstallerRepository {
+    $template = Join-Path ([IO.Path]::GetTempPath()) ('flujo-clone-template-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path (Join-Path $template 'info') | Out-Null
+    try {
+        $patterns = "/*`n!/githubpages/`n/githubpages/oauth/client-metadata.json`n"
+        [IO.File]::WriteAllText((Join-Path $template 'info\sparse-checkout'), $patterns, (New-Object System.Text.UTF8Encoding $false))
+        $arguments = @('clone')
+        if (Test-InstallerPartialClone) { $arguments += '--filter=blob:none' }
+        $arguments += @("--template=$template", '-c', 'core.sparseCheckout=true', '-c', 'core.sparseCheckoutCone=false', '-b', $Branch, $RepoUrl, $InstallDir)
+        Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments $arguments -Environment $installerEnvironment
+    } finally {
+        Remove-Item -LiteralPath $template -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Update-InstallerRepository {
     Assert-InstallerRepository
     Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'fetch', 'origin', $Branch) -Environment $installerEnvironment
@@ -868,7 +895,7 @@ if (Test-Path (Join-Path $InstallDir '.git')) {
     if ($parent -and -not (Test-Path $parent)) {
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
     }
-    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('clone', '-b', $Branch, $RepoUrl, $InstallDir) -Environment $installerEnvironment
+    Install-InstallerRepository
 }
 $installedRevision = Read-InstallerGit @('rev-parse', 'HEAD')
 if ($env:FLUJO_REVISION -and $installedRevision -cne $env:FLUJO_REVISION.ToLowerInvariant()) { throw 'The cloned source does not match the installer revision. Installation stopped before building or registration.' }
