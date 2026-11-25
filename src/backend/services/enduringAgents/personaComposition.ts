@@ -57,7 +57,7 @@ async function requireFlow(flowRef: string): Promise<void> {
   if (!await flowService.getFlow(flowRef)) missing('Flow', flowRef);
 }
 
-function normalizeBehaviorBinding(
+export function normalizeBehaviorBinding(
   behavior: PersonaBehaviorComposition,
 ): PersonaFlowBinding | null {
   if (behavior.binding) return behavior.binding;
@@ -73,7 +73,7 @@ function normalizeBehaviorBinding(
     : null;
 }
 
-function effectiveFlowRef(binding: PersonaFlowBinding): string {
+export function effectiveFlowRef(binding: PersonaFlowBinding): string {
   return binding.mode === 'shared' ? binding.sharedFlowRef : binding.personaFlowRef;
 }
 
@@ -117,7 +117,7 @@ async function projectFlowCard(
   };
 }
 
-async function assertBindingOwnership(
+export async function assertBindingOwnership(
   personaId: string,
   binding: PersonaFlowBinding,
 ): Promise<void> {

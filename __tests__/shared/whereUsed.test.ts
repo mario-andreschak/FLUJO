@@ -28,6 +28,17 @@ describe('where-used (#1278)', () => {
     expect(usage.a).toBeUndefined();
   });
 
+  it('counts flows a step runs side by side, and steps typed only on the node (#1389)', () => {
+    const usage = subflowUsage([
+      { id: 'fan', name: 'Fan out', nodes: [
+        { data: { type: 'subflow', properties: { parallelSubflowIds: ['helper', 'other', 'helper'] } } },
+        { type: 'subflow', data: { properties: { subflowId: 'third' } } },
+      ] },
+    ]);
+    expect(Object.keys(usage).sort()).toEqual(['helper', 'other', 'third']);
+    expect(usage.helper).toHaveLength(1);
+  });
+
   it('links an agent to its editor and a policy to the model dialog', () => {
     expect(whereUsedHref({ kind: 'flow', id: 'a b', name: 'x' })).toBe('/flows?flow=a%20b&mode=edit');
     expect(whereUsedHref({ kind: 'policy', id: 'p', name: 'x' })).toBe('/models?edit=p');

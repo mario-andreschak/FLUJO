@@ -48,7 +48,9 @@ The backend service is responsible for:
 - `loadFlows()`: Load all flows from storage
 - `getFlow(flowId)`: Get a specific flow by ID
 - `saveFlow(flow)`: Save a flow (create new or update existing)
-- `deleteFlow(flowId)`: Delete a flow by ID
+- `deleteFlow(flowId)`: Remove a flow's file. To delete a flow a person or agent picked, use
+  `deleteFlowAndMoveUses` in `flowDeletion.ts`: it first switches or releases every Persona,
+  automation and flow that uses it (`findFlowUsage`), then deletes it last.
 - `listFlows()`: List all flows with standardized response format
 
 ### Storage layout & migration

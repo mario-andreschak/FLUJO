@@ -12,7 +12,7 @@ export interface WhereUsedRef {
 interface FlowLike {
   id: string;
   name?: string;
-  nodes?: Array<{ data?: { type?: string; properties?: Record<string, unknown> } }>;
+  nodes?: Array<{ type?: string; data?: { type?: string; properties?: Record<string, unknown> } }>;
 }
 interface ModelLike {
   id: string;
@@ -46,14 +46,21 @@ export function modelUsage(flows: readonly FlowLike[], models: readonly ModelLik
   return usage;
 }
 
+/** The flows one subflow step calls: its single flow and every flow it runs side by side. */
+export function subflowStepTargets(node: NonNullable<FlowLike['nodes']>[number]): string[] {
+  if ((node.data?.type ?? node.type) !== 'subflow') return [];
+  const properties = node.data?.properties ?? {};
+  const targets = [properties.subflowId, ...(Array.isArray(properties.parallelSubflowIds) ? properties.parallelSubflowIds : [])];
+  return [...new Set(targets.filter((target): target is string => typeof target === 'string' && target.length > 0))];
+}
+
 /** Flow id -> agents that call it through a subflow node. */
 export function subflowUsage(flows: readonly FlowLike[]): Record<string, WhereUsedRef[]> {
   const usage: Record<string, WhereUsedRef[]> = {};
   for (const flow of flows) {
     for (const node of flow.nodes ?? []) {
-      const target = node.data?.properties?.subflowId;
-      if (node.data?.type === 'subflow' && typeof target === 'string' && target && target !== flow.id) {
-        add(usage, target, { kind: 'flow', id: flow.id, name: flow.name || flow.id });
+      for (const target of subflowStepTargets(node)) {
+        if (target !== flow.id) add(usage, target, { kind: 'flow', id: flow.id, name: flow.name || flow.id });
       }
     }
   }

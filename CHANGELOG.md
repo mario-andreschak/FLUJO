@@ -92,6 +92,7 @@ Most flows behave as before. Three things changed on purpose, in 3.48.5 and 3.48
 
 ### Personas
 
+- Delete an agent that a Persona, an automation or another agent still uses (#1389). Instead of only saying who uses it, "Delete agent" now asks what happens in each place: switch it to another agent, or take the agent away (a Persona without a Core Flow is paused, an automation is turned off, a step is emptied). Everything is switched first and the agent is deleted last, so nothing is left pointing at a missing agent. The MCP `delete_flow` tool takes `replace_with` for the same.
 - Keep first-start migration reports accurate after workspace-lock setup, distinguish directory moves from merges, and release the startup lock if snapshot admission fails.
 - Check Role-derived Core and Behavior readiness before creation; preserve blocked drafts and provide setup/retry actions. Repair Core editor navigation, add specialist Behaviors after creation, and clarify History outcomes.
 - Add an opt-in beginner browser journey with a local model/App fixture, queued-Task restart checks and configuration/privacy assertions. Let users dismiss the first-use telemetry notice without changing privacy preferences, so it no longer traps controls underneath it.

@@ -42,6 +42,8 @@ import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import { setEditBase, type EditConflict } from '@/frontend/services/sharedItems';
 import EditConflictDialog from '@/frontend/components/shared/sharedEditing/EditConflictDialog';
+import FlowDeleteDialog from '@/frontend/components/Flow/FlowDashboard/FlowDeleteDialog';
+import type { FlowDeletePlan, FlowDeleteSummary, FlowUsage } from '@/shared/types/flow/flowUsage';
 import {
   remapFlowModelBindings,
   type FlowModelReplacementMap,
@@ -116,6 +118,13 @@ const FlowsPage = () => {
   // persisted just before the root on first save, so every subflowId resolves. Discarding
   // the draft discards these too.
   const [draftDescendants, setDraftDescendants] = useState<Flow[]>([]);
+  // A delete that needs the person's choices for the places still using the flow (#1389).
+  const [pendingDelete, setPendingDelete] = useState<{
+    usage: FlowUsage;
+    busy: boolean;
+    error: string | null;
+    notice: string | null;
+  } | null>(null);
   // Multi-user mode (#575): a save refused because someone else saved first.
   // The builder's save waits until the person chooses what to keep.
   const [flowConflict, setFlowConflict] = useState<{ conflict: EditConflict; flow: Flow } | null>(null);
@@ -481,34 +490,72 @@ const FlowsPage = () => {
     showSnackbar(t('flows.page.subflowCreated', { name: childFlow.name }), 'success');
   }, [showSnackbar, t]);
 
+  const finishDelete = (flowId: string, summary?: FlowDeleteSummary) => {
+    log.debug('Flow deleted successfully');
+    setFlows(prevFlows => prevFlows.filter(f => f.id !== flowId));
+    // Agents that called the deleted one now call the replacement.
+    if (summary?.flows.length) {
+      void flowService.loadFlows({ refresh: true }).then(setFlows).catch((error: unknown) => {
+        log.warn('Could not reload agents after a delete', error);
+      });
+    }
+
+    if (selectedFlow === flowId) {
+      log.debug('Clearing selected flow as it was deleted');
+      setSelectedFlow(null);
+      router.replace('/flows');
+    }
+
+    const paused = [...(summary?.pausedPersonas ?? []), ...(summary?.turnedOffAutomations ?? [])];
+    showSnackbar(paused.length > 0
+      ? t('flows.page.deletedPaused', { names: formatList(paused) })
+      : t('flows.page.deleted'), 'success');
+  };
+
   const handleDeleteFlow = async (flowId: string) => {
     log.info('Deleting flow', { flowId });
     try {
       const result = await flowService.deleteFlow(flowId);
 
-      // The server can refuse a delete, for example while a Persona still uses
-      // the flow. Keep it in the list and say why.
+      // Personas, automations or other agents still use it: ask what happens
+      // to each place instead of refusing (#1389).
+      if (!result.success && result.usage) {
+        setPendingDelete({ usage: result.usage, busy: false, error: null, notice: null });
+        return;
+      }
+      // Any other refusal keeps the flow in the list and says why.
       if (!result.success) {
         log.warn('Flow delete was refused', { flowId, error: result.error });
         showSnackbar(result.error || t('flows.page.deleteFailed'), 'error');
         return;
       }
-      log.debug('Flow deleted successfully');
-
-      // Update local state
-      setFlows(prevFlows => prevFlows.filter(f => f.id !== flowId));
-      
-      if (selectedFlow === flowId) {
-        log.debug('Clearing selected flow as it was deleted');
-        setSelectedFlow(null);
-        router.replace('/flows');
-      }
-      
-      showSnackbar(t('flows.page.deleted'), 'success');
+      finishDelete(flowId);
     } catch (error) {
       log.error('Error deleting flow', error);
       showSnackbar(t('flows.page.deleteFailed'), 'error');
     }
+  };
+
+  const confirmDelete = async (plan: FlowDeletePlan) => {
+    if (!pendingDelete) return;
+    const flowId = pendingDelete.usage.flowId;
+    setPendingDelete(current => current && { ...current, busy: true, error: null });
+    const result = await flowService.deleteFlow(flowId, plan);
+    if (result.success) {
+      setPendingDelete(null);
+      finishDelete(flowId, result.summary);
+      return;
+    }
+    if (result.usage) {
+      setPendingDelete({
+        usage: result.usage,
+        busy: false,
+        error: null,
+        notice: result.usageChanged ? t('flows.delete.changed') : null,
+      });
+      return;
+    }
+    setPendingDelete(current => current && { ...current, busy: false, error: result.error || t('flows.page.deleteFailed') });
   };
   
   const handleSetFlowFolder = useCallback(async (flowId: string, folder: string | undefined) => {
@@ -1010,6 +1057,16 @@ const FlowsPage = () => {
         open={generateDialogOpen}
         onClose={() => setGenerateDialogOpen(false)}
         onGenerated={handleGenerated}
+      />
+
+      <FlowDeleteDialog
+        usage={pendingDelete?.usage ?? null}
+        flows={flows}
+        busy={pendingDelete?.busy ?? false}
+        error={pendingDelete?.error ?? null}
+        notice={pendingDelete?.notice ?? null}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={(plan) => void confirmDelete(plan)}
       />
 
     </Box>

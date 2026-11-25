@@ -4,8 +4,15 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
-import { listPersonas } from '@/backend/services/enduringAgents';
+import {
+  deleteFlowAndMoveUses,
+  findFlowUsage,
+  flowDeleteTouchesPersonas,
+  flowInUseBody,
+} from '@/backend/services/flow/flowDeletion';
 import { checkBaseRevision, currentSharedEditor, recordChange } from '@/backend/services/sharedItems/guard';
+import { parseFlowDeletePlan } from '@/shared/types/flow/flowUsage';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { json } from '../_helpers';
 
 const log = createLogger('app/api/flow/[id]/route');
@@ -96,53 +103,50 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
 
 /**
  * DELETE /api/flow/{id}
- * Delete a flow by ID.
+ * Delete a flow by ID (204). When Personas, automations or other flows still
+ * use it, the answer is 409 `FLOW_IN_USE` with every place. Send the person's
+ * choices as `{ plan: { choices: { [place key]: { replaceWith } | { remove: true } } } }`
+ * to switch or release each place first; the flow is deleted last (200).
  */
-async function DELETE_handler(_request: NextRequest, { params }: RouteContext) {
+async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
     const { id } = await params;
+    const plan = parseFlowDeletePlan(await request.json().catch(() => null));
+    if (plan === 'invalid') {
+      return json({ error: 'The choices for deleting this flow could not be read.' }, 400);
+    }
 
-    const existing = await flowService.getFlow(id);
-    if (!existing) {
+    const usage = await findFlowUsage(id);
+    if (!usage) {
       return json({ error: `Flow "${id}" not found` }, 404);
     }
 
-    const personas = await listPersonas();
-    const referencedBy = personas.find((persona) => {
-      const composition = persona.composition;
-      if (!composition) return false;
-      const coreRefs = composition.coreBinding
-        ? composition.coreBinding.mode === 'shared'
-          ? [composition.coreBinding.sharedFlowRef]
-          : [composition.coreBinding.personaFlowRef, composition.coreBinding.sharedFlowRef]
-        : [composition.coreFlowRef];
-      const behaviorRefs = (composition.behaviors ?? []).flatMap((behavior) => {
-        if (behavior.binding) {
-          return behavior.binding.mode === 'shared'
-            ? [behavior.binding.sharedFlowRef]
-            : [behavior.binding.personaFlowRef, behavior.binding.sharedFlowRef];
-        }
-        return [behavior.sourceFlowRef, behavior.overrideFlowRef];
-      });
-      return [...coreRefs, ...behaviorRefs].includes(id);
-    });
-    if (referencedBy) {
-      return json({
-        error: `Flow "${existing.name || id}" is used by Persona "${referencedBy.name}". Replace or remove that binding first.`,
-        code: 'PERSONA_FLOW_REFERENCED',
-      }, 409);
+    // Changing a Persona needs the same access as the Persona pages.
+    const changesPlaces = plan !== null || (usage.uses.length === 0 && usage.copySources.length > 0);
+    const touches = flowDeleteTouchesPersonas(usage);
+    if (changesPlaces && touches.personas) {
+      const notLocal = assertLocalRequest(request);
+      if (notLocal) return notLocal;
+    }
+    if (changesPlaces && touches.personaAutomations) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
     }
 
-    const result = await flowService.deleteFlow(id);
-    if (!result.success) {
-      return json({ error: result.error || 'Failed to delete flow' }, 500);
+    const outcome = await deleteFlowAndMoveUses(id, plan, await currentSharedEditor());
+    switch (outcome.status) {
+      case 'not-found':
+        return json({ error: `Flow "${id}" not found` }, 404);
+      case 'in-use':
+        return json(flowInUseBody(outcome.usage, outcome.changed), 409);
+      case 'refused':
+        return json({ error: outcome.error, code: outcome.busy ? 'PERSONA_BUSY' : 'FLOW_DELETE_REFUSED' }, 409);
+      case 'deleted':
+        return plan ? json({ deleted: true, summary: outcome.summary }, 200) : new Response(null, { status: 204 });
     }
-    await recordChange(await currentSharedEditor(), { kind: 'flow', itemId: id, action: 'deleted', before: existing, after: null });
-
-    return new Response(null, { status: 204 });
   } catch (error) {
     log.error('Error handling DELETE request', error);
     return json({ error: 'Internal server error' }, 500);
