@@ -91,9 +91,6 @@
   "src/backend/execution/flow/handlers/nativeOriginalHost.ts": {
     "flujo/no-double-cast": {
       "count": 1
-    },
-    "flujo/no-sync-fs": {
-      "count": 8
     }
   },
   "src/backend/execution/flow/nodes/ProcessNode.ts": {
@@ -332,11 +329,6 @@
   "src/backend/services/ollama/modelRegistry.ts": {
     "flujo/no-double-cast": {
       "count": 1
-    }
-  },
-  "src/backend/services/originalOwner/nativeToolEffects.ts": {
-    "flujo/no-sync-fs": {
-      "count": 4
     }
   },
   "src/backend/services/originalOwner/sender.ts": {

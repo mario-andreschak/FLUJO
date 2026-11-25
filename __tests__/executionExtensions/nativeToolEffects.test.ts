@@ -19,8 +19,8 @@ describe('Original Owner Native Worker effects', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-    if (renamedRoot) await fs.rm(renamedRoot, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    if (renamedRoot) await fs.rm(renamedRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     renamedRoot = undefined;
   });
 
@@ -116,6 +116,16 @@ describe('Original Owner Native Worker effects', () => {
     await expect(effect.start()).resolves.toEqual({ content: [{ type: 'text', text: 'native-effect-ok' }] });
   });
 
+  it('refuses a command whose working directory was replaced after preparation', async () => {
+    await fs.mkdir(path.join(root, 'work'));
+    const command = 'node -e "process.stdout.write(\'replaced-cwd\')"';
+    const effect = await prepare('worker_command', { command, cwd: 'work' }, { ...grant, commands: [command] });
+    await fs.rename(path.join(root, 'work'), path.join(root, 'old-work'));
+    await fs.mkdir(path.join(root, 'work'));
+    await expect(effect.start()).rejects.toThrow('refused');
+    await expect(effect.launched()).resolves.toBeUndefined();
+  });
+
   it('refuses oversized file contents, directory listings and command output', async () => {
     await expect(prepare('worker_write_file', { path: 'too-large.txt', content: 'x'.repeat(256 * 1024 + 1) }))
       .rejects.toThrow();
@@ -133,12 +143,16 @@ describe('Original Owner Native Worker effects', () => {
     await expect(effect.start()).rejects.toThrow('failed');
   });
 
-  it('kills an authorized child process when its signal aborts', async () => {
+  it('reports a command as launched while it runs and kills it when its signal aborts', async () => {
     const command = 'node -e "setTimeout(() => {}, 30000)"';
     const controller = new AbortController();
     const effect = await prepare('worker_command', { command }, { ...grant, commands: [command] }, controller.signal);
     const completion = effect.start();
-    setTimeout(() => controller.abort(), 50);
+    let finished = false;
+    completion.then(() => { finished = true; }, () => { finished = true; });
+    await effect.launched();
+    expect(finished).toBe(false);
+    controller.abort();
     await expect(completion).rejects.toThrow('failed');
   });
 });
