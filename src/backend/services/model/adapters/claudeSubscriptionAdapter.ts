@@ -479,7 +479,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // Recorded-session migrations always start fresh under the v2 fingerprint.
     let resumeSessionId: string | undefined;
     let resumeCheckpoint: import('./claudeUsageTracker').ClaudeUsageCheckpoint | undefined;
-    let resumeReason = sessionResume ? 'no-compatible-checkpoint' : 'resume-disabled';
+    // The request record says why a turn resumed or started a new session.
+    let resumeReason = !sessionResume ? 'resume-disabled' : sessionTracking ? 'no-compatible-checkpoint' : 'not-a-resumable-request';
     let reusableSessionAvailable = false;
     let userContent: string | Anthropic.ContentBlockParam[] = '';
     if (sessionResume && sessionTracking) {
@@ -488,17 +489,22 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         sessionTracking.prefixHash,
         messages as unknown as Array<{ role: string; [key: string]: unknown }>,
         leadingSystemMessageCount,
+        reason => { resumeReason = reason; },
       );
       // Only resume when there are genuinely new messages beyond the watermark;
       // an empty delta would mean "nothing new to say" (degenerate) — fall back
       // to the full flatten rather than send an empty turn.
-      if (reusable && reusable.usageCheckpoint && reusable.transcriptCheckpoint && messages.length > reusable.seenMessageCount
-        && await hasClaudeSessionTranscript(runtime.home, reusable.sessionId, reusable.transcriptCheckpoint)) {
+      if (reusable && (!reusable.usageCheckpoint || !reusable.transcriptCheckpoint)) resumeReason = 'outdated-record';
+      else if (reusable && messages.length <= reusable.seenMessageCount) resumeReason = 'no-new-messages';
+      else if (reusable && !await hasClaudeSessionTranscript(runtime.home, reusable.sessionId, reusable.transcriptCheckpoint!)) {
+        resumeReason = 'transcript-missing-or-changed';
+      } else if (reusable) {
         reusableSessionAvailable = true;
         const delta = buildUserMessage(messages.slice(reusable.seenMessageCount), runResourceMarkers);
         // `content` is a string OR a content-block array; both expose `.length`,
         // so a non-empty delta means there is genuinely something new to send.
-        if (delta.content.length > 0) {
+        if (delta.content.length === 0) resumeReason = 'no-new-messages';
+        else {
           resumeSessionId = reusable.sessionId;
           resumeCheckpoint = reusable.usageCheckpoint;
           resumeReason = 'compatible-history-and-transcript';
@@ -1030,15 +1036,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // #1408 opt-in warm process: a request that starts a fresh Claude session
     // can take a parked Claude Code process started with exactly these options.
     // Resumed sessions, the native broker paths and extension-bound runs always
-    // start Claude Code themselves.
-    const warmEnabled = !nativeToolPort && !nativeOriginalProcessHost && !resumeSessionId && !executionExtensionContext
-      && await isClaudeWarmProcessEnabled();
-    if (!warmEnabled && !nativeToolPort && !nativeOriginalProcessHost) closeAllClaudeSpares();
+    // start Claude Code themselves. They leave processes parked for other
+    // requests alone (#1096): only switching the setting off closes them.
+    const warmSetting = !nativeToolPort && !nativeOriginalProcessHost && await isClaudeWarmProcessEnabled();
+    const warmEnabled = warmSetting && !resumeSessionId && !executionExtensionContext;
+    if (!warmSetting && !nativeToolPort && !nativeOriginalProcessHost) closeAllClaudeSpares();
     // Claude Code adds the account's claude.ai connectors while it starts. A
     // parked process has always finished that, a fresh one often has not, so
     // the model could see different tools. FLUJO denies them anyway (#166);
-    // in this mode they stay off so every request offers only FLUJO's tools.
-    if (warmEnabled) childEnv.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
+    // in this mode they stay off so every request offers only FLUJO's tools,
+    // including a resumed turn of a session a parked process started.
+    if (warmSetting) childEnv.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
 
     const hasImages = typeof userContent !== 'string';
     log.debug('createCompletion via Claude Agent SDK', {

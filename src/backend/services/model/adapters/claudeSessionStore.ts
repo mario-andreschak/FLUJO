@@ -130,25 +130,35 @@ export function computeHistoryHash(messages: readonly { role: string; [key: stri
  * contiguous leading system-message count has not changed. The latter protects
  * the positional watermark from future context transformations that alter the
  * message-array head. Entries missing this metadata are treated as stale.
+ * `onMiss` learns why a stored session cannot be continued (#1096), so the
+ * request record says why a turn started a new session.
  */
 export function findReusableSession(
   key: string,
   prefixHash: string,
   currentMessages: readonly { role: string; [key: string]: unknown }[],
   currentLeadingSystemMessageCount: number,
+  onMiss?: (reason: SessionReuseMiss) => void,
 ): StoredSession | undefined {
+  const miss = (reason: SessionReuseMiss): undefined => { onMiss?.(reason); return undefined; };
   const existing = sessions().get(key);
-  if (!existing) return undefined;
-  if (Date.now() - existing.updatedAt > CLAUDE_SESSION_TTL_MS) { invalidateSession(key); return undefined; }
-  if (existing.prefixHash !== prefixHash) return undefined;
-  if (existing.leadingSystemMessageCount === undefined) return undefined;
-  if (existing.leadingSystemMessageCount !== currentLeadingSystemMessageCount) return undefined;
+  if (!existing) return miss('no-session');
+  if (Date.now() - existing.updatedAt > CLAUDE_SESSION_TTL_MS) { invalidateSession(key); return miss('expired'); }
+  if (existing.prefixHash !== prefixHash) return miss('instructions-tools-or-settings-changed');
+  if (existing.leadingSystemMessageCount === undefined) return miss('outdated-record');
+  if (existing.leadingSystemMessageCount !== currentLeadingSystemMessageCount) return miss('leading-system-messages-changed');
   const currentMessageCount = currentMessages.length;
-  if (currentMessageCount < existing.seenMessageCount) return undefined;
+  if (currentMessageCount < existing.seenMessageCount) return miss('history-shrank');
   if (!existing.historyHash
-    || existing.historyHash !== computeHistoryHash(currentMessages.slice(0, existing.seenMessageCount), currentLeadingSystemMessageCount)) return undefined;
+    || existing.historyHash !== computeHistoryHash(currentMessages.slice(0, existing.seenMessageCount), currentLeadingSystemMessageCount)) {
+    return miss('history-changed');
+  }
   return existing;
 }
+
+/** Why `findReusableSession` found nothing to continue. */
+export type SessionReuseMiss = 'no-session' | 'expired' | 'instructions-tools-or-settings-changed' | 'outdated-record'
+  | 'leading-system-messages-changed' | 'history-shrank' | 'history-changed';
 
 /** Record (or refresh) the session for a key after a successful run. */
 export function recordSession(key: string, observation: SessionObservation): void {
