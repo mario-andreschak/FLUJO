@@ -49,6 +49,8 @@ future measurements under the fully automated development policy. Its checker
 can initialize a clean-source external evidence collection without inventing
 distribution identities, measured passes or independent grades. Foundation
 development checks do not replace release acceptance or external reassessment.
+The [scorecard status](quality/scorecard-status.md) page lists, per row, what is
+delivered, what is still missing and which issue owns it.
 
 Open issues are tracked in [GitHub](https://github.com/mario-andreschak/FLUJO/issues).
 Release notes belong in [CHANGELOG.md](../CHANGELOG.md), including migration

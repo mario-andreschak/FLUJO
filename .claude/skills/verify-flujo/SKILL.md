@@ -98,8 +98,9 @@ Things that trip up a run:
 ## Evidence
 
 Relative `--out`, `--then-shot` and `--then-aria` paths are saved under
-`<temp>/flujo-drive/evidence/`, outside the repository (see Repository hygiene
-in AGENTS.md). Good proof:
+`flujo-drive/evidence/` in your own cache folder (`%LOCALAPPDATA%` on Windows,
+`~/.cache` elsewhere; `FLUJO_DRIVE_HOME` moves it), outside the repository (see
+Repository hygiene in AGENTS.md). Good proof:
 
 - follows the real user path, not internal APIs or test-only routes;
 - shows the action and the result: a before and after screenshot, plus an
