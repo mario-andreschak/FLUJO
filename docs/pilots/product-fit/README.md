@@ -2,12 +2,15 @@
 
 This packet supports [#577](https://github.com/mario-andreschak/FLUJO/issues/577) and supplies journey requirements for [#572](https://github.com/mario-andreschak/FLUJO/issues/572). FLUJO's intended value is a local MCP hub whose connections can be inspected, used in visual agents, debugged, approved, and reused by other clients. Measure whether people actually return to those workflows and benefit from that control.
 
+**Running the pilot?** Start with the plain-language [pilot kit](start-here.md): who to invite, the invitation, a consent note, the tester guide, a weekly form and two tracking sheets. The rest of this page describes the strict record for the independent reviewer.
+
 **Status: preparation only.** No participants, consent, candidate installed-artifact acceptance, eight elapsed weeks, or independent scorecard reassessment are supplied by this change. Numeric targets remain proposed until the maintainer and independent reviewer agree them under [#564](https://github.com/mario-andreschak/FLUJO/issues/564). Fixture/test success validates the collection tool, not product fit or real usage.
 
 ## Use the packet
 
 | Material | Purpose | Owner or consumer |
 | --- | --- | --- |
+| [Pilot kit](start-here.md) | Recruit, send, collect and review week by week, in plain language | Pilot owner; testers |
 | [Read-only reference workflows](reference-workflows.md) | Three synthetic task fixtures, receipt checker and current-app rehearsal | Pilot operator; Feature surface |
 | [Task protocol](tasks.md) and [practice fixture](fixtures/sample-notes.txt) | Reproduce the first model-plus-MCP run and the approval/debugger/proxy extensions | Pilot operator; Feature surface |
 | [Read-only reference workflows](reference-workflows.md) | Prepare a pinned separate fixture checkout and run three synthetic task cards | Technical operator |
