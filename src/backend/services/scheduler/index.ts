@@ -2613,7 +2613,7 @@ export class SchedulerService {
     // pause while that owner is turned off. Nothing is stored, so the next
     // tick after the owner is turned on again (also after a restart) runs.
     if (payload.kind !== 'manual') {
-      const pause = await backgroundWorkPause(this.workspace);
+      const pause = await backgroundWorkPause(this.workspace, Date.now(), currentExecution?.startedBy ?? execution.startedBy);
       if (pause.paused) {
         const record: RunRecord = {
           runId, executionGenerationId: this.executionGenerationId(execution), conversationId: '',
