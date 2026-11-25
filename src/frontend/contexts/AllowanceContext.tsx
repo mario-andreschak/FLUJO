@@ -119,7 +119,7 @@ export function AllowanceProvider({ children }: { children: ReactNode }) {
   const ensureFresh = useCallback(async (modelIds?: string[]) => {
     const workspace = getSelectedWorkspace();
     // A usage-permission refusal is rechecked automatically once its retryAt passes.
-    const missing = snapshot?.models.filter(row => isSubscriptionAllowance(row)
+    const missing = snapshot?.models.filter(row => isSubscriptionAllowance(row) && row.reason !== 'unsupported'
       && (!row.retryAt || Date.parse(row.retryAt) <= now)
       && (!modelIds || modelIds.includes(row.modelId))
       && Date.now() - (lastCollection.current.get(accountKey(workspace, row)) ?? 0) >= ALLOWANCE_MAX_AGE_MS

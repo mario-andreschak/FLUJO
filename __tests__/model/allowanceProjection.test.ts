@@ -1,6 +1,6 @@
-import { projectModelAllowance } from '@/backend/services/model/allowance/projection';
-import { currentAllowanceWindows, modelAllowancePercent, ALLOWANCE_MAX_AGE_MS, type AllowanceSnapshot } from '@/shared/types/model/allowance';
-import { allowanceAccountKey, recordAllowanceSnapshot, readAllowanceSnapshot } from '@/backend/services/model/allowance/store';
+import { projectModelAllowance, applyAllowanceFailure } from '@/backend/services/model/allowance/projection';
+import { currentAllowanceWindows, modelAllowancePercent, allowanceLevel, ALLOWANCE_MAX_AGE_MS, type AllowanceSnapshot } from '@/shared/types/model/allowance';
+import { allowanceAccountKey, recordAllowanceSnapshot, recordAllowanceSignal, readAllowanceSnapshot } from '@/backend/services/model/allowance/store';
 import { runWithWorkspace } from '@/utils/workspace';
 import type { Model } from '@/shared/types/model/model';
 
@@ -82,4 +82,77 @@ test('an empty SDK result cannot erase a fresh direct account-usage observation'
   recordAllowanceSnapshot(key, fresh);
   recordAllowanceSnapshot(key, { ...snapshot, observedAt: new Date(now + 1000).toISOString(), windows: [] });
   expect(readAllowanceSnapshot(key)).toEqual(fresh);
+});
+
+describe('rate-limit signals beside full usage reads', () => {
+  const signal = (id: string, remainingPercent: number, at: number): AllowanceSnapshot => ({
+    provider: 'claude', source: 'claude-rate-limit-event', observedAt: new Date(at).toISOString(),
+    windows: [{ id, label: id, remainingPercent, resetAt: null }],
+  });
+
+  test('a newer signal replaces only its own window and keeps the older reading time', () => {
+    const key = allowanceAccountKey('claude', 'signal-overlay');
+    recordAllowanceSnapshot(key, snapshot);
+    recordAllowanceSignal(key, signal('five_hour', 0, now + 1000), now + 1000);
+    const merged = readAllowanceSnapshot(key, now + 1000)!;
+    expect(merged.observedAt).toBe(snapshot.observedAt);
+    expect(merged.windows.map(window => [window.id, window.remainingPercent])).toEqual([['sonnet', 40], ['opus', 2], ['five_hour', 0]]);
+  });
+
+  test('a full read made after the signal wins, and "clear" drops a signal', () => {
+    const key = allowanceAccountKey('claude', 'signal-superseded');
+    recordAllowanceSignal(key, signal('five_hour', 0, now), now);
+    recordAllowanceSnapshot(key, { ...snapshot, observedAt: new Date(now + 1000).toISOString() });
+    expect(readAllowanceSnapshot(key, now + 1000)?.windows.find(window => window.id === 'five_hour')?.remainingPercent).toBe(60);
+    const other = allowanceAccountKey('claude', 'signal-cleared');
+    recordAllowanceSignal(other, signal('seven_day', 10, now), now);
+    recordAllowanceSignal(other, 'clear', now);
+    expect(readAllowanceSnapshot(other, now)).toBeUndefined();
+  });
+
+  test('an expired full read never hides a fresh signal', () => {
+    const key = allowanceAccountKey('claude', 'signal-after-expiry');
+    recordAllowanceSnapshot(key, snapshot);
+    const later = now + ALLOWANCE_MAX_AGE_MS + 1000;
+    recordAllowanceSignal(key, signal('seven_day', 15, later), later);
+    const projected = projectModelAllowance(model, key, readAllowanceSnapshot(key, later), later);
+    expect(projected.status).toBe('available');
+    expect(modelAllowancePercent(projected)).toBe(15);
+  });
+
+  test('signals for the same account add up into one reading until they age out', () => {
+    const key = allowanceAccountKey('claude', 'signal-accumulate');
+    recordAllowanceSignal(key, signal('five_hour', 30, now), now);
+    recordAllowanceSignal(key, signal('seven_day', 12, now + 1000), now + 1000);
+    expect(readAllowanceSnapshot(key, now + 1000)?.windows.map(window => window.id)).toEqual(['five_hour', 'seven_day']);
+    const later = now + ALLOWANCE_MAX_AGE_MS + 5000;
+    recordAllowanceSignal(key, signal('seven_day', 11, later), later);
+    expect(readAllowanceSnapshot(key, later)?.windows.map(window => window.id)).toEqual(['seven_day']);
+  });
+});
+
+test('a reading with no window for this model is not observed yet, not unreadable', () => {
+  const opusOnly = { ...snapshot, windows: [snapshot.windows[2]] };
+  expect(projectModelAllowance(model, 'opaque', opusOnly, now)).toMatchObject({ status: 'unknown', reason: 'not-observed', billing: 'subscription' });
+});
+
+test('an Antigravity login is a subscription FLUJO cannot read, never API billing', () => {
+  const antigravity: Model = { id: 'agy', name: 'gemini-3-pro', provider: 'antigravity-cli', ApiKey: '' };
+  expect(projectModelAllowance(antigravity, 'login', undefined, now)).toMatchObject({ provider: 'antigravity', billing: 'subscription', status: 'unavailable', reason: 'unsupported' });
+  expect(projectModelAllowance({ ...antigravity, ApiKey: 'encrypted-key' }, undefined, undefined, now).billing).toBe('api');
+});
+
+test('a refused usage page is no failure while another current reading exists', () => {
+  const available = projectModelAllowance(model, 'opaque', snapshot, now);
+  const retryAt = new Date(now + 60_000).toISOString();
+  const refused = applyAllowanceFailure({ ...available }, { reason: 'usage-permission', retryAt });
+  expect(refused).toMatchObject({ status: 'available', retryAt });
+  expect(refused.refreshFailed).toBeUndefined();
+  expect(applyAllowanceFailure({ ...available }, { reason: 'collection-failed' }).refreshFailed).toBe(true);
+  expect(applyAllowanceFailure(projectModelAllowance(model, 'opaque', undefined, now), { reason: 'usage-permission', retryAt }))
+    .toMatchObject({ status: 'unknown', reason: 'usage-permission', refreshFailed: true });
+});
+
+test.each([[100, 'ok'], [26, 'ok'], [25, 'low'], [11, 'low'], [10, 'critical'], [0, 'critical']] as const)('%s%% left is %s', (percent, level) => {
+  expect(allowanceLevel(percent)).toBe(level);
 });

@@ -1,38 +1,18 @@
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
-import type { AllowanceSnapshot, AllowanceFailureReason } from '@/shared/types/model/allowance';
+import type { AllowanceSnapshot } from '@/shared/types/model/allowance';
 import { prepareClaudeRuntimeEnvironment } from '../adapters/claudeRuntimeHome';
 import { createClaudeOwnedProcessSpawner, assertClaudeOwnedProcessRegistration, type ClaudeOwnedProcessRegistration } from '../adapters/claudeOwnedProcess';
-import { normalizeClaudeAllowance, claudeAllowanceSnapshot } from './claude';
+import { normalizeClaudeAllowance, claudeAllowanceSnapshot, claudeOAuthUsageResult, ClaudeAllowanceError } from './claude';
 import { allowanceAccountKey } from './store';
 
-export class ClaudeAllowanceError extends Error {
-  constructor(readonly reason: AllowanceFailureReason, cause?: unknown, readonly retryAt?: string) {
-    super('CLAUDE_ALLOWANCE_UNAVAILABLE', { cause });
-  }
-}
+export { ClaudeAllowanceError };
 
-/** Same usage endpoint as the installed official CLI. Its response is
- * authoritative even when the SDK's environment-token lane lacks scope metadata. */
-export async function readClaudeOAuthAllowance(credential: string, signal: AbortSignal): Promise<AllowanceSnapshot> {
-  const response = await fetch('https://api.anthropic.com/api/oauth/usage', {
-    method: 'GET', headers: { Authorization: 'Bearer ' + credential, 'anthropic-beta': 'oauth-2025-04-20' },
-    cache: 'no-store', redirect: 'error', signal,
-  });
-  if (response.status === 429) {
-    const header = response.headers.get('retry-after');
-    const seconds = header && /^\d+$/.test(header) ? Number(header) : NaN;
-    const date = header && /^[A-Za-z]{3}, /.test(header) ? Date.parse(header) : NaN;
-    const deadline = Number.isFinite(seconds) ? Date.now() + seconds * 1000 : Number.isFinite(date) ? date : Date.now() + 60_000;
+/** Reads a successful body within 64 KiB; any other answer is only drained. */
+async function boundedBody(response: Response): Promise<string> {
+  if (!response.ok || !response.body) {
     await response.body?.cancel().catch(() => {});
-    throw new ClaudeAllowanceError('rate-limited', undefined, new Date(Math.min(Math.max(deadline, Date.now() + 1000), Date.now() + 24 * 60 * 60 * 1000)).toISOString());
+    return '';
   }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => {});
-    // 401 usually means an access token that is being refreshed: an ordinary,
-    // retryable failure. Only 403 says this credential cannot read usage.
-    throw new ClaudeAllowanceError(response.status === 403 ? 'usage-permission' : 'collection-failed');
-  }
-  if (!response.body) throw new ClaudeAllowanceError('collection-failed');
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let bytes = 0;
@@ -45,10 +25,19 @@ export async function readClaudeOAuthAllowance(credential: string, signal: Abort
       chunks.push(chunk.value);
     }
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
-  const value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
-  const observation = normalizeClaudeAllowance({ rate_limits_available: true, rate_limits: value }, allowanceAccountKey('claude', credential));
-  if (!observation.available) throw new ClaudeAllowanceError('collection-failed');
-  return { ...claudeAllowanceSnapshot(observation), source: 'claude-oauth-usage' };
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/** Same usage endpoint as the installed official CLI. Its response is
+ * authoritative even when the SDK's environment-token lane lacks scope metadata. */
+export async function readClaudeOAuthAllowance(credential: string, signal: AbortSignal): Promise<AllowanceSnapshot> {
+  const response = await fetch('https://api.anthropic.com/api/oauth/usage', {
+    method: 'GET', headers: { Authorization: 'Bearer ' + credential, 'anthropic-beta': 'oauth-2025-04-20' },
+    cache: 'no-store', redirect: 'error', signal,
+  });
+  const body = await boundedBody(response);
+  return claudeOAuthUsageResult({ status: response.status, retryAfter: response.headers.get('retry-after'), body },
+    allowanceAccountKey('claude', credential));
 }
 
 /** Initialize an idle SDK process and read /usage. The input stream never yields

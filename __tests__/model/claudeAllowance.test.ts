@@ -21,7 +21,7 @@ describe('Claude subscription allowance', () => {
     expect(normalizeClaudeAllowance({ rate_limits_available: false, rate_limits: null }, 'account').available).toBe(false);
     const result = normalizeClaudeAllowance({ rate_limits_available: true, rate_limits: {
       five_hour: { utilization: null, resets_at: 'not a date' },
-      seven_day: { utilization: 101, resets_at: null },
+      seven_day: { utilization: -1, resets_at: null },
     } }, 'account');
     expect(result.windows.map(row => row.remainingPercent)).toEqual([null, null]);
     expect(result.windows.every(row => row.resetAt === null)).toBe(true);

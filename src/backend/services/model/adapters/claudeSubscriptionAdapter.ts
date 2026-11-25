@@ -14,8 +14,8 @@ import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handle
 import { createClaudeOwnedProcessSpawner } from './claudeOwnedProcess';
 import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
-import { collectClaudeAllowance, claudeAllowanceSnapshot } from '@/backend/services/model/allowance/claude';
-import { allowanceAccountKey, recordAllowanceSnapshot } from '@/backend/services/model/allowance/store';
+import { collectClaudeAllowance, claudeAllowanceSnapshot, claudeRateLimitSignal } from '@/backend/services/model/allowance/claude';
+import { allowanceAccountKey, recordAllowanceSnapshot, recordAllowanceSignal } from '@/backend/services/model/allowance/store';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
@@ -1529,6 +1529,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             attempt: lifecycle.attempt, retryDelayMs: lifecycle.retry_delay_ms, terminalReason: lifecycle.terminal_reason,
             runtimeVersion: lifecycle.claude_code_version });
         }
+        if (message.type === 'rate_limit_event') recordAllowanceSignal(allowanceKey, claudeRateLimitSignal(message.rate_limit_info));
         // Once cancelled, stop recording/streaming anything the detached loop
         // may still drain out of the dying subprocess.
         if (signal?.aborted) break;
