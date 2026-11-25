@@ -62,8 +62,10 @@ export type {
   InstallPreview,
   InstallSummary,
 } from '@/shared/types/package/install';
+import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
+import { stableStringify } from '@/backend/services/scheduler/triggers/pollEvaluators';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { validatePackage } from '@/shared/types/package/package.serialize';
@@ -123,6 +125,17 @@ export interface InstallPackageInput {
    * REST route passes `true` (the request itself is the consent).
    */
   consentGranted?: boolean;
+  /**
+   * The `reviewDigest` from the dry-run the person approved. When present, the
+   * install refuses a manifest that differs from the reviewed one, so the
+   * install and build commands that run are exactly the ones that were shown.
+   */
+  reviewDigest?: string;
+}
+
+/** Fingerprint of a validated manifest, independent of JSON key order. */
+export function packageReviewDigest(manifest: unknown): string {
+  return createHash('sha256').update(stableStringify(manifest)).digest('hex');
 }
 
 interface PackageInstallRecord {
@@ -543,6 +556,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     return s;
   }
   const manifest = parsed.data;
+  const reviewDigest = packageReviewDigest(manifest);
 
   const secrets = input.secrets ?? {};
   const secretProvided = (name: string): boolean =>
@@ -566,6 +580,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
         ...await buildPreview(manifest, secretProvided, { flowRenames, executionRenames, renameErrors }),
         missingGlobals: await computeMissingGlobals(manifest),
       },
+      reviewDigest,
       created: [],
       updated: [],
       skipped: [],
@@ -574,6 +589,17 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       errors: [],
       missingGlobals: [],
     };
+  }
+
+  // The registry is fetched again for the install. A package that changed after
+  // the review could run install or build commands the person never saw, so
+  // refuse before touching the host. Opening the package again shows the new
+  // version for review; nothing is left blocked.
+  if (input.reviewDigest !== undefined && input.reviewDigest !== reviewDigest) {
+    const s = empty();
+    s.dryRun = false;
+    s.errors.push('This package changed after you reviewed it. Open it again to review the current version, then install.');
+    return s;
   }
 
   // A rename the user asked for must never be silently dropped: refuse BEFORE

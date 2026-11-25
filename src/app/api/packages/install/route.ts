@@ -20,7 +20,10 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
  *         secrets?: Record<string,string>, modelMappings?: Record<string,string>,
  *         renames?: { flows?: Record<string,string>,
  *                     plannedExecutions?: Record<string,string> },
- *         consentGranted?: boolean }
+ *         consentGranted?: boolean, reviewDigest?: string }
+ *
+ * `reviewDigest` is returned by the preview. The UI sends it back so the
+ * install refuses a package that changed after the person reviewed it.
  *
  * `renames` (issue #407) carries the wizard's bulk DISPLAY-NAME rename map —
  * flow entries keyed by manifest-local flow id, planned-execution entries keyed
@@ -51,7 +54,7 @@ async function POST_handler(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { source, packageId, version, secrets, modelMappings, renames, consentGranted } = (body ?? {}) as {
+  const { source, packageId, version, secrets, modelMappings, renames, consentGranted, reviewDigest } = (body ?? {}) as {
     source?: unknown;
     packageId?: unknown;
     version?: unknown;
@@ -59,6 +62,7 @@ async function POST_handler(request: NextRequest) {
     modelMappings?: unknown;
     renames?: unknown;
     consentGranted?: unknown;
+    reviewDigest?: unknown;
   };
 
   if (source !== 'registry') {
@@ -116,6 +120,9 @@ async function POST_handler(request: NextRequest) {
   if (consentGranted !== undefined && typeof consentGranted !== 'boolean') {
     return NextResponse.json({ error: 'consentGranted must be a boolean' }, { status: 400 });
   }
+  if (reviewDigest !== undefined && (typeof reviewDigest !== 'string' || !/^[a-f0-9]{64}$/.test(reviewDigest))) {
+    return NextResponse.json({ error: 'reviewDigest must be the value returned by the preview' }, { status: 400 });
+  }
   const secretRecord = (secrets ?? {}) as Record<string, unknown>;
   for (const [k, v] of Object.entries(secretRecord)) {
     if (typeof v !== 'string') {
@@ -136,6 +143,7 @@ async function POST_handler(request: NextRequest) {
       plannedExecutions: (renameGroups.plannedExecutions ?? {}) as Record<string, string>,
     },
     consentGranted: consentGranted === undefined ? true : (consentGranted as boolean),
+    ...(reviewDigest ? { reviewDigest: reviewDigest as string } : {}),
   });
 
   return NextResponse.json(summary, { status: summary.ok ? 200 : 400 });

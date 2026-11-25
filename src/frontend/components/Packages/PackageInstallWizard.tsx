@@ -358,9 +358,13 @@ export default function PackageInstallWizard({
           throw new Error(body?.error || t('packages.browse.globalsFailed', { status: envResponse.status }));
         }
       }
+      // Install exactly the version and contents that were reviewed, even when
+      // the wizard was opened for "latest" and a newer version appeared since.
+      const reviewedVersion = preview.package?.version ?? version;
       const summary = await packageService.installFromRegistry({
         packageId,
-        ...(version ? { version } : {}),
+        ...(reviewedVersion ? { version: reviewedVersion } : {}),
+        ...(preview.reviewDigest ? { reviewDigest: preview.reviewDigest } : {}),
         secrets: secretValues,
         modelMappings: Object.fromEntries(Object.entries(modelMappings).filter(([, id]) => id !== '')),
         renames: renameMaps,

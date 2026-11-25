@@ -223,6 +223,12 @@ export interface InstallSummary {
   package?: { name: string; version: string; publisher?: string };
   /** Present on a dry-run (consent preview). */
   preview?: InstallPreview;
+  /**
+   * Present on a dry-run: a fingerprint of the exact package the person
+   * reviewed. Sending it back with the install makes the install refuse a
+   * package whose commands or contents changed after the review.
+   */
+  reviewDigest?: string;
   created: InstallEntityRef[];
   updated: InstallEntityRef[];
   skipped: InstallEntityRef[];

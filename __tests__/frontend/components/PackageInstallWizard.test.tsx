@@ -56,4 +56,27 @@ describe('PackageInstallWizard', () => {
       expect.objectContaining({ packageId: 'example', consentGranted: true }),
     ));
   });
+
+  it('installs exactly the reviewed version and contents when opened for the latest version', async () => {
+    const reviewDigest = 'a'.repeat(64);
+    installFromRegistry.mockReset()
+      .mockResolvedValueOnce({
+        ok: true, dryRun: true, package: { name: 'Example', version: '1.4.2' }, reviewDigest,
+        preview: { servers: [], models: [], installedModels: [], flows: [], plannedExecutions: [], secrets: [], globals: [], missingGlobals: [] },
+        created: [], updated: [], skipped: [], disabled: [], errors: [], servers: [], missingGlobals: [],
+      })
+      .mockResolvedValueOnce({
+        ok: true, dryRun: false, package: { name: 'Example', version: '1.4.2' },
+        created: [], updated: [], skipped: [], disabled: [], errors: [], servers: [], missingGlobals: [],
+      });
+    render(<PackageInstallWizard open packageId="example" packageName="Example" onClose={jest.fn()} />);
+    const install = await screen.findByRole('button', { name: 'Install package' });
+    expect(installFromRegistry.mock.calls[0][0]).not.toHaveProperty('version');
+
+    await waitFor(() => expect(install).toBeEnabled());
+    fireEvent.click(install);
+    await waitFor(() => expect(installFromRegistry).toHaveBeenLastCalledWith(
+      expect.objectContaining({ packageId: 'example', version: '1.4.2', reviewDigest, consentGranted: true }),
+    ));
+  });
 });

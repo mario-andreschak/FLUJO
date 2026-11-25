@@ -8,7 +8,7 @@ Packages bundle a FLUJO setup (agents, models, tool servers by reference, and pl
 
 - `packages-create`: "Create package" opens the "Create package" wizard with the steps "Select contents", "Resolve & validate", "Secret review", "Metadata" and "Export"; buttons "Next", "Back", "Build" (on "Metadata") and "Cancel" (or "Close" once built).
 - `packages-account`: "Package registry account" with the tabs "Log in" and "Sign up", "Email" and "Password" fields, "Continue with GitHub" and a "Registry URL" setting.
-- `packages-browse`: "Browse registry" searches published packages; choosing one opens the install wizard. Packages published under the signed-in account show a "Delete <package name>" button.
+- `packages-browse`: "Browse registry" searches published packages; choosing one opens the install wizard. Packages published under the signed-in account show a "Delete <package name>" button. The wizard installs exactly the version and contents it showed: if the package changed on the registry after the preview, the install stops with "This package changed after you reviewed it" and nothing is installed.
 - `packages-installed`: "Installed packages" lists what is installed, with a search box, "Refresh" and "Uninstall".
 
 ## How to get to it (user POV)
