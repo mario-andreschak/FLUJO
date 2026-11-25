@@ -38,6 +38,11 @@ jest.mock('@/backend/services/model/encryption', () => ({
   initializeDefaultEncryption: jest.fn(async () => true),
 }));
 
+const mockAdoptFirstModel = jest.fn(async (_model: unknown) => true);
+jest.mock('@/backend/services/flow/defaultAgent', () => ({
+  adoptFirstModelForDefaultAgent: (model: unknown) => mockAdoptFirstModel(model),
+}));
+
 import { GET as listModels, POST as createModel } from '@/app/api/model/route';
 import { GET as getModel, PUT as updateModel, DELETE as deleteModel } from '@/app/api/model/[id]/route';
 import { withModelCatalogLease } from '@/backend/services/model/catalogAdmission';
@@ -159,6 +164,23 @@ describe('Model REST API', () => {
 
     const delAgain = await deleteModel(req(), ctx('m1'));
     expect(delAgain.status).toBe(404);
+  });
+
+  it('hands only the first AI to the shipped FLUJO agent', async () => {
+    mockAdoptFirstModel.mockClear();
+    expect((await createModel(req(modelFixture()))).status).toBe(201);
+    expect(mockAdoptFirstModel).toHaveBeenCalledTimes(1);
+    expect(mockAdoptFirstModel.mock.calls[0][0]).toMatchObject({ id: 'm1' });
+
+    expect((await createModel(req(modelFixture({ id: 'm2', displayName: 'Second' })))).status).toBe(201);
+    expect(mockAdoptFirstModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('still saves the AI when the shipped agent cannot adopt it', async () => {
+    mockAdoptFirstModel.mockRejectedValueOnce(new Error('flow store busy'));
+    const res = await createModel(req(modelFixture()));
+    expect(res.status).toBe(201);
+    await expect(res.json()).resolves.toMatchObject({ id: 'm1' });
   });
 
   it('returns a retryable 409 for a busy catalog on create, update, and delete', async () => {

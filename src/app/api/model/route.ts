@@ -3,6 +3,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
+import { adoptFirstModelForDefaultAgent } from '@/backend/services/flow/defaultAgent';
 import * as modelAdapter from './frontend-model-adapter';
 
 const log = createLogger('app/api/model/route');
@@ -36,6 +37,18 @@ async function GET_handler(_request: Request) {
   }
 }
 
+/** The first AI also becomes the shipped FLUJO agent's AI. This never fails the save. */
+async function adoptAsFirstAi(model: Model) {
+  try {
+    const listed = await modelAdapter.loadModels();
+    if (listed.success && listed.models?.length === 1 && listed.models[0].id === model.id) {
+      await adoptFirstModelForDefaultAgent(model);
+    }
+  } catch (error) {
+    log.warn('The FLUJO agent could not adopt the first AI; the user can choose it in the agent', error);
+  }
+}
+
 /**
  * POST /api/model
  * Create a new model. The request body is the model object itself.
@@ -64,6 +77,7 @@ async function POST_handler(request: NextRequest) {
       });
     }
 
+    if (result.model) await adoptAsFirstAi(result.model);
     return new Response(JSON.stringify(result.model), {
       status: 201,
       headers: { 'Content-Type': 'application/json' },
