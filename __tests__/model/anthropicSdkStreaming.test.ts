@@ -3,7 +3,6 @@ import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
   AnthropicAdapter,
-  clearModelCapabilityCache,
   __resetCacheControlSupport,
 } from '@/backend/services/model/adapters/anthropicAdapter';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
@@ -49,7 +48,6 @@ function input(extra: Partial<CompletionInput> = {}): CompletionInput {
 }
 
 beforeEach(async () => {
-  clearModelCapabilityCache();
   __resetCacheControlSupport();
   receipts = [];
   server = createServer(async (request, response) => {
@@ -57,11 +55,6 @@ beforeEach(async () => {
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const receipt = { path: request.url!, body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {} };
     receipts.push(receipt);
-    if (receipt.path.startsWith('/v1/models/')) {
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end('{}');
-      return;
-    }
     respond(response, receipt);
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

@@ -274,7 +274,7 @@
   },
   "src/backend/services/model/adapters/anthropicAdapter.ts": {
     "flujo/no-double-cast": {
-      "count": 2
+      "count": 1
     }
   },
   "src/backend/services/model/adapters/claudeSessionPersistence.ts": {

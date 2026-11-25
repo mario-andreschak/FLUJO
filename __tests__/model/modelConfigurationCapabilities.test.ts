@@ -64,6 +64,16 @@ describe('provider-aware model configuration capabilities (#329)', () => {
     expect(claude.effortLevels).toContain('max');
   });
 
+  it('offers no Creativity on the Anthropic Messages format, for any model, and keeps a saved one', () => {
+    for (const name of ['claude-3-5-sonnet-20241022', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-5-5']) {
+      const capabilities = getModelConfigurationCapabilities('anthropic', 'anthropic', name);
+      expect(capabilities.creativity).toBeUndefined();
+      expect(capabilities.keepsUnusedCreativity).toBe(true);
+    }
+    // The OpenAI-format Anthropic profile is a different request format and keeps its control.
+    expect(getModelConfigurationCapabilities('anthropic', 'openai', 'claude-sonnet-4-6').creativity).toBeDefined();
+  });
+
   it('offers creativity to ordinary request/response models', () => {
     expect(
       getModelConfigurationCapabilities('openrouter', 'openai', 'vendor/model').creativity

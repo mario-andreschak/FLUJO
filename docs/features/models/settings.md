@@ -8,6 +8,17 @@ Generation controls such as temperature and output limits must be supported by t
 
 For **Antigravity CLI**, the CLI manages its generation settings; FLUJO does not forward temperature or output-token controls. A local Google account login can use an empty API key, or you can supply a Gemini API key. The technical name must be an available Antigravity model slug. The separate Gemini native API profile requires a key. See [Antigravity CLI setup](connecting.md#antigravity-cli) for authentication and host requirements.
 
+**Anthropic (Native)** and **OpenRouter Messages** use the Anthropic SDK 1.x,
+which sends Claude API version `2026-10-21`. That version no longer accepts a
+temperature, so these connections have no **Creativity** setting. A value saved
+earlier stays in the model's settings with a short note, but FLUJO does not send
+it and the model uses its default. Where a model offers **Effort**, use it to
+change how much the model thinks. Your API key still goes out in the `X-Api-Key`
+header, so gateways behind a custom base URL keep working. If a server behind a
+custom base URL refuses the new version, FLUJO retries with the older
+`2023-06-01` and keeps using it for that server. See Anthropic's
+[migration guide](https://platform.claude.com/docs/en/api/migration-2026-10-21).
+
 After changing an endpoint, credential, or model name, use **Test model** on the saved model card. Then open dependent agents and confirm their model binding still exists. Replacing or deleting a model can leave an existing step unable to run.
 
 **Gemini (Native)** uses Google's Interactions API with the same API key and
