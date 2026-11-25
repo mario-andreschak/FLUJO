@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
+import { realpath } from '../../../utils/realpath';
 
 // Resolve through Node's public native API. Test runners can replace imported
 // createRequire with their project resolver, which is not the child process's
@@ -59,7 +60,7 @@ async function readJson(filename: string): Promise<Record<string, unknown>> {
       if ((await fs.lstat(current)).isSymbolicLink()) throw new Error('Linked package manifest path');
       if (path.dirname(current) === current) break;
     }
-    if (!equal(await fs.realpath(filename), filename)) throw new Error('Retargeted package manifest');
+    if (!equal(await realpath(filename), filename)) throw new Error('Retargeted package manifest');
   };
   await assertPath();
   const handle = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
@@ -93,7 +94,7 @@ async function readJson(filename: string): Promise<Record<string, unknown>> {
 export async function assertPackageRunnerResolution(sourceRoot: string, entryPoint: string, cwd: string, runner: ProtectedPackageRunner,
   runtime?: { command: string; home: string; inspectClosure?: boolean }) {
   for (let current = path.resolve(cwd); ; current = path.dirname(current)) {
-    if ((await fs.lstat(current)).isSymbolicLink() || !equal(await fs.realpath(current), current)) throw new Error('Unsafe package runner working directory');
+    if ((await fs.lstat(current)).isSymbolicLink() || !equal(await realpath(current), current)) throw new Error('Unsafe package runner working directory');
     if (await exists(path.join(current, 'node_modules', '.bin'))) throw new Error('Unreviewed npm ancestor resolution candidate');
     if (path.dirname(current) === current) break;
   }

@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { OriginalOwnerEnrollment } from './types';
 import { refuse } from './types';
 import { killProcessTreeAndWait } from '@/utils/process/killProcessTree';
+import { realpath } from '@/utils/realpath';
 
 const toolNames = new Set(['worker_read_file', 'worker_write_file', 'worker_list_dir', 'worker_command']);
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -313,7 +314,7 @@ async function commandDirectory(target: string, snapshot: PathSnapshot): Promise
   const refusal = () => new Error('original_owner_tool_effect_refused');
   try {
     await assertSnapshot(snapshot);
-    const real = await fs.realpath(target);
+    const real = await realpath(target);
     if (canonical(real) !== canonical(target)) throw refusal();
     const stat = await fs.lstat(target, { bigint: true });
     const expected = snapshot.get(target);

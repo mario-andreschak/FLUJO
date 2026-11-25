@@ -9,6 +9,7 @@ import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import type { FlowExecutionAuthority } from '../types';
 import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
+import { realpath } from '@/utils/realpath';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { withWorkspaceRuntimeLock, probeRuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
 import { getPersonaActivity, getPersonaWorkItem } from '@/backend/services/enduringAgents/store';
@@ -171,7 +172,7 @@ async function cleanupOwnedTemporary(binding: Binding, temporary: string, handle
     const normalize = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
     for (const part of [base, path.join(base, 'db'), path.dirname(directory), directory]) {
       const stat = await fs.lstat(part);
-      if (!stat.isDirectory() || stat.isSymbolicLink() || normalize(await fs.realpath(part)) !== normalize(part)) return;
+      if (!stat.isDirectory() || stat.isSymbolicLink() || normalize(await realpath(part)) !== normalize(part)) return;
     }
     const parent = await fs.lstat(directory, { bigint: true });
     if (parent.dev !== directoryIdentity.dev || parent.ino !== directoryIdentity.ino) return;

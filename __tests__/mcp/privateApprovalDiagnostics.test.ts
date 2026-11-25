@@ -50,6 +50,8 @@ function mockStableContents() {
   // These readers always request bigint stats; the mocks intentionally cover that overload only.
   jest.spyOn(fs.promises, 'lstat').mockImplementation((async () => identity) as unknown as typeof fs.promises.lstat);
   jest.spyOn(fs.promises, 'realpath').mockImplementation((async (filename: fs.PathLike) => String(filename)) as typeof fs.promises.realpath);
+  jest.spyOn(fs, 'realpath').mockImplementation(((filename: fs.PathLike, callback: (error: null, resolved: string) => void) =>
+    callback(null, String(filename))) as typeof fs.realpath);
   jest.spyOn(fs.promises, 'open').mockImplementation(async () => {
     let read = false;
     return {

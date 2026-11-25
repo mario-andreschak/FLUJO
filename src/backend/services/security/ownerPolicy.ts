@@ -2,6 +2,7 @@ import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { ownerPolicySchema, type OwnerPolicy } from './ownerCredentials';
+import { realpath } from '../../../utils/realpath';
 
 export const MAX_OWNER_POLICY_BYTES = 64 * 1024;
 
@@ -22,7 +23,7 @@ export async function readOwnerPolicy(filename: string): Promise<OwnerPolicy> {
   const resolved = path.resolve(filename);
   const before = await fs.lstat(resolved, { bigint: true });
   assertPrivateFile(before);
-  const canonical = await fs.realpath(resolved);
+  const canonical = await realpath(resolved);
   if (path.relative(canonical, resolved) !== '') throw new Error('Invalid owner policy path');
   const handle = await fs.open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
@@ -39,7 +40,7 @@ export async function readOwnerPolicy(filename: string): Promise<OwnerPolicy> {
     const finalNamed = await fs.lstat(resolved, { bigint: true });
     if (length > MAX_OWNER_POLICY_BYTES || BigInt(length) !== stat.size
         || !sameFile(stat, await handle.stat({ bigint: true })) || !sameFile(stat, finalNamed)
-        || finalNamed.isSymbolicLink() || path.relative(canonical, await fs.realpath(resolved)) !== '') {
+        || finalNamed.isSymbolicLink() || path.relative(canonical, await realpath(resolved)) !== '') {
       throw new Error('Owner policy changed');
     }
     return ownerPolicySchema.parse(JSON.parse(bytes.subarray(0, length).toString('utf8')));

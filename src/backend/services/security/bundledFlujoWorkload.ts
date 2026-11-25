@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName, runWithWorkspace } from '@/utils/workspace';
 import { readPlainFile } from '@/utils/readPlainFile';
+import { realpath } from '@/utils/realpath';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { ownerPolicySchema } from './ownerCredentials';
 import { ownerPolicyRevision } from './ownerPolicy';
@@ -193,7 +194,7 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     const parent = directory(pending.ledger);
     try { await fs.promises.mkdir(parent, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     const parentStat = await fs.promises.lstat(parent);
-    if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || path.relative(await fs.promises.realpath(parent), parent) !== ''
+    if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || path.relative(await realpath(parent), parent) !== ''
         || (await fs.promises.readdir(parent)).length >= 512) throw new BundledFlujoWorkloadError();
     assertPending(pending); verified.assertLive();
     const key = hash(pending.token);
@@ -412,7 +413,7 @@ async function readCurrentConfig(serverName: string, signal: AbortSignal) {
   let current = path.dirname(filename);
   while (true) {
     const identity = await fs.promises.lstat(current, { bigint: true });
-    if (!identity.isDirectory() || identity.isSymbolicLink() || path.relative(await fs.promises.realpath(current), current) !== '') throw new BundledFlujoWorkloadError();
+    if (!identity.isDirectory() || identity.isSymbolicLink() || path.relative(await realpath(current), current) !== '') throw new BundledFlujoWorkloadError();
     parents.push({ filename: current, identity });
     const parent = path.dirname(current); if (parent === current) break; current = parent;
   }
@@ -422,7 +423,7 @@ async function readCurrentConfig(serverName: string, signal: AbortSignal) {
       // Directory size/timestamps legitimately change during the guarded write.
       if (!fresh.isDirectory() || fresh.isSymbolicLink() || fresh.dev !== parent.identity.dev || fresh.ino !== parent.identity.ino
           || fresh.mode !== parent.identity.mode || fresh.uid !== parent.identity.uid || fresh.gid !== parent.identity.gid
-          || path.relative(await fs.promises.realpath(parent.filename), parent.filename) !== '') throw new BundledFlujoWorkloadError();
+          || path.relative(await realpath(parent.filename), parent.filename) !== '') throw new BundledFlujoWorkloadError();
     }
   };
   const verifyPath = async () => {

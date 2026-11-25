@@ -260,8 +260,8 @@ describe('isolated MCP runtime directory admission', () => {
   it('denies canonical target drift after admission', async () => {
     seedDirectories();
     const admission = await admitTree();
-    jest.spyOn(fs.promises, 'realpath').mockImplementation(async candidate =>
-      String(candidate) === anchor ? path.join(container, 'different-target') : fs.realpathSync(candidate));
+    jest.spyOn(fs, 'realpath').mockImplementation(((candidate: fs.PathLike, callback: (error: null, resolved: string) => void) =>
+      callback(null, String(candidate) === anchor ? path.join(container, 'different-target') : fs.realpathSync(candidate))) as typeof fs.realpath);
     await expect(admission.verify()).rejects.toThrow(expect.objectContaining(denied));
   });
 

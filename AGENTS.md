@@ -44,6 +44,7 @@ workaround.
 | Every lint or type exception names its rule and reason | `flujo/disable-needs-reason`, `@typescript-eslint/ban-ts-comment` |
 | No `as unknown as` casts | `flujo/no-double-cast` |
 | Keep work off the event loop: no synchronous file calls in `src/` | `flujo/no-sync-fs` |
+| Resolve links without blocking but keep the path's spelling: `realpath` from `@/utils/realpath`, not `fs.promises.realpath` | `flujo/no-sync-fs` message, `__tests__/utils/realpath.test.ts` |
 | No raw timers in UI code; use `src/frontend/hooks/timing.ts` | `flujo/no-raw-timers` |
 | Effects, refs and state follow React's rules | `react-hooks/*` in `eslint.config.mjs` |
 | `backend`, `frontend` and `shared` import only what their layer allows | `__tests__/architecture/importBoundaries.test.ts` |
