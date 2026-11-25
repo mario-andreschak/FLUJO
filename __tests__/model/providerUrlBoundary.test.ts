@@ -42,7 +42,8 @@ test('a provider name in the path changes neither authentication headers nor Ope
 
 test('the real Anthropic hostname selects its header format and refuses redirect following', async () => {
   await fetchOpenAIModels('synthetic-key', 'https://api.anthropic.com/v1');
-  expect(network.mock.calls[0][1]).toEqual({ headers: { 'Content-Type': 'application/json', 'x-api-key': 'synthetic-key', 'anthropic-version': '2023-06-01' }, redirect: 'error' });
+  // The same API version the Anthropic SDK sends (anthropicApiVersion20261021.test.ts checks that pairing).
+  expect(network.mock.calls[0][1]).toEqual({ headers: { 'Content-Type': 'application/json', 'x-api-key': 'synthetic-key', 'anthropic-version': '2026-10-21' }, redirect: 'error' });
 });
 
 test('the real OpenAI hostname preserves the existing chat catalogue filter', async () => {

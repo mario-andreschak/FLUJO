@@ -16,7 +16,6 @@ import {
   AnthropicAdapter,
   applyCacheBreakpoints,
   isCacheControlRejection,
-  clearModelCapabilityCache,
   __resetCacheControlSupport,
 } from '@/backend/services/model/adapters/anthropicAdapter';
 import { Model } from '@/shared/types/model';
@@ -28,23 +27,15 @@ jest.mock('@/utils/logger', () => {
 
 jest.mock('@anthropic-ai/sdk', () => {
   const create = jest.fn();
-  const retrieve = jest.fn();
   const stream = jest.fn();
-  const BadRequestError = class extends Error {
-    status = 400;
-    constructor(msg: string) { super(msg); }
-  };
   const AnthropicMock = jest.fn().mockImplementation(() => ({
     messages: { create, stream },
-    models: { retrieve },
   }));
-  (AnthropicMock as any).BadRequestError = BadRequestError;
-  return { __esModule: true, default: AnthropicMock, __create: create, __retrieve: retrieve, __stream: stream };
+  return { __esModule: true, default: AnthropicMock, __create: create, __stream: stream };
 });
 
 const sdk = jest.requireMock('@anthropic-ai/sdk') as any;
 const anthropicCreate = sdk.__create;
-const anthropicRetrieve = sdk.__retrieve;
 const anthropicStream = sdk.__stream;
 
 const GOOD_RESP = {
@@ -170,11 +161,9 @@ describe('isCacheControlRejection', () => {
 describe('AnthropicAdapter prompt-cache breakpoints on the wire', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    clearModelCapabilityCache();
     __resetCacheControlSupport();
     anthropicCreate.mockResolvedValue(GOOD_RESP);
     anthropicStream.mockReturnValue({ finalMessage: jest.fn().mockResolvedValue(GOOD_RESP) });
-    anthropicRetrieve.mockResolvedValue({});
   });
 
   test('createCompletion sends breakpoints on tools, system and the last message', async () => {
@@ -202,8 +191,9 @@ describe('AnthropicAdapter prompt-cache breakpoints on the wire', () => {
     await new AnthropicAdapter().createStreamCompletion(input);
 
     expect(Anthropic).toHaveBeenCalledWith(expect.objectContaining({
-      apiKey: null, authToken: 'gateway-key', baseURL: 'https://openrouter.ai/api',
+      authToken: 'gateway-key', baseURL: 'https://openrouter.ai/api',
     }));
+    expect(jest.mocked(Anthropic).mock.calls[0][0]).not.toHaveProperty('apiKey');
     for (const body of [anthropicCreate.mock.calls[0][0], anthropicStream.mock.calls[0][0]]) {
       expect(body.output_config).toEqual({ effort: 'medium' });
       expect(body).not.toHaveProperty('temperature');
@@ -277,9 +267,7 @@ describe('AnthropicAdapter prompt-cache breakpoints on the wire', () => {
 describe('AnthropicAdapter usage mapping with cache buckets', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    clearModelCapabilityCache();
     __resetCacheControlSupport();
-    anthropicRetrieve.mockResolvedValue({});
   });
 
   test('prompt_tokens is the FULL input context and cached_tokens is the re-read', async () => {

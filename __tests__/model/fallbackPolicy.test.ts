@@ -31,7 +31,8 @@ it('falls back in order and uses each member’s credential and settings', async
   const call = jest.fn().mockRejectedValueOnce(limited()).mockResolvedValueOnce(result);
   const receipt = await new FallbackAdapter(() => ({ createCompletion: call })).createCompletion(input());
   expect(call.mock.calls.map(([value]) => [value.model.id, value.apiKey, value.temperature, value.maxTokens])).toEqual([
-    ['a', 'key-a', 0.2, 200], ['b', 'key-b', 0.7, 300],
+    // The Anthropic Messages member keeps its saved Creativity, but API 2026-10-21 has none to send.
+    ['a', 'key-a', 0.2, 200], ['b', 'key-b', undefined, 300],
   ]);
   expect(receipt.routing).toEqual({ policyId: 'p', selectedModelId: 'b', attempts: [
     { modelId: 'a', outcome: 'failed', reason: 'rate_limit' }, { modelId: 'b', outcome: 'completed' },

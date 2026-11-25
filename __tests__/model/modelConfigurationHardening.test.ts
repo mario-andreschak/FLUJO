@@ -31,12 +31,26 @@ describe('generation settings validation (#329)', () => {
     })).toMatch(/between 0 and 2/);
 
     expect(validateModelConfiguration({
-      provider: 'anthropic', adapter: 'anthropic', name: 'claude-3-5-sonnet', temperature: 1.5,
-    })).toMatch(/between 0 and 1/);
+      provider: 'openrouter', adapter: 'openai', name: 'vendor/model', temperature: -0.5,
+    })).toMatch(/between 0 and 2/);
 
     expect(validateModelConfiguration({
       provider: 'openrouter', adapter: 'openai', name: 'vendor/model', temperature: 'hot',
     })).toMatch(/Creativity/);
+  });
+
+  it('keeps a Creativity saved on an Anthropic Messages connection but never sends it (API 2026-10-21)', () => {
+    for (const [provider, name] of [
+      ['anthropic', 'claude-3-5-sonnet'], ['anthropic', 'claude-sonnet-4-6'], ['anthropic', 'claude-opus-4-8'],
+      ['openrouter', 'anthropic/claude-haiku-4.5'],
+    ] as const) {
+      for (const temperature of ['0.7', 1.5, '0.0']) {
+        const model = { provider, adapter: 'anthropic' as const, name, temperature };
+        // Saving an existing connection never fails because of a value FLUJO ignores.
+        expect(validateModelConfiguration(model)).toBeUndefined();
+        expect(normalizeModelTemperature(temperature, provider, 'anthropic', name)).toBeUndefined();
+      }
+    }
   });
 
   it('rejects creativity for models that expose effort instead', () => {
@@ -157,8 +171,8 @@ describe('persisted creativity normalization (#329)', () => {
   it('parses stored strings and clamps into the provider range', () => {
     expect(normalizeModelTemperature('0.7', 'openrouter', 'openai', 'vendor/model')).toBe(0.7);
     expect(normalizeModelTemperature(9, 'openrouter', 'openai', 'vendor/model')).toBe(2);
-    expect(normalizeModelTemperature(-3, 'anthropic', 'anthropic', 'claude-3-5-sonnet')).toBe(0);
-    expect(normalizeModelTemperature(5, 'anthropic', 'anthropic', 'claude-3-5-sonnet')).toBe(1);
+    expect(normalizeModelTemperature(-3, 'gemini', 'gemini', 'gemini-2.5-pro')).toBe(0);
+    expect(normalizeModelTemperature(5, 'gemini', 'gemini', 'gemini-2.5-pro')).toBe(2);
   });
 
   it('drops values that must never reach a provider SDK', () => {

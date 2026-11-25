@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createLogger } from '@/utils/logger';
 import { NormalizedModel } from '@/shared/types/model';
 import { ModelAdapter, ModelProvider } from '@/shared/types/model/provider';
+import { ANTHROPIC_API_VERSION } from './adapters/anthropicApiVersion';
 
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/provider');
@@ -270,7 +271,7 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
   if (apiKey) {
     if (provider === 'anthropic'){
     headers['x-api-key'] = `${apiKey}`;
-    headers['anthropic-version'] = `2023-06-01`; // TODO make dynamic? e.g. fetch models with anthropic sdk
+    headers['anthropic-version'] = ANTHROPIC_API_VERSION;
 
     } else {
     headers['Authorization'] = `Bearer ${apiKey}`;

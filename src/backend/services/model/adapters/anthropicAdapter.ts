@@ -15,6 +15,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { assertOwnerCredentialAdapterRoute } from '@/backend/execution/extensions';
+import { ANTHROPIC_API_VERSION, ANTHROPIC_PREVIOUS_API_VERSION } from './anthropicApiVersion';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
@@ -23,9 +24,6 @@ const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 // per-model Model.maxTokens). It is no longer a silent ceiling: when a value is
 // resolved it is used verbatim, so larger caps are honored (issue #173).
 const DEFAULT_MAX_TOKENS = 8192;
-
-const CAPABILITY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const modelCapabilityCache = new Map<string, { supportsTemperature: boolean; expiresAt: number }>();
 
 // --- Prompt caching -------------------------------------------------------
 //
@@ -94,114 +92,64 @@ export function isCacheControlRejection(err: unknown): boolean {
 }
 
 /**
+ * Endpoints (provider + baseURL) that refused {@link ANTHROPIC_API_VERSION}:
+ * an Anthropic-compatible server that only knows the earlier version. They get
+ * {@link ANTHROPIC_PREVIOUS_API_VERSION} instead, under which every request
+ * FLUJO builds is equally valid. In-process only, like `rejectedCacheControl`:
+ * a restart costs at most one more retry.
+ */
+const previousVersionEndpoints = new Set<string>();
+
+/** Test seam: forget which endpoints refused the current API version. */
+export function __resetApiVersionSupport(): void {
+  previousVersionEndpoints.clear();
+}
+
+/**
+ * True when a 400 names the `anthropic-version` header itself. Deliberately
+ * narrow, like {@link isCacheControlRejection}: a 400 about the request body
+ * (a field the version refuses, say) propagates unchanged instead of being
+ * hidden by a quiet move to the older version.
+ */
+export function isApiVersionRejection(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status !== 400) return false;
+  const haystack = [
+    (err as { message?: string })?.message,
+    JSON.stringify((err as { error?: unknown })?.error ?? ''),
+  ]
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes('anthropic-version');
+}
+
+/**
  * How many optional request features `complete()` can negotiate away
- * (`cache_control`, `temperature`) — the retry bound for its attempt loop.
+ * (`cache_control`, the current API version) — the retry bound for its
+ * attempt loop.
  */
 const DROPPABLE_FEATURES = 2;
 
-/** True when a 400 is Anthropic telling us `temperature` is gone on this model. */
-function isTemperatureDeprecated(err: unknown): boolean {
-  return (
-    err instanceof Anthropic.BadRequestError &&
-    err.message.includes('temperature') &&
-    err.message.toLowerCase().includes('deprecated')
-  );
-}
-
-/** Clears the capability cache. Call in tests between cases. */
-export function clearModelCapabilityCache(): void {
-  modelCapabilityCache.clear();
-}
-
 /**
- * Static denylist of model-name substrings that no longer accept the
- * `temperature` sampling parameter (Anthropic deprecated it for adaptive-
- * thinking models starting with claude-opus-4-7).
- *
- * Rules:
- * - Match is case-insensitive substring; we use lowercase model names.
- * - Prefer false-negatives (include temperature) over false-positives (break
- *   the call) for unknown models: an unsupported temperature produces a 400
- *   that the retry path catches; a missing temperature on a model that wants it
- *   would silently change behaviour.
+ * Client options for one connection. A client holds exactly one credential in
+ * SDK 1.x. An API key still goes out in `X-Api-Key`, as it did before 1.x:
+ * the Claude API accepts it there, and gateways or Anthropic-compatible
+ * servers behind a custom base URL (Microsoft Foundry among them) read it from
+ * that header. OpenRouter expects its key as a bearer token.
  */
-export const TEMPERATURE_DEPRECATED_SUBSTRINGS = [
-  'claude-opus-4-7',
-  'claude-opus-4-8',
-  'claude-opus-4-9',
-  'claude-opus-5',
-  'claude-fable-4',
-  'claude-fable-5',
-  'claude-sonnet-5',
-  'claude-haiku-5',
-] as const;
-
-async function fetchTemperatureSupportFromApi(
-  client: Anthropic,
-  modelName: string
-): Promise<boolean | null> {
-  try {
-    const model = await client.models.retrieve(modelName);
-    const caps = (model as unknown as Record<string, unknown>)['capabilities'] as Record<string, unknown> | undefined;
-    const thinking = caps?.['thinking'] as Record<string, unknown> | undefined;
-    const types = thinking?.['types'] as Record<string, unknown> | undefined;
-    const adaptive = types?.['adaptive'] as Record<string, unknown> | undefined;
-    if (typeof adaptive?.['supported'] === 'boolean') {
-      // adaptive.supported === true → model uses only adaptive thinking → no temperature
-      return !adaptive['supported'];
-    }
-    return null; // capability field absent — unknown
-  } catch {
-    return null; // API unavailable or model not returned — fall back to static list
-  }
-}
-
-/**
- * Returns true when the Anthropic model is expected to accept the `temperature`
- * parameter; false for models that reject it with a 400.
- *
- * Resolution order:
- * 1. Cache hit (keyed by lowercase model name, TTL 5 min).
- * 2. Live API lookup via client.models.retrieve (when client is provided).
- * 3. Static denylist fallback (TEMPERATURE_DEPRECATED_SUBSTRINGS).
- */
-export async function anthropicModelSupportsTemperature(
-  modelName: string,
-  client?: Anthropic
-): Promise<boolean> {
-  const key = modelName.toLowerCase().replace(/\./g, '-');
-
-  // 1. Cache hit
-  const cached = modelCapabilityCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.supportsTemperature;
-  }
-
-  // 2. Live API lookup
-  if (client) {
-    const apiResult = await fetchTemperatureSupportFromApi(client, modelName);
-    if (apiResult !== null) {
-      modelCapabilityCache.set(key, {
-        supportsTemperature: apiResult,
-        expiresAt: Date.now() + CAPABILITY_CACHE_TTL_MS,
-      });
-      return apiResult;
-    }
-    log.debug(
-      'Anthropic Models API returned no temperature capability info; using static denylist',
-      { model: modelName }
-    );
-  }
-
-  // 3. Static denylist fallback
-  const staticResult = !TEMPERATURE_DEPRECATED_SUBSTRINGS.some(s => key.includes(s));
-  if (client) {
-    modelCapabilityCache.set(key, {
-      supportsTemperature: staticResult,
-      expiresAt: Date.now() + CAPABILITY_CACHE_TTL_MS,
-    });
-  }
-  return staticResult;
+export function anthropicClientOptions(input: {
+  provider?: string;
+  apiKey: string;
+  baseUrl?: string;
+}): ConstructorParameters<typeof Anthropic>[0] {
+  return {
+    ...(input.provider === 'openrouter'
+      ? { authToken: input.apiKey }
+      : { apiKey: input.apiKey, defaultHeaders: { 'X-Api-Key': input.apiKey, Authorization: null } }),
+    // Honour a custom base URL if one was configured; otherwise the SDK
+    // default (api.anthropic.com) is used.
+    ...(input.baseUrl ? { baseURL: input.baseUrl } : {}),
+  };
 }
 
 /**
@@ -360,6 +308,7 @@ export function toAnthropicTools(
  * shape that can carry the marker.
  */
 function withCacheControl(message: Anthropic.MessageParam): Anthropic.MessageParam | null {
+  if (message.role === 'system') return null;
   const { content } = message;
 
   if (typeof content === 'string') {
@@ -579,16 +528,10 @@ export class AnthropicAdapter implements CompletionAdapter {
    * client.messages.stream() helper to open a native streaming connection,
    * then collects the final assembled Message via stream.finalMessage().
    *
-   * AUDIT NOTE (issue #274): As of the audit at baseSha
-   * 18dbcbbbf7223aba499f4bc8f5489e5a52010ef8 there was no streaming branch in
-   * this adapter. This method adds one proactively so that the same temperature
-   * guard and catch-and-retry applied to createCompletion cannot be bypassed by
-   * callers that prefer native SDK streaming.
-   *
    * The interface contract is identical to createCompletion: callers receive a
-   * CompletionResult containing an OpenAI-shaped ChatCompletion. Both paths now
-   * share `complete()` below, so the parameter fallbacks cannot diverge between
-   * them — which was the whole point of adding this method.
+   * CompletionResult containing an OpenAI-shaped ChatCompletion. Both paths
+   * share `complete()` below, so the request body and the negotiated fallbacks
+   * cannot diverge between them.
    */
   async createStreamCompletion(input: CompletionInput): Promise<CompletionResult> {
     if (input.readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
@@ -641,14 +584,19 @@ export class AnthropicAdapter implements CompletionAdapter {
   /**
    * The one request path, shared by the streaming and non-streaming entry points.
    *
-   * Negotiates away two optional-but-valuable request features, each detected
-   * narrowly and each dropped at most once, so the loop cannot spin:
+   * The body follows API version 2026-10-21: it never carries `temperature`,
+   * `top_p` or `top_k` (refused on every model), documents travel only in user
+   * turns and user text never carries citations. A Creativity value saved on
+   * the model is therefore ignored here; the model settings say so.
+   *
+   * Negotiates two optional-but-valuable request features, each detected
+   * narrowly and each dropped at most once, so the loop cannot spin. Both are
+   * remembered per (provider, baseURL) for the rest of the process, since the
+   * answer never changes mid-run:
    *   - `cache_control` breakpoints — absent from Anthropic-compatible proxies
-   *     that don't implement prompt caching. Disabled per (provider, baseURL) for
-   *     the rest of the process, since the answer never changes mid-run.
-   *   - `temperature` — rejected by adaptive-thinking models (claude-opus-4-7+)
-   *     that aren't yet on the static denylist. NOT remembered: the capability
-   *     cache and Models API lookup already handle that per model.
+   *     that don't implement prompt caching.
+   *   - the current API version — an Anthropic-compatible server that only
+   *     knows the earlier one gets that instead.
    */
   private async complete(
     input: CompletionInput,
@@ -656,19 +604,14 @@ export class AnthropicAdapter implements CompletionAdapter {
     send: (
       client: Anthropic,
       params: Anthropic.MessageCreateParamsNonStreaming,
-      options?: { signal: AbortSignal }
+      options?: Anthropic.RequestOptions
     ) => Promise<{ message: Anthropic.Message; liveMessageId?: string }>
   ): Promise<CompletionResult> {
     assertReadOnlyAssessmentInput(input);
-    const { model, apiKey, messages, tools, temperature, maxTokens, signal, onSdkRequest, onSdkRequestResult, readOnlyAssessment } = input;
+    const { model, apiKey, messages, tools, maxTokens, signal, onSdkRequest, onSdkRequestResult, readOnlyAssessment } = input;
     assertOwnerCredentialAdapterRoute(model, 'anthropic');
     const client = new Anthropic({
-      ...(model.provider === 'openrouter'
-        ? { apiKey: null, authToken: apiKey }
-        : { apiKey, authToken: null }),
-      // Honour a custom base URL if one was configured; otherwise the SDK
-      // default (api.anthropic.com) is used.
-      ...(model.baseUrl ? { baseURL: model.baseUrl } : {}),
+      ...anthropicClientOptions({ provider: model.provider, apiKey, baseUrl: model.baseUrl }),
       // The SDK defaults to a ~10-minute per-request timeout; raise it so a slow
       // turn in a long flow isn't aborted (see shared timeouts config).
       timeout: LLM_REQUEST_TIMEOUT_MS,
@@ -677,23 +620,17 @@ export class AnthropicAdapter implements CompletionAdapter {
 
     const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
     const anthropicTools = toAnthropicTools(tools);
-
-    // NOTE: anthropicModelSupportsTemperature is now async (issue #275): it first
-    // checks a short-lived cache, then queries the Anthropic Models API for
-    // live capability data, and finally falls back to the static denylist.
-    const includeTemperature = readOnlyAssessment ? false : await anthropicModelSupportsTemperature(model.name, client);
     const endpoint = endpointKey(model.provider, model.baseUrl);
 
     // Each attempt builds its own body from the untouched translation output, so
     // the params already handed to the SDK are never rewritten underneath it.
-    const build = (opts: { cache: boolean; temperature: boolean }) => {
+    const build = (opts: { cache: boolean }) => {
       const shaped = opts.cache
         ? applyCacheBreakpoints({ system, messages: anthropicMessages, tools: anthropicTools })
         : { system, messages: anthropicMessages, tools: anthropicTools, breakpoints: 0 };
       const params: Anthropic.MessageCreateParamsNonStreaming = {
         model: model.name,
         max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
-        ...(opts.temperature ? { temperature } : {}),
         ...(model.reasoningEffort
           ? {
               output_config: {
@@ -709,21 +646,27 @@ export class AnthropicAdapter implements CompletionAdapter {
     };
 
     let useCache = !readOnlyAssessment && !rejectedCacheControl.has(endpoint);
-    let useTemperature = includeTemperature;
-    // The abort signal (Stop button) cancels the in-flight HTTP request.
-    const options = signal ? { signal } : undefined;
+    let useCurrentVersion = !previousVersionEndpoints.has(endpoint);
 
     // One attempt, plus at most one retry per droppable feature. Each retry
     // clears the flag its own guard tests, so the loop cannot spin; the bound
     // mirrors openaiResponsesAdapter's negotiation loop as a backstop.
     for (let attempt = 0; attempt <= DROPPABLE_FEATURES; attempt++) {
-      const { params, breakpoints } = build({ cache: useCache, temperature: useTemperature });
+      const { params, breakpoints } = build({ cache: useCache });
+      // The abort signal (Stop button) cancels the in-flight HTTP request.
+      const options: Anthropic.RequestOptions | undefined = signal || !useCurrentVersion
+        ? {
+            ...(signal ? { signal } : {}),
+            ...(!useCurrentVersion ? { headers: { 'anthropic-version': ANTHROPIC_PREVIOUS_API_VERSION } } : {}),
+          }
+        : undefined;
 
       log.debug(`${label} via Anthropic SDK`, {
         model: model.name,
         toolCount: anthropicTools?.length ?? 0,
         hasSystem: Boolean(system),
         cacheBreakpoints: breakpoints,
+        apiVersion: useCurrentVersion ? ANTHROPIC_API_VERSION : ANTHROPIC_PREVIOUS_API_VERSION,
       });
 
       try {
@@ -744,6 +687,15 @@ export class AnthropicAdapter implements CompletionAdapter {
         };
       } catch (err) {
         if (readOnlyAssessment) throw err;
+        if (useCurrentVersion && isApiVersionRejection(err)) {
+          previousVersionEndpoints.add(endpoint);
+          log.warn(
+            `Endpoint refused Anthropic API version ${ANTHROPIC_API_VERSION}; retrying with ${ANTHROPIC_PREVIOUS_API_VERSION} for it.`,
+            { model: model.name, provider: model.provider, baseUrl: model.baseUrl }
+          );
+          useCurrentVersion = false;
+          continue;
+        }
         if (useCache && breakpoints > 0 && isCacheControlRejection(err)) {
           rejectedCacheControl.add(endpoint);
           log.warn(
@@ -752,17 +704,6 @@ export class AnthropicAdapter implements CompletionAdapter {
             { model: model.name, provider: model.provider, baseUrl: model.baseUrl }
           );
           useCache = false;
-          continue;
-        }
-        // Some models (e.g. claude-opus-4-7+) reject `temperature` with a 400.
-        // When not yet covered by the static denylist, auto-retry without it.
-        if (useTemperature && isTemperatureDeprecated(err)) {
-          log.warn(
-            'Anthropic API rejected temperature for model; retrying without it. ' +
-              'Consider adding this model to TEMPERATURE_DEPRECATED_SUBSTRINGS.',
-            { model: model.name }
-          );
-          useTemperature = false;
           continue;
         }
         throw err;

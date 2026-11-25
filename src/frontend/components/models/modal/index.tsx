@@ -415,6 +415,8 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
     formState.adapter,
     formState.name,
   );
+  // A Creativity value this connection already saved (a draft has no name yet).
+  const savedCreativity = model.name ? String(model.temperature ?? '').trim() : '';
   const discoveredEfforts = openRouterModels.find(candidate => candidate.id === formState.name)?.reasoningEfforts;
   if (currentProfile.id === 'codex' && discoveredEfforts?.length) {
     configurationCapabilities.effortLevels = discoveredEfforts as NonNullable<typeof configurationCapabilities.effortLevels>;
@@ -548,7 +550,11 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
         provider: formState.provider!,
         adapter: resolveModelAdapter(formState.provider, formState.adapter),
         promptTemplate: formState.promptTemplate,
-        temperature: configurationCapabilities.creativity ? formState.temperature : undefined,
+        temperature: configurationCapabilities.creativity
+          ? formState.temperature
+          : configurationCapabilities.keepsUnusedCreativity && savedCreativity
+            ? savedCreativity
+            : undefined,
         reasoningEffort: configurationCapabilities.effortLevels?.includes(formState.reasoningEffort!)
           ? formState.reasoningEffort
           : undefined,
@@ -991,6 +997,12 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
                       max: configurationCapabilities.creativity.max,
                     })}
                   />
+                )}
+
+                {configurationCapabilities.keepsUnusedCreativity && savedCreativity && (
+                  <Alert severity="info" sx={{ mt: 1 }}>
+                    {t('models.modal.creativityUnusedForClaude', { value: savedCreativity })}
+                  </Alert>
                 )}
 
                 {configurationCapabilities.effortLevels && (

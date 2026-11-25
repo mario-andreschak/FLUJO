@@ -89,6 +89,12 @@ export type ModelServiceTier = 'default' | 'priority';
 export interface ModelConfigurationCapabilities {
   /** Temperature, presented to users as Creativity. */
   creativity?: { min: number; max: number; step: number };
+  /**
+   * The request format has no Creativity setting any more (Anthropic Messages,
+   * API version 2026-10-21). A value saved earlier is kept as it is but never
+   * sent, and the settings show a note instead of the field.
+   */
+  keepsUnusedCreativity?: boolean;
   /** Provider-supported qualitative reasoning values. */
   effortLevels?: ModelReasoningEffort[];
   /** Gemini 3+ qualitative thinking levels. */
@@ -135,7 +141,7 @@ export function validateModelConfiguration(
 
   const capabilities = getModelConfigurationCapabilities(model.provider, model.adapter, model.name ?? '');
 
-  if (model.temperature !== undefined && model.temperature !== '') {
+  if (model.temperature !== undefined && model.temperature !== '' && !capabilities.keepsUnusedCreativity) {
     const temperature = typeof model.temperature === 'number'
       ? model.temperature
       : typeof model.temperature === 'string' ? Number(model.temperature) : NaN;
@@ -255,9 +261,7 @@ export function getModelConfigurationCapabilities(
 
   if (resolvedAdapter === 'anthropic') {
     return {
-      ...(!ANTHROPIC_ADAPTIVE_MODEL.test(name)
-        ? { creativity: { min: 0, max: 1, step: 0.1 } }
-        : {}),
+      keepsUnusedCreativity: true,
       ...(ANTHROPIC_EFFORT_MODEL.test(name)
         ? { effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] as ModelReasoningEffort[] }
         : {}),
