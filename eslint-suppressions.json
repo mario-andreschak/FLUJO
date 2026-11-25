@@ -376,21 +376,6 @@
       "count": 13
     }
   },
-  "src/backend/services/security/ownerBootstrap.ts": {
-    "flujo/no-sync-fs": {
-      "count": 14
-    }
-  },
-  "src/backend/services/security/ownerPolicy.ts": {
-    "flujo/no-sync-fs": {
-      "count": 9
-    }
-  },
-  "src/backend/services/security/ownerSession.ts": {
-    "flujo/no-sync-fs": {
-      "count": 14
-    }
-  },
   "src/backend/services/security/protectedPackageRunner.ts": {
     "flujo/no-sync-fs": {
       "count": 16
