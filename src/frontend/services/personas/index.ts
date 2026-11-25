@@ -430,6 +430,10 @@ class PersonasService {
     return jsonRequest(personaPath(personaId, '/work-items'), 'POST', input);
   }
 
+  listWorkItems(personaId: string): Promise<PersonaWorkItem[]> {
+    return parse(fetch(withWorkspaceUrl(personaPath(personaId, '/work-items'))));
+  }
+
   creationReadiness(input: PersonaCreationReadinessInput, signal?: AbortSignal): Promise<PersonaCreationReadiness> {
     return parse(fetch(withWorkspaceUrl(`${BASE}/readiness`), {
       method: 'POST', signal,

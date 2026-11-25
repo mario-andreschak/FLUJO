@@ -68,6 +68,7 @@ import {
 import { digestProjectedMessages, digestProjectionIdentity } from '../compaction/digest';
 import { withExactSourceRecall } from '../compaction/exactSourceRecall';
 import { retainSummaryArtifacts } from '../compaction/state';
+import { manualCompactionMode, markManualCompactionAttempted } from '../compaction/manualRequest';
 import {
   COMPACTION_ARTIFACT_SCHEMA_VERSION,
   COMPACTION_POLICY_VERSION,
@@ -616,7 +617,16 @@ export class ModelHandler {
     shouldAbort?: () => boolean,
   ): Promise<CompactHistoryResult | null> {
     try {
-      if (!conversationId || source.length < 4) return null;
+      if (!conversationId) return null;
+      const state = getConversationStates().get(conversationId);
+      // The first model call after a "/compact" uses the request up, whatever
+      // the outcome, so a request never lingers or retries on every call.
+      const manualRequest = state?.compactionRequest;
+      const forced = manualCompactionMode(manualRequest) === 'force';
+      if (forced && state && manualRequest) {
+        state.compactionRequest = markManualCompactionAttempted(manualRequest, Date.now());
+      }
+      if (source.length < 4) return null;
 
       const global = await ModelHandler.getCompactionGlobalSettings();
       const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
@@ -637,7 +647,8 @@ export class ModelHandler {
             : 96_000));
       // Codex also bounds text in one turn/start independently of model tokens.
       const threshold = model.adapter === 'codex-cli' ? Math.min(tokenThreshold, 220_000) : tokenThreshold;
-      if (threshold === undefined || threshold <= 0 || estimate < threshold) return null;
+      const overThreshold = threshold !== undefined && threshold > 0 && estimate >= threshold;
+      if (!overThreshold && !state?.compactionRequest) return null;
 
       const projection: CompactionProjectionIdentity = {
         conversationId,
@@ -653,7 +664,6 @@ export class ModelHandler {
       const fullSourceDigest = digestProjectedMessages(source);
       const projectionDigest = digestProjectionIdentity(projection);
 
-      const state = getConversationStates().get(conversationId);
       const reusableArtifact = state?.compactionState?.artifacts.find(artifact =>
         artifact.schemaVersion === COMPACTION_ARTIFACT_SCHEMA_VERSION &&
         artifact.conversationId === conversationId &&
@@ -662,6 +672,9 @@ export class ModelHandler {
         artifact.policyVersion === COMPACTION_POLICY_VERSION &&
         artifact.modelId === model.id
       );
+      const keepManualSummary = !overThreshold && !forced
+        && manualCompactionMode(state?.compactionRequest, reusableArtifact) === 'keep';
+      if (!overThreshold && !forced && !keepManualSummary) return null;
       if (model.adapter === 'openai-responses' || model.adapter === 'openrouter-agent') {
         const requestIndex = source.findLastIndex(message => message.role === 'user' && (message.depth ?? 0) === 0);
         const request = source[requestIndex];
@@ -676,8 +689,11 @@ export class ModelHandler {
         // checks still apply to the unmodified fallback.
         if (continuingTools && !usingCurrentSummary) return null;
       }
-      const split = selectCompactionSplit(source, eff.keepTokens, reusableArtifact);
+      const split = selectCompactionSplit(source, eff.keepTokens, reusableArtifact, keepManualSummary);
       const sourceDigest = digestProjectedMessages([...split.leadingSystem, ...split.toSummarize]);
+      // Below the threshold a kept manual summary is reused exactly or not at
+      // all; it never starts a new summarizer call on its own.
+      if (keepManualSummary && sourceDigest !== reusableArtifact?.sourceDigest) return null;
 
       const summarize = async (
         msgs: FlujoChatMessage[],
@@ -792,6 +808,7 @@ export class ModelHandler {
         policyVersion: COMPACTION_POLICY_VERSION,
         modelId: model.id,
         reusableArtifact,
+        pinToArtifact: keepManualSummary,
       }, { summarize, writeAnchor, writeSummaryRange: async payload => {
         const name = 'compaction-range-' + createHash('sha256')
           .update(projectionDigest).update(JSON.stringify(payload)).digest('hex');

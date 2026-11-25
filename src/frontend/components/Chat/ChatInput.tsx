@@ -54,6 +54,17 @@ import {
 } from '@/utils/shared/promptRefs';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { PointerDragShield, usePointerDrag } from './floatingPanel';
+import {
+  SLASH_COMMANDS,
+  filterSlashCommands,
+  findSlashQuery,
+  literalSlashText,
+  parseSlashCommand,
+  type SlashCommandHost,
+  type SlashCommandNotice,
+  type SlashCommandSpec,
+} from './slashCommands';
+import SlashCommandMenu, { SLASH_MENU_ID, SlashCommandNoticeBanner, slashOptionId } from './SlashCommandMenu';
 
 const COMPOSER_HEIGHT_KEY = 'flujo-chat-composer-height';
 const MIN_EDITOR_HEIGHT = 24;
@@ -101,6 +112,10 @@ interface ChatInputProps {
    * start of the run options row, or in the phone run-options sheet.
    */
   projectControl?: React.ReactNode;
+  /** Slash commands ("/goal", "/compact", …). Without it a leading "/" is plain text. */
+  slashCommands?: SlashCommandHost;
+  /** The chat on screen; a command's answer shows only in the chat it belongs to. */
+  slashNoticeKey?: string | null;
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
@@ -124,6 +139,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onSaveEdit,
   onCancelEdit,
   projectControl,
+  slashCommands,
+  slashNoticeKey = null,
 }) => {
   const { t, tp } = useI18n();
   const theme = useTheme();
@@ -397,10 +414,35 @@ const ChatInput: React.FC<ChatInputProps> = ({
     'idle' | 'processing' | 'success' | 'empty' | 'error' | 'disabled' | 'cancelled'
   >('idle');
   
+  // Slash commands (#1225): "/" plus a word opens the command menu. A known
+  // command runs instead of being sent; anything else is sent as typed.
+  const slashEnabled = Boolean(slashCommands) && !isEditing;
+  const [slashNotice, setSlashNotice] = useState<{ notice: SlashCommandNotice; key: string | null } | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissedText, setSlashDismissedText] = useState<string | null>(null);
+  const slashQuery = slashEnabled ? findSlashQuery(message) : null;
+  const slashMatches = useMemo<SlashCommandSpec[]>(() => {
+    if (slashQuery === null || !slashCommands) return [];
+    const available = SLASH_COMMANDS.filter(command => slashCommands.availability(command.id).available);
+    return filterSlashCommands(available, slashQuery, command => t(command.description));
+  }, [slashCommands, slashQuery, t]);
+  const slashMenuOpen = slashQuery !== null && slashDismissedText !== message;
+  const unavailableSlash = slashCommands && slashQuery && slashMatches.length === 0
+    ? SLASH_COMMANDS.find(command => command.name === slashQuery)
+    : undefined;
+  const unavailableSlashState = unavailableSlash ? slashCommands?.availability(unavailableSlash.id) : undefined;
+  const slashEmptyText = unavailableSlashState && !unavailableSlashState.available ? unavailableSlashState.reason : undefined;
+  const activeSlashIndex = Math.min(slashIndex, Math.max(0, slashMatches.length - 1));
+  const pendingSlashCommand = slashEnabled ? parseSlashCommand(message) : null;
+  const visibleSlashNotice = slashNotice && slashNotice.key === slashNoticeKey ? slashNotice.notice : null;
+
   // Handle text input change (routes to the parent while editing).
   const handleMessageChange = (value: string) => {
     if (isEditing) onEditingContentChange?.(value);
-    else setMessage(value);
+    else {
+      setMessage(value);
+      setSlashIndex(0);
+    }
   };
 
   // Save the in-progress edit (only when there's content).
@@ -408,16 +450,63 @@ const ChatInput: React.FC<ChatInputProps> = ({
     if (editing && editing.content.trim()) onSaveEdit?.();
   };
 
+  const runSlashCommand = async (command: SlashCommandSpec, args: string) => {
+    if (!slashCommands) return;
+    const startedIn = slashNoticeKey;
+    const allowed = slashCommands.availability(command.id);
+    if (!allowed.available) {
+      // Explain why, and keep the text so it can still be edited or sent.
+      setSlashNotice({ notice: { tone: 'warning', title: `/${command.name}`, lines: [allowed.reason] }, key: startedIn });
+      return;
+    }
+    const typed = message;
+    setMessage('');
+    setSlashNotice(null);
+    let notice: SlashCommandNotice | null;
+    try {
+      notice = await slashCommands.run(command.id, args);
+    } catch (error) {
+      log.warn('Slash command failed', { command: command.id, error });
+      notice = {
+        tone: 'error',
+        title: `/${command.name}`,
+        lines: [t('chat.slash.failed', { error: error instanceof Error ? error.message : String(error) })],
+      };
+    }
+    if (!mountedRef.current) return;
+    if (notice) setSlashNotice({ notice, key: notice.conversationId ?? startedIn });
+    // A failed command gives the typed text back instead of losing it.
+    if (notice?.tone === 'error') setMessage(current => current || typed);
+    editorRef.current?.focus();
+  };
+
+  const completeSlashCommand = (command: SlashCommandSpec) => {
+    setMessage(`/${command.name}${command.acceptsArgs ? ' ' : ''}`);
+    setSlashIndex(0);
+    editorRef.current?.focus();
+  };
+
+  // Enter or a click on a menu entry: run it, or wait for its text first.
+  const chooseSlashCommand = (command: SlashCommandSpec) => {
+    if (command.acceptsArgs && slashQuery !== command.name) completeSlashCommand(command);
+    else void runSlashCommand(command, '');
+  };
+
   // Handle sending a message
   const handleSend = () => {
+    if (pendingSlashCommand) {
+      void runSlashCommand(pendingSlashCommand.command, pendingSlashCommand.args);
+      return;
+    }
     // The textbox stays editable while `disabled` (so the user can type ahead while a
     // conversation loads or a run is in flight), so sending is gated here instead.
     if (disabled || attachmentsPending) return;
     if (message.trim() || attachments.length > 0) {
       log.debug('Sending message', { messageLength: message.length, attachmentsCount: attachments.length });
-      onSendMessage(message, attachments);
+      onSendMessage((slashEnabled ? literalSlashText(message) : null) ?? message, attachments);
       setMessage('');
       setAttachments([]);
+      setSlashNotice(null);
       // Keep the caret in the composer so the user can keep typing after a send.
       editorRef.current?.focus();
     }
@@ -425,6 +514,31 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
   // Handle key press (Enter to send / save edit)
   const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (slashMenuOpen) {
+      const selected = slashMatches[activeSlashIndex];
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && slashMatches.length > 0) {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        setSlashIndex((activeSlashIndex + step + slashMatches.length) % slashMatches.length);
+        return;
+      }
+      if (e.key === 'Tab' && !e.shiftKey && selected) {
+        e.preventDefault();
+        completeSlashCommand(selected);
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey && selected) {
+        e.preventDefault();
+        chooseSlashCommand(selected);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashDismissedText(message);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (isEditing) {
@@ -1060,6 +1174,20 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </Box>
         )}
         
+        {visibleSlashNotice && (
+          <SlashCommandNoticeBanner notice={visibleSlashNotice} onClose={() => setSlashNotice(null)} />
+        )}
+
+        {slashMenuOpen && (
+          <SlashCommandMenu
+            commands={slashMatches}
+            activeIndex={activeSlashIndex}
+            emptyText={slashEmptyText}
+            onHover={setSlashIndex}
+            onChoose={chooseSlashCommand}
+          />
+        )}
+
         {/* Edit banner: shown while editing an existing message in the input. */}
         {isEditing && (
           <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -1086,6 +1214,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
             height={editorHeight}
             dataTour="chat-input"
             ariaLabel={isEditing ? t('chat.input.editMessage') : t('chat.input.message')}
+            ariaControls={slashMenuOpen ? SLASH_MENU_ID : undefined}
+            ariaActiveDescendant={slashMenuOpen && slashMatches[activeSlashIndex]
+              ? slashOptionId(slashMatches[activeSlashIndex].id) : undefined}
             placeholder={isEditing ? t('chat.input.editPlaceholder') : (placeholder || t('chat.input.placeholder'))}
             onKeyDown={handleKeyPress}
             onPaste={handlePaste}
@@ -1190,7 +1321,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 <IconButton
                   color="primary"
                   onClick={handleSend}
-                  disabled={disabled || attachmentsPending || (!message.trim() && attachments.length === 0)}
+                  disabled={!pendingSlashCommand && (disabled || attachmentsPending || (!message.trim() && attachments.length === 0))}
                   aria-label={t('chat.input.send')}
                   sx={{
                     width: 44,

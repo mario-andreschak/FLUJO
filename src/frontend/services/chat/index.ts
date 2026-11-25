@@ -11,6 +11,7 @@ import type {
 import type { Flow } from '@/shared/types/flow';
 import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
 import type { WirePreviewResponse } from '@/shared/types/execution/modelInput';
+import type { ManualCompactionResponse } from '@/shared/types/contextCompaction';
 import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { HumanAnswer } from '@/utils/shared/humanStep';
@@ -280,6 +281,15 @@ class ChatService {
       },
     );
     return parse<WirePreviewResponse>(response);
+  }
+
+  /** Ask the next model call of this conversation to use a summary of older messages ("/compact"). */
+  async requestCompaction(conversationId: string): Promise<ManualCompactionResponse> {
+    const response = await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/compact`),
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: '{}' },
+    );
+    return parse<ManualCompactionResponse>(response);
   }
 
   /** Durable, exact SDK-dispatch markers for the Chat model-turn timeline. */

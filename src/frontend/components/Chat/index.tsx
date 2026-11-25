@@ -72,6 +72,8 @@ import {
 import LiveRunIndicator, { LiveRunStats, toolProgressStatus } from './LiveRunIndicator';
 import TodoDock from './TodoDock';
 import ConversationStats from './ConversationStats';
+import { useChatSlashCommands } from './useChatSlashCommands';
+import type { ChatSlashContext } from './chatSlashCommands';
 import ChatTargetSelector from './ChatTargetSelector';
 import { personaChatRoutingMetadata } from './personaChatTarget';
 import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
@@ -4184,32 +4186,36 @@ const Chat: React.FC = () => {
   // `half` picks which side of the cut is kept:
   //   'head' → start … picked message (inclusive) — the original behaviour
   //   'tail' → picked message … end of the conversation
-  const splitConversationAtMessage = (messageId: string, half: SplitHalf = 'head') => {
-    if (!detailedConversation) return;
+  const splitConversationAtMessage = (
+    messageId: string,
+    half: SplitHalf = 'head',
+    source: Conversation | null = detailedConversation,
+  ): string | null => {
+    if (!source) return null;
     log.debug('Splitting conversation at message', { messageId, half });
 
-    const messageIndex = detailedConversation.messages.findIndex(msg => msg.id === messageId);
-    if (messageIndex === -1) return;
+    const messageIndex = source.messages.findIndex(msg => msg.id === messageId);
+    if (messageIndex === -1) return null;
 
-    const messagesBeforeSplit = buildSplitMessages(detailedConversation.messages, messageIndex, half);
+    const messagesBeforeSplit = buildSplitMessages(source.messages, messageIndex, half);
 
     // A tail split can end up empty once orphan tool results are dropped —
     // creating a blank conversation would only confuse.
     if (messagesBeforeSplit.length === 0) {
       log.debug('Split produced no messages — ignoring', { messageId, half });
-      return;
+      return null;
     }
 
     // Create a new *local* conversation based on the split
     const newId = uuidv4();
     const newSplitConversation: Conversation = {
       id: newId,
-      title: t(half === 'head' ? 'chat.page.splitTitle' : 'chat.page.splitTailTitle', { title: detailedConversation.title }),
+      title: t(half === 'head' ? 'chat.page.splitTitle' : 'chat.page.splitTailTitle', { title: source.title }),
       messages: messagesBeforeSplit,
-      flowId: detailedConversation.flowId,
-      ...(detailedConversation.personaId ? { personaId: detailedConversation.personaId } : {}),
-      ...(detailedConversation.personaBehaviorSlotKey
-        ? { personaBehaviorSlotKey: detailedConversation.personaBehaviorSlotKey }
+      flowId: source.flowId,
+      ...(source.personaId ? { personaId: source.personaId } : {}),
+      ...(source.personaBehaviorSlotKey
+        ? { personaBehaviorSlotKey: source.personaBehaviorSlotKey }
         : {}),
       createdAt: Date.now(), // New creation time
       updatedAt: Date.now(),
@@ -4237,6 +4243,7 @@ const Chat: React.FC = () => {
     setIsLoadingDetails(false);
     setDetailsError(null);
     // Note: This split conversation doesn't exist on the backend until a message is sent.
+    return newId;
   };
 
   // Mirror of the above: keep the picked message through the END of the thread.
@@ -5068,6 +5075,61 @@ const Chat: React.FC = () => {
   const sidebarStopConversation = useStableCallback(handleStopConversation);
   const sidebarCreateNewConversation = useStableCallback(createNewConversation);
   const sidebarOpenQuickChat = useCallback(() => setQuickChatOpen(true), []);
+
+  // Slash commands in the message box (#1225) call these existing features.
+  const slashStartNewConversation = useStableCallback(async () => {
+    const personaId = detailedConversation?.personaId ?? currentConversationSummary?.personaId;
+    if (personaId) {
+      const slot = detailedConversation?.personaBehaviorSlotKey
+        ?? currentConversationSummary?.personaBehaviorSlotKey ?? 'primary';
+      await createPersonaConversation(personaId, slot);
+      return;
+    }
+    const flowId = detailedConversation?.flowId ?? currentConversationSummary?.flowId ?? undefined;
+    // A Quick Chat is set up in its own dialog, like the "Quick" button does.
+    if (flowId && isQuickChatFlowId(flowId)) setQuickChatOpen(true);
+    else await createNewConversation(flowId);
+  });
+  const slashForkConversation = useStableCallback(async (): Promise<string | null> => {
+    let source = detailedConversation;
+    if (!source) return null;
+    if (source.transcriptWindow?.truncated) {
+      source = await chatService.getConversation(source.id);
+      if (currentConversationIdRef.current !== source.id) return null;
+    }
+    const last = source.messages.at(-1);
+    return last ? splitConversationAtMessage(last.id, 'head', source) : null;
+  });
+  const slashActions = useMemo(() => ({
+    startNewConversation: slashStartNewConversation,
+    forkConversation: slashForkConversation,
+  }), [slashStartNewConversation, slashForkConversation]);
+  const slashPersonaId = detailedConversation?.personaId ?? currentConversationSummary?.personaId;
+  const slashFlowId = detailedConversation?.flowId ?? currentConversationSummary?.flowId ?? null;
+  const slashContext = useMemo<ChatSlashContext>(() => ({
+    conversationId: currentConversationId,
+    title: detailedConversation?.title ?? currentConversationSummary?.title,
+    flowId: slashFlowId,
+    agentName: slashFlowId ? flowNames[slashFlowId] : undefined,
+    personaId: slashPersonaId,
+    personaName: slashPersonaId ? personaNames[slashPersonaId] : undefined,
+    readOnly: Boolean(detailedConversation?.personaArchived || currentConversationSummary?.personaArchived),
+    messageCount: detailedConversation?.transcriptWindow?.totalCount ?? detailedConversation?.messages.length ?? 0,
+    runState: isLoadingDetails ? 'loading'
+      : viewedConversationAwaitingApproval ? 'approval'
+        : isDebugPaused || currentConversationSummary?.status === 'paused_debug' ? 'debugger'
+          : viewedConversationRunning ? 'running' : 'idle',
+    nextNodeLabel: currentNodeId ? availableNodes.find(node => node.id === currentNodeId)?.label : undefined,
+    queuedCount: currentConversationId ? getMsgQueue(queuedMessages, currentConversationId).length : 0,
+    requireApproval,
+    usage: detailedConversation?.usage,
+    contextInfo: detailedConversation?.contextInfo,
+  }), [
+    availableNodes, currentConversationId, currentConversationSummary, currentNodeId, detailedConversation,
+    flowNames, isDebugPaused, isLoadingDetails, personaNames, queuedMessages, requireApproval, slashFlowId,
+    slashPersonaId, viewedConversationAwaitingApproval, viewedConversationRunning,
+  ]);
+  const slashCommands = useChatSlashCommands(slashContext, slashActions);
 
   const translateQueueHoldReason = (reason: string | null): string | null => {
     switch (reason) {
@@ -6202,6 +6264,8 @@ const Chat: React.FC = () => {
             onCancelEdit={handleCancelEditingMessage}
             // Per-chat working folder: project, branch and worktree.
             projectControl={<ChatProjectChip conversationId={currentConversationId} />}
+            slashCommands={slashCommands}
+            slashNoticeKey={currentConversationId}
           />
         </Box>}
         </Box> {/* End Chat Area */}

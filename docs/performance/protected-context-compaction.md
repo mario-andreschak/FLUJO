@@ -1212,3 +1212,29 @@ CLI/Claude SDK ownership, genuine provider compaction, visual benefit,
 installed/endurance and release criteria remain open in #1091/#1093. No full/remote
 CI, workflow dispatch, container build, release, deployment, new issue or automation
 change occurs. Model and build phases overlap; measured phase times are not added.
+
+## Compacting on request (`/compact`, #1225)
+
+Typing `/compact` in an agent chat calls
+`POST /v1/chat/conversations/{id}/compact`. The route never changes the saved
+chat. It stores a small request on the conversation (`compactionRequest`) and
+answers with a preview from the saved messages: how many older AI and tool
+messages the summary replaces, how many recent messages stay word for word, and
+how many earlier messages from the person stay (or, when they are too long to
+all stay, how many hold rules or corrections, which always stay).
+
+The summary itself is still built right before a model call, where the exact
+view of that step (node, model, tools) is known:
+
+- The first model call after the request summarizes even below the automatic
+  threshold, through the same `compactHistory` path and the same checks. It
+  uses the request up whatever happens, so a request never lingers or retries.
+- Later calls keep reusing that summary with its boundary pinned, so no new
+  summarizer call runs below the threshold. Newer messages stay word for word
+  until the automatic threshold takes over and extends the summary as usual.
+- A switched-off setting (Settings or a node's `compactionMode: 'off'`) still
+  wins. The route answers `disabled` when summaries are off in Settings.
+- While a reply is running, the route hands the request to the live state, and
+  the running reply switches to the summary at its next model call.
+- Persona chats, anonymized archives and owner-protected chats answer 409: their
+  memory belongs to the Persona runtime or the owner.

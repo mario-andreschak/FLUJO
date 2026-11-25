@@ -25,6 +25,7 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
 import type { ConversationCompactionState } from './compaction/types';
+import type { ManualCompactionRequest } from './compaction/manualRequest';
 import type { ResponsesSessionState } from '@/backend/services/model/adapters/responsesSessionState';
 import type {
   Persona,
@@ -1082,6 +1083,8 @@ export interface SharedState extends DebuggerStateView {
     messages: FlujoChatMessage[];
     /** Versioned provider-wire summary artifacts, persisted separately. */
     compactionState?: ConversationCompactionState;
+    /** The person's latest "/compact"; honoured by the next model call (#1225). */
+    compactionRequest?: ManualCompactionRequest;
     /** Codex SDK threads persisted with the conversation, keyed by Process node id. */
     codexSessions?: Record<string, CodexSessionMetadata>;
     /** Bounded native Responses windows; never replace canonical messages. */
