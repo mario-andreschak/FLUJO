@@ -310,7 +310,7 @@ export async function settle(page, log) {
   ).catch(() => log('! A loading spinner was still showing after 60s.'));
 }
 
-async function gotoWithRetry(page, url, log) {
+export async function gotoWithRetry(page, url, log) {
   const deadline = Date.now() + 120_000;
   for (;;) {
     try {

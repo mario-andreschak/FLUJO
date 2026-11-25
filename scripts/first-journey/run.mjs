@@ -7,7 +7,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EVIDENCE_DIR, loadChromium, parseArgs, parseViewport, readState, routeUrl, save, settle } from '../flujo-drive.mjs';
+import {
+  EVIDENCE_DIR, gotoWithRetry, loadChromium, parseArgs, parseViewport, readState, routeUrl, save, settle,
+} from '../flujo-drive.mjs';
 import { STUB_FINAL_PREFIX, STUB_MODEL_ID, startStubModel } from './stub-model.mjs';
 
 export const NAMES = Object.freeze({
@@ -36,7 +38,7 @@ async function seeText(page, text, timeout = WAIT) {
 }
 
 async function openNavigationTo(page, url, log) {
-  await page.goto(url, { timeout: 300_000 });
+  await gotoWithRetry(page, url, log);
   await settle(page, log);
 }
 

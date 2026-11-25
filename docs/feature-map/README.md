@@ -45,7 +45,11 @@ real AI. Each stage saves a screenshot and an ARIA snapshot, plus
 `report.json`, under `first-journey/<viewport>/` in the evidence folder. Run
 it after `launch` (and `warm models mcp flows chat`); `--viewport 390x844`
 checks the phone layout. A failed stage stops the run and saves
-`<stage>-failed.png`.
+`<stage>-failed.png`. Dev mode needs plenty of free memory for this many
+pages (about 8–10 GB): with a smaller `--max-old-space-size` Next restarts
+itself mid-run ("approaching the used memory threshold") and the stage that
+was loading fails with `ERR_CONNECTION_REFUSED`. That is the machine, not the
+journey; run it again with more memory.
 
 ## Features
 
