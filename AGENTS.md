@@ -76,6 +76,7 @@ workaround.
 | Claude Agent SDK runs keep FLUJO's approval as the only tool gate: default permission mode, no settings files, no allow list, and every tool handler checks FLUJO's decision | `__tests__/model/claudeSdkAuthorityArgs.test.ts` (installed SDK, fake Claude Code); `__tests__/model/claudeSubscriptionSdkBoundary.test.ts` |
 | A private Antigravity CLI home pins every CLI default that can skip FLUJO's approvals (newer CLIs default to Auto mode) | `__tests__/model/antigravityCliRuntime.test.ts` |
 | A reopened Antigravity conversation gets the prompt only after the CLI confirms its id; an unknown id silently starts an empty one | `__tests__/model/antigravityCliProcess.test.ts`, `__tests__/model/antigravityCliIntegration.test.ts` |
+| A context summary never lets a model alone decide which user corrections or prohibitions survive, and never drops the exact receipt of an action that already ran | `requiredInstructionIds` in `src/backend/execution/flow/compaction/standingInstructions.ts`; `__tests__/model/compactionFidelity.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 
 # Resilience over refusal

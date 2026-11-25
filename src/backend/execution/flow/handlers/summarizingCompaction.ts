@@ -1,13 +1,16 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import type { CompactionProjectionIdentity, WireSummaryArtifact, SummaryRange } from '../compaction/types';
 import { appendSummaryRanges, type SummaryRangePayload } from '../compaction/summaryHierarchy';
 import { inspectJson } from '../compaction/jsonInspection';
 import { digestProjectedMessages } from '../compaction/digest';
 import { buildStructuredObservationBlock, STRUCTURED_OBSERVATIONS_HEADING,
   validateSourceObservationBlock } from '../compaction/structuredObservations';
+import { requiredInstructionIds } from '../compaction/standingInstructions';
 
 const log = createLogger('backend/execution/flow/handlers/summarizingCompaction');
 
@@ -327,19 +330,110 @@ export function validateCompactionSummary(summary: string): boolean {
     && !/\[(?:truncated|incomplete)\]\s*$/i.test(narrative.trim());
 }
 
-function preserveExecutionReceipts(summary: string, messages: FlujoChatMessage[], maxChars = Infinity): string {
+const EXECUTION_RECEIPTS_MARKER = '\n\n## Execution Receipts\n';
+const ARCHIVE_POINTER_PREFIX = '\n\n_(Earlier turns compacted;';
+const EARLIER_RECEIPTS = / earlier receipts are in the full source archive\./;
+/** Arguments up to this size are kept exactly; longer ones keep a digest. */
+const MAX_RECEIPT_ARGUMENT_CHARS = 1_024;
+
+function receiptRecord(call: FlujoFunctionToolCall, observed: boolean): string {
+  const args = call.function.arguments ?? '';
+  return JSON.stringify({ call_id: call.id, tool: call.function.name, state: observed ? 'result-observed' : 'unresolved',
+    ...(args.length <= MAX_RECEIPT_ARGUMENT_CHARS ? { arguments: args }
+      : { arguments_sha256: createHash('sha256').update(args, 'utf8').digest('hex'), arguments_chars: args.length }) });
+}
+
+function withoutArchivePointer(summary: string): string {
+  const pointer = summary.lastIndexOf(ARCHIVE_POINTER_PREFIX);
+  return pointer < 0 ? summary : summary.slice(0, pointer);
+}
+
+/** Receipts from the runtime block of an earlier summary on this wire. The
+ * narrative cannot add one: only well-formed records in the last block count. */
+function carriedReceipts(summary: string): { records: string[]; archived: number } {
+  const body = withoutArchivePointer(summary);
+  const start = body.lastIndexOf(EXECUTION_RECEIPTS_MARKER);
+  if (start < 0) return { records: [], archived: 0 };
+  const records: string[] = [];
+  let archived = 0;
+  for (const line of body.slice(start + EXECUTION_RECEIPTS_MARKER.length).split('\n')) {
+    if (EARLIER_RECEIPTS.test(line)) { archived += Number.parseInt(line, 10) || 0; continue; }
+    if (!line.startsWith('{')) continue;
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (typeof parsed.call_id === 'string' && typeof parsed.tool === 'string'
+        && (parsed.state === 'result-observed' || parsed.state === 'unresolved')) records.push(line);
+      else archived += 1;
+    } catch { archived += 1; }
+  }
+  return { records, archived };
+}
+
+/** Exact call identities, arguments and observed-result state, rebuilt from the
+ * source on every rewrite so the agent never has to guess whether it already
+ * acted. Newest receipts are kept when the block is bounded. */
+export function executionReceiptBlock(messages: readonly FlujoChatMessage[], maxChars = Infinity): string {
   const results = new Set(messages.filter(message => message.role === 'tool')
     .map(message => (message as FlujoChatMessage & { tool_call_id?: string }).tool_call_id));
-  const receipts = messages.flatMap(message => (message.role === 'assistant' ? message.tool_calls ?? [] : [])
-    .filter(call => call.type === 'function')
-    .map(call => JSON.stringify({ call_id: call.id, tool: call.function.name,
-      state: results.has(call.id) ? 'result-observed' : 'unresolved' })));
-  let characters = 0, first = receipts.length;
-  while (first > 0 && characters + receipts[first - 1].length + 1 <= maxChars) characters += receipts[--first].length + 1;
-  return receipts.length ? summary + '\n\n## Execution Receipts\n'
+  const receipts = new Set<string>();
+  let archived = 0;
+  for (const message of messages) {
+    if (isCompactionSummary(message)) {
+      const carried = carriedReceipts(String(message.content));
+      carried.records.forEach(record => receipts.add(record));
+      archived += carried.archived;
+      continue;
+    }
+    if (message.role !== 'assistant') continue;
+    for (const call of message.tool_calls ?? []) {
+      if (call.type === 'function') receipts.add(receiptRecord(call, results.has(call.id)));
+    }
+  }
+  const ordered = [...receipts];
+  let characters = 0, first = ordered.length;
+  while (first > 0 && characters + ordered[first - 1].length + 1 <= maxChars) characters += ordered[--first].length + 1;
+  const earlier = first + archived;
+  return ordered.length || archived ? EXECUTION_RECEIPTS_MARKER
     + 'Exact recorded identifiers; an observed result does not assert side-effect success. Consult the source artifact before recovery; do not repeat a call because detail was summarized.\n'
-    + (first ? first + ' earlier receipts are in the full source archive. Read it before recovering an earlier action.\n' : '')
-    + receipts.slice(first).join('\n') : summary;
+    + (earlier ? earlier + ' earlier receipts are in the full source archive. Read it before recovering an earlier action.\n' : '')
+    + ordered.slice(first).join('\n') : '';
+}
+
+/** A cached summary is reusable only when its receipts equal the source's. */
+function receiptBlockMatches(summary: string, expected: string): boolean {
+  return !expected || withoutArchivePointer(summary).endsWith(expected);
+}
+
+/** The share of the input budget that retained original user turns may use. */
+const RETAINED_USER_SHARE = 0.35;
+
+/**
+ * Required standing instructions always stay. Model-selected turns fill what
+ * remains of the bound, newest first, so an over-eager selection is trimmed
+ * rather than abandoning the summary. Null when the required turns alone do
+ * not fit: the caller then keeps the full canonical wire, whose last-resort
+ * refit retains every user turn or fails with an explicit capacity error.
+ */
+function chooseRetainedUserIds(
+  split: SplitResult, required: ReadonlySet<string>, selected: Iterable<string>, bound: number,
+): string[] | null {
+  let tokens = estimateTokens(split.preservedSubflow);
+  const chosen = new Set<string>();
+  for (const message of split.protectedMessages) {
+    if (!required.has(message.id)) continue;
+    tokens += estimateMessageTokens(message);
+    chosen.add(message.id);
+  }
+  if (tokens > bound) return null;
+  const wanted = new Set(selected);
+  for (const message of [...split.protectedMessages].reverse()) {
+    if (chosen.has(message.id) || !wanted.has(message.id)) continue;
+    const cost = estimateMessageTokens(message);
+    if (tokens + cost > bound) continue;
+    tokens += cost;
+    chosen.add(message.id);
+  }
+  return split.protectedMessages.filter(message => chosen.has(message.id)).map(message => message.id);
 }
 
 /**
@@ -496,8 +590,16 @@ export async function compactHistory(
   let summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user')
     .map(message => message.id).filter((id): id is string => Boolean(id));
   let retainedOld = retainedOldMessages(messages, split);
-  const selectUserInstructions = opts.inputBudgetTokens !== undefined
-    && estimateTokens(retainedOld) > opts.inputBudgetTokens * 0.35;
+  const retainedUserBound = (opts.inputBudgetTokens ?? Infinity) * RETAINED_USER_SHARE;
+  const selectUserInstructions = estimateTokens(retainedOld) > retainedUserBound;
+  // The model may add user turns to keep, but cannot drop these.
+  const requiredUserIds = selectUserInstructions ? requiredInstructionIds(split.protectedMessages) : new Set<string>();
+  if (selectUserInstructions && !chooseRetainedUserIds(split, requiredUserIds, [], retainedUserBound)) {
+    log.warn('compactHistory: required user instructions exceed the retained-turn bound; keeping the canonical wire');
+    return null;
+  }
+  const recoveryBlockChars = opts.inputBudgetTokens ? Math.min(8192, Math.floor(opts.inputBudgetTokens * 0.2)) : Infinity;
+  const receipts = executionReceiptBlock(split.toSummarize, recoveryBlockChars);
   const leadingSystem = split.leadingSystem.some(message => message.content === SUMMARY_AUTHORITY_INSTRUCTION)
     ? split.leadingSystem
     : [...split.leadingSystem, {
@@ -527,12 +629,13 @@ export async function compactHistory(
     reusable.sourceMessageCount === split.toSummarize.length
     && validateCompactionSummary(reusable.summaryText)
     && validateSourceObservationBlock(reusable.summaryText, observations)
+    && receiptBlockMatches(reusable.summaryText, receipts)
     && (!requiresArchive || (typeof reusable.summaryResourceUri === 'string'
       && reusable.summaryResourceUri.startsWith(RUN_RESOURCE_SCHEME)
       && reusable.summaryText.includes(reusable.summaryResourceUri)))
   ) {
     if (selectUserInstructions) {
-      const retained = new Set(reusable.protectedUserIds);
+      const retained = new Set(chooseRetainedUserIds(split, requiredUserIds, reusable.protectedUserIds ?? [], retainedUserBound));
       retainedOld = retainedOld.filter(message => message.role !== 'user' || retained.has(message.id));
       summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user' || !retained.has(message.id))
         .map(message => message.id);
@@ -642,11 +745,14 @@ export async function compactHistory(
     log.warn('compactHistory: summarization model call failed; falling back (no mutation)', error);
     return null;
   }
+  let retainedUserIds: string[] | undefined;
   if (selectUserInstructions) {
-    retainedOld = retainedOld.filter(message => message.role !== 'user' || protectedIds.has(message.id));
-    summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user' || !protectedIds.has(message.id))
+    retainedUserIds = chooseRetainedUserIds(split, requiredUserIds, protectedIds, retainedUserBound) ?? undefined;
+    if (!retainedUserIds) return null;
+    const retained = new Set(retainedUserIds);
+    retainedOld = retainedOld.filter(message => message.role !== 'user' || retained.has(message.id));
+    summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user' || !retained.has(message.id))
       .map(message => message.id);
-    if (estimateTokens(retainedOld) > opts.inputBudgetTokens! * 0.35) return null;
   }
   if (!summaryBody || !validateCompactionSummary(summaryBody)
     || summaryBody.includes(STRUCTURED_OBSERVATIONS_HEADING)) {
@@ -655,10 +761,8 @@ export async function compactHistory(
   }
 
   // Preserve dereferenceable resource URIs from the summarized slice.
-  const recoveryBlockChars = opts.inputBudgetTokens ? Math.min(8192, Math.floor(opts.inputBudgetTokens * 0.2)) : Infinity;
   summaryBody = preserveResourceUris(summaryBody, split.toSummarize, recoveryBlockChars);
-  summaryBody += observations;
-  summaryBody = preserveExecutionReceipts(summaryBody, split.toSummarize, recoveryBlockChars);
+  summaryBody += observations + receipts;
   // Validate achieved reduction after exact instruction/receipt restoration,
   // before writing an artifact. Refuse a cosmetic summary that makes the wire
   // larger and amplifies memory/transport pressure.
@@ -724,7 +828,7 @@ export async function compactHistory(
     projectionDigest: opts.projectionDigest,
     summaryText: String(summaryMessage.content ?? ''),
     summaryResourceUri: anchorUri,
-    ...(selectUserInstructions ? { protectedUserIds: [...protectedIds] } : {}),
+    ...(retainedUserIds ? { protectedUserIds: retainedUserIds } : {}),
     ...(summaryRanges ? { summaryRanges } : {}),
     policyVersion: opts.policyVersion,
     modelId: opts.modelId,
