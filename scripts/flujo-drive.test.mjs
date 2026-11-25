@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { evidencePath, main, parseArgs, parseViewport, routeUrl, validateSteps } from './flujo-drive.mjs';
+import { fileURLToPath } from 'node:url';
+import {
+  defaultDriveHome, evidencePath, isOwnedDataDir, main, parseArgs, parseViewport, routeUrl, stopPlan, validateSteps,
+} from './flujo-drive.mjs';
+
+const SCRIPT = fileURLToPath(new URL('./flujo-drive.mjs', import.meta.url));
 
 test('arguments split into command, positional values and options', () => {
   assert.deepEqual(parseArgs(['click', '/flows', '--role', 'button', '--name', 'New agent', '--full', '--viewport=360x800']), {
@@ -39,4 +47,57 @@ test('commands with missing options fail before launching a browser', async () =
   const lines = [];
   assert.equal(await main([], (line) => lines.push(line)), 0);
   assert.match(lines.join('\n'), /Usage: node scripts\/flujo-drive\.mjs/);
+});
+
+test('the state and evidence folder is private to the user, never the shared temp folder', () => {
+  assert.equal(defaultDriveHome({}, 'linux', '/home/ana'), path.join('/home/ana', '.cache', 'flujo-drive'));
+  assert.equal(defaultDriveHome({ XDG_CACHE_HOME: '/srv/cache' }, 'linux', '/home/ana'), path.join('/srv/cache', 'flujo-drive'));
+  const local = path.join('/Users', 'ana', 'AppData', 'Local');
+  assert.equal(defaultDriveHome({ LOCALAPPDATA: local }, 'win32', path.join('/Users', 'ana')), path.join(local, 'flujo-drive'));
+  assert.equal(defaultDriveHome({ FLUJO_DRIVE_HOME: '/custom/drive' }, 'linux', '/home/ana'), path.resolve('/custom/drive'));
+});
+
+test('only a data folder this tool created in the temp folder counts as its own', () => {
+  const temp = os.tmpdir();
+  const created = mkdtempSync(path.join(temp, 'flujo-drive-data-'));
+  try {
+    assert.equal(isOwnedDataDir(created, temp), true);
+    assert.equal(isOwnedDataDir(temp, temp), false);
+    assert.equal(isOwnedDataDir(os.homedir(), temp), false);
+    assert.equal(isOwnedDataDir(path.join(created, 'nested'), temp), false);
+    assert.equal(isOwnedDataDir(path.join(created, '..', 'important'), temp), false);
+    assert.equal(isOwnedDataDir('flujo-drive-data-abc123', temp), false);
+    assert.equal(isOwnedDataDir(undefined, temp), false);
+  } finally {
+    rmSync(created, { recursive: true, force: true });
+  }
+});
+
+test('stop ignores a process id that would signal more than one process', () => {
+  assert.deepEqual(stopPlan({ pid: 0, ownsDataDir: true, dataDir: os.homedir() }), { pid: undefined, dataDir: undefined });
+  assert.deepEqual(stopPlan({ pid: -5 }), { pid: undefined, dataDir: undefined });
+  assert.deepEqual(stopPlan({ pid: '42' }), { pid: undefined, dataDir: undefined });
+  assert.equal(stopPlan({ pid: 42 }).pid, 42);
+});
+
+test('stop never deletes a folder it did not create, whatever the state file says', () => {
+  const sandbox = mkdtempSync(path.join(os.tmpdir(), 'flujo-drive-test-'));
+  try {
+    const home = path.join(sandbox, 'home');
+    const precious = path.join(sandbox, 'precious');
+    mkdirSync(home);
+    mkdirSync(precious);
+    writeFileSync(path.join(precious, 'keep.txt'), 'keep');
+    const finished = spawnSync(process.execPath, ['-e', '']);
+    writeFileSync(path.join(home, 'instance.json'), JSON.stringify({ pid: finished.pid, dataDir: precious, ownsDataDir: true }));
+    const result = spawnSync(process.execPath, [SCRIPT, 'stop'], {
+      env: { ...process.env, FLUJO_DRIVE_HOME: home },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(path.join(precious, 'keep.txt')), true);
+    assert.match(result.stdout, /precious is not a data folder this tool created.*left in place/);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });

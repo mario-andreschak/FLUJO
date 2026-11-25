@@ -10,7 +10,17 @@ import { fileURLToPath } from 'node:url';
 import { findPages, pageRoutes } from './check-feature-map.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const HOME = process.env.FLUJO_DRIVE_HOME || path.join(os.tmpdir(), 'flujo-drive');
+const DATA_DIR_PREFIX = 'flujo-drive-data-';
+
+// The shared temp folder is writable by every user on Linux and macOS, so the state file that
+// names what "stop" kills and deletes lives in the user's own cache folder instead.
+export function defaultDriveHome(env = process.env, platform = process.platform, home = os.homedir()) {
+  if (env.FLUJO_DRIVE_HOME) return path.resolve(env.FLUJO_DRIVE_HOME);
+  if (platform === 'win32' && env.LOCALAPPDATA) return path.join(env.LOCALAPPDATA, 'flujo-drive');
+  return path.join(env.XDG_CACHE_HOME || path.join(home, '.cache'), 'flujo-drive');
+}
+
+export const HOME = defaultDriveHome();
 const STATE_FILE = path.join(HOME, 'instance.json');
 export const EVIDENCE_DIR = path.join(HOME, 'evidence');
 const RESERVED_PORTS = new Set([4200]);
@@ -90,6 +100,24 @@ export function validateSteps(steps) {
   return steps;
 }
 
+function samePath(left, right) {
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+export function isOwnedDataDir(dir, tempDir = os.tmpdir()) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) return false;
+  const resolved = path.resolve(dir);
+  return samePath(path.dirname(resolved), path.resolve(tempDir))
+    && new RegExp(`^${DATA_DIR_PREFIX}[A-Za-z0-9]{6}$`).test(path.basename(resolved));
+}
+
+export function stopPlan(state, tempDir = os.tmpdir()) {
+  const pid = Number.isInteger(state?.pid) && state.pid > 0 ? state.pid : undefined;
+  if (pid === undefined) return { pid: undefined, dataDir: undefined };
+  const dataDir = state.ownsDataDir && isOwnedDataDir(state.dataDir, tempDir) ? path.resolve(state.dataDir) : undefined;
+  return { pid, dataDir };
+}
+
 function readState() {
   try {
     return JSON.parse(readFileSync(STATE_FILE, 'utf8'));
@@ -150,9 +178,9 @@ async function launch(options, log) {
   }
   const port = options.port ? Number(options.port) : await freePort();
   if (!Number.isInteger(port) || RESERVED_PORTS.has(port)) throw new Error(`Port ${options.port} is reserved or invalid; 4200 belongs to the everyday FLUJO.`);
-  mkdirSync(HOME, { recursive: true });
+  mkdirSync(HOME, { recursive: true, mode: 0o700 });
   const ownsDataDir = !options['data-dir'];
-  const dataDir = path.resolve(options['data-dir'] || mkdtempSync(path.join(os.tmpdir(), 'flujo-drive-data-')));
+  const dataDir = path.resolve(options['data-dir'] || mkdtempSync(path.join(os.tmpdir(), DATA_DIR_PREFIX)));
   mkdirSync(dataDir, { recursive: true });
   const logFile = path.join(HOME, `instance-${port}.log`);
   const out = openSync(logFile, 'w');
@@ -167,7 +195,7 @@ async function launch(options, log) {
   child.unref();
   const baseUrl = `http://127.0.0.1:${port}/`;
   const state = { pid: child.pid, port, baseUrl, dataDir, ownsDataDir, logFile, root: ROOT, startedAt: new Date().toISOString() };
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
   log(`Starting FLUJO at ${baseUrl} (pid ${child.pid}, data ${dataDir}). The first page compile can take a few minutes.`);
   const deadline = Date.now() + Number(options.timeout || 600) * 1000;
   while (Date.now() < deadline) {
@@ -228,15 +256,20 @@ function stop(log) {
     log('Nothing to stop: no instance started by this tool.');
     return 0;
   }
-  if (isAlive(state.pid)) {
-    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(state.pid), '/T', '/F'], { stdio: 'ignore' });
+  const { pid, dataDir } = stopPlan(state);
+  if (pid !== undefined && isAlive(pid)) {
+    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
     else {
-      try { process.kill(-state.pid, 'SIGTERM'); } catch { /* already gone */ }
+      try { process.kill(-pid, 'SIGTERM'); } catch { /* already gone */ }
     }
   }
-  if (state.ownsDataDir) rmSync(state.dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+  if (dataDir) rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+  else if (state.ownsDataDir && typeof state.dataDir === 'string') {
+    log(`! ${state.dataDir} is not a data folder this tool created in ${os.tmpdir()}, so it was left in place.`);
+  }
   rmSync(STATE_FILE, { force: true });
-  log(`Stopped pid ${state.pid}${state.ownsDataDir ? ' and removed its data folder' : ''}. Evidence stays in ${EVIDENCE_DIR}.`);
+  const stopped = pid === undefined ? 'Nothing stopped: the state file named no valid process' : `Stopped pid ${pid}`;
+  log(`${stopped}${dataDir ? ' and removed its data folder' : ''}. Evidence stays in ${EVIDENCE_DIR}.`);
   return 0;
 }
 
