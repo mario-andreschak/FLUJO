@@ -6,12 +6,12 @@ import {
   DEFAULT_WORKSPACE,
   getSelectedWorkspace,
   initializeWorkspaceSelection,
-  isValidWorkspaceName,
   readWorkspacePageRequest,
   setSelectedWorkspace,
   workspacePageUrl,
 } from '@/frontend/utils/workspaceSelection';
 import { migrateLegacyBrowserWorkspaceContent } from '@/frontend/utils/workspaceContentKeys';
+import { discoverWorkspaces } from '@/frontend/utils/workspaceDiscovery';
 
 interface WorkspaceBootstrapProps {
   children: React.ReactNode;
@@ -30,84 +30,57 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
   initializeWorkspaceSelection();
   migrateLegacyBrowserWorkspaceContent();
   const pageRequestOnMount = useRef(readWorkspacePageRequest());
-  const [status, setStatus] = useState<'loading' | 'migrating' | 'ready' | 'error' | 'owner-auth'>('loading');
-  const [errorMessage, setErrorMessage] = useState('Workspace discovery is not ready.');
+  const [status, setStatus] = useState<'loading' | 'slow' | 'migrating' | 'ready' | 'error' | 'owner-auth'>('loading');
+  const [errorMessage, setErrorMessage] = useState('FLUJO did not answer for a minute. Check that it is still running, then retry.');
 
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
-      let transientFailures = 0;
-      while (!cancelled) {
-        try {
-          const response = await fetch('/api/workspaces', { cache: 'no-store' });
-          if (response.status === 401) {
-            if (!cancelled) setStatus('owner-auth');
-            return;
-          }
-          const payload = (await response.json()) as {
-            workspaces?: Array<{ name?: unknown }>;
-            code?: unknown;
-          };
-          if (response.status === 503 && payload.code === 'WORKSPACE_LAYOUT_PREPARING') {
-            transientFailures = 0;
-            if (!cancelled) setStatus('migrating');
-            const retrySeconds = Number(response.headers?.get?.('Retry-After'));
-            await new Promise(resolve => window.setTimeout(
-              resolve,
-              Number.isFinite(retrySeconds) ? Math.max(500, retrySeconds * 1000) : 2000,
-            ));
-            continue;
-          }
-          if (!response.ok) throw new Error(`Workspace discovery failed (${response.status})`);
-          const names = new Set(
-            (Array.isArray(payload.workspaces) ? payload.workspaces : [])
-              .map(item => item?.name)
-              .filter(isValidWorkspaceName),
-          );
-          const selected = getSelectedWorkspace();
-          const pageRequest = pageRequestOnMount.current;
-          if (pageRequest.kind === 'invalid') {
-            if (!cancelled) {
-              setErrorMessage('The workspace in this link is invalid.');
-              setStatus('error');
-            }
-            return;
-          }
-
-          const requested = pageRequest.kind === 'valid' ? pageRequest.workspace : selected;
-          if (!names.has(requested)) {
-            if (pageRequest.kind === 'valid') {
-              if (!cancelled) {
-                setErrorMessage(`Unknown workspace: ${requested}`);
-                setStatus('error');
-              }
-              return;
-            }
-            setSelectedWorkspace(DEFAULT_WORKSPACE);
-            window.location.assign(workspacePageUrl(DEFAULT_WORKSPACE));
-            return;
-          }
-
-          // initializeWorkspaceSelection froze a valid top-level deep link as
-          // this tab's request workspace before providers mounted. Discovery
-          // has now confirmed it exists, so persist it as the next-load/default
-          // preference. No reload is needed (or safe when storage is blocked).
-          if (pageRequest.kind === 'valid') {
-            setSelectedWorkspace(requested);
-          }
-
-          if (!cancelled) setStatus('ready');
-          return;
-        } catch {
-          transientFailures += 1;
-          if (transientFailures >= 4) break;
-          await new Promise(resolve => window.setTimeout(resolve, 250 * transientFailures));
-        }
+      const outcome = await discoverWorkspaces({
+        isCancelled: () => cancelled,
+        onMigrating: () => { if (!cancelled) setStatus('migrating'); },
+        onSlow: () => { if (!cancelled) setStatus('slow'); },
+      });
+      if (cancelled || outcome.kind === 'cancelled') return;
+      if (outcome.kind === 'owner-auth') {
+        setStatus('owner-auth');
+        return;
       }
-      // Fail closed: mounting data providers here would let them fall back or
-      // issue a storm of 404s while migration/readiness is uncertain.
-      if (!cancelled) setStatus('error');
+      // Data providers stay unmounted until discovery succeeds, so they never
+      // fall back to a guessed workspace or fire a storm of 404s.
+      if (outcome.kind === 'unavailable') {
+        setStatus('error');
+        return;
+      }
+
+      const pageRequest = pageRequestOnMount.current;
+      if (pageRequest.kind === 'invalid') {
+        setErrorMessage('The workspace in this link is invalid.');
+        setStatus('error');
+        return;
+      }
+
+      const requested = pageRequest.kind === 'valid' ? pageRequest.workspace : getSelectedWorkspace();
+      if (!outcome.names.has(requested)) {
+        if (pageRequest.kind === 'valid') {
+          setErrorMessage(`Unknown workspace: ${requested}`);
+          setStatus('error');
+          return;
+        }
+        setSelectedWorkspace(DEFAULT_WORKSPACE);
+        window.location.assign(workspacePageUrl(DEFAULT_WORKSPACE));
+        return;
+      }
+
+      // initializeWorkspaceSelection froze a valid top-level deep link as
+      // this tab's request workspace before providers mounted. Discovery
+      // has now confirmed it exists, so persist it as the next-load/default
+      // preference. No reload is needed (or safe when storage is blocked).
+      if (pageRequest.kind === 'valid') {
+        setSelectedWorkspace(requested);
+      }
+      setStatus('ready');
     })();
 
     return () => {
@@ -116,6 +89,16 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
   }, []);
 
   if (status === 'ready') return <>{children}</>;
+  if (status === 'slow') {
+    return (
+      <div className="app-loading" role="status" aria-live="polite">
+        <div className="app-loading__content">
+          <div className="app-loading__mark" aria-hidden="true"><span>F</span></div>
+          <span>FLUJO is taking longer than usual to answer. Still trying…</span>
+        </div>
+      </div>
+    );
+  }
   if (status === 'migrating') {
     return (
       <div className="app-loading" role="status" aria-live="polite">

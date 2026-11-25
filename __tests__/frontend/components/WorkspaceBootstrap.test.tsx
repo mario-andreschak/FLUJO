@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import WorkspaceBootstrap from '@/frontend/components/WorkspaceBootstrap';
 import {
   WORKSPACE_STORAGE_KEY,
@@ -26,7 +26,52 @@ describe('WorkspaceBootstrap deep links', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     jest.restoreAllMocks();
+  });
+
+  const serverError = { ok: false, status: 500, json: async () => ({}) };
+
+  it('keeps waiting through slow answers and then opens the page (#1427)', async () => {
+    jest.useFakeTimers();
+    const fetchMock = jest.fn()
+      .mockRejectedValueOnce(new Error('aborted'))
+      .mockResolvedValueOnce(serverError)
+      .mockResolvedValueOnce(serverError)
+      .mockResolvedValueOnce(serverError)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ workspaces: [{ name: 'default-workspace' }] }) });
+    Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: fetchMock });
+
+    render(<WorkspaceBootstrap><div>opened after a slow start</div></WorkspaceBootstrap>);
+
+    expect(await screen.findByText(/taking longer than usual to answer/)).toBeInTheDocument();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByText('opened after a slow start')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('shows the error with Retry only after a minute without an answer (#1427)', async () => {
+    jest.useFakeTimers();
+    const fetchMock = jest.fn().mockResolvedValue(serverError);
+    Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: fetchMock });
+
+    render(<WorkspaceBootstrap><div>never mounted</div></WorkspaceBootstrap>);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(30_000);
+    });
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Still trying');
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(40_000);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('FLUJO did not answer for a minute');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByText('never mounted')).not.toBeInTheDocument();
   });
 
   it('validates and persists a top-level workspace before mounting providers', async () => {
