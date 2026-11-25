@@ -1,6 +1,7 @@
 import { defineConfig, globalIgnores } from 'eslint/config';
 import nextVitals from 'eslint-config-next/core-web-vitals';
 import nextTypescript from 'eslint-config-next/typescript';
+import flujo from './tooling/eslint-plugin-flujo/index.mjs';
 
 export default defineConfig([
   // Unused eslint-disable comments are an error, not a warning (issue #457):
@@ -55,8 +56,9 @@ export default defineConfig([
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/ban-ts-comment': 'off',
       'react-hooks/exhaustive-deps': 'off',
-      // These rules target React Compiler adoption. FLUJO does not enable the
-      // compiler yet, so treat that migration separately from the Next 16 bump.
+      // Compiler-only rules stay off until FLUJO enables the React Compiler.
+      // The rules that catch effect and ref misuse are switched on for src/
+      // below; older code is listed in eslint-suppressions.json.
       'react-hooks/static-components': 'off',
       'react-hooks/use-memo': 'off',
       'react-hooks/preserve-manual-memoization': 'off',
@@ -99,6 +101,43 @@ export default defineConfig([
         { selector: "CallExpression[callee.name='setTimeout']", message: 'Use the Persona runtime clock seam.' },
         { selector: "CallExpression[callee.name='setInterval']", message: 'Use the Persona runtime clock seam.' },
       ],
+    },
+  },
+  {
+    // Corrections become checks (AGENTS.md). Each rule here replaced a review
+    // comment that kept coming back. Code that already breaks a rule is listed
+    // in eslint-suppressions.json; that list may only shrink
+    // (scripts/check-lint-ratchet.mjs).
+    files: ['src/**/*.{js,jsx,ts,tsx}'],
+    plugins: { flujo },
+    rules: {
+      'flujo/no-workaround-comment': 'error',
+      'flujo/disable-needs-reason': 'error',
+      'flujo/no-double-cast': 'error',
+      'flujo/no-sync-fs': 'error',
+      '@typescript-eslint/ban-ts-comment': ['error', {
+        'ts-expect-error': 'allow-with-description',
+        'ts-ignore': true,
+        'ts-nocheck': true,
+        'ts-check': false,
+        minimumDescriptionLength: 10,
+      }],
+      'react-hooks/set-state-in-effect': 'error',
+      'react-hooks/set-state-in-render': 'error',
+      'react-hooks/refs': 'error',
+      'react-hooks/immutability': 'error',
+      'react-hooks/purity': 'error',
+      'react-hooks/globals': 'error',
+      'react-hooks/static-components': 'error',
+      'react-hooks/use-memo': 'error',
+      'react-hooks/error-boundaries': 'error',
+    },
+  },
+  {
+    files: ['src/frontend/**/*.tsx', 'src/app/**/*.tsx', 'src/frontend/**/hooks/**/*.ts'],
+    ignores: ['src/frontend/hooks/timing.ts'],
+    rules: {
+      'flujo/no-raw-timers': 'error',
     },
   },
   {

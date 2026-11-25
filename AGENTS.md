@@ -8,6 +8,44 @@ existing screenshots rather than committing identical copies.
 Perform cleanup and file deletions through the flujo-bash MCP. Keep the primary
 development checkout on `main`; remove temporary branches after delivery.
 
+`npm run check:repo-hygiene` enforces the file rules above.
+
+# Corrections become checks
+
+When a mistake comes back, or a reviewer corrects one, fix it where it cannot
+return. Take the first of these that works:
+
+1. Code: change the API, types or folder layout so the wrong code cannot be
+   written.
+2. A check: a lint rule in `tooling/eslint-plugin-flujo`, a type or a test.
+   Its message says how to fix the cause, never how to silence it.
+3. Verification: run the app and check what the user sees.
+4. Prose here or in a skill, only for calls that need judgment.
+
+Then add a row to the table. The recipe is `.claude/skills/correct/SKILL.md`.
+
+Code that already broke a rule when the rule arrived is listed in
+`eslint-suppressions.json`. That list only shrinks: ESLint fails on entries
+that are no longer needed (`npm run lint:prune` removes them) and
+`npm run lint:ratchet` fails when it grows. Never run eslint with
+`--suppress-all`. A real exception goes on its own line with a reason:
+`// eslint-disable-next-line <rule> -- <why>`.
+
+Write code that needs no comment, and never use a comment to explain away a
+workaround.
+
+| Rule | Enforced by |
+|---|---|
+| Fix the cause; no comments that justify a workaround | `flujo/no-workaround-comment` |
+| Every lint or type exception names its rule and reason | `flujo/disable-needs-reason`, `@typescript-eslint/ban-ts-comment` |
+| No `as unknown as` casts | `flujo/no-double-cast` |
+| Keep work off the event loop: no synchronous file calls in `src/` | `flujo/no-sync-fs` |
+| No raw timers in UI code; use `src/frontend/hooks/timing.ts` | `flujo/no-raw-timers` |
+| Effects, refs and state follow React's rules | `react-hooks/*` in `eslint.config.mjs` |
+| `backend`, `frontend` and `shared` import only what their layer allows | `__tests__/architecture/importBoundaries.test.ts` |
+| Repository hygiene | `scripts/check-repo-hygiene.mjs` |
+| Resilience over refusal | Prose: needs judgment |
+
 # Resilience over refusal
 
 FLUJO is a long-running desktop app. Prefer degrading gracefully to failing

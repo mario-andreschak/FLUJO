@@ -354,6 +354,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # The lint ratchet compares eslint-suppressions.json with the first parent.
+          fetch-depth: 2
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.23.4'
@@ -364,7 +366,11 @@ jobs:
       # Covers src/, __tests__/ and scripts/ with warnings treated as errors.
       - name: Verify the locked Next lint adapter and real rule callers
         run: npm run test:dependency-glob
+      - name: Verify FLUJO's own lint rules and repository checks
+        run: npm run test:lint-rules
       - run: npm run lint:all
+      - run: npm run lint:ratchet
+      - run: npm run check:repo-hygiene
 
   test:
     name: test

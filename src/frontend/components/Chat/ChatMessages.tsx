@@ -591,7 +591,7 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
                   }
                   if (itemType === 'image' && itemData && itemMimeType) {
                     return (
-                      // eslint-disable-next-line @next/next/no-img-element
+                      // eslint-disable-next-line @next/next/no-img-element -- tool images are data URLs, which the Next image optimizer does not support
                       <img key={index} src={`data:${itemMimeType};base64,${itemData}`} alt={`Tool Result Image ${index + 1}`} style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }} />
                     );
                   }
@@ -1464,8 +1464,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                   }
                   if (isImageUrlContentPart(part)) {
                     return (
-                      // Provider image URLs may be data URLs and cannot be statically optimized.
-                      // eslint-disable-next-line @next/next/no-img-element
+                      // eslint-disable-next-line @next/next/no-img-element -- provider image URLs may be data URLs, which cannot be statically optimized
                       <img
                         key={partIndex}
                         src={part.image_url.url}
@@ -1616,8 +1615,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             {message.attachments.map((attachment) => (
               attachment.type === 'image' ? (
                 <Box key={attachment.id} sx={{ mb: 0.5 }}>
-                  {/* Attachments use local data URLs, which the Next image optimizer does not support. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {/* eslint-disable-next-line @next/next/no-img-element -- attachments are local data URLs, which the Next image optimizer does not support */}
                   <img
                     src={attachment.content}
                     alt={attachment.originalName || t('chat.messages.imageAttachment')}

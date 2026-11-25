@@ -447,7 +447,7 @@ export default function PersonaSettings({
         />
         {form.avatarUrl && (
           <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {/* eslint-disable-next-line @next/next/no-img-element -- a user-entered avatar URL can point at any host, which next/image would have to allow-list */}
             <img
               src={form.avatarUrl}
               alt=""
