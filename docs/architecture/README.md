@@ -27,6 +27,9 @@ Docker probes do not qualify an installed FLUJO artifact or shared/team deployme
 
 ## Decision Records
 
+- [Multi-user and teams plan](./multi-user-plan.md): opt-in accounts, the
+  workspace as the unit of ownership, team workspaces, data layout, migration
+  and the step order for #573, #574 and #575 (epic #212).
 - [Shared model-input and wire-preview contract](./model-input-contract.md):
   Debugger data contracts and backend compatibility type exports.
 - [Shared debugger state view](./debugger-state-view.md):
