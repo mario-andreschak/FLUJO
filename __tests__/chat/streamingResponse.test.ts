@@ -253,7 +253,7 @@ describe('Flow submission pressure in completion responses', () => {
   const request = { model: 'flow-Test', messages: [{ role: 'user', content: 'New request' }], stream: true };
   const admissionVariables = [
     'FLUJO_RUN_ADMISSION_MAX_CONVERSATION_RUNS', 'FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES',
-    'FLUJO_RUN_ADMISSION_MAX_RSS_BYTES',
+    'FLUJO_RUN_ADMISSION_MAX_RSS_BYTES', 'FLUJO_CHAT_ADMISSION_WAIT_MS',
   ];
   let previousEnvironment: Array<string | undefined>;
   const drained = () => expect(getFlowRunAdmissionDiagnostics()).toMatchObject({
@@ -265,8 +265,23 @@ describe('Flow submission pressure in completion responses', () => {
     process.env.FLUJO_RUN_ADMISSION_MAX_CONVERSATION_RUNS = '1';
     process.env.FLUJO_RUN_ADMISSION_MAX_PROCESS_BYTES = String(128 * 1024 * 1024);
     process.env.FLUJO_RUN_ADMISSION_MAX_RSS_BYTES = String(Number.MAX_SAFE_INTEGER);
+    process.env.FLUJO_CHAT_ADMISSION_WAIT_MS = '50';
     (persistConversationState as jest.Mock).mockClear();
     drained();
+  });
+
+  it.each([true, false])('waits for a run slot instead of refusing, and runs once one frees (stream=%s)', async stream => {
+    process.env.FLUJO_CHAT_ADMISSION_WAIT_MS = '5000';
+    const conversationId = `completion-admission-wait-${stream}`;
+    const held = acquireFlowRunAdmission({ conversationId });
+    (runFlow as jest.Mock).mockResolvedValueOnce({ flowNotFound: { name: 'Test' } });
+    setTimeout(() => held.release(), 50);
+    const response = await processChatCompletion({ ...request, stream } as any, false, false, false, conversationId, false, true);
+    expect(response.status).toBe(stream ? 200 : 400);
+    expect(runFlow).toHaveBeenCalledTimes(1);
+    await response.body?.cancel();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(getFlowRunAdmissionDiagnostics().waitingRuns).toBe(0);
   });
   afterEach(() => {
     admissionVariables.forEach((name, index) => {
@@ -550,11 +565,25 @@ describe('createStreamingResponse (event-bus driven)', () => {
 describe('completion reader admission and cleanup', () => {
   const request = { model: 'flow-Test', messages: [{ role: 'user', content: 'Current request' }], stream: true };
 
+  it('waits for a free stream and runs once one is released', async () => {
+    const id = 'completion-reader-wait';
+    const before = executionStreamAdmission.diagnostics();
+    const held = Array.from({ length: 4 }, () => executionStreamAdmission.reserve(id)!);
+    (runFlow as jest.Mock).mockResolvedValue({ flowNotFound: { name: 'Test' } });
+    setTimeout(() => held.forEach(release => release()), 50);
+    const response = await processChatCompletion(request as any, false, false, false, id, false, true);
+    expect(response.status).toBe(200);
+    expect(runFlow).toHaveBeenCalledTimes(1);
+    await response.body?.cancel();
+    expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, waiting: 0 });
+  });
+
   it('rejects repeated capacity requests before invoking a Flow and admits once after capacity is freed', async () => {
     const id = 'completion-reader-full';
     const before = executionStreamAdmission.diagnostics();
     const held = Array.from({ length: 4 }, () => executionStreamAdmission.reserve(id)!);
     let response: Response | undefined;
+    process.env.FLUJO_CHAT_ADMISSION_WAIT_MS = '50';
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
         const rejected = await processChatCompletion(request as any, false, false, false, id, false, true);
@@ -571,6 +600,7 @@ describe('completion reader admission and cleanup', () => {
       expect(runFlow).toHaveBeenCalledTimes(1);
       expect(executionStreamAdmission.diagnostics().active).toBe(before.active + 1);
     } finally {
+      delete process.env.FLUJO_CHAT_ADMISSION_WAIT_MS;
       held.forEach(release => release());
       await response?.body?.cancel();
     }

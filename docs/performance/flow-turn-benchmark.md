@@ -10,6 +10,8 @@ resource bound in its prompt with `${resource:...}`. Each stub records when
 FLUJO reached it, so the time that is left is FLUJO's own. Nothing outside the
 machine is contacted unless `--real` is given.
 
+For many requests at once, see [the parallel chat load test](chat-burst-load-test.md).
+
 ## Running it
 
 Build first, then run from the checkout:

@@ -44,8 +44,14 @@ refuse work before physical memory is exhausted. They do not reserve OS memory.
 `FLOW_RUN_BUSY` returns HTTP 429; `FLOW_RUN_MEMORY` returns HTTP 503. Both give a
 five-second `Retry-After` hint. `FLOW_RUN_INPUT_TOO_LARGE` returns HTTP 413 and
 requires smaller input, without a retry hint.
-Initial refusal adds no waiting queue and performs no execution, conversation
-mutation, provider dispatch or cancellation registration. A second check after
+Initial refusal performs no execution, conversation mutation, provider
+dispatch or cancellation registration. The `/v1/chat/completions` endpoint does
+not refuse at once: when runs, memory or completion streams are momentarily
+full, the request waits in arrival order (`acquireFlowRunAdmissionWhenAvailable`,
+`ExecutionStreamAdmission.reserveWhenAvailable`) and starts as soon as an
+earlier run finishes. Only after `FLUJO_CHAT_ADMISSION_WAIT_MS` (default 60
+seconds) does it get the 429/503 below; a caller that disconnects stops
+waiting (#757). A second check after
 registration and lock waiting catches changed input or process pressure before
 conversation mutation; late refusal also releases its registration. It does not
 cancel another run. Callers must not mutate admitted input while it is pending;

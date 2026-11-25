@@ -1,14 +1,26 @@
 import { getHeapStatistics } from 'node:v8';
 import { pendingAllocationBytes, setAllocationReservation } from '@/backend/execution/flow/allocationReservations';
 import { getProcessRssLimitBytes } from '@/backend/execution/flow/runAdmission';
+import { CapacityWaitQueue } from '@/utils/capacityWaitQueue';
 
 const MiB = 1024 * 1024;
 /** `owners` bounds concurrent parses; admitted chats keep only their parsed byte charge. */
 export const CHAT_INGRESS_LIMITS = Object.freeze({
   bodyBytes: 8 * MiB, urlCharacters: 8 * MiB, queryParameters: 128,
   depth: 64, values: 100_000, chunks: 100_000, bodyTimeoutMs: 30_000,
-  owners: 16, parsingBytes: 96 * MiB, processBytes: 256 * MiB, admissionWaitMs: 10_000,
+  owners: 16, parsingBytes: 96 * MiB, processBytes: 256 * MiB, admissionWaitMs: 60_000,
 });
+
+/** How long a chat request waits for momentarily full capacity before it gets a retryable 429 or 503. */
+export function chatAdmissionWaitMs(): number {
+  const value = Number(process.env.FLUJO_CHAT_ADMISSION_WAIT_MS);
+  return Number.isSafeInteger(value) && value > 0 ? value : CHAT_INGRESS_LIMITS.admissionWaitMs;
+}
+
+/** Admitted chats keep a small charge each. The total scales with the machine, never below the fixed floor. */
+function processBytesLimit(): number {
+  return Math.max(CHAT_INGRESS_LIMITS.processBytes, Math.floor(getProcessRssLimitBytes() / 8));
+}
 type Code = 'CHAT_INPUT_TOO_LARGE' | 'CHAT_INPUT_BUSY' | 'CHAT_INPUT_MEMORY' | 'CHAT_INPUT_INVALID' | 'CHAT_INPUT_ABORTED';
 export class ChatIngressError extends Error {
   readonly status: 400 | 413 | 429 | 503;
@@ -26,16 +38,19 @@ export function isChatIngressError(error: unknown): error is ChatIngressError {
   return error instanceof Error && error.name === 'ChatIngressError'
     && ['CHAT_INPUT_TOO_LARGE', 'CHAT_INPUT_BUSY', 'CHAT_INPUT_MEMORY', 'CHAT_INPUT_INVALID', 'CHAT_INPUT_ABORTED'].includes((error as ChatIngressError).code);
 }
-export interface ChatIngressPermit { readonly release: () => void }
+/** `signal` ends when the HTTP caller goes away, so later waits for capacity can stop. */
+export interface ChatIngressPermit { readonly release: () => void; readonly signal?: AbortSignal }
 interface Reservation { bytes: number; owners: number; claimed: boolean; parsed: boolean }
 interface Runtime {
   active: number; bytes: number; parsing: number; rejectedSize: number; rejectedBusy: number; rejectedMemory: number;
   reservations: WeakMap<ChatIngressPermit, Reservation>;
+  waiting?: CapacityWaitQueue;
 }
 const host = globalThis as typeof globalThis & { __flujoChatIngressV1?: Runtime };
 const runtime = host.__flujoChatIngressV1 ??= {
   active: 0, bytes: 0, parsing: 0, rejectedSize: 0, rejectedBusy: 0, rejectedMemory: 0, reservations: new WeakMap(),
 };
+const waiting = runtime.waiting ??= new CapacityWaitQueue();
 setAllocationReservation('ingress', runtime.bytes);
 export function refuseChatInput(code: Code): never {
   if (code === 'CHAT_INPUT_TOO_LARGE') runtime.rejectedSize++;
@@ -52,10 +67,29 @@ function releaseOwner(record: Reservation): () => void {
     runtime.active--; runtime.bytes -= record.bytes;
     setAllocationReservation('ingress', runtime.bytes);
     if (!record.parsed) runtime.parsing--;
+    waiting.wake();
   };
 }
+
+function declaredBodyBytes(request: Pick<Request, 'headers'>): number | undefined {
+  const length = request.headers.get('content-length');
+  if (length === null) return undefined;
+  if (length.length > 16 || !/^\d+$/.test(length) || Number(length) > CHAT_INGRESS_LIMITS.bodyBytes) {
+    refuseChatInput('CHAT_INPUT_TOO_LARGE');
+  }
+  return Number(length);
+}
+
+/** A declared body bounds its parse: the read buffer, its UTF-16 text and
+ * every parsed value, as finishChatInputParsing charges them. Nested metadata
+ * JSON can count each body byte once more. Undeclared bodies reserve the limit. */
+function parsingReservationBytes(declared: number | undefined): number {
+  if (declared === undefined) return CHAT_INGRESS_LIMITS.parsingBytes;
+  const values = Math.min(2 * declared, 2 * CHAT_INGRESS_LIMITS.values);
+  return Math.min(CHAT_INGRESS_LIMITS.parsingBytes, declared * 5 + values * 192 + MiB);
+}
 /** Before reader acquisition, URL decoding, buffers, or JSON parsing. No wait queue. */
-export function acquireChatIngress(request: Pick<Request, 'method' | 'url' | 'headers'>): ChatIngressPermit {
+export function acquireChatIngress(request: Pick<Request, 'method' | 'url' | 'headers'> & { signal?: AbortSignal }): ChatIngressPermit {
   if (request.url.length > CHAT_INGRESS_LIMITS.urlCharacters) refuseChatInput('CHAT_INPUT_TOO_LARGE');
   // The workspace wrapper decodes query parameters for every HTTP method.
   // Bound raw parameter work here as well as GET parsing, before that wrapper.
@@ -66,23 +100,20 @@ export function acquireChatIngress(request: Pick<Request, 'method' | 'url' | 'he
       if (request.url[index] === '&' && ++parameters > CHAT_INGRESS_LIMITS.queryParameters) refuseChatInput('CHAT_INPUT_TOO_LARGE');
     }
   }
-  const length = request.headers.get('content-length');
-  if (length !== null && (length.length > 16 || !/^\d+$/.test(length) || Number(length) > CHAT_INGRESS_LIMITS.bodyBytes)) {
-    refuseChatInput('CHAT_INPUT_TOO_LARGE');
-  }
+  const reserved = parsingReservationBytes(declaredBodyBytes(request));
   // Long-running chats keep their small parsed charge, not a parsing slot, so
   // the number of concurrent conversations is bounded by bytes, not by 16.
-  if (runtime.parsing >= CHAT_INGRESS_LIMITS.owners || runtime.bytes + CHAT_INGRESS_LIMITS.parsingBytes > CHAT_INGRESS_LIMITS.processBytes) {
+  if (runtime.parsing >= CHAT_INGRESS_LIMITS.owners || runtime.bytes + reserved > processBytesLimit()) {
     refuseChatInput('CHAT_INPUT_BUSY');
   }
   const heap = getHeapStatistics();
   const rss = process.memoryUsage().rss;
-  const pending = pendingAllocationBytes('ingress', runtime.bytes + CHAT_INGRESS_LIMITS.parsingBytes);
+  const pending = pendingAllocationBytes('ingress', runtime.bytes + reserved);
   const available = heap.heap_size_limit * 0.8 - heap.used_heap_size - 64 * MiB;
   if (!Number.isFinite(rss) || rss + pending > getProcessRssLimitBytes()
     || !Number.isFinite(available) || pending > available) refuseChatInput('CHAT_INPUT_MEMORY');
-  const record: Reservation = { bytes: CHAT_INGRESS_LIMITS.parsingBytes, owners: 1, claimed: false, parsed: false };
-  const permit = Object.freeze({ release: releaseOwner(record) });
+  const record: Reservation = { bytes: reserved, owners: 1, claimed: false, parsed: false };
+  const permit = Object.freeze({ release: releaseOwner(record), signal: request.signal });
   runtime.reservations.set(permit, record);
   runtime.active++; runtime.parsing++; runtime.bytes += record.bytes;
   setAllocationReservation('ingress', runtime.bytes);
@@ -101,19 +132,17 @@ function recheckChatIngressMemory(): void {
   if (!Number.isFinite(rss) || rss + pending > getProcessRssLimitBytes()
     || !Number.isFinite(available) || pending > available) refuseChatInput('CHAT_INPUT_MEMORY');
 }
+const ingressRules = {
+  waitable: (error: unknown) => isChatIngressError(error) && (error.code === 'CHAT_INPUT_BUSY' || error.code === 'CHAT_INPUT_MEMORY'),
+  blocksAll: (error: unknown) => (isChatIngressError(error) && error.code === 'CHAT_INPUT_MEMORY')
+    || runtime.parsing >= CHAT_INGRESS_LIMITS.owners,
+};
+
 /** Admission with backpressure: a momentarily busy or memory-pressured server
- * makes the request wait briefly instead of failing it. Size errors still fail. */
-export async function acquireChatIngressWhenAvailable(request: Pick<Request, 'method' | 'url' | 'headers'> & { signal?: AbortSignal },
-  waitMs: number = CHAT_INGRESS_LIMITS.admissionWaitMs): Promise<ChatIngressPermit> {
-  const deadline = Date.now() + waitMs;
-  for (let attempt = 0; ; attempt++) {
-    try { return acquireChatIngress(request); }
-    catch (error) {
-      if (!isChatIngressError(error) || (error.code !== 'CHAT_INPUT_BUSY' && error.code !== 'CHAT_INPUT_MEMORY')
-        || Date.now() >= deadline || request.signal?.aborted) throw error;
-      await new Promise(resolve => setTimeout(resolve, Math.min(500, 25 * 2 ** attempt)));
-    }
-  }
+ * makes the request wait, in arrival order, until capacity frees. Size errors still fail. */
+export function acquireChatIngressWhenAvailable(request: Pick<Request, 'method' | 'url' | 'headers'> & { signal?: AbortSignal },
+  waitMs: number = chatAdmissionWaitMs()): Promise<ChatIngressPermit> {
+  return waiting.acquire(() => acquireChatIngress(request), ingressRules, { deadline: Date.now() + waitMs, signal: request.signal });
 }
 /** One service claim; the route keeps its independent construction lifetime. */
 export function claimChatIngress(permit: ChatIngressPermit): { release: () => void; retain: () => () => void } {
@@ -139,11 +168,13 @@ export function finishChatInputParsing(permit: ChatIngressPermit, characters: nu
   if (!Number.isSafeInteger(bytes) || bytes > record.bytes) refuseChatInput('CHAT_INPUT_TOO_LARGE');
   runtime.bytes -= record.bytes - bytes; record.bytes = bytes; record.parsed = true; runtime.parsing--;
   setAllocationReservation('ingress', runtime.bytes);
+  waiting.wake();
 }
 export function getChatIngressDiagnostics() {
   return Object.freeze({ active: runtime.active, parsing: runtime.parsing, reservedBytes: runtime.bytes,
     rejectedSize: runtime.rejectedSize, rejectedBusy: runtime.rejectedBusy, rejectedMemory: runtime.rejectedMemory,
-    ...CHAT_INGRESS_LIMITS, maxRssBytes: getProcessRssLimitBytes() });
+    ...CHAT_INGRESS_LIMITS, maxRssBytes: getProcessRssLimitBytes(), processBytesLimit: processBytesLimit(),
+    waiting: waiting.size, admissionWaitMs: chatAdmissionWaitMs() });
 }
 
 /** Allocation preflight over bytes: no decoded strings, token arrays, or recursion.
@@ -177,7 +208,7 @@ export async function readChatJson(request: Request, permit: ChatIngressPermit):
   if (!request.body || typeof request.body.getReader !== 'function') refuseChatInput('CHAT_INPUT_INVALID');
   recheckChatIngressMemory();
   // One backing store bounds metadata even for arbitrarily small chunks.
-  const storage = Buffer.allocUnsafe(CHAT_INGRESS_LIMITS.bodyBytes);
+  const storage = Buffer.allocUnsafe(declaredBodyBytes(request) ?? CHAT_INGRESS_LIMITS.bodyBytes);
   const reader = request.body.getReader();
   let total = 0, chunks = 0, aborted = false;
   let cancellation: Promise<void> | undefined;

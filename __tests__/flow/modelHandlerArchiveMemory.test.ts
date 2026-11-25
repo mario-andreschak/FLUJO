@@ -508,9 +508,10 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     expect(canonical).toHaveLength(MODEL_TURN_ARCHIVE_WRITE_LIMITS.inspectedValues + 1);
   });
 
-  it('refuses a protected per-dispatch write before cloning or starting HTTP, then admits a successor after drainage', async () => {
+  it('refuses a fail-fast write before cloning, and queues a protected dispatch before HTTP until the held writers drain', async () => {
     const gate = deferred();
     const entered = deferred();
+    const sdkEntered = deferred();
     let count = 0;
     const writes = Array.from({ length: MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites }, () => withArchiveWriteMemory('held', async () => {
       if (++count === MODEL_TURN_ARCHIVE_WRITE_LIMITS.concurrentWrites) entered.resolve();
@@ -518,18 +519,22 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     }));
     const prepare = jest.fn(() => ({ conversationId: 'no-write', nodeId: 'node', modelId: 'model', modelName: 'model',
       adapter: 'openai', operation: 'create', attempt: 1, canonicalMessages: [message], genericWire: [], sdkRequest: {} }));
+    let running: ReturnType<typeof invoke> | undefined;
     try {
       await entered.promise;
       await expect(archiveModelDispatch(prepare(), prepare)).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' });
       // One call only builds the input references; deferred clone factory did not run.
       expect(prepare).toHaveBeenCalledTimes(1);
-      const result = await invoke([message], [message], {
+      // A Persona or extension dispatch waits its turn like an ordinary one (#757).
+      sdkRequestObserved = sdkEntered.resolve;
+      running = invoke([message], [message], {
         durableContext: { executionAuthority: { assertCurrent: async () => {} } },
       });
-      expect(result).toMatchObject({ success: false, error: { code: 'MODEL_TURN_ARCHIVE_MEMORY_BUSY' } });
+      await sdkEntered.promise;
+      expect((globalThis as typeof globalThis & { __flujoArchiveWriteQueue?: unknown[] }).__flujoArchiveWriteQueue).toHaveLength(1);
       expect(requests).toHaveLength(0);
     } finally { gate.resolve(); await Promise.allSettled(writes); }
-    expect((await invoke([message])).success).toBe(true);
+    expect((await running!).success).toBe(true);
     expect(requests).toHaveLength(1);
   });
 

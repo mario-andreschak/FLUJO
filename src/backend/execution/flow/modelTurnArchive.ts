@@ -613,9 +613,9 @@ export async function preparePagedCanonicalArchive(
 export async function archiveModelDispatch(
   input: ArchiveModelDispatchInput, prepare?: () => ArchiveModelDispatchInput,
 ): Promise<ModelTurnIndexEntry> {
-  const protectedDispatch = Boolean(input.id || input.durableContext?.executionAuthority
-    || input.durableContext?.executionExtensionContext || input.durableContext?.personaAttribution);
-  const writeAdmission = protectedDispatch ? undefined : input.writeAdmission;
+  // A journalled native invocation keeps its immediate refusal; every other
+  // dispatch, Persona and extension work included, waits its turn (#757).
+  const writeAdmission = input.id ? undefined : input.writeAdmission;
   const canonicalCapture = input.canonicalArchive?.capture();
   const pagedProvenance = (input.modelInput?.provenance.length ?? 0) > 1000;
   const modelInput = input.modelInput ? { inputMode: input.modelInput.inputMode, counts: input.modelInput.counts,

@@ -77,6 +77,7 @@ workaround.
 | A private Antigravity CLI home pins every CLI default that can skip FLUJO's approvals (newer CLIs default to Auto mode) | `__tests__/model/antigravityCliRuntime.test.ts` |
 | A reopened Antigravity conversation gets the prompt only after the CLI confirms its id; an unknown id silently starts an empty one | `__tests__/model/antigravityCliProcess.test.ts`, `__tests__/model/antigravityCliIntegration.test.ts` |
 | A context summary never lets a model alone decide which user corrections or prohibitions survive, and never drops the exact receipt of an action that already ran | `requiredInstructionIds` in `src/backend/execution/flow/compaction/standingInstructions.ts`; `__tests__/model/compactionFidelity.test.ts` |
+| A burst of chat requests waits its turn (`src/utils/capacityWaitQueue.ts`); none is refused because others arrived together | `__tests__/chat/parallelChatBurst.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 
 # Resilience over refusal

@@ -70,17 +70,57 @@ it('does not fall back to unbounded json methods on incomplete mock requests', a
   expect(json).not.toHaveBeenCalled();
 });
 
-it('holds capacity for two slow body readers, rejects a third without acquiring its reader, then drains on abort', async () => {
-  const controls = [new AbortController(), new AbortController()];
+it('holds capacity for slow undeclared body readers, rejects the next without acquiring its reader, then drains on abort', async () => {
+  const slots = Math.min(CHAT_INGRESS_LIMITS.owners,
+    Math.floor(getChatIngressDiagnostics().processBytesLimit / CHAT_INGRESS_LIMITS.parsingBytes));
+  const controls = Array.from({ length: slots }, () => new AbortController());
   const requests = controls.map(controller => new NextRequest(url, { method: 'POST',
     signal: controller.signal, body: new ReadableStream({}), duplex: 'half' } as ConstructorParameters<typeof NextRequest>[1]));
   const running = requests.map(req => parseRequestParameters(req).catch(error => error));
-  expect(getChatIngressDiagnostics()).toMatchObject({ active: 2, parsing: 2 });
+  expect(getChatIngressDiagnostics()).toMatchObject({ active: slots, parsing: slots });
   const refused = request('{}'); const getReader = jest.spyOn(refused.body!, 'getReader');
   await expect(parseRequestParameters(refused)).rejects.toMatchObject({ status: 429 });
   expect(getReader).not.toHaveBeenCalled();
   controls.forEach(controller => controller.abort());
-  expect(await Promise.all(running)).toEqual([expect.objectContaining({ code: 'CHAT_INPUT_ABORTED' }), expect.objectContaining({ code: 'CHAT_INPUT_ABORTED' })]);
+  expect(await Promise.all(running)).toEqual(controls.map(() => expect.objectContaining({ code: 'CHAT_INPUT_ABORTED' })));
+});
+
+it('reserves a declared small body by its size, so a burst of chats is read at once', () => {
+  const body = JSON.stringify({ model: 'flow-test', messages: [{ role: 'user', content: 'x'.repeat(4000) }] });
+  const permits: ReturnType<typeof acquireChatIngress>[] = [];
+  try {
+    for (let index = 0; index < CHAT_INGRESS_LIMITS.owners; index++) permits.push(acquireChatIngress(request(body, String(body.length))));
+    expect(getChatIngressDiagnostics().reservedBytes).toBeLessThan(CHAT_INGRESS_LIMITS.owners * 4 * 1024 * 1024);
+  } finally { permits.forEach(permit => permit.release()); }
+});
+
+it('admits waiting chats in arrival order the moment capacity frees, without polling', async () => {
+  const held: ReturnType<typeof acquireChatIngress>[] = [];
+  try { for (;;) held.push(acquireChatIngress(request('{}'))); } catch { /* every parse slot is taken */ }
+  const order: number[] = [];
+  const waiters = [0, 1, 2].map(index => acquireChatIngressWhenAvailable(request('{}'), 5_000).then(permit => { order.push(index); return permit; }));
+  await new Promise(resolve => setImmediate(resolve));
+  expect(getChatIngressDiagnostics().waiting).toBe(3);
+  const freedAt = performance.now();
+  held.splice(0, 3).forEach(permit => permit.release());
+  const admitted = await Promise.all(waiters);
+  expect(performance.now() - freedAt).toBeLessThan(100);
+  expect(order).toEqual([0, 1, 2]);
+  admitted.forEach(permit => permit.release());
+  held.forEach(permit => permit.release());
+});
+
+it('gives a waiting chat the retryable refusal at its deadline or when its caller leaves', async () => {
+  const held: ReturnType<typeof acquireChatIngress>[] = [];
+  try { for (;;) held.push(acquireChatIngress(request('{}'))); } catch { /* every parse slot is taken */ }
+  try {
+    await expect(acquireChatIngressWhenAvailable(request('{}'), 30)).rejects.toMatchObject({ code: 'CHAT_INPUT_BUSY', status: 429 });
+    const controller = new AbortController();
+    const leaving = acquireChatIngressWhenAvailable({ method: 'POST', url, headers: new Headers(), signal: controller.signal }, 5_000);
+    controller.abort();
+    await expect(leaving).rejects.toMatchObject({ code: 'CHAT_INPUT_BUSY' });
+    expect(getChatIngressDiagnostics().waiting).toBe(0);
+  } finally { held.forEach(permit => permit.release()); }
 });
 
 it('holds retained source bytes and independent producer ownership after route release', async () => {
