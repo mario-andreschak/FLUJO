@@ -1265,6 +1265,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     }
 
     const isFirstProcessStep = !nodes.some(node => node.data.type === 'process');
+    // "Build it myself" only declines AI help while building. The new step still
+    // needs an AI to run, so it gets the favourite (or only) connected AI.
+    const stepModelId = guidedAiAssistance === 'assisted' && guidedSelectedModelId
+      ? guidedSelectedModelId
+      : getPreferredGuidedModelId(guidedModels);
     const processNode = flowService.createNode('process', {
       x: source.position.x,
       y: source.position.y + 180,
@@ -1277,9 +1282,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         promptTemplate: prompt,
         inputMode: 'full-history',
         outputMode: 'latest-message',
-        ...(guidedAiAssistance === 'assisted' && guidedSelectedModelId
-          ? { boundModel: guidedSelectedModelId }
-          : {}),
+        ...(stepModelId ? { boundModel: stepModelId } : {}),
       },
     };
 
@@ -1386,7 +1389,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setAssistanceNodeId(processNode.id);
       setAssistanceFocus('apps');
       setAssistanceOpen(true);
-    } else if (!guidedSelectedModelId) {
+    } else if (!stepModelId) {
       showBuilderNotice(t('flows.builder.connectModel'));
     }
   }, [
@@ -1394,6 +1397,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     edges,
     guidedAiAssistance,
     guidedSelectedModelId,
+    guidedModels,
     guidedGraph.orderedNodeIds,
     hasUnsafeGuidedGraph,
     showBuilderNotice,

@@ -636,4 +636,56 @@ describe('FlowBuilder toolbar', () => {
       ]),
     }));
   });
+
+  it('gives a self-built goal step the favorite AI so the agent can be tried at once', async () => {
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
+    const onSave = jest.fn().mockResolvedValue(true);
+    const onTry = jest.fn();
+    render(
+      <FlowBuilder
+        initialFlow={{ ...initialFlow, id: 'manual-draft', name: 'NewFlow2' }}
+        isDraft
+        onSave={onSave}
+        onTry={onTry}
+        onDelete={() => {}}
+        allFlows={[]}
+      />,
+    );
+
+    const recipe = screen.getByLabelText('Guided agent builder');
+    await waitFor(() => expect(modelService.loadModels).toHaveBeenCalled());
+    fireEvent.click(within(recipe).getByRole('button', { name: 'No, I’ll build it myself' }));
+    fireEvent.change(within(recipe).getByLabelText('Workflow goal'), {
+      target: { value: 'List the folders you can read.' },
+    });
+    fireEvent.click(within(recipe).getByRole('button', { name: 'Create goal step' }));
+    await waitFor(() => expect(within(recipe).getByText('List the folders you can read.')).toBeInTheDocument());
+    fireEvent.change(within(recipe).getByLabelText('Agent name'), { target: { value: 'Folder helper' } });
+
+    expect(within(recipe).queryByText(/This step still needs an AI/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('flow-assistance-dialog')).not.toBeInTheDocument();
+    expect(flowService.generateNameForFlow).not.toHaveBeenCalled();
+    const tryAgent = within(recipe).getByRole('button', { name: 'Try my agent' });
+    await waitFor(() => expect(tryAgent).toBeEnabled());
+    fireEvent.click(tryAgent);
+
+    await waitFor(() => expect(onTry).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Folder helper',
+      nodes: expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: 'process',
+            properties: expect.objectContaining({
+              promptTemplate: 'List the folders you can read.',
+              boundModel: 'model-favorite',
+            }),
+          }),
+        }),
+      ]),
+    }));
+  });
 });
