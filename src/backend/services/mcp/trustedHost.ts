@@ -9,6 +9,7 @@ import { assertPackageRunnerResolution, packageRunnerArguments } from '../securi
 import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
 import { activatePendingWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
 import { parseRuntimeHomeIsolationOverride, resolveRuntimeHomeIsolation, MCP_RUNTIME_HOME_ISOLATION_ENV } from './runtimeHomeIsolation';
+import { stdioLaunchForm } from './launchForm';
 
 const BROKER_NAMES = ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'];
 const RESERVED_RUNTIME_NAMES = [...BROKER_NAMES, GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_WORKER_MODE', 'FLUJO_MCP_WORKLOAD_TOKEN', 'FLUJO_MCP_WORKLOAD_AUDIENCE'];
@@ -63,6 +64,7 @@ export interface ManagedTrustedHost {
   readonly workspace: string;
   readonly serverName: string;
   readonly generation: string;
+  /** Accepts the stored or the launch form; both are compared in launch form. */
   assertCurrent(config: MCPStdioConfig): Promise<void>;
   retire(): void;
 }
@@ -130,7 +132,7 @@ async function currentConfig(serverName: string): Promise<MCPStdioConfig> {
   const configs = await (await import('./config')).loadServerConfigs();
   const config = Array.isArray(configs) ? configs.find(item => item.name === serverName) : undefined;
   if (!config || config.disabled || config.transport !== 'stdio') throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  return config;
+  return stdioLaunchForm(config);
 }
 
 /** Capture the launched identity, not whatever later happens to be approved. */
@@ -172,8 +174,9 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
   const managed: ManagedTrustedHost = Object.freeze({
     workspace: initial.workspace, serverName: config.name, generation: randomUUID(),
     retire: () => retireWithReason('explicit'),
-    assertCurrent: async (current: MCPStdioConfig) => {
+    assertCurrent: async (given: MCPStdioConfig) => {
       checkLive();
+      const current = await stdioLaunchForm(given);
       if (initial.policy.packageRunner) {
         if (await resolveRuntimeHomeIsolation(current) !== (initial.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
       }

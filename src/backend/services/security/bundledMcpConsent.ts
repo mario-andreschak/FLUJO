@@ -6,6 +6,7 @@ import { getDataDir } from '@/utils/paths';
 import { loadServerConfigs, saveConfig } from '../mcp/config';
 import { shippedDescriptorForConfig, shippedMcpAppRoot } from '../mcp/shippedServers';
 import { inspectShippedWorkspaceProvenance } from '../mcp/shippedWorkspacePackages';
+import { stdioLaunchForm } from '../mcp/launchForm';
 import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAccess';
 import { ownerPolicySchema } from './ownerCredentials';
 import { previewPackageRunnerConsent } from './packageRunnerConsent';
@@ -161,7 +162,7 @@ export async function previewBundledHostConsent(serverName: string, options: { r
         assetDigest: revision.assetDigest, dependencyGraphDigest: revision.dependencyGraph.digest,
         dependencyDirectories: revision.dependencies.map(item => item.directory), dependencyLinks: revision.dependencyLinks,
         ...(workload ? { workload } : {}) } } };
-  return { config, policyDigest: await consentDiagnosticStage('CONSENT_DIGEST', () => trustedHostMcpPreviewDigestAsync(config)), revision, storedConfig: structuredClone(stored) };
+  return { config, policyDigest: await consentDiagnosticStage('CONSENT_DIGEST', async () => trustedHostMcpPreviewDigestAsync(await stdioLaunchForm(config))), revision, storedConfig: structuredClone(stored) };
   });
 }
 

@@ -53,7 +53,7 @@ it('does not downgrade an explicit server profile', () => {
 it('allows dispatch only from its captured local transport and current launch config', async () => {
   const transport = { start: jest.fn(async () => undefined) };
   const close = jest.fn(async () => undefined);
-  attachLocalHostLaunch(transport, mockConfig, config => JSON.stringify([config.command, config.args]));
+  attachLocalHostLaunch(transport, mockConfig, { isolateRuntimeHome: false });
   const wrapper = { __flujoInnerTransport: transport };
   expect(getLocalHostLaunch(wrapper)).toBeDefined();
   const client = { transport: wrapper, close } as unknown as Client;
@@ -67,18 +67,19 @@ it('compares a secret env by its resolved value, as it was launched', async () =
   mockConfig.env = { FLY_API_TOKEN: { value: 'encrypted:stored-form', metadata: { isSecret: true } } } as unknown as MCPStdioConfig['env'];
   const launched = { ...mockConfig, env: { FLY_API_TOKEN: 'resolved-secret' } };
   const transport = { start: jest.fn(async () => undefined) };
-  attachLocalHostLaunch(transport, launched, config => JSON.stringify([config.command, config.args, config.env]));
+  attachLocalHostLaunch(transport, launched, { isolateRuntimeHome: false });
   const client = { transport, close: jest.fn(async () => undefined) } as unknown as Client;
   await expect(assertMcpIsolationDispatch(client, mockConfig.name)).resolves.toBeUndefined();
   mockConfig.env = { FLY_API_TOKEN: { value: 'encrypted:rotated', metadata: { isSecret: true } } } as unknown as MCPStdioConfig['env'];
   await expect(assertMcpIsolationDispatch(client, mockConfig.name)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
 });
 
-it('revokes a local transport when a protected profile is selected', () => {
+it('revokes a local transport when a protected profile is selected', async () => {
   const transport = { start: jest.fn(async () => undefined) };
-  attachLocalHostLaunch(transport, mockConfig, config => config.command);
+  attachLocalHostLaunch(transport, mockConfig, { isolateRuntimeHome: false });
   process.env.FLUJO_OWNER_AUTH_FILE = 'selected-policy';
-  expect(() => getLocalHostLaunch(transport)!.assertCurrent(mockConfig)).toThrow();
+  await expect(getLocalHostLaunch(transport)!.assertCurrent(mockConfig)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
+  await expect(transport.start()).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
 });
 
 it('denies untracked local clients even when compatibility mode is available', async () => {
