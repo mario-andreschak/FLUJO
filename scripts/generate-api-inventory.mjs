@@ -50,7 +50,8 @@ const output = [
 
 if (process.argv.includes('--check')) {
   if (!fs.existsSync(destination) || fs.readFileSync(destination, 'utf8').replace(/\r\n/g, '\n') !== output) {
-    console.error('API route inventory is stale. Run node scripts/generate-api-inventory.mjs.');
+    console.error('docs/api-reference/routes.md no longer matches the route files. Run `node scripts/generate-api-inventory.mjs` '
+      + 'and commit the result. After a merge conflict in that file, take either side and run it again.');
     process.exitCode = 1;
   } else console.log(`API inventory current: ${rows.length} route files.`);
 } else {

@@ -24,8 +24,9 @@ node scripts/flujo-drive.mjs warm          # compile every page once (dev mode);
 ```
 
 `launch` returns only once `/api/cwd` answers and the home page renders. On
-failure it prints the end of the server log. One instance at a time; `--port`
-and `--data-dir` pick them yourself. Without `warm`, the first visit to a large
+failure it prints the end of the server log. One instance per checkout, so
+agents in other worktrees keep theirs; `--port` and `--data-dir` pick them
+yourself. Without `warm`, the first visit to a large
 page can take minutes while dev mode compiles it. `warm` with routes
 (`warm flows chat`) compiles only those.
 
@@ -129,9 +130,11 @@ passes.
 node scripts/flujo-drive.mjs stop
 ```
 
-Stops only the process tree this tool started and deletes the data folder it
-created. Evidence stays. Never stop node or FLUJO processes by name. Run `stop`
-after a failed attempt too.
+Stops only the process tree this tool started from this checkout and deletes
+the data folder it created. Evidence stays. Never stop node or FLUJO processes
+by name, and never delete other `flujo-drive-data-*` folders in the temp
+folder: they belong to other agents' instances. Run `stop` after a failed
+attempt too.
 
 ## Keep the map honest
 
