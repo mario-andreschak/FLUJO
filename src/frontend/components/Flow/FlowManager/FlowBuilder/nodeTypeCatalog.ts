@@ -54,6 +54,12 @@ export const getNodeTypes = (t: Translator): AddableNodeType[] => [
     description: t('flows.palette.staticHelp'),
   },
   {
+    type: 'human',
+    label: t('flows.palette.human'),
+    shortLabel: t('flows.palette.humanShort'),
+    description: t('flows.palette.humanHelp'),
+  },
+  {
     type: 'trigger',
     label: t('flows.palette.trigger'),
     shortLabel: t('flows.palette.triggerShort'),

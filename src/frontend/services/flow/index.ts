@@ -649,7 +649,9 @@ class FlowService {
       type,
       position,
       data: {
-        label: `${type === 'mcp' ? 'MCP' : type.charAt(0).toUpperCase() + type.slice(1)} Node`,
+        label: type === 'human'
+          ? 'Human step'
+          : `${type === 'mcp' ? 'MCP' : type.charAt(0).toUpperCase() + type.slice(1)} Node`,
         type,
         // Guided FlowBuilder does not expose process input modes. Persist its
         // intended "Full conversation" choice explicitly so a newly-created
@@ -661,6 +663,8 @@ class FlowService {
             // properties modal and validation never see an undefined array.
             : type === 'static'
             ? { entries: [] }
+            : type === 'human'
+            ? { mode: 'approval', prompt: '' }
             : type === 'subflow'
             ? {
                 resultPresentation: 'separate',

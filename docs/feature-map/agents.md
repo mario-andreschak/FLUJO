@@ -13,6 +13,7 @@ Here a user builds and manages AI agents (called "flows" inside the app). The li
 - `agents-create-ai`: "Create with AI" opens the "Create an agent" dialog, where the user describes the agent and picks "AI used to build it".
 - `agents-easy-builder`: "Start simple" opens the Easy view. The user fills "Workflow goal", chooses "Create goal step" (then "Add this step"), fills "Agent name" and chooses "Try my agent".
 - `agents-expert-canvas`: "Start expert", or the "Expert view" switch, opens the node canvas with a list of node types ("Ask AI", "Send the answer", "Use a connected app", "Ask another agent" and more), "Add node", "Tidy up layout", "Undo" and "Redo".
+- `agents-human-step`: a step that waits for a person. In the Easy view, "Add human step" adds one at the end and opens its settings; in Expert view it is "Ask a person" in the node list. The settings dialog "Human step" offers "Approve", "Fill in" and "Review and edit", the question, the wait time and what a no does. "Save" stays off while the question is empty.
 - `agents-node-properties`: selecting a node fills the "Inspector" panel ("Node name", and "Full settings" for every option). With nothing selected, the panel shows "Flow details" with "Flow name".
 - `agents-save`: the "Save flow" button (it shows the text "Save"). A chip reports "Save status: Saved / Unsaved / Saving…", and a banner says "Agent saved."
 - `agents-more-actions`: the "More actions" menu ("Previous versions" or "History", "Duplicate agent", "Delete agent", "Improve with AI", "Improvement and versions").
@@ -43,4 +44,5 @@ Preconditions: a throwaway instance from the verify-flujo skill. A fresh instanc
 - "Try it" / "Try my agent" stay disabled until each AI step has a model and the name is not "Untitled agent". Without a model, the Easy view warns "This step still needs an AI…".
 - The canvas is the slowest part. The first load in a dev instance compiles it, and nodes have no stable accessible names: drive the node list and the "Inspector", not canvas positions.
 - The node list sits beside the canvas only at 900 px wide or more. Below that, use "Add node".
+- A Human step only waits in a saved chat run. Trying it shows a card in the chat; building and saving it needs no model.
 - The guided tour starts on its own only on the home page `/`, so opening `/flows` directly avoids it.

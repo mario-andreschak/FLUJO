@@ -4,6 +4,7 @@ import {
   MCPNode,
   ProcessNode,
   SignalNode,
+  HumanNode,
   FLOW_QUICK_CONNECT_EVENT,
 } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 
@@ -95,6 +96,27 @@ describe('FlowBuilder CustomNodes', () => {
 
   // Issue #412: technical details moved out of the canvas node into the
   // Inspector's last action, which opens a read-only modal.
+  it('renders a Human step with its two flow handles, kind and question', () => {
+    renderNode(HumanNode as typeof ProcessNode, {
+      label: 'Check the reply',
+      type: 'human',
+      properties: { mode: 'edit', prompt: 'Fix anything before it goes out.' },
+    });
+
+    expect(screen.getByTestId('handle-human-top')).toHaveAttribute('data-type', 'target');
+    expect(screen.getByTestId('handle-human-bottom')).toHaveAttribute('data-type', 'source');
+    const summary = within(screen.getByLabelText('Node summary'));
+    expect(summary.getByText('Review and edit')).toBeInTheDocument();
+    expect(summary.getByText(/Fix anything before it goes out/)).toBeInTheDocument();
+  });
+
+  it('marks a Human step without a question as not written yet', () => {
+    renderNode(HumanNode as typeof ProcessNode, { label: 'Human step', type: 'human', properties: { mode: 'approval', prompt: '' } });
+    const summary = within(screen.getByLabelText('Node summary'));
+    expect(summary.getByText('Approve')).toBeInTheDocument();
+    expect(summary.getByText('Not written yet')).toBeInTheDocument();
+  });
+
   it('no longer renders inline technical details while keeping the node summary', () => {
     renderNode(ProcessNode, {
       label: 'Safe node',

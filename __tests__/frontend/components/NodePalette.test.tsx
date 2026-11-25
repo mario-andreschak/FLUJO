@@ -19,6 +19,16 @@ describe('NodePalette', () => {
     expect(screen.getByText('Use saved information')).toBeInTheDocument();
     expect(screen.getByText('Notify an automation')).toBeInTheDocument();
     expect(screen.getByText('Start automatically')).toBeInTheDocument();
+    expect(screen.getByText('Ask a person')).toBeInTheDocument();
+  });
+
+  it('adds a Human step from the advanced list', () => {
+    const onAddNode = jest.fn();
+    render(<NodePalette authoringMode="advanced" onAddNode={onAddNode} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Ask a person:/i }));
+
+    expect(onAddNode).toHaveBeenCalledWith('human');
   });
 
   it('adds a node with one click through the explicit builder callback', () => {

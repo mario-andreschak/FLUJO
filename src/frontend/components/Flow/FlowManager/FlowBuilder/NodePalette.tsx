@@ -15,7 +15,8 @@ import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded';
 import MemoryRoundedIcon from '@mui/icons-material/MemoryRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
-import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT, STATIC_COLOR, STATIC_COLOR_LIGHT } from './CustomNodes';
+import FrontHandRoundedIcon from '@mui/icons-material/FrontHandRounded';
+import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT, STATIC_COLOR, STATIC_COLOR_LIGHT, HUMAN_COLOR, HUMAN_COLOR_LIGHT } from './CustomNodes';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getNodeTypes } from './nodeTypeCatalog';
@@ -79,6 +80,8 @@ const NodeItem = styled(Paper, {
       ? TRIGGER_COLOR
       : nodeType === 'static'
       ? STATIC_COLOR
+      : nodeType === 'human'
+      ? HUMAN_COLOR
       : theme.palette.info.main
   }`,
   boxShadow: 'none',
@@ -101,6 +104,8 @@ const NodeItem = styled(Paper, {
         ? TRIGGER_COLOR
         : nodeType === 'static'
         ? STATIC_COLOR
+        : nodeType === 'human'
+        ? HUMAN_COLOR
         : theme.palette.info.main,
       0.55,
     ),
@@ -119,6 +124,8 @@ const NodeItem = styled(Paper, {
         ? TRIGGER_COLOR
         : nodeType === 'static'
         ? STATIC_COLOR
+        : nodeType === 'human'
+        ? HUMAN_COLOR
         : theme.palette.info.main
     }, 0 14px 30px rgba(0,0,0,0.12)`
   },
@@ -159,6 +166,8 @@ const NodeHeader = styled(Box, {
       ? TRIGGER_COLOR_LIGHT
       : nodeType === 'static'
       ? STATIC_COLOR_LIGHT
+      : nodeType === 'human'
+      ? HUMAN_COLOR_LIGHT
       : theme.palette.info.light
   }`,
   marginBottom: theme.spacing(1),
@@ -202,6 +211,8 @@ const getNodeIcon = (type: NodeType) => {
       return <BoltIcon sx={{ color: TRIGGER_COLOR }} />;
     case 'static':
       return <NoteAddIcon sx={{ color: STATIC_COLOR }} />;
+    case 'human':
+      return <FrontHandRoundedIcon sx={{ color: HUMAN_COLOR }} />;
     default:
       return <SettingsIcon color="primary" />;
   }

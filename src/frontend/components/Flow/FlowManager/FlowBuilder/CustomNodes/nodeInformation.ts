@@ -137,6 +137,17 @@ const PROPERTY_SPECS: Record<NodeType, readonly PropertySpec[]> = {
     { key: 'entries', label: 'Entries' },
     { key: 'injectOnce', label: 'Inject once', defaultValue: false },
   ],
+  human: [
+    { key: 'mode', label: 'Mode', defaultValue: 'approval' },
+    { key: 'title', label: 'Title' },
+    { key: 'prompt', label: 'Question' },
+    { key: 'review', label: 'What to review' },
+    { key: 'fields', label: 'Questions' },
+    { key: 'outputVariable', label: 'Result name', defaultValue: 'review' },
+    { key: 'timeoutMinutes', label: 'Wait time in minutes', defaultValue: 10080 },
+    { key: 'onReject', label: 'After a no', defaultValue: 'stop' },
+    { key: 'onTimeout', label: 'After a time-out', defaultValue: 'stop' },
+  ],
   trigger: [
     { key: 'executionId', label: 'Execution ID' },
     { key: 'name', label: 'Name' },
@@ -415,6 +426,25 @@ const addOtherSummary = (
         summary.push({ key: 'first', label: tr(i18n, 'flows.nodeInfo.first', 'First entry'), value: preview, multiline: true });
       }
     }
+  } else if (nodeType === 'human') {
+    const mode = properties.mode === 'input' || properties.mode === 'edit' ? properties.mode : 'approval';
+    summary.push({
+      key: 'mode',
+      label: tr(i18n, 'flows.nodeInfo.humanMode', 'Asks for'),
+      value: mode === 'input'
+        ? tr(i18n, 'flows.human.mode.input', 'Fill in')
+        : mode === 'edit'
+          ? tr(i18n, 'flows.human.mode.edit', 'Review and edit')
+          : tr(i18n, 'flows.human.mode.approval', 'Approve'),
+    });
+    summary.push({
+      key: 'question',
+      label: tr(i18n, 'flows.nodeInfo.humanQuestion', 'Question'),
+      value: nonEmptyString(properties.prompt)
+        ? promptPreview(properties.prompt) ?? ''
+        : tr(i18n, 'flows.nodeInfo.humanNoQuestion', 'Not written yet'),
+      multiline: true,
+    });
   } else if (nodeType === 'trigger') {
     const trigger = isRecord(properties.trigger) ? properties.trigger : {};
     summary.push({
