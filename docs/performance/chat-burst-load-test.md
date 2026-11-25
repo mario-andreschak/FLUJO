@@ -64,7 +64,9 @@ work. First model call in ms, for the requests that got one.
 What changed: requests with a declared size are read together instead of two
 at a time; busy runs and reply streams make a request wait its turn instead of
 refusing it; concurrent model calls share one model-catalog registration; and
-the end of a run no longer re-measures every cached conversation.
+the end of a run no longer re-measures every cached conversation. Because
+model calls now start closer together, Persona and extension model calls also
+wait for a free archive writer instead of being refused at once.
 
 What is left: each run still saves its state and recovery checkpoints several
 times (about 1 to 3.5 s per run during a burst), and a workspace runs up to 16
