@@ -1143,6 +1143,32 @@ describe('CodexAdapter — tool bridging', () => {
     }));
   });
 
+  it('drops structuredContent from a bounded result and sizes the limit from the model window (#1226)', async () => {
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'x'.repeat(60_000) }], structuredContent: { rows: 'x'.repeat(60_000) } },
+    });
+    boundToolResultMock.mockResolvedValueOnce({ spilled: true, content: '[bounded text preview]' });
+    let bridgeResult: unknown;
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        bridgeResult = await capturedBridgeTools[0].handler({ q: 'x' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    await new CodexAdapter().createCompletion(baseInput({
+      model: { ...baseInput().model, contextWindow: 400_000 },
+      conversationId: 'conv-1',
+      tools: [mcpTool],
+      toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+    }));
+
+    expect(bridgeResult).toEqual({ content: [{ type: 'text', text: '[bounded text preview]' }] });
+    expect(boundToolResultMock).toHaveBeenCalledWith(expect.objectContaining({ contextWindow: 400_000 }));
+  });
+
   it('streams a pending tool call before the bridge result resolves', async () => {
     let resolveTool!: (value: { success: true; data: { content: Array<{ type: 'text'; text: string }> } }) => void;
     const toolResult = new Promise<{ success: true; data: { content: Array<{ type: 'text'; text: string }> } }>(

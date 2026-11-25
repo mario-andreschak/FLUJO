@@ -1,23 +1,26 @@
 import { createLogger } from '@/utils/logger';
-import {
-  DEFAULT_TOOL_RESULT_MAX_BYTES,
-  DEFAULT_TOOL_RESULT_MAX_LINES,
-  RunResourceSettings,
-} from '@/shared/types/runResources';
+import type { RunResourceSettings } from '@/shared/types/runResources';
+import { resolveToolResultBound, type ToolResultBound } from '@/shared/toolResultLimit';
 import { writeRunResource } from './index';
+import { measureToolResult } from './toolResultBound';
 
 /**
- * Tool-boundary result bound (issue #251).
+ * Tool-boundary result bound (issue #251, settings in #1226).
  *
  * Every tool result is bounded at the tool boundary — in ModelHandler's
- * processToolCalls (OpenAI/request-response path) and the Claude Subscription
- * adapter's MCP-tool callback — rather than only later on the wire
- * (compactForWire). When a result's text form exceeds EITHER a line budget OR a
- * byte budget (both configurable) the full content is spilled UNCONDITIONALLY
- * to a run resource and the model is shown a HEAD + TAIL preview carrying the
+ * processToolCalls (OpenAI/request-response path), the Claude, Codex and
+ * Antigravity adapters' MCP-tool callbacks, the native tool broker and history
+ * reload — rather than only later on the wire (compactForWire). When a
+ * result's text form exceeds EITHER a line budget OR a byte budget (see
+ * `resolveToolResultBound`) the full content is spilled UNCONDITIONALLY to a
+ * run resource and the model is shown a HEAD + TAIL preview carrying the
  * `flujo://run/...` URI. This guarantees a multi-megabyte result never reaches
  * the wire in full even on the very first turn, and that both ends of a long
  * log (a stack trace's cause AND its final line) survive.
+ *
+ * With the setting off only the safety ceiling applies (half the model's
+ * context window): such a result is moved anyway, with a note saying why,
+ * instead of overflowing the model and failing the run.
  *
  * Pure/near-pure and dependency-light on purpose: the only side effect is the
  * `writeRunResource` spill, and a spill failure degrades gracefully to a lossy
@@ -36,6 +39,11 @@ export interface BoundToolResultInput {
   /** The already-stringified tool result (JSON of the CallToolResult data). */
   content: string;
   settings: RunResourceSettings;
+  /**
+   * Context window (tokens) of the model that reads this result. Sizes the
+   * 'auto' limit and the safety ceiling; unknown ⇒ a 128K-token window.
+   */
+  contextWindow?: number;
 }
 
 export interface BoundToolResultOutcome {
@@ -47,6 +55,8 @@ export interface BoundToolResultOutcome {
   uri?: string;
   /** Bytes stored (present only alongside `uri`). */
   bytes?: number;
+  /** Present when spilled: 'safety' when the model's context window, not the user's limit, decided. */
+  reason?: ToolResultBound['reason'];
 }
 
 /** Take at most `maxBytes` UTF-8 bytes from the START of `s`. */
@@ -73,13 +83,13 @@ function takeTailBytes(s: string, maxBytes: number): string {
  */
 function buildPreview(
   content: string,
-  maxLines: number,
-  maxBytes: number,
+  bound: ToolResultBound,
   totalBytes: number,
-  totalLines: number,
   uri: string | undefined
 ): string {
+  const { maxLines, maxBytes } = bound;
   const lines = content.split('\n');
+  const totalLines = lines.length;
   const lineBudget = maxLines > 0 ? maxLines : lines.length;
   const halfLines = Math.max(1, Math.floor(lineBudget / 2));
   const headLineStr = lines.slice(0, halfLines).join('\n');
@@ -90,10 +100,18 @@ function buildPreview(
   const head = takeHeadBytes(headLineStr, halfBytes);
   const tail = takeTailBytes(tailLineStr, halfBytes);
 
+  // Say why when the user's own limit did not decide: the setting is off (or
+  // a custom limit is larger than the model can take) and the result would not
+  // fit the model's context window.
+  const why = bound.reason === 'safety'
+    ? `it is too large for the model's context window (${bound.contextWindow} tokens), so it was moved ` +
+      'even though the tool result size limit allows more — '
+    : '';
   const marker = uri
-    ? `\n…\n[tool result truncated for context — the full ${totalBytes}-byte (${totalLines}-line) ` +
-      `result is stored as run resource ${uri}; call read_resource with this uri to read all of it]\n…\n`
-    : `\n…[tool result truncated for context — ${totalBytes} bytes / ${totalLines} lines dropped; ` +
+    ? `\n…\n[tool result truncated for context — ${why}the full ${totalBytes}-byte (${totalLines}-line) ` +
+      `result is stored as run resource ${uri}; call read_resource with this uri ` +
+      '(use max_chars and start_char to read it in parts) to read all of it]\n…\n'
+    : `\n…[tool result truncated for context — ${why}${totalBytes} bytes / ${totalLines} lines dropped; ` +
       `the full result could not be stored]\n…\n`;
 
   return `${head}${marker}${tail}`;
@@ -102,32 +120,9 @@ function buildPreview(
 export async function boundToolResult(input: BoundToolResultInput): Promise<BoundToolResultOutcome> {
   const { conversationId, toolCallId, server, toolName, nodeId, content, settings } = input;
 
-  // Master switch: if truncation is disabled, return content as-is
-  if (!settings.toolResultTruncationEnabled) {
-    return { content, spilled: false };
-  }
-
-  const maxLines = settings.toolResultMaxLines ?? DEFAULT_TOOL_RESULT_MAX_LINES;
-  const maxBytes = settings.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
-
-  // Both dimensions disabled → bounding is off entirely.
-  if (maxLines <= 0 && maxBytes <= 0) return { content, spilled: false };
-
-  // Byte check first (cheap) — only split lines when a line budget is active.
-  const totalBytes = Buffer.byteLength(content, 'utf8');
-  const overBytes = maxBytes > 0 && totalBytes > maxBytes;
-
-  let totalLines = 0;
-  let overLines = false;
-  if (maxLines > 0) {
-    totalLines = 1;
-    for (let i = 0; i < content.length; i++) {
-      if (content.charCodeAt(i) === 10 /* \n */) totalLines++;
-    }
-    overLines = totalLines > maxLines;
-  }
-
-  if (!overBytes && !overLines) return { content, spilled: false };
+  const bound = resolveToolResultBound(settings, input.contextWindow);
+  const { over, totalBytes } = measureToolResult(content, bound);
+  if (!over) return { content, spilled: false };
 
   // Over a limit: spill the FULL content unconditionally so the model always
   // has a dereferenceable URI for the whole thing. Never throws at the caller.
@@ -160,6 +155,6 @@ export async function boundToolResult(input: BoundToolResultInput): Promise<Boun
     log.error('Tool-result spill failed; falling back to lossy preview', error);
   }
 
-  const preview = buildPreview(content, maxLines, maxBytes, totalBytes, totalLines, uri);
-  return { content: preview, spilled: true, uri, bytes };
+  const preview = buildPreview(content, bound, totalBytes, uri);
+  return { content: preview, spilled: true, uri, bytes, reason: bound.reason };
 }

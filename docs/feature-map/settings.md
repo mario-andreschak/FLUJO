@@ -23,6 +23,7 @@ One page for everything that shapes the whole installation. Sections are grouped
 - `settings-privacy`: "Privacy & usage": which anonymous usage signals may be shared.
 - `settings-diagnostic-report`: under "Privacy & usage", "Diagnostic report" → "Create report" shows a read-only "Report (read it before you share it)" with "Copy" and "Save as file". It holds versions, counts and error counts only and is never sent (`GET /api/diagnostics/report`). Testers in the user pilot share it by hand (`docs/pilots/product-fit/tester-guide.md`).
 - `settings-experimental`: "Experimental features" with "Enable experimental features", "Enable Harness Lab", "Show models without tool capabilities", "Continue the Antigravity CLI conversation across turns (reduce token usage)" and more switches grouped by topic.
+- `settings-tool-result-limit`: under "Experimental features" → "Context management", "Move large tool results to a resource" (off by default) with "Size limit": "Automatic (based on the model)" or "Custom size", the fields "Size limit (KB)" and "Line limit", and "Save limits". It works without "Enable experimental features". Stored per workspace through `GET`/`PATCH /api/tool-result-limit`; see `docs/features/tool-result-size-limit.md`.
 
 ## How to get to it (user POV)
 
@@ -37,6 +38,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. Nothing else ne
 - **Open the page**: `node scripts/flujo-drive.mjs open /settings` → heading "Settings"; the "Network access" section is shown first.
 - **Switch section**: `node scripts/flujo-drive.mjs click /settings --role button --name "Experimental features" --then-aria settings-experimental.aria` → the experimental switches, starting with "Enable experimental features".
 - **Turn on experimental features**: use `steps /settings --file <steps.json>`: click button "Experimental features", click switch "Enable experimental features", then `shot` → the switch is on and "Experimental" appears under "More" in the navigation.
+- **Set the tool result size limit**: `steps`: click button "Experimental features", click switch "Move large tool results to a resource", click radio "Custom size", fill "Size limit (KB)" with `32`, click button "Save limits", then `aria` → the switch is on, "Custom size" is chosen and "Saved. The next tool call uses the new setting." shows. Typing `0` instead shows "Enter a whole number of kilobytes from 1 to 102,400." and "Save limits" stays disabled.
 - **Replay the tour**: `steps`: click button "Onboarding", then click button "Replay guided tour" → the guided tour starts.
 - **Create a diagnostic report**: `steps`: click button "Privacy & usage", click button "Create report", then `aria` → the "Report (read it before you share it)" text box starting with "FLUJO diagnostic report", plus "Copy" and "Save as file".
 - **Proof**: an ARIA snapshot and a screenshot of the chosen section after the change.
@@ -45,6 +47,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. Nothing else ne
 
 - The chosen section is not in the address; every fresh load starts on "Network access". Each driver command is a fresh session, so use `steps` to pick a section and act on it.
 - In narrow windows (under about 900 px wide, including `--viewport 360x800`) the left list is replaced by a "Settings section" drop-down, so the section buttons above are not there.
+- The tool result size limit is saved per workspace, not in the browser. A throwaway instance should switch it off again after a run, or be thrown away. The "Size limit (KB)" field stays greyed out until "Custom size" is chosen, and everything below the switch stays greyed out while the switch is off.
 - Experimental pages (under "More" → "Experimental") appear only after "Enable experimental features" is on. Harness Lab also needs "Enable Harness Lab". Turning experimental features off hides them but keeps their data.
 - Choosing "Local Network" or "Public" takes effect after a restart. Without a configured owner sign-in, the app's own data requests are then refused ("Owner authentication is unavailable"). Leave a throwaway instance on "Localhost".
 - Switching to a "Legacy" theme changes some labels elsewhere, for example "Add server" instead of "Connect App" on Connected Apps.

@@ -175,6 +175,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/telemetry/daily-active': 'admin', // installation-wide usage heartbeat
   '/api/tickets': 'workspace',
   '/api/tickets/[id]': 'workspace',
+  '/api/tool-result-limit': 'workspace', // the workspace's tool result size limit (#1226)
   '/api/transcription': 'workspace',
   '/api/update': 'admin', // updates the installation
   '/api/waves': 'workspace',

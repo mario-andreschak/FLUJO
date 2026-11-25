@@ -111,6 +111,8 @@ import {
 import { captureToolResult } from '@/backend/services/runResources/capture';
 import { mediaPartFromToolItem, splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { measureToolResult } from '@/backend/services/runResources/toolResultBound';
+import { resolveToolResultBound } from '@/shared/toolResultLimit';
 import { isRunResourceToolName, executeRunResourceTool, nativeRunResourceResult, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
@@ -128,11 +130,7 @@ import { withSubflowOutputConsumption } from '../subflowOutputBudget';
 import { isSubflowCommunicationTool, executeSubflowCommunicationTool } from '../subflowCommunication';
 import { isBehaviorToolName, executeBehaviorToolCall } from './behaviorToolInvocation';
 import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
-import {
-  DEFAULT_TOOL_RESULT_MAX_BYTES,
-  DEFAULT_TOOL_RESULT_MAX_LINES,
-  type RunResourceSettings,
-} from '@/shared/types/runResources';
+import { type RunResourceSettings } from '@/shared/types/runResources';
 import type { ModelSteering, ModelStreamDelta, ModelToolProgress, SdkRequestSnapshot, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { RecoveryFailureDetails } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -3185,6 +3183,7 @@ export class ModelHandler {
                       authority: opts.nativeBrokerAuthority!, signal: abortController.signal,
                       terminationProtocol, originalProcessHost: opts.nativeOriginalProcessHost,
                       executionExtensionContext: opts.executionExtensionContext,
+                      contextWindow: model.contextWindow,
                     });
                   })()
                 : undefined;
@@ -4823,19 +4822,10 @@ export class ModelHandler {
             && runResourceSettings?.autoCaptureEnabled
             && receivedResultContent.length >= runResourceSettings.textThresholdChars
           ) {
-            const resultBytes = Buffer.byteLength(receivedResultContent, 'utf8');
-            const maxBytes = runResourceSettings.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
-            const maxLines = runResourceSettings.toolResultMaxLines ?? DEFAULT_TOOL_RESULT_MAX_LINES;
-            const overBytes = maxBytes > 0 && resultBytes > maxBytes;
-            let overLines = false;
-            if (maxLines > 0) {
-              let lines = 1;
-              for (let index = 0; index < receivedResultContent.length && lines <= maxLines; index++) {
-                if (receivedResultContent.charCodeAt(index) === 10) lines++;
-              }
-              overLines = lines > maxLines;
-            }
-            if (!overBytes && !overLines) {
+            // Same test boundToolResult applies below (#1226), so exactly one
+            // of the two writes the full copy whatever the setting says.
+            const resultBound = resolveToolResultBound(runResourceSettings, input.modelContextWindow);
+            if (!measureToolResult(receivedResultContent, resultBound).over) {
               try {
                 await commitFlowDurableMutation(durableContext, async () => {
                   const writtenResult = await writeRunResource({
@@ -4890,6 +4880,7 @@ export class ModelHandler {
                   nodeId: node?.nodeId,
                   content: receivedResultContent,
                   settings: runResourceSettings,
+                  contextWindow: input.modelContextWindow,
                 }),
               );
               if (bounded.spilled) {

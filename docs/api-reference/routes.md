@@ -4,10 +4,14 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 236.
+Route files: 243.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
+| `/api/accounts/mode` | POST | [source](../../src/app/api/accounts/mode/route.ts) |
+| `/api/accounts/session` | DELETE, GET, POST | [source](../../src/app/api/accounts/session/route.ts) |
+| `/api/accounts/tokens` | DELETE, GET, POST | [source](../../src/app/api/accounts/tokens/route.ts) |
+| `/api/accounts/users` | GET, PATCH, POST, PUT | [source](../../src/app/api/accounts/users/route.ts) |
 | `/api/approvals` | GET | [source](../../src/app/api/approvals/route.ts) |
 | `/api/approvals/{id}` | POST | [source](../../src/app/api/approvals/[id]/route.ts) |
 | `/api/automation-map` | GET | [source](../../src/app/api/automation-map/route.ts) |
@@ -53,6 +57,8 @@ Route files: 236.
 | `/api/harness/comparisons/{id}` | DELETE, GET | [source](../../src/app/api/harness/comparisons/[id]/route.ts) |
 | `/api/harness/profiles` | GET, POST | [source](../../src/app/api/harness/profiles/route.ts) |
 | `/api/harness/{id}` | GET, POST | [source](../../src/app/api/harness/[id]/route.ts) |
+| `/api/human-tasks` | GET | [source](../../src/app/api/human-tasks/route.ts) |
+| `/api/human-tasks/{requestId}` | GET, POST | [source](../../src/app/api/human-tasks/[requestId]/route.ts) |
 | `/api/init` | GET | [source](../../src/app/api/init/route.ts) |
 | `/api/local-models/capability` | GET | [source](../../src/app/api/local-models/capability/route.ts) |
 | `/api/local-models/pull` | POST | [source](../../src/app/api/local-models/pull/route.ts) |
@@ -154,6 +160,7 @@ Route files: 236.
 | `/api/telemetry/daily-active` | GET, POST | [source](../../src/app/api/telemetry/daily-active/route.ts) |
 | `/api/tickets` | DELETE, GET, POST | [source](../../src/app/api/tickets/route.ts) |
 | `/api/tickets/{id}` | DELETE, GET, PATCH | [source](../../src/app/api/tickets/[id]/route.ts) |
+| `/api/tool-result-limit` | GET, PATCH | [source](../../src/app/api/tool-result-limit/route.ts) |
 | `/api/transcription` | POST | [source](../../src/app/api/transcription/route.ts) |
 | `/api/update` | GET, POST | [source](../../src/app/api/update/route.ts) |
 | `/api/waves` | GET | [source](../../src/app/api/waves/route.ts) |

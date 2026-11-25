@@ -219,7 +219,7 @@ describe('processToolCalls auto-capture', () => {
     callToolMock.mockResolvedValue({ success: true, data });
     captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
     getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
-      toolResultTruncationEnabled: true, toolResultMaxBytes: 128, toolResultMaxLines: 0 });
+      toolResultTruncationEnabled: true, toolResultLimitMode: 'custom', toolResultMaxBytes: 128, toolResultMaxLines: 0 });
     writeRunResourceMock.mockResolvedValue(spill === 'stored'
       ? { ...capturedEntry, mimeType: 'text/plain', kind: 'text', size: Buffer.byteLength(full, 'utf8') }
       : { skipped: 'size-cap' });
@@ -269,7 +269,7 @@ describe('processToolCalls auto-capture', () => {
     });
     getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
       autoCaptureEnabled: true, textThresholdChars: 32,
-      toolResultTruncationEnabled: true, toolResultMaxBytes: 128, toolResultMaxLines: 2 });
+      toolResultTruncationEnabled: true, toolResultLimitMode: 'custom', toolResultMaxBytes: 128, toolResultMaxLines: 2 });
     const spillUri = 'flujo://run/conv-1/error-overflow';
     writeRunResourceMock.mockResolvedValue(spill === 'stored'
       ? { ...capturedEntry, uri: spillUri, mimeType: 'text/plain', kind: 'text', size: Buffer.byteLength(full, 'utf8') }
@@ -441,5 +441,80 @@ describe('processToolCalls tool-args capture (#168)', () => {
       toolNameMap,
     });
     expect(writeRunResourceMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('tool result size limit on the FLUJO tool loop (#1226)', () => {
+  const bigText = (bytes: number) => ({ isError: false, content: [{ type: 'text', text: 'x'.repeat(bytes) }] });
+  const fullCopies = (data: object) => writeRunResourceMock.mock.calls
+    .filter(([input]) => (input as { data: { text?: string } }).data.text === JSON.stringify(data));
+
+  beforeEach(() => {
+    writeRunResourceMock.mockImplementation(async (input: { data: { text: string } }) => ({
+      ...capturedEntry, uri: 'flujo://run/conv-1/full', mimeType: 'text/plain', kind: 'text',
+      size: Buffer.byteLength(input.data.text, 'utf8'),
+    }));
+  });
+
+  it('with the limit off, still moves a result too big for the model and says why', async () => {
+    const data = bigText(300_000);
+    callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
+    getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: false });
+
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap, conversationId: 'conv-1',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    const message = result.value.toolCallMessages[0].content as string;
+    expect(message).toContain("too large for the model's context window (131072 tokens)");
+    expect(message).toContain('flujo://run/conv-1/full');
+    // Exactly one full copy is stored: by the bound, not also by the display capture.
+    expect(fullCopies(data)).toHaveLength(1);
+  });
+
+  it('with the limit off, keeps the same result inline for a model with a larger window', async () => {
+    const data = bigText(300_000);
+    callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
+    getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: false });
+
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap, conversationId: 'conv-1',
+      modelContextWindow: 1_000_000,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(result.value.toolCallMessages[0].content).toBe(JSON.stringify(data));
+    // The display copy for the chat's "expand" view is still written once.
+    expect(fullCopies(data)).toHaveLength(1);
+  });
+
+  it('with the limit on and automatic, sizes it from the model window', async () => {
+    // 200,000 tokens / 8 * 4 bytes = 100,000 bytes.
+    const data = bigText(120_000);
+    callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
+    getRunResourceSettingsMock.mockResolvedValue({
+      ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: true, toolResultLimitMode: 'auto',
+    });
+
+    const small = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap, conversationId: 'conv-1',
+      modelContextWindow: 200_000,
+    });
+    const large = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call2', 'mcp_srv_abc123', {})], toolNameMap, conversationId: 'conv-1',
+      modelContextWindow: 1_000_000,
+    });
+
+    if (!small.success || !large.success) throw new Error('tool processing failed');
+    const moved = small.value.toolCallMessages[0].content as string;
+    expect(moved).toContain('tool result truncated for context');
+    expect(moved).not.toContain("too large for the model's context window");
+    expect(large.value.toolCallMessages[0].content).toBe(JSON.stringify(data));
   });
 });

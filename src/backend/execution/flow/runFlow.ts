@@ -60,6 +60,7 @@ import { waitForActiveSubflows, resumeSubflowOrchestrator } from './subflowCommu
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
+import { resolveToolCallContextWindow } from './toolResultContextWindow';
 import { Flow, normalizeBehaviorRulesInput } from '@/shared/types/flow';
 import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -2057,6 +2058,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     try {
       result = await ModelHandler.processToolCalls({
         ...args,
+        // Sizes the tool result size limit for the model that reads these results (#1226).
+        ...(args.conversationId && args.modelContextWindow === undefined
+          ? { modelContextWindow: await resolveToolCallContextWindow(sharedState) }
+          : {}),
         signal: combineAbortSignals(args.signal, runtimeAbortSignal),
         beforeToolDispatch: input.executionAuthority?.assertCurrent,
         executionAuthority: sharedState.executionAuthority,
