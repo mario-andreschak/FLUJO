@@ -545,6 +545,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // legacy semantics — the run ends at the next streamed message, no extra
     // model turn. Spawnable targets instead end when the model stops calling.
     let endSpawning = false;
+    // Tool-use ids of the plain handoffs that ran. The PostToolUse hook tells
+    // Claude Code to stop after each of them, so it never asks the model for
+    // another turn once the handoff has answered (#1414).
+    const plainHandoffUseIds = new Set<string>();
     let toolScopeClosed = false;
     const abortController = new AbortController();
     let endedByCaller = false;
@@ -743,9 +747,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // moment (see the for-await checks). For a SPAWNABLE target the
             // result text invites further calls, so a model that works one tool
             // call per turn can still queue several parallel workers; a plain
-            // handoff keeps the legacy immediate end.
+            // handoff ends Claude Code's turn through the PostToolUse hook.
             if (!spawnable) {
               endSpawning = true;
+              plainHandoffUseIds.add(callId);
               return { content: [{ type: 'text', text: 'Handing off.' }] };
             }
             return {
@@ -997,6 +1002,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                     handoffCalls.push({ id: callId, name: advertised.name, args: capturedArgs });
                     if (!(advertised.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties?.task) {
                       endSpawning = true;
+                      plainHandoffUseIds.add(callId);
                     }
                   }
                   recordToolResult({ id: callId, resultContent: dispatched.transcriptText });
@@ -1242,6 +1248,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'FLUJO tool authority is no longer current.' } };
             }
           }] }],
+          // `continue: false` makes Claude Code end the query once this tool's
+          // result is in, without another model request (#1414).
+          PostToolUse: [{ hooks: [async hook => hook.hook_event_name === 'PostToolUse' && plainHandoffUseIds.has(hook.tool_use_id)
+            ? { continue: false, stopReason: 'FLUJO handed this run off.' }
+            : {}] }],
         },
         canUseTool: async (toolName, input, opts) => {
           try {
@@ -1364,6 +1375,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       toolShapes: hostToolShapes,
     } : undefined;
     const requestPreToolUse = queryOptions.hooks!.PreToolUse![0].hooks[0];
+    const requestPostToolUse = queryOptions.hooks!.PostToolUse![0].hooks[0];
     // In the same opt-in mode the answer does not wait for the used process to
     // exit (about 0.7 s on Windows); it is told to stop and exits on its own.
     // A turn that records a session for later resume still waits, so the
@@ -1396,6 +1408,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       const binding: ClaudeSpareBinding | undefined = spare ? {
         canUseTool: queryOptions.canUseTool!,
         preToolUse: requestPreToolUse,
+        postToolUse: requestPostToolUse,
         tools: new Map(effectiveSdkTools.map(definition => [definition.name, definition.handler as ClaudeSpareToolHandler])),
       } : undefined;
       const warmResponse = spare && binding
@@ -1594,7 +1607,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         }
         // Handoff end conditions (issue #156). A PLAIN handoff (endSpawning)
         // ends the run at the next streamed message, exactly like before —
-        // no extra model turn, no post-handoff narration. SPAWN handoffs
+        // no post-handoff narration; Claude Code itself already stopped
+        // after the handoff's result (PostToolUse hook, #1414). SPAWN handoffs
         // instead let the model keep calling the spawn tool (one call per
         // turn, or several tool_uses in one turn) and end the run when the
         // model produces a turn WITHOUT another handoff call — or at the
@@ -1911,7 +1925,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             ...queryOptions,
             abortController: delegates.abortController,
             canUseTool: delegates.canUseTool,
-            hooks: { PreToolUse: [{ hooks: [delegates.preToolUse] }] },
+            hooks: { PreToolUse: [{ hooks: [delegates.preToolUse] }], PostToolUse: [{ hooks: [delegates.postToolUse] }] },
             ...(effectiveSdkTools.length > 0 ? { mcpServers: { [SDK_SERVER_NAME]: createSdkMcpServer({
               name: SDK_SERVER_NAME, version: '1.0.0',
               tools: effectiveSdkTools.map(definition => ({ ...definition, handler: delegates.toolHandler(definition.name) })),
