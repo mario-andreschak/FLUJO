@@ -58,6 +58,9 @@ workaround.
 | Tests run only on a Node.js version the app supports | `assertSupportedTestRuntime` in `scripts/local-test-dependencies.cjs`; `__tests__/scripts/localTestDependencies.test.ts` |
 | Every page has exactly one feature map entry | `scripts/check-feature-map.mjs` |
 | Every API route has one multi-user kind (`workspace`, `host`, `admin`, `account`, `protocol`); routes that start programs are `host` or `admin` | `__tests__/accounts/routeCapabilities.test.ts` |
+| A workflow job that can publish or sign first requires the exact-commit `main` verification run | `assertReleaseVerificationGates` in `scripts/workflow-contract.mjs` (its exception list only shrinks) |
+| Every open security alert is fixed or has a written reason that expires | `npm run check:security-response` with `docs/security/alert-triage.json` |
+| A package install runs only the install and build commands the person reviewed | `reviewDigest` in `installPackage.ts`; `__tests__/packages/installPackage.test.ts` |
 | Persona runtime cleanup writes only with a grant from the rollout switches | `PersonaRuntimeRetentionWriteGrant` argument of the compactors in `compactRuntime.ts`; `personaRuntimeRetentionSweep.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 

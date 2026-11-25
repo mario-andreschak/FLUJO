@@ -68,14 +68,21 @@ not kept current.
     required checks and one approval; they were relaxed later to match the
     owner's "merge without waiting for CI" policy. A reviewer will see that a red
     build does not block a merge.
-  - **70 open code-scanning alerts** on `main` (3 critical, 29 high, 38 medium).
-    The three critical ones are in `src/backend/services/security/isolatedMcp.ts`
-    and `src/backend/services/mcp/githubInstall.ts` (opened 2026-11-20). Three
-    high ones in `scripts/flujo-drive.mjs` are fixed on the cleanup branch (see
-    below).
-  - **6 open dependency alerts**: five for `hono` (used at runtime, fixed in
-    4.13.16) and one for `minimatch` (development only).
-  - No named security responder, backup or response time (SECURITY.md says so).
+  - **70 open code-scanning alerts** on `main` (3 critical, 28 high, 39 medium).
+    On the cleanup branch (#565) every one has a fix or a written, expiring
+    reason in [alert-triage.json](../security/alert-triage.json), checked by
+    `npm run check:security-response`. Fixed in code: the two critical Docker
+    launch alerts are narrowed to the Docker program, the critical package
+    install alert now runs only the commands the person reviewed, plus one
+    property-name alert and one real bug (an escape that did nothing). The
+    other alerts are false positives, by design, or development scripts that
+    are not shipped. CodeQL may keep reporting the three critical data flows,
+    because running reviewed commands is the feature.
+  - **6 open dependency alerts**: the five `hono` alerts are fixed on the cleanup
+    branch (4.13.18). The `minimatch` alert (development only) waits for a Jest
+    release on glob 14; forcing it could break the test runner.
+  - Response targets are now written in SECURITY.md, but no named security
+    responder or backup exists.
 
 ### Code health (B−)
 
@@ -115,10 +122,9 @@ not kept current.
     ([first-owner pairing](../security/first-owner-pairing-v1.md)), so few users
     will do it. #566 and #567 are closed, so nobody owns changing these defaults.
   - Multi-user isolation (#573–#575 under #212, deferred by the owner).
-  - Triage or fixes for the critical and high code-scanning alerts in MCP code
-    (#565).
-  - SECURITY.md still says #566–#568 are "being delivered"; they are closed
-    (#565).
+  - The critical and high code-scanning alerts in MCP code are fixed or have a
+    written reason on the cleanup branch (#565); they stay open on GitHub until
+    that branch reaches `main` and is scanned.
   - An outside security review of an installed release (#578).
 
 ### Maturity / stability (C)
@@ -156,8 +162,8 @@ not kept current.
 - **Delivered:** [project status](../project-status.md) names experimental
   features and limits; the foundation contract separates definitions from
   results; this page.
-- **Missing:** SECURITY.md is out of date (see Security). Evidence bound to one
-  exact release is not published (#578). This row drops if pages go stale, so
+- **Missing:** Evidence bound to one exact release is not published (#578).
+  SECURITY.md was corrected on the cleanup branch (#565). This row drops if pages go stale, so
   refresh this page whenever a child issue changes state.
 
 ### Production readiness (C−)
@@ -183,7 +189,8 @@ not kept current.
 ## What only people can do
 
 - [ ] Decide whether `main` should require passing checks before a merge. Auto-merge
-      lets agents keep working without waiting (#565).
+      lets agents keep working without waiting. The ruleset, the one command and
+      the trade-off are in [main merge rules](../security/main-merge-rules.md) (#565).
 - [ ] Name a security responder and a backup (#565, #576).
 - [ ] Find two more human maintainers and outside contributors (#576).
 - [ ] Run the product-fit pilot with real users (#577).
