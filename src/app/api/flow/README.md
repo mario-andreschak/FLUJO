@@ -56,14 +56,15 @@ The flow API follows standard REST resource conventions:
 | Method | Path | Description | Success |
 |--------|------|-------------|---------|
 | `GET` | `/api/flow` | List all flows | `200` + `Flow[]` |
-| `POST` | `/api/flow` | Create a flow (body = `Flow`; rejects a duplicate id) | `201` + `Flow` |
+| `POST` | `/api/flow` | Create a flow (body = `Flow`; leave out `id` and FLUJO makes one; rejects a duplicate id) | `201` + `Flow` (with its `id`) |
 | `GET` | `/api/flow/{id}` | Get a single flow | `200` + `Flow` |
 | `PUT` | `/api/flow/{id}` | Update a flow (body = `Flow`; path `{id}` is authoritative) | `200` + `Flow` |
 | `DELETE` | `/api/flow/{id}` | Delete a flow | `204` (no body) |
 | `POST` | `/api/flow/prompt-renderer` | Render a node's prompt within a flow | `200` + `{ prompt }` |
 
-Errors return `{ "error": string }` with an appropriate status (`400` invalid input,
-`404` not found, `409` duplicate on create, `500` server error).
+Errors return `{ "error": string }` with an appropriate status (`400` invalid input or
+an id that is not 1 to 64 letters, digits, underscores or hyphens, `404` not found,
+`409` duplicate on create, `500` server error).
 
 Create and update are separate, mirroring the Model API: `POST` creates and fails if
 the id already exists; `PUT` updates an existing flow and returns `404` if it does not.

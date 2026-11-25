@@ -8,8 +8,7 @@ import {
 } from '@/shared/types/model/fallbackPolicy';
 import { normalizeMaxTokens } from '@/shared/types/model';
 import { isSelfOrchestratingAdapter, normalizeModelTemperature } from '@/shared/types/model/provider';
-import { loadItem } from '@/utils/storage/backend';
-import { StorageKey } from '@/shared/types/storage';
+import { loadStoredModels } from '../storedModels';
 import { workspaceCacheKey } from '@/utils/workspace';
 import { resolveAndDecryptApiKey } from '../encryption';
 import { parseRetryAfterMs } from '@/backend/execution/flow/retryAfter';
@@ -58,7 +57,7 @@ export class FallbackAdapter implements CompletionAdapter {
     if (input.executionExtensionContext || isOwnerCredentialBoundModel(input.model)) {
       throw new ExecutionExtensionError('execution_model_fallback_forbidden');
     }
-    const models = await loadItem<Model[]>(StorageKey.MODELS, []);
+    const { models } = await loadStoredModels();
     const invalid = validateFallbackPolicy(input.model, models);
     if (invalid) throw new Error(invalid);
     const policy = input.model.fallbackPolicy!;

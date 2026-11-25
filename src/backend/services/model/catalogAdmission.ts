@@ -12,6 +12,7 @@ import type { Model } from '@/shared/types/model';
 import { StorageKey } from '@/shared/types/storage';
 import { loadItem } from '@/utils/storage/backend';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { withStoredModelIds } from './storedModels';
 
 /** A detached model and the exact filesystem generation admitted during prep. */
 export interface ModelCatalogAdmission {
@@ -39,8 +40,9 @@ export const assertModelCatalogLeaseOwned = assertModelCatalogFilesystemLeaseOwn
 async function readCatalog(): Promise<{ models: Model[]; generation: string }> {
   // The filesystem lock excludes all production catalog writes while these two
   // reads run. File identity also detects a same-content atomic replacement.
-  const models = await loadItem<Model[]>(StorageKey.MODELS, []);
-  if (!Array.isArray(models)) throw new ExecutionExtensionError('execution_model_catalog_invalid');
+  const stored = await loadItem<Model[]>(StorageKey.MODELS, []);
+  if (!Array.isArray(stored)) throw new ExecutionExtensionError('execution_model_catalog_invalid');
+  const { models } = withStoredModelIds(stored);
   const file = path.join(getWorkspaceDataDir(), 'db', `${StorageKey.MODELS}.json`);
   const stat = await fs.stat(file, { bigint: true }).catch(error => {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;

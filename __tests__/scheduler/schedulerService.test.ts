@@ -523,6 +523,12 @@ describe('SchedulerService', () => {
     });
   });
 
+  it('makes a UUID when the caller sends no id (#1350)', async () => {
+    const { execution } = await scheduler.create(scheduleInput());
+    expect(execution?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect((await scheduler.get(execution!.id))?.id).toBe(execution!.id);
+  });
+
   it('accepts a client-supplied UUID id and round-trips it', async () => {
     const id = 'a388f4f8-132c-44d8-a412-ed082456b029';
     const { execution } = await scheduler.create(scheduleInput({ id }));

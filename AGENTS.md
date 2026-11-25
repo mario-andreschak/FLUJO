@@ -89,6 +89,7 @@ workaround.
 | FLUJO's own system prompt tells a model only about tools and helpers the step really offers, and each part has a switch that removes it | `planFlujoSystemPromptSections` in `src/shared/utils/flujoSystemPrompt.ts`; `__tests__/flow/flujoSystemPrompt.test.ts`, `__tests__/flow/processNodeSystemSections.test.ts` |
 | A file upload limit stays below what FLUJO's request proxy keeps of a body (`proxyClientMaxBodySize` in `next.config.mjs`); a bigger body reaches the route cut off | `MCPB_UPLOAD_CEILING_BYTES` check in `__tests__/mcp/mcpbBundle.test.ts` |
 | An MCP bundle is unpacked only after its review, and a zip entry that would land outside its folder refuses the whole bundle | `__tests__/mcp/mcpbBundle.test.ts` |
+| A create route never stores a record without an id: a missing id gets a fresh one from `newRecordId` (`src/shared/recordId.ts`), and a model already stored without one gets an id on its next load | `__tests__/architecture/createRouteIds.test.ts` (lists every create route); `__tests__/api/modelCreateId.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 | MCP App settings set where FLUJO starts win over Localhost mode's local default for requests through a front door; this computer keeps `<app>.localhost`, a Settings-page Localhost choice ignores leftovers, and a wrong value falls back with one startup line | `__tests__/mcp/sandboxLocalhostFrontDoor.test.ts` |
 

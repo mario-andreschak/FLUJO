@@ -6,6 +6,7 @@ import { flowService } from '@/backend/services/flow';
 import { currentSharedEditor, recordChange } from '@/backend/services/sharedItems/guard';
 import { json } from './_helpers';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { FILE_RECORD_ID_RULE, newRecordId } from '@/shared/recordId';
 
 const log = createLogger('app/api/flow/route');
 
@@ -30,19 +31,22 @@ async function GET_handler(_request: Request) {
  * POST /api/flow
  * Create a new flow. The request body is the flow object itself.
  *
- * Create semantics: a flow whose id already exists is rejected (use
- * PUT /api/flow/{id} to update an existing flow).
+ * Create semantics: a flow without an id gets a new one; a flow whose id
+ * already exists is rejected (use PUT /api/flow/{id} to update it).
  */
 async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
-    const flow = (await request.json()) as Flow;
+    const body = (await request.json()) as Flow;
 
-    if (!flow || typeof flow !== 'object' || !flow.id) {
-      return json({ error: 'A flow with an id is required' }, 400);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return json({ error: 'A flow is required' }, 400);
     }
+    const newId = newRecordId(body.id, FILE_RECORD_ID_RULE);
+    if (!newId.ok) return json({ error: newId.error }, 400);
+    const flow: Flow = { ...body, id: newId.id };
 
     // Persona ownership is server-authored only through the scoped copy API.
     flow.personaOwnership = undefined;
