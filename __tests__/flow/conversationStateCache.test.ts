@@ -164,6 +164,29 @@ describe('conversation cache retained-payload accounting', () => {
     });
   });
 
+  it('ends a run without walking every cached conversation, so a burst of runs stays linear (#757)', async () => {
+    await runWithWorkspace(WORKSPACE, async () => {
+      const messages = Array.from({ length: 50 }, (_, index) => ({ id: `m${index}`, timestamp: 1, role: 'user' as const, content: 'hello' }));
+      const payloadReadsAtRunEnd = async (cached: number) => {
+        for (let index = 0; index < cached; index++) {
+          const value = state(`cached-${cached}-${index}`, { messages: structuredClone(messages) });
+          register(value);
+          await markTerminal(value.conversationId!, value, async () => undefined);
+        }
+        const last = state(`last-${cached}`, { messages: structuredClone(messages) });
+        register(last);
+        const reads = jest.spyOn(Object, 'getPrototypeOf');
+        await markTerminal(last.conversationId!, last, async () => undefined);
+        const count = reads.mock.calls.length;
+        reads.mockRestore();
+        return count;
+      };
+      const few = await payloadReadsAtRunEnd(5);
+      const many = await payloadReadsAtRunEnd(100);
+      expect(many).toBeLessThanOrEqual(few * 2);
+    });
+  });
+
   it('refreshes existing writes and invalidates eligibility until the new state is persisted', async () => {
     await runWithWorkspace(WORKSPACE, async () => {
       const value = state('growing');

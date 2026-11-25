@@ -5,6 +5,7 @@ import { getHeapStatistics } from 'node:v8';
 import { pendingAllocationBytes, setAllocationReservation } from './allocationReservations';
 
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { CapacityWaitQueue, type CapacityWaitOptions } from '@/utils/capacityWaitQueue';
 
 const MiB = 1024 * 1024;
 const MIN_RESERVATION_BYTES = MiB;
@@ -66,6 +67,7 @@ interface AdmissionRuntime {
   rejectedBusy: number;
   rejectedMemory: number;
   rejectedInput: number;
+  waiting?: CapacityWaitQueue;
 }
 const globalRuntime = globalThis as typeof globalThis & { __flujoFlowRunAdmission?: AdmissionRuntime };
 const runtime = globalRuntime.__flujoFlowRunAdmission ??= {
@@ -73,6 +75,7 @@ const runtime = globalRuntime.__flujoFlowRunAdmission ??= {
   rejectedBusy: 0, rejectedMemory: 0, rejectedInput: 0,
 };
 setAllocationReservation('run', runtime.bytes);
+const waiting = runtime.waiting ??= new CapacityWaitQueue();
 
 function configured(name: string, fallback: number): number {
   const value = Number(process.env[`FLUJO_RUN_ADMISSION_${name}`]);
@@ -107,10 +110,17 @@ export function getProcessRssLimitBytes(): number {
   return limits().maxRssBytes;
 }
 
-function refuse(code: FlowRunPressureCode): never {
+function countRefusal(code: FlowRunPressureCode): void {
   if (code === 'FLOW_RUN_BUSY') runtime.rejectedBusy++;
   else if (code === 'FLOW_RUN_MEMORY') runtime.rejectedMemory++;
   else runtime.rejectedInput++;
+}
+
+/** Waiting callers retry quietly; only the refusal they finally receive is counted. */
+const quietRefusals = new AsyncLocalStorage<true>();
+
+function refuse(code: FlowRunPressureCode): never {
+  if (!quietRefusals.getStore()) countRefusal(code);
   throw new FlowRunPressureError(code);
 }
 
@@ -250,6 +260,7 @@ export function acquireFlowRunAdmission<T extends FlowRunAdmissionInput>(input: 
       else owner.conversations.delete(conversationId);
     }
     if (!owner.active) runtime.workspaces.delete(workspace);
+    waiting.wake();
   } });
   runtime.reservations.set(permit, reservation);
   runtime.active++; runtime.bytes += bytes;
@@ -257,6 +268,33 @@ export function acquireFlowRunAdmission<T extends FlowRunAdmissionInput>(input: 
   owner.active++; owner.bytes += bytes;
   if (conversationId !== undefined) owner.conversations.set(conversationId, (owner.conversations.get(conversationId) ?? 0) + 1);
   return permit;
+}
+
+const runWaitRules = {
+  waitable: (error: unknown) => isFlowRunPressureError(error) && error.code !== 'FLOW_RUN_INPUT_TOO_LARGE',
+  // Every run is full: no later waiter, of any workspace, fits until one finishes.
+  blocksAll: () => runtime.active >= configured('MAX_PROCESS_RUNS', 64),
+};
+
+/**
+ * Admission for a caller that can wait: when runs or memory are momentarily
+ * full, it waits in arrival order and is admitted as soon as a run finishes.
+ * At the deadline it gets the same retryable refusal as an immediate caller.
+ */
+export async function acquireFlowRunAdmissionWhenAvailable<T extends FlowRunAdmissionInput>(
+  input: T,
+  options: CapacityWaitOptions,
+): Promise<FlowRunAdmissionPermit> {
+  try {
+    return await waiting.acquire(
+      () => quietRefusals.run(true, () => acquireFlowRunAdmission(input)),
+      runWaitRules,
+      options,
+    );
+  } catch (error) {
+    if (isFlowRunPressureError(error)) countRefusal(error.code);
+    throw error;
+  }
 }
 
 /** A preflight authorizes exactly one run. Nested/parallel descendants need fresh capacity. */
@@ -308,6 +346,7 @@ export function getFlowRunAdmissionDiagnostics() {
     workspaceActiveRuns: workspace?.active ?? 0, workspaceReservedBytes: workspace?.bytes ?? 0,
     workspaceConversations: workspace?.conversations.size ?? 0,
     rejectedBusy: runtime.rejectedBusy, rejectedMemory: runtime.rejectedMemory, rejectedInput: runtime.rejectedInput,
+    waitingRuns: waiting.size,
     ...limits(), minReservationBytes: MIN_RESERVATION_BYTES, inputExpansion: INPUT_EXPANSION,
   };
 }

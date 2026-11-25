@@ -90,6 +90,24 @@ describe('model catalog lease dynamic lifetime', () => {
     expect(await locks()).toEqual([]);
   });
 
+  it('lets concurrent model calls of one process share one reader registration (#757)', async () => {
+    const inside = deferred();
+    const finish = deferred();
+    let entered = 0;
+    const calls = Array.from({ length: 8 }, () => readerLease(async () => {
+      if (++entered === 8) inside.resolve();
+      await finish.promise;
+      await assertModelCatalogFilesystemLeaseOwned();
+    }));
+    await inside.promise;
+    expect((await locks()).filter(name => name.startsWith('.model-catalog-reader-'))).toHaveLength(1);
+    await expect(writerLease(async () => undefined)).rejects.toBeInstanceOf(ModelCatalogBusyError);
+    finish.resolve();
+    await Promise.all(calls);
+    expect(await locks()).toEqual([]);
+    await expect(writerLease(async () => 'edited')).resolves.toBe('edited');
+  });
+
   it('drains an already admitted child before releasing its physical reader', async () => {
     const started = deferred();
     const finish = deferred();

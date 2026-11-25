@@ -367,24 +367,31 @@ export async function markTerminal(
   enforceBounds();
 }
 
+/** Revoke eviction eligibility when the live state is no longer the persisted one. */
+function revalidate(entry: CacheEntry, state: SharedState): void {
+  const bytes = estimateStateBytes(state);
+  if (entry.evictable && (isLiveOwned(state) || entry.persistedState?.deref() !== state ||
+      bytes !== entry.bytes || state.updatedAt !== entry.persistedUpdatedAt || state.logicalRunId !== entry.persistedRunId)) {
+    entry.evictable = false;
+    entry.terminalAt = undefined;
+    entry.persistedState = undefined;
+  }
+  entry.bytes = bytes;
+}
+
+/** Drop bookkeeping for states that left the live map. */
+function pruneEntries(): Array<[string, CacheEntry]> {
+  const map = FlowExecutor.conversationStates;
+  for (const [key] of entriesForCurrentWorkspace()) {
+    if (!map.get(conversationIdFromKey(key))) meta().delete(key);
+  }
+  return entriesForCurrentWorkspace();
+}
+
 /** Refresh in-place payload growth and revoke stale eligibility before accounting. */
 function refreshEntries(): Array<[string, CacheEntry]> {
   const map = FlowExecutor.conversationStates;
-  for (const [key, entry] of entriesForCurrentWorkspace()) {
-    const state = map.get(conversationIdFromKey(key));
-    if (!state) {
-      meta().delete(key);
-      continue;
-    }
-    const bytes = estimateStateBytes(state);
-    if (entry.evictable && (isLiveOwned(state) || entry.persistedState?.deref() !== state ||
-        bytes !== entry.bytes || state.updatedAt !== entry.persistedUpdatedAt || state.logicalRunId !== entry.persistedRunId)) {
-      entry.evictable = false;
-      entry.terminalAt = undefined;
-      entry.persistedState = undefined;
-    }
-    entry.bytes = bytes;
-  }
+  for (const [key, entry] of pruneEntries()) revalidate(entry, map.get(conversationIdFromKey(key))!);
   return entriesForCurrentWorkspace();
 }
 
@@ -400,13 +407,16 @@ export function enforceBounds(): number {
   const now = Date.now();
   const ttl = ttlMs();
   let evicted = 0;
-  refreshEntries();
+  // Every run end calls this. Walking every cached payload here made a burst of
+  // runs quadratic (#757), so only the entries chosen for eviction are re-checked.
+  pruneEntries();
 
   const evict = (conversationId: string, reason: string): boolean => {
     const state = map.get(conversationId);
     const entry = meta().get(cacheKey(conversationId));
     if (!entry?.evictable) return false;
-    if (isLiveOwned(state) || (state && entry.persistedState?.deref() !== state)) {
+    if (state) revalidate(entry, state);
+    if (!entry.evictable || isLiveOwned(state)) {
       entry.evictable = false;
       return false;
     }

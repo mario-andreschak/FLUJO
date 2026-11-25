@@ -1,4 +1,5 @@
-import { claimChatIngress, type ChatIngressPermit } from '@/utils/http/chatIngress';
+import { chatAdmissionWaitMs, claimChatIngress, type ChatIngressPermit } from '@/utils/http/chatIngress';
+import type { CapacityWaitOptions } from '@/utils/capacityWaitQueue';
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -9,7 +10,7 @@ import { TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, STAY_ON_NODE_ACTION } from '@/
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage from shared types
 import { StorageKey } from '@/shared/types/storage'; // Import StorageKey
 import { runFlow } from '@/backend/execution/flow/runFlow';
-import { acquireFlowRunAdmission, withFlowRunAdmission, isFlowRunPressureError,
+import { acquireFlowRunAdmissionWhenAvailable, withFlowRunAdmission, isFlowRunPressureError,
   type FlowRunAdmissionPermit, type FlowRunPressureError } from '@/backend/execution/flow/runAdmission';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { prepareConversationSequence, warmConversationSequence } from '@/backend/execution/flow/conversationLog';
@@ -66,7 +67,16 @@ function conversationDurabilityResponse(error: ConversationSequenceSafetyError |
 /** Reserve observation only; neither submit nor cancel an execution. */
 function reserveCompletionStream(conversationId: string): CompletionStreamAdmission | undefined {
   const releaseReader = executionStreamAdmission.reserve(conversationId);
-  if (!releaseReader) return undefined;
+  return releaseReader ? pinCompletionStream(conversationId, releaseReader) : undefined;
+}
+
+/** Like reserveCompletionStream, but waits in arrival order while every stream is in use. */
+async function reserveCompletionStreamWhenAvailable(conversationId: string, wait: CapacityWaitOptions): Promise<CompletionStreamAdmission | undefined> {
+  const releaseReader = await executionStreamAdmission.reserveWhenAvailable(conversationId, wait);
+  return releaseReader ? pinCompletionStream(conversationId, releaseReader) : undefined;
+}
+
+function pinCompletionStream(conversationId: string, releaseReader: () => void): CompletionStreamAdmission | undefined {
   let unsubscribePin: (() => void) | undefined;
   let released = false;
   const releasePin = () => {
@@ -597,7 +607,7 @@ export async function processChatCompletion(
   const owner = ingress ? claimChatIngress(ingress) : undefined;
   try {
     return await processAdmittedChatCompletion(data, flujo, requireApproval, flujodebug,
-      conversationId, continueDebug, userTurn, personaTarget, owner, externalTurn);
+      conversationId, continueDebug, userTurn, personaTarget, owner, externalTurn, ingress?.signal);
   } finally { owner?.release(); }
 }
 
@@ -612,6 +622,7 @@ async function processAdmittedChatCompletion(
   personaTarget?: PersonaChatCompletionTarget,
   ingressOwner?: ReturnType<typeof claimChatIngress>,
   externalTurn?: ExternalChatTurn,
+  callerSignal?: AbortSignal,
 ) {
   if (personaTarget && typeof data.model === 'string' && (data.model.startsWith('model-') || data.model.startsWith('policy/'))) {
     return NextResponse.json({
@@ -666,20 +677,23 @@ async function processAdmittedChatCompletion(
     return processDirectModelCompletion(data);
   }
 
+  // A burst of requests waits for a free run and stream instead of being
+  // refused at once; the wait ends with the usual retryable refusal.
+  const wait = { deadline: Date.now() + chatAdmissionWaitMs(), signal: callerSignal };
+  const admissionInput = (id: string | undefined) => ({ modelName: data.model, messages: data.messages,
+    mcpAppContexts: data.mcpAppContexts, mcpSkillSelections: data.mcpSkillSelections,
+    processNodeId: data.processNodeId, conversationId: id });
+
   // Handle streaming requests differently
   if (data.stream === true) {
     // Generate a conversation ID if not provided
     const effectiveConvId = conversationId || crypto.randomUUID();
     await traceSpan('service.warmSequence', () => warmConversationSequence(effectiveConvId));
-    const snapshotReplayFrom = data.appendMessages || !userTurn
-      ? FlowExecutor.conversationStates.get(effectiveConvId)?.messages.length : undefined;
-    const streamFromSeq = executionEventBus.currentSeq(effectiveConvId);
     let runAdmission: FlowRunAdmissionPermit;
     try {
       prepareConversationSequence(effectiveConvId);
-      runAdmission = acquireFlowRunAdmission({ modelName: data.model, messages: data.messages,
-        mcpAppContexts: data.mcpAppContexts, mcpSkillSelections: data.mcpSkillSelections,
-        processNodeId: data.processNodeId, conversationId: effectiveConvId });
+      runAdmission = await traceSpan('service.runAdmission',
+        () => acquireFlowRunAdmissionWhenAvailable(admissionInput(effectiveConvId), wait));
     } catch (error) {
       if (isConversationDurabilityError(error)) return conversationDurabilityResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);
@@ -690,11 +704,16 @@ async function processAdmittedChatCompletion(
     let primarySubmissionFailure: unknown;
     let submitted = false;
     try {
-      admission = reserveCompletionStream(effectiveConvId);
+      admission = await traceSpan('service.streamAdmission', () => reserveCompletionStreamWhenAvailable(effectiveConvId, wait));
       if (!admission) {
         runAdmission.release();
         return completionStreamCapacityResponse();
       }
+      // Read where the reply starts only once this request may run: another
+      // turn of the same conversation can have finished while it waited.
+      const snapshotReplayFrom = data.appendMessages || !userTurn
+        ? FlowExecutor.conversationStates.get(effectiveConvId)?.messages.length : undefined;
+      const streamFromSeq = executionEventBus.currentSeq(effectiveConvId);
       log.info(`Streaming requested for conversation ${effectiveConvId}. Starting async processing.`);
       // Start processing asynchronously (don't await)
       // The reference in FlowExecutor.conversationStates will prevent garbage collection
@@ -777,7 +796,10 @@ async function processAdmittedChatCompletion(
   } else {
     // Non-streaming path - use the internal function directly
     try {
-      return await processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn, externalTurn);
+      const runAdmission = await traceSpan('service.runAdmission',
+        () => acquireFlowRunAdmissionWhenAvailable(admissionInput(conversationId), wait));
+      return await withFlowRunAdmission(runAdmission, () =>
+        processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn, externalTurn));
     } catch (error) {
       if (isConversationDurabilityError(error)) return conversationDurabilityResponse(error);
       if (isFlowRunPressureError(error)) return flowRunPressureResponse(error);

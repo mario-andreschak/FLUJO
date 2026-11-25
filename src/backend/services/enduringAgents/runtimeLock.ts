@@ -86,6 +86,7 @@ declare global {
   var __flujo_enduring_agent_deferred_lock_cleanups: Set<string> | undefined;
   var __flujo_workspace_writer_admission_chains: Map<string, Promise<void>> | undefined;
   var __flujo_shared_workspace_writer_leases: Map<string, SharedWriterLease> | undefined;
+  var __flujo_shared_model_catalog_readers: Map<string, SharedCatalogReader> | undefined;
   var __flujo_pending_workspace_captures: Map<string, number> | undefined;
   var __flujo_model_catalog_lease_scope: AsyncLocalStorage<{
     lock: PersonaRuntimeLock;
@@ -1242,7 +1243,8 @@ export function withWorkspaceRuntimeLock<T>(
 /**
  * Cross-process shared readers / exclusive writer for the whole models file.
  * A reader registers a unique owned lock under a short admission gate, then
- * releases the gate during prompt preparation or a provider call. A writer
+ * releases the gate during prompt preparation or a provider call. Concurrent
+ * readers of one process share that registration (SharedCatalogReader). A writer
  * closes admission and refuses the edit if any live reader remains before
  * replacing models.json.
  * None of this enters the workspace mutation gate: preparation can still write
@@ -1300,32 +1302,110 @@ async function withModelCatalogPhysicalLease<T>(
         await admission.release();
       }
     }
-    let reader: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
-    const readerId = `${MODEL_CATALOG_READER_PREFIX}${randomUUID()}`;
-    await traceSpan('lock.catalogAdmit', async () => {
-      const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
-      try {
-        await admission.lock.assertOwned();
-        reader = await acquireFilesystemLock(readerId, MODEL_CATALOG_WAIT_MS);
-      } finally {
-        try {
-          await admission.release();
-        } catch (error) {
-          await reader?.release();
-          throw error;
-        }
-      }
-    });
+    const key = getWorkspaceDbDir();
+    const shared = await enterCatalogReader(key);
     try {
-      await reader!.lock.assertOwned();
+      const reader = await shared.registered;
+      try {
+        await reader.lock.assertOwned();
+      } catch (error) {
+        // A lost or unreadable registration admits no further readers.
+        closeCatalogReader(key, shared);
+        throw error;
+      }
       return await modelCatalogLeaseScope.run(
-        { lock: reader!.lock, workspace: getCurrentWorkspace(), writer: false, readerId },
+        { lock: reader.lock, workspace: getCurrentWorkspace(), writer: false, readerId: shared.readerId },
         task,
       );
     } finally {
-      if (reader) await traceSpan('lock.catalogRelease', () => reader!.release());
+      await leaveCatalogReader(key, shared);
     }
   });
+}
+
+/**
+ * One published reader registration covering every concurrent model call of
+ * this process (issue #757). Each call used to register its own reader under
+ * the exclusive admission lock, so a burst of runs queued on that lock one
+ * by one. Now the first call registers and the others join while it is open.
+ * A writer still sees a live reader for as long as any of them runs, and the
+ * registration retires as soon as the last one leaves, as a private one did.
+ */
+interface SharedCatalogReader {
+  readonly readerId: string;
+  readonly registered: Promise<Awaited<ReturnType<typeof acquireFilesystemLock>>>;
+  /** Restores the registering call's async context for a release by another call. */
+  readonly inContext: <R>(fn: () => R) => R;
+  users: number;
+  closing: boolean;
+}
+
+const SHARED_CATALOG_READERS = global.__flujo_shared_model_catalog_readers
+  ??= new Map<string, SharedCatalogReader>();
+
+async function registerCatalogReader(readerId: string): Promise<Awaited<ReturnType<typeof acquireFilesystemLock>>> {
+  let reader: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
+  await traceSpan('lock.catalogAdmit', async () => {
+    const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
+    try {
+      await admission.lock.assertOwned();
+      reader = await acquireFilesystemLock(readerId, MODEL_CATALOG_WAIT_MS);
+    } finally {
+      try {
+        await admission.release();
+      } catch (error) {
+        await reader?.release();
+        throw error;
+      }
+    }
+  });
+  return reader!;
+}
+
+/** Join this process's open registration, or start one that later callers join. */
+async function enterCatalogReader(key: string): Promise<SharedCatalogReader> {
+  const open = SHARED_CATALOG_READERS.get(key);
+  if (open && !open.closing) {
+    // Pin before awaiting so the registration cannot retire under this call.
+    open.users += 1;
+    try {
+      await traceSpan('lock.catalogJoin', () => open.registered);
+    } catch (error) {
+      open.users -= 1;
+      throw error;
+    }
+    return open;
+  }
+  const readerId = `${MODEL_CATALOG_READER_PREFIX}${randomUUID()}`;
+  const shared: SharedCatalogReader = {
+    readerId,
+    registered: registerCatalogReader(readerId),
+    inContext: AsyncLocalStorage.snapshot(),
+    users: 1,
+    closing: false,
+  };
+  SHARED_CATALOG_READERS.set(key, shared);
+  try {
+    await shared.registered;
+  } catch (error) {
+    shared.users -= 1;
+    closeCatalogReader(key, shared);
+    throw error;
+  }
+  return shared;
+}
+
+function closeCatalogReader(key: string, shared: SharedCatalogReader): void {
+  shared.closing = true;
+  if (SHARED_CATALOG_READERS.get(key) === shared) SHARED_CATALOG_READERS.delete(key);
+}
+
+async function leaveCatalogReader(key: string, shared: SharedCatalogReader): Promise<void> {
+  shared.users -= 1;
+  if (shared.users > 0) return;
+  closeCatalogReader(key, shared);
+  const reader = await shared.registered;
+  await traceSpan('lock.catalogRelease', () => shared.inContext(() => reader.release()));
 }
 
 export function withModelCatalogFilesystemLease<T>(task: () => Promise<T>): Promise<T> {

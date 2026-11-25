@@ -27,13 +27,15 @@ it.each(['running', 'paused_debug', 'awaiting_tool_approval', 'error'])('does no
 });
 
 it('returns actionable busy errors before parsed input or service invocation', async () => {
-  const owners = [acquireChatIngress(new NextRequest(url)), acquireChatIngress(new NextRequest(url))];
+  const owners: ReturnType<typeof acquireChatIngress>[] = [];
+  try { for (;;) owners.push(acquireChatIngress(new NextRequest(url))); } catch { /* every parse slot is taken */ }
+  process.env.FLUJO_CHAT_ADMISSION_WAIT_MS = '50';
   try {
     const response = await POST(new NextRequest(url, { method: 'POST', body: '{}' }));
     expect(response.status).toBe(429); expect(response.headers.get('retry-after')).toBe('5');
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'CHAT_INPUT_BUSY', type: 'rate_limit_error' } });
     expect(processChatCompletion).not.toHaveBeenCalled();
-  } finally { owners.forEach(owner => owner.release()); }
+  } finally { owners.forEach(owner => owner.release()); delete process.env.FLUJO_CHAT_ADMISSION_WAIT_MS; }
 });
 
 it('returns malformed JSON as a private-data-free 400', async () => {

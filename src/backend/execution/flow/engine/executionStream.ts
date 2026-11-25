@@ -2,12 +2,16 @@ import type { ExecutionEvent } from '@/shared/types/execution/events';
 import { EXECUTION_STREAM_CONTROL_EVENT, type ExecutionStreamControl } from '@/shared/types/execution/streamControl';
 import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { MAX_EXECUTION_EVENT_WIRE_BYTES, snapshotEventPayload } from './eventPayload';
+import { CapacityWaitQueue, type CapacityWaitOptions } from '@/utils/capacityWaitQueue';
 
 export const EXECUTION_STREAM_LIMITS = Object.freeze({
   maxProcess: 64, maxWorkspace: 16, maxConversation: 4, maxReplayReads: 4, maxQueueBytes: 1024 * 1024,
 });
 const CONTROL_RESERVE_BYTES = 1024;
 type StreamLimits = { [K in keyof typeof EXECUTION_STREAM_LIMITS]: number };
+
+class ExecutionStreamBusy extends Error {}
+const STREAM_BUSY = new ExecutionStreamBusy('Execution stream capacity is busy.');
 
 /** Bounded live-subscription bookkeeping. Does not admit or cancel execution runs. */
 export class ExecutionStreamAdmission {
@@ -16,6 +20,7 @@ export class ExecutionStreamAdmission {
   private conversations = new Map<string, number>();
   private rejected = 0;
   private replayReads = 0;
+  private readonly waiting = new CapacityWaitQueue();
   constructor(private limits: StreamLimits = EXECUTION_STREAM_LIMITS) {
     for (const value of Object.values(limits)) {
       if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid execution stream limit');
@@ -43,7 +48,21 @@ export class ExecutionStreamAdmission {
       this.active--;
       decrement(this.workspaces, workspace);
       if (key !== undefined) decrement(this.conversations, key);
+      this.waiting.wake();
     };
+  }
+  /** Like reserve(), but waits in arrival order for a free stream until the deadline. */
+  async reserveWhenAvailable(conversationId: string | undefined, options: CapacityWaitOptions): Promise<(() => void) | undefined> {
+    try {
+      return await this.waiting.acquire(() => {
+        const release = this.reserve(conversationId);
+        if (!release) throw STREAM_BUSY;
+        return release;
+      }, { waitable: refusal => refusal === STREAM_BUSY, blocksAll: () => this.active >= this.limits.maxProcess }, options);
+    } catch (refusal) {
+      if (refusal === STREAM_BUSY) return undefined;
+      throw refusal;
+    }
   }
   reserveReplay(): (() => void) | undefined {
     if (this.replayReads >= this.limits.maxReplayReads) return undefined;
@@ -53,7 +72,7 @@ export class ExecutionStreamAdmission {
   }
   diagnostics() {
     return { active: this.active, replayReads: this.replayReads, workspaces: this.workspaces.size,
-      conversations: this.conversations.size, rejected: this.rejected, limits: { ...this.limits } };
+      conversations: this.conversations.size, rejected: this.rejected, waiting: this.waiting.size, limits: { ...this.limits } };
   }
 }
 const runtime = globalThis as typeof globalThis & { __flujoExecutionStreamAdmission?: ExecutionStreamAdmission };
