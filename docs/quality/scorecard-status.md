@@ -37,7 +37,10 @@ not kept current.
 - **Delivered since the audit:** MCP stays the centre of the product. A
   product-fit pilot kit exists: [tasks and consent](../pilots/product-fit/README.md)
   and `scripts/product-fit-pilot/`. The first-use navigation was repaired in
-  PR #1128 (part of #572).
+  PR #1128 (part of #572). On the cleanup branch (#577): a plain-language
+  [pilot kit](../pilots/product-fit/start-here.md) (who to invite, invitation,
+  consent note, tester guide, weekly form, tracking sheets) and a diagnostic
+  report testers create in Settings and share by hand.
 - **Missing:** the targets in the contract: ten independent people using FLUJO
   weekly for eight weeks, and eight of ten new users finishing a first
   model-plus-MCP run within 15 minutes. No pilot has started. #577 was deferred on

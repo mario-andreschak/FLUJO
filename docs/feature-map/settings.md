@@ -19,6 +19,7 @@ One page for everything that shapes the whole installation. Sections are grouped
 - `settings-tool-server-startup`: "Tool server startup": when tool servers start and which keep running.
 - `settings-updates`: "Updates": installed version and automatic update checks.
 - `settings-privacy`: "Privacy & usage": which anonymous usage signals may be shared.
+- `settings-diagnostic-report`: under "Privacy & usage", "Diagnostic report" → "Create report" shows a read-only "Report (read it before you share it)" with "Copy" and "Save as file". It holds versions, counts and error counts only and is never sent (`GET /api/diagnostics/report`). Testers in the user pilot share it by hand (`docs/pilots/product-fit/tester-guide.md`).
 - `settings-experimental`: "Experimental features" with "Enable experimental features", "Enable Harness Lab", "Show models without tool capabilities" and more switches grouped by topic.
 
 ## How to get to it (user POV)
@@ -35,6 +36,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. Nothing else ne
 - **Switch section**: `node scripts/flujo-drive.mjs click /settings --role button --name "Experimental features" --then-aria settings-experimental.aria` → the experimental switches, starting with "Enable experimental features".
 - **Turn on experimental features**: use `steps /settings --file <steps.json>`: click button "Experimental features", click switch "Enable experimental features", then `shot` → the switch is on and "Experimental" appears under "More" in the navigation.
 - **Replay the tour**: `steps`: click button "Onboarding", then click button "Replay guided tour" → the guided tour starts.
+- **Create a diagnostic report**: `steps`: click button "Privacy & usage", click button "Create report", then `aria` → the "Report (read it before you share it)" text box starting with "FLUJO diagnostic report", plus "Copy" and "Save as file".
 - **Proof**: an ARIA snapshot and a screenshot of the chosen section after the change.
 
 ## Gotchas
@@ -44,4 +46,5 @@ Preconditions: a throwaway instance from the verify-flujo skill. Nothing else ne
 - Experimental pages (under "More" → "Experimental") appear only after "Enable experimental features" is on. Harness Lab also needs "Enable Harness Lab". Turning experimental features off hides them but keeps their data.
 - Choosing "Local Network" or "Public" takes effect after a restart. Without a configured owner sign-in, the app's own data requests are then refused ("Owner authentication is unavailable"). Leave a throwaway instance on "Localhost".
 - Switching to a "Legacy" theme changes some labels elsewhere, for example "Add server" instead of "Connect App" on Connected Apps.
+- The diagnostic report needs FLUJO unlocked; while it waits for the encryption password, "Create report" shows a warning instead. A section that cannot be read in five seconds is listed under "Could not read" and is tried again on the next "Create report".
 - Setting an encryption password protects stored credentials; forgetting it locks them. Do not set one in a run unless that is the test.

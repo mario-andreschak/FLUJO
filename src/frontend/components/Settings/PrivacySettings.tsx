@@ -11,6 +11,7 @@ import {
 } from '@mui/material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DiagnosticReportPanel from './DiagnosticReportPanel';
 
 export default function PrivacySettings() {
   const { settings, updateSettings } = useStorage();
@@ -98,6 +99,8 @@ export default function PrivacySettings() {
       <Alert severity="info">
         {t('settings.privacy.defaultInfo')}
       </Alert>
+
+      <DiagnosticReportPanel />
     </Box>
   );
 }
