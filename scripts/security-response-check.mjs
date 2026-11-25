@@ -35,7 +35,7 @@ const SOURCES = ['dependabot', 'code-scanning'];
 const DAY_MS = 86_400_000;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function severityOf(source, alert) {
+export function severityOf(source, alert) {
   const value = source === 'dependabot'
     ? alert.security_advisory?.severity
     : alert.rule?.security_severity_level ?? { error: 'high', warning: 'medium', note: 'low' }[alert.rule?.severity];

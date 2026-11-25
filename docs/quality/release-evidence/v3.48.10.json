@@ -1,0 +1,665 @@
+{
+  "schemaVersion": 1,
+  "repository": "mario-andreschak/FLUJO",
+  "version": "3.48.10",
+  "tag": "v3.48.10",
+  "collectedAt": "2026-11-25T14:53:32.740Z",
+  "command": "npm run evidence:release -- --version 3.48.10 --out docs/quality/release-evidence",
+  "options": {
+    "hashNpmBytes": true
+  },
+  "release": {
+    "url": "https://github.com/mario-andreschak/FLUJO/releases/tag/v3.48.10",
+    "publishedAt": "2026-11-21T05:59:15Z",
+    "draft": false,
+    "prerelease": false,
+    "author": "github-actions[bot]",
+    "assets": [
+      {
+        "name": "flujo-setup.exe",
+        "size": 2117273,
+        "digest": "sha256:599cf10bd01eeca7fc1938e7db2def461fe60b734eca9e7643176a25ba9e8c0d"
+      },
+      {
+        "name": "installer-release-evidence.json",
+        "size": 716,
+        "digest": "sha256:bbc7a24d3ace985ae06bf11027be0c33a908df2bf164b8824a207258b9148788"
+      },
+      {
+        "name": "installer-SHA256SUMS",
+        "size": 180,
+        "digest": "sha256:e8a361312ae76071c7299fad993e509c4fff5c22ae1d271bf9406baa6a7abfaa"
+      }
+    ]
+  },
+  "source": {
+    "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+    "annotatedTag": false,
+    "tree": "ad155c3f6f270a850786fe0233ea7cb73ad173ce",
+    "subject": "Bump version to 3.48.10 (#1418)",
+    "committedAt": "2026-11-21T03:39:19Z",
+    "signatureVerified": true,
+    "signatureReason": "valid",
+    "main": {
+      "aheadBy": 32,
+      "behindBy": 0,
+      "status": "ahead"
+    },
+    "packageVersion": "3.48.10"
+  },
+  "ci": {
+    "runs": [
+      {
+        "attempt": 1,
+        "conclusion": "success",
+        "createdAt": "2026-11-21T03:39:22Z",
+        "event": "push",
+        "id": 44862237628,
+        "name": "verify",
+        "path": ".github/workflows/verify.yml",
+        "status": "completed",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862237628",
+        "jobs": {
+          "total": 13,
+          "passed": 12,
+          "failed": [],
+          "skipped": [
+            "diagnostic Persona memory profile (not release acceptance)"
+          ],
+          "unfinished": []
+        }
+      },
+      {
+        "attempt": 3,
+        "conclusion": "success",
+        "createdAt": "2026-11-21T03:39:26Z",
+        "event": "workflow_dispatch",
+        "id": 44862243232,
+        "name": "Release FLUJO 3.48.10 at 174ffaf034532b1ec52e483724563309e1fc9693",
+        "path": ".github/workflows/publish-npm.yml",
+        "status": "completed",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232",
+        "jobs": {
+          "total": 6,
+          "passed": 5,
+          "failed": [],
+          "skipped": [
+            "diagnose-oidc"
+          ],
+          "unfinished": []
+        }
+      },
+      {
+        "attempt": 2,
+        "conclusion": "success",
+        "createdAt": "2026-11-21T04:15:02Z",
+        "event": "workflow_dispatch",
+        "id": 44865156014,
+        "name": "Validate Windows installer",
+        "path": ".github/workflows/installer.yml",
+        "status": "completed",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/44865156014",
+        "jobs": {
+          "total": 9,
+          "passed": 8,
+          "failed": [],
+          "skipped": [
+            "Fresh Windows installer and first launch (${{ matrix.os }})"
+          ],
+          "unfinished": []
+        }
+      },
+      {
+        "attempt": 1,
+        "conclusion": "success",
+        "createdAt": "2026-11-21T04:15:04Z",
+        "event": "workflow_dispatch",
+        "id": 44865160071,
+        "name": "Publish Docker Image",
+        "path": ".github/workflows/publish-image.yml",
+        "status": "completed",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/44865160071",
+        "jobs": {
+          "total": 3,
+          "passed": 3,
+          "failed": [],
+          "skipped": [],
+          "unfinished": []
+        }
+      }
+    ],
+    "otherRuns": [
+      ".github/workflows/auto-label-new-issues.yml",
+      ".github/workflows/close-issues-on-push.yml",
+      ".github/workflows/pages.yml",
+      "dynamic/dependabot/dependabot-updates",
+      "dynamic/dependabot/dependabot-updates",
+      "dynamic/dependabot/dependabot-updates",
+      "dynamic/dependabot/dependabot-updates"
+    ]
+  },
+  "tests": [
+    {
+      "stage": "ci",
+      "artifact": "jest-results-ci",
+      "run": 44862237628,
+      "floor": {
+        "minSuites": 1080,
+        "minTests": 12185
+      },
+      "available": true,
+      "expiresAt": "2027-02-19T03:39:22Z",
+      "suites": {
+        "total": 1151,
+        "passed": 1144,
+        "failed": 0,
+        "pending": 7,
+        "runtimeErrors": 0
+      },
+      "tests": {
+        "total": 13486,
+        "passed": 13473,
+        "failed": 0,
+        "pending": 13,
+        "todo": 0
+      },
+      "success": true,
+      "startedAt": "2026-11-21T03:42:50.380Z"
+    },
+    {
+      "stage": "isolated",
+      "artifact": "jest-results-isolated",
+      "run": 44862237628,
+      "floor": {
+        "minSuites": 16,
+        "minTests": 186
+      },
+      "available": true,
+      "expiresAt": "2027-02-19T03:39:22Z",
+      "suites": {
+        "total": 16,
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "runtimeErrors": 0
+      },
+      "tests": {
+        "total": 206,
+        "passed": 206,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0
+      },
+      "success": true,
+      "startedAt": "2026-11-21T03:41:14.556Z"
+    }
+  ],
+  "npm": [
+    {
+      "name": "@mario.andreschak/mcp-flujo",
+      "found": true,
+      "version": "3.48.10",
+      "integrity": "sha512-pvE4137CrVDv5qKZWirrUJuNLS9PV7hbww2x1jypkspnKqjMULRTvrZ2JS4/4EsW4o8AFDdv92s+8I9wW8e1qg==",
+      "fileCount": 14,
+      "registrySignatures": 2,
+      "npmPublishRecord": true,
+      "npmProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/actions/runner/github-hosted"
+      },
+      "npmProvenanceDigestMatches": true,
+      "bytes": {
+        "size": 13798,
+        "sha256": "a09b8d1d81dc2b9caffa327e5ec3e7a76c4a881d5a6312795b7e801a2e6dfbef",
+        "integrityMatches": true
+      },
+      "githubProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main"
+      },
+      "githubSbom": {
+        "specVersion": "1.5",
+        "root": "pkg:npm/flujo-ai@3.48.10",
+        "components": 1202
+      },
+      "signedFiles": {
+        "manifest.json": "cda22a3b5195277db65b3262bad4068bb470a4dacaee6ac61a728926b118ed66",
+        "release-evidence.json": "3eb47c864e3421ad20c0d550fb7a68f68c43826bb1a1de1b01ad6395756b24f2",
+        "source-lock.sbom.cdx.json": "9b069943a6b8ddfd1b1edf0e9481ee790132158aa0404ffcaf9e347ada688697"
+      }
+    },
+    {
+      "name": "@mario.andreschak/mcp-filesystem",
+      "found": true,
+      "version": "3.48.10",
+      "integrity": "sha512-SmoBJ+tpsc8Jc8b2SAcqtbM1t1QJ1Vq6qtSxjfEKjb6aKkoAj/Pr3kjOL3GDXe34lewNzlEcOQli0mKJ7wbahA==",
+      "fileCount": 23,
+      "registrySignatures": 2,
+      "npmPublishRecord": true,
+      "npmProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/actions/runner/github-hosted"
+      },
+      "npmProvenanceDigestMatches": true,
+      "bytes": {
+        "size": 58093,
+        "sha256": "f6f18ac8d1e3ebb266d79b3db56bc2556aeb69108f760dc17d82ac7ba768be58",
+        "integrityMatches": true
+      },
+      "githubProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main"
+      },
+      "githubSbom": {
+        "specVersion": "1.5",
+        "root": "pkg:npm/flujo-ai@3.48.10",
+        "components": 1202
+      },
+      "signedFiles": {
+        "manifest.json": "cda22a3b5195277db65b3262bad4068bb470a4dacaee6ac61a728926b118ed66",
+        "release-evidence.json": "3eb47c864e3421ad20c0d550fb7a68f68c43826bb1a1de1b01ad6395756b24f2",
+        "source-lock.sbom.cdx.json": "9b069943a6b8ddfd1b1edf0e9481ee790132158aa0404ffcaf9e347ada688697"
+      }
+    },
+    {
+      "name": "@mario.andreschak/mcp-bash",
+      "found": true,
+      "version": "3.48.10",
+      "integrity": "sha512-uKQOKaMfA8PFp4/QH7yMkoRu+VrYk7486vPKv6WYuax0UEVOMKerENID/vzdCvuoa3Bp/b7J4YH9jMLCzdK5mQ==",
+      "fileCount": 17,
+      "registrySignatures": 2,
+      "npmPublishRecord": true,
+      "npmProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/actions/runner/github-hosted"
+      },
+      "npmProvenanceDigestMatches": true,
+      "bytes": {
+        "size": 59389,
+        "sha256": "b0df22a391998b8c9334525abbb9fac6e45665b5fe8cf5f567977c8d6a530580",
+        "integrityMatches": true
+      },
+      "githubProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main"
+      },
+      "githubSbom": {
+        "specVersion": "1.5",
+        "root": "pkg:npm/flujo-ai@3.48.10",
+        "components": 1202
+      },
+      "signedFiles": {
+        "manifest.json": "cda22a3b5195277db65b3262bad4068bb470a4dacaee6ac61a728926b118ed66",
+        "release-evidence.json": "3eb47c864e3421ad20c0d550fb7a68f68c43826bb1a1de1b01ad6395756b24f2",
+        "source-lock.sbom.cdx.json": "9b069943a6b8ddfd1b1edf0e9481ee790132158aa0404ffcaf9e347ada688697"
+      }
+    },
+    {
+      "name": "@mario.andreschak/mcp-browser",
+      "found": true,
+      "version": "3.48.10",
+      "integrity": "sha512-Z4LlPpX1s8JTz/m9si1ger9QgYpt1gzW31Psg+gsLgxDmEccg+UxseG+HLcLy0iEbqbGbffWfMu9hA7Ct8rJyA==",
+      "fileCount": 34,
+      "registrySignatures": 2,
+      "npmPublishRecord": true,
+      "npmProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/actions/runner/github-hosted"
+      },
+      "npmProvenanceDigestMatches": true,
+      "bytes": {
+        "size": 95864,
+        "sha256": "c099497cdc71f840f1cf3b7f98a224840c1cc6d5c93c85c5acda342c28d86c02",
+        "integrityMatches": true
+      },
+      "githubProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main"
+      },
+      "githubSbom": {
+        "specVersion": "1.5",
+        "root": "pkg:npm/flujo-ai@3.48.10",
+        "components": 1202
+      },
+      "signedFiles": {
+        "manifest.json": "cda22a3b5195277db65b3262bad4068bb470a4dacaee6ac61a728926b118ed66",
+        "release-evidence.json": "3eb47c864e3421ad20c0d550fb7a68f68c43826bb1a1de1b01ad6395756b24f2",
+        "source-lock.sbom.cdx.json": "9b069943a6b8ddfd1b1edf0e9481ee790132158aa0404ffcaf9e347ada688697"
+      }
+    },
+    {
+      "name": "flujo-ai",
+      "found": true,
+      "version": "3.48.10",
+      "integrity": "sha512-aEm6Bng2w9ssaSnq+tuXz49nAzTwbpufsxmf1r6vTrjPTpZAb3Vs0CwaHsUXdN23G2ZhFTvjlJWMSFu7N2ytUg==",
+      "fileCount": 2016,
+      "registrySignatures": 2,
+      "npmPublishRecord": true,
+      "npmProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/actions/runner/github-hosted"
+      },
+      "npmProvenanceDigestMatches": true,
+      "bytes": {
+        "size": 15130747,
+        "sha256": "706b10cefaec7d729c4c666bdc00f0626f1123e199823316ea71090e5fcffb0e",
+        "integrityMatches": true
+      },
+      "githubProvenance": {
+        "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+        "workflow": ".github/workflows/publish-npm.yml",
+        "ref": "refs/heads/main",
+        "repository": "https://github.com/mario-andreschak/FLUJO",
+        "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44862243232/attempts/1",
+        "builder": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main"
+      },
+      "githubSbom": {
+        "specVersion": "1.5",
+        "root": "pkg:npm/flujo-ai@3.48.10",
+        "components": 1202
+      },
+      "signedFiles": {
+        "manifest.json": "cda22a3b5195277db65b3262bad4068bb470a4dacaee6ac61a728926b118ed66",
+        "release-evidence.json": "3eb47c864e3421ad20c0d550fb7a68f68c43826bb1a1de1b01ad6395756b24f2",
+        "source-lock.sbom.cdx.json": "9b069943a6b8ddfd1b1edf0e9481ee790132158aa0404ffcaf9e347ada688697"
+      }
+    }
+  ],
+  "npmInventory": {
+    "assets": {
+      "source-lock.sbom.cdx.json": null,
+      "release-evidence.json": null,
+      "SHA256SUMS": null
+    },
+    "evidence": null,
+    "checksums": null
+  },
+  "image": {
+    "name": "ghcr.io/mario-andreschak/flujo",
+    "digests": {
+      "3.48.10": "sha256:f7567006d333d79245ad01983905663f10dd469d5817fba4b56af0c815afe040",
+      "sha-174ffaf": "sha256:f7567006d333d79245ad01983905663f10dd469d5817fba4b56af0c815afe040"
+    },
+    "digest": "sha256:f7567006d333d79245ad01983905663f10dd469d5817fba4b56af0c815afe040",
+    "provenance": {
+      "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+      "workflow": ".github/workflows/publish-image.yml",
+      "ref": "refs/heads/main",
+      "repository": "https://github.com/mario-andreschak/FLUJO",
+      "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44865160071/attempts/1",
+      "builder": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-image.yml@refs/heads/main"
+    },
+    "sbom": {
+      "specVersion": "1.6",
+      "root": "sha256",
+      "components": 10891
+    },
+    "recordsFound": 2
+  },
+  "installer": {
+    "asset": {
+      "name": "flujo-setup.exe",
+      "size": 2117273,
+      "sha256": "599cf10bd01eeca7fc1938e7db2def461fe60b734eca9e7643176a25ba9e8c0d"
+    },
+    "evidence": {
+      "revision": "174ffaf034532b1ec52e483724563309e1fc9693",
+      "version": "3.48.10",
+      "ref": "refs/tags/v3.48.10",
+      "sha256": "599cf10bd01eeca7fc1938e7db2def461fe60b734eca9e7643176a25ba9e8c0d",
+      "size": 2117273
+    },
+    "checksums": {
+      "flujo-setup.exe": "599cf10bd01eeca7fc1938e7db2def461fe60b734eca9e7643176a25ba9e8c0d",
+      "installer-release-evidence.json": "bbc7a24d3ace985ae06bf11027be0c33a908df2bf164b8824a207258b9148788"
+    },
+    "evidenceSha256": "bbc7a24d3ace985ae06bf11027be0c33a908df2bf164b8824a207258b9148788",
+    "provenance": {
+      "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+      "workflow": ".github/workflows/installer.yml",
+      "ref": "refs/tags/v3.48.10",
+      "repository": "https://github.com/mario-andreschak/FLUJO",
+      "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44865156014/attempts/2",
+      "builder": "https://github.com/mario-andreschak/FLUJO/.github/workflows/installer.yml@refs/tags/v3.48.10"
+    }
+  },
+  "alerts": {
+    "code-scanning": {
+      "atRelease": {
+        "critical": 3,
+        "high": 28,
+        "medium": 37,
+        "low": 0,
+        "total": 68,
+        "uncertain": 0
+      },
+      "now": {
+        "critical": 3,
+        "high": 29,
+        "medium": 39,
+        "low": 0,
+        "total": 71,
+        "uncertain": 0
+      }
+    },
+    "dependabot": {
+      "atRelease": {
+        "critical": 0,
+        "high": 0,
+        "medium": 12,
+        "low": 1,
+        "total": 13,
+        "uncertain": 0
+      },
+      "now": {
+        "critical": 0,
+        "high": 0,
+        "medium": 5,
+        "low": 1,
+        "total": 6,
+        "uncertain": 0
+      }
+    }
+  },
+  "readErrors": [],
+  "checks": [
+    {
+      "id": "release",
+      "piece": "GitHub release",
+      "status": "ok",
+      "detail": "v3.48.10 published 2026-11-21 05:59 UTC."
+    },
+    {
+      "id": "source-commit",
+      "piece": "Exact commit and tree",
+      "status": "ok",
+      "detail": "Tag v3.48.10 points to commit 174ffaf0, tree ad155c3f."
+    },
+    {
+      "id": "source-main",
+      "piece": "Commit is on main",
+      "status": "ok",
+      "detail": "main contains the commit (32 newer commits since)."
+    },
+    {
+      "id": "source-version",
+      "piece": "package.json version",
+      "status": "ok",
+      "detail": "package.json at the commit says 3.48.10."
+    },
+    {
+      "id": "source-signature",
+      "piece": "Commit signature",
+      "status": "ok",
+      "detail": "GitHub shows the commit signature as verified (valid)."
+    },
+    {
+      "id": "ci-verify",
+      "piece": "CI: verify.yml",
+      "status": "ok",
+      "detail": "success (push); 12 of 13 jobs passed, skipped: diagnostic Persona memory profile (not release acceptance)."
+    },
+    {
+      "id": "ci-publish-npm",
+      "piece": "CI: publish-npm.yml",
+      "status": "ok",
+      "detail": "success (workflow_dispatch, attempt 3); 5 of 6 jobs passed, skipped: diagnose-oidc."
+    },
+    {
+      "id": "ci-publish-image",
+      "piece": "CI: publish-image.yml",
+      "status": "ok",
+      "detail": "success (workflow_dispatch); 3 of 3 jobs passed."
+    },
+    {
+      "id": "ci-installer",
+      "piece": "CI: installer.yml",
+      "status": "ok",
+      "detail": "success (workflow_dispatch, attempt 2); 8 of 9 jobs passed, skipped: Fresh Windows installer and first launch."
+    },
+    {
+      "id": "ci-verify-full",
+      "piece": "CI: verify-full.yml",
+      "status": "missing",
+      "detail": "Did not run on this commit (optional; started by hand)."
+    },
+    {
+      "id": "ci-scorecard-source",
+      "piece": "CI: scorecard-source.yml",
+      "status": "missing",
+      "detail": "Did not run on this commit (optional; started by hand)."
+    },
+    {
+      "id": "tests-ci",
+      "piece": "Tests: ci stage",
+      "status": "ok",
+      "detail": "13473 of 13486 tests passed in 1151 suites; 0 failed, 13 skipped; floor 12185 tests."
+    },
+    {
+      "id": "tests-isolated",
+      "piece": "Tests: isolated stage",
+      "status": "ok",
+      "detail": "206 of 206 tests passed in 16 suites; 0 failed, 0 skipped; floor 186 tests."
+    },
+    {
+      "id": "npm-registry",
+      "piece": "npm packages on the registry",
+      "status": "ok",
+      "detail": "All 5 packages exist at 3.48.10 with an integrity hash and 2+ registry signatures."
+    },
+    {
+      "id": "npm-provenance",
+      "piece": "npm provenance",
+      "status": "ok",
+      "detail": "All 5 packages carry npm provenance from publish-npm.yml naming commit 174ffaf0."
+    },
+    {
+      "id": "npm-bytes",
+      "piece": "npm tarball bytes",
+      "status": "ok",
+      "detail": "Downloaded all 5 tarballs (15357891 bytes); each matches its registry integrity hash."
+    },
+    {
+      "id": "npm-github-provenance",
+      "piece": "GitHub build record for npm bytes",
+      "status": "ok",
+      "detail": "GitHub holds a signed build record for each tarball, from publish-npm.yml at commit 174ffaf0."
+    },
+    {
+      "id": "npm-sbom-signed",
+      "piece": "npm dependency list (SBOM), signed",
+      "status": "ok",
+      "detail": "Signed CycloneDX 1.5 list for pkg:npm/flujo-ai@3.48.10, 1202 components."
+    },
+    {
+      "id": "npm-sbom-release",
+      "piece": "npm SBOM and checksums on the release page",
+      "status": "missing",
+      "detail": "Not attached: source-lock.sbom.cdx.json, release-evidence.json, SHA256SUMS. Releases made before the release workflow attached them (#565) keep them only in GitHub's signed store and the 30-day workflow artifact. The signed npm build record still names the SBOM's SHA-256 (9b069943a6b8...)."
+    },
+    {
+      "id": "image-digest",
+      "piece": "Docker image",
+      "status": "ok",
+      "detail": "3.48.10 and sha-174ffaf point to sha256:f7567006d333..."
+    },
+    {
+      "id": "image-provenance",
+      "piece": "Docker image build record",
+      "status": "ok",
+      "detail": "Signed build record from .github/workflows/publish-image.yml at refs/heads/main names commit 174ffaf0."
+    },
+    {
+      "id": "image-sbom",
+      "piece": "Docker image dependency list (SBOM), signed",
+      "status": "ok",
+      "detail": "Signed CycloneDX 1.6 list of the image's OS and installed packages, 10891 components."
+    },
+    {
+      "id": "installer-asset",
+      "piece": "Windows installer",
+      "status": "ok",
+      "detail": "flujo-setup.exe (2117273 bytes) matches installer-release-evidence.json and installer-SHA256SUMS."
+    },
+    {
+      "id": "installer-provenance",
+      "piece": "Windows installer build record",
+      "status": "ok",
+      "detail": "Signed build record from .github/workflows/installer.yml at refs/tags/v3.48.10 names commit 174ffaf0."
+    },
+    {
+      "id": "installer-code-signing",
+      "piece": "Windows code signing (Authenticode)",
+      "status": "not-checked",
+      "detail": "This collector does not open the installer file; check it on Windows (see \"How to check this yourself\")."
+    },
+    {
+      "id": "alerts-code-scanning",
+      "piece": "Open code scanning alerts at release",
+      "status": "attention",
+      "detail": "68 open (3 critical, 28 high); 71 open on 2026-11-25."
+    },
+    {
+      "id": "alerts-dependabot",
+      "piece": "Open dependency alerts at release",
+      "status": "ok",
+      "detail": "13 open (0 critical, 0 high); 6 open on 2026-11-25."
+    }
+  ]
+}
