@@ -31,19 +31,37 @@ function supportedVersion(version) {
     && (Number(match[2]) > 3 || (Number(match[2]) === 3 && Number(match[3]) >= 3)));
 }
 
+function runtimeError(code, message, version) {
+  return Object.assign(new Error(message), { code, ...(version ? { version } : {}) });
+}
+
+function versionError(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (!match) return runtimeError('AGY_OUTDATED', `Update the official Antigravity CLI to a supported version (${minimumVersion} or newer in the 1.x series). Run "agy update", then retry.`);
+  if (Number(match[1]) > 1) {
+    return runtimeError('AGY_UNSUPPORTED_MAJOR', `Antigravity CLI ${version} is newer than this FLUJO version supports (1.x from ${minimumVersion}). Update FLUJO, then retry.`, version);
+  }
+  return runtimeError('AGY_OUTDATED', `Antigravity CLI ${version} is too old for FLUJO. Run "agy update" to get ${minimumVersion} or newer in the 1.x series, then retry.`, version);
+}
+
 async function qualify(binary) {
   const stat = fs.statSync(binary, { bigint: true });
   const identity = `${binary}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
   if (verified?.identity === identity) return verified;
   const options = { timeout: 15000, maxBuffer: 256 * 1024, windowsHide: true,
     env: { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } };
-  const version = (await run(binary, ['--version'], options)).stdout.trim();
-  if (!supportedVersion(version)) throw new Error('Update the official Antigravity CLI to a supported version (1.3.3 or newer in the 1.x series).');
-  const result = await run(binary, ['--input-format', 'stream-json', '--output-format', 'stream-json',
-    '--agent', 'flujo', '--disable-slash-commands', '--print-timeout', '1m', '--help'], options);
+  // A large executable's first start after an update or a virus scan can be slow.
+  const probe = args => run(binary, args, options).catch(error => {
+    if (!error?.killed) throw error;
+    return run(binary, args, { ...options, timeout: 60000 });
+  });
+  const version = (await probe(['--version'])).stdout.trim();
+  if (!supportedVersion(version)) throw versionError(version);
+  const result = await probe(['--input-format', 'stream-json', '--output-format', 'stream-json',
+    '--agent', 'flujo', '--disable-slash-commands', '--print-timeout', '1m', '--help']);
   const help = result.stdout + result.stderr;
   for (const flag of ['--input-format', '--output-format', '--agent', '--disable-slash-commands', '--print-timeout']) {
-    if (!help.includes(flag)) throw new Error('This Antigravity CLI does not support the required FLUJO integration. Update the CLI and FLUJO.');
+    if (!help.includes(flag)) throw runtimeError('AGY_INCOMPATIBLE', 'This Antigravity CLI does not support the required FLUJO integration. Update the CLI and FLUJO.');
   }
   verified = { identity, binary, version };
   return verified;
@@ -67,16 +85,16 @@ async function resolveBinary() {
   if (!binary) {
     if (!installation) installation = install().finally(() => { installation = undefined; });
     try { await installation; } catch {
-      throw new Error('Could not install the official Antigravity CLI. Check internet access and installation permissions, then retry, or install it from https://antigravity.google/cli.');
+      throw runtimeError('AGY_MISSING', 'Could not install the official Antigravity CLI. Check internet access and installation permissions, then retry, or install it from https://antigravity.google/cli.');
     }
     binary = findBinary();
   }
-  if (!binary) throw new Error('Antigravity CLI was not found after installation. Install agy for the operating-system user running FLUJO, then retry.');
+  if (!binary) throw runtimeError('AGY_MISSING', 'Antigravity CLI was not found after installation. Install agy for the operating-system user running FLUJO, then retry.');
   try { await qualify(binary); } catch (error) {
-    if (/^Update the official|^This Antigravity/.test(error.message)) throw error;
-    throw new Error('The official Antigravity CLI could not start. Repair its installation and retry.');
+    if (/^AGY_/.test(error?.code ?? '')) throw error;
+    throw runtimeError('AGY_START_FAILED', 'The official Antigravity CLI could not start. Repair its installation and retry.');
   }
   return binary;
 }
 
-module.exports = { candidates, findBinary, resolveBinary, supportedVersion, minimumVersion };
+module.exports = { candidates, findBinary, resolveBinary, supportedVersion, minimumVersion, versionError };

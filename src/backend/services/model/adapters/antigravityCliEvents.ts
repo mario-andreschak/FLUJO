@@ -49,6 +49,34 @@ export class AntigravityCliEventDecoder {
   }
 }
 
+const COUNTERS = ['input_tokens', 'output_tokens', 'cache_read_tokens', 'thinking_tokens', 'total_tokens'] as const;
+const isCounter = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+/**
+ * A reopened conversation reports counters for the whole conversation. Return
+ * this turn's share; any counter that went backwards makes the turn unknown.
+ */
+export function subtractAntigravityUsage(
+  current: AntigravityCliStats | undefined,
+  baseline: (AntigravityCliStats & { num_turns?: number }) | undefined,
+  currentTurns?: number,
+): AntigravityCliStats | undefined {
+  if (!current || !baseline) return undefined;
+  if (isCounter(baseline.num_turns) && isCounter(currentTurns) && currentTurns <= baseline.num_turns) return undefined;
+  const turn: AntigravityCliStats = {};
+  for (const name of COUNTERS) {
+    const now = current[name];
+    if (!isCounter(now)) continue;
+    const before = baseline[name];
+    if (!isCounter(before) || now < before) {
+      if (name === 'thinking_tokens' || name === 'total_tokens') continue;
+      return undefined;
+    }
+    turn[name] = now - before;
+  }
+  return turn;
+}
+
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
 }

@@ -142,6 +142,73 @@ test('catalog cancellation kills its child and sanitized command failures omit n
   await expect(readAntigravityCliCommand(runtime, 'models')).rejects.toThrow('Antigravity model discovery failed. Check the connection authentication and runtime.');
 });
 
+const initLine = (id: string) => JSON.stringify({ event: 'init', conversation_id: id, init: { cwd: 'neutral', tools: [], permission_mode: 'request-review', agent: 'flujo' } }) + '\n';
+
+test('a reopened conversation receives the prompt only after init confirms its identity', async () => {
+  let sent = '';
+  child.stdin.on('data', chunk => { sent += String(chunk); });
+  child.stdin.on('finish', () => {
+    child.stdout.write('{"event":"result","result":{"conversation_id":"saved-1","status":"SUCCESS","response":"done"}}\n');
+    setImmediate(() => child.emit('close', 0));
+  });
+  const events: string[] = [];
+  const running = runAntigravityCli({ runtime, model: 'default', prompt: 'next question', signal: new AbortController().signal,
+    resumeConversationId: 'saved-1', onEvent: event => { events.push(`${event.event}:${sent ? 'sent' : 'held'}`); } });
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  expect(sent).toBe('');
+  child.stdout.write(initLine('saved-1'));
+  await running;
+  const args = mockSpawn.mock.calls[0][1] as string[];
+  expect(args.slice(args.indexOf('--conversation'), args.indexOf('--conversation') + 2)).toEqual(['--conversation', 'saved-1']);
+  expect(JSON.parse(sent).message.content).toContain('next question');
+  expect(events).toEqual(['init:held', 'result:sent']);
+});
+
+test.each([
+  ['a new conversation instead of the saved one', () => child.stdout.write(initLine('new-conversation'))],
+  ['an exit before init', () => setImmediate(() => child.emit('close', 0))],
+])('a missed reopen (%s) sends nothing and reports a resume miss', async (_name, act) => {
+  let sent = '';
+  child.stdin.on('data', chunk => { sent += String(chunk); });
+  const onEvent = jest.fn();
+  const running = runAntigravityCli({ runtime, model: 'default', prompt: 'delta only', signal: new AbortController().signal, resumeConversationId: 'saved-1', onEvent });
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  act();
+  await expect(running).rejects.toMatchObject({ name: 'AntigravityResumeMiss' });
+  expect(sent).toBe('');
+  expect(onEvent).not.toHaveBeenCalled();
+});
+
+test('an unsafe saved conversation identity is never passed to the CLI', async () => {
+  await expect(runAntigravityCli({ runtime, model: 'default', prompt: 'x', signal: new AbortController().signal, resumeConversationId: '--dangerously-skip-permissions', onEvent: () => {} }))
+    .rejects.toMatchObject({ name: 'AntigravityResumeMiss' });
+  expect(mockSpawn).not.toHaveBeenCalled();
+});
+
+test('a sign-in failure reported only in the result event still gets sign-in guidance', async () => {
+  child.stdin.on('finish', () => {
+    child.stdout.write('{"event":"result","result":{"conversation_id":"id","status":"ERROR","response":"","error":"authentication required secret-token"}}\n');
+    setImmediate(() => child.emit('close', 1));
+  });
+  const failure = await run().catch((error: Error) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect((failure as Error).message).toMatch(/complete Google sign-in/);
+  expect((failure as Error).message).not.toContain('secret-token');
+});
+
+test.each([
+  ['Authentication expired. Please log back in. secret-token', /complete Google sign-in/, false],
+  ['network unreachable secret-token', /^Antigravity model discovery failed\. Check the connection authentication and runtime\.$/, true],
+])('catalog failure %j is explained without native text', async (diagnostic, expected, transient) => {
+  child.stdin.on('finish', () => { child.stderr.write(diagnostic); setImmediate(() => child.emit('close', 1)); });
+  const failure = await readAntigravityCliCommand(runtime, 'models').catch((error: Error) => error);
+  expect((failure as Error).message).toMatch(expected);
+  expect((failure as Error).message).not.toContain('secret-token');
+  expect((failure as { transient?: boolean }).transient).toBe(transient);
+});
+
 test('rejects an oversized catalog and terminates before retaining more output', async () => {
   child.stdin.on('finish', () => child.stdout.write('x'.repeat(1024 * 1024 + 1)));
   await expect(readAntigravityCliCommand(runtime, 'models')).rejects.toThrow('Antigravity model catalog exceeded its limit.');

@@ -163,6 +163,9 @@ function assertNativeExited(): void {
 }
 
 describe('Antigravity pinned native executable integration', () => {
+  // The first start of the large native executable can take longer than one
+  // case's deadline (image load, virus scan). Pay it once, outside the cases.
+  beforeAll(async () => { await resolveAntigravityCliEntry(); }, 180_000);
   beforeEach(async () => {
     mockRuntime = undefined; mockStderr = ''; mockStdout = ''; mockNativeChildren = []; mockMcpCallTool = jest.fn();
     mockInvocationLog = '';
@@ -320,6 +323,39 @@ describe('Antigravity pinned native executable integration', () => {
       clearTimeout(deadline); controller.abort(); await endpoint.close();
     }
   }, 45_000);
+
+  it('reopens the saved native conversation on the next turn and sends only the new message', async () => {
+    const endpoint = await startFakeGenAi((body, res, streaming) => {
+      const said = JSON.stringify(body.contents ?? []);
+      respond(res, streaming, [{ text: said.includes('Which word') ? 'apple' : 'Noted.' }]);
+    });
+    mockGenAiBaseUrl = endpoint.url;
+    const session = { conversationId: 'flujo-conversation', nodeId: 'process-node', sessionResume: true };
+    const firstMessages = [{ role: 'user' as const, content: 'Remember the word apple.' }];
+    try {
+      const first = await new AntigravityCliAdapter().createCompletion(input({ ...session, messages: firstMessages }));
+      const firstHome = mockRuntime!.home;
+      expect(path.dirname(firstHome)).toBe(path.join(mockFixtureRoot, 'db', 'antigravity-cli-runtime', 'sessions'));
+      const modelRequests = endpoint.requests.length;
+      const second = await new AntigravityCliAdapter().createCompletion(input({ ...session,
+        messages: [...firstMessages, ...first.transcript!, { role: 'user', content: 'Which word?' }] as CompletionInput['messages'] }));
+      expect(mockRuntime!.home).toBe(firstHome);
+      expect(second.completion.choices[0].message.content).toContain('apple');
+      const resumed = endpoint.requests.slice(modelRequests).find(request => JSON.stringify(request.contents ?? []).includes('Which word'));
+      const texts = (resumed?.contents ?? []).flatMap(content => (content.parts ?? []).map(part => `${content.role}:${part.text ?? ''}`));
+      expect(texts.filter(text => text.includes('Remember the word apple.'))).toHaveLength(1);
+      expect(texts.filter(text => text.includes('Which word?'))).toHaveLength(1);
+      expect(texts.some(text => text.startsWith('model:') && text.includes('Noted.'))).toBe(true);
+      // The native result counts the whole conversation; FLUJO reports this turn only.
+      expect(second.completion.usage?.total_tokens).toBe(first.completion.usage?.total_tokens);
+      expect(mockNativeChildren).toHaveLength(2);
+      for (const child of mockNativeChildren) expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    } catch (error) {
+      throw new Error(String(error) + '; synthetic CLI diagnostics: ' + mockStderr + '; native stream: ' + mockStdout);
+    } finally {
+      await endpoint.close();
+    }
+  }, 60_000);
 
   it.each(['approval_denied', 'stale_fence'])('prevents native MCP dispatch after %s', async mode => {
     const approval = jest.fn(async () => mode !== 'approval_denied');

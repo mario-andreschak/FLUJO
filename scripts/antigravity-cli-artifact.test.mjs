@@ -8,8 +8,9 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const source = readFileSync(new URL('../bin/antigravity-runtime.cjs', import.meta.url), 'utf8');
-function runtime({ present = true, version = '1.4.2', failInstall = false, help = true } = {}) {
+function runtime({ present = true, version = '1.4.2', failInstall = false, help = true, slowStarts = 0 } = {}) {
   let installed = present;
+  let slow = slowStarts;
   const calls = [];
   const execFile = () => {};
   execFile[promisify.custom] = async (file, args, options) => {
@@ -17,6 +18,9 @@ function runtime({ present = true, version = '1.4.2', failInstall = false, help 
     if (file.endsWith('powershell.exe')) {
       if (failInstall) throw new Error('secret installer output');
       installed = true;
+    } else if (slow > 0) {
+      slow--;
+      throw Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM' });
     }
     return { stdout: args.includes('--version') ? version : '', stderr: help ? '--input-format --output-format --agent --disable-slash-commands --print-timeout' : '' };
   };
@@ -75,7 +79,18 @@ test('installer failures are sanitized and retryable; incompatible CLIs are neve
     await assert.rejects(native.resolveBinary(), error => /Could not install/.test(error.message) && !error.message.includes('secret'));
   }
   assert.equal(calls.length, 2);
-  await assert.rejects(runtime({ version: '1.2.13' }).native.resolveBinary(), /Update the official/);
-  await assert.rejects(runtime({ version: '2.0.0' }).native.resolveBinary(), /Update the official/);
-  await assert.rejects(runtime({ help: false }).native.resolveBinary(), /required FLUJO integration/);
+  await assert.rejects(runtime({ version: '1.2.13' }).native.resolveBinary(),
+    { code: 'AGY_OUTDATED', version: '1.2.13', message: /Antigravity CLI 1\.2\.13 is too old for FLUJO\. Run "agy update"/ });
+  await assert.rejects(runtime({ version: '2.0.0' }).native.resolveBinary(),
+    { code: 'AGY_UNSUPPORTED_MAJOR', version: '2.0.0', message: /newer than this FLUJO version supports.*Update FLUJO/ });
+  await assert.rejects(runtime({ version: 'garbled output' }).native.resolveBinary(), { code: 'AGY_OUTDATED', message: /^Update the official/ });
+  await assert.rejects(runtime({ help: false }).native.resolveBinary(), { code: 'AGY_INCOMPATIBLE', message: /required FLUJO integration/ });
+  await assert.rejects(runtime({ present: false, failInstall: true }).native.resolveBinary(), { code: 'AGY_MISSING' });
+});
+
+test('a slow first start after an update gets one longer attempt instead of a repair message', async () => {
+  const { native, calls } = runtime({ slowStarts: 1 });
+  assert.equal(await native.resolveBinary(), 'C:\\Users\\Owner\\AppData\\Local\\agy\\bin\\agy.exe');
+  assert.deepEqual(calls.map(call => call.options.timeout), [15000, 60000, 15000]);
+  await assert.rejects(runtime({ slowStarts: 2 }).native.resolveBinary(), { code: 'AGY_START_FAILED', message: /could not start/ });
 });

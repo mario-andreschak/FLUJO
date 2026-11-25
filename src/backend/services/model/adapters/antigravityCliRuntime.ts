@@ -1,8 +1,8 @@
 import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
-import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readStableFile } from '@/utils/readStableFile';
+import { antigravityRuntimeRoot, antigravitySessionsRoot, scheduleAntigravityRuntimeSweep } from './antigravityCliSession';
 
 export const ANTIGRAVITY_CLI_VERSION = '1.3.3+ (1.x)';
 export const ANTIGRAVITY_CLI_TIMEOUT_MS = 5 * 60 * 1000;
@@ -24,6 +24,9 @@ export interface AntigravityCliRuntime {
 export function antigravityCliSettings(apiKey: string, bridge?: AntigravityBridge): Record<string, unknown> {
   return {
     ...(apiKey ? { modelProvider: 'gemini' } : {}),
+    // Newer CLIs default to Auto mode where available, and Auto mode ignores
+    // toolPermission. FLUJO's approval boundary needs the default mode.
+    agentMode: 'default',
     toolPermission: 'request-review', artifactReviewPolicy: 'asks-for-review',
     notifications: false, showTips: false, useG1Credits: false,
     permissions: { allow: (bridge?.tools ?? []).map(tool => `mcp(flujo/${tool})`), deny: ANTIGRAVITY_NATIVE_DENIES, ask: [] },
@@ -72,6 +75,8 @@ async function seedAccountCache(destination: string): Promise<void> {
 /** Only the official single account cache may enter otherwise private configuration. */
 export async function prepareAntigravityCliRuntime(options: {
   model: string; maxTurns: number; apiKey: string; bridge?: AntigravityBridge; diagnosticsOnly?: boolean;
+  /** A kept session home: its native conversations stay, the account cache copy does not. */
+  sessionHome?: string;
 }): Promise<AntigravityCliRuntime> {
   if (options.apiKey.includes('${global:')) throw new Error('Could not resolve the selected Antigravity API key.');
   if (options.bridge) {
@@ -81,14 +86,24 @@ export async function prepareAntigravityCliRuntime(options: {
       throw new Error('Invalid private Antigravity tool bridge configuration.');
     }
   }
-  const root = path.resolve(getWorkspaceDataDir(), 'db', 'antigravity-cli-runtime');
+  const root = antigravityRuntimeRoot();
+  if (options.sessionHome && path.dirname(path.resolve(options.sessionHome)) !== antigravitySessionsRoot()) {
+    throw new Error('Invalid Antigravity session home.');
+  }
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  const home = await fs.mkdtemp(path.join(root, 'invocation-'));
+  scheduleAntigravityRuntimeSweep();
+  const home = options.sessionHome ? path.resolve(options.sessionHome) : await fs.mkdtemp(path.join(root, 'invocation-'));
+  if (options.sessionHome) await fs.mkdir(home, { recursive: true, mode: 0o700 });
   let cleaned = false;
   const cleanup = async (): Promise<void> => {
     if (cleaned) return;
-    if (path.dirname(path.resolve(home)) !== root) throw new Error('Invalid Antigravity runtime cleanup path.');
-    await fs.rm(home, { recursive: true, force: true });
+    if (options.sessionHome) {
+      await Promise.all([path.join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), path.join(home, 'tmp'), path.join(home, 'agy.log')]
+        .map(entry => fs.rm(entry, { recursive: true, force: true })));
+    } else {
+      if (path.dirname(path.resolve(home)) !== root) throw new Error('Invalid Antigravity runtime cleanup path.');
+      await fs.rm(home, { recursive: true, force: true });
+    }
     cleaned = true;
   };
   try {
