@@ -105,6 +105,18 @@ describe('OpenAI GPT-5.6 explicit prompt-cache wire', () => {
     }).messages).toBe(messages);
   });
 
+  it('keeps the system message first for MartLLM, even for an OpenAI model behind it', () => {
+    const messages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: 'system', content: 'instructions' },
+      { role: 'user', content: 'task' },
+    ];
+    const martllm = { ...model('openai/gpt-5.6', 'martllm'), adapter: 'openai' as const };
+    expect(supportsExplicitOpenAiPromptCaching(martllm)).toBe(false);
+    const prepared = prepareOpenAiPromptCacheWire(messages, martllm, { lateNodeInstruction: true });
+    expect(prepared.messages).toBe(messages);
+    expect(prepared.lateSystem).toBe(false);
+  });
+
   it('removes markers for the adapter compatibility retry', () => {
     const prepared = prepareOpenAiPromptCacheWire([
       { role: 'system', content: 'instructions' },

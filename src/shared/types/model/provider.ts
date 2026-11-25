@@ -6,6 +6,7 @@ export type ModelProvider =
   | 'azure'
   | 'openrouter'
   | 'requesty'
+  | 'martllm'
   | 'anthropic'
   | 'gemini'
   | 'mistral'
@@ -334,6 +335,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
     label: 'Requesty',
     baseUrl: 'https://router.requesty.ai/v1'
   },
+  martllm: {
+    label: 'MartLLM',
+    baseUrl: 'https://api.martllm.com/v1'
+  },
   xai: {
     label: 'X.ai',
     baseUrl: 'https://api.x.ai/v1'
@@ -531,6 +536,19 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     // name to `policy/<policy-name>` and the router applies that policy's
     // fallback chain. Policies also appear in Requesty's /v1/models listing,
     // so the autocomplete surfaces them automatically.
+  },
+  {
+    // OpenAI-compatible gateway (formerly UberLLM; api.uberllm.dev still
+    // answers). One key covers its catalogue of `vendor/model` ids, which its
+    // /models listing returns in the shape the autocomplete already reads.
+    // Not official OpenAI, so the system message keeps its usual first place.
+    id: 'martllm',
+    label: 'MartLLM',
+    provider: 'martllm',
+    adapter: 'openai',
+    sdkLabel: 'OpenAI SDK',
+    baseUrl: 'https://api.martllm.com/v1',
+    showBaseUrl: true,
   },
   {
     id: 'xai',

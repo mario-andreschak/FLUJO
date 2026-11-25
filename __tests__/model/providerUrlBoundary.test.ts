@@ -14,7 +14,7 @@ beforeEach(() => {
 afterAll(() => { global.fetch = originalFetch; });
 
 test.each(['api.openai.com', 'api.anthropic.com', 'api.mistral.ai', 'api.x.ai', 'openrouter.ai', 'requesty.ai',
-  'generativelanguage.googleapis.com', 'resource.openai.azure.com'])
+  'martllm.com', 'uberllm.dev', 'generativelanguage.googleapis.com', 'resource.openai.azure.com'])
 ('provider name %s in another host, user info, path or query cannot select that provider', domain => {
   for (const url of [`https://${domain}.attacker.example/v1`, `https://${domain}@attacker.example/v1`,
     `https://attacker.example/${domain}/v1`, `https://attacker.example/v1?provider=${domain}`]) {
