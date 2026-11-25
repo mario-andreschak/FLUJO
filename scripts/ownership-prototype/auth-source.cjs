@@ -5,21 +5,24 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
-const source = path.resolve(__dirname, '../../src/backend/services/security/ownerCredentials.ts');
-const loaded = new Module(source, module);
-loaded.filename = source;
-loaded.paths = Module._nodeModulePaths(path.dirname(source));
-loaded._compile(ts.transpileModule(fs.readFileSync(source, 'utf8'), { fileName: source,
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
-}).outputText, source);
+
+function loadSource(relative, provided = {}) {
+  const source = path.resolve(__dirname, '../../src', relative);
+  const loaded = new Module(source, module);
+  loaded.filename = source;
+  loaded.paths = Module._nodeModulePaths(path.dirname(source));
+  const nativeRequire = loaded.require.bind(loaded);
+  loaded.require = name => Object.hasOwn(provided, name) ? provided[name] : nativeRequire(name);
+  loaded._compile(ts.transpileModule(fs.readFileSync(source, 'utf8'), { fileName: source,
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
+  }).outputText, source);
+  return loaded.exports;
+}
+
+const credentials = loadSource('backend/services/security/ownerCredentials.ts');
 // Use the same semantic revision function as actual owner stream witnesses.
-const policySource = path.resolve(__dirname, '../../src/backend/services/security/ownerPolicy.ts');
-const policyModule = new Module(policySource, module);
-policyModule.filename = policySource;
-policyModule.paths = Module._nodeModulePaths(path.dirname(policySource));
-const nativeRequire = policyModule.require.bind(policyModule);
-policyModule.require = name => name === './ownerCredentials' ? loaded.exports : nativeRequire(name);
-policyModule._compile(ts.transpileModule(fs.readFileSync(policySource, 'utf8'), { fileName: policySource,
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
-}).outputText, policySource);
-module.exports = { ...loaded.exports, ownerPolicyRevision: policyModule.exports.ownerPolicyRevision };
+const policy = loadSource('backend/services/security/ownerPolicy.ts', {
+  './ownerCredentials': credentials,
+  '../../../utils/realpath': loadSource('utils/realpath.ts'),
+});
+module.exports = { ...credentials, ownerPolicyRevision: policy.ownerPolicyRevision };
