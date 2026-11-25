@@ -78,6 +78,7 @@ workaround.
 | A reopened Antigravity conversation gets the prompt only after the CLI confirms its id; an unknown id silently starts an empty one | `__tests__/model/antigravityCliProcess.test.ts`, `__tests__/model/antigravityCliIntegration.test.ts` |
 | A context summary never lets a model alone decide which user corrections or prohibitions survive, and never drops the exact receipt of an action that already ran | `requiredInstructionIds` in `src/backend/execution/flow/compaction/standingInstructions.ts`; `__tests__/model/compactionFidelity.test.ts` |
 | A burst of chat requests waits its turn (`src/utils/capacityWaitQueue.ts`); none is refused because others arrived together | `__tests__/chat/parallelChatBurst.test.ts` |
+| A Codex SDK/CLI bump re-records the real app-server messages (`npm run record:codex-protocol`, no account) and FLUJO's conversation code must still accept them | `__tests__/model/codexAppServerProtocolReplay.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 
 # Resilience over refusal

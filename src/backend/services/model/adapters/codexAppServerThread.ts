@@ -1,7 +1,7 @@
 import type { ThreadEvent, ThreadOptions, UserInput } from '@openai/codex-sdk';
 import path from 'node:path';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, CodexAppServerRpcError, CodexAppServerRequestError } from './codexAppServerProcess';
-import { codexRecord as record, codexId as id, parseCodexProtocolUsage } from './codexProtocol';
+import { codexRecord as record, codexId as id, parseCodexProtocolUsage, assertSupportedCodexServer, codexApprovalAnswer, describeCodexTurnError, CODEX_DECLINED_ELICITATION } from './codexProtocol';
 import type { CodexUsageLike } from './codexUsage';
 import type { ModelContextUsage } from '@/shared/types/model/contextUsage';
 import type { CodexAsyncUserInputResult } from './codexUserInput';
@@ -26,6 +26,8 @@ export function createCodexAppServerThread(input: {
   developerInstructions: string; resumeThreadId?: string; outputSchema?: Record<string, unknown>;
   fork?: { threadId: string; lastTurnId: string; sessionId?: string };
   onUsage(total: CodexUsageLike, context: ModelContextUsage): void;
+  /** Account-wide plan limits Codex reports during a run (one bucket per call). */
+  onRateLimits?(rateLimits: unknown): void;
   onQuestion?(questions: unknown, signal: AbortSignal): Promise<unknown>;
   onAsyncQuestion?(questions: unknown, signal: AbortSignal): Promise<CodexAsyncUserInputResult>;
   beforeContinuation?(): Promise<void>;
@@ -47,6 +49,7 @@ export function createCodexAppServerThread(input: {
   let totalUsage: CodexUsageLike | undefined;
   let completedTurnId: string | undefined;
   let nativeSessionId: string | undefined;
+  let runtimeVersion: string | undefined;
   let resumedTurnIds = new Set<string>();
   const endedTurns = new Set<string>();
   const enqueue = (message: Notification) => {
@@ -100,6 +103,12 @@ export function createCodexAppServerThread(input: {
         childCloseProof = registration.close;
       },
       onNotification: message => {
+        if (message.method === 'account/rateLimits/updated') {
+          // Account telemetry, not conversation output: it has no thread or
+          // turn, and a failing reader must never end the user's run.
+          try { input.onRateLimits?.(record(message.params).rateLimits); } catch { /* Telemetry only. */ }
+          return;
+        }
         if (message.method === 'turn/completed') {
           const params = record(message.params);
           if (params.threadId === threadId) {
@@ -113,8 +122,18 @@ export function createCodexAppServerThread(input: {
       onRequest: async (request, signal) => {
         const params = record(request.params);
         const expectedTurnId = activeTurnId, expectedThreadId = threadId;
-        if (closed || signal.aborted || !expectedTurnId || endedTurns.has(expectedTurnId)
-          || params.threadId !== expectedThreadId || params.turnId !== expectedTurnId) {
+        const owned = !closed && !signal.aborted && Boolean(expectedTurnId) && !endedTurns.has(expectedTurnId!)
+          && params.threadId === expectedThreadId;
+        // Codex's own approval prompts get a typed answer, never a transport
+        // error. Declining is always safe; passing a FLUJO tool on to FLUJO's
+        // gate needs the active turn (an MCP prompt may not name its turn).
+        const approval = codexApprovalAnswer(request.method, params);
+        if (approval) {
+          if (!approval.forwardToFlujoGate) return approval.result;
+          if (owned && (params.turnId == null || params.turnId === expectedTurnId)) return approval.result;
+          return CODEX_DECLINED_ELICITATION;
+        }
+        if (!owned || !expectedTurnId || params.turnId !== expectedTurnId) {
           throw new CodexAppServerRequestError(-32602, 'User input does not belong to the active FLUJO turn.');
         }
         if (request.method !== 'item/tool/requestUserInput' || !input.onQuestion) {
@@ -129,9 +148,11 @@ export function createCodexAppServerThread(input: {
       },
     });
     if (closed) { await child.stop(); throw new Error('Codex conversation was cancelled during startup.'); }
-    await child.request('initialize', { clientInfo: { name: 'flujo_conversation', title: 'FLUJO', version: '1' },
+    const initialized = await child.request('initialize', { clientInfo: { name: 'flujo_conversation', title: 'FLUJO', version: '1' },
       ...(input.onQuestion || input.onAsyncQuestion ? { capabilities: { experimentalApi: true } } : {}),
     });
+    // A too-old program is refused before any thread exists, so no input is sent.
+    runtimeVersion = assertSupportedCodexServer(initialized);
     child.notify('initialized');
     const params = { model: input.options.model, cwd: input.options.workingDirectory,
       approvalPolicy: 'never', sandbox: 'read-only', config: input.config,
@@ -190,6 +211,8 @@ export function createCodexAppServerThread(input: {
     usage: () => totalUsage,
     completedTurnId: () => completedTurnId,
     nativeSessionId: () => nativeSessionId,
+    /** Version the running app-server reported, once it has started. */
+    runtimeVersion: () => runtimeVersion,
     canSteer: () => Boolean(child && activeTurnId && !closed && !awaitingAsyncInput),
     /** Only a received rejection permits returning input to the pending inbox. */
     async steer(prompt: string | UserInput[]): Promise<boolean> {
@@ -355,7 +378,7 @@ export function createCodexAppServerThread(input: {
                   throw new Error(`Codex emitted an unsupported item${itemType}. Update the FLUJO integration before continuing.`);
                 }
               } else if (method === 'error') {
-                if (params.willRetry !== true) throw new Error('Codex reported a model error; the submitted input was not replayed.');
+                if (params.willRetry !== true) throw new Error(describeCodexTurnError(params.error));
               } else {
                 const turn = record(params.turn);
                 activeTurnId = undefined;
@@ -397,7 +420,8 @@ export function createCodexAppServerThread(input: {
                   // Usage can be absent; absence must not erase protocol totals or fabricate entitlement.
                   yield { type: 'turn.completed', usage: totalUsage ?? { input_tokens: 0, output_tokens: 0 } } as ThreadEvent;
                 } else if (turn.status === 'failed' || turn.status === 'interrupted') {
-                  yield { type: 'turn.failed', error: { message: turn.status === 'interrupted' ? 'Codex turn was interrupted.' : 'Codex turn failed.' } };
+                  yield { type: 'turn.failed', error: { message: turn.status === 'interrupted' ? 'Codex turn was interrupted.'
+                    : turn.error != null ? describeCodexTurnError(turn.error) : 'Codex turn failed.' } };
                 } else throw new Error('Invalid Codex terminal status.');
                 finished = true;
                 break turns;

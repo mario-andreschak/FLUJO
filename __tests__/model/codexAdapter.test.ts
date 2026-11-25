@@ -33,6 +33,12 @@ jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({
   readOrdinaryCodexVersion: jest.fn(async () => '0.162.1'),
   readCodexRuntimeCompatibility: jest.fn(async () => ({ cliVersion: '0.162.1', sdkVersion: '0.162.1', protocolContract: 'flujo-codex-app-server-v1' })),
 }));
+const recordRateLimitMock = jest.fn();
+const allowanceAccountMock = jest.fn(async () => 'codex-allowance-account');
+jest.mock('@/backend/services/model/allowance/codex', () => ({
+  readCodexAllowanceAccountKey: () => allowanceAccountMock(),
+  recordCodexRateLimitUpdate: (...args: unknown[]) => recordRateLimitMock(...args),
+}));
 // Existing SDK/private/native contract regressions retain the explicit fallback.
 // Ordinary RPC lifecycle is exercised separately in codexAppServerThread.test.ts.
 const previousAppServer = process.env.FLUJO_CODEX_APP_SERVER;
@@ -1471,6 +1477,24 @@ describe('CodexAdapter — tool bridging', () => {
     });
     expect(completion.choices[0].message.content).toBeNull();
   });
+});
+
+it('moves the allowance bar from plan limits Codex sends during an ordinary run, reading the account once', async () => {
+  process.env.FLUJO_CODEX_APP_SERVER = '1';
+  recordRateLimitMock.mockReset(); allowanceAccountMock.mockClear();
+  const first = { limitId: 'codex', primary: { usedPercent: 40 } }, second = { limitId: 'codex', primary: { usedPercent: 41 } };
+  appServerThreadMock.mockImplementation(input => ({
+    runStreamed: async () => {
+      input.onRateLimits(first); input.onRateLimits(second);
+      return { events: eventStream([threadStarted('ordinary-thread'), agentMessage('done'), turnCompleted({ input_tokens: 1, output_tokens: 1 })])() };
+    },
+    close: jest.fn(async () => {}), canSteer: () => false, usage: () => undefined, completedTurnId: () => undefined, nativeSessionId: () => undefined,
+  }));
+  const result = await new CodexAdapter().createCompletion(baseInput({ apiKey: undefined }));
+  expect(result.completion.choices[0].message.content).toBe('done');
+  await new Promise(resolve => setImmediate(resolve));
+  expect(allowanceAccountMock).toHaveBeenCalledTimes(1);
+  expect(recordRateLimitMock.mock.calls).toEqual([['codex-allowance-account', first], ['codex-allowance-account', second]]);
 });
 
 describe('CodexAdapter — SDK thread reuse', () => {

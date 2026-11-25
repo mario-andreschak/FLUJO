@@ -268,7 +268,8 @@ it('routes only an opted-in direct question for the owned active turn', async ()
   expect(request).toHaveBeenCalledWith('initialize', expect.objectContaining({ capabilities: { experimentalApi: true } }));
   await expect(callback({ id: 'wrong-thread', method: 'item/tool/requestUserInput', params: { ...params, threadId: 'other' } }, signal)).rejects.toThrow('active FLUJO turn');
   await expect(callback({ id: 'wrong-turn', method: 'item/tool/requestUserInput', params: { ...params, turnId: 'old-turn' } }, signal)).rejects.toThrow('active FLUJO turn');
-  await expect(callback({ id: 'shell', method: 'item/commandExecution/requestApproval', params }, signal)).rejects.toThrow('not enabled');
+  await expect(callback({ id: 'shell', method: 'item/commandExecution/requestApproval', params }, signal)).resolves.toEqual({ decision: 'decline' });
+  await expect(callback({ id: 'other', method: 'item/tool/unknownRequest', params }, signal)).rejects.toThrow('not enabled');
   expect(question).toHaveBeenCalledTimes(1);
   send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
   await events.next();
@@ -462,5 +463,87 @@ it('bounds a long streamed reply without queueing ignored diagnostic notificatio
   expect(collected).toHaveLength(2);
   expect(collected[0]).toMatchObject({ type: 'item.updated', item: { text: 'word '.repeat(3000) } });
   expect(collected[1].type).toBe('turn.completed');
+  await thread.close();
+});
+
+describe('Codex approval prompts keep FLUJO as the only approval gate', () => {
+  const owned = { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' };
+  const approvalCallback = async () => {
+    const thread = make(), events = await begin(thread);
+    const callback = jest.mocked(startOwnedCodexAppServer).mock.calls.at(-1)![0].onRequest!;
+    return { thread, events, callback, signal: new AbortController().signal };
+  };
+  it.each([
+    ['item/commandExecution/requestApproval', { decision: 'decline' }],
+    ['item/fileChange/requestApproval', { decision: 'decline' }],
+    ['execCommandApproval', { decision: { denied: { rejection: expect.stringContaining('FLUJO tools') } } }],
+    ['applyPatchApproval', { decision: { denied: { rejection: expect.stringContaining('FLUJO tools') } } }],
+    ['item/permissions/requestApproval', { permissions: {}, scope: 'turn' }],
+    ['item/tool/call', { success: false, contentItems: [{ type: 'inputText', text: expect.stringContaining('FLUJO tools') }] }],
+  ])('declines Codex\'s own %s with a typed answer, even outside the active turn', async (method, expected) => {
+    const { thread, events, callback, signal } = await approvalCallback();
+    await expect(callback({ id: 'own', method, params: owned }, signal)).resolves.toEqual(expected);
+    await expect(callback({ id: 'stale', method, params: { ...owned, turnId: 'old-turn', threadId: 'other' } }, signal)).resolves.toEqual(expected);
+    await events.return(undefined); await thread.close();
+  });
+  it('passes Codex\'s approval prompt for a FLUJO tool to the FLUJO gate only for the active turn', async () => {
+    const { thread, events, callback, signal } = await approvalCallback();
+    const prompt = { ...owned, serverName: 'flujo', mode: 'form', message: 'Allow write?', requestedSchema: { type: 'object', properties: {} },
+      _meta: { codex_approval_kind: 'mcp_tool_call' } };
+    const accepted = { action: 'accept', content: {}, _meta: null }, declined = { action: 'decline', content: null, _meta: null };
+    await expect(callback({ id: 'tool', method: 'mcpServer/elicitation/request', params: prompt }, signal)).resolves.toEqual(accepted);
+    // MCP prompts may not name a turn; the thread must still match.
+    await expect(callback({ id: 'no-turn', method: 'mcpServer/elicitation/request', params: { ...prompt, turnId: null } }, signal)).resolves.toEqual(accepted);
+    await expect(callback({ id: 'other-thread', method: 'mcpServer/elicitation/request', params: { ...prompt, threadId: 'other' } }, signal)).resolves.toEqual(declined);
+    await expect(callback({ id: 'old-turn', method: 'mcpServer/elicitation/request', params: { ...prompt, turnId: 'old-turn' } }, signal)).resolves.toEqual(declined);
+    // Another server, a real form, or a URL flow is never accepted on the user's behalf.
+    await expect(callback({ id: 'server', method: 'mcpServer/elicitation/request', params: { ...prompt, serverName: 'other' } }, signal)).resolves.toEqual(declined);
+    await expect(callback({ id: 'form', method: 'mcpServer/elicitation/request', params: { ...prompt, _meta: null } }, signal)).resolves.toEqual(declined);
+    await expect(callback({ id: 'url', method: 'mcpServer/elicitation/request', params: { ...prompt, mode: 'url', url: 'https://example.com' } }, signal)).resolves.toEqual(declined);
+    send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await events.next();
+    await expect(callback({ id: 'after', method: 'mcpServer/elicitation/request', params: prompt }, signal)).resolves.toEqual(declined);
+    await thread.close();
+  });
+});
+
+it('refuses a too-old Codex before any thread or turn exists', async () => {
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((method, ...args) => method === 'initialize'
+    ? Promise.resolve({ userAgent: 'flujo_conversation/0.150.0 (Linux; x86_64) unknown' }) : original(method, ...args));
+  const thread = make(), { events } = await thread.runStreamed('input', {});
+  await expect(events.next()).rejects.toThrow('version 0.150.0, but FLUJO needs version 0.162.1 or newer');
+  expect(request.mock.calls.map(([method]) => method)).toEqual(['initialize']);
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it('reports the version the running Codex names and tolerates one that does not say', async () => {
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((method, ...args) => method === 'initialize'
+    ? Promise.resolve({ userAgent: 'flujo_conversation/0.174.0-alpha.5 (Windows 10.0.19045; x86_64) unknown' }) : original(method, ...args));
+  const thread = make(), events = await begin(thread);
+  expect(thread.runtimeVersion()).toBe('0.174.0');
+  await events.return(undefined); await thread.close();
+  request.mockImplementation(original);
+  const silent = make(), silentEvents = await begin(silent);
+  expect(silent.runtimeVersion()).toBeUndefined();
+  await silentEvents.return(undefined); await silent.close();
+});
+
+it('explains a failed turn with the reason Codex gives', async () => {
+  const thread = make(), events = await begin(thread);
+  send('turn/completed', { turn: { id: 'turn-1', status: 'failed', error: { message: 'Your access token could not be refreshed.', codexErrorInfo: 'unauthorized' } } });
+  expect((await events.next()).value).toEqual({ type: 'turn.failed', error: { message:
+    'Codex refused the sign-in. Sign in to Codex again under AI Setup. Codex says: "Your access token could not be refreshed." FLUJO did not send the input again.' } });
+  await events.return(undefined); await thread.close();
+});
+
+it('keeps plan-limit updates out of the conversation stream and never fails a run over them', async () => {
+  const onRateLimits = jest.fn(() => { throw new Error('allowance store unavailable'); });
+  const thread = make({ onRateLimits }), events = await begin(thread);
+  emit({ method: 'account/rateLimits/updated', params: { rateLimits: { limitId: 'codex', primary: { usedPercent: 50 } } } });
+  send('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  expect((await events.next()).value?.type).toBe('turn.completed');
+  expect(onRateLimits).toHaveBeenCalledWith({ limitId: 'codex', primary: { usedPercent: 50 } });
   await thread.close();
 });

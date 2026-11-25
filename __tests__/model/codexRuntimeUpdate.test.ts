@@ -20,7 +20,10 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => ({
   ...jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess'),
   startOwnedCodexAppServer: jest.fn(), assertCodexOwnedProcessRegistration: jest.fn(),
 }));
+// The real conversation turn is qualified against the installed CLI in codexRuntimeProtocol.test.ts.
+jest.mock('@/backend/services/model/adapters/codexConversationQualification', () => ({ qualifyCodexConversation: jest.fn(async () => {}) }));
 import { resolveOrdinaryCodexExecutable, acquireOrdinaryCodexExecutable, qualifyCodexUpdate, readCodexRuntimeCompatibility } from '@/backend/services/model/adapters/codexRuntimeUpdate';
+import { qualifyCodexConversation } from '@/backend/services/model/adapters/codexConversationQualification';
 import { startOwnedCodexAppServer, CodexAppServerRpcError } from '@/backend/services/model/adapters/codexAppServerProcess';
 import { CODEX_APP_SERVER_CONTRACT } from '@/backend/services/model/adapters/codexProtocol';
 
@@ -83,7 +86,7 @@ it('keeps calls on the working binary while one background install qualifies, th
   expect(stop).toHaveBeenCalledTimes(1);
   expect(JSON.parse(await fs.readFile(path.join(mockWorkspace, 'db/codex-cli/current.json'), 'utf8'))).toMatchObject({ version: '0.163.0',
     compatibility: { cliVersion: '0.163.0', sdkVersion: '0.162.1', protocolContract: CODEX_APP_SERVER_CONTRACT,
-      qualificationContract: 'flujo-codex-runtime-qualification-v2' } });
+      qualificationContract: 'flujo-codex-runtime-qualification-v3' } });
   await old.release();
 });
 
@@ -177,6 +180,35 @@ it.each([undefined, new Error('malformed error framing'), new CodexAppServerRpcE
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+it.each([
+  ['a different program', 'flujo_codex_update/0.163.1 (Windows 10.0.19045; x86_64) unknown', 'different version'],
+  ['a too-old program', 'flujo_codex_update/0.150.0 (Linux; x86_64) unknown', 'needs version 0.162.1 or newer'],
+])('keeps the working CLI when the candidate app-server reports %s', async (_case, userAgent, message) => {
+  const ordinaryRequest = request.getMockImplementation()!;
+  request.mockImplementation(async (method, params) => method === 'initialize' ? { userAgent } : ordinaryRequest(method, params));
+  await expect(qualifyCodexUpdate(path.join(mockWorkspace, 'candidate'), mockWorkspace)).rejects.toThrow(message);
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls.map(([method]) => method)).toEqual(['initialize']);
+  expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toBe(mockBundled);
+  await expect(fs.stat(path.join(mockWorkspace, 'db/codex-cli/current.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('keeps the working CLI when FLUJO cannot read a conversation turn from the candidate', async () => {
+  jest.mocked(qualifyCodexConversation).mockRejectedValueOnce(new Error('Codex conversation protocol changed'));
+  expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toBe(mockBundled);
+  await expect(fs.stat(path.join(mockWorkspace, 'db/codex-cli/current.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  // The turn runs in its own process after the catalogue child has closed.
+  expect(stop.mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(qualifyCodexConversation).mock.invocationCallOrder[0]);
+  expect(jest.mocked(qualifyCodexConversation).mock.calls[0][0]).toMatchObject({ executable: expect.stringContaining('release-0.163.0-') });
+});
+
+it('admits a candidate whose app-server reports the version it was installed as', async () => {
+  const ordinaryRequest = request.getMockImplementation()!;
+  request.mockImplementation(async (method, params) => method === 'initialize'
+    ? { userAgent: 'flujo_codex_update/0.163.0 (Windows 10.0.19045; x86_64) unknown (flujo_codex_update; 1)' } : ordinaryRequest(method, params));
+  expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toContain('release-0.163.0-');
+});
+
 it('rejects a CLI whose SDK resume argument parsing fails without activating or replaying a turn', async () => {
   const ordinaryRun = mockRun.getMockImplementation()!;
   mockRun.mockImplementation(async (file, args, options) => {
@@ -194,7 +226,7 @@ it('requalifies a legacy receipt before admission, preserving its binary digest 
   expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toBe(executable);
   const admitted = JSON.parse(await fs.readFile(path.join(root, 'current.json'), 'utf8'));
   expect(admitted).toMatchObject({ ...receipt, compatibility: { sdkVersion: '0.162.1', cliVersion: receipt.version,
-    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v2' } });
+    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v3' } });
   expect(mockRun.mock.calls.filter(([, args]) => args.includes('install'))).toHaveLength(0);
   expect(stop).toHaveBeenCalledTimes(1);
   await resolveOrdinaryCodexExecutable();
@@ -203,7 +235,7 @@ it('requalifies a legacy receipt before admission, preserving its binary digest 
 
 it.each(['sdk', 'protocol', 'qualification'])('requalifies receipt admission after a %s contract changes', async kind => {
   const { root, executable } = await existingReceipt({ cliVersion: '0.163.0', sdkVersion: '0.162.1',
-    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v2' });
+    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v3' });
   expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toBe(executable);
   expect(stop).not.toHaveBeenCalled();
   if (kind === 'sdk') await sdkVersion('0.164.0');
@@ -221,7 +253,7 @@ it.each(['sdk', 'protocol', 'qualification'])('requalifies receipt admission aft
 
 it('falls back after failed SDK requalification, retains active leases, and backs off without installation or replay', async () => {
   const { root, executable } = await existingReceipt({ cliVersion: '0.163.0', sdkVersion: '0.162.1',
-    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v2' });
+    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v3' });
   const active = await acquireOrdinaryCodexExecutable();
   await resolveOrdinaryCodexExecutable({ waitForUpdate: true });
   expect(active.executable).toBe(executable);
@@ -239,7 +271,7 @@ it('falls back after failed SDK requalification, retains active leases, and back
 
 it.each([false, true])('does not reinstall a rejected receipt but still discovers a newer compatible CLI: newer=%s', async newer => {
   const { executable } = await existingReceipt({ cliVersion: '0.163.0', sdkVersion: '0.161.9',
-    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v2' });
+    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v3' });
   request.mockRejectedValueOnce(new Error('stale receipt is incompatible'));
   const ordinaryRun = mockRun.getMockImplementation()!;
   mockRun.mockImplementation(async (file, args, options) => {
@@ -262,7 +294,7 @@ it.each([false, true])('does not reinstall a rejected receipt but still discover
 
 it('refuses a changed digest even when a receipt was previously admitted in this process', async () => {
   const { root, executable } = await existingReceipt({ cliVersion: '0.163.0', sdkVersion: '0.162.1',
-    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v2' });
+    protocolContract: CODEX_APP_SERVER_CONTRACT, qualificationContract: 'flujo-codex-runtime-qualification-v3' });
   expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toBe(executable);
   const receipt = JSON.parse(await fs.readFile(path.join(root, 'current.json'), 'utf8'));
   receipt.sha256 = '0'.repeat(64);

@@ -1,0 +1,1628 @@
+{
+ "recordedWith": {
+  "cliVersion": "0.166.0",
+  "sdkVersion": "0.166.0",
+  "recordedAt": "2026-11-25",
+  "provider": "Local fixture Responses server on 127.0.0.1. No login, no account and no real model call."
+ },
+ "sessions": [
+  {
+   "name": "start",
+   "frames": [
+    {
+     "direction": "out",
+     "message": {
+      "id": 1,
+      "method": "initialize",
+      "params": {
+       "clientInfo": {
+        "name": "flujo_conversation",
+        "title": "FLUJO",
+        "version": "1"
+       }
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "id": 1,
+      "result": {
+       "userAgent": "flujo_conversation/0.166.0 (Windows 10.0.19045; x86_64) unknown (flujo_conversation; 1)",
+       "codexHome": "<CODEX_HOME>",
+       "platformFamily": "windows",
+       "platformOs": "windows"
+      }
+     }
+    },
+    {
+     "direction": "out",
+     "message": {
+      "method": "initialized",
+      "params": {}
+     }
+    },
+    {
+     "direction": "out",
+     "message": {
+      "id": 2,
+      "method": "thread/start",
+      "params": {
+       "model": "flujo-fixture-model",
+       "cwd": "<WORKSPACE>",
+       "approvalPolicy": "never",
+       "sandbox": "read-only",
+       "config": {
+        "service_tier": "default",
+        "web_search": "disabled",
+        "features": {
+         "shell_tool": false
+        }
+       },
+       "developerInstructions": "You are the FLUJO protocol recording fixture.",
+       "ephemeral": false
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "configWarning",
+      "params": {
+       "summary": "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `tools.view_image` is ignored.",
+       "details": null
+      },
+      "emittedAtMs": 1795621981565
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "remoteControl/status/changed",
+      "params": {
+       "status": "disabled",
+       "serverName": "<HOST>",
+       "installationId": "<INSTALLATION_ID>",
+       "environmentId": null
+      },
+      "emittedAtMs": 1795621981565
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "id": 2,
+      "result": {
+       "thread": {
+        "id": "01a21369-0d84-7032-804a-715ce8f925be",
+        "environments": [
+         {
+          "environmentId": "local",
+          "cwd": "<WORKSPACE>",
+          "runtimeWorkspaceRoots": [
+           "<WORKSPACE>"
+          ]
+         }
+        ],
+        "extra": null,
+        "sessionId": "01a21369-0d84-7032-804a-715ce8f925be",
+        "forkedFromId": null,
+        "parentThreadId": null,
+        "preview": "",
+        "ephemeral": false,
+        "section": null,
+        "sectionEnteredAt": null,
+        "projectId": null,
+        "historyMode": "paginated",
+        "modelProvider": "flujo_fixture",
+        "model": "flujo-fixture-model",
+        "reasoningEffort": null,
+        "createdAt": 1795621981,
+        "updatedAt": 1795621981,
+        "recencyAt": 1795621981,
+        "status": {
+         "type": "idle"
+        },
+        "path": "<CODEX_HOME>\\sessions\\2026\\11\\25\\rollout-2026-11-25T10-53-01-01a21369-0d84-7032-804a-715ce8f925be.jsonl",
+        "cwd": "<WORKSPACE>",
+        "cliVersion": "0.166.0",
+        "originator": "flujo_conversation",
+        "source": "vscode",
+        "canAcceptDirectInput": true,
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": null,
+        "gitInfo": null,
+        "name": null,
+        "daybreakEnabled": null,
+        "turns": []
+       },
+       "model": "flujo-fixture-model",
+       "modelProvider": "flujo_fixture",
+       "serviceTier": "default",
+       "disabledPluginIds": [],
+       "cwd": "<WORKSPACE>",
+       "runtimeWorkspaceRoots": [
+        "<WORKSPACE>"
+       ],
+       "instructionSources": [],
+       "approvalPolicy": "never",
+       "approvalsReviewer": "user",
+       "sandbox": {
+        "type": "readOnly",
+        "networkAccess": false
+       },
+       "activePermissionProfile": null,
+       "reasoningEffort": null,
+       "multiAgentMode": "explicitRequestOnly"
+      }
+     }
+    },
+    {
+     "direction": "out",
+     "message": {
+      "id": 3,
+      "method": "turn/start",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "model": "flujo-fixture-model",
+       "effort": "low",
+       "input": [
+        {
+         "type": "text",
+         "text": "Say the fixture reply."
+        }
+       ]
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/started",
+      "params": {
+       "thread": {
+        "id": "01a21369-0d84-7032-804a-715ce8f925be",
+        "environments": [
+         {
+          "environmentId": "local",
+          "cwd": "<WORKSPACE>",
+          "runtimeWorkspaceRoots": [
+           "<WORKSPACE>"
+          ]
+         }
+        ],
+        "extra": null,
+        "sessionId": "01a21369-0d84-7032-804a-715ce8f925be",
+        "forkedFromId": null,
+        "parentThreadId": null,
+        "preview": "",
+        "ephemeral": false,
+        "section": null,
+        "sectionEnteredAt": null,
+        "projectId": null,
+        "historyMode": "paginated",
+        "modelProvider": "flujo_fixture",
+        "model": "flujo-fixture-model",
+        "reasoningEffort": null,
+        "createdAt": 1795621981,
+        "updatedAt": 1795621981,
+        "recencyAt": 1795621981,
+        "status": {
+         "type": "idle"
+        },
+        "path": "<CODEX_HOME>\\sessions\\2026\\11\\25\\rollout-2026-11-25T10-53-01-01a21369-0d84-7032-804a-715ce8f925be.jsonl",
+        "cwd": "<WORKSPACE>",
+        "cliVersion": "0.166.0",
+        "originator": "flujo_conversation",
+        "source": "vscode",
+        "canAcceptDirectInput": true,
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": null,
+        "gitInfo": null,
+        "name": null,
+        "daybreakEnabled": null,
+        "turns": []
+       }
+      },
+      "emittedAtMs": 1795621981609
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "warning",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "message": "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `tools.view_image` is ignored."
+      },
+      "emittedAtMs": 1795621981609
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "warning",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "message": "Model metadata for `flujo-fixture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+      },
+      "emittedAtMs": 1795621981632
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "id": 3,
+      "result": {
+       "turn": {
+        "id": "01a21369-0db0-7841-85f0-e83d45d89481",
+        "rootTurnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null
+       }
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/status/changed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "status": {
+        "type": "active",
+        "activeFlags": []
+       }
+      },
+      "emittedAtMs": 1795621981730
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "turn/started",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turn": {
+        "id": "01a21369-0db0-7841-85f0-e83d45d89481",
+        "rootTurnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": 1795621981,
+        "completedAt": null,
+        "durationMs": null
+       }
+      },
+      "emittedAtMs": 1795621981730
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/started",
+      "params": {
+       "item": {
+        "type": "userMessage",
+        "id": "01a21369-0e46-7040-b23a-6d95261dfdf6",
+        "clientId": null,
+        "content": [
+         {
+          "type": "text",
+          "text": "Say the fixture reply.",
+          "text_elements": []
+         }
+        ],
+        "startedAtMs": 1795621981776,
+        "completedAtMs": null
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "startedAtMs": 1795621981776
+      },
+      "emittedAtMs": 1795621981776
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/completed",
+      "params": {
+       "item": {
+        "type": "userMessage",
+        "id": "01a21369-0e46-7040-b23a-6d95261dfdf6",
+        "clientId": null,
+        "content": [
+         {
+          "type": "text",
+          "text": "Say the fixture reply.",
+          "text_elements": []
+         }
+        ],
+        "startedAtMs": 1795621981776,
+        "completedAtMs": 1795621981776
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "completedAtMs": 1795621981776
+      },
+      "emittedAtMs": 1795621981785
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/started",
+      "params": {
+       "item": {
+        "type": "agentMessage",
+        "id": "msg_fixture_1",
+        "text": "",
+        "phase": null,
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null,
+        "startedAtMs": 1795621981795,
+        "completedAtMs": null
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "startedAtMs": 1795621981795
+      },
+      "emittedAtMs": 1795621981795
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/agentMessage/delta",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "itemId": "msg_fixture_1",
+       "delta": "Fixture "
+      },
+      "emittedAtMs": 1795621981795
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/agentMessage/delta",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "itemId": "msg_fixture_1",
+       "delta": "reply 1."
+      },
+      "emittedAtMs": 1795621981795
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/completed",
+      "params": {
+       "item": {
+        "type": "agentMessage",
+        "id": "msg_fixture_1",
+        "text": "Fixture reply 1.",
+        "phase": null,
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null,
+        "startedAtMs": 1795621981795,
+        "completedAtMs": 1795621981795
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "completedAtMs": 1795621981795
+      },
+      "emittedAtMs": 1795621981804
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "tokenUsage": {
+        "total": {
+         "totalTokens": 138,
+         "inputTokens": 120,
+         "cachedInputTokens": 40,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 18,
+         "reasoningOutputTokens": 6
+        },
+        "last": {
+         "totalTokens": 138,
+         "inputTokens": 120,
+         "cachedInputTokens": 40,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 18,
+         "reasoningOutputTokens": 6
+        },
+        "modelContextWindow": 258400
+       }
+      },
+      "emittedAtMs": 1795621981830
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "account/rateLimits/updated",
+      "params": {
+       "rateLimits": {
+        "limitId": "codex",
+        "limitName": null,
+        "normalModelSlug": null,
+        "primary": {
+         "usedPercent": 42,
+         "windowDurationMins": 300,
+         "resetsAt": 1893456000
+        },
+        "secondary": {
+         "usedPercent": 12,
+         "windowDurationMins": 10080,
+         "resetsAt": 1893542400
+        },
+        "credits": null,
+        "individualLimit": null,
+        "spendControlReached": null,
+        "planType": null,
+        "rateLimitReachedType": null
+       }
+      },
+      "emittedAtMs": 1795621981830
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/status/changed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "status": {
+        "type": "idle"
+       }
+      },
+      "emittedAtMs": 1795621981844
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "turn/completed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turn": {
+        "id": "01a21369-0db0-7841-85f0-e83d45d89481",
+        "rootTurnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+        "items": [
+         {
+          "type": "agentMessage",
+          "id": "msg_fixture_1",
+          "text": "Fixture reply 1.",
+          "phase": null,
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null,
+          "startedAtMs": 1795621981795,
+          "completedAtMs": 1795621981795
+         }
+        ],
+        "itemsView": "summary",
+        "status": "completed",
+        "error": null,
+        "startedAt": 1795621981,
+        "completedAt": 1795621981,
+        "durationMs": 201
+       }
+      },
+      "emittedAtMs": 1795621981844
+     }
+    }
+   ]
+  },
+  {
+   "name": "resume",
+   "frames": [
+    {
+     "direction": "out",
+     "message": {
+      "id": 1,
+      "method": "initialize",
+      "params": {
+       "clientInfo": {
+        "name": "flujo_conversation",
+        "title": "FLUJO",
+        "version": "1"
+       }
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "id": 1,
+      "result": {
+       "userAgent": "flujo_conversation/0.166.0 (Windows 10.0.19045; x86_64) unknown (flujo_conversation; 1)",
+       "codexHome": "<CODEX_HOME>",
+       "platformFamily": "windows",
+       "platformOs": "windows"
+      }
+     }
+    },
+    {
+     "direction": "out",
+     "message": {
+      "method": "initialized",
+      "params": {}
+     }
+    },
+    {
+     "direction": "out",
+     "message": {
+      "id": 2,
+      "method": "thread/resume",
+      "params": {
+       "model": "flujo-fixture-model",
+       "cwd": "<WORKSPACE>",
+       "approvalPolicy": "never",
+       "sandbox": "read-only",
+       "config": {
+        "service_tier": "default",
+        "web_search": "disabled",
+        "features": {
+         "shell_tool": false
+        }
+       },
+       "developerInstructions": "You are the FLUJO protocol recording fixture.",
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be"
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "configWarning",
+      "params": {
+       "summary": "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `tools.view_image` is ignored.",
+       "details": null
+      },
+      "emittedAtMs": 1795621982459
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "remoteControl/status/changed",
+      "params": {
+       "status": "disabled",
+       "serverName": "<HOST>",
+       "installationId": "<INSTALLATION_ID>",
+       "environmentId": null
+      },
+      "emittedAtMs": 1795621982459
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "deprecationNotice",
+      "params": {
+       "summary": "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.",
+       "details": null
+      },
+      "emittedAtMs": 1795621982465
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "warning",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "message": "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `tools.view_image` is ignored."
+      },
+      "emittedAtMs": 1795621982564
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/status/changed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "status": {
+        "type": "idle"
+       }
+      },
+      "emittedAtMs": 1795621982568
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "id": 2,
+      "result": {
+       "thread": {
+        "id": "01a21369-0d84-7032-804a-715ce8f925be",
+        "environments": [
+         {
+          "environmentId": "local",
+          "cwd": "<WORKSPACE>",
+          "runtimeWorkspaceRoots": [
+           "<WORKSPACE>"
+          ]
+         }
+        ],
+        "extra": null,
+        "sessionId": "01a21369-0d84-7032-804a-715ce8f925be",
+        "forkedFromId": null,
+        "parentThreadId": null,
+        "preview": "Say the fixture reply.",
+        "ephemeral": false,
+        "section": null,
+        "sectionEnteredAt": null,
+        "projectId": null,
+        "historyMode": "paginated",
+        "modelProvider": "flujo_fixture",
+        "model": "flujo-fixture-model",
+        "reasoningEffort": null,
+        "createdAt": 1795621981,
+        "updatedAt": 1795621982,
+        "recencyAt": 1795621981,
+        "status": {
+         "type": "idle"
+        },
+        "path": "\\\\?\\<CODEX_HOME>\\sessions\\2026\\11\\25\\rollout-2026-11-25T10-53-01-01a21369-0d84-7032-804a-715ce8f925be.jsonl",
+        "cwd": "<WORKSPACE>",
+        "cliVersion": "0.166.0",
+        "originator": "flujo_conversation",
+        "source": "vscode",
+        "canAcceptDirectInput": true,
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": null,
+        "gitInfo": null,
+        "name": null,
+        "daybreakEnabled": null,
+        "turns": [
+         {
+          "id": "01a21369-0db0-7841-85f0-e83d45d89481",
+          "rootTurnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+          "items": [
+           {
+            "type": "userMessage",
+            "id": "01a21369-0e46-7040-b23a-6d95261dfdf6",
+            "clientId": null,
+            "content": [
+             {
+              "type": "text",
+              "text": "Say the fixture reply.",
+              "text_elements": []
+             }
+            ],
+            "startedAtMs": 1795621981776,
+            "completedAtMs": 1795621981776
+           },
+           {
+            "type": "agentMessage",
+            "id": "msg_fixture_1",
+            "text": "Fixture reply 1.",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null,
+            "startedAtMs": 1795621981795,
+            "completedAtMs": 1795621981795
+           }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1795621981,
+          "completedAt": 1795621981,
+          "durationMs": 201
+         }
+        ]
+       },
+       "model": "flujo-fixture-model",
+       "modelProvider": "flujo_fixture",
+       "serviceTier": "default",
+       "disabledPluginIds": [],
+       "cwd": "<WORKSPACE>",
+       "runtimeWorkspaceRoots": [
+        "<WORKSPACE>"
+       ],
+       "instructionSources": [],
+       "approvalPolicy": "never",
+       "approvalsReviewer": "user",
+       "sandbox": {
+        "type": "readOnly",
+        "networkAccess": false
+       },
+       "activePermissionProfile": null,
+       "reasoningEffort": null,
+       "collaborationMode": {
+        "mode": "default",
+        "settings": {
+         "model": "flujo-fixture-model",
+         "reasoning_effort": null,
+         "developer_instructions": null
+        }
+       },
+       "multiAgentMode": "explicitRequestOnly",
+       "initialTurnsPage": null,
+       "turnsBackwardsCursor": "{\"requestedThreadId\":\"01a21369-0d84-7032-804a-715ce8f925be\",\"rolloutOrdinal\":1,\"includeAnchor\":true,\"scope\":{\"kind\":\"turns\"}}",
+       "itemsBackwardsCursor": "{\"requestedThreadId\":\"01a21369-0d84-7032-804a-715ce8f925be\",\"rolloutOrdinal\":9,\"includeAnchor\":true,\"scope\":{\"kind\":\"itemsByCreatedAtOrdinal\"}}"
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "tokenUsage": {
+        "total": {
+         "totalTokens": 138,
+         "inputTokens": 120,
+         "cachedInputTokens": 40,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 18,
+         "reasoningOutputTokens": 6
+        },
+        "last": {
+         "totalTokens": 138,
+         "inputTokens": 120,
+         "cachedInputTokens": 40,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 18,
+         "reasoningOutputTokens": 6
+        },
+        "modelContextWindow": 258400
+       }
+      },
+      "emittedAtMs": 1795621982570
+     }
+    },
+    {
+     "direction": "out",
+     "message": {
+      "id": 3,
+      "method": "turn/start",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "model": "flujo-fixture-model",
+       "effort": "low",
+       "input": [
+        {
+         "type": "text",
+         "text": "Say the next fixture reply."
+        }
+       ]
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/goal/cleared",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be"
+      },
+      "emittedAtMs": 1795621982570
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "warning",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "message": "Model metadata for `flujo-fixture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+      },
+      "emittedAtMs": 1795621982614
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "id": 3,
+      "result": {
+       "turn": {
+        "id": "01a21369-117e-7e02-847a-27e021f58048",
+        "rootTurnId": "01a21369-117e-7e02-847a-27e021f58048",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null
+       }
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/status/changed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "status": {
+        "type": "active",
+        "activeFlags": []
+       }
+      },
+      "emittedAtMs": 1795621982640
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "turn/started",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turn": {
+        "id": "01a21369-117e-7e02-847a-27e021f58048",
+        "rootTurnId": "01a21369-117e-7e02-847a-27e021f58048",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": 1795621982,
+        "completedAt": null,
+        "durationMs": null
+       }
+      },
+      "emittedAtMs": 1795621982640
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/started",
+      "params": {
+       "item": {
+        "type": "userMessage",
+        "id": "01a21369-11c0-7671-ac32-6c9bb0dffc81",
+        "clientId": null,
+        "content": [
+         {
+          "type": "text",
+          "text": "Say the next fixture reply.",
+          "text_elements": []
+         }
+        ],
+        "startedAtMs": 1795621982664,
+        "completedAtMs": null
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-117e-7e02-847a-27e021f58048",
+       "startedAtMs": 1795621982664
+      },
+      "emittedAtMs": 1795621982664
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/completed",
+      "params": {
+       "item": {
+        "type": "userMessage",
+        "id": "01a21369-11c0-7671-ac32-6c9bb0dffc81",
+        "clientId": null,
+        "content": [
+         {
+          "type": "text",
+          "text": "Say the next fixture reply.",
+          "text_elements": []
+         }
+        ],
+        "startedAtMs": 1795621982664,
+        "completedAtMs": 1795621982664
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-117e-7e02-847a-27e021f58048",
+       "completedAtMs": 1795621982664
+      },
+      "emittedAtMs": 1795621982675
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/started",
+      "params": {
+       "item": {
+        "type": "agentMessage",
+        "id": "msg_fixture_2",
+        "text": "",
+        "phase": null,
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null,
+        "startedAtMs": 1795621982680,
+        "completedAtMs": null
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-117e-7e02-847a-27e021f58048",
+       "startedAtMs": 1795621982680
+      },
+      "emittedAtMs": 1795621982680
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/agentMessage/delta",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-117e-7e02-847a-27e021f58048",
+       "itemId": "msg_fixture_2",
+       "delta": "Fixture "
+      },
+      "emittedAtMs": 1795621982680
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/agentMessage/delta",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-117e-7e02-847a-27e021f58048",
+       "itemId": "msg_fixture_2",
+       "delta": "reply 2."
+      },
+      "emittedAtMs": 1795621982680
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/completed",
+      "params": {
+       "item": {
+        "type": "agentMessage",
+        "id": "msg_fixture_2",
+        "text": "Fixture reply 2.",
+        "phase": null,
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null,
+        "startedAtMs": 1795621982680,
+        "completedAtMs": 1795621982680
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-117e-7e02-847a-27e021f58048",
+       "completedAtMs": 1795621982680
+      },
+      "emittedAtMs": 1795621982690
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-117e-7e02-847a-27e021f58048",
+       "tokenUsage": {
+        "total": {
+         "totalTokens": 396,
+         "inputTokens": 360,
+         "cachedInputTokens": 80,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 36,
+         "reasoningOutputTokens": 12
+        },
+        "last": {
+         "totalTokens": 258,
+         "inputTokens": 240,
+         "cachedInputTokens": 40,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 18,
+         "reasoningOutputTokens": 6
+        },
+        "modelContextWindow": 258400
+       }
+      },
+      "emittedAtMs": 1795621982715
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "account/rateLimits/updated",
+      "params": {
+       "rateLimits": {
+        "limitId": "codex",
+        "limitName": null,
+        "normalModelSlug": null,
+        "primary": {
+         "usedPercent": 42,
+         "windowDurationMins": 300,
+         "resetsAt": 1893456000
+        },
+        "secondary": {
+         "usedPercent": 12,
+         "windowDurationMins": 10080,
+         "resetsAt": 1893542400
+        },
+        "credits": null,
+        "individualLimit": null,
+        "spendControlReached": null,
+        "planType": null,
+        "rateLimitReachedType": null
+       }
+      },
+      "emittedAtMs": 1795621982715
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/status/changed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "status": {
+        "type": "idle"
+       }
+      },
+      "emittedAtMs": 1795621982727
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "turn/completed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turn": {
+        "id": "01a21369-117e-7e02-847a-27e021f58048",
+        "rootTurnId": "01a21369-117e-7e02-847a-27e021f58048",
+        "items": [
+         {
+          "type": "agentMessage",
+          "id": "msg_fixture_2",
+          "text": "Fixture reply 2.",
+          "phase": null,
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null,
+          "startedAtMs": 1795621982680,
+          "completedAtMs": 1795621982680
+         }
+        ],
+        "itemsView": "summary",
+        "status": "completed",
+        "error": null,
+        "startedAt": 1795621982,
+        "completedAt": 1795621982,
+        "durationMs": 103
+       }
+      },
+      "emittedAtMs": 1795621982727
+     }
+    }
+   ]
+  },
+  {
+   "name": "usage-limit",
+   "frames": [
+    {
+     "direction": "out",
+     "message": {
+      "id": 4,
+      "method": "turn/start",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "model": "flujo-fixture-model",
+       "effort": "low",
+       "input": [
+        {
+         "type": "text",
+         "text": "FLUJO_FIXTURE_USAGE_LIMIT"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "warning",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "message": "Model metadata for `flujo-fixture-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+      },
+      "emittedAtMs": 1795621982746
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "id": 4,
+      "result": {
+       "turn": {
+        "id": "01a21369-120d-7c41-9a0d-64816fa27a10",
+        "rootTurnId": "01a21369-120d-7c41-9a0d-64816fa27a10",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null
+       }
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/status/changed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "status": {
+        "type": "active",
+        "activeFlags": []
+       }
+      },
+      "emittedAtMs": 1795621982755
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "turn/started",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turn": {
+        "id": "01a21369-120d-7c41-9a0d-64816fa27a10",
+        "rootTurnId": "01a21369-120d-7c41-9a0d-64816fa27a10",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": 1795621982,
+        "completedAt": null,
+        "durationMs": null
+       }
+      },
+      "emittedAtMs": 1795621982755
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/started",
+      "params": {
+       "item": {
+        "type": "userMessage",
+        "id": "01a21369-122f-7c11-9909-2c37cd50bc3d",
+        "clientId": null,
+        "content": [
+         {
+          "type": "text",
+          "text": "FLUJO_FIXTURE_USAGE_LIMIT",
+          "text_elements": []
+         }
+        ],
+        "startedAtMs": 1795621982777,
+        "completedAtMs": null
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-120d-7c41-9a0d-64816fa27a10",
+       "startedAtMs": 1795621982777
+      },
+      "emittedAtMs": 1795621982777
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "item/completed",
+      "params": {
+       "item": {
+        "type": "userMessage",
+        "id": "01a21369-122f-7c11-9909-2c37cd50bc3d",
+        "clientId": null,
+        "content": [
+         {
+          "type": "text",
+          "text": "FLUJO_FIXTURE_USAGE_LIMIT",
+          "text_elements": []
+         }
+        ],
+        "startedAtMs": 1795621982777,
+        "completedAtMs": 1795621982777
+       },
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-120d-7c41-9a0d-64816fa27a10",
+       "completedAtMs": 1795621982777
+      },
+      "emittedAtMs": 1795621982787
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-120d-7c41-9a0d-64816fa27a10",
+       "tokenUsage": {
+        "total": {
+         "totalTokens": 396,
+         "inputTokens": 360,
+         "cachedInputTokens": 80,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 36,
+         "reasoningOutputTokens": 12
+        },
+        "last": {
+         "totalTokens": 258,
+         "inputTokens": 240,
+         "cachedInputTokens": 40,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 18,
+         "reasoningOutputTokens": 6
+        },
+        "modelContextWindow": 258400
+       }
+      },
+      "emittedAtMs": 1795621982800
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "account/rateLimits/updated",
+      "params": {
+       "rateLimits": {
+        "limitId": "codex",
+        "limitName": null,
+        "normalModelSlug": null,
+        "primary": {
+         "usedPercent": 100,
+         "windowDurationMins": 300,
+         "resetsAt": 1893456000
+        },
+        "secondary": {
+         "usedPercent": 12,
+         "windowDurationMins": 10080,
+         "resetsAt": 1893542400
+        },
+        "credits": null,
+        "individualLimit": null,
+        "spendControlReached": null,
+        "planType": null,
+        "rateLimitReachedType": null
+       }
+      },
+      "emittedAtMs": 1795621982800
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/status/changed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "status": {
+        "type": "systemError"
+       }
+      },
+      "emittedAtMs": 1795621982800
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "error",
+      "params": {
+       "error": {
+        "message": "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at Dec 31st, 2029 7:00 PM.",
+        "codexErrorInfo": "usageLimitExceeded",
+        "additionalDetails": null,
+        "misalignment": null
+       },
+       "willRetry": false,
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turnId": "01a21369-120d-7c41-9a0d-64816fa27a10"
+      },
+      "emittedAtMs": 1795621982800
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "turn/completed",
+      "params": {
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "turn": {
+        "id": "01a21369-120d-7c41-9a0d-64816fa27a10",
+        "rootTurnId": "01a21369-120d-7c41-9a0d-64816fa27a10",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "failed",
+        "error": {
+         "message": "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at Dec 31st, 2029 7:00 PM.",
+         "codexErrorInfo": "usageLimitExceeded",
+         "additionalDetails": null,
+         "misalignment": null
+        },
+        "startedAt": 1795621982,
+        "completedAt": 1795621982,
+        "durationMs": 56
+       }
+      },
+      "emittedAtMs": 1795621982812
+     }
+    }
+   ]
+  },
+  {
+   "name": "fork",
+   "frames": [
+    {
+     "direction": "out",
+     "message": {
+      "id": 5,
+      "method": "thread/fork",
+      "params": {
+       "model": "flujo-fixture-model",
+       "cwd": "<WORKSPACE>",
+       "approvalPolicy": "never",
+       "sandbox": "read-only",
+       "config": {
+        "service_tier": "default",
+        "web_search": "disabled",
+        "features": {
+         "shell_tool": false
+        }
+       },
+       "developerInstructions": "You are the FLUJO protocol recording fixture.",
+       "threadId": "01a21369-0d84-7032-804a-715ce8f925be",
+       "lastTurnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "ephemeral": false
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "deprecationNotice",
+      "params": {
+       "summary": "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.",
+       "details": null
+      },
+      "emittedAtMs": 1795621982813
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "warning",
+      "params": {
+       "threadId": "01a21369-1268-7d30-9b8f-a0dccb78676a",
+       "message": "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `tools.view_image` is ignored."
+      },
+      "emittedAtMs": 1795621982857
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "id": 5,
+      "result": {
+       "thread": {
+        "id": "01a21369-1268-7d30-9b8f-a0dccb78676a",
+        "environments": [
+         {
+          "environmentId": "local",
+          "cwd": "<WORKSPACE>",
+          "runtimeWorkspaceRoots": [
+           "<WORKSPACE>"
+          ]
+         }
+        ],
+        "extra": null,
+        "sessionId": "01a21369-1268-7d30-9b8f-a0dccb78676a",
+        "forkedFromId": "01a21369-0d84-7032-804a-715ce8f925be",
+        "parentThreadId": null,
+        "preview": "",
+        "ephemeral": false,
+        "section": null,
+        "sectionEnteredAt": null,
+        "projectId": null,
+        "historyMode": "paginated",
+        "modelProvider": "flujo_fixture",
+        "model": "flujo-fixture-model",
+        "reasoningEffort": null,
+        "createdAt": 1795621982,
+        "updatedAt": 1795621982,
+        "recencyAt": 1795621982,
+        "status": {
+         "type": "idle"
+        },
+        "path": "<CODEX_HOME>\\sessions\\2026\\11\\25\\rollout-2026-11-25T10-53-02-01a21369-1268-7d30-9b8f-a0dccb78676a.jsonl",
+        "cwd": "<WORKSPACE>",
+        "cliVersion": "0.166.0",
+        "originator": "flujo_conversation",
+        "source": "vscode",
+        "canAcceptDirectInput": true,
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": null,
+        "gitInfo": null,
+        "name": null,
+        "daybreakEnabled": null,
+        "turns": [
+         {
+          "id": "01a21369-0db0-7841-85f0-e83d45d89481",
+          "rootTurnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+          "items": [
+           {
+            "type": "userMessage",
+            "id": "01a21369-0e46-7040-b23a-6d95261dfdf6",
+            "clientId": null,
+            "content": [
+             {
+              "type": "text",
+              "text": "Say the fixture reply.",
+              "text_elements": []
+             }
+            ],
+            "startedAtMs": 1795621981776,
+            "completedAtMs": 1795621981776
+           },
+           {
+            "type": "agentMessage",
+            "id": "msg_fixture_1",
+            "text": "Fixture reply 1.",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null,
+            "startedAtMs": 1795621981795,
+            "completedAtMs": 1795621981795
+           }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1795621981,
+          "completedAt": 1795621981,
+          "durationMs": 201
+         }
+        ]
+       },
+       "model": "flujo-fixture-model",
+       "modelProvider": "flujo_fixture",
+       "serviceTier": "default",
+       "disabledPluginIds": [],
+       "cwd": "<WORKSPACE>",
+       "runtimeWorkspaceRoots": [
+        "<WORKSPACE>"
+       ],
+       "instructionSources": [],
+       "approvalPolicy": "never",
+       "approvalsReviewer": "user",
+       "sandbox": {
+        "type": "readOnly",
+        "networkAccess": false
+       },
+       "activePermissionProfile": null,
+       "reasoningEffort": null,
+       "multiAgentMode": "explicitRequestOnly"
+      }
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+       "threadId": "01a21369-1268-7d30-9b8f-a0dccb78676a",
+       "turnId": "01a21369-0db0-7841-85f0-e83d45d89481",
+       "tokenUsage": {
+        "total": {
+         "totalTokens": 138,
+         "inputTokens": 120,
+         "cachedInputTokens": 40,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 18,
+         "reasoningOutputTokens": 6
+        },
+        "last": {
+         "totalTokens": 138,
+         "inputTokens": 120,
+         "cachedInputTokens": 40,
+         "cacheWriteInputTokens": 0,
+         "outputTokens": 18,
+         "reasoningOutputTokens": 6
+        },
+        "modelContextWindow": 258400
+       }
+      },
+      "emittedAtMs": 1795621982861
+     }
+    },
+    {
+     "direction": "in",
+     "message": {
+      "method": "thread/started",
+      "params": {
+       "thread": {
+        "id": "01a21369-1268-7d30-9b8f-a0dccb78676a",
+        "environments": [
+         {
+          "environmentId": "local",
+          "cwd": "<WORKSPACE>",
+          "runtimeWorkspaceRoots": [
+           "<WORKSPACE>"
+          ]
+         }
+        ],
+        "extra": null,
+        "sessionId": "01a21369-1268-7d30-9b8f-a0dccb78676a",
+        "forkedFromId": "01a21369-0d84-7032-804a-715ce8f925be",
+        "parentThreadId": null,
+        "preview": "",
+        "ephemeral": false,
+        "section": null,
+        "sectionEnteredAt": null,
+        "projectId": null,
+        "historyMode": "paginated",
+        "modelProvider": "flujo_fixture",
+        "model": "flujo-fixture-model",
+        "reasoningEffort": null,
+        "createdAt": 1795621982,
+        "updatedAt": 1795621982,
+        "recencyAt": 1795621982,
+        "status": {
+         "type": "idle"
+        },
+        "path": "<CODEX_HOME>\\sessions\\2026\\11\\25\\rollout-2026-11-25T10-53-02-01a21369-1268-7d30-9b8f-a0dccb78676a.jsonl",
+        "cwd": "<WORKSPACE>",
+        "cliVersion": "0.166.0",
+        "originator": "flujo_conversation",
+        "source": "vscode",
+        "canAcceptDirectInput": true,
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": null,
+        "gitInfo": null,
+        "name": null,
+        "daybreakEnabled": null,
+        "turns": []
+       }
+      },
+      "emittedAtMs": 1795621982861
+     }
+    }
+   ]
+  }
+ ]
+}
