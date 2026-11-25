@@ -363,7 +363,7 @@
   },
   "src/backend/services/security/bundledFlujoWorkload.ts": {
     "flujo/no-sync-fs": {
-      "count": 55
+      "count": 34
     }
   },
   "src/backend/services/security/isolatedMcp.ts": {
