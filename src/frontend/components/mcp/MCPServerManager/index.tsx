@@ -115,8 +115,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     updateServer,
     setServerFolder,
     setServerFavorite,
-    saveEnv,
-    loadServers,
+    saveEnv
   } = useServerStatus();
   // #1230: drop a .mcpb file on this page, or pick it from the Import menu.
   const bundleInstaller = useMcpBundleInstaller({ onInstalled: () => { void loadServers(); } });
