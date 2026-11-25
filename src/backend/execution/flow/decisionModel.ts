@@ -81,20 +81,24 @@ function addUsage(
   nodeKey: string,
   usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null | undefined,
 ): void {
-  if (!usage) return;
+  const totals = sharedState.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, byNode: {} };
+  sharedState.usage = totals;
+  const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
+  totals.byNode[nodeKey] = node;
+  if (!usage) {
+    totals.unreportedCalls = (totals.unreportedCalls ?? 0) + 1;
+    node.unreportedCalls = (node.unreportedCalls ?? 0) + 1;
+    return;
+  }
   const prompt = usage.prompt_tokens ?? 0;
   const completion = usage.completion_tokens ?? 0;
   const total = usage.total_tokens ?? prompt + completion;
-  const totals = sharedState.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, byNode: {} };
   totals.promptTokens += prompt;
   totals.completionTokens += completion;
   totals.totalTokens += total;
-  const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
   node.promptTokens += prompt;
   node.completionTokens += completion;
   node.totalTokens += total;
-  totals.byNode[nodeKey] = node;
-  sharedState.usage = totals;
 }
 
 type ModelDecisionEntry = Extract<StaticEntry, { kind: 'modelDecision' }>;

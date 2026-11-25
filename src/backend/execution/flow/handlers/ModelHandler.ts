@@ -1964,6 +1964,7 @@ export class ModelHandler {
     // OpenAI-path sibling #89). The mapping is a small pure helper so it can be
     // unit-tested (see __tests__/model/openaiUsageMapping.test.ts).
     const usage = mapOpenAiUsage(modelResponse.fullResponse?.usage);
+    const usageReport = usage ? { usage } : { usageNotReported: true as const };
 
     const projectMcpToolCalls = (toolCalls: unknown): FlujoChatMessage['mcpToolCalls'] => {
       if (!Array.isArray(toolCalls)) return undefined;
@@ -2011,7 +2012,7 @@ export class ModelHandler {
             ? { mcpToolCalls: projectMcpToolCalls((msg as { tool_calls?: unknown }).tool_calls) }
             : {}),
           ...(transcriptMedia?.length ? { media: transcriptMedia } : {}),
-          ...(isLast && usage ? { usage } : {}),
+          ...(isLast ? usageReport : {}),
           ...(isLast && modelResponse.contextUsage !== undefined ? { contextUsage: modelResponse.contextUsage } : {}),
           ...(isLast && msg.role === 'assistant' ? cutOff : {}),
         } as FlujoChatMessage);
@@ -2050,7 +2051,7 @@ export class ModelHandler {
           : {}),
         timestamp: Date.now(), // Add timestamp
         processNodeId: nodeId, // Attach the process node ID
-        ...(usage ? { usage } : {}),
+        ...usageReport,
         ...(modelResponse.contextUsage !== undefined ? { contextUsage: modelResponse.contextUsage } : {}),
         ...cutOff,
       } as unknown as FlujoChatMessage;

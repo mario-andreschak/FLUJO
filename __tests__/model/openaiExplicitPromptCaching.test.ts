@@ -1,15 +1,24 @@
 import type OpenAI from 'openai';
 import type { Model } from '@/shared/types/model';
 import {
+  isOfficialOpenAiEndpoint,
   prepareOpenAiPromptCacheWire,
   stripOpenAiPromptCacheBreakpoints,
   supportsExplicitOpenAiPromptCaching,
 } from '@/backend/services/model/adapters/openaiPromptCaching';
 
+const BASE_URLS: Partial<Record<NonNullable<Model['provider']>, string>> = {
+  openai: 'https://api.openai.com/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  litellm: 'http://localhost:4000/v1',
+  martllm: 'https://api.martllm.com/v1',
+};
+
 const model = (
   name: string,
   provider: Model['provider'] = 'openai',
-): Pick<Model, 'name' | 'provider' | 'adapter'> => ({ name, provider });
+  baseUrl = BASE_URLS[provider!],
+): Pick<Model, 'name' | 'provider' | 'adapter' | 'baseUrl'> => ({ name, provider, baseUrl });
 
 const breakpointOf = (message: OpenAI.ChatCompletionMessageParam) => {
   const content = (message as { content?: unknown }).content;
@@ -125,5 +134,56 @@ describe('OpenAI GPT-5.6 explicit prompt-cache wire', () => {
     const stripped = stripOpenAiPromptCacheBreakpoints(prepared.messages);
     expect(breakpointOf(stripped[0])).toBeUndefined();
     expect(stripped.at(-1)).toMatchObject({ role: 'system', content: 'instructions' });
+  });
+});
+
+describe('which servers get the OpenAI cache order (issue #1367)', () => {
+  const VLLM = 'http://10.0.0.5:8000/v1';
+  const conversation: OpenAI.ChatCompletionMessageParam[] = [
+    { role: 'system', content: 'You are a worker.' },
+    { role: 'user', content: 'task' },
+  ];
+
+  it('decides from the server address, not the provider name', () => {
+    expect(isOfficialOpenAiEndpoint('https://api.openai.com/v1')).toBe(true);
+    expect(isOfficialOpenAiEndpoint('https://us.api.openai.com/v1')).toBe(true);
+    expect(isOfficialOpenAiEndpoint(undefined)).toBe(true);
+    expect(isOfficialOpenAiEndpoint('')).toBe(true);
+    expect(isOfficialOpenAiEndpoint(VLLM)).toBe(false);
+    expect(isOfficialOpenAiEndpoint('https://api.openai.com.example.net/v1')).toBe(false);
+    expect(isOfficialOpenAiEndpoint('not a url')).toBe(false);
+  });
+
+  it('keeps the system message first for a self-hosted server saved as "openai"', () => {
+    const qwen = model('Qwen/Qwen3-32B', 'openai', VLLM);
+    const prepared = prepareOpenAiPromptCacheWire(conversation, qwen, { lateNodeInstruction: true });
+    expect(prepared.messages).toBe(conversation);
+    expect(prepared.lateSystem).toBe(false);
+    expect(supportsExplicitOpenAiPromptCaching(model('gpt-5.6', 'openai', VLLM))).toBe(false);
+    expect(prepareOpenAiPromptCacheWire(conversation, { ...qwen, adapter: 'openai-responses' }, {
+      lateNodeInstruction: true,
+    }).messages).toBe(conversation);
+  });
+
+  it('lets Azure OpenAI move it only for GPT models', () => {
+    const azure = 'https://flujo-test.openai.azure.com/openai/v1';
+    expect(prepareOpenAiPromptCacheWire(conversation, model('gpt-5.6', 'openai', azure), {
+      lateNodeInstruction: true,
+    }).messages.map(message => message.role)).toEqual(['user', 'system']);
+    expect(prepareOpenAiPromptCacheWire(conversation, model('DeepSeek-R1', 'openai', azure), {
+      lateNodeInstruction: true,
+    }).messages).toBe(conversation);
+  });
+
+  it('follows OPENAI_BASE_URL when the model has no address of its own', () => {
+    const saved = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = VLLM;
+    try {
+      expect(isOfficialOpenAiEndpoint(undefined)).toBe(false);
+      expect(isOfficialOpenAiEndpoint('https://api.openai.com/v1')).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = saved;
+    }
   });
 });

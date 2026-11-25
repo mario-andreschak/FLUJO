@@ -57,6 +57,7 @@ import {
   StatisticsSortField,
   StatisticsStatusFilter,
   StatisticsSubflowMode,
+  StatisticsUsageTotals,
 } from '@/shared/types/statistics';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
@@ -358,6 +359,11 @@ function TimeSeries({
   );
 }
 
+/** Model calls ran, but their AI servers sent no token counts: that is not "0 tokens". */
+function tokensNotReported(usage: StatisticsUsageTotals): boolean {
+  return usage.totalTokens === 0 && (usage.unreportedCalls ?? 0) > 0;
+}
+
 interface RankingTableProps {
   title: string;
   rows: StatisticsRankingRow[];
@@ -374,6 +380,7 @@ function RankingTable({ title, rows, selectedIds, mode, onSelect, credentials = 
   const subflowMode = mode === 'subflows';
   const runMode = mode === 'runs';
   const compact = (value: number) => formatNumber(value, { notation: 'compact', maximumFractionDigits: 1 });
+  const tokens = (usage: StatisticsUsageTotals) => tokensNotReported(usage) ? t('statistics.tokensNotReported') : compact(usage.totalTokens);
   const duration = (value: number) => formatDuration(value, formatNumber, (days) => tp('statistics.duration.days', days, {
     value: formatNumber(days, { maximumFractionDigits: 1 }),
   }));
@@ -416,7 +423,7 @@ function RankingTable({ title, rows, selectedIds, mode, onSelect, credentials = 
       formatNumber(row.runs),
       formatNumber(row.errors),
       formatNumber(row.schedulerSkips),
-      compact(row.usage.totalTokens),
+      tokens(row.usage),
       duration(row.runDuration.totalMs),
       formatNumber(row.toolFailures),
     ]
@@ -424,7 +431,7 @@ function RankingTable({ title, rows, selectedIds, mode, onSelect, credentials = 
       ? [
         formatNumber(row.providerAttempts),
         formatNumber(row.providerErrors),
-        compact(row.usage.totalTokens),
+        tokens(row.usage),
         duration(row.providerDuration.totalMs),
         formatPercent(row.peakContextUtilization, formatNumber),
       ]
@@ -441,7 +448,7 @@ function RankingTable({ title, rows, selectedIds, mode, onSelect, credentials = 
           formatNumber(row.subflowCalls ?? 0),
           formatNumber(row.subflowFailures ?? 0),
           duration(row.subflowDuration?.totalMs ?? 0),
-          compact(row.usage.totalTokens),
+          tokens(row.usage),
         ]);
 
   return (
@@ -1044,8 +1051,10 @@ export default function Statistics() {
             />
             <SummaryCard
               label={t('statistics.tokens')}
-              value={compact(data.summary.usage.totalTokens)}
-              detail={t('statistics.inputOutputTokens', { input: compact(data.summary.usage.inputTokens), output: compact(data.summary.usage.outputTokens) })}
+              value={tokensNotReported(data.summary.usage) ? t('statistics.tokensNotReported') : compact(data.summary.usage.totalTokens)}
+              detail={tokensNotReported(data.summary.usage)
+                ? t('statistics.tokensNotReportedHelp', { count: formatNumber(data.summary.usage.unreportedCalls ?? 0) })
+                : t('statistics.inputOutputTokens', { input: compact(data.summary.usage.inputTokens), output: compact(data.summary.usage.outputTokens) })}
             />
             <SummaryCard
               label={t('statistics.runWallClock')}

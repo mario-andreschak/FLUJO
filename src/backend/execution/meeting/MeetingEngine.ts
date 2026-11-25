@@ -474,6 +474,7 @@ function addUsage(target: UsageTotals, source: UsageTotals, prefix: string): voi
   target.costUsd += source.costUsd;
   target.cacheReadTokens = (target.cacheReadTokens ?? 0) + (source.cacheReadTokens ?? 0);
   target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + (source.cacheWriteTokens ?? 0);
+  if (source.unreportedCalls) target.unreportedCalls = (target.unreportedCalls ?? 0) + source.unreportedCalls;
   for (const [nodeId, node] of Object.entries(source.byNode)) {
     target.byNode[`${prefix}:${nodeId}`] = { ...node };
   }

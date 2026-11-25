@@ -220,6 +220,8 @@ export interface Conversation {
     cacheReadTokens?: number;
     /** Cache-write tokens (subset of promptTokens) — fresh, but called out separately. */
     cacheWriteTokens?: number;
+    /** Model calls whose AI server sent no token counts; shown as "not reported", not 0. */
+    unreportedCalls?: number;
     byNode?: Record<string, {
       promptTokens: number;
       completionTokens: number;
@@ -227,6 +229,7 @@ export interface Conversation {
       costUsd?: number;
       cacheReadTokens?: number;
       cacheWriteTokens?: number;
+      unreportedCalls?: number;
     }>;
   };
   /** Latest individual model request and effective runtime window, when known. */
@@ -2090,6 +2093,7 @@ const Chat: React.FC = () => {
     }
     setLiveStats(prev => ({
       totalTokens: prev?.totalTokens ?? 0,
+      ...(prev?.tokensNotReported ? { tokensNotReported: true } : {}),
       activeNode: toolProgressStatus(event.name, event.message),
       startedAt: prev?.startedAt ?? Date.now(),
       lastEventAt: Date.now(),
@@ -2151,6 +2155,7 @@ const Chat: React.FC = () => {
     setDetailedConversation(prev => prev ? applyModelDeltaBatch(prev, pending) : prev);
     setLiveStats(prev => ({
       totalTokens: prev?.totalTokens ?? 0,
+      ...(prev?.tokensNotReported ? { tokensNotReported: true } : {}),
       activeNode: prev?.activeNode ?? null,
       startedAt: prev?.startedAt ?? Date.now(),
       lastEventAt: Date.now(),
@@ -2245,6 +2250,7 @@ const Chat: React.FC = () => {
     const touch = (patch: Partial<{ totalTokens: number; activeNode: string | null }>) =>
       setLiveStats(prev => ({
         totalTokens: patch.totalTokens ?? prev?.totalTokens ?? 0,
+        ...(prev?.tokensNotReported ? { tokensNotReported: true } : {}),
         activeNode: patch.activeNode !== undefined ? patch.activeNode : (prev?.activeNode ?? null),
         startedAt: prev?.startedAt ?? Date.now(),
         lastEventAt: Date.now(),
@@ -2404,6 +2410,7 @@ const Chat: React.FC = () => {
             0,
             (event.totalTokens || 0) - (event.cacheReadTokens || 0),
           ),
+          ...(prev?.tokensNotReported || event.notReported ? { tokensNotReported: true } : {}),
           activeNode: prev?.activeNode ?? null,
           startedAt: prev?.startedAt ?? Date.now(),
           lastEventAt: Date.now(),

@@ -229,6 +229,13 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
   };
 
   /**
+   * Display-only: the AI server answered this model call without saying how
+   * many tokens it used, so the chat says "not reported" instead of counting 0.
+   * Never sent to a model.
+   */
+  usageNotReported?: true;
+
+  /**
    * Provider-neutral media attached to or generated with this message.
    * Generated payloads are normally persisted as run resources, leaving only
    * a lightweight URL/resourceUri here rather than base64 in conversation JSON.

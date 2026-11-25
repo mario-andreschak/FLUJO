@@ -509,7 +509,7 @@ export function toApiMessages(
   for (let index = 0; index < stripped.length; index++) {
     const message = stripped[index];
     const sourceIndex = strippedIndexes?.[index];
-    const { id, timestamp, disabled, processNodeId, depth, usage, contextUsage, cutOff, injected, agentMessage, media, providerMetadata, ...wire } = message;
+    const { id, timestamp, disabled, processNodeId, depth, usage, usageNotReported, contextUsage, cutOff, injected, agentMessage, media, providerMetadata, ...wire } = message;
     const rest = preserveProviderMetadata && providerMetadata ? { ...wire, providerMetadata } : wire;
 
     if (rest.role === 'tool') {

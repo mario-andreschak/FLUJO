@@ -19,7 +19,8 @@ Here a user chats. They can talk to one of their saved agents, or start a Quick 
 - `talk-copy-link`: "Copy link to this chat" in the top bar, shown only while a conversation is open.
 - `talk-delete`: "Delete conversation" on a sidebar row, with a confirmation.
 - `talk-project-folder`: the folder chip under the message box shows the folder this chat's agents work in (project, branch, uncommitted changes), or "No project". Its menu changes the project, moves the chat into a worktree, switches or creates a branch, and copies the path. Each chat keeps its own folder. When the agents cannot use the folder, the chip turns orange with a warning sign and the menu says why: the folder "cannot be found" (deleted, renamed or its drive is not connected), or "Restrict MCP filesystem access to configured roots" is on and the folder is outside your projects. The menu then also offers "Add project".
-- `talk-cut-off-notice`: when a reply stops early because it reached the model's length limit, the reply stays and a grey note under it says "The answer was cut off because it hit the length limit. Ask it to continue." It is not an error banner.
+- `talk-cut-off-notice`: when a reply stops early because it reached the model's length limit, the reply stays and a grey note under it says "The answer was cut off because it hit the length limit. Ask it to continue." It is not an error banner. A tool call the limit cut in half is dropped, never run.
+- `talk-token-counts`: the header chip shows input and output tokens. When the AI server sends no token counts (some self-hosted servers), it says "Tokens not reported" instead of 0, and the running indicator says the same.
 
 ## How to get to it (user POV)
 

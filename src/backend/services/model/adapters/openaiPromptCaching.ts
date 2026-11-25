@@ -17,21 +17,49 @@ export interface PreparedOpenAiPromptCacheWire {
   lateSystem: boolean;
 }
 
-function isOfficialOpenAiChatCompletion(
-  model: Pick<Model, 'provider' | 'adapter' | 'name'>,
-): boolean {
+type CacheWireModel = Pick<Model, 'provider' | 'adapter' | 'name' | 'baseUrl'>;
+
+const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+const GPT_FAMILY = /(?:^|\/)gpt-\d+/i;
+
+function hostOf(baseUrl: string): string | undefined {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when requests go to OpenAI's own servers. An empty address uses the
+ * OpenAI SDK's default, which is OpenAI unless `OPENAI_BASE_URL` says otherwise.
+ * The provider name never decides this: a self-hosted server may be saved as
+ * "openai" and still needs its messages in the order they were written.
+ */
+export function isOfficialOpenAiEndpoint(baseUrl: string | undefined): boolean {
+  const host = hostOf(baseUrl?.trim() || process.env.OPENAI_BASE_URL?.trim() || OPENAI_DEFAULT_BASE_URL);
+  return host === 'api.openai.com' || Boolean(host?.endsWith('.api.openai.com'));
+}
+
+/** Azure OpenAI resources also serve other vendors' models, so they need a GPT name too. */
+function isAzureOpenAiEndpoint(baseUrl: string | undefined): boolean {
+  const host = baseUrl ? hostOf(baseUrl.trim()) : undefined;
+  return Boolean(host && ['.openai.azure.com', '.openai.azure.us'].some(suffix => host.endsWith(suffix)));
+}
+
+function isOfficialOpenAiChatCompletion(model: CacheWireModel): boolean {
   const compatible = !model.adapter || model.adapter === 'openai' || model.adapter === 'openai-responses';
-  return compatible && (model.provider === 'openai' ||
-    (model.provider === 'litellm' && /(?:^|\/)gpt-\d+/i.test(model.name)));
+  if (!compatible) return false;
+  if (isOfficialOpenAiEndpoint(model.baseUrl)) return true;
+  // A LiteLLM gateway or an Azure OpenAI resource passes GPT models through to OpenAI's models.
+  return (model.provider === 'litellm' || isAzureOpenAiEndpoint(model.baseUrl)) && GPT_FAMILY.test(model.name);
 }
 
 /**
  * OpenAI introduced explicit prompt-cache breakpoints in the GPT-5.6 family.
  * Older models reject both the request option and the per-content marker.
  */
-export function supportsExplicitOpenAiPromptCaching(
-  model: Pick<Model, 'provider' | 'name' | 'adapter'>,
-): boolean {
+export function supportsExplicitOpenAiPromptCaching(model: CacheWireModel): boolean {
   if (!isOfficialOpenAiChatCompletion(model)) return false;
   const match = model.name.toLowerCase().match(/(?:^|\/)gpt-(\d+)(?:\.(\d+))?/);
   if (!match) return false;
@@ -113,12 +141,13 @@ export function stripOpenAiPromptCacheBreakpoints(
  * GPT-5.6+ additionally receives explicit markers/options. Earlier cacheable
  * OpenAI models still benefit from the history-first ordering through their
  * automatic longest-prefix matching, but receive no unsupported controls.
- * OpenAI-compatible gateways retain conventional system-first ordering because
- * they may impose stricter role-order rules.
+ * Every other server, including a self-hosted one saved under the provider
+ * "openai", keeps the system message first: many chat templates (Qwen on vLLM,
+ * for example) refuse a system message anywhere else.
  */
 export function prepareOpenAiPromptCacheWire(
   messages: OpenAI.ChatCompletionMessageParam[],
-  model: Pick<Model, 'provider' | 'name' | 'adapter'>,
+  model: CacheWireModel,
   options: { lateNodeInstruction: boolean },
 ): PreparedOpenAiPromptCacheWire {
   if (!options.lateNodeInstruction || !isOfficialOpenAiChatCompletion(model)) {

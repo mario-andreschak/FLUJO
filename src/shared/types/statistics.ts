@@ -676,6 +676,8 @@ export interface StatisticsUsageTotals {
   totalTokens: number;
   cachedInputTokens: number;
   cacheWriteTokens: number;
+  /** Finished model calls whose AI server sent no token counts; they add nothing above. */
+  unreportedCalls?: number;
 }
 
 /**

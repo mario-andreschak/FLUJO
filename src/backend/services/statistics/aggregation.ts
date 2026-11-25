@@ -502,6 +502,8 @@ export function _clearStatisticsAggregateCacheForTests(): void {
   aggregateCache.clear();
 }
 
+const TOKEN_TOTAL_KEYS = ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cacheWriteTokens'] as const;
+
 function emptyUsage(): StatisticsUsageTotals {
   return {
     inputTokens: 0,
@@ -716,8 +718,11 @@ function mergeSummary(target: MutableSummary, source: MutableSummary): void {
   target.subflowFailures += source.subflowFailures;
   target.subflowIncomplete += source.subflowIncomplete;
   target.runsIncomplete += source.runsIncomplete;
-  for (const key of Object.keys(target.usage) as (keyof StatisticsUsageTotals)[]) {
+  for (const key of TOKEN_TOTAL_KEYS) {
     target.usage[key] += source.usage[key];
+  }
+  if (source.usage.unreportedCalls) {
+    target.usage.unreportedCalls = (target.usage.unreportedCalls ?? 0) + source.usage.unreportedCalls;
   }
   target.peakContextUtilization = Math.max(
     target.peakContextUtilization,
@@ -782,6 +787,11 @@ function addAttempt(target: MutableSummary, attempt: AttemptContribution): void 
   }
   target.durations.providerDuration.push(attempt.durationMs);
   addUsage(target, attempt.usage);
+  const usage = attempt.usage;
+  if (attempt.outcome === 'completed'
+    && usage?.inputTokens === undefined && usage?.outputTokens === undefined && usage?.totalTokens === undefined) {
+    target.usage.unreportedCalls = (target.usage.unreportedCalls ?? 0) + 1;
+  }
   addCacheOutcome(target, attempt.cacheOutcome);
   addPhases(target, attempt.phases);
 }

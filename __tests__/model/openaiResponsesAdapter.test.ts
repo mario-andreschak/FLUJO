@@ -1044,8 +1044,11 @@ describe('optional-parameter negotiation', () => {
       error: { message: `Unsupported parameter: '${param}' is not supported with this model.` },
     });
 
-  it.each([['openai', 'gpt-5.2'], ['openrouter', 'openai/gpt-5.6']])('omits explicit controls for unsupported %s %s', async (provider, name) => {
-    await call({ ...model(name), provider } as Model, [{ role: 'user', content: 'hi' }], { promptCacheMode: 'explicit' });
+  it.each([
+    ['openai', 'gpt-5.2', 'https://api.openai.com/v1'],
+    ['openrouter', 'openai/gpt-5.6', 'https://openrouter.ai/api/v1'],
+  ])('omits explicit controls for unsupported %s %s', async (provider, name, baseUrl) => {
+    await call({ ...model(name), provider, baseUrl } as Model, [{ role: 'user', content: 'hi' }], { promptCacheMode: 'explicit' });
     expect(bodyOf(0)).not.toHaveProperty('prompt_cache_options');
     expect(JSON.stringify(bodyOf(0).input)).not.toContain('prompt_cache_breakpoint');
   });

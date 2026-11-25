@@ -453,6 +453,8 @@ export interface UsageEvent extends ExecutionEventBase {
   cacheReadTokens?: number;
   /** Subset of promptTokens written to the provider prompt cache. */
   cacheWriteTokens?: number;
+  /** The AI server did not say how many tokens this call used; the counts are 0 placeholders. */
+  notReported?: true;
 }
 /** A new message was appended to the conversation (assistant, tool result, etc.). */
 export interface MessageEvent extends ExecutionEventBase {
@@ -646,6 +648,12 @@ export interface UsageTotals {
   cacheReadTokens?: number;
   /** Sum of prompt tokens written to provider caches. */
   cacheWriteTokens?: number;
+  /**
+   * Model calls whose AI server did not say how many tokens they used. They
+   * add nothing to the sums above, so a total of 0 with calls here means
+   * "not reported", not "used nothing".
+   */
+  unreportedCalls?: number;
   byNode: Record<string, {
     promptTokens: number;
     completionTokens: number;
@@ -653,5 +661,6 @@ export interface UsageTotals {
     costUsd: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
+    unreportedCalls?: number;
   }>;
 }

@@ -196,3 +196,29 @@ describe('running tool status (#1321)', () => {
     expect(screen.getByTestId('run-status').className).toMatch(/noWrap/);
   });
 });
+
+describe('a server that sends no token counts (issue #1367)', () => {
+  it('says "not reported" instead of 0 tokens', () => {
+    const now = Date.now();
+    render(
+      <LiveRunIndicator
+        liveStats={{ totalTokens: 0, tokensNotReported: true, activeNode: 'Reply', startedAt: now, lastEventAt: now }}
+        onStop={() => undefined}
+      />,
+    );
+    expect(screen.getByText(/^Tokens not reported · \d+ seconds? elapsed$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^0 fresh tokens/)).not.toBeInTheDocument();
+  });
+
+  it('shows the count once some calls were counted', () => {
+    const now = Date.now();
+    render(
+      <LiveRunIndicator
+        liveStats={{ totalTokens: 42, tokensNotReported: true, activeNode: 'Reply', startedAt: now, lastEventAt: now }}
+        onStop={() => undefined}
+      />,
+    );
+    expect(screen.getByText(/^42 fresh tokens · /)).toBeInTheDocument();
+    expect(screen.queryByText(/Tokens not reported/)).not.toBeInTheDocument();
+  });
+});
