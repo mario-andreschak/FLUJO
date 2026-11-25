@@ -31,6 +31,8 @@ export interface ServerModalProps {
   /** Persist the (streamable) server and start its OAuth flow without closing the modal
    * until it completes. Bound to the manager, which owns the store + modal state. */
   onSaveAndAuthenticate?: (config: MCPServerConfig) => Promise<SaveAndAuthenticateResult>;
+  /** Multi-user mode (#575): load the newest server list again (after a restore from the change history). */
+  onReload?: () => void | Promise<void>;
 }
 
 export interface MessageState {

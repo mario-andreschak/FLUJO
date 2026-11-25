@@ -104,6 +104,10 @@ import {
 import type { Model } from '@/shared/types/model';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useEditLease } from '@/frontend/hooks/useEditLease';
+import { clearEditBase, flowRevision, setEditBase } from '@/frontend/services/sharedItems';
+import EditingNotice from '@/frontend/components/shared/sharedEditing/EditingNotice';
+import ChangeHistoryDialog from '@/frontend/components/shared/sharedEditing/ChangeHistoryDialog';
 import { FlowNamesContext } from './CustomNodes/flowNamesContext';
 import {
   configureGuidedSubagentEdge,
@@ -196,6 +200,12 @@ interface FlowBuilderProps {
   isDraft?: boolean;
   onTry?: () => void;
   onNavigateToFlow?: (flowId: string) => void;
+  /**
+   * Multi-user mode (#575): the flow was saved outside this builder (an older
+   * version was restored from the change history). The page shows that
+   * version instead of the canvas.
+   */
+  onExternalSave?: (flow: Flow) => void;
 }
 
 // Imperative handle for the parent page: navigation away from the builder
@@ -291,7 +301,7 @@ const analyzeGuidedGraph = (nodes: FlowNode[], edges: Edge[]) => {
   return { unsafe, orderedNodeIds, subagentNodeIds };
 };
 
-export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, initialAuthoringMode, onSave, onDelete, onConversionCommitted, allFlows, relatedDraftFlows = [], onRelatedDraftFlowsChange, isDraft = false, onTry, onNavigateToFlow }, ref) => {
+export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, initialAuthoringMode, onSave, onDelete, onConversionCommitted, allFlows, relatedDraftFlows = [], onRelatedDraftFlowsChange, isDraft = false, onTry, onNavigateToFlow, onExternalSave }, ref) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
   const { t, tp, formatList } = useI18n();
   const theme = useTheme();
@@ -401,6 +411,21 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   // Version history: browse/preview/restore archived versions of a saved flow.
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+
+  // Multi-user mode (#575): "Anna is editing" notes and who changed what.
+  // Both stay off (no request) while the mode is off.
+  const savedFlowId = initialFlow && !isDraft ? initialFlow.id : null;
+  const editLease = useEditLease('flow', savedFlowId, savedFlowId !== null);
+  const [changeHistoryOpen, setChangeHistoryOpen] = useState(false);
+  // The version this canvas started from, so a save can tell whether someone
+  // else saved in between. It follows the page's copy, which takes the new
+  // stamp after each of this person's own saves.
+  const savedFlowUpdatedAt = initialFlow?.updatedAt;
+  useEffect(() => {
+    if (!savedFlowId || typeof savedFlowUpdatedAt !== 'number') return undefined;
+    setEditBase('flow', savedFlowId, flowRevision(savedFlowUpdatedAt));
+    return () => clearEditBase('flow', savedFlowId);
+  }, [savedFlowId, savedFlowUpdatedAt]);
   
   // History for undo/redo functionality
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -2356,6 +2381,16 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   {authoringMode === 'guided' ? t('flows.builder.previousVersions') : t('flows.builder.history')}
                 </MenuItem>
               )}
+              {initialFlow && !isDraft && editLease.enabled && (
+                <MenuItem
+                  onClick={() => {
+                    setMoreActionsMenuAnchor(null);
+                    setChangeHistoryOpen(true);
+                  }}
+                >
+                  Who changed what
+                </MenuItem>
+              )}
               {initialFlow && !isDraft && <MenuItem component="a" href={withWorkspaceUrl(`/harness?flowId=${encodeURIComponent(initialFlow.id)}`)}>{t('harness.versions')}</MenuItem>}
               {initialFlow && !isDraft && (
                 <MenuItem
@@ -2396,6 +2431,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               </Alert>
             )}
           </Collapse>
+
+          {/* Multi-user mode (#575): someone else has this flow open too. */}
+          {editLease.others.length > 0 && (
+            <Box sx={{ mb: 1 }}>
+              <EditingNotice others={editLease.others} />
+            </Box>
+          )}
 
           {/* AI-Improve result notice (issue #99) — dismissible summary of the last revision. */}
           <Collapse in={!!improveNotice} unmountOnExit>
@@ -2727,6 +2769,21 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         onClose={() => setConversionProcessId(null)}
         onAccept={handleAcceptProcessConversion}
       />
+
+      {/* Multi-user mode (#575): who changed this flow, and bringing back an older version. */}
+      {editLease.enabled && (
+        <ChangeHistoryDialog
+          open={changeHistoryOpen}
+          kind="flow"
+          itemId={savedFlowId}
+          itemLabel="flow"
+          onClose={() => setChangeHistoryOpen(false)}
+          onRestored={(item) => {
+            setChangeHistoryOpen(false);
+            if (item && typeof item === 'object') onExternalSave?.(item as Flow);
+          }}
+        />
+      )}
 
       {/* Version history: browse/preview/restore archived versions of this flow. */}
       <FlowVersionHistoryDialog

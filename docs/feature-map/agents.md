@@ -8,7 +8,7 @@ Here a user builds and manages AI agents (called "flows" inside the app). The li
 
 - `agents-list`: the "My agents" list with agent cards, or "No agents yet" with "Create my first agent" when there are none.
 - `agents-search-sort`: the "Search agents…" box, plus "Group agents", "Sort agents", "Show agent cards" and "Show compact agent list".
-- `agents-card-actions`: on each card, "Use" (opens it in Talk), "Edit", "Make a copy", "Move to folder", "Delete agent" and the favorites star.
+- `agents-card-actions`: on each card, "Use" (opens it in Talk), "Edit", "Make a copy", "Move to folder", "Delete agent" and the favorites star. With sign-in for several people on, also "Copy to a team workspace: <name>".
 - `agents-change-models`: "Change models" selects several agents and swaps their AI model in one go (dialog "Quick-change models").
 - `agents-create-ai`: "Create with AI" opens the "Create an agent" dialog, where the user describes the agent and picks "AI used to build it".
 - `agents-easy-builder`: "Start simple" opens the Easy view. The user fills "Workflow goal", chooses "Create goal step" (then "Add this step"), fills "Agent name" and chooses "Try my agent".
@@ -18,6 +18,7 @@ Here a user builds and manages AI agents (called "flows" inside the app). The li
 - `agents-save`: the "Save flow" button (it shows the text "Save"). A chip reports "Save status: Saved / Unsaved / Saving…", and a banner says "Agent saved."
 - `agents-more-actions`: the "More actions" menu ("Previous versions" or "History", "Duplicate agent", "Delete agent", "Improve with AI", "Improvement and versions").
 - `agents-unsaved-guard`: leaving with unsaved edits opens "Unsaved changes" with "Discard changes", "Save changes" and "Cancel".
+- `agents-shared-editing`: with sign-in for several people on, the editor says "<name> is editing this too. If they save first, you will be asked what to keep." A save after someone else's opens "Someone else saved first" with "Compare", "Load their version", "Save mine anyway" and "Keep editing". "More actions" → "Who changed what" opens "Who changed this flow" with "View" and "Restore this version".
 
 ## How to get to it (user POV)
 
@@ -46,3 +47,5 @@ Preconditions: a throwaway instance from the verify-flujo skill. A fresh instanc
 - The node list sits beside the canvas only at 900 px wide or more. Below that, use "Add node".
 - A Human step only waits in a saved chat run. Trying it shows a card in the chat; building and saving it needs no model.
 - The guided tour starts on its own only on the home page `/`, so opening `/flows` directly avoids it.
+- The shared-editing parts (`agents-shared-editing`) appear only while sign-in for several people is on; with it off the editor asks nothing new. To see "Someone else saved first", sign in as two people in two browsers, open the same agent in a team workspace and save in both. Their version is never lost: it stays in "Who changed what".
+- "Copy to a team workspace: <name>" appears only while sign-in for several people is on (Settings → "Users and sign-in"). Its dialog lists only workspaces the person may change; keys, passwords and sign-ins stay behind and the result lists what to enter in the team workspace. A copied app starts turned off.

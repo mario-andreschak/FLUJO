@@ -11,6 +11,7 @@ import {
 import { TestConnectionEvent } from '@/shared/types/streaming';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import { createLogger } from '@/utils/logger';
+import { announceEditConflict, baseRevisionHeaders, editConflictFrom } from '@/frontend/services/sharedItems';
 import { FEATURES } from '@/config/features'; // Import the feature flags
 import {
   callStreamingTool,
@@ -489,18 +490,37 @@ class MCPService {
    * The update is considered successful if the config is saved correctly,
    * regardless of whether the server can connect with the new configuration.
    */
-  async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>) {
+  async updateServerConfig(serverName: string, updates: Partial<MCPServerConfig>,
+    options: { baseRevision?: string | null } = {}) {
     try {
       const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          // Multi-user mode (#575): the version the open editor started from.
+          ...baseRevisionHeaders('mcp-server', serverName, options.baseRevision),
         },
         body: JSON.stringify(updates),
       });
 
       // PUT /api/mcp/{name} returns the updated config on success, or { error } on failure.
       const data = await response.json();
+
+      // Multi-user mode (#575): someone else saved this server first. Nothing
+      // was saved; the page's conflict host asks what to keep (the editor has
+      // usually closed by now).
+      const conflict = editConflictFrom(response.status, data);
+      if (conflict) {
+        announceEditConflict({
+          conflict,
+          mine: updates,
+          saveMine: async () => {
+            const retry = await this.updateServerConfig(serverName, updates, { baseRevision: conflict.currentRevision });
+            return 'success' in retry && retry.success === true;
+          },
+        });
+        return { success: false, error: conflict.message, conflict };
+      }
 
       if (response.ok) {
         log.info(`Successfully updated server config for ${serverName}`);

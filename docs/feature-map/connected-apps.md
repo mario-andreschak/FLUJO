@@ -10,7 +10,8 @@ Here the user gives agents extra abilities by connecting apps (MCP tool servers)
 - `connected-apps-connect-wizard`: "Connect App" opens "Let’s connect an app" with "AI-assisted" (Recommended), "Help me choose", "I have connection details" and "I’m an expert".
 - `connected-apps-setup-dialog`: the full server setup with tabs "Spotlight", "Marketplace", "GitHub", "Configure & Test", "Remote", "Reference servers".
 - `connected-apps-details`: clicking a card opens its details with tabs "Tools", "Resources", "Prompts", "Skills", "Environment Variables"; tools can be tested here.
-- `connected-apps-card-actions`: "Edit server", "Delete server", "Restart server", "Retry connection", "Expose to external apps", favourite star, move to folder, and sign-in ("Authenticate with <server>") for apps that need it.
+- `connected-apps-card-actions`: "Edit server", "Delete server", "Restart server", "Retry connection", "Expose to external apps", favourite star, move to folder, and sign-in ("Authenticate with <server>") for apps that need it. With sign-in for several people on, also "Copy to a team workspace: <name>".
+- `connected-apps-shared-editing`: with sign-in for several people on, "Edit server" says "<name> is editing this too…" and offers "Who changed what" (with "Restore this version"; a restore never changes stored secrets). The editor closes when it saves, so a save after someone else's opens "Someone else saved first" on the page ("Compare", "Load their version", "Save mine anyway").
 - `connected-apps-bulk`: "Select", then "Select all" and enable or disable several servers at once.
 - `connected-apps-import-export`: "Import" and "Export" menus, each offering several config formats ("<name> format").
 - `connected-apps-apps-dashboard`: "MCP Apps Dashboard" button (accessible name "Open MCP Apps Dashboard").
@@ -44,3 +45,4 @@ Preconditions: a throwaway instance from the verify-flujo skill. Testing a real 
 - Installing apps from GitHub, the marketplace or AI-assisted setup downloads and runs third-party code on the machine. Do not do that in an unattended run.
 - The search box has only a placeholder, so `fill --label` will not find it.
 - The main button carries `data-tour="add-mcp-server"`; the "Marketplace" tab carries `data-tour="mcp-marketplace-tab"`.
+- "Copy to a team workspace: <name>" appears only while sign-in for several people is on (Settings → "Users and sign-in"). Its dialog lists only workspaces the person may change; keys, passwords and sign-ins stay behind and the result lists what to enter in the team workspace. A copied app starts turned off.

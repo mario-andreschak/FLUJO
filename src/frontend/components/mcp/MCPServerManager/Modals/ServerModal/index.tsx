@@ -11,6 +11,7 @@ import ReferenceServersTab from './tabs/ReferenceServersTab';
 import RemoteTab from './tabs/RemoteTab';
 import { getSelectedWorkspace, onWorkspaceChanged } from '@/frontend/utils/workspaceSelection';
 import {
+  Button,
   Dialog,
   DialogContent,
   Tabs,
@@ -21,6 +22,9 @@ import {
 } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
+import { useEditLease } from '@/frontend/hooks/useEditLease';
+import EditingNotice from '@/frontend/components/shared/sharedEditing/EditingNotice';
+import ChangeHistoryDialog from '@/frontend/components/shared/sharedEditing/ChangeHistoryDialog';
 
 const ServerModal: React.FC<ServerModalProps> = ({
   isOpen,
@@ -30,9 +34,14 @@ const ServerModal: React.FC<ServerModalProps> = ({
   initialTab = 'spotlight',
   onUpdate,
   onRestartAfterUpdate,
-  onSaveAndAuthenticate
+  onSaveAndAuthenticate,
+  onReload,
 }) => {
   const { t } = useI18n();
+  // Multi-user mode (#575): "Anna is editing" notes and who changed what while
+  // editing an existing server. Both stay off (no request) while it is off.
+  const editLease = useEditLease('mcp-server', initialConfig?.name, isOpen && Boolean(initialConfig));
+  const [changeHistoryOpen, setChangeHistoryOpen] = useState(false);
   const theme = useTheme();
   // Phones get the whole viewport: the desktop 95vw shell leaves the six setup
   // tabs and the configure form unusable at phone widths (#394).
@@ -167,6 +176,14 @@ const ServerModal: React.FC<ServerModalProps> = ({
             </Box>
           )}
           {/* Render the active tab or the edit form */}
+          {initialConfig && editLease.enabled && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
+              <EditingNotice others={editLease.others} />
+              <Box>
+                <Button size="small" onClick={() => setChangeHistoryOpen(true)}>Who changed what</Button>
+              </Box>
+            </Box>
+          )}
           {initialConfig ? (
             <ConfigureTab
               initialConfig={initialConfig}
@@ -201,6 +218,21 @@ const ServerModal: React.FC<ServerModalProps> = ({
           )}
         </Box>
       </DialogContent>
+      {initialConfig && editLease.enabled && (
+        <ChangeHistoryDialog
+          open={changeHistoryOpen}
+          kind="mcp-server"
+          itemId={initialConfig.name}
+          itemLabel="MCP server"
+          onClose={() => setChangeHistoryOpen(false)}
+          onRestored={() => {
+            // The open form still shows the replaced settings; close it and show the list again.
+            setChangeHistoryOpen(false);
+            void onReload?.();
+            onClose();
+          }}
+        />
+      )}
     </Dialog>
   );
 };
