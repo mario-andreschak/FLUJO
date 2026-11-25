@@ -81,5 +81,7 @@ tester.run('no-sync-fs', rules['no-sync-fs'], {
     { code: "import { writeFileSync as write } from 'node:fs';\nwrite(p, d);", errors: [{ messageId: 'syncFs', data: { name: 'writeFileSync' } }] },
     { code: "const { statSync } = require('fs');\nstatSync(p);", errors: [{ messageId: 'syncFs' }] },
     { code: "require('fs').mkdirSync(p);", errors: [{ messageId: 'syncFs' }] },
+    { code: "import fs from 'node:fs';\nfs.realpathSync(p);", errors: [{ messageId: 'syncRealpath' }] },
+    { code: "import { realpathSync } from 'fs';\nrealpathSync(p);", errors: [{ messageId: 'syncRealpath' }] },
   ],
 });

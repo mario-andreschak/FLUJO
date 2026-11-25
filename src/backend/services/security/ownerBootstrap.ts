@@ -2,6 +2,7 @@ import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getDataDir } from '../../../utils/paths';
+import { realpath } from '../../../utils/realpath';
 import { getExposureMode } from '../../../utils/http/exposureMode';
 import { authenticateOwnerBearer, issueOwnerCredential, type OwnerPolicy } from './ownerCredentials';
 import { readOwnerPolicy, ownerPolicyRevision } from './ownerPolicy';
@@ -19,13 +20,13 @@ async function configuration() {
       || path.dirname(policy) !== path.dirname(bootstrap) || policy === bootstrap) throw new Error();
   const directory = path.dirname(policy);
   const roots = [path.resolve(getDataDir())];
-  try { roots.push(await fs.realpath(roots[0])); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  try { roots.push(await realpath(roots[0])); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   if (roots.some(root => {
     const relative = path.relative(root, directory);
     return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
   })) throw new Error();
   const stat = await fs.lstat(directory, { bigint: true });
-  if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.realpath(directory) !== directory
+  if (!stat.isDirectory() || stat.isSymbolicLink() || await realpath(directory) !== directory
       || (process.platform !== 'win32' && ((stat.mode & BigInt(0o077)) !== BigInt(0)
         || stat.uid !== BigInt(process.getuid?.() ?? -1)))) throw new Error();
   try { await fs.lstat(policy); throw new Error('Owner already enrolled'); }
@@ -74,7 +75,7 @@ export async function pairFirstOwner(request: Request, confirmed: boolean, now =
     const current = await fs.lstat(configured.directory, { bigint: true });
     if (current.dev !== configured.stat.dev || current.ino !== configured.stat.ino
         || current.mode !== configured.stat.mode || current.uid !== configured.stat.uid || current.gid !== configured.stat.gid
-        || await fs.realpath(configured.directory) !== configured.directory
+        || await realpath(configured.directory) !== configured.directory
         || ownerPolicyRevision(await readOwnerPolicy(configured.bootstrap)) !== ownerPolicyRevision(configured.grant)
         || ownerPolicyRevision(await readOwnerPolicy(staged)) !== ownerPolicyRevision(policy)
         || !await isOwnerBootstrapAvailable(Math.max(now, Date.now()))) throw new Error();

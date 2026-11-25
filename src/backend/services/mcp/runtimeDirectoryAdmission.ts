@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import path from 'node:path';
+import { realpath } from '../../../utils/realpath';
 
 export class RuntimeDirectoryAdmissionError extends Error {
   readonly code = 'UNSAFE_MCP_RUNTIME_DIRECTORY';
@@ -45,7 +46,7 @@ export class RuntimeDirectoryAdmission {
       const admission = new RuntimeDirectoryAdmission(path.resolve(workspaceRoot));
       const stat = await fs.lstat(admission.root, { bigint: true });
       validateDirectory(stat, false);
-      admission.directories.set(admission.root, { stat, canonical: await fs.realpath(admission.root), privateAnchor: false });
+      admission.directories.set(admission.root, { stat, canonical: await realpath(admission.root), privateAnchor: false });
       await admission.verify();
       return admission;
     } catch {
@@ -85,7 +86,7 @@ export class RuntimeDirectoryAdmission {
         stat = await fs.lstat(candidate, { bigint: true });
       }
       validateDirectory(stat, privateAnchor);
-      const canonical = await fs.realpath(candidate);
+      const canonical = await realpath(candidate);
       if (path.dirname(canonical) !== parent.canonical) throw new RuntimeDirectoryAdmissionError();
       this.directories.set(candidate, { stat, canonical, privateAnchor });
       await this.verify();
@@ -101,7 +102,7 @@ export class RuntimeDirectoryAdmission {
       await Promise.all([...this.directories].map(async ([directory, expected]) => {
         const [current, canonical] = await Promise.all([
           fs.lstat(directory, { bigint: true }),
-          fs.realpath(directory),
+          realpath(directory),
         ]);
         validateDirectory(current, expected.privateAnchor);
         for (const field of ['dev', 'ino', 'mode', 'uid', 'gid'] as const) {

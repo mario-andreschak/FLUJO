@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
+import { realpath } from '@/utils/realpath';
 import { ownerPolicySchema } from './ownerCredentials';
 import { windowsPrivateAuthorityStamp, windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
 import { BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
@@ -459,7 +460,7 @@ async function assertLinkFreeAsync(filename: string): Promise<void> {
       if (result.value.isSymbolicLink()) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
     }
   }
-  if (canonical(await fs.promises.realpath(filename)) !== canonical(filename)) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+  if (canonical(await realpath(filename)) !== canonical(filename)) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
 }
 
 async function readStableFileAsync(filename: string, maximum: number, consume: (chunk: Buffer) => void,
@@ -537,7 +538,7 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, 
       if (stat.isSymbolicLink()) {
         await flush();
         const admitted = dependencyLinks.find(item => canonical(item.link) === canonical(filename));
-        if (!admitted || canonical(await fs.promises.realpath(filename)) !== canonical(admitted.target)) throw new Error();
+        if (!admitted || canonical(await realpath(filename)) !== canonical(admitted.target)) throw new Error();
         tree.update(JSON.stringify(['approved-dependency-link', path.relative(root, filename).split(path.sep).join('/'), canonical(admitted.target)]));
         continue;
       }
