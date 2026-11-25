@@ -14,6 +14,7 @@ import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
 import { normalizeChatError } from '@/backend/execution/flow/normalizeError';
 import { resumePersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/step/route');
 
@@ -84,7 +85,7 @@ async function POST_handler(
         reason: 'debug',
         flowInputPatch: {
           messages: sharedState.messages,
-          requireApproval: sharedState.requireApproval ?? false,
+          requireApproval: requireApprovalOf(sharedState.requireApproval),
           debug: true,
           continueDebug: false,
           userTurn: false,
@@ -128,7 +129,7 @@ async function POST_handler(
     const response = await processChatCompletion(
       simulatedRequestData,
       true, // flujo
-      sharedState.requireApproval ?? false,
+      requireApprovalOf(sharedState.requireApproval),
       false, // flujodebug param ignored on resume (debugMode already set in state)
       conversationId,
       false // continueDebug: false → single step then pause

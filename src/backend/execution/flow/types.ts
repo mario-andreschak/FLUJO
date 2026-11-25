@@ -1543,6 +1543,13 @@ export interface SharedState extends DebuggerStateView {
     onApprovalRequired?: 'auto' | 'fail' | 'pause';
 
     /**
+     * A sub-flow cannot pause on its own, so it asks for approval live, in this
+     * conversation: the one whose chat the person is viewing (#1284).
+     * Runtime-only; inherited from the parent run.
+     */
+    approvalConversationId?: string;
+
+    /**
      * True for a transient run (subflow child, future scheduler runs): this
      * state must NEVER reach the conversations/* store, so it never appears in
      * the chat sidebar. The policy travels ON the state and is enforced inside
@@ -1678,6 +1685,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     requireToolApproval?: boolean;
     /** Approval behavior forwarded to adapters which execute their own tool loop. */
     onApprovalRequired?: 'auto' | 'fail' | 'pause';
+    /** A sub-flow's approval card shows in this conversation. */
+    approvalConversationId?: string;
     /** Unattended run (issue #258): forwarded so the synthetic `question` tool
      *  degrades to a tool-error instead of blocking for an answer. */
     unattended?: boolean;
@@ -1762,6 +1771,12 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     chainDepth?: number;
     /** Parent conversation id, for nesting provenance. */
     parentRunId?: string;
+    /** The parent run's approval setting; a child uses the same gate (#1284). */
+    requireApproval?: boolean;
+    /** Where the child asks for approval live: the conversation the person views. */
+    approvalConversationId?: string;
+    /** The parent run's no-approver outcome, passed unchanged to the child. */
+    onApprovalRequired?: 'auto' | 'fail' | 'pause';
     /** The parent run's planned-execution id (issue #220), passed unchanged to
      *  each child run so a persisted sub-flow conversation inherits the parent's
      *  wave membership instead of falling into the "Ad-hoc" bucket. Undefined for

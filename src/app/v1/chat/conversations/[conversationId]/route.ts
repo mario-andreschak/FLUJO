@@ -38,6 +38,7 @@ import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 import { listPendingQuestions } from '@/backend/services/questionRegistry';
 import { listPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -203,7 +204,7 @@ async function GET_handler(
           ? { behaviorRevisionId: sharedState.personaAttribution.behaviorRevisionId }
           : {}),
         ...(sharedState.personaArchived ? { personaArchived: true as const } : {}),
-        requireApproval: sharedState.requireApproval ?? false, // Per-conversation tool-approval setting
+        requireApproval: requireApprovalOf(sharedState.requireApproval), // Per-conversation tool-approval setting
         createdAt: sharedState.createdAt || 0,
         updatedAt: sharedState.updatedAt || Date.now(), // Use current time if missing
         status: sharedState.status,

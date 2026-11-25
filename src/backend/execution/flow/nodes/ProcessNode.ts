@@ -1,4 +1,5 @@
 // Local implementation of PocketFlow for debugging
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
 import { traceSpan } from '../turnTrace';
@@ -868,8 +869,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         sharedState.codexSessions = Object.keys(remaining).length > 0 ? remaining : undefined;
       }
     },
-    requireToolApproval: sharedState.requireApproval ?? false,
+    requireToolApproval: requireApprovalOf(sharedState.requireApproval),
     onApprovalRequired: sharedState.onApprovalRequired,
+    approvalConversationId: sharedState.approvalConversationId,
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
     unattended: sharedState.unattended,
@@ -1444,6 +1446,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             onResponsesSessionChange: prepResult.onResponsesSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
             onApprovalRequired: prepResult.onApprovalRequired,
+            approvalConversationId: prepResult.approvalConversationId,
             mcpNodes: prepResult.mcpNodesForDispatch ?? node_params?.properties?.mcpNodes,
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
             beforeToolDispatch: async () => {

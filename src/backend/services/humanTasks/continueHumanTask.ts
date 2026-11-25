@@ -15,6 +15,7 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import { getPendingApproval, putPendingApproval, removePendingApproval } from '@/backend/services/scheduler/pendingApprovals';
 import { updateRunRecord } from '@/backend/services/scheduler/runHistory';
 import { resumePersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 
 const log = createLogger('backend/services/humanTasks/continueHumanTask');
 
@@ -129,7 +130,7 @@ export async function continueHumanTask(
         reason: 'approval',
         flowInputPatch: {
           messages: state.messages,
-          requireApproval: state.requireApproval ?? true,
+          requireApproval: requireApprovalOf(state.requireApproval),
           debug: state.debugMode ?? false,
           continueDebug: false,
           userTurn: false,
@@ -159,7 +160,7 @@ export async function continueHumanTask(
         conversationId,
         mode: 'conversation',
         flujo: true,
-        requireApproval: state.requireApproval ?? true,
+        requireApproval: requireApprovalOf(state.requireApproval),
         userTurn: false,
         source: overdue || task.decision?.channel === 'expiry' ? 'internal' : 'chat',
       });

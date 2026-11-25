@@ -9,6 +9,8 @@ import { applyToolRepeatGuard, TOOL_REPEAT_TEMPERATURE } from './toolRepeatGuard
 import type { HumanAnswer } from '@/utils/shared/humanStep';
 import { approvalActionFor, decideHumanTask, type HumanTaskReceipt } from './humanTask';
 import type { HumanTaskDecision } from './types';
+import { commitToolCheckpoint } from './recoveryCheckpoint';
+import type { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('backend/execution/flow/resumeAfterApproval');
 
@@ -109,6 +111,21 @@ export function refusedHumanStepAnswer(
   return recordHumanStepAnswer({ humanTask: structuredClone(sharedState.humanTask) }, toolCallId, action, human).refused;
 }
 
+/** What the model and the person see when an approved call was cut off mid-run. */
+export const INTERRUPTED_APPROVED_TOOL_RESULT =
+  'This approved tool call was interrupted before FLUJO saved its result. It may already have taken effect, so FLUJO did not run it again. Check the result before asking for it again.';
+
+/**
+ * An earlier approval of this call started the tool and never recorded how it
+ * ended (the app stopped, or the attempt failed half way). Running it again
+ * could repeat an external effect, so the call is settled without running.
+ */
+function approvedEffectIsUncertain(sharedState: SharedState, toolCallId: string): boolean {
+  const checkpoint = sharedState.recovery?.currentCheckpoint;
+  return (checkpoint?.phase === 'tool:before' || checkpoint?.phase === 'tool:unknown')
+    && checkpoint.tools?.some((tool) => tool.toolCallId === toolCallId) === true;
+}
+
 export async function applyApprovalDecision(
   sharedState: SharedState,
   toolCallId: string,
@@ -124,6 +141,9 @@ export async function applyApprovalDecision(
   // Messages appended by this decision; folded into the append-only
   // conversation log by the caller after the state is saved.
   const appendedMessages: FlujoChatMessage[] = [];
+  const storageKey = sharedState.conversationId && !sharedState.ephemeral
+    ? `conversations/${sharedState.conversationId}` as StorageKey
+    : undefined;
 
   if (sharedState.humanTask?.toolCallId === toolCallId) {
     // A Human step applies the answer itself when it resumes, like a Static wait.
@@ -137,15 +157,40 @@ export async function applyApprovalDecision(
     log.info(`Recording a decision for a Static node's wait: ${action} ${toolCallId}`);
     sharedState.staticHold.decision = action === 'approve' ? 'approved' : 'rejected';
     sharedState.pendingToolCalls = pending.filter(tc => tc.id !== toolCallId);
+  } else if (action === 'approve' && approvedEffectIsUncertain(sharedState, toolCallId)) {
+    log.warn(`Approved tool call ${toolCallId} was interrupted earlier; settling it without running it again`);
+    if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'unknown');
+    const interrupted: FlujoChatMessage = {
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: INTERRUPTED_APPROVED_TOOL_RESULT,
+      id: uuidv4(),
+      timestamp: Date.now(),
+    };
+    sharedState.messages.push(interrupted);
+    appendedMessages.push(interrupted);
+    sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
   } else if (action === 'approve') {
     log.info(`Approving tool call ${toolCallId} (${toolCallToProcess.function.name})`);
+    // The decision is saved before the tool starts, so a crash during the call
+    // can never lead to running it a second time (see approvedEffectIsUncertain).
+    if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'before');
     // Process *only* the approved tool call.
-    const toolProcessingResult = await ModelHandler.processToolCalls({
-      toolCalls: [toolCallToProcess],
-      toolNameMap: sharedState.toolNameMap,
-      offeredToolNames: sharedState.offeredToolNames,
-      mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
-    });
+    let toolProcessingResult: Awaited<ReturnType<typeof ModelHandler.processToolCalls>>;
+    try {
+      toolProcessingResult = await ModelHandler.processToolCalls({
+        toolCalls: [toolCallToProcess],
+        toolNameMap: sharedState.toolNameMap,
+        offeredToolNames: sharedState.offeredToolNames,
+        mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
+        executionAuthority: sharedState.executionAuthority,
+        executionExtensionContext: sharedState.executionExtensionContext,
+        personaAttribution: sharedState.personaAttribution,
+      });
+    } catch (error) {
+      if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'unknown');
+      throw error;
+    }
 
     if (!toolProcessingResult.success) {
       log.error(`Internal tool processing failed after approval for ${toolCallId}`, {
@@ -161,6 +206,7 @@ export async function applyApprovalDecision(
       sharedState.messages.push(errorMessage);
       appendedMessages.push(errorMessage);
       sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
+      if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'unknown');
     } else {
       log.info(
         `Adding ${toolProcessingResult.value.toolCallMessages.length} tool result message(s) after approval`
@@ -200,6 +246,7 @@ export async function applyApprovalDecision(
         appendedMessages.push(hint);
       }
       sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
+      if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'completed');
     }
   } else {
     // action === 'reject'

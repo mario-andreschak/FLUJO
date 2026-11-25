@@ -2,7 +2,12 @@ import { ConversationLogReadPressureError } from '@/backend/execution/flow/conve
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
-import { listPendingApprovals, removePendingApproval } from '@/backend/services/scheduler/pendingApprovals';
+import {
+  approvalReceiptOf,
+  listPendingApprovals,
+  putPendingApproval,
+  removePendingApproval,
+} from '@/backend/services/scheduler/pendingApprovals';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { listAllPendingQuestions } from '@/backend/services/questionRegistry';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -57,6 +62,7 @@ async function GET_handler(request: Request) {
       // Validate against the live/persisted state; prune stale index entries.
       let stillAwaiting = false;
       let state: SharedState | undefined;
+      let stateUnknown = false;
       try {
         state = await loadConversationState(entry.conversationId);
         stillAwaiting = state?.status === 'awaiting_tool_approval';
@@ -80,8 +86,12 @@ async function GET_handler(request: Request) {
       } catch (error) {
         if (error instanceof ConversationLogReadPressureError) throw error;
         requiresStrictControlPlane = true;
+        stateUnknown = true;
         log.debug(`Could not load state for approval ${entry.approvalId}`, error);
       }
+      // A conversation that could not be read is not known to be finished:
+      // keep its entry, and list it again once it can be read.
+      if (stateUnknown) continue;
       if (!stillAwaiting) {
         const personaTerminal = Boolean(
           state?.personaAttribution
@@ -98,15 +108,32 @@ async function GET_handler(request: Request) {
         }
         continue;
       }
+      // The receipt names one batch. When the run moved on to a later batch
+      // (decided elsewhere, such as in the chat), list that batch under a new receipt.
+      const batch = new Set(entry.pendingToolCalls.map((call) => call.id));
+      const waitingNow = (state?.pendingToolCalls ?? []).map((call) => ({
+        id: call.id,
+        name: call.type === 'function' ? call.function.name : String(call.type),
+      }));
+      const stillInBatch = waitingNow.filter((call) => batch.has(call.id));
+      let listed = { ...entry, pendingToolCalls: stillInBatch };
+      if (stillInBatch.length === 0 && waitingNow.length > 0) {
+        try {
+          listed = await putPendingApproval({ ...entry, pendingToolCalls: waitingNow });
+        } catch (error) {
+          log.warn(`Could not move approval ${entry.approvalId} to its current batch`, error);
+          continue;
+        }
+      }
       approvals.push({
-        approvalId: entry.approvalId,
+        approvalId: approvalReceiptOf(listed),
         conversationId: entry.conversationId,
         plannedExecutionId: entry.plannedExecutionId,
         flowId: entry.flowId,
         flowName: entry.flowName,
         runId: entry.runId,
         triggerSummary: entry.triggerSummary,
-        pendingToolCalls: entry.pendingToolCalls, // { id, name } only — no args
+        pendingToolCalls: listed.pendingToolCalls, // { id, name } only — no args
         createdAt: entry.createdAt,
       });
     }

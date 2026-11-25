@@ -18,6 +18,7 @@ import { isPersonaOwnedConversationState } from './personaConversationOwnership'
 import { latestSubflowAssistantText, SubflowOutputBudget } from './subflowOutputBudget';
 import { publishConversation } from './conversationPublication';
 import { FlowExecutionAuthorityError } from './executionAuthority';
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 
 const log = createLogger('backend/execution/flow/subflowRecovery');
 
@@ -273,7 +274,7 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
         mode: 'conversation',
         source,
         flujo: true,
-        requireApproval: parent.requireApproval ?? false,
+        requireApproval: requireApprovalOf(parent.requireApproval),
         debug: parent.debugMode ?? false,
         userTurn: false,
         depth: parent.runDepth,
@@ -579,7 +580,7 @@ async function runRecoveryConversation(state: RecoveryConversation): Promise<Sub
       mode: 'conversation',
       source,
       flujo: true,
-      requireApproval: current.requireApproval ?? false,
+      requireApproval: requireApprovalOf(current.requireApproval),
       debug: current.debugMode ?? false,
       userTurn: false,
       depth: current.runDepth,

@@ -27,6 +27,7 @@ import {
   resumePersonaFlowDispatch,
   type PersonaFlowDispatchRecord,
 } from '@/backend/services/enduringAgents/personaDispatcher';
+import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/respond/route');
 
@@ -321,7 +322,7 @@ async function POST_handler(
         reason: 'approval',
         flowInputPatch: {
           messages: sharedState.messages,
-          requireApproval: sharedState.requireApproval ?? true,
+          requireApproval: requireApprovalOf(sharedState.requireApproval),
           debug: sharedState.debugMode ?? false,
           continueDebug: false,
           userTurn: false,
@@ -416,9 +417,8 @@ async function POST_handler(
     const response = await processChatCompletion(
       simulatedRequestData,
       true, // flujo
-      // Got here via approval, so keep requiring approval for later calls unless
-      // the run explicitly recorded otherwise.
-      sharedState.requireApproval ?? true,
+      // The conversation's saved setting decides later batches; missing is off (#1284).
+      requireApprovalOf(sharedState.requireApproval),
       false, // flujodebug param ignored on resume (debugMode already in state)
       conversationId
     );

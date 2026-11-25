@@ -563,6 +563,10 @@ const Chat: React.FC = () => {
   // Other states
   const [flows, setFlows] = useState<Flow[]>([]); // Use the Flow type from shared types
   const [requireApproval, setRequireApproval] = useState<boolean>(false);
+  // The approval setting as last saved, and the queue of pending saves (#1284).
+  const savedApprovalRef = useRef<{ conversationId: string | null; value: boolean }>({ conversationId: null, value: false });
+  const approvalSaveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const approvalSaveAttemptRef = useRef(0);
   // Inline conversation-title rename (issue #134, item 2).
   const [isEditingTitle, setIsEditingTitle] = useState<boolean>(false);
   const [titleDraft, setTitleDraft] = useState<string>('');
@@ -1522,23 +1526,36 @@ const Chat: React.FC = () => {
   // on every content refresh (which would clobber a just-toggled value mid-run).
   useEffect(() => {
     if (detailedConversation) {
+      savedApprovalRef.current = { conversationId: detailedConversation.id, value: detailedConversation.requireApproval === true };
       setRequireApproval(detailedConversation.requireApproval ?? false);
     }
   }, [detailedConversation?.id]);
 
   // Toggle handler: update the checkbox and immediately persist the setting on the
-  // conversation. A brand-new, not-yet-persisted conversation may 404 — harmless,
-  // since the value is also sent with the next run and persisted onto the state then.
+  // conversation. Saves run one after another, so a later batch always sees the
+  // newest saved choice. A brand-new, not-yet-persisted conversation may 404 —
+  // harmless, since the value is also sent with the next run and saved then. Any
+  // other failure puts the checkbox back to the saved value and says so (#1284),
+  // unless the person has moved on to another conversation or a newer choice.
   const handleRequireApprovalChange = useCallback(async (value: boolean) => {
     setRequireApproval(value);
-    if (currentConversationId) {
-      try {
-        await chatService.updateConversationApproval(currentConversationId, value);
-      } catch (err) {
-        log.warn('Failed to persist requireApproval setting', { conversationId: currentConversationId, err });
-      }
+    if (!currentConversationId) return;
+    const conversationId = currentConversationId;
+    const attempt = ++approvalSaveAttemptRef.current;
+    const save = approvalSaveChainRef.current.then(() => chatService.updateConversationApproval(conversationId, value));
+    approvalSaveChainRef.current = save.then(() => undefined, () => undefined);
+    try {
+      await save;
+      savedApprovalRef.current = { conversationId, value };
+    } catch (err) {
+      if (err instanceof ChatApiError && err.status === 404) return;
+      log.warn('Failed to persist requireApproval setting', { conversationId, err });
+      if (attempt !== approvalSaveAttemptRef.current || currentConversationIdRef.current !== conversationId) return;
+      const saved = savedApprovalRef.current;
+      setRequireApproval(saved.conversationId === conversationId ? saved.value : !value);
+      setError(t('chat.page.approvalSaveFailed'));
     }
-  }, [currentConversationId]);
+  }, [currentConversationId, t]);
 
   // --- Conversation Management Functions ---
 

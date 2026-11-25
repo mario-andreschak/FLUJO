@@ -48,6 +48,7 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { ToolHandler } from '@/backend/execution/flow/handlers/ToolHandler';
 import { encodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
+import { listPendingToolCalls, resolvePendingApproval } from '@/backend/execution/flow/toolApprovalRegistry';
 import { saveItem } from '@/utils/storage/backend';
 import { flowRequiresStepApproval } from '@/utils/shared/flowApproval';
 import { compileFlowSpec, flowToSpec } from '@/utils/shared/flowSpecCompiler';
@@ -244,6 +245,48 @@ describe('real runs', () => {
     expect(calledTools()).toEqual([]);
   });
 
+  describe('in a sub-flow, which cannot pause on its own (#1284)', () => {
+    const askedIn = async (conversationId: string, count: number) => {
+      for (let attempt = 0; attempt < 500 && listPendingToolCalls(conversationId).length < count; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return listPendingToolCalls(conversationId).map((call) => call.function.name);
+    };
+
+    it('asks in the conversation on screen and runs only what was approved', async () => {
+      const run = start('sub-gate', {}, { mode: 'ephemeral', requireApproval: true, approvalConversationId: 'root-view' });
+
+      expect(await askedIn('root-view', 2)).toEqual([READ_TOOL, WRITE_TOOL]);
+      expect(calledTools()).toEqual([]);
+      resolvePendingApproval('root-view', 'call_0', true);
+      resolvePendingApproval('root-view', 'call_1', false);
+      const result = await run;
+
+      expect(result.status).toBe('completed');
+      expect(calledTools()).toEqual(['read_it']);
+      const secondTurn = requests[1] as { messages?: Array<{ role: string; tool_call_id?: string; content?: unknown }> };
+      expect(secondTurn.messages).toContainEqual(expect.objectContaining({ role: 'tool', tool_call_id: 'call_1', content: 'tool denied' }));
+    });
+
+    it('asks for a step rule instead of failing the run', async () => {
+      const run = start('sub-step', { requireApprovalFor: ['write_it'] }, { mode: 'ephemeral', approvalConversationId: 'root-view-2' });
+
+      expect(await askedIn('root-view-2', 1)).toEqual([WRITE_TOOL]);
+      resolvePendingApproval('root-view-2', 'call_1', true);
+
+      expect((await run).status).toBe('completed');
+      expect(calledTools().sort()).toEqual(['read_it', 'write_it']);
+    });
+
+    it('still fails without asking when the run has policy fail', async () => {
+      const result = await start('sub-fail', {}, { mode: 'ephemeral', requireApproval: true, approvalConversationId: 'root-view-3', onApprovalRequired: 'fail' });
+
+      expect(result.status).toBe('error');
+      expect(listPendingToolCalls('root-view-3')).toEqual([]);
+      expect(calledTools()).toEqual([]);
+    });
+  });
+
   it('also holds the call when the client handles its own tools', async () => {
     const result = await start('step-client', { requireApprovalFor: ['write_it'] }, { flujo: false });
 
@@ -301,6 +344,45 @@ describe('models that run their own tool loop', () => {
   it('asks for everything when the run asks', async () => {
     const gate = await gateFrom(true);
     await expect(gate!({ id: 'a', name: READ_TOOL, args: {} })).rejects.toThrow('requires approval');
+  });
+
+  it('refuses instead of running when approval is on but there is no conversation to ask in (#1284)', async () => {
+    const generate = spyOnGenerate();
+    await ModelHandler.callModel({
+      modelId: 'approval-model',
+      prompt: 'Work.',
+      messages: [{ role: 'user', content: 'Please work.' }],
+      nodeName: 'Step',
+      nodeId: 'process',
+      requireToolApproval: true,
+      toolNameMap: { [READ_TOOL]: { server: 'srv', tool: 'read_it' } },
+    } as never);
+    const options = generate.mock.calls[0]?.[4] as { requestToolApproval?: (call: { id: string; name: string; args: Record<string, unknown> }) => Promise<boolean> } | undefined;
+
+    expect(options?.requestToolApproval).toBeDefined();
+    await expect(options!.requestToolApproval!({ id: 'a', name: READ_TOOL, args: {} })).rejects.toThrow('no approver is available');
+  });
+
+  it('asks a sub-flow call in the conversation on screen (#1284)', async () => {
+    const generate = spyOnGenerate();
+    await ModelHandler.callModel({
+      modelId: 'approval-model',
+      prompt: 'Work.',
+      messages: [{ role: 'user', content: 'Please work.' }],
+      nodeName: 'Step',
+      nodeId: 'process',
+      conversationId: 'child-run',
+      approvalConversationId: 'viewed-conv',
+      requireToolApproval: true,
+      toolNameMap: { [READ_TOOL]: { server: 'srv', tool: 'read_it' } },
+    } as never);
+    const options = generate.mock.calls[0]?.[4] as { requestToolApproval?: (call: { id: string; name: string; args: Record<string, unknown> }) => Promise<boolean> } | undefined;
+
+    const decision = options!.requestToolApproval!({ id: 'sdk-1', name: READ_TOOL, args: {} });
+    expect(listPendingToolCalls('viewed-conv').map((call) => call.id)).toEqual(['sdk-1']);
+    expect(listPendingToolCalls('child-run')).toEqual([]);
+    resolvePendingApproval('viewed-conv', 'sdk-1', true);
+    await expect(decision).resolves.toBe(true);
   });
 
   it('adds no gate when nothing asks for one', async () => {
