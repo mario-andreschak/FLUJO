@@ -47,7 +47,7 @@ async function adapterQuery(systemPromptPolicy: CompletionInput['systemPromptPol
       yield { type: 'result', subtype: 'success', session_id: 'captured', result: 'done' };
     })());
   await new ClaudeSubscriptionAdapter().createCompletion({
-    model: { id: 'm1', name: 'sonnet', provider: 'claude-subscription' },
+    model: { id: 'm1', name: 'sonnet', provider: 'claude-subscription', ApiKey: '' },
     apiKey: 'oauth-token',
     messages: [
       { role: 'system', content: 'Stable instructions' },

@@ -44,7 +44,7 @@ const baseInput = (overrides: Partial<CompletionInput> = {}): CompletionInput =>
   ...overrides,
 } as CompletionInput);
 
-const localTool = (name = 'local'): OpenAI.ChatCompletionTool[] => [{
+const localTool = (name = 'local'): OpenAI.ChatCompletionFunctionTool[] => [{
   type: 'function', function: { name, parameters: { type: 'object', properties: {} } },
 }];
 
