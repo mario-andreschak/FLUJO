@@ -177,6 +177,7 @@ Route files: 244.
 | `/v1/chat/conversations/{conversationId}` | DELETE, GET, PATCH | [source](../../src/app/v1/chat/conversations/[conversationId]/route.ts) |
 | `/v1/chat/conversations/{conversationId}/breakpoints` | PUT | [source](../../src/app/v1/chat/conversations/[conversationId]/breakpoints/route.ts) |
 | `/v1/chat/conversations/{conversationId}/cancel` | POST | [source](../../src/app/v1/chat/conversations/[conversationId]/cancel/route.ts) |
+| `/v1/chat/conversations/{conversationId}/compact` | POST | [source](../../src/app/v1/chat/conversations/[conversationId]/compact/route.ts) |
 | `/v1/chat/conversations/{conversationId}/debug/attach` | POST | [source](../../src/app/v1/chat/conversations/[conversationId]/debug/attach/route.ts) |
 | `/v1/chat/conversations/{conversationId}/debug/continue` | POST | [source](../../src/app/v1/chat/conversations/[conversationId]/debug/continue/route.ts) |
 | `/v1/chat/conversations/{conversationId}/debug/state` | GET | [source](../../src/app/v1/chat/conversations/[conversationId]/debug/state/route.ts) |

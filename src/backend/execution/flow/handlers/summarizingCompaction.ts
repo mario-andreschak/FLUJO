@@ -284,14 +284,17 @@ function withCurrentRequestBoundary(
 
 /** Keep a verified prefix stable across tool follow-ups to the same request.
  * New requests, edited prefixes and incompatible settings use the normal split.
- * Only the summary boundary is pinned; the complete current tail stays verbatim. */
+ * Only the summary boundary is pinned; the complete current tail stays verbatim.
+ * `pinToArtifact` also pins across new requests: a manual "/compact" keeps its
+ * summary below the automatic threshold without summarizing again (#1225). */
 export function selectCompactionSplit(
   messages: FlujoChatMessage[],
   keepTokens: number,
   compatibleArtifact?: WireSummaryArtifact,
+  pinToArtifact = false,
 ): SplitResult {
-  if (compatibleArtifact?.sourceEndId && compatibleArtifact.requestDigest
-      && compatibleArtifact.requestDigest === currentRequestDigest(messages)) {
+  if (compatibleArtifact?.sourceEndId && (pinToArtifact || (compatibleArtifact.requestDigest
+      && compatibleArtifact.requestDigest === currentRequestDigest(messages)))) {
     const pinned = splitHistoryForCompaction(messages, keepTokens, compatibleArtifact.sourceEndId);
     if (pinned.toSummarize.at(-1)?.id === compatibleArtifact.sourceEndId
         && digestProjectedMessages([...pinned.leadingSystem, ...pinned.toSummarize]) === compatibleArtifact.sourceDigest) {
@@ -405,7 +408,7 @@ function receiptBlockMatches(summary: string, expected: string): boolean {
 }
 
 /** The share of the input budget that retained original user turns may use. */
-const RETAINED_USER_SHARE = 0.35;
+export const RETAINED_USER_SHARE = 0.35;
 
 /**
  * Required standing instructions always stay. Model-selected turns fill what
@@ -513,6 +516,8 @@ export interface CompactHistoryOptions {
   modelId?: string;
   /** Candidate selected by the caller; reused only after exact identity checks. */
   reusableArtifact?: WireSummaryArtifact;
+  /** Keep the candidate's boundary for a new request too (see selectCompactionSplit). */
+  pinToArtifact?: boolean;
 }
 
 export interface CompactHistoryDeps {
@@ -575,7 +580,7 @@ export async function compactHistory(
     && candidate.nodeId === opts.nodeId && candidate.projectionDigest === opts.projectionDigest
     && candidate.policyVersion === opts.policyVersion && candidate.modelId === opts.modelId
     ? candidate : undefined;
-  const split = selectCompactionSplit(messages, opts.keepTokens, compatibleArtifact);
+  const split = selectCompactionSplit(messages, opts.keepTokens, compatibleArtifact, opts.pinToArtifact);
   const requestDigest = currentRequestDigest(messages);
   if (split.toSummarize.length === 0 || split.toSummarize.every(message => message.role === 'user')) {
     log.debug('compactHistory: nothing old enough to summarize; no-op');

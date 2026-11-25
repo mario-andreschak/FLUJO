@@ -191,6 +191,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/v1/chat/conversations/[conversationId]': 'workspace',
   '/v1/chat/conversations/[conversationId]/breakpoints': 'workspace',
   '/v1/chat/conversations/[conversationId]/cancel': 'workspace',
+  '/v1/chat/conversations/[conversationId]/compact': 'workspace',
   '/v1/chat/conversations/[conversationId]/debug/attach': 'workspace',
   '/v1/chat/conversations/[conversationId]/debug/continue': 'workspace',
   '/v1/chat/conversations/[conversationId]/debug/state': 'workspace',

@@ -66,6 +66,10 @@ export interface GlobalReferenceEditorProps {
   autoFocus?: boolean;
   bare?: boolean;
   ariaLabel?: string;
+  /** Id of a list the caller shows for this field (for example chat commands). */
+  ariaControls?: string;
+  /** Id of that list's highlighted entry, so screen readers announce it. */
+  ariaActiveDescendant?: string;
   dataTour?: string;
   containerSx?: Record<string, unknown>;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
@@ -508,6 +512,8 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   autoFocus = false,
   bare = false,
   ariaLabel,
+  ariaControls,
+  ariaActiveDescendant,
   dataTour,
   containerSx,
   onKeyDown,
@@ -885,6 +891,8 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
             readOnly={disabled}
             autoFocus={autoFocus}
             aria-label={ariaLabel}
+            aria-controls={ariaControls}
+            aria-activedescendant={ariaActiveDescendant}
             data-tour={dataTour}
             role="textbox"
             aria-multiline={multiline}
