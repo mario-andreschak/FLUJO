@@ -1,0 +1,46 @@
+# Agents
+
+Routes: `/flows`
+
+Here a user builds and manages AI agents (called "flows" inside the app). The list page, titled "My agents", shows every saved agent as a card that can be searched, sorted, grouped, starred, copied, moved into a folder, deleted, or opened in chat. A new agent can be described in plain words ("Create with AI"), built step by step in the simple Easy view ("Start simple"), or wired by hand on the node canvas in Expert view ("Start expert"). In the editor the user names the agent, adds steps, edits each step's settings, saves, and tries it.
+
+## Sub-features
+
+- `agents-list`: the "My agents" list with agent cards, or "No agents yet" with "Create my first agent" when there are none.
+- `agents-search-sort`: the "Search agents…" box, plus "Group agents", "Sort agents", "Show agent cards" and "Show compact agent list".
+- `agents-card-actions`: on each card, "Use" (opens it in Talk), "Edit", "Make a copy", "Move to folder", "Delete agent" and the favorites star.
+- `agents-change-models`: "Change models" selects several agents and swaps their AI model in one go (dialog "Quick-change models").
+- `agents-create-ai`: "Create with AI" opens the "Create an agent" dialog, where the user describes the agent and picks "AI used to build it".
+- `agents-easy-builder`: "Start simple" opens the Easy view. The user fills "Workflow goal", chooses "Create goal step" (then "Add this step"), fills "Agent name" and chooses "Try my agent".
+- `agents-expert-canvas`: "Start expert", or the "Expert view" switch, opens the node canvas with a list of node types ("Ask AI", "Send the answer", "Use a connected app", "Ask another agent" and more), "Add node", "Tidy up layout", "Undo" and "Redo".
+- `agents-node-properties`: selecting a node fills the "Inspector" panel ("Node name", and "Full settings" for every option). With nothing selected, the panel shows "Flow details" with "Flow name".
+- `agents-save`: the "Save flow" button (it shows the text "Save"). A chip reports "Save status: Saved / Unsaved / Saving…", and a banner says "Agent saved."
+- `agents-more-actions`: the "More actions" menu ("Previous versions" or "History", "Duplicate agent", "Delete agent", "Improve with AI", "Improvement and versions").
+- `agents-unsaved-guard`: leaving with unsaved edits opens "Unsaved changes" with "Discard changes", "Save changes" and "Cancel".
+
+## How to get to it (user POV)
+
+- Choose `Agents` in the top navigation (`data-tour="nav-flows"`). Below 1536 px wide, first choose `Open navigation menu`.
+- Open `http://127.0.0.1:<port>/flows`.
+- Choose `Use` / `Edit` from elsewhere, or follow a copied agent link (`/flows?flow=<id>&mode=edit`).
+- The setup journey's `/flows?create=assistant` link opens a new Easy-view draft at once.
+
+## Driving it with flujo-drive
+
+Preconditions: a throwaway instance from the verify-flujo skill. A fresh instance has one built-in agent, "FLUJO", and no AI model. Building and saving works without a model, but "Try it", "Try my agent" and "Create with AI" need one. If no model can be connected, report those steps as unmet.
+
+- **List**: open the page. `node scripts/flujo-drive.mjs open /flows` → the heading "My agents" and, on a fresh instance, the built-in "FLUJO" agent card ("1 of 1 agent").
+- **Start simple**: `node scripts/flujo-drive.mjs click /flows --role button --name "Start simple" --then-shot agents-easy.png` → the Easy view ("Build it like a simple recipe.") and the banner "Your new agent is ready. Give it a name, add a task, then try it."
+- **Build and save** (one session, because a draft is lost between commands): `node scripts/flujo-drive.mjs steps /flows --file agents-save.json`. The steps: click button "Start simple"; fill "Workflow goal"; click button "Create goal step"; fill "Agent name"; click button "Save flow"; expect-text "Agent saved."; then shot and aria.
+- **Expert canvas**: `node scripts/flujo-drive.mjs click /flows --role button --name "Start expert" --then-shot agents-expert.png` → the canvas with the node list and "Add node".
+- **Proof**: an ARIA snapshot and a screenshot of the saved agent in the editor (chip "Save status: Saved"), then of `/flows` showing its card.
+
+## Gotchas
+
+- A new agent is only a draft until its first save. Each flujo-drive command is a fresh browser, so an unsaved draft's `?flow=<id>&mode=edit` link shows "Agent not found." Use `steps` for anything after "Start simple" or "Start expert".
+- The Save button's accessible name is "Save flow", even though it shows "Save".
+- When a model exists, the Easy view first asks "Yes, help me" or "No, I’ll build it myself". The goal field only appears after you answer.
+- "Try it" / "Try my agent" stay disabled until each AI step has a model and the name is not "Untitled agent". Without a model, the Easy view warns "This step still needs an AI…".
+- The canvas is the slowest part. The first load in a dev instance compiles it, and nodes have no stable accessible names: drive the node list and the "Inspector", not canvas positions.
+- The node list sits beside the canvas only at 900 px wide or more. Below that, use "Add node".
+- The guided tour starts on its own only on the home page `/`, so opening `/flows` directly avoids it.
