@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 241.
+Route files: 244.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -26,6 +26,7 @@ Route files: 241.
 | `/api/backup` | POST | [source](../../src/app/api/backup/route.ts) |
 | `/api/browse` | GET | [source](../../src/app/api/browse/route.ts) |
 | `/api/bugs/enhance` | POST | [source](../../src/app/api/bugs/enhance/route.ts) |
+| `/api/chat/attachments` | GET, POST | [source](../../src/app/api/chat/attachments/route.ts) |
 | `/api/cloud/instance` | GET | [source](../../src/app/api/cloud/instance/route.ts) |
 | `/api/credential-migration` | GET, POST | [source](../../src/app/api/credential-migration/route.ts) |
 | `/api/credential-transfer` | POST | [source](../../src/app/api/credential-transfer/route.ts) |
@@ -57,6 +58,8 @@ Route files: 241.
 | `/api/harness/comparisons/{id}` | DELETE, GET | [source](../../src/app/api/harness/comparisons/[id]/route.ts) |
 | `/api/harness/profiles` | GET, POST | [source](../../src/app/api/harness/profiles/route.ts) |
 | `/api/harness/{id}` | GET, POST | [source](../../src/app/api/harness/[id]/route.ts) |
+| `/api/human-tasks` | GET | [source](../../src/app/api/human-tasks/route.ts) |
+| `/api/human-tasks/{requestId}` | GET, POST | [source](../../src/app/api/human-tasks/[requestId]/route.ts) |
 | `/api/init` | GET | [source](../../src/app/api/init/route.ts) |
 | `/api/local-models/capability` | GET | [source](../../src/app/api/local-models/capability/route.ts) |
 | `/api/local-models/pull` | POST | [source](../../src/app/api/local-models/pull/route.ts) |
