@@ -56,8 +56,8 @@ async function main() {
       const config = { name: `controlled-${era}`, transport: 'stdio', command: process.execPath, args: [entry], cwd: packageRoot,
         disabled: false, rootPath: '', roots: [], env, _buildCommand: '', _installCommand: '', source: { type: 'local' },
         trustedHost: { schemaVersion: 1, kind: 'trusted-host', privileges: 'owner-account', runtime: 'node', entryPoint: entry,
-          sourceRoot: packageRoot, sourceDigest: policy.fingerprintTrustedHostSource(packageRoot),
-          executableDigest: policy.fingerprintTrustedHostExecutable(process.execPath), environmentNames: Object.keys(env) } };
+          sourceRoot: packageRoot, sourceDigest: await policy.fingerprintTrustedHostSourceAsync(packageRoot),
+          executableDigest: await policy.fingerprintTrustedHostExecutableAsync(process.execPath), environmentNames: Object.keys(env) } };
       const grant = { schemaVersion: 1, ownerId: 'synthetic-owner', approvals: [{ workspace: workspace.getCurrentWorkspace(), serverName: config.name,
         policyDigest: policy.trustedHostMcpPolicyDigest(config), expiresAt: Date.now() + 120000 }] };
       fs.writeFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE, JSON.stringify(grant), { mode: 0o600 });

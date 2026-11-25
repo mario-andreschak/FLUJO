@@ -219,16 +219,21 @@ test.each(['FLUJO_MCP_ISOLATION_FILE', 'FLUJO_OWNER_AUTH_FILE'])('refuses multip
 });
 
 test('refuses an approval file that changes during its actual descriptor read', async () => {
-  const original = fs.readSync;
+  const open = fs.promises.open.bind(fs.promises);
   let changed = false;
-  jest.spyOn(fs, 'readSync').mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
-    const count = Reflect.apply(original, fs, args) as number;
-    if (!changed && count > 0) {
-      changed = true;
-      fs.appendFileSync(process.env.FLUJO_MCP_ISOLATION_FILE!, ' ');
-    }
-    return count;
-  }) as typeof fs.readSync);
+  jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    const read = handle.read.bind(handle);
+    handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+      const result = await read(...readArgs);
+      if (!changed && result.bytesRead > 0) {
+        changed = true;
+        fs.appendFileSync(process.env.FLUJO_MCP_ISOLATION_FILE!, ' ');
+      }
+      return result;
+    }) as typeof handle.read;
+    return handle;
+  });
   await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(changed).toBe(true);
   expect(create).not.toHaveBeenCalled();
@@ -444,13 +449,13 @@ test('a stopped attach CLI cannot qualify unknown container cleanup', async () =
   expect(JSON.stringify(receipt)).not.toMatch(/approved fixture token|UNRELATED_SECRET|docker/);
 });
 
-test('private grant digest can be checked independently without creating a container', () => {
-  expect(approvedIsolationDigest(config)).toBe(approvals.approvals[0].policyDigest);
+test('private grant digest can be checked independently without creating a container', async () => {
+  expect(await approvedIsolationDigest(config)).toBe(approvals.approvals[0].policyDigest);
   expect(create).not.toHaveBeenCalled();
 });
 
-test('private MCP approval composes with the new voice-only workspace credential schema', () => {
+test('private MCP approval composes with the new voice-only workspace credential schema', async () => {
   const voice = issueOwnerCredential(['avatar:voice'], Date.now() + 60_000, Date.now(), { workspaceId: 'voice-workspace' });
   fs.writeFileSync(process.env.FLUJO_OWNER_AUTH_FILE!, JSON.stringify({ schemaVersion: 1, ownerId: 'approved-owner', credentials: [voice.record] }), { mode: 0o600 });
-  expect(approvedIsolationDigest(config)).toBe(approvals.approvals[0].policyDigest);
+  expect(await approvedIsolationDigest(config)).toBe(approvals.approvals[0].policyDigest);
 });

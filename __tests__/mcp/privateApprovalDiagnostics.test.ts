@@ -24,6 +24,7 @@ const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
 let savedTrace: string | undefined;
 let savedSystemRoot: string | undefined;
 let log: jest.SpyInstance;
+const closeHandle = jest.fn(async () => undefined);
 
 beforeEach(() => {
   savedTrace = process.env.FLUJO_MCP_WORKLOAD_TRACE;
@@ -33,6 +34,7 @@ beforeEach(() => {
   Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
   jest.mocked(windowsPrivateAuthorityStampAsync).mockReset().mockResolvedValue('synthetic-authority');
   log = jest.spyOn(console, 'info').mockImplementation(() => undefined);
+  closeHandle.mockClear();
 });
 
 afterEach(() => {
@@ -45,17 +47,20 @@ afterEach(() => {
 });
 
 function mockStableContents() {
-  let read = false;
   // These readers always request bigint stats; the mocks intentionally cover that overload only.
-  jest.spyOn(fs, 'lstatSync').mockImplementation((() => identity) as unknown as typeof fs.lstatSync);
-  jest.spyOn(fs, 'fstatSync').mockImplementation((() => identity) as unknown as typeof fs.fstatSync);
-  jest.spyOn(fs, 'realpathSync').mockImplementation((filename => String(filename)) as typeof fs.realpathSync);
-  jest.spyOn(fs, 'openSync').mockImplementation(() => { read = false; return 42; });
-  jest.spyOn(fs, 'closeSync').mockImplementation(() => undefined);
-  jest.spyOn(fs, 'readSync').mockImplementation(((_fd: number, buffer: Buffer) => {
-    if (read) return 0;
-    read = true; contents.copy(buffer); return contents.length;
-  }) as typeof fs.readSync);
+  jest.spyOn(fs.promises, 'lstat').mockImplementation((async () => identity) as unknown as typeof fs.promises.lstat);
+  jest.spyOn(fs.promises, 'realpath').mockImplementation((async (filename: fs.PathLike) => String(filename)) as typeof fs.promises.realpath);
+  jest.spyOn(fs.promises, 'open').mockImplementation(async () => {
+    let read = false;
+    return {
+      stat: async () => identity,
+      read: async (buffer: Buffer) => {
+        if (read) return { bytesRead: 0, buffer };
+        read = true; contents.copy(buffer); return { bytesRead: contents.length, buffer };
+      },
+      close: closeHandle,
+    } as unknown as fs.promises.FileHandle;
+  });
 }
 
 function expectSafeTrace(expected: Record<string, unknown>) {
@@ -69,10 +74,10 @@ function expectSafeTrace(expected: Record<string, unknown>) {
 
 it('identifies a missing member without logging the file, contents or original error message', async () => {
   const failure = Object.assign(new Error(secret), { code: 'ENOENT', errno: -4058, path: members[1] });
-  jest.spyOn(fs, 'lstatSync').mockImplementation(((filename: fs.PathLike) => {
+  jest.spyOn(fs.promises, 'lstat').mockImplementation((async (filename: fs.PathLike) => {
     if (filename === members[1]) throw failure;
     return identity;
-  }) as unknown as typeof fs.lstatSync);
+  }) as unknown as typeof fs.promises.lstat);
   await expect(readPrivateApprovalSetAsync(members, undefined, roles)).rejects.toBe(failure);
   expect(windowsPrivateAuthorityStampAsync).not.toHaveBeenCalled();
   expectSafeTrace({ phase: 'identity-before', role: 'marker', errorKind: 'ENOENT', errno: -4058, cancelled: false });
@@ -83,17 +88,17 @@ it('keeps an identity change fail closed after both native witnesses', async () 
   let witnessed = false;
   jest.mocked(windowsPrivateAuthorityStampAsync).mockImplementationOnce(async () => 'synthetic-authority')
     .mockImplementationOnce(async () => { witnessed = true; return 'synthetic-authority'; });
-  jest.mocked(fs.lstatSync).mockImplementation(((filename: fs.PathLike) =>
-    witnessed && filename === members[2] ? { ...identity, ino: BigInt(99) } : identity) as unknown as typeof fs.lstatSync);
+  jest.mocked(fs.promises.lstat).mockImplementation((async (filename: fs.PathLike) =>
+    witnessed && filename === members[2] ? { ...identity, ino: BigInt(99) } : identity) as unknown as typeof fs.promises.lstat);
   await expect(readPrivateApprovalSetAsync(members, undefined, roles)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
   expect(windowsPrivateAuthorityStampAsync).toHaveBeenCalledTimes(2);
-  expect(fs.closeSync).toHaveBeenCalledTimes(4);
+  expect(closeHandle).toHaveBeenCalledTimes(4);
   expectSafeTrace({ phase: 'identity-after', role: 'owner', errorKind: 'HOST_CONSENT_REQUIRED', cancelled: false });
 });
 
 it('reports cancellation at entry before reading a file or starting native inspection', async () => {
   const controller = new AbortController(); controller.abort(new Error(secret));
-  const stat = jest.spyOn(fs, 'lstatSync');
+  const stat = jest.spyOn(fs.promises, 'lstat');
   await expect(readPrivateApprovalSetAsync(members, controller.signal, roles)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
   expect(stat).not.toHaveBeenCalled();
   expect(windowsPrivateAuthorityStampAsync).not.toHaveBeenCalled();
@@ -108,7 +113,7 @@ it('successful diagnostic reads return the original private values without loggi
 
 it.each(['disabled', 'throwing-logger'] as const)('preserves the exact original error with %s diagnostics', async mode => {
   const failure = Object.assign(new Error(secret), { code: 'ENOENT' });
-  jest.spyOn(fs, 'lstatSync').mockImplementation(() => { throw failure; });
+  jest.spyOn(fs.promises, 'lstat').mockImplementation(async () => { throw failure; });
   if (mode === 'disabled') delete process.env.FLUJO_MCP_WORKLOAD_TRACE;
   else log.mockImplementation(() => { throw new Error('logger failed'); });
   await expect(readPrivateApprovalSetAsync(members, undefined, roles)).rejects.toBe(failure);
@@ -119,7 +124,7 @@ it('bounds caller roles and unknown error codes, without invoking diagnostic acc
   const getter = jest.fn(() => secret);
   const failure = Object.defineProperty(Object.assign(new Error(secret), { code: secret, errno: secret }), 'extra', { get: getter });
   const suppliedRoles = Object.defineProperty([], '0', { get: getter }) as PrivateApprovalFileRole[];
-  jest.spyOn(fs, 'lstatSync').mockImplementation(() => { throw failure; });
+  jest.spyOn(fs.promises, 'lstat').mockImplementation(async () => { throw failure; });
   await expect(readPrivateApprovalSetAsync(members, undefined, suppliedRoles)).rejects.toBe(failure);
   expect(getter).not.toHaveBeenCalled();
   expectSafeTrace({ phase: 'identity-before', role: 'member', errorKind: 'unknown', cancelled: false });

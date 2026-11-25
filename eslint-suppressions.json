@@ -366,24 +366,14 @@
       "count": 55
     }
   },
-  "src/backend/services/security/bundledMcpDependencyGraph.ts": {
-    "flujo/no-sync-fs": {
-      "count": 2
-    }
-  },
   "src/backend/services/security/isolatedMcp.ts": {
     "flujo/no-sync-fs": {
       "count": 13
     }
   },
-  "src/backend/services/security/protectedPackageRunner.ts": {
-    "flujo/no-sync-fs": {
-      "count": 16
-    }
-  },
   "src/backend/services/security/trustedHostMcp.ts": {
     "flujo/no-sync-fs": {
-      "count": 27
+      "count": 12
     }
   },
   "src/backend/services/security/windowsPrivateAuthority.ts": {

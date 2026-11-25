@@ -22,7 +22,7 @@ export async function previewPackageRunnerConsent(stored: MCPStdioConfig, runtim
     }
     cwd = runtime.cwd;
   }
-  assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner,
+  await assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner,
     { ...trustedHostPackageRunnerContext(stored, runtimeHome), inspectClosure: false });
   const checks = await Promise.allSettled([fingerprintTrustedHostSourceAsync(policy.sourceRoot),
     fingerprintTrustedHostExecutableAsync(stored.command), fingerprintTrustedHostExecutableAsync(policy.packageRunner.shell)]);
@@ -37,7 +37,7 @@ export async function previewPackageRunnerConsent(stored: MCPStdioConfig, runtim
       environmentNames: [...new Set([...policy.environmentNames, ...Object.keys(environment),
         ...(runtimeHome === 'isolated' ? TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES : [])])] } };
   const policyDigest = await trustedHostMcpPreviewDigestAsync(config);
-  const dependencyGraph = assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config, runtimeHome));
+  const dependencyGraph = await assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config, runtimeHome));
   if (!dependencyGraph) throw new Error('Package dependency graph unavailable');
   const cache = Object.entries(environment).find(([name]) => name.toUpperCase() === 'NPM_CONFIG_CACHE')?.[1];
   if (!cache) throw new Error('Package runner cache unavailable');

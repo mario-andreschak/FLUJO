@@ -365,10 +365,11 @@ export async function createBetaTransport(
     runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
     const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
+    const brokerEnv = runtimeBroker ? (config.trustedHost ? await trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {};
     const parameters = {
       command,
       args,
-      env: { ...env, ...(runtimeBroker ? (config.trustedHost ? trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {}), ...workloadEnv },
+      env: { ...env, ...brokerEnv, ...workloadEnv },
       cwd,
       stderr: isolation ? 'ignore' as const : 'pipe' as const,
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -380,7 +381,7 @@ export async function createBetaTransport(
     }
     transport = new BetaStdioClientTransport(parameters);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
-    else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else if (config.trustedHost) await attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
     else {
       attachShippedWorkspaceReadiness(transport, config, cwd);
       attachLocalHostLaunch(transport, config, current => JSON.stringify([

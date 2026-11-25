@@ -37,7 +37,7 @@ import {
 } from "@/backend/services/mcp/betaClient";
 import type { MCPServerConfig, MCPStdioConfig } from "@/shared/types/mcp";
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
-import { fingerprintTrustedHostExecutable } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable } from './fixtures/trustedHostFingerprint';
 
 let approvedHost: ReturnType<typeof installTrustedHostProfile>;
 const stdio = (command = "node"): MCPStdioConfig => {

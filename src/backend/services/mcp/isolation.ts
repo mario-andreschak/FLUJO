@@ -7,7 +7,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { ownerPolicySchema } from '../security/ownerCredentials';
-import { readPrivateApproval, trustedHostMcpApproval, TrustedHostMcpError } from '../security/trustedHostMcp';
+import { readPrivateApprovalAsync, trustedHostMcpApprovalAsync, TrustedHostMcpError } from '../security/trustedHostMcp';
 import { getManagedTrustedHost } from './trustedHost';
 import { getLocalHostLaunch, localHostMcpAllowed } from './localHost';
 import {
@@ -26,20 +26,20 @@ const approvalSchema = z.object({
   }).strict()).max(128),
 }).strict().refine(value => new Set(value.approvals.map(item => JSON.stringify([item.workspace, item.serverName]))).size === value.approvals.length);
 
-function readPrivatePolicy(filename: string | undefined): unknown {
-  try { return readPrivateApproval(filename); }
+async function readPrivatePolicy(filename: string | undefined): Promise<unknown> {
+  try { return await readPrivateApprovalAsync(filename); }
   catch { throw new McpIsolationError('ISOLATION_UNAVAILABLE'); }
 }
 
-export function approvedIsolationDigest(config: MCPStdioConfig, workspace = getCurrentWorkspace()): string {
+export async function approvedIsolationDigest(config: MCPStdioConfig, workspace = getCurrentWorkspace()): Promise<string> {
   try {
     const policy = isolatedMcpPolicySchema.parse(config.isolation);
     if (JSON.stringify(policy.command) !== JSON.stringify([config.command, ...(config.args ?? [])])
         || config.enableMcpApps || config.enableMcpSkills || config.sampling?.enabled || config.elicitation?.enabled) {
       throw new McpIsolationError('ISOLATION_POLICY_INVALID');
     }
-    const approvals = approvalSchema.parse(readPrivatePolicy(process.env.FLUJO_MCP_ISOLATION_FILE));
-    const owner = ownerPolicySchema.parse(readPrivatePolicy(process.env.FLUJO_OWNER_AUTH_FILE));
+    const approvals = approvalSchema.parse(await readPrivatePolicy(process.env.FLUJO_MCP_ISOLATION_FILE));
+    const owner = ownerPolicySchema.parse(await readPrivatePolicy(process.env.FLUJO_OWNER_AUTH_FILE));
     const approved = approvals.approvals.find(item => item.workspace === workspace && item.serverName === config.name);
     const digest = isolatedMcpPolicyDigest(policy);
     if (owner.ownerId !== approvals.ownerId || !approved || approved.expiresAt <= Date.now()
@@ -52,18 +52,18 @@ export function approvedIsolationDigest(config: MCPStdioConfig, workspace = getC
 }
 
 /** A private isolation grant cannot be bypassed by omitting it from an imported config. */
-export function assertHostMcpLaunchAllowed(config: MCPStdioConfig): void {
+export async function assertHostMcpLaunchAllowed(config: MCPStdioConfig): Promise<void> {
   if (localHostMcpAllowed(config)) return;
   if (process.env.FLUJO_MCP_ISOLATION_FILE === undefined) {
-    trustedHostMcpApproval(config);
+    await trustedHostMcpApprovalAsync(config);
     return;
   }
   try {
-    const approvals = approvalSchema.parse(readPrivatePolicy(process.env.FLUJO_MCP_ISOLATION_FILE));
+    const approvals = approvalSchema.parse(await readPrivatePolicy(process.env.FLUJO_MCP_ISOLATION_FILE));
     if (approvals.approvals.some(item => item.workspace === getCurrentWorkspace() && item.serverName === config.name)) {
       throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
     }
-    trustedHostMcpApproval(config);
+    await trustedHostMcpApprovalAsync(config);
   } catch (error) {
     if (error instanceof McpIsolationError || error instanceof TrustedHostMcpError) throw error;
     throw new McpIsolationError('ISOLATION_UNAVAILABLE');
@@ -87,9 +87,9 @@ function registry(): Map<string, ManagedMcpIsolation> {
   return global.__flujo_mcp_isolated_generations ??= new Map();
 }
 
-export function prepareMcpIsolation(config: MCPStdioConfig, environment: Record<string, string>): ManagedMcpIsolation {
+export async function prepareMcpIsolation(config: MCPStdioConfig, environment: Record<string, string>): Promise<ManagedMcpIsolation> {
   const workspace = getCurrentWorkspace();
-  const policyDigest = approvedIsolationDigest(config, workspace);
+  const policyDigest = await approvedIsolationDigest(config, workspace);
   const key = JSON.stringify([workspace, config.name]);
   const predecessor = registry().get(key);
   if (predecessor && (!predecessor.cleanupPending || predecessor.close().outcome === 'unknown')) {
@@ -171,7 +171,7 @@ export function attachMcpIsolation(transport: IsolationTransport, config: MCPStd
   });
   transport.start = async () => {
     try {
-      if (getCurrentWorkspace() !== managed.workspace || approvedIsolationDigest(config, managed.workspace) !== managed.policyDigest) {
+      if (getCurrentWorkspace() !== managed.workspace || await approvedIsolationDigest(config, managed.workspace) !== managed.policyDigest) {
         throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
       }
       await start();
@@ -318,7 +318,7 @@ export async function assertMcpIsolationDispatch(client: Client, serverName: str
     const current = await currentServerConfig(serverName);
     if (!current || current.disabled || current.transport !== 'stdio' || current.isolation === undefined
         || getCurrentWorkspace() !== managed.workspace || serverName !== managed.serverName
-        || approvedIsolationDigest(current, managed.workspace) !== managed.policyDigest) {
+        || await approvedIsolationDigest(current, managed.workspace) !== managed.policyDigest) {
       throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
     }
   } catch (error) {

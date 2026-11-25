@@ -9,8 +9,8 @@ import { readPlainFile } from '@/utils/readPlainFile';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { ownerPolicySchema } from './ownerCredentials';
 import { ownerPolicyRevision } from './ownerPolicy';
-import { readPrivateApproval, readPrivateApprovalAsync, readPrivateApprovalSet, readPrivateApprovalSetAsync, sameTrustedHostConsent, trustedHostEnvironment,
-  trustedHostApprovalsSchema, trustedHostMcpApproval, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from './trustedHostMcp';
+import { readPrivateApproval, readPrivateApprovalAsync, readPrivateApprovalSetAsync, sameTrustedHostConsent, trustedHostEnvironment,
+  trustedHostApprovalsSchema, trustedHostMcpApprovalAsync, trustedHostMcpPolicyDigestAsync, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from './trustedHostMcp';
 import { canonicalWorkloadJson, computeBundledFlujoWorkloadDefinitions, computeBundledFlujoWorkloadInventory,
   type WorkloadAction } from '../mcp/bundledFlujoWorkloadInventory';
 
@@ -188,7 +188,7 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     const inventory = await computeBundledFlujoWorkloadInventory(); assertPending(pending); verified.assertLive();
     if (canonicalWorkloadJson(inventory) !== canonicalWorkloadJson(trustedHostMcpPolicySchema.parse(pending.config.trustedHost).bundledInstallation?.workload?.inventory)) throw new BundledFlujoWorkloadError();
     const owner = ownerPolicySchema.parse(await traceAsync('activation-owner', () => readPrivateApprovalAsync(pending.ownerFile))); assertPending(pending); verified.assertLive();
-    const authority = traceSync('activation-grant', () => trustedHostMcpApproval(pending.config));
+    const authority = await traceAsync('activation-grant', () => trustedHostMcpApprovalAsync(pending.config));
     if (owner.ownerId !== authority.ownerId || authority.digest !== verified.digest || authority.ownerId !== verified.ownerId) throw new BundledFlujoWorkloadError();
     const parent = directory(pending.ledger);
     try { fs.mkdirSync(parent, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
@@ -209,8 +209,8 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
       markerIdentity: stamp(pending.marker.identity), markerDigest: hash(pending.marker.bytes), inventory });
     assertPending(pending); verified.assertLive();
     traceSync('activation-record', () => fillFile(pending.record!, record));
-    if (ownerPolicyRevision(ownerPolicySchema.parse(traceSync('activation-owner-final', () => readPrivateApproval(pending.ownerFile)))) !== record.ownerRevision) throw new BundledFlujoWorkloadError();
-    const final = traceSync('activation-grant-final', () => trustedHostMcpApproval(pending.config)); assertPending(pending); verified.assertLive();
+    if (ownerPolicyRevision(ownerPolicySchema.parse(await traceAsync('activation-owner-final', () => readPrivateApprovalAsync(pending.ownerFile)))) !== record.ownerRevision) throw new BundledFlujoWorkloadError();
+    const final = await traceAsync('activation-grant-final', () => trustedHostMcpApprovalAsync(pending.config)); assertPending(pending); verified.assertLive();
     if (final.digest !== record.policyDigest || final.ownerId !== record.ownerId || record.expiresAt <= Date.now()) throw new BundledFlujoWorkloadError();
     readExact(pending.marker); readExact(pending.record);
     if (fs.existsSync(publishedName)) throw new BundledFlujoWorkloadError();
@@ -505,11 +505,12 @@ async function evidence(request: Request) {
     const finalEvidence = await traceAsync('config-final', () => readCurrentConfig(record.serverName, request.signal));
     const finalConfig = finalEvidence.config;
     if (!sameTrustedHostConsent(finalConfig, config)) throw new BundledFlujoWorkloadError();
-    const finalDigest = traceSync('digest-final', () => trustedHostMcpPolicyDigest(finalConfig));
+    const finalDigest = await traceAsync('digest-final', () => trustedHostMcpPolicyDigestAsync(finalConfig));
     // The last fresh set covers every private file after ALL yielding source,
     // executable, environment, inventory and config checks. No verdict is reused.
     phase = 'final-private-binding';
-    const [lastRecord, lastMarker, lastOwner, lastApprovals] = traceSync('private-set-final', () => readPrivateApprovalSet(files, request.signal));
+    const [lastRecord, lastMarker, lastOwner, lastApprovals] = await traceAsync('private-set-final', () =>
+      readPrivateApprovalSetAsync(files, request.signal, ['record', 'marker', 'owner', 'ledger']));
     const freshOwner = ownerPolicySchema.parse(lastOwner), approvals = trustedHostApprovalsSchema.parse(lastApprovals);
     const freshGrant = approvals.approvals.find(item => item.workspace === record.workspace && item.serverName === record.serverName);
     if (canonicalWorkloadJson(recordSchema.parse(lastRecord)) !== canonicalWorkloadJson(record)

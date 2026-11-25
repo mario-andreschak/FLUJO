@@ -50,8 +50,9 @@ async function checkpoint(filename: string, identity: fs.BigIntStats, handle?: F
   // Parallel observations may precede the final canonical-path yield. Reread
   // every identity after all operations settle. This restores post-canonical
   // witness ordering; subsequent caller awaits still require their own checks.
-  if (handle && !same(identity, fs.fstatSync(handle.fd, { bigint: true }))) throw new Error(refusal);
-  if (!same(identity, fs.lstatSync(filename, { bigint: true }))) throw new Error(refusal);
+  const [held, named] = await Promise.all([handle?.stat({ bigint: true }), fs.promises.lstat(filename, { bigint: true })]);
+  if (held && !same(identity, held)) throw new Error(refusal);
+  if (!same(identity, named)) throw new Error(refusal);
 }
 
 /** Declared dependency inspection only: never loads package code or conveys consent. */

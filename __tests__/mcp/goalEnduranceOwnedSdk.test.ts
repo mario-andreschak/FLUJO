@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
-import { fingerprintTrustedHostSource, trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostSource } from './fixtures/trustedHostFingerprint';
 import { createStdioTransport } from '@/backend/services/mcp/connection';
 import { getManagedTrustedHost } from '@/backend/services/mcp/trustedHost';
 

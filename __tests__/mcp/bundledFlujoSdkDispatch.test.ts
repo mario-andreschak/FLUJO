@@ -82,7 +82,7 @@ test.each(['live', 'retired-after-final-admission'] as const)('real SDK producer
     capsule = prepareBundledFlujoWorkload(approved.config);
     if (!capsule) throw new Error('Genuine pending SDK workload was not prepared.');
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
-    attachTrustedHost(clientTransport, approved.config, undefined, capsule);
+    await attachTrustedHost(clientTransport, approved.config, undefined, capsule);
     await server.connect(serverTransport);
     await client.connect(clientTransport);
     const request = new Request('http://127.0.0.1:4200/api/mcp/flujo/tools', { signal: cancellation.signal,
