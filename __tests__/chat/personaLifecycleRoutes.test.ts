@@ -58,6 +58,7 @@ jest.mock('@/backend/services/questionRegistry', () => ({
 const applyApprovalDecisionMock = jest.fn();
 jest.mock('@/backend/execution/flow/resumeAfterApproval', () => ({
   applyApprovalDecision: (...args: unknown[]) => applyApprovalDecisionMock(...(args as [])),
+  refusedHumanStepAnswer: () => undefined,
 }));
 
 const processChatCompletionMock = jest.fn();

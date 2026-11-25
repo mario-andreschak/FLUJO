@@ -62,7 +62,8 @@ function reviewFlow(id: string): Flow {
 const params = (requestId: string) => ({ params: Promise.resolve({ requestId }) });
 const post = (requestId: string, body: unknown) => answer(new Request(`http://localhost/api/human-tasks/${requestId}`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-}), params(requestId));
+}) as never, params(requestId) as never);
+const open = (requestId: string) => read(new Request(`http://localhost/api/human-tasks/${requestId}`) as never, params(requestId) as never);
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 200 && !check(); attempt++) {
@@ -103,7 +104,7 @@ describe('/api/human-tasks', () => {
   it('lists waiting steps without their content', async () => {
     const view = await waitingStep('listed');
 
-    const body = await (await list(new Request('http://localhost/api/human-tasks'))).json();
+    const body = await (await list(new Request('http://localhost/api/human-tasks') as never)).json();
 
     expect(body.tasks).toEqual([expect.objectContaining({
       requestId: view.requestId, conversationId: 'listed', title: 'Check the email', mode: 'edit', status: 'waiting',
@@ -115,7 +116,7 @@ describe('/api/human-tasks', () => {
   it('shows one step with its content and digest, and reading changes nothing', async () => {
     const view = await waitingStep('opened');
 
-    const response = await read(new Request(`http://localhost/api/human-tasks/${view.requestId}`), params(view.requestId));
+    const response = await open(view.requestId);
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -141,7 +142,7 @@ describe('/api/human-tasks', () => {
     expect(again.status).toBe(200);
     expect(await again.json()).toMatchObject({ status: 'applied', repeat: true, receipt: { decisionId: body.receipt.decisionId } });
     expect((await post(view.requestId, { action: 'decline' })).status).toBe(409);
-    const after = await (await read(new Request('http://localhost'), params(view.requestId))).json();
+    const after = await (await open(view.requestId)).json();
     expect(after).toMatchObject({ status: 'applied', receipt: { decisionId: body.receipt.decisionId, outcome: 'submitted' } });
   });
 
@@ -169,7 +170,7 @@ describe('/api/human-tasks', () => {
     assertLocalRequestMock.mockReturnValue(Response.json({ error: 'Forbidden' }, { status: 403 }));
 
     expect((await post(view.requestId, { action: 'decline' })).status).toBe(403);
-    expect((await read(new Request('http://localhost'), params(view.requestId))).status).toBe(403);
+    expect((await open(view.requestId)).status).toBe(403);
   });
 
   it('returns 404 for a step it does not know', async () => {

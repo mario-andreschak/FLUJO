@@ -2,7 +2,8 @@
  * A Human step (#1095) can be written as a FlowSpec, as a guided simple step and on the
  * canvas, and each of these keeps it exactly as authored.
  */
-import Ajv from 'ajv';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
+import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation/types';
 import { compileFlowSpec, flowToSpec, type FlowSpec } from '@/utils/shared/flowSpecCompiler';
 import { validateFlow } from '@/utils/shared/flowValidation';
 import { flowUsesAdvancedFeatures } from '@/utils/shared/flowAuthoringProfile';
@@ -173,7 +174,8 @@ describe('Human step in a guided simple flow', () => {
       { id: 'send', task: 'Send the email' },
     ],
   });
-  const validate = new Ajv({ strict: false }).compile(SIMPLE_FLOW_SPEC_SCHEMA);
+  const schemaCheck = new AjvJsonSchemaValidator().getValidator(SIMPLE_FLOW_SPEC_SCHEMA as unknown as JsonSchemaType);
+  const validate = (value: unknown) => schemaCheck(value).valid;
   const context = { models: [{ id: 'model-1', name: 'small-model' }] };
 
   it('accepts a Human step in the schema and still needs a task or a human part', () => {

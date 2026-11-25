@@ -28,6 +28,8 @@ import { readWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { CONVERSATION_PINS_PREFERENCE } from '@/utils/shared/conversationPins';
 import ChatMessages from './ChatMessages';
 import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './ChatMessages';
+import type { HumanTaskAnswerResult } from './HumanTaskCard';
+import type { HumanAnswer } from '@/utils/shared/humanStep';
 import type { CapturedToolResource } from './toolCallPairing';
 import { buildSplitMessages, type SplitHalf } from './conversationSplit';
 import ChatInput from './ChatInput';
@@ -4292,6 +4294,56 @@ const Chat: React.FC = () => {
     handleToolResponse('approve', toolCallId);
   };
 
+  /**
+   * Answer a waiting Human step (#1095). The answer is checked and saved first; a refusal
+   * comes back to the card, which keeps what was typed. Once saved, the run goes on in
+   * the background and this view follows it through the event stream. A Persona's step
+   * goes through /respond instead, because only its dispatcher may continue it.
+   */
+  const handleAnswerHumanStep = async (
+    target: { toolCallId: string; requestId: string },
+    action: 'approve' | 'reject',
+    human: HumanAnswer,
+  ): Promise<HumanTaskAnswerResult> => {
+    const conversationId = currentConversationIdRef.current;
+    if (!conversationId) return { ok: false, error: t('chat.humanStep.failed') };
+    setError(null);
+    setErrorInfo(null);
+    // Listen before answering, so no event of the continued run can slip past.
+    await openEventStream(conversationId);
+    try {
+      await chatService.answerHumanTask(target.requestId, action, human);
+    } catch (err) {
+      const body = err instanceof ChatApiError ? err.body as { code?: string; error?: string; fieldErrors?: Record<string, string> } | undefined : undefined;
+      if (body?.code === 'persona_owned') {
+        try {
+          setIsLoading(true);
+          setLoadingConversationId(conversationId);
+          markConvRunning(conversationId, true);
+          const data = await chatService.respondToToolCall(conversationId, action, target.toolCallId, human);
+          handleApiResponse(data, conversationId);
+          return { ok: true };
+        } catch (fallbackError) {
+          if (loadingConversationIdRef.current === conversationId) setIsLoading(false);
+          markConvRunning(conversationId, false);
+          const fallbackBody = fallbackError instanceof ChatApiError
+            ? fallbackError.body as { error?: string; fieldErrors?: Record<string, string> } | undefined : undefined;
+          return { ok: false, error: fallbackBody?.error ?? t('chat.humanStep.failed'), fieldErrors: fallbackBody?.fieldErrors };
+        }
+      }
+      log.warn('Could not answer a Human step', { conversationId, requestId: target.requestId, err });
+      return { ok: false, error: body?.error ?? t('chat.humanStep.failed'), fieldErrors: body?.fieldErrors };
+    }
+    if (currentConversationIdRef.current === conversationId) {
+      setPendingToolCalls(null);
+      setIsLoading(true);
+      setLoadingConversationId(conversationId);
+    }
+    markConvRunning(conversationId, true);
+    patchConversationStatus(conversationId, 'running');
+    return { ok: true };
+  };
+
   const handleRejectToolCall = (toolCallId: string) => {
     handleToolResponse('reject', toolCallId);
   };
@@ -5707,6 +5759,7 @@ const Chat: React.FC = () => {
                 onBeginEditMessage={beginEditMessage} // "Edit" opens the input editor
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}
+                onAnswerHumanStep={handleAnswerHumanStep}
                 onCancelToolCall={handleCancelToolCall}
                 onSubmitElicitation={handleSubmitElicitation}
                 onCancelElicitation={handleCancelElicitation}

@@ -135,12 +135,13 @@ async function POST_handler(request: Request, { params }: Context) {
     const outcome = await withConversationExecutionLock(conversationId, async () => {
       const state = await loadConversationState(conversationId);
       const refused = guardState(request, state);
-      if (refused) return { response: refused };
-      if (!state) return { response: Response.json({ error: 'This step is not waiting for an answer.' }, { status: 404 }) };
+      if (refused) return { kind: 'reply' as const, response: refused };
+      if (!state) return { kind: 'reply' as const, response: Response.json({ error: 'This step is not waiting for an answer.' }, { status: 404 }) };
       if (isPersonaOwnedConversationState(state)) {
         // A Persona's run may only change through its dispatcher, which the chat answer path uses.
-        return { response: Response.json({
+        return { kind: 'reply' as const, response: Response.json({
           error: 'This step belongs to a Persona. Answer it in its chat or with POST /v1/chat/conversations/{id}/respond.',
+          code: 'persona_owned',
         }, { status: 409 }) };
       }
       const result = decideHumanTask(state, { requestId, accept: ACCEPT.has(action), answer, channel: 'api' });
@@ -149,14 +150,14 @@ async function POST_handler(request: Request, { params }: Context) {
         // The step already used its answer. A client that lost the reply gets the receipt
         // back when it asks for the same thing; a different answer is too late.
         const accepted = applied.outcome === 'approved' || applied.outcome === 'submitted';
-        return { response: accepted === ACCEPT.has(action)
+        return { kind: 'reply' as const, response: accepted === ACCEPT.has(action)
           ? Response.json({ status: 'applied', repeat: true, conversationId, receipt: {
             requestId, decisionId: applied.decisionId, outcome: applied.outcome, decidedAt: applied.decidedAt,
           } })
           : Response.json({ error: 'This step already has a different answer.' }, { status: 409 }) };
       }
       if (result.kind === 'refused') {
-        return { response: Response.json({ error: result.error, fieldErrors: result.fieldErrors }, { status: result.status }) };
+        return { kind: 'reply' as const, response: Response.json({ error: result.error, fieldErrors: result.fieldErrors }, { status: result.status }) };
       }
       if (result.kind === 'recorded') {
         FlowExecutor.conversationStates.set(conversationId, state);
@@ -165,9 +166,9 @@ async function POST_handler(request: Request, { params }: Context) {
           status: 'decided', outcome: result.receipt.outcome, decisionId: result.receipt.decisionId, decidedAt: result.receipt.decidedAt,
         }), 'decided');
       }
-      return { receipt: result.receipt, repeat: result.kind === 'repeat' };
+      return { kind: 'saved' as const, receipt: result.receipt, repeat: result.kind === 'repeat' };
     });
-    if ('response' in outcome) return outcome.response;
+    if (outcome.kind === 'reply') return outcome.response;
 
     const continueInBackground = bindToCurrentWorkspace(async () => {
       try {

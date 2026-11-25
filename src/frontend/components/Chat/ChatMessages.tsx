@@ -79,6 +79,8 @@ import {
 } from '@/frontend/components/shared/MarkdownLink';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import SubflowLaneChip from './SubflowLaneChip';
+import HumanTaskCard, { type HumanTaskAnswerResult } from './HumanTaskCard';
+import { parseHumanTaskCall, type HumanAnswer } from '@/utils/shared/humanStep';
 import { formatPartialJson } from '@/frontend/utils/partialJson';
 import {
   groupMcpAppOccurrences,
@@ -174,6 +176,12 @@ interface ChatMessagesProps {
   onBeginEditMessage?: (messageId: string) => void;
   onApproveToolCall?: (toolCallId: string) => void;
   onRejectToolCall?: (toolCallId: string) => void;
+  /** Answer a waiting Human step (#1095); resolves with the server's verdict for the card. */
+  onAnswerHumanStep?: (
+    target: { toolCallId: string; requestId: string },
+    action: 'approve' | 'reject',
+    human: HumanAnswer,
+  ) => Promise<HumanTaskAnswerResult>;
   onCancelToolCall?: (toolCallId: string) => void; // Issue #357: cancel one in-flight tool call
   /** Submit elicitation form — called with the collected field values. */
   onSubmitElicitation?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
@@ -1940,6 +1948,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onBeginEditMessage,
   onApproveToolCall, // Destructure new prop
   onRejectToolCall, // Destructure new prop
+  onAnswerHumanStep,
   onCancelToolCall, // Issue #357
   onSubmitElicitation,
   onCancelElicitation,
@@ -1962,6 +1971,17 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const { settings, settingsHydrated } = useStorage();
   const restoreEnabled = settingsHydrated && settings?.experimental?.snapshotsEnabled === true;
   const { t, tp } = useI18n();
+  // A waiting Human step gets its own card; the rest are ordinary tool approvals.
+  const { humanStepCalls, toolCallsToApprove } = useMemo(() => {
+    const human: Array<{ call: OpenAI.ChatCompletionMessageFunctionToolCall; task: NonNullable<ReturnType<typeof parseHumanTaskCall>> }> = [];
+    const tools: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
+    for (const call of pendingToolCalls ?? []) {
+      const task = parseHumanTaskCall(call);
+      if (task) human.push({ call, task });
+      else tools.push(call);
+    }
+    return { humanStepCalls: human, toolCallsToApprove: tools };
+  }, [pendingToolCalls]);
   // --- Render window (long-conversation performance) ---
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
   useEffect(() => {
@@ -2375,9 +2395,12 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         />
       )}
 
+      {humanStepCalls.map(({ call, task }) => (
+        <HumanTaskCard key={call.id} toolCallId={call.id} task={task} onAnswer={onAnswerHumanStep} />
+      ))}
+
       {/* Display Pending Tool Calls for Approval */}
-      {/* Add null check for pendingToolCalls before accessing length */}
-      {pendingToolCalls && pendingToolCalls.length > 0 && (
+      {toolCallsToApprove.length > 0 && (
         <Paper
           elevation={2}
           sx={{ p: 2, mt: 2, bgcolor: 'warning.light', border: '1px solid', borderColor: 'warning.main', borderRadius: 2 }}
@@ -2388,7 +2411,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           <Typography variant="body2" sx={{ mb: 2 }}>
             {t('chat.approval.help')}
           </Typography>
-          {pendingToolCalls.map((toolCall, ptcIndex) => { // Added index for key
+          {toolCallsToApprove.map((toolCall, ptcIndex) => { // Added index for key
             const toolName = displayToolName(toolCall.function.name);
             let formattedArgs = toolCall.function.arguments;
             try {
