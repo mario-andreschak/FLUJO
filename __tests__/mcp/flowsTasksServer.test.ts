@@ -64,9 +64,17 @@ async function dispatch(method: string, params: Record<string, unknown> = {}, op
   const body = JSON.parse(await response.text()) as RpcBody;
   return { status: response.status, body };
 }
-function persist() {
+/** Replaces the policy the way an operator tool must on Windows: a rename over a file
+ * that a reader holds open is refused briefly, so retry it. */
+async function persist() {
   fs.writeFileSync(`${policyPath}.new`, JSON.stringify(policy), { mode: 0o600 });
-  fs.renameSync(`${policyPath}.new`, policyPath);
+  for (let attempt = 1; ; attempt += 1) {
+    try { fs.renameSync(`${policyPath}.new`, policyPath); return; }
+    catch (error) {
+      if (attempt >= 50 || !['EPERM', 'EBUSY', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
 }
 async function waitFor(taskId: string, status: string, form = false): Promise<Record<string, unknown>> {
   const until = Date.now() + 7000;
@@ -93,7 +101,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
     const issued = issueOwnerCredential(scopes, Date.now() + 3600000);
     token = issued.token;
     policy = { schemaVersion: 1, ownerId: 'test-owner', credentials: [issued.record] };
-    persist();
+    await persist();
     process.env.FLUJO_OWNER_AUTH_FILE = policyPath;
     delete process.env.FLUJO_WORKER_MODE;
     process.env.FLUJO_MCP_TASKS_SERVER = 'true';
@@ -108,7 +116,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
   afterEach(async () => {
     // Restore the exact original policy only to drain this test's owned jobs.
     for (const record of policy.credentials) record.revokedAt = null;
-    persist();
+    await persist();
     const resolved = await resolveOwnerRequest(request('ping'), scopes, { requireBearer: true });
     if (resolved.ok) for (const taskId of createdIds) {
       await runWithWorkspace(workspace, () => serverTaskStore.cancel(resolved.authorization, workspace, taskId)).catch(() => undefined);
@@ -144,7 +152,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
     expect((await handleModernFlowsMcpRequest(incoming)).status).toBe(401);
     expect(text).not.toHaveBeenCalled(); expect(json).not.toHaveBeenCalled();
     const limited = issueOwnerCredential(['openai:execute'], Date.now() + 60000);
-    policy.credentials.push(limited.record); persist();
+    policy.credentials.push(limited.record); await persist();
     expect((await dispatch('tools/call', { name: 'owned_flow' }, { bearer: limited.token })).status).toBe(403);
     expect(mockRun).not.toHaveBeenCalled();
   });
@@ -246,7 +254,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
 
   it('denies another credential and another selected workspace without disclosing a task result', async () => {
     const second = issueOwnerCredential(scopes, Date.now() + 3600000);
-    policy.credentials.push(second.record); persist();
+    policy.credentials.push(second.record); await persist();
     const task = await create(); await waitFor(task.taskId, 'completed');
     const otherCredential = await dispatch('tasks/get', { taskId: task.taskId }, { tasks: true, bearer: second.token });
     expect(otherCredential.body.error?.message).toBe('Task is unavailable.');
@@ -299,7 +307,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
       await gate.promise; await options.assertAuthorized(); ranEffect = true; return { content: [] };
     });
     const task = await create();
-    policy.credentials[0].revokedAt = Date.now(); persist();
+    policy.credentials[0].revokedAt = Date.now(); await persist();
     expect((await dispatch('tasks/get', { taskId: task.taskId }, { tasks: true })).status).toBe(401);
     gate.resolve(); await new Promise(resolve => setTimeout(resolve, 150));
     expect(ranEffect).toBe(false);
