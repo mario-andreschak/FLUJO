@@ -29,9 +29,10 @@ describe('browser recording recovery', () => {
     process.env.FLUJO_FFMPEG_PATH = path.join(root, 'missing-ffmpeg');
 
     let closed = false;
-    const video = {
-      path: jest.fn(async () => path.join(root, 'raw.webm')),
-      saveAs: jest.fn(async (destination: string) => fs.writeFile(destination, Buffer.from('WEBM_BYTES'))),
+    let videoPath = '';
+    const screencast = {
+      start: jest.fn(async (options: { path: string }) => { videoPath = options.path; }),
+      stop: jest.fn(async () => fs.writeFile(videoPath, Buffer.from('WEBM_BYTES'))),
     };
     const page = {
       evaluate: jest.fn(async () => ({ width: 1280, height: 720, dpr: 1 })),
@@ -39,7 +40,7 @@ describe('browser recording recovery', () => {
       mainFrame: jest.fn(() => ({})),
       on: jest.fn(),
       url: jest.fn(() => 'about:blank'),
-      video: jest.fn(() => video),
+      screencast,
     };
     const context = {
       close: jest.fn(async () => { closed = true; }),
@@ -73,13 +74,13 @@ describe('browser recording recovery', () => {
         attempts: [expect.stringContaining('encoder rejected')],
       });
       expect(newContext).toHaveBeenNthCalledWith(1, expect.objectContaining({
-        recordVideo: expect.objectContaining({ size: { width: 1920, height: 1080 } }),
+        viewport: { width: 1920, height: 1080 },
       }));
       expect(newContext).toHaveBeenNthCalledWith(2, expect.objectContaining({
         viewport: { width: 1280, height: 720 },
         deviceScaleFactor: 1,
-        recordVideo: expect.objectContaining({ size: { width: 1280, height: 720 } }),
       }));
+      expect(screencast.start).toHaveBeenCalledWith(expect.objectContaining({ size: { width: 1280, height: 720 } }));
 
       const stopped = await stopRecording({
         recordingId: started.recordingId,
