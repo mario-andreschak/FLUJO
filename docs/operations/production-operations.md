@@ -230,6 +230,56 @@ and counts, with no prompt/output/tool arguments, command/env, bearer or raw
 provider/filesystem error. Retain report digests and reviewer access to originals.
 Do not describe them as a signed or tamper-proof audit trail.
 
+## Checks on the shipped forms
+
+`scripts/packaged-acceptance.mjs` runs one set of backup, restart, upgrade and
+restore checks against FLUJO as people install it, not against a source build:
+
+| Shipped form | Where CI runs it | Command |
+| --- | --- | --- |
+| npm package, Linux and Windows | `verify-full.yml` production build (both systems), and the npm release before publishing | `--form npm --pack` or `--form npm --tarballs DIR` |
+| Windows installer | `installer.yml`, right after the real install on Windows Server 2022 and 2025 | `--form checkout --app-root DIR` |
+| Docker image | `publish-image.yml`, before the image is pushed | `--form docker --image ID` |
+
+Every run uses a new, empty data folder (or Docker volume) and its own port:
+
+1. Start the app and wait until it has finished starting.
+2. Add test data and take a backup; the backup must hold exactly that data.
+3. Stop normally and start again; the data must be unchanged.
+4. Change the data, force-stop the app right away and start again; the changes
+   must still be there.
+5. Try to restore two damaged backups; both must be refused and change nothing.
+6. Restore the backup; the original data must be back. Back up again.
+7. Stop normally; the app must end and free its port.
+
+With `--from npm:latest` (or `--from image:...` for Docker) the previous release
+starts first, writes the test data and takes the backup. The release under test
+must then open that data folder, show the same data and restore the older
+backup. CI uses the latest published release, so every release is checked as an
+upgrade from the one before it.
+
+What these checks do not cover: the test data is one flow, one finished
+conversation, the theme and one non-secret setting, with no model call, MCP
+tool, schedule, approval or secret. A forced stop is not a power cut. On Windows
+a console program has no gentle stop signal, so a normal stop there also ends
+the process tree. The backups are the ordinary selective backups, not complete
+data-folder or snapshot backups.
+
+Run the same checks on your own machine, for example against a Linux
+installation made by `scripts/install.sh`:
+
+```sh
+node scripts/packaged-acceptance.mjs --form checkout --app-root "$HOME/FLUJO" --from npm:latest --report "$HOME/flujo-acceptance.json"
+```
+
+New installations from `scripts/install.sh` and `scripts/install.ps1` download
+only the chosen version (a partial clone) and leave out the website folder
+`githubpages/`, which is mostly video and audio. The app only builds in
+`githubpages/oauth/client-metadata.json`, which is kept; the Docker image leaves
+out the same files. This cuts the first download from roughly 370 MB to roughly
+30 MB. Run `git sparse-checkout disable` in the installation folder to get the
+website files back. Git older than 2.25 still downloads the full history.
+
 ## Acceptance record for #570
 
 The source operations recovery drill

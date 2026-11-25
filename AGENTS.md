@@ -58,6 +58,8 @@ workaround.
 | Tests run only on a Node.js version the app supports | `assertSupportedTestRuntime` in `scripts/local-test-dependencies.cjs`; `__tests__/scripts/localTestDependencies.test.ts` |
 | Every page has exactly one feature map entry | `scripts/check-feature-map.mjs` |
 | Every API route has one multi-user kind (`workspace`, `host`, `admin`, `account`, `protocol`); routes that start programs are `host` or `admin` | `__tests__/accounts/routeCapabilities.test.ts` |
+| Every shipped form (npm, Windows installer, Docker) runs the same backup, restart, upgrade and restore checks before release | `assertPackagedAcceptance` in `scripts/workflow-contract.mjs` |
+| App code reads website files only from `githubpages/oauth/client-metadata.json`; installers and the image leave the rest out | `tests/installer-repository.test.mjs` |
 | Persona runtime cleanup writes only with a grant from the rollout switches | `PersonaRuntimeRetentionWriteGrant` argument of the compactors in `compactRuntime.ts`; `personaRuntimeRetentionSweep.test.ts` |
 | Resilience over refusal | Prose: needs judgment |
 

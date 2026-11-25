@@ -4,6 +4,7 @@ export const stateSelections = Object.freeze(['flows', 'chatHistory', 'settings'
 const conversationId = 'maintainer_drill_conversation';
 const flowId = 'maintainer_drill_flow';
 const variable = 'FLUJO_MAINTAINER_LABEL';
+export const syntheticIdentifiers = Object.freeze({ conversationId, flowId, variable });
 const conversationPath = `storage/conversations/${conversationId}.json`;
 const timestamp = 1700000000000;
 const flowTimestampFields = Object.freeze(['createdAt', 'updatedAt']);
