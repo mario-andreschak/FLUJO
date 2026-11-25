@@ -95,7 +95,12 @@ beforeEach(() => {
 
 describe('PromptRenderer renderMode', () => {
   it('requires the current answer before Finish and does not ask models to simulate future requests', async () => {
-    getFlowMock.mockResolvedValue(flow({}));
+    const base = flow({});
+    getFlowMock.mockResolvedValue({
+      ...base,
+      nodes: [...base.nodes, { id: 'finish', type: 'finish', data: { label: 'Finish', type: 'finish', properties: {} } }],
+      edges: [{ id: 'e1', source: 'node-1', target: 'finish' }],
+    });
     const result = await promptRenderer.renderPrompt('flow-1', 'node-1');
     expect(result).toContain('provide the requested response before handing off to Finish');
     expect(result).toContain('Do not invent future user messages, observations or review rounds');
