@@ -46,6 +46,33 @@ While the automation is armed, FLUJO pins the server so it is not closed for bei
 
 The endpoint only accepts calls from this computer.
 
+## Claude channel messages (no delivery guarantee)
+
+Under **What the server sends**, choose **Claude channel messages (no delivery guarantee)**
+for a server built as a [Claude Code channel](https://code.claude.com/docs/en/channels-reference).
+Such a server declares `experimental['claude/channel']` and sends
+`notifications/claude/channel` with `content` (text) and optional `meta` (text values).
+Like Claude Code, FLUJO keeps only `meta` keys made of letters, digits and underscores.
+
+- FLUJO keeps the server running and connected while the automation is on, and checks
+  the connection every few minutes.
+- Messages go through the same steps as events: the same checks, the same "already seen"
+  list, the same steering into a running conversation, and they reach the flow as untrusted
+  data (`data.channel` and `data.messages`).
+- A burst becomes one run: messages that arrive within a quarter of a second are handed
+  over together.
+- A message with `meta.event_id` or `meta.message_id` is recognised when it comes again.
+  Without one, two equal messages are two messages.
+- While the automation is busy, FLUJO holds messages and tries again, for up to 30 minutes
+  and within a memory budget that scales with the machine. After that, or when the budget
+  is full, the oldest are dropped and the automation card says so. The note clears on the
+  next successful check.
+
+Channels have no acknowledgement and no replay. A message sent while FLUJO or the server
+is off is lost, and so are messages held when the automation is changed or switched off.
+Choose **Events (delivery guaranteed)** whenever the server offers them. Only automations
+that chose this source listen; without one, channel messages are ignored and nothing runs.
+
 ## Steer a running conversation
 
 Fill in **Send to a running conversation (optional)** with a conversation id or a

@@ -11,7 +11,7 @@ const log = createLogger('app/api/mcp/servers/[name]/events/route');
 /**
  * GET /api/mcp/servers/{name}/events
  * The events a server can report. `{ supported: false, events: [] }` for a server
- * without the capability.
+ * without the capability. `channel` says whether it sends Claude channel messages.
  */
 async function GET_handler(_request: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   const locked = await assertUnlocked();
@@ -21,7 +21,7 @@ async function GET_handler(_request: NextRequest, { params }: { params: Promise<
     return json(await mcpService.listServerEvents(name), 200);
   } catch (error) {
     log.error('Error handling GET request', error);
-    return json({ supported: false, events: [], ...formatErrorResponse(error) }, 500);
+    return json({ supported: false, channel: false, events: [], ...formatErrorResponse(error) }, 500);
   }
 }
 

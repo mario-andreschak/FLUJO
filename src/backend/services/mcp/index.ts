@@ -267,6 +267,12 @@ import {
   type McpEventSubscribeResult,
 } from "./serverEvents";
 import { registerResourceNotificationHandlers, registerToolListChangedHandler } from "./resourceNotifications";
+import {
+  CLAUDE_CHANNEL_METHOD,
+  receiveClaudeChannelNotification,
+  registerClaudeChannelHandler,
+  serverDeclaresClaudeChannel,
+} from "./inboundEvents";
 import { cachedMcpList, invalidateMcpLists } from "./listCache";
 import {
   isMcpBetaProtocolEnabled,
@@ -1225,6 +1231,16 @@ export class MCPService {
           invalidateMcpLists(notifiedClient, 'tools');
           invalidateMcpLists(this.clients.get(config.name), 'tools');
         }));
+        // Claude channel messages (#1401): only automations that chose this
+        // source listen. Late messages from a replaced client are ignored.
+        registerClaudeChannelHandler(client, config.name, bindToCurrentWorkspace((notification: unknown) => {
+          receiveClaudeChannelNotification(
+            notifiedClient,
+            config.name,
+            notification,
+            () => this.getClient(config.name) === notifiedClient,
+          );
+        }));
       } else {
         // v2 beta SDK: the Client class's setNotificationHandler takes a method string and a
         // typed handler. Cast through unknown to call it without importing the beta types here.
@@ -1246,6 +1262,18 @@ export class MCPService {
               const uri = (notification as { params?: { uri?: string } })
                 ?.params?.uri;
               if (uri && this.getClient(config.name) === client) this.onResourceUpdated(config.name, uri);
+            }),
+          );
+          const channelClient = client;
+          betaSetNotification(
+            CLAUDE_CHANNEL_METHOD,
+            bindToCurrentWorkspace((notification: unknown) => {
+              receiveClaudeChannelNotification(
+                channelClient,
+                config.name,
+                notification,
+                () => this.getClient(config.name) === channelClient,
+              );
             }),
           );
         }
@@ -2189,13 +2217,38 @@ export class MCPService {
     return [...closed, ...evicted];
   }
 
-  /** The events a server can report, for the automation editor. */
-  async listServerEvents(serverName: string): Promise<{ supported: boolean; events: McpEventDescriptor[]; error?: string }> {
+  /**
+   * The events a server can report, for the automation editor. `channel` says
+   * whether it also sends Claude channel messages (#1401).
+   */
+  async listServerEvents(serverName: string): Promise<{
+    supported: boolean;
+    channel: boolean;
+    events: McpEventDescriptor[];
+    error?: string;
+  }> {
     const acquired = await this.acquireServerLease(serverName);
-    if (!acquired.lease) return { supported: false, events: [], error: acquired.error };
+    if (!acquired.lease) return { supported: false, channel: false, events: [], error: acquired.error };
     try {
-      if (!serverSupportsEvents(acquired.lease.client)) return { supported: false, events: [] };
-      return { supported: true, events: await listMcpEvents(acquired.lease.client) };
+      const channel = serverDeclaresClaudeChannel(acquired.lease.client);
+      if (!serverSupportsEvents(acquired.lease.client)) return { supported: false, channel, events: [] };
+      return { supported: true, channel, events: await listMcpEvents(acquired.lease.client) };
+    } finally {
+      acquired.lease.release();
+    }
+  }
+
+  /**
+   * Starts the server if needed and says whether it sends Claude channel
+   * messages. Called on arm and every few minutes, which also reconnects a
+   * server that went away. Throws when the server cannot be reached.
+   */
+  async connectClaudeChannel(serverName: string): Promise<boolean> {
+    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
+    try {
+      return serverDeclaresClaudeChannel(acquired.lease.client);
     } finally {
       acquired.lease.release();
     }

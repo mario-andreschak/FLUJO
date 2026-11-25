@@ -41,6 +41,8 @@ import {
 import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll } from './triggers/mcpPoll';
 import { armMcpEvent, mcpEventDeliveryUrl, newMcpEventSecret } from './triggers/mcpEvent';
+import { armClaudeChannel } from './triggers/claudeChannel';
+import { subscribeInboundEvents } from '@/backend/services/mcp/inboundEvents';
 import { composeTriggerPrompt } from './triggerPrompt';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import { armUrlWatch } from './triggers/urlWatch';
@@ -713,6 +715,43 @@ export class SchedulerService {
       }
       case 'mcp-event': {
         const pin = `trigger:${execution.id}`;
+        if (mcpEventSource(trigger) === 'claude-channel') {
+          this.armed.set(
+            execution.id,
+            armClaudeChannel({
+              connect: this.bindToWorkspace(async () => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before connecting');
+                return mcpService.connectClaudeChannel(trigger.serverName);
+              }),
+              pin: this.bindToWorkspace(async () => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                mcpService.pinServer(trigger.serverName, pin);
+              }),
+              unpin: this.bindToWorkspace(async () => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                mcpService.unpinServer(trigger.serverName, pin);
+              }),
+              listen: this.bindToWorkspace(listener => subscribeInboundEvents(trigger.serverName, listener)),
+              deliver: this.bindToWorkspace(async (batch) => {
+                const [{ deliverClaudeChannelEvents }, { steerEventWithRuntime }] = await Promise.all([
+                  import('./mcpEventDelivery'),
+                  import('./eventSteering'),
+                ]);
+                return deliverClaudeChannelEvents({
+                  scheduler: this,
+                  loadState: loadExecutionState,
+                  updateState: (executionId, update) => updateExecutionState(executionId, update),
+                  steer: steerEventWithRuntime,
+                  onBackgroundError: (message, error) => log.warn(`${message} for ${execution.id}:`, error),
+                }, execution.id, batch);
+              }),
+              onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
+              onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
+            })
+          );
+          break;
+        }
         this.armed.set(
           execution.id,
           armMcpEvent({

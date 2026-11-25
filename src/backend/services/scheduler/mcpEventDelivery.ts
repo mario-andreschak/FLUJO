@@ -11,6 +11,8 @@ import { mcpEventSource } from '@/shared/types/plannedExecution';
 import { mcpEventFingerprint, verifyMcpEventSignature } from './triggers/mcpEvent';
 import { composeTriggerPrompt } from './triggerPrompt';
 import type { EventSteeringOutcome, EventSteeringRequest } from './eventSteering';
+import type { McpInboundEvent } from '@/backend/services/mcp/inboundEvents';
+import type { ChannelDeliveryOutcome } from './triggers/claudeChannel';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_SEEN_IDS = 1000;
@@ -211,4 +213,38 @@ export async function admitMcpEvents<T>(
   void scheduler.fire(execution, payload, runId).catch(error => deps.onBackgroundError?.('Event run failed', error));
   await remember();
   return { status: 202, body: { accepted: true, runId } };
+}
+
+/**
+ * Claude channel messages for one automation (#1401). Same checks, dedup,
+ * steering and run start as webhook events; a burst arrives as one batch and
+ * becomes one run. There is no sender to retry, so the caller holds a busy
+ * batch briefly (see triggers/claudeChannel.ts).
+ */
+export async function deliverClaudeChannelEvents(
+  deps: McpEventDeliveryDeps,
+  executionId: string,
+  events: McpInboundEvent[],
+): Promise<ChannelDeliveryOutcome> {
+  const execution = activeMcpEventExecution(await deps.scheduler.get(executionId), 'claude-channel');
+  if (!execution) return 'gone';
+  const serverName = execution.trigger.serverName;
+  const items = events
+    .filter(event => event.serverName === serverName)
+    .map(event => ({ key: event.deliveryId, payload: event }));
+  if (items.length === 0) return 'gone';
+  const result = await admitMcpEvents(deps, execution, items, fresh => ({
+    summary: fresh.length === 1 ? `${serverName}: channel message` : `${serverName}: ${fresh.length} channel messages`,
+    context: {
+      channel: { server: serverName, delivery: 'no guarantee' },
+      messages: fresh.map(({ payload }) => ({
+        content: payload.content,
+        meta: payload.meta,
+        receivedAt: payload.receivedAt,
+      })),
+    },
+  }));
+  if (result.status === 503) return 'busy';
+  if (result.status === 410) return 'gone';
+  return result.body.duplicate ? 'duplicate' : 'accepted';
 }
