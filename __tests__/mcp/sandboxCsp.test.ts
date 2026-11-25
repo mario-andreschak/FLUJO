@@ -422,11 +422,22 @@ describe('hosted sandbox endpoint configuration', () => {
       `https://${originKey}.sandbox.example.test/sandbox.html`,
     );
 
+    // Localhost set where FLUJO starts: this computer keeps `<app>.localhost`,
+    // a request through a front door uses the operator's configured address.
     process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    expect(deriveSandboxPublicUrl('http://localhost:4200', 4201, originKey)).toBe(
+      `http://${originKey}.localhost:4201/sandbox.html`,
+    );
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey)).toBe(
+      `https://${originKey}.sandbox.example.test/sandbox.html`,
+    );
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201)).toBeUndefined();
+
+    // Localhost chosen on the Settings page ignores leftover hosted settings.
+    process.env.FLUJO_EXPOSURE_MODE_SOURCE = 'settings';
     expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey)).toBe(
       `http://${originKey}.localhost:4201/sandbox.html`,
     );
-    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201)).toBeUndefined();
   });
 
   it('uses only exact valid host origins and embeds the allowlist in the proxy', () => {

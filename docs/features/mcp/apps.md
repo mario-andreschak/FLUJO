@@ -25,7 +25,7 @@ Declared CSP origins are normalized and constrained to supported HTTP(S) origins
 
 External links are limited to safe HTTP(S) URLs. App-originated tool calls and resource reads pass through host authorization. App-provided model context is treated as untrusted, validated, size-bounded, and applied to later turns using last-write-wins semantics.
 
-Localhost and plain-HTTP Local Network installs work without sandbox configuration. For a hosted HTTPS deployment, choose **Settings → Network access → Public** and optionally configure a wildcard sandbox hostname as described below. See [Network exposure](../../../README.md#network-exposure).
+Localhost and plain-HTTP Local Network installs work without sandbox configuration. For a hosted HTTPS deployment, choose **Settings → Network access → Public** and optionally configure a wildcard sandbox hostname as described below, or keep Localhost mode behind your own signed-in front door ([see below](#localhost-mode-behind-a-trusted-front-door)). See [Network exposure](../../../README.md#network-exposure).
 
 ### Per-app sandbox origins
 
@@ -61,6 +61,35 @@ Before issuing sandbox credentials, FLUJO re-reads the exact resource through th
 On localhost, FLUJO automatically uses `<app>.localhost:4201`. On a plain-HTTP LAN, it automatically reuses the hostname or IP that opened the dashboard on port `4201`; the outer proxy origin is shared, while its URL and HMAC token remain scoped to the verified App identity. No DNS lookup or environment variable is required.
 
 For a configured wildcard HTTPS endpoint, **the reverse proxy must preserve the original `Host` header when forwarding requests to the sandbox listener.** The listener extracts the effective key from that header and rejects a token minted for any other hostname.
+
+#### Localhost mode behind a trusted front door
+
+FLUJO can stay in Localhost mode on a server whose only way in is the
+operator's own signed-in gateway on the same machine. To show App views through
+that gateway, set `FLUJO_EXPOSURE_MODE=localhost` together with
+`FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` (and usually `FLUJO_MCP_APP_HOST_ORIGINS`)
+where FLUJO is started. Then:
+
+- A dashboard request that reaches `/api/mcp/app-sandbox` with a
+  non-loopback `X-Forwarded-Host` gets the configured address (the `{app}`
+  template or the shared origin with the App key in the URL).
+- A browser on the machine itself still gets `<app>.localhost:4201`, one origin
+  per App.
+- `FLUJO_MCP_APP_HOST_ORIGINS` adds the gateway's dashboard origins to the
+  sandbox's `frame-ancestors`; unlike Local Network and Public mode, it does not
+  replace the local defaults.
+- The sandbox listener accepts an App key in the URL only when a valid shared
+  address is configured, and every token stays scoped to one App key. The
+  sandbox origin must still differ from the dashboard origin, so browser
+  storage stays separate. Browsers share cookies across ports of one host
+  name, so a sandbox on another port of the dashboard's host name can read
+  that host's cookies unless they are `HttpOnly`; prefer a separate host name,
+  or keep the gateway's cookies `HttpOnly`.
+
+If Localhost was chosen only on the Settings page, both variables are ignored
+so that values left over from an older hosted setup stay off. A malformed value
+is ignored too and App views keep the local address. Either way FLUJO writes
+one startup line naming what it uses or ignores and why.
 
 The proxy must also support WebSocket upgrades on this wildcard route. This is
 needed when an App has registered a private sidecar runtime as described below.
