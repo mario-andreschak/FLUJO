@@ -50,3 +50,20 @@ it('labels a configured limit and distinguishes unreported cache counts from zer
   fireEvent.click(screen.getByText('1.0k in · 50 out'));
   expect(within(screen.getByRole('table')).getAllByText('—')).toHaveLength(2);
 });
+
+describe('a server that sends no token counts (issue #1367)', () => {
+  it('says "not reported" instead of showing 0', () => {
+    render(<ConversationStats usage={{ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, byNode: {}, unreportedCalls: 2 }}
+      availableNodes={[]} contextInfo={undefined} />);
+    expect(screen.getByTestId('tokens-not-reported')).toHaveTextContent('Tokens not reported');
+    expect(screen.queryByText(/0 in · 0 out/)).not.toBeInTheDocument();
+  });
+
+  it('notes the calls it could not count when other calls were counted', () => {
+    render(<ConversationStats usage={{ promptTokens: 1000, completionTokens: 50, totalTokens: 1050, costUsd: 0, byNode: {}, unreportedCalls: 1 }}
+      availableNodes={[]} contextInfo={undefined} />);
+    expect(screen.queryByTestId('tokens-not-reported')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('1.0k in · 50 out'));
+    expect(screen.getByText('Model calls without token counts from the AI server: 1. The totals leave them out.')).toBeInTheDocument();
+  });
+});

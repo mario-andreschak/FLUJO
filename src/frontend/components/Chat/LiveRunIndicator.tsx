@@ -33,6 +33,8 @@ export function toolProgressStatus(name: string, message?: string | null): strin
 /** Live execution stats, driven by the SSE event stream while a run is active. */
 export interface LiveRunStats {
   totalTokens: number;
+  /** A model call in this run came back without token counts. */
+  tokensNotReported?: boolean;
   activeNode: string | null;
   startedAt: number;
   lastEventAt: number;
@@ -182,6 +184,10 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
         : t('chat.live.retryWait', { seconds: formatNumber(retrySeconds) }))
     : null;
 
+  // A server that sends no token counts would otherwise read as "0 tokens".
+  const tokensNotReported = Boolean(liveStats?.tokensNotReported) && !liveStats?.totalTokens;
+  const tokenCount = tokensNotReported ? t('chat.stats.notReported') : formatNumber(liveStats?.totalTokens ?? 0);
+
   const laneRows = lanes ? laneList(lanes) : [];
   const summary = laneRows.length > 0 ? (() => {
     const running = laneRows.filter(lane => lane.status === 'running').length;
@@ -252,7 +258,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
           </Typography>
           {!awaitingApproval && (
             <Typography variant="caption" color={stuck ? 'warning.main' : 'text.secondary'} sx={{ whiteSpace: 'nowrap' }}>
-              {formatNumber(liveStats?.totalTokens ?? 0)} · {formatNumber(elapsed)}s
+              {tokenCount} · {formatNumber(elapsed)}s
             </Typography>
           )}
           {summary && (
@@ -405,7 +411,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
       {!awaitingApproval && (
         <Typography variant="caption" color={stuck ? 'warning.main' : 'textSecondary'}>
           {tp('chat.live.elapsed', elapsed, {
-            tokens: t('chat.stats.tokens', { count: formatNumber(liveStats?.totalTokens ?? 0) }),
+            tokens: tokensNotReported ? t('chat.stats.notReported') : t('chat.stats.tokens', { count: tokenCount }),
           })}
           {stuck ? ` · ${tp('chat.live.inactive', sinceLast)}` : ''}
         </Typography>

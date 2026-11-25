@@ -53,6 +53,9 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
   const cachedReads = meter?.cacheReadTokens ?? 0;
   const cacheWrites = meter?.cacheWriteTokens ?? 0;
   const promptTokens = usage?.promptTokens ?? 0;
+  // Calls whose AI server sent no token counts add nothing above, so say so instead of showing 0.
+  const unreportedCalls = usage?.unreportedCalls ?? 0;
+  const notReported = unreportedCalls > 0 && meter!.processedTotalTokens === 0;
 
   const contextTokens = contextInfo?.totalTokens ?? contextInfo?.promptTokens;
   const hasContext = typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens >= 0;
@@ -71,14 +74,25 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: compact ? 0.5 : 1.5, flexShrink: 0 }}>
+      {notReported && (
+        <Tooltip title={t('chat.stats.notReportedHelp')}>
+          <Chip
+            icon={<DataUsageIcon />}
+            label={t('chat.stats.notReported')}
+            size="small"
+            variant="outlined"
+            data-testid="tokens-not-reported"
+          />
+        </Tooltip>
+      )}
       {usage && meter!.processedTotalTokens > 0 && (
         <>
-          <Tooltip title={t('chat.stats.tooltip', {
+          <Tooltip title={`${t('chat.stats.tooltip', {
             prompt: formatNumber(promptTokens),
             completion: formatNumber(usage.completionTokens),
             cached: cachedReads > 0 ? t('chat.stats.cached', { count: formatNumber(cachedReads) }) : '',
             written: cacheWrites > 0 ? t('chat.stats.written', { count: formatNumber(cacheWrites) }) : '',
-          })}>
+          })}${unreportedCalls > 0 ? ` ${t('chat.stats.partlyNotReported', { count: formatNumber(unreportedCalls) })}` : ''}`}>
             <Chip
               icon={<DataUsageIcon />}
               label={t(compact ? 'chat.stats.inputOutputCompact' : 'chat.stats.inputOutput', {
@@ -149,6 +163,11 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
               {cacheWrites > 0 && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                   {t('chat.stats.cacheWriteHelp', { written: formatNumber(cacheWrites) })}
+                </Typography>
+              )}
+              {unreportedCalls > 0 && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {t('chat.stats.partlyNotReported', { count: formatNumber(unreportedCalls) })}
                 </Typography>
               )}
             </Box>

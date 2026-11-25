@@ -171,6 +171,21 @@ describe('Statistics dashboard', () => {
     expect(screen.queryByLabelText('Statistics summary')).not.toBeInTheDocument();
   });
 
+  it('says tokens were not reported when model calls ran without counts (issue #1367)', async () => {
+    const body = fixture();
+    body.summary = summary({
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, unreportedCalls: 3 },
+    });
+    mockFetch.mockImplementation(async () => successfulResponse(body));
+
+    render(<Statistics />);
+
+    const summaryRegion = await screen.findByLabelText('Statistics summary');
+    const tokensCard = within(summaryRegion).getByLabelText('Tokens');
+    expect(within(tokensCard).getByText('Not reported')).toBeInTheDocument();
+    expect(within(tokensCard).getByText('3 model calls ran, but their AI server did not say how many tokens they used.')).toBeInTheDocument();
+  });
+
   it('shows retryable API errors', async () => {
     mockFetch.mockResolvedValue({
       ok: false,

@@ -1798,10 +1798,28 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   );
 
   const accumulateUsage = (msg: FlujoChatMessage) => {
-    if (!msg.usage) return;
+    if (!msg.usage && !msg.usageNotReported) return;
     const totals: UsageTotals = sharedState.usage ?? {
       promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, byNode: {},
     };
+    sharedState.usage = totals;
+    if (!msg.usage) {
+      // Count the call, so a total of 0 reads as "not reported" rather than "nothing used".
+      const nodeKey = msg.processNodeId || 'unknown';
+      const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
+      totals.unreportedCalls = (totals.unreportedCalls ?? 0) + 1;
+      node.unreportedCalls = (node.unreportedCalls ?? 0) + 1;
+      totals.byNode[nodeKey] = node;
+      emit({
+        type: 'usage',
+        node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        notReported: true,
+      });
+      return;
+    }
     totals.promptTokens += msg.usage.promptTokens;
     totals.completionTokens += msg.usage.completionTokens;
     totals.totalTokens += msg.usage.totalTokens;
@@ -1820,7 +1838,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     if (msgCacheRead) node.cacheReadTokens = (node.cacheReadTokens ?? 0) + msgCacheRead;
     if (msgCacheWrite) node.cacheWriteTokens = (node.cacheWriteTokens ?? 0) + msgCacheWrite;
     totals.byNode[nodeKey] = node;
-    sharedState.usage = totals;
     emit({
       type: 'usage',
       node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,

@@ -162,6 +162,30 @@ describe('statistics aggregation', () => {
     );
   });
 
+  it('counts finished model calls whose server sent no token counts (issue #1367)', async () => {
+    await seedRun();
+    for (const [attempt, usage] of [[1, undefined], [2, { contextWindow: 100 }]] as const) {
+      await appendStatisticsEvent(createStatisticsEvent({
+        type: 'model.attempt',
+        runId: 'run-1',
+        timestamp: `2026-07-30T10:00:0${attempt + 5}.000Z`,
+        model: { id: 'model-2', name: 'Self-hosted' },
+        provider: { id: 'openai', name: 'openai' },
+        attempt,
+        outcome: 'completed',
+        durationMs: 10,
+        ...(usage ? { usage } : {}),
+      }));
+    }
+
+    const response = await aggregateStatistics({ range: { from: '2026-07-30', to: '2026-07-30' }, filters: {} });
+
+    expect(response.summary.usage).toEqual(expect.objectContaining({ totalTokens: 130, unreportedCalls: 2 }));
+    const selfHosted = response.rankings.models.find(row => row.id === 'model-2');
+    expect(selfHosted?.usage).toEqual(expect.objectContaining({ totalTokens: 0, unreportedCalls: 2 }));
+    expect(response.rankings.models.find(row => row.id === 'model-1')?.usage).not.toHaveProperty('unreportedCalls');
+  });
+
   it('applies linked filters consistently and returns stable empty buckets and rankings', async () => {
     await seedRun();
 

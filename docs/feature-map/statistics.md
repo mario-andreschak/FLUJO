@@ -6,7 +6,7 @@ Statistics shows how the user's agents have been behaving: how many runs there w
 
 ## Sub-features
 
-- `statistics-summary`: summary cards "Logical runs", "Success rate", "Tokens", "Run wall-clock time", "Failed tool calls" and "Cache hit rate".
+- `statistics-summary`: summary cards "Logical runs", "Success rate", "Tokens", "Run wall-clock time", "Failed tool calls" and "Cache hit rate". When model calls ran but their AI server sent no token counts, "Tokens" says "Not reported" instead of 0.
 - `statistics-filters`: "Shared filters" with "From (UTC)", "To (UTC)", "Sources", "Statuses", "Subflow mode", "Cache outcome", "Content category", "Sort by" and "Direction"; "Reset" and "Refresh" buttons.
 - `statistics-tabs`: views "Overview", "Flows", "Executions", "Models", "Providers & Keys", "Nodes", "Tools", "Subflows", "Compare".
 - `statistics-drilldown`: choosing a row in a ranking, or a day in a chart, applies it as a filter for the whole page.
