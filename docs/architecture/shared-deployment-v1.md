@@ -1,5 +1,11 @@
 # Identity, storage and sharing contracts v1
 
+> **Replaced on 2026-11-25 by the [multi-user plan](multi-user-plan.md).** Do not
+> build the controller and one-runtime-per-user topology described below. The
+> plan makes the workspace the unit of ownership inside one FLUJO process and
+> keeps multi-user mode opt-in. This page stays for its threat notes and route
+> ideas.
+
 Status: design proposal for #573, with a runnable source prototype. Security and
 maintainer review, #564 agreement, migration/artifact qualification and independent
 acceptance remain pending. #574/#575 must not enable shared/public deployment on
