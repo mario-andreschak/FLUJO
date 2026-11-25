@@ -191,9 +191,10 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     const authority = await traceAsync('activation-grant', () => trustedHostMcpApprovalAsync(pending.config));
     if (owner.ownerId !== authority.ownerId || authority.digest !== verified.digest || authority.ownerId !== verified.ownerId) throw new BundledFlujoWorkloadError();
     const parent = directory(pending.ledger);
-    try { fs.mkdirSync(parent, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    const parentStat = fs.lstatSync(parent);
-    if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || path.relative(fs.realpathSync(parent), parent) !== '' || fs.readdirSync(parent).length >= 512) throw new BundledFlujoWorkloadError();
+    try { await fs.promises.mkdir(parent, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    const parentStat = await fs.promises.lstat(parent);
+    if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || path.relative(await fs.promises.realpath(parent), parent) !== ''
+        || (await fs.promises.readdir(parent)).length >= 512) throw new BundledFlujoWorkloadError();
     assertPending(pending); verified.assertLive();
     const key = hash(pending.token);
     // The authoritative name stays absent until every activation guard passes.
@@ -213,14 +214,15 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     const final = await traceAsync('activation-grant-final', () => trustedHostMcpApprovalAsync(pending.config)); assertPending(pending); verified.assertLive();
     if (final.digest !== record.policyDigest || final.ownerId !== record.ownerId || record.expiresAt <= Date.now()) throw new BundledFlujoWorkloadError();
     readExact(pending.marker); readExact(pending.record);
-    if (fs.existsSync(publishedName)) throw new BundledFlujoWorkloadError();
+    if (await pathExists(publishedName)) throw new BundledFlujoWorkloadError();
     assertPending(pending); verified.assertLive();
     // Exclusive publication cannot overwrite an unknown replacement.
-    fs.linkSync(pending.record.filename, publishedName);
+    await fs.promises.link(pending.record.filename, publishedName);
+    const pendingName = await fs.promises.lstat(pending.record.filename, { bigint: true });
+    const published = await fs.promises.lstat(publishedName, { bigint: true });
     const linked = fs.fstatSync(descriptor(pending.record), { bigint: true });
-    if (linked.nlink !== BigInt(2) || !same(linked, fs.lstatSync(pending.record.filename, { bigint: true }))
-        || !same(linked, fs.lstatSync(publishedName, { bigint: true }))) throw new BundledFlujoWorkloadError();
-    fs.unlinkSync(pending.record.filename);
+    if (linked.nlink !== BigInt(2) || !same(linked, pendingName) || !same(linked, published)) throw new BundledFlujoWorkloadError();
+    await fs.promises.unlink(pending.record.filename);
     pending.record.filename = publishedName;
     fs.fsyncSync(descriptor(pending.record));
     pending.record.identity = fs.fstatSync(descriptor(pending.record), { bigint: true });
@@ -230,6 +232,10 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     try { revokePendingWorkload(value); } catch (cleanup) { throw new AggregateError([cause, cleanup], 'Workload activation and durable retirement failed.', { cause }); }
     throw cause;
   }
+}
+async function pathExists(filename: string): Promise<boolean> {
+  try { await fs.promises.lstat(filename); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
 }
 function settleDescriptor(file: { uncertainDescriptor?: number }) {
   if (file.uncertainDescriptor === undefined) return;
@@ -405,23 +411,26 @@ async function readCurrentConfig(serverName: string, signal: AbortSignal) {
   const parents: Array<{ filename: string; identity: fs.BigIntStats }> = [];
   let current = path.dirname(filename);
   while (true) {
-    const identity = fs.lstatSync(current, { bigint: true });
-    if (!identity.isDirectory() || identity.isSymbolicLink() || path.relative(fs.realpathSync(current), current) !== '') throw new BundledFlujoWorkloadError();
+    const identity = await fs.promises.lstat(current, { bigint: true });
+    if (!identity.isDirectory() || identity.isSymbolicLink() || path.relative(await fs.promises.realpath(current), current) !== '') throw new BundledFlujoWorkloadError();
     parents.push({ filename: current, identity });
     const parent = path.dirname(current); if (parent === current) break; current = parent;
   }
-  const verifyPath = async () => {
+  const assertParents = async () => {
     for (const parent of parents) {
-      const fresh = fs.lstatSync(parent.filename, { bigint: true });
+      const fresh = await fs.promises.lstat(parent.filename, { bigint: true });
       // Directory size/timestamps legitimately change during the guarded write.
       if (!fresh.isDirectory() || fresh.isSymbolicLink() || fresh.dev !== parent.identity.dev || fresh.ino !== parent.identity.ino
           || fresh.mode !== parent.identity.mode || fresh.uid !== parent.identity.uid || fresh.gid !== parent.identity.gid
-          || path.relative(fs.realpathSync(parent.filename), parent.filename) !== '') throw new BundledFlujoWorkloadError();
+          || path.relative(await fs.promises.realpath(parent.filename), parent.filename) !== '') throw new BundledFlujoWorkloadError();
     }
+  };
+  const verifyPath = async () => {
+    await assertParents();
     await assertCredentialStoreReady(filename);
   };
   await verifyPath();
-  const identity = fs.lstatSync(filename, { bigint: true });
+  const identity = await fs.promises.lstat(filename, { bigint: true });
   const bytes = await readPlainFile(filename, { maxBytes: 4 * 1024 * 1024, signal, verifyPath, expected: identity });
   try {
     const stored: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
@@ -431,14 +440,9 @@ async function readCurrentConfig(serverName: string, signal: AbortSignal) {
     const config = { ...selected, name: serverName } as MCPStdioConfig;
     if (config.transport !== 'stdio' || config.disabled || typeof config.command !== 'string' || typeof config.cwd !== 'string') throw new BundledFlujoWorkloadError();
     trustedHostMcpPolicySchema.parse(config.trustedHost);
-    return { config, assertCurrent: () => {
-      if (!same(identity, fs.lstatSync(filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
-      for (const parent of parents) {
-        const fresh = fs.lstatSync(parent.filename, { bigint: true });
-        if (!fresh.isDirectory() || fresh.isSymbolicLink() || fresh.dev !== parent.identity.dev || fresh.ino !== parent.identity.ino
-            || fresh.mode !== parent.identity.mode || fresh.uid !== parent.identity.uid || fresh.gid !== parent.identity.gid
-            || path.relative(fs.realpathSync(parent.filename), parent.filename) !== '') throw new BundledFlujoWorkloadError();
-      }
+    return { config, assertCurrent: async () => {
+      if (!same(identity, await fs.promises.lstat(filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
+      await assertParents();
       signal.throwIfAborted();
     } };
   } finally { bytes.fill(0); }
@@ -454,8 +458,8 @@ async function evidence(request: Request) {
   if (!ledger || !ownerFile) throw new BundledFlujoWorkloadError();
   const key = hash(match[1]), filename = path.join(directory(ledger), `${key}.json`), markerFilename = path.join(directory(ledger), `${key}.lease`);
   phase = 'private-files';
-  const recordBefore = fs.lstatSync(filename, { bigint: true });
-  const markerBefore = fs.lstatSync(markerFilename, { bigint: true });
+  const recordBefore = await fs.promises.lstat(filename, { bigint: true });
+  const markerBefore = await fs.promises.lstat(markerFilename, { bigint: true });
   const files = [filename, markerFilename, ownerFile, ledger];
   const [recordValue, markerValue, ownerValue, approvalValue] = await traceAsync('private-set-initial', () =>
     readPrivateApprovalSetAsync(files, request.signal, ['record', 'marker', 'owner', 'ledger']));
@@ -518,10 +522,12 @@ async function evidence(request: Request) {
         || freshOwner.ownerId !== record.ownerId || ownerPolicyRevision(freshOwner) !== record.ownerRevision
         || approvals.ownerId !== record.ownerId || !freshGrant || freshGrant.expiresAt <= Date.now()
         || freshGrant.policyDigest !== record.policyDigest || finalDigest !== record.policyDigest) throw new BundledFlujoWorkloadError();
-    finalEvidence.assertCurrent();
+    await finalEvidence.assertCurrent();
   });
   phase = 'final-file-fences';
-  if (!same(recordBefore, fs.lstatSync(filename, { bigint: true })) || !same(markerBefore, fs.lstatSync(markerFilename, { bigint: true }))
+  const recordAfter = await fs.promises.lstat(filename, { bigint: true });
+  const markerAfter = await fs.promises.lstat(markerFilename, { bigint: true });
+  if (!same(recordBefore, recordAfter) || !same(markerBefore, markerAfter)
       || ledger !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE
       || audience(process.env.FLUJO_BASE_URL) !== record.audience || record.expiresAt <= Date.now()) throw new BundledFlujoWorkloadError();
   request.signal.throwIfAborted();
