@@ -86,7 +86,7 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
       metadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadataBytes));
       if (!metadata || ![1, 2].includes(metadata.encryption_version)
           || (metadata.encryption_type !== undefined && !['default', 'user'].includes(metadata.encryption_type))) throw new Error();
-      const sourcePassword = metadata.key_protection === 'operator-file' ? readOperatorSecret()
+      const sourcePassword = metadata.key_protection === 'operator-file' ? await readOperatorSecret()
         : metadata.encryption_type === 'user' ? options.sourcePassphrase : DEFAULT_PASSWORD;
       if (!sourcePassword) throw new Error();
       publiclyWrapped = sourcePassword === DEFAULT_PASSWORD;
@@ -94,7 +94,7 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
         : newKeyring(await unwrapLegacyKey(metadata, sourcePassword));
     } catch { throw new CredentialMigrationError('SOURCE_INVALID', StorageKey.ENCRYPTION_KEY); }
     const protection = options.protection ?? 'passphrase';
-    const targetPassword = protection === 'operator-file' ? readOperatorSecret() : options.recoveryPassphrase;
+    const targetPassword = protection === 'operator-file' ? await readOperatorSecret() : options.recoveryPassphrase;
     if (!targetPassword) throw new CredentialMigrationError('PROFILE_UNAVAILABLE');
     // A copied public-default wrapper already exposes its active DEK. Rewrapping
     // that key cannot protect future ciphertext; retire it for all live writes.
@@ -267,7 +267,7 @@ async function applyJournal(journal: Journal, rollback: boolean, options: Creden
   if (!rollback) {
     const target = Buffer.from(journal.entries[StorageKey.ENCRYPTION_KEY].after, 'base64');
     try {
-      const password = journal.protection === 'operator-file' ? readOperatorSecret() : options.recoveryPassphrase;
+      const password = journal.protection === 'operator-file' ? await readOperatorSecret() : options.recoveryPassphrase;
       if (!password) throw new Error();
       await unwrapKeyring(JSON.parse(target.toString('utf8')), password);
     } catch { throw new CredentialMigrationError('PROFILE_UNAVAILABLE'); }

@@ -119,7 +119,7 @@ async function persist(ring: Keyring, type: EncryptionType, password: string,
 async function metadataOrInitialize(): Promise<EncryptionMetadata> {
   const existing = await readMetadata();
   if (existing) return existing;
-  const secret = readOperatorSecret();
+  const secret = await readOperatorSecret();
   if (!secret && isWorkerMode()) {
     throw new EncryptionLockedError('Restore the worker workspace encryption metadata before accessing credentials');
   }
@@ -174,7 +174,7 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
       const metadata = await readMetadata();
       if (!metadata) return false;
       if (metadata.encryption_version === 2 && metadata.encryption_type !== 'user') throw new CredentialMigrationRequiredError();
-      const password = metadata.key_protection === 'operator-file' ? readOperatorSecret()
+      const password = metadata.key_protection === 'operator-file' ? await readOperatorSecret()
         : metadata.encryption_type === 'user' ? oldPassword : DEFAULT_PASSWORD;
       if (!password) return false;
       const ring = metadata.encryption_version === 2 ? await unwrapKeyring(metadata, password)

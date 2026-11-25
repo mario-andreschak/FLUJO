@@ -1456,11 +1456,6 @@
       "count": 4
     }
   },
-  "src/utils/encryption/operatorSecret.ts": {
-    "flujo/no-sync-fs": {
-      "count": 10
-    }
-  },
   "src/utils/logger/logger.ts": {
     "flujo/no-double-cast": {
       "count": 1

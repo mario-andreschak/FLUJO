@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -63,7 +62,7 @@ test('reuses only a verified operator keyring while rereading metadata and the p
   await secure.initializeDefaultEncryption();
   const unwrap = jest.mocked(format.unwrapKeyring);
   unwrap.mockClear();
-  const opened = jest.spyOn(fsSync, 'openSync');
+  const opened = jest.spyOn(fs, 'open');
   const loaded = jest.spyOn(fs, 'readFile');
   const metadataFile = path.join(workspace.getWorkspaceDataDir(), 'db', `${StorageKey.ENCRYPTION_KEY}.json`);
   const ciphertext = (await secure.encryptWithPassword('disposable-operator-fixture'))!;

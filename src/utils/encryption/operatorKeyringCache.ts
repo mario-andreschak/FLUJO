@@ -66,7 +66,7 @@ async function currentIdentity(readMetadata: ReadMetadata) {
   const canonicalRoot = await fs.realpath(namedRoot);
   const root = await fs.stat(namedRoot, { bigint: true });
   if (!root.isDirectory()) throw new OperatorKeyringContextChangedError();
-  const mount = readVerifiedOperatorSecret();
+  const mount = await readVerifiedOperatorSecret();
   if (!mount) throw new OperatorKeyringContextChangedError();
   const scope = workspaceCacheKey(path.resolve(getDataDir()), namedRoot, canonicalRoot,
     root.dev.toString(), root.ino.toString(), String(isWorkerMode()));
