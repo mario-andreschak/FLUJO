@@ -199,7 +199,7 @@ test('Antigravity CLI chat attachments reach authoritative adapter rejection bef
   expect(mockAntigravityMediaProcess).not.toHaveBeenCalled();
 });
 
-test('existing text-only providers retain the generic unsupported-media filter', async () => {
+test('existing text-only providers replace unsupported media with a short note', async () => {
   getModelMock.mockResolvedValue({ id: 'model-1', name: 'text-model', provider: 'openai', adapter: 'openai', inputModalities: ['text'] });
   const result = await ModelHandler.callModel({
     modelId: 'model-1', prompt: 'Describe this image.',
@@ -207,7 +207,8 @@ test('existing text-only providers retain the generic unsupported-media filter',
     iteration: 1, maxIterations: 1, nodeName: 'Node', nodeId: 'node-1',
   } as Parameters<typeof ModelHandler.callModel>[0]);
   expect(result.success).toBe(true);
-  expect(createCompletionMock.mock.calls[0][0].messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'Describe this image.' }] }]);
+  // Since the chat file work, an attachment the model cannot read is replaced by a short note, never dropped silently.
+  expect(createCompletionMock.mock.calls[0][0].messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'Describe this image.' }, { type: 'text', text: '[Attachment not sent: this model cannot read images.]' }] }]);
 });
 
 describe('mid-flight completion cancellation', () => {
