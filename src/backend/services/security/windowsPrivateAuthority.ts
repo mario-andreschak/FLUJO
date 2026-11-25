@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 // Native PowerShell startup and fresh ancestor ACL reads can exceed five seconds on busy hosts.
 const NATIVE_INSPECTION_TIMEOUT_MS = 30_000;
@@ -67,67 +67,131 @@ while ($null -ne $current) {
 function traceNativeRefusal(reason: 'spawn' | 'stdin' | 'deadline' | 'abort' | 'abort-before-spawn' | 'bounds' | 'exit' | 'evidence', stderr = '') {
   try {
     if (process.env.FLUJO_MCP_WORKLOAD_TRACE !== '1') return;
-    const phase = /^FLUJO_AUTHORITY_REFUSED:(input|native-acl|owner-dacl|outsider-access|evidence-bounds)\s*$/.exec(stderr)?.[1];
-    console.info('[private-authority-native]', 'refused', phase ?? reason);
+    console.info('[private-authority-native]', 'refused', nativePhase(stderr) ?? reason);
   } catch { /* Diagnostics cannot change authority disposition. */ }
+}
+
+function nativePhase(stderr: string) {
+  return /^FLUJO_AUTHORITY_REFUSED:(input|native-acl|owner-dacl|outsider-access|evidence-bounds)\s*$/.exec(stderr)?.[1];
+}
+
+export type WindowsAuthorityFailure = 'unavailable' | 'cancelled' | 'deadline' | 'bounds' | 'spawn' | 'stdin' | 'exit' | 'evidence' | 'refused';
+
+/**
+ * Says why native inspection failed, without paths or ACL contents. A
+ * `transient` failure (the helper could not start, lost its input, died early,
+ * or could not read an ACL while a file was being replaced) may pass on a fresh
+ * attempt. A policy refusal, cancellation, the deadline or the output bound is
+ * never transient. Readers outside this module check the own `transient` field.
+ */
+export class WindowsAuthorityInspectionError extends Error {
+  readonly transient: boolean;
+  readonly code?: string;
+  constructor(message: string, readonly nativeFailure: WindowsAuthorityFailure, cause?: unknown) {
+    super(message);
+    this.name = 'WindowsAuthorityInspectionError';
+    this.transient = ['spawn', 'stdin', 'exit', 'evidence'].includes(nativeFailure);
+    const descriptor = cause && typeof cause === 'object' ? Object.getOwnPropertyDescriptor(cause, 'code') : undefined;
+    const code: unknown = descriptor && 'value' in descriptor ? descriptor.value : undefined;
+    if (typeof code === 'string' && /^E[A-Z0-9]{1,15}$/.test(code)) this.code = code;
+  }
+}
+
+/** A native phase that judged the ACL is a refusal; any other non-zero exit is the helper failing. */
+function exitFailure(stderr: string): WindowsAuthorityInspectionError {
+  const phase = nativePhase(stderr);
+  return new WindowsAuthorityInspectionError('Windows authority inspection refused',
+    phase === 'owner-dacl' || phase === 'outsider-access' || phase === 'evidence-bounds' ? 'refused' : 'exit');
 }
 
 /** DACL evidence supplements stable file identity; 0600 is not a Windows ACL. */
 export function windowsPrivateAuthorityStamp(filename: string | readonly string[]): string {
-  if (process.platform !== 'win32') throw new Error('Windows authority inspection unavailable');
+  const unavailable = () => new WindowsAuthorityInspectionError('Windows authority inspection unavailable', 'unavailable');
+  if (process.platform !== 'win32') throw unavailable();
   const filenames = typeof filename === 'string' ? [filename] : filename;
-  if (filenames.length < 1 || filenames.length > 4 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
+  if (filenames.length < 1 || filenames.length > 4 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw unavailable();
   const systemRoot = process.env.SystemRoot;
-  if (!systemRoot || !path.isAbsolute(systemRoot)) throw new Error('Windows authority inspection unavailable');
+  if (!systemRoot || !path.isAbsolute(systemRoot)) throw unavailable();
   const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  if (!fs.statSync(executable).isFile()) throw new Error('Windows authority inspection unavailable');
+  if (!fs.statSync(executable).isFile()) throw unavailable();
   const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
     input: JSON.stringify(typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filenames.map(item => path.resolve(item)) }), encoding: 'utf8',
     windowsHide: true, timeout: NATIVE_INSPECTION_TIMEOUT_MS, maxBuffer: 64 * 1024,
     env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
   });
-  if (result.error || result.status !== 0 || result.signal) throw new Error('Windows authority inspection refused');
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new WindowsAuthorityInspectionError('Windows authority inspection refused',
+      code === 'ETIMEDOUT' ? 'deadline' : code === 'ENOBUFS' ? 'bounds' : 'spawn', result.error);
+  }
+  if (result.status !== 0 || result.signal) throw exitFailure(String(result.stderr ?? ''));
   return authorityEvidence(result.stdout);
 }
 
 function authorityEvidence(stdout: string): string {
+  const malformed = () => new WindowsAuthorityInspectionError('Windows authority inspection refused', 'evidence');
   let value: unknown;
-  try { value = JSON.parse(stdout); } catch { throw new Error('Windows authority inspection refused'); }
+  try { value = JSON.parse(stdout); } catch { throw malformed(); }
   const evidence = value as { schemaVersion?: unknown; records?: unknown };
   if (!evidence || evidence.schemaVersion !== 1 || !Array.isArray(evidence.records)
       || evidence.records.length < 2 || evidence.records.length > 128
-      || evidence.records.some(item => typeof item !== 'string' || item.length > 8192)) throw new Error('Windows authority inspection refused');
+      || evidence.records.some(item => typeof item !== 'string' || item.length > 8192)) throw malformed();
   return createHash('sha256').update(JSON.stringify(evidence.records)).digest('hex');
 }
 
+const STOP_MESSAGES = {
+  spawn: 'Windows authority inspection could not start',
+  stdin: 'Windows authority inspection lost its input',
+  deadline: 'Windows authority inspection cancelled or exceeded bounds',
+  abort: 'Windows authority inspection cancelled or exceeded bounds',
+  bounds: 'Windows authority inspection cancelled or exceeded bounds',
+} as const;
+
 /** Every call obtains fresh native ACL evidence; cancellation waits for exit. */
 export async function windowsPrivateAuthorityStampAsync(filename: string | readonly string[], signal?: AbortSignal): Promise<string> {
+  const unavailable = () => new WindowsAuthorityInspectionError('Windows authority inspection unavailable', 'unavailable');
   if (process.platform !== 'win32' || signal?.aborted) {
-    if (process.platform === 'win32' && signal?.aborted) traceNativeRefusal('abort-before-spawn');
-    throw new Error('Windows authority inspection unavailable');
+    if (process.platform === 'win32' && signal?.aborted) {
+      traceNativeRefusal('abort-before-spawn');
+      throw new WindowsAuthorityInspectionError('Windows authority inspection unavailable', 'cancelled');
+    }
+    throw unavailable();
   }
   const filenames = typeof filename === 'string' ? [filename] : filename;
-  if (filenames.length < 1 || filenames.length > 4 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw new Error('Windows authority inspection unavailable');
+  if (filenames.length < 1 || filenames.length > 4 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw unavailable();
   const systemRoot = process.env.SystemRoot;
-  if (!systemRoot || !path.isAbsolute(systemRoot)) throw new Error('Windows authority inspection unavailable');
+  if (!systemRoot || !path.isAbsolute(systemRoot)) throw unavailable();
   const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  if (!(await fs.promises.stat(executable)).isFile()) throw new Error('Windows authority inspection unavailable');
-  if (signal?.aborted) { traceNativeRefusal('abort-before-spawn'); throw new Error('Windows authority inspection cancelled'); }
+  if (!(await fs.promises.stat(executable)).isFile()) throw unavailable();
+  if (signal?.aborted) { traceNativeRefusal('abort-before-spawn'); throw new WindowsAuthorityInspectionError('Windows authority inspection cancelled', 'cancelled'); }
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
-      windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-      env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
-    });
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
+        windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+        env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
+      });
+    } catch (error) {
+      // Node throws instead of emitting 'error' for some process-creation
+      // failures (for example ENOMEM or EPERM while the machine is under load).
+      traceNativeRefusal('spawn');
+      reject(new WindowsAuthorityInspectionError(STOP_MESSAGES.spawn, 'spawn', error));
+      return;
+    }
     let failure: Error | undefined;
     let bytes = 0;
     const output: Buffer[] = [];
     const errors: Buffer[] = [];
-    const stop = (reason: 'spawn' | 'stdin' | 'deadline' | 'abort' | 'bounds') => { traceNativeRefusal(reason); failure ??= new Error('Windows authority inspection cancelled or exceeded bounds'); child.kill(); };
+    const stop = (reason: keyof typeof STOP_MESSAGES, cause?: unknown) => {
+      traceNativeRefusal(reason);
+      failure ??= new WindowsAuthorityInspectionError(STOP_MESSAGES[reason], reason === 'abort' ? 'cancelled' : reason, cause);
+      child.kill();
+    };
     const abort = () => stop('abort');
     const timer = setTimeout(() => stop('deadline'), NATIVE_INSPECTION_TIMEOUT_MS);
     signal?.addEventListener('abort', abort, { once: true });
-    child.on('error', error => { failure = error; stop('spawn'); });
-    child.stdin.on('error', error => { failure = error; stop('stdin'); });
+    child.on('error', error => stop('spawn', error));
+    child.stdin.on('error', error => stop('stdin', error));
     for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > 64 * 1024) { stop('bounds'); return; }
@@ -136,10 +200,13 @@ export async function windowsPrivateAuthorityStampAsync(filename: string | reado
     });
     child.on('close', (code, exitSignal) => {
       clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      const stderr = Buffer.concat(errors).toString('utf8');
       try {
-        if (failure || code !== 0 || exitSignal || signal?.aborted) throw failure ?? new Error('Windows authority inspection refused');
+        if (failure) throw failure;
+        if (signal?.aborted) throw new WindowsAuthorityInspectionError('Windows authority inspection cancelled', 'cancelled');
+        if (code !== 0 || exitSignal) throw exitFailure(stderr);
         resolve(authorityEvidence(Buffer.concat(output).toString('utf8')));
-      } catch (error) { traceNativeRefusal(code === 0 ? 'evidence' : 'exit', Buffer.concat(errors).toString('utf8')); reject(error); }
+      } catch (error) { traceNativeRefusal(code === 0 ? 'evidence' : 'exit', stderr); reject(error); }
       finally { for (const chunk of [...output, ...errors]) chunk.fill(0); }
     });
     const request = typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filename.map(item => path.resolve(item)) };

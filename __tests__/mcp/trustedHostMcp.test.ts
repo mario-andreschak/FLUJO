@@ -105,7 +105,7 @@ it('overlaps eight actual sibling reads while preserving the synchronous ordered
   } finally { clearTimeout(timer); release(); await outcome; spy.mockRestore(); }
 }, 120_000);
 
-it.each(['sync', 'async'] as const)('fresh %s private sets reject mutation of another member during a genuine held read', async mode => {
+it.each(['sync', 'async'] as const)('fresh %s private sets never return a set torn by a mutation during a genuine held read', async mode => {
   const first = path.join(root, 'set-first.json'), second = path.join(root, 'set-second.json');
   fs.writeFileSync(first, '{"value":"first"}', { mode: 0o600 });
   fs.writeFileSync(second, '{"value":"second"}', { mode: 0o600 });
@@ -125,8 +125,12 @@ it.each(['sync', 'async'] as const)('fresh %s private sets reject mutation of an
     return count;
   });
   try {
+    // The synchronous final set refuses; its caller decides whether to wait and
+    // read again. The async reader reads the whole set again by itself and
+    // returns only the fresh, consistent version (issue #1050).
     if (mode === 'sync') expect(() => readPrivateApprovalSet(members)).toThrow();
-    else await expect(readPrivateApprovalSetAsync(members)).rejects.toThrow();
+    else await expect(readPrivateApprovalSetAsync(members)).resolves.toEqual([expect.anything(), expect.anything(),
+      { value: 'first' }, { value: 'changed-during-other-held-read' }]);
     expect(changed).toBe(true);
   } finally { read.mockRestore(); }
 });

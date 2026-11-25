@@ -10,7 +10,9 @@ import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrati
 import { ownerPolicySchema } from './ownerCredentials';
 import { ownerPolicyRevision } from './ownerPolicy';
 import { readPrivateApproval, readPrivateApprovalAsync, readPrivateApprovalSet, readPrivateApprovalSetAsync, sameTrustedHostConsent, trustedHostEnvironment,
-  trustedHostApprovalsSchema, trustedHostMcpApproval, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from './trustedHostMcp';
+  privateApprovalSetMayClearUp, trustedHostApprovalsSchema, trustedHostMcpApproval, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema,
+  verifyTrustedHostMcp } from './trustedHostMcp';
+import { retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { canonicalWorkloadJson, computeBundledFlujoWorkloadDefinitions, computeBundledFlujoWorkloadInventory,
   type WorkloadAction } from '../mcp/bundledFlujoWorkloadInventory';
 
@@ -509,7 +511,16 @@ async function evidence(request: Request) {
     // The last fresh set covers every private file after ALL yielding source,
     // executable, environment, inventory and config checks. No verdict is reused.
     phase = 'final-private-binding';
-    const [lastRecord, lastMarker, lastOwner, lastApprovals] = traceSync('private-set-final', () => readPrivateApprovalSet(files, request.signal));
+    // A first read that passes continues without yielding. A failure that may
+    // clear up waits briefly and reads the whole set again from scratch.
+    const readFinalSet = () => traceSync('private-set-final', () => readPrivateApprovalSet(files, request.signal));
+    let finalSet: unknown[];
+    try { finalSet = readFinalSet(); }
+    catch (error) {
+      finalSet = await retryTransientFileOperation(readFinalSet, { signal: request.signal, afterFailure: error,
+        isTransient: failure => privateApprovalSetMayClearUp(failure, request.signal) });
+    }
+    const [lastRecord, lastMarker, lastOwner, lastApprovals] = finalSet;
     const freshOwner = ownerPolicySchema.parse(lastOwner), approvals = trustedHostApprovalsSchema.parse(lastApprovals);
     const freshGrant = approvals.approvals.find(item => item.workspace === record.workspace && item.serverName === record.serverName);
     if (canonicalWorkloadJson(recordSchema.parse(lastRecord)) !== canonicalWorkloadJson(record)

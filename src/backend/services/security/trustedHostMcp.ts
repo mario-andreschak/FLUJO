@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
+import { TRANSIENT_FILE_ERROR_CODES, fileErrorCode, isTransientFileError, retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { ownerPolicySchema } from './ownerCredentials';
 import { windowsPrivateAuthorityStamp, windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
 import { BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
@@ -216,60 +217,178 @@ export function readPrivateApproval(filename: string | undefined): unknown {
 }
 
 export async function readPrivateApprovalAsync(filename: string | undefined, signal?: AbortSignal): Promise<unknown> {
-  return (await readPrivateApprovalEvidenceAsync(filename, signal)).value;
+  return (await readPrivateApprovalWithRetry('[private-approval-reader]', [filename], signal))[0];
 }
 
 /** Fresh private evidence for two related files, never a cross-request cache. */
 export async function readPrivateApprovalPairAsync(first: string | undefined, second: string | undefined, signal?: AbortSignal): Promise<[unknown, unknown]> {
-  if (!first || !second || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  const filenames = [first, second];
-  const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
-  const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync(filenames, signal) : undefined;
-  const values = filenames.map(filename => readPrivateApprovalContents(filename));
-  if (before !== undefined && await windowsPrivateAuthorityStampAsync(filenames, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  for (const [index, filename] of filenames.entries()) {
-    assertLinkFree(filename);
-    if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  }
-  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  return [values[0], values[1]];
+  const [firstValue, secondValue] = await readPrivateApprovalWithRetry('[private-approval-reader]', [first, second], signal);
+  return [firstValue, secondValue];
 }
 
 export type PrivateApprovalFileRole = 'record' | 'marker' | 'owner' | 'ledger';
-type PrivateApprovalReadPhase = 'input' | 'identity-before' | 'native-before' | 'contents' | 'native-after' | 'identity-after' | 'signal-after';
+export type PrivateApprovalReadPhase = 'input' | 'identity-before' | 'native-before' | 'contents' | 'native-after' | 'identity-after' | 'signal-after';
 
-/** Never serialize exceptions, paths, native evidence or approval contents. */
-function tracePrivateApprovalSetRefusal(phase: PrivateApprovalReadPhase, memberIndex: number | undefined,
-  roles: readonly PrivateApprovalFileRole[] | undefined, error: unknown, signal: AbortSignal | undefined, started: number | undefined): void {
-  try {
-    if (started === undefined) return;
-    const roleDescriptor = memberIndex !== undefined && roles ? Object.getOwnPropertyDescriptor(roles, String(memberIndex)) : undefined;
-    const suppliedRole: unknown = roleDescriptor && 'value' in roleDescriptor ? roleDescriptor.value : undefined;
-    const role = memberIndex === undefined ? 'set'
-      : suppliedRole === 'record' || suppliedRole === 'marker' || suppliedRole === 'owner' || suppliedRole === 'ledger' ? suppliedRole : 'member';
-    // Read only own data properties; a diagnostic must not invoke error accessors.
-    const descriptors = error && typeof error === 'object' ? Object.getOwnPropertyDescriptors(error) : {};
-    const code: unknown = descriptors.code && 'value' in descriptors.code ? descriptors.code.value : undefined;
-    const errno: unknown = descriptors.errno && 'value' in descriptors.errno ? descriptors.errno.value : undefined;
-    const errorKind = typeof code === 'string' && ['HOST_CONSENT_REQUIRED', 'HOST_SOURCE_CHANGED', 'HOST_POLICY_INVALID',
-      'ENOENT', 'EACCES', 'EPERM', 'EIO', 'EBUSY', 'EMFILE', 'ENFILE', 'ENOTDIR', 'ELOOP', 'EINVAL'].includes(code) ? code : 'unknown';
-    console.info('[private-approval-set-reader]', 'refused', { phase, role, errorKind,
-      ...(typeof errno === 'number' && Number.isInteger(errno) && Math.abs(errno) <= 65535 ? { errno } : {}),
-      cancelled: signal?.aborted === true, elapsedMs: Math.max(0, Date.now() - started) });
-  } catch { /* Preserve the original failure, including when the logger throws. */ }
+/** What a refused private read reports: steps, roles and error codes only. */
+export interface PrivateApprovalRefusal {
+  readonly phase: PrivateApprovalReadPhase;
+  readonly role: PrivateApprovalFileRole | 'member' | 'set';
+  readonly errorKind: string;
+  readonly errno?: number;
+  readonly nativeFailure?: string;
+  readonly cancelled: boolean;
+  readonly attempts: number;
+  readonly elapsedMs: number;
 }
 
-/** One bounded fresh native witness set; never stored or reused by a request. */
-export async function readPrivateApprovalSetAsync(input: readonly string[], signal?: AbortSignal,
-  roles?: readonly PrivateApprovalFileRole[]): Promise<unknown[]> {
-  const started = process.env.FLUJO_MCP_WORKLOAD_TRACE === '1' ? Date.now() : undefined;
+const REFUSAL_STEPS: Record<PrivateApprovalReadPhase, string> = {
+  input: 'checking the request', 'identity-before': 'looking up the file', 'native-before': 'checking Windows file permissions',
+  contents: 'reading the file', 'native-after': 're-checking Windows file permissions',
+  'identity-after': 'confirming the file did not change', 'signal-after': 'finishing the check',
+};
+
+const NATIVE_HINTS: Record<string, string> = {
+  spawn: 'The Windows permission helper could not start.', stdin: 'The Windows permission helper could not start.',
+  exit: 'The Windows permission helper stopped early.', evidence: 'The Windows permission helper stopped early.',
+  deadline: 'The Windows permission helper did not finish in time.', bounds: 'The Windows permission helper reported too much.',
+  refused: 'Windows reports that the file or one of its folders is not private to this account.',
+  unavailable: 'The Windows permission helper is not available.',
+};
+
+function describeRefusal(refusal: PrivateApprovalRefusal): string {
+  const file = refusal.role === 'set' ? 'the private approval files' : refusal.role === 'member' ? 'a private approval file' : `the private ${refusal.role} file`;
+  const causes: string[] = [];
+  if (refusal.errorKind !== 'unknown' || !refusal.nativeFailure) causes.push(`${refusal.errorKind}${refusal.errno === undefined ? '' : ` (errno ${refusal.errno})`}`);
+  if (refusal.nativeFailure) causes.push(`Windows permission helper ${refusal.nativeFailure}`);
+  const hint = refusal.cancelled ? ''
+    : refusal.nativeFailure && NATIVE_HINTS[refusal.nativeFailure] ? ` ${NATIVE_HINTS[refusal.nativeFailure]}`
+      : TRANSIENT_FILE_ERROR_CODES.has(refusal.errorKind) ? ' This is usually another program, such as antivirus or file indexing, holding the file.'
+        : '';
+  return `FLUJO refused a private approval check while ${REFUSAL_STEPS[refusal.phase]} for ${file}: `
+    + `${refusal.cancelled ? 'the request was cancelled' : causes.join(', ')}. `
+    + `It stopped after ${refusal.attempts === 1 ? '1 try' : `${refusal.attempts} tries`} in ${refusal.elapsedMs} ms.${hint}`;
+}
+
+/** A plain refusal that never carries a path, file contents or the original error text. */
+export class PrivateApprovalReadError extends TrustedHostMcpError {
+  constructor(readonly refusal: PrivateApprovalRefusal) {
+    super('HOST_CONSENT_REQUIRED');
+    this.name = 'PrivateApprovalReadError';
+    this.message = describeRefusal(refusal);
+  }
+}
+
+/** Where one attempt stopped; it never leaves this module. */
+class PrivateApprovalAttemptFailure {
+  constructor(readonly phase: PrivateApprovalReadPhase, readonly memberIndex: number | undefined, readonly error: unknown) {}
+}
+
+function ownDataValue(value: unknown, key: string): unknown {
+  if (!value || typeof value !== 'object') return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+}
+
+const REPORTED_ERROR_KINDS = new Set(['HOST_CONSENT_REQUIRED', 'HOST_SOURCE_CHANGED', 'HOST_POLICY_INVALID', 'ENOENT', 'EIO',
+  'ENOTDIR', 'ELOOP', 'EINVAL', 'ENOMEM', 'EPIPE', 'ETIMEDOUT', ...TRANSIENT_FILE_ERROR_CODES]);
+
+/** Never serialize exceptions, paths, native evidence or approval contents; never invoke accessors. */
+function privateApprovalRefusal(failure: PrivateApprovalAttemptFailure, roles: readonly PrivateApprovalFileRole[] | undefined,
+  signal: AbortSignal | undefined, attempts: number, started: number): PrivateApprovalRefusal {
+  const suppliedRole = failure.memberIndex !== undefined && roles ? ownDataValue(roles, String(failure.memberIndex)) : undefined;
+  const role = failure.memberIndex === undefined ? 'set'
+    : suppliedRole === 'record' || suppliedRole === 'marker' || suppliedRole === 'owner' || suppliedRole === 'ledger' ? suppliedRole : 'member';
+  const code = fileErrorCode(failure.error);
+  const errno = ownDataValue(failure.error, 'errno');
+  const nativeFailure = ownDataValue(failure.error, 'nativeFailure');
+  return {
+    phase: failure.phase, role, errorKind: code !== undefined && REPORTED_ERROR_KINDS.has(code) ? code : 'unknown',
+    ...(typeof errno === 'number' && Number.isInteger(errno) && Math.abs(errno) <= 65535 ? { errno } : {}),
+    ...(typeof nativeFailure === 'string' && /^[a-z]{1,16}$/.test(nativeFailure) ? { nativeFailure } : {}),
+    cancelled: signal?.aborted === true, attempts, elapsedMs: Math.max(0, Date.now() - started),
+  };
+}
+
+/**
+ * A failure a fresh, complete attempt may not meet again: a file briefly held
+ * by antivirus or the indexer, the Windows permission helper failing to run, a
+ * file replaced between two looks, or a short or torn read while it was being
+ * rewritten. Cancellation and fixed refusals (links, location, permissions,
+ * policy) are never retried.
+ */
+function mayClearUp(failure: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted || !(failure instanceof PrivateApprovalAttemptFailure)) return false;
+  const { phase, error } = failure;
+  if (phase === 'input' || phase === 'signal-after') return false;
+  if (isTransientFileError(error) || ownDataValue(error, 'transient') === true) return true;
+  if (error instanceof TrustedHostMcpError) {
+    return (phase === 'contents' && error.code === 'HOST_SOURCE_CHANGED')
+      || ((phase === 'native-after' || phase === 'identity-after') && error.code === 'HOST_CONSENT_REQUIRED');
+  }
+  return phase === 'contents' && (error instanceof SyntaxError || error instanceof TypeError);
+}
+
+/**
+ * For the synchronous final set, which keeps no step record: after anything but
+ * cancellation, a fresh complete read may pass. A fixed refusal simply fails
+ * again within the same short bound.
+ */
+export function privateApprovalSetMayClearUp(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return false;
+  return isTransientFileError(error) || ownDataValue(error, 'transient') === true || error instanceof TrustedHostMcpError
+    || error instanceof SyntaxError || error instanceof TypeError;
+}
+
+type PrivateApprovalTraceLabel = '[private-approval-set-reader]' | '[private-approval-reader]';
+
+function tracePrivateApproval(label: PrivateApprovalTraceLabel, event: 'retry' | 'refused', details: object): void {
+  try { if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info(label, event, details); }
+  catch { /* Diagnostics never change the outcome, even when the logger throws. */ }
+}
+
+/** Always on, because a lock that needed a retry is worth seeing; the text holds no path or contents. */
+function warnPrivateApproval(label: PrivateApprovalTraceLabel, message: string): void {
+  try { console.warn(label, message); } catch { /* Diagnostics never change the outcome, even when the logger throws. */ }
+}
+
+/**
+ * One bounded fresh native witness set, read again from scratch after a short
+ * wait while a failure may clear up. Values are never stored or reused across
+ * attempts or requests; only a complete, consistent attempt is returned.
+ */
+async function readPrivateApprovalWithRetry(label: PrivateApprovalTraceLabel, input: readonly (string | undefined)[],
+  signal?: AbortSignal, roles?: readonly PrivateApprovalFileRole[]): Promise<unknown[]> {
+  const started = Date.now();
+  let attempts = 0;
+  try {
+    const values = await retryTransientFileOperation(() => { attempts += 1; return readPrivateApprovalSetOnce(input, signal); }, {
+      signal, isTransient: failure => mayClearUp(failure, signal),
+      onRetry: (failure, failed, delayMs) => {
+        if (failure instanceof PrivateApprovalAttemptFailure) {
+          tracePrivateApproval(label, 'retry', { ...privateApprovalRefusal(failure, roles, signal, failed, started), delayMs });
+        }
+      },
+    });
+    if (attempts > 1) warnPrivateApproval(label, `Private approval check passed after ${attempts} tries in ${Math.max(0, Date.now() - started)} ms.`);
+    return values;
+  } catch (failure) {
+    if (!(failure instanceof PrivateApprovalAttemptFailure)) throw failure;
+    const refusal = privateApprovalRefusal(failure, roles, signal, attempts, started);
+    tracePrivateApproval(label, 'refused', refusal);
+    const error = new PrivateApprovalReadError(refusal);
+    if (attempts > 1) warnPrivateApproval(label, error.message);
+    throw error;
+  }
+}
+
+async function readPrivateApprovalSetOnce(input: readonly (string | undefined)[], signal?: AbortSignal): Promise<unknown[]> {
   let phase: PrivateApprovalReadPhase = 'input';
   let memberIndex: number | undefined;
   try {
     if (!input.length || input.length > 4 || new Set(input).size !== input.length
         || input.some(filename => typeof filename !== 'string' || !path.isAbsolute(filename) || filename.length > 2048 || filename.includes('\0'))
         || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-    const filenames = [...input];
+    const filenames = input as readonly string[];
     phase = 'identity-before';
     const identities = filenames.map((filename, index) => { memberIndex = index; return fs.lstatSync(filename, { bigint: true }); });
     phase = 'native-before'; memberIndex = undefined;
@@ -288,9 +407,14 @@ export async function readPrivateApprovalSetAsync(input: readonly string[], sign
     if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     return values;
   } catch (error) {
-    tracePrivateApprovalSetRefusal(phase, memberIndex, roles, error, signal, started);
-    throw error;
+    throw new PrivateApprovalAttemptFailure(phase, memberIndex, error);
   }
+}
+
+/** One bounded fresh native witness set; never stored or reused by a request. */
+export async function readPrivateApprovalSetAsync(input: readonly string[], signal?: AbortSignal,
+  roles?: readonly PrivateApprovalFileRole[]): Promise<unknown[]> {
+  return readPrivateApprovalWithRetry('[private-approval-set-reader]', input, signal, roles);
 }
 
 /** Final synchronous witness set after every yielding verification phase. */
@@ -309,29 +433,6 @@ export function readPrivateApprovalSet(input: readonly string[], signal?: AbortS
   }
   if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   return values;
-}
-
-async function readPrivateApprovalEvidenceAsync(filename: string | undefined, signal?: AbortSignal) {
-  let phase: 'signal-before' | 'native-before' | 'identity-before' | 'contents' | 'native-after' | 'identity-after' | 'signal-after' = 'signal-before';
-  try {
-  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  phase = 'native-before';
-  const before = process.platform === 'win32' && filename ? await windowsPrivateAuthorityStampAsync(filename, signal) : undefined;
-  phase = 'identity-before';
-  const identity = filename ? fs.lstatSync(filename, { bigint: true }) : undefined;
-  phase = 'contents';
-  const value = readPrivateApprovalContents(filename);
-  phase = 'native-after';
-  if (before !== undefined && await windowsPrivateAuthorityStampAsync(filename!, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  phase = 'identity-after';
-  if (identity && filename) { assertLinkFree(filename); if (!sameIdentity(identity, fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); }
-  phase = 'signal-after';
-  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  return { value, windowsAuthority: before };
-  } catch (error) {
-    try { if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[private-approval-reader]', 'refused', phase); } catch { /* Preserve the original failure. */ }
-    throw error;
-  }
 }
 
 function readPrivateApprovalContents(filename: string | undefined): unknown {
@@ -559,7 +660,8 @@ async function assertLinkFreeAsync(filename: string): Promise<void> {
 
 async function hashStableFileAsync(filename: string, maximum: number, signal?: AbortSignal, expected?: BigIntStats): Promise<{ digest: string; size: number }> {
   if (signal?.aborted) throw new Error();
-  const handle = await fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  const handle = await retryTransientFileOperation(
+    () => fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)), { signal });
   let buffer: Buffer | undefined;
   try {
     const opened = await handle.stat({ bigint: true });

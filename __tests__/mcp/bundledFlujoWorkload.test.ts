@@ -105,7 +105,7 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
   });
 });
 
-test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
+test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
   'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-quarantine-retry', 'retire-acquisition-ambiguous', 'verification-threeway-drain',
   'diagnostic-explicit', 'diagnostic-close', 'diagnostic-onclose', 'diagnostic-start-failed'] as const)
 ('real private consent and fresh guarded workload contract: %s', async mode => {
@@ -341,6 +341,27 @@ test.each(['lifecycle', 'crossgraph-positive', 'inventory-drift', 'deferred-owne
         await expect(refused.text()).rejects.toThrow();
         expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
       } finally { fs.writeFileSync(ownerFilename, originalOwner); }
+    }
+    if (mode === 'transient-private-reads') {
+      // Issue #1050: every private read of the ledger in the resource-list guard
+      // (initial set, both approval pairs, final synchronous set) meets one
+      // short-lived lock and must recover instead of refusing the request.
+      const ledgerFile = path.resolve(process.env.FLUJO_MCP_TRUSTED_HOST_FILE!);
+      const actualOpenSync = fs.openSync;
+      let ledgerOpens = 0, injected = 0;
+      const busy = jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+        if (path.resolve(String(args[0])) === ledgerFile && ledgerOpens++ % 2 === 0) {
+          injected += 1; throw Object.assign(new Error('Injected short-lived lock.'), { code: 'EBUSY', errno: -4082 });
+        }
+        return Reflect.apply(actualOpenSync, fs, args) as number;
+      });
+      const resourceRequest = new Request('http://127.0.0.1:4200/api/mcp/flujo/resources', {
+        signal: cancellation.signal, headers: { host: '127.0.0.1:4200', 'x-flujo-workspace': getCurrentWorkspace(), authorization: `Bearer ${token}` },
+      });
+      try {
+        expect((await timed('resolve-transient', () => resolveBundledFlujoWorkloadRequest(resourceRequest))).kind).toBe('authorized');
+      } finally { busy.mockRestore(); }
+      expect(injected).toBeGreaterThanOrEqual(4);
     }
     if (mode === 'deferred-owner-drift') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
