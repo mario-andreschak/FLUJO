@@ -11,6 +11,7 @@ const BASE_URLS: Partial<Record<NonNullable<Model['provider']>, string>> = {
   openai: 'https://api.openai.com/v1',
   openrouter: 'https://openrouter.ai/api/v1',
   litellm: 'http://localhost:4000/v1',
+  martllm: 'https://api.martllm.com/v1',
 };
 
 const model = (
