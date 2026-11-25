@@ -1,4 +1,4 @@
-import { constants as fsConstants, lstatSync, realpathSync, promises as fs, type BigIntStats } from 'node:fs';
+import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { OriginalOwnerEnrollment } from './types';
@@ -120,21 +120,6 @@ async function captureIdentity(filename: string): Promise<PathIdentity | null> {
 async function assertSnapshot(snapshot: PathSnapshot): Promise<void> {
   for (const [filename, expected] of snapshot) {
     const actual = await captureIdentity(filename);
-    if (expected === null ? actual !== null : !actual || !sameIdentity(actual, expected)) return refused();
-  }
-}
-
-function assertSnapshotSync(snapshot: PathSnapshot): void {
-  for (const [filename, expected] of snapshot) {
-    let actual: PathIdentity | null;
-    try {
-      const stats = lstatSync(filename, { bigint: true });
-      if (canonical(realpathSync(filename)) !== canonical(filename)) return refused();
-      actual = pathIdentity(stats);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') actual = null;
-      else return refused();
-    }
     if (expected === null ? actual !== null : !actual || !sameIdentity(actual, expected)) return refused();
   }
 }
@@ -324,6 +309,20 @@ function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<
   });
 }
 
+async function commandDirectory(target: string, snapshot: PathSnapshot): Promise<string> {
+  const refusal = () => new Error('original_owner_tool_effect_refused');
+  try {
+    await assertSnapshot(snapshot);
+    const real = await fs.realpath(target);
+    if (canonical(real) !== canonical(target)) throw refusal();
+    const stat = await fs.lstat(target, { bigint: true });
+    const expected = snapshot.get(target);
+    if (stat.isSymbolicLink() || !stat.isDirectory() || !expected
+      || !sameIdentity(pathIdentity(stat), expected)) throw refusal();
+    return real;
+  } catch { throw refusal(); }
+}
+
 function commandEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { NODE_ENV: 'production' };
   for (const name of commandEnvironmentNames) {
@@ -337,13 +336,15 @@ function commandEnvironment(): NodeJS.ProcessEnv {
  * Prepares one exact, enrollment-authorized Worker effect. Preparation is
  * effect-free; start is one-use and begins the operation immediately so its
  * caller can invoke it inside the genuine Persona fence and await it afterward.
+ * launched settles once a command's child process exists (or was refused), so
+ * the caller can hold the fence until then without waiting for the command.
  */
 export async function prepareNativeToolEffect(
   enrollment: EnrollmentGrant,
   name: string,
   args: Record<string, unknown>,
   signal: AbortSignal,
-): Promise<{ start(): Promise<ToolResult> }> {
+): Promise<{ start(): Promise<ToolResult>; launched(): Promise<void> }> {
   if (!signal || typeof signal.throwIfAborted !== 'function' || !enrollment || !Array.isArray(enrollment.allowedTools)
     || !enrollment.allowedTools.includes(name as never)) return refused();
   const captured = normalizedArguments(name, args);
@@ -357,6 +358,7 @@ export async function prepareNativeToolEffect(
   if (isFile) await validateFilePath(root, target, snapshot);
   else await validateDirectoryPath(root, target, snapshot);
   let started = false;
+  let launched: Promise<void> = Promise.resolve();
   return Object.freeze({
     start(): Promise<ToolResult> {
       if (started) return Promise.reject(new Error('original_owner_tool_effect_spent'));
@@ -365,20 +367,11 @@ export async function prepareNativeToolEffect(
       if (name === 'worker_read_file') return readFile(root, target, snapshot, signal);
       if (name === 'worker_write_file') return writeFile(root, target, snapshot, captured.content as string, signal);
       if (name === 'worker_list_dir') return listDirectory(root, target, snapshot, signal);
-      // Keep the synchronous cwd recheck and process creation within start()'s
-      // call stack; only process completion remains asynchronous.
-      let childPath: string;
-      try {
-        assertSnapshotSync(snapshot);
-        const real = realpathSync(target);
-        if (canonical(real) !== canonical(target)) return Promise.reject(new Error('original_owner_tool_effect_refused'));
-        const stat = lstatSync(target, { bigint: true });
-        const expected = snapshot.get(target);
-        if (stat.isSymbolicLink() || !stat.isDirectory() || !expected
-          || !sameIdentity(pathIdentity(stat), expected)) return Promise.reject(new Error('original_owner_tool_effect_refused'));
-        childPath = real;
-      } catch { return Promise.reject(new Error('original_owner_tool_effect_refused')); }
-      return runCommand(command!, childPath, signal);
+      const launch = commandDirectory(target, snapshot)
+        .then(cwd => ({ completion: runCommand(command!, cwd, signal) }));
+      launched = launch.then(() => undefined, () => undefined);
+      return launch.then(({ completion }) => completion);
     },
+    launched(): Promise<void> { return launched; },
   });
 }
