@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { currentChatAttachmentLimits, machineAttachmentDefaults } from '@/backend/services/chatAttachments/limits';
 import { prepareChatAttachment } from '@/backend/services/chatAttachments/prepare';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/api/chat/attachments/route');
@@ -13,6 +14,8 @@ const NO_STORE = { 'Cache-Control': 'private, no-store' };
  * The attachment limits in force, and the defaults this computer would use.
  */
 async function GET_handler() {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
   const limits = await currentChatAttachmentLimits();
   return NextResponse.json({ limits, defaults: machineAttachmentDefaults() }, { headers: NO_STORE });
 }
@@ -51,6 +54,8 @@ async function readBody(request: NextRequest, maxBytes: number): Promise<Uint8Ar
  * never dropped without a word.
  */
 async function POST_handler(request: NextRequest) {
+  const _lock = await assertUnlocked();
+  if (_lock) return _lock;
   const url = new URL(request.url);
   const name = url.searchParams.get('name')?.trim() || 'attachment';
   const mimeType = url.searchParams.get('type')?.trim() || undefined;
