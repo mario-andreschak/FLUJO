@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React from 'react';
 import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
 import HeadersEditor from './HeadersEditor';
 import OAuthCredentialsEditor from './OAuthCredentialsEditor';
@@ -46,9 +46,7 @@ interface RunToolsProps {
   onOAuthClientIdChange?: (clientId: string) => void;
   onOAuthClientSecretChange?: (clientSecret: string) => void;
   serverName: string;
-  consoleOutput: string;
   message: MessageState | null;
-  setMessage: (message: MessageState | null) => void;
   /** Test Run detected a reachable OAuth (RFC 9728) streamable server. */
   oauthCapable?: boolean;
   /** Persist the server and start its OAuth flow (shown when oauthCapable). */
@@ -79,25 +77,14 @@ const RunTools: React.FC<RunToolsProps> = ({
   onOAuthClientIdChange,
   onOAuthClientSecretChange,
   serverName,
-  consoleOutput,
   message,
-  setMessage,
   oauthCapable = false,
   onSaveAndAuthenticate,
   isAuthenticating = false
 }) => {
   const { t, formatNumber } = useI18n();
   const fieldId = React.useId();
-  // Check for MODULE_NOT_FOUND in console output
-  useEffect(() => {
-    if (consoleOutput.includes("MODULE_NOT_FOUND")) {
-      setMessage({
-        type: 'error',
-        text: t('mcp.local.run.moduleNotFound')
-      });
-    }
-  }, [consoleOutput, setMessage, t]);
-  
+
   // URL validation
   const isValidWebsocketUrl = (url: string): boolean => {
     if (!url) return false;

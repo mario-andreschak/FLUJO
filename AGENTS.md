@@ -45,6 +45,7 @@ workaround.
 | No `as unknown as` casts | `flujo/no-double-cast` |
 | Keep work off the event loop: no synchronous file calls in `src/` | `flujo/no-sync-fs` |
 | No raw timers in UI code; use `src/frontend/hooks/timing.ts` | `flujo/no-raw-timers` |
+| Read an MCP server's startup error only in `src/utils/mcp/startupFailureHint.ts`; Python and Node.js word a missing file or package differently | `flujo/no-adhoc-startup-error-match` |
 | Effects, refs and state follow React's rules | `react-hooks/*` in `eslint.config.mjs` |
 | `backend`, `frontend` and `shared` import only what their layer allows | `__tests__/architecture/importBoundaries.test.ts` |
 | Repository hygiene | `scripts/check-repo-hygiene.mjs` |
