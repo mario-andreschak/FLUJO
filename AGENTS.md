@@ -57,7 +57,9 @@ workaround.
 | Repository hygiene | `scripts/check-repo-hygiene.mjs` |
 | Tests run only on a Node.js version the app supports | `assertSupportedTestRuntime` in `scripts/local-test-dependencies.cjs`; `__tests__/scripts/localTestDependencies.test.ts` |
 | Every page has exactly one feature map entry | `scripts/check-feature-map.mjs` |
-| A reply that reaches the output length limit is a finished, cut-off reply (`finish_reason: 'length'` and a soft chat notice), never a run error | `__tests__/model/cutOffReply.test.ts`, `__tests__/model/geminiSdkContinuation.test.ts` |
+| A reply that reaches the output length limit is a finished, cut-off reply (`finish_reason: 'length'` and a soft chat notice), never a run error; its tool calls never run (`guardCutOffToolCalls` wraps every adapter) | `__tests__/model/cutOffReply.test.ts`, `__tests__/model/geminiSdkContinuation.test.ts`, `__tests__/model/selfHostedOpenAiCompatible.test.ts` |
+| Whether a server is OpenAI's own is decided from its address (`isOfficialOpenAiEndpoint`), never from the provider name; a self-hosted server saved as "openai" gets its messages in the order written | `__tests__/model/openaiExplicitPromptCaching.test.ts`, `__tests__/flow/selfHostedServerRuns.test.ts` |
+| Every OpenAI-compatible server is asked for token counts and read in its own spelling (`readOpenAiCompatibleUsage`); a call without counts shows "not reported", never 0 | `__tests__/model/selfHostedOpenAiCompatible.test.ts`, `__tests__/flow/selfHostedServerRuns.test.ts` |
 | Every API route has one multi-user kind (`workspace`, `host`, `admin`, `account`, `protocol`); routes that start programs are `host` or `admin` | `__tests__/accounts/routeCapabilities.test.ts` |
 | A workflow job that can publish or sign first requires the exact-commit `main` verification run | `assertReleaseVerificationGates` in `scripts/workflow-contract.mjs` (its exception list only shrinks) |
 | Every open security alert is fixed or has a written reason that expires | `npm run check:security-response` with `docs/security/alert-triage.json` |

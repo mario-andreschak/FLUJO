@@ -101,6 +101,7 @@ import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement'
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
 import { registerCancellableRun } from '@/backend/execution/flow/cancellationCoordinator';
+import { nodeAfterFinishStep } from '@/backend/execution/flow/finishReentry';
 import {
   FlowSnapshotSchema,
   PersonaInstructionContextSchema,
@@ -1679,6 +1680,28 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       log.info(`New user turn for ${effectiveConvId}: directing execution to node ${lastMsg.processNodeId} (was ${sharedState.currentNodeId}).`);
       sharedState.currentNodeId = lastMsg.processNodeId;
       FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+    }
+    // A message without a step would otherwise run the Finish step again: no
+    // model is called and the run still says "completed".
+    if (sharedState.flowId && sharedState.currentNodeId) {
+      try {
+        // A caller that sends the whole history sends it without step ids, so
+        // the saved history from before this turn still names the last step.
+        const reentryNodeId = nodeAfterFinishStep(
+          sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId),
+          sharedState.currentNodeId,
+          [...messagesBeforeTurn, ...sharedState.messages],
+        );
+        if (reentryNodeId) {
+          log.info(`New user turn for ${effectiveConvId} after a Finish step: continuing at node ${reentryNodeId} (was ${sharedState.currentNodeId}).`);
+          sharedState.currentNodeId = reentryNodeId;
+          FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+        }
+      } catch (error) {
+        // The entry check below reads the same flow and ends this turn with a
+        // clear message when the flow store cannot be read.
+        log.warn(`Could not read the flow to leave the Finish step for ${effectiveConvId}`, error);
+      }
     }
   }
 
