@@ -40,6 +40,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. Testing a real 
 - While no app is connected, the first-run guide shows a second "Connect App" button; both open the same wizard.
 - Clicking a disabled server's card does nothing; enable it first.
 - "Connected" only means the server started. A tool works only after a real tool test succeeds.
+- When "3) Test run" of a command on this computer fails because a Python script or package, or a Node.js file or package, is missing, the red message names that cause and the fix (for example "Python could not find the script …"). Other failures show "Connection test failed. See the console for details." The server's own error is always in the console. See `docs/features/mcp/local-servers.md`.
 - Installing apps from GitHub, the marketplace or AI-assisted setup downloads and runs third-party code on the machine. Do not do that in an unattended run.
 - The search box has only a placeholder, so `fill --label` will not find it.
 - The main button carries `data-tour="add-mcp-server"`; the "Marketplace" tab carries `data-tour="mcp-marketplace-tab"`.

@@ -134,6 +134,13 @@ export default defineConfig([
     },
   },
   {
+    files: ['src/**/*.{js,jsx,ts,tsx}'],
+    ignores: ['src/utils/mcp/startupFailureHint.ts'],
+    rules: {
+      'flujo/no-adhoc-startup-error-match': 'error',
+    },
+  },
+  {
     files: ['src/frontend/**/*.tsx', 'src/app/**/*.tsx', 'src/frontend/**/hooks/**/*.ts'],
     ignores: ['src/frontend/hooks/timing.ts'],
     rules: {

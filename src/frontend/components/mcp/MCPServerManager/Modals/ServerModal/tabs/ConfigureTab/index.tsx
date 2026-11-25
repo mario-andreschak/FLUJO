@@ -802,12 +802,7 @@ const ConfigureTab: React.FC<TabProps> = ({
                     // the editor emits verbatim (masked, a ${global:} binding, or a new value).
                     onOAuthClientSecretChange={(oauthClientSecret) => setLocalConfig(prev => ({ ...prev, oauthClientSecret }))}
                     serverName={localConfig.name}
-                    consoleOutput={consoleOutput}
                     message={message}
-                    setMessage={(nextMessage) => {
-                      setMessage(nextMessage);
-                      setTestRunError(nextMessage?.type === 'error' ? nextMessage.text : null);
-                    }}
                     oauthCapable={oauthCapable}
                     onSaveAndAuthenticate={onSaveAndAuthenticate ? onSaveAndAuthenticateClick : undefined}
                     isAuthenticating={isAuthenticating}

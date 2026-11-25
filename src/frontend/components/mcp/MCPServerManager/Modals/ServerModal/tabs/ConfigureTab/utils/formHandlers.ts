@@ -8,9 +8,17 @@ import { isStdioConfig, isWebSocketConfig, isSSEConfig, isStreamableConfig } fro
 import { mcpService } from '@/frontend/services/mcp';
 import { TestConnectionEvent } from '@/shared/types/streaming';
 import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
-import { translate, type Translator } from '@/frontend/i18n';
+import { findStartupFailureHint, type StartupFailureKind } from '@/utils/mcp/startupFailureHint';
+import { translate, type TranslationKey, type Translator } from '@/frontend/i18n';
 
 const englishTranslator: Translator = (key, values) => translate('en', key, values);
+
+const STARTUP_FAILURE_MESSAGE: Record<StartupFailureKind, TranslationKey> = {
+  pythonScriptMissing: 'mcp.local.run.startup.pythonScriptMissing',
+  pythonPackageMissing: 'mcp.local.run.startup.pythonPackageMissing',
+  nodeFileMissing: 'mcp.local.run.startup.nodeFileMissing',
+  nodePackageMissing: 'mcp.local.run.startup.nodePackageMissing',
+};
 
 /**
  * Assemble the final, saveable server config from the current form state, applying the
@@ -811,9 +819,12 @@ export const handleRun = async (
       }
       setConsoleOutput((prev: string) => prev + `\n⚠️ ${t('mcp.local.console.authEnvHeaders')}\n`);
     } else {
+      const hint = findStartupFailureHint(testResult.error);
       setMessage({
         type: 'error',
-        text: t('mcp.local.messages.testFailed')
+        text: hint
+          ? t(STARTUP_FAILURE_MESSAGE[hint.kind], { target: hint.target })
+          : t('mcp.local.messages.testFailed')
       });
       setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.failed')}\n`);
       setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.details', { details: testResult.error || t('mcp.server.unknownError') })}\n`);

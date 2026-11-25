@@ -24,9 +24,7 @@ interface RunSectionProps {
   env: Record<string, EnvVarValue>;
   onEnvChange: (env: Record<string, EnvVarValue>) => void;
   serverName: string;
-  consoleOutput: string;
   message: MessageState | null;
-  setMessage: (message: MessageState | null) => void;
   handleArgChange: (index: number, value: string) => void;
   addArgField: () => void;
   removeArgField: (index: number) => void;
@@ -54,9 +52,7 @@ const RunSection: React.FC<RunSectionProps> = ({
   env,
   onEnvChange,
   serverName,
-  consoleOutput,
   message,
-  setMessage,
   handleArgChange,
   addArgField,
   removeArgField,
@@ -110,9 +106,7 @@ const RunSection: React.FC<RunSectionProps> = ({
             env={env}
             onEnvChange={onEnvChange}
             serverName={serverName}
-            consoleOutput={consoleOutput}
             message={message}
-            setMessage={setMessage}
           />
           
           <div className="mt-6">

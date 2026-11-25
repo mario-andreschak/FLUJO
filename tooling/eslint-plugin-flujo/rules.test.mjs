@@ -83,3 +83,22 @@ tester.run('no-sync-fs', rules['no-sync-fs'], {
     { code: "require('fs').mkdirSync(p);", errors: [{ messageId: 'syncFs' }] },
   ],
 });
+
+tester.run('no-adhoc-startup-error-match', rules['no-adhoc-startup-error-match'], {
+  valid: [
+    'const hint = findStartupFailureHint(result.error);',
+    "if (error.code === 'MODULE_NOT_FOUND') return fallback();",
+    "if ('ERR_MODULE_NOT_FOUND' !== err.code) throw err;",
+    "const label = 'Module not installed';",
+  ],
+  invalid: [
+    {
+      code: "if (consoleOutput.includes(\"MODULE_NOT_FOUND\")) {\n  setMessage({ type: 'error', text: t('mcp.local.run.moduleNotFound') });\n}",
+      errors: [{ messageId: 'adhocMatch', data: { marker: 'MODULE_NOT_FOUND' } }],
+    },
+    { code: 'const missing = /ModuleNotFoundError: (.+)/.exec(stderr);', errors: [{ messageId: 'adhocMatch', data: { marker: 'ModuleNotFoundError' } }] },
+    { code: "if (text.startsWith(`Error: Cannot find module ${name}`)) warn();", errors: [{ messageId: 'adhocMatch' }] },
+    { code: "const isMissing = stderr.includes(\"can't open file\");", errors: [{ messageId: 'adhocMatch' }] },
+    { code: "const isMissing = codes.includes('MODULE_NOT_FOUND');", errors: [{ messageId: 'adhocMatch' }] },
+  ],
+});
