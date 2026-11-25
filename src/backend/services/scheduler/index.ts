@@ -1,4 +1,5 @@
 import { AsyncResource } from 'node:async_hooks';
+import { backgroundWorkPause } from '@/backend/services/accounts/background';
 import { hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError, getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
@@ -2607,6 +2608,20 @@ export class SchedulerService {
         firedAt, finishedAt: firedAt, status: 'skipped', triggerSummary: payload.summary,
         error: 'Worker automatic schedule execution requires a local recovery admission',
       });
+    }
+    // Multi-user mode (#574): automatic runs act for the workspace owner and
+    // pause while that owner is turned off. Nothing is stored, so the next
+    // tick after the owner is turned on again (also after a restart) runs.
+    if (payload.kind !== 'manual') {
+      const pause = await backgroundWorkPause(this.workspace);
+      if (pause.paused) {
+        const record: RunRecord = {
+          runId, executionGenerationId: this.executionGenerationId(execution), conversationId: '',
+          firedAt, finishedAt: firedAt, status: 'skipped', triggerSummary: payload.summary, error: pause.reason,
+        };
+        admissionObserver?.resolve({ runId, record });
+        return record;
+      }
     }
     if (
       execution.personaRetired

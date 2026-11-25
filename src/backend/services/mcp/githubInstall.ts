@@ -1,4 +1,5 @@
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '@/backend/services/security/bundledFlujoWorkload';
+import { assertHostAccess } from '@/backend/services/accounts/hostAccess';
 import path from 'path';
 import fs from 'fs/promises';
 import { createHash } from 'crypto';
@@ -137,6 +138,7 @@ async function run(
   secretValues: string[],
 ): Promise<void> {
   await assertBundledFlujoWorkloadEffectCurrent();
+  await assertHostAccess('github-install');
   return new Promise((resolve, reject) => {
     let settled = false;
     let output = '';

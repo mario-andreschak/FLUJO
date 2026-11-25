@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { assertHostAccess } from '@/backend/services/accounts/hostAccess';
 import { captureRuntimeChildIdentity, probeRuntimeProcessIdentity, type RuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
 
 export interface CodexOwnedProcessRegistration {
@@ -54,6 +55,7 @@ export async function startOwnedCodexAppServer(input: {
   admissionTimeoutMs?: number;
 }) {
   input.signal?.throwIfAborted();
+  await assertHostAccess('command-line-model');
   const admissionTimeoutMs=input.admissionTimeoutMs ?? 30000;
   if(!Number.isInteger(admissionTimeoutMs) || admissionTimeoutMs<1 || admissionTimeoutMs>30000)throw new Error('Invalid Codex admission timeout.');
   const child = spawn(input.executable, input.args ?? ['app-server', '--stdio'], {

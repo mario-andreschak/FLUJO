@@ -1,4 +1,5 @@
 import { isConversationDurabilityError } from '@/backend/execution/flow/conversationPublicationError';
+import { assertHostAccess } from '@/backend/services/accounts/hostAccess';
 import OpenAI from 'openai';
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -1323,6 +1324,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     let claimedSpare: ReturnType<typeof takeClaudeSpare>;
 
     let response: ReturnType<typeof query>;
+    await assertHostAccess('command-line-model');
     try {
       if (nativeOriginalProcessHost) {
         await nativeOriginalProcessHost.assertTurnBudget(queryOptions.maxTurns!);

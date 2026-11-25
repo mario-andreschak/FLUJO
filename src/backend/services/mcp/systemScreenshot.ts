@@ -25,6 +25,7 @@
  * command-execution path.
  */
 import { promises as fs } from 'node:fs';
+import { assertHostAccess } from '@/backend/services/accounts/hostAccess';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -93,6 +94,7 @@ function hasInteractiveDesktopSession(): boolean {
 
 async function runSpawn(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
   await assertBundledFlujoWorkloadEffectCurrent();
+  await assertHostAccess('system-screenshot');
   return new Promise((resolve, reject) => {
     let child;
     try {

@@ -57,6 +57,7 @@ import {
   shippedDescriptorForConfig,
 } from './shippedServers';
 import { ensureShippedWorkspacePackages } from './shippedWorkspacePackages';
+import { assertHostAccess } from '@/backend/services/accounts/hostAccess';
 import { registerRootsHandler } from "./roots";
 import {
   samplingEnabled,
@@ -1103,6 +1104,20 @@ export function attachShippedWorkspaceReadiness(
   };
 }
 
+/**
+ * Multi-user mode (#574): a server program outside the isolated container
+ * needs host access for the person behind the request, or for the workspace
+ * owner when FLUJO starts it by itself. Checked last, right before the spawn,
+ * so the other launch wrappers clean up exactly as after any failed start.
+ */
+export function attachHostAccessCheck(transport: { start: () => Promise<void> }): void {
+  const start = transport.start.bind(transport);
+  transport.start = async () => {
+    await assertHostAccess('local-mcp-server');
+    await start();
+  };
+}
+
 /** Create a stdio transport for the MCP client. */
 export function createStdioTransport(
   config: MCPServerConfig,
@@ -1148,6 +1163,7 @@ export function createStdioTransport(
     }
 
     transport = new StdioClientTransport(transportoptions);
+    if (!isolation) attachHostAccessCheck(transport);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
     else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
     else {
