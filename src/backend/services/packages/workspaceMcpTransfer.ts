@@ -11,6 +11,7 @@ import { mapInstallOrigin, resolveDependencies, type PackageEntities } from './b
 import { mcpService } from '@/backend/services/mcp';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { sameTrustedHostConsent, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
+import { stdioLaunchForm } from '@/backend/services/mcp/launchForm';
 import { prepareGithubServerRuntime } from '@/backend/services/mcp/githubInstall';
 import { prepareRegistryServerRuntime } from '@/backend/services/mcp/registryInstall';
 import { createShippedServerConfig, shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServers';
@@ -384,7 +385,7 @@ async function existingRuntime(
   if (entry.kind === 'bundled' && config.transport === 'stdio' && config.trustedHost !== undefined) {
     const captured = structuredClone(config);
     const descriptor = shippedDescriptorForConfig(captured);
-    const verified = await verifyTrustedHostMcp(captured);
+    const verified = await verifyTrustedHostMcp(await stdioLaunchForm(captured));
     const installation = verified.policy.bundledInstallation;
     const canonical = (value: string) => process.platform === 'win32'
       ? path.resolve(value).toLowerCase() : path.resolve(value);

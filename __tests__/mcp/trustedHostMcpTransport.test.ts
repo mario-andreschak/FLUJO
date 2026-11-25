@@ -19,9 +19,10 @@ import { getMcpAppRuntimeBrokerSnapshot, revokeMcpAppRuntimeBrokerForServer } fr
 
 jest.mock('@/backend/services/mcp/config', () => ({ loadServerConfigs: jest.fn() }));
 jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn(async () => undefined), saveItem: jest.fn() }));
-jest.mock('@/backend/utils/resolveGlobalVars', () => ({ resolveGlobalVars: jest.fn(() => {
-  throw new Error('Trusted host dispatch must not access the shared secret store');
-}) }));
+jest.mock('@/backend/utils/resolveGlobalVars', () => ({
+  resolveGlobalVars: jest.fn(() => { throw new Error('Trusted host dispatch must not access the shared secret store'); }),
+  resolveAndDecryptApiKey: jest.fn(async (value: string) => value),
+}));
 
 let directory: string;
 let fixtureParent: string;

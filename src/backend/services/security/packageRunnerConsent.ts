@@ -1,5 +1,6 @@
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { resolveRuntimeHomeIsolation } from '../mcp/runtimeHomeIsolation';
+import { stdioLaunchForm } from '../mcp/launchForm';
 import { assertPackageRunnerResolution, packageRunnerArguments } from './protectedPackageRunner';
 import { fingerprintTrustedHostExecutableAsync, fingerprintTrustedHostSourceAsync, trustedHostEnvironment,
   trustedHostMcpPolicySchema, trustedHostMcpPreviewDigestAsync, TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES, trustedHostPackageRunnerContext } from './trustedHostMcp';
@@ -36,7 +37,7 @@ export async function previewPackageRunnerConsent(stored: MCPStdioConfig, runtim
       packageRunner: { ...policy.packageRunner, shellDigest },
       environmentNames: [...new Set([...policy.environmentNames, ...Object.keys(environment),
         ...(runtimeHome === 'isolated' ? TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES : [])])] } };
-  const policyDigest = await trustedHostMcpPreviewDigestAsync(config);
+  const policyDigest = await trustedHostMcpPreviewDigestAsync(await stdioLaunchForm(config));
   const dependencyGraph = assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config, runtimeHome));
   if (!dependencyGraph) throw new Error('Package dependency graph unavailable');
   const cache = Object.entries(environment).find(([name]) => name.toUpperCase() === 'NPM_CONFIG_CACHE')?.[1];

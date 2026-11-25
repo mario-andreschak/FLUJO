@@ -384,9 +384,7 @@ export function createBetaTransport(
     else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
     else {
       attachShippedWorkspaceReadiness(transport, config, cwd);
-      attachLocalHostLaunch(transport, config, current => JSON.stringify([
-        stdioConfigKey(current, options?.isolateRuntimeHome === true), capabilityKey(current),
-      ]));
+      attachLocalHostLaunch(transport, config, { isolateRuntimeHome: options?.isolateRuntimeHome === true });
     }
   } catch (error) {
     const cleanupErrors: unknown[] = [];

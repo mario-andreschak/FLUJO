@@ -2,6 +2,7 @@ import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { getExposureMode } from '@/utils/http/exposureMode';
 import { TrustedHostMcpError } from '../security/trustedHostMcp';
+import { launchForm } from './launchForm';
 
 /** Preserve native localhost installations that have not selected a private policy. */
 export function localHostMcpAllowed(config: MCPServerConfig): boolean {
@@ -20,7 +21,8 @@ interface LocalHostTransport {
 }
 
 interface LocalHostLaunch {
-  assertCurrent(config: MCPServerConfig): void;
+  /** Accepts the stored or the launch form; both are compared in launch form. */
+  assertCurrent(config: MCPServerConfig): Promise<void>;
 }
 
 // Bind dispatch to a transport created by our factory, never to an arbitrary
@@ -41,25 +43,33 @@ export function getLocalHostLaunch(transport: unknown): LocalHostLaunch | undefi
   return undefined;
 }
 
+/** `config` is the launch form the transport starts with. */
 export function attachLocalHostLaunch(transport: LocalHostTransport, config: MCPStdioConfig,
-  identity: (config: MCPStdioConfig) => string): void {
+  options: { isolateRuntimeHome: boolean }): void {
   const captured = structuredClone(config);
   const workspace = getCurrentWorkspace();
-  const key = identity(captured);
+  const assertAdmitted = (current: MCPServerConfig): MCPStdioConfig => {
+    if (current.transport !== 'stdio' || !localHostMcpAllowed(current) || getCurrentWorkspace() !== workspace
+      || current.name !== captured.name) {
+      throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    }
+    return current;
+  };
   const launch: LocalHostLaunch = {
-    assertCurrent(current) {
-      if (current.transport !== 'stdio' || !localHostMcpAllowed(current) || getCurrentWorkspace() !== workspace
-        || current.name !== captured.name || identity(current) !== key) {
+    async assertCurrent(given) {
+      const [{ localLaunchFingerprint }, current] = await Promise.all([import('./connection'), launchForm(given)]);
+      if (localLaunchFingerprint(assertAdmitted(current), options.isolateRuntimeHome)
+        !== localLaunchFingerprint(assertAdmitted(captured), options.isolateRuntimeHome)) {
         throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       }
     },
   };
-  launch.assertCurrent(captured);
+  assertAdmitted(captured);
   launches.set(transport, launch);
   const start = transport.start.bind(transport);
   transport.start = async () => {
-    launch.assertCurrent(captured);
+    assertAdmitted(captured);
     await start();
-    launch.assertCurrent(captured);
+    assertAdmitted(captured);
   };
 }

@@ -15,6 +15,7 @@ import { readPrivateApproval, readPrivateApprovalAsync, readPrivateApprovalSet, 
 import { retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { canonicalWorkloadJson, computeBundledFlujoWorkloadDefinitions, computeBundledFlujoWorkloadInventory,
   type WorkloadAction } from '../mcp/bundledFlujoWorkloadInventory';
+import { stdioLaunchForm } from '../mcp/launchForm';
 
 export const BUNDLED_FLUJO_WORKLOAD_TOKEN_ENV = 'FLUJO_MCP_WORKLOAD_TOKEN';
 export const BUNDLED_FLUJO_WORKLOAD_AUDIENCE_ENV = 'FLUJO_MCP_WORKLOAD_AUDIENCE';
@@ -491,7 +492,7 @@ async function evidence(request: Request) {
   await runWithWorkspace(record.workspace, async () => {
     phase = 'config';
     const first = await traceAsync('config-first', () => readCurrentConfig(record.serverName, request.signal));
-    const config = first.config;
+    const config = await stdioLaunchForm(first.config);
     const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
     if (policy.bundledInstallation?.packageDirectory !== 'flujo') throw new BundledFlujoWorkloadError();
     phase = 'package';
@@ -503,9 +504,9 @@ async function evidence(request: Request) {
         || canonicalWorkloadJson(inventory) !== canonicalWorkloadJson(record.inventory)) throw new BundledFlujoWorkloadError();
     phase = 'config-fences';
     const latest = await traceAsync('config-latest', () => readCurrentConfig(record.serverName, request.signal));
-    if (!sameTrustedHostConsent(latest.config, config)) throw new BundledFlujoWorkloadError();
+    if (!sameTrustedHostConsent(await stdioLaunchForm(latest.config), config)) throw new BundledFlujoWorkloadError();
     const finalEvidence = await traceAsync('config-final', () => readCurrentConfig(record.serverName, request.signal));
-    const finalConfig = finalEvidence.config;
+    const finalConfig = await stdioLaunchForm(finalEvidence.config);
     if (!sameTrustedHostConsent(finalConfig, config)) throw new BundledFlujoWorkloadError();
     const finalDigest = traceSync('digest-final', () => trustedHostMcpPolicyDigest(finalConfig));
     // The last fresh set covers every private file after ALL yielding source,

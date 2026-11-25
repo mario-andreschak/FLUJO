@@ -410,6 +410,17 @@ export function stdioConfigKey(
 }
 
 /**
+ * The one fingerprint of what a local stdio server runs with: command,
+ * arguments, environment, folders and client capabilities. Pass a config in
+ * launch form (see launchForm.ts). The keyed hash never contains a secret.
+ */
+export function localLaunchFingerprint(config: MCPStdioConfig, isolateRuntimeHome: boolean): string {
+  return createHmac('sha256', fingerprintKey)
+    .update(JSON.stringify([stdioConfigKey(config, isolateRuntimeHome), capabilityKey(config)]))
+    .digest('hex');
+}
+
+/**
  * Identity key of everything in a streamable/SSE (HTTP) config that affects the live
  * connection but is NOT the URL — chiefly the auth material (Authorization / custom
  * headers, requestInit, OAuth client + tokens) and session / reconnection options.
@@ -1168,9 +1179,7 @@ export function createStdioTransport(
     else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
     else {
       attachShippedWorkspaceReadiness(transport, config, cwd);
-      attachLocalHostLaunch(transport, config, current => JSON.stringify([
-        stdioConfigKey(current, options?.isolateRuntimeHome === true), capabilityKey(current),
-      ]));
+      attachLocalHostLaunch(transport, config, { isolateRuntimeHome: options?.isolateRuntimeHome === true });
     }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
