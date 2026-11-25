@@ -12,13 +12,15 @@ import { bundledCodexExecutable } from './codexRestrictedProfile';
 import { startOwnedCodexAppServer, assertCodexOwnedProcessRegistration, CodexAppServerRpcError } from './codexAppServerProcess';
 import { admitCodexDirectory, readCodexRuntimeFile, writeCodexRuntimeFile } from './codexRuntimeFiles';
 import { CODEX_APP_SERVER_CONTRACT, assertSupportedCodexServer } from './codexProtocol';
+import { qualifyCodexConversation } from './codexConversationQualification';
 
 const log = createLogger('backend/services/model/adapters/codexRuntimeUpdate');
 const run = promisify(execFile);
 const DAY = 24 * 60 * 60 * 1000;
 const VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 // Bump when the admitted catalogue/error schema or SDK argument contract changes.
-// v3: the running app-server's own version must match --version and be supported.
+// v3: the running app-server's own version must match --version and be supported,
+// and one conversation turn against a local stand-in model must read correctly.
 const QUALIFICATION_CONTRACT = 'flujo-codex-runtime-qualification-v3';
 export interface CodexRuntimeCompatibility {
   cliVersion: string;
@@ -131,11 +133,13 @@ async function qualifySdkExecution(executable: string, home: string, signal: Abo
   }
 }
 
-/** No threads or inference: qualify stdio framing, errors, all catalogue pages and SDK parsing. */
+/** No account or real inference: qualify stdio framing, errors, all catalogue
+ * pages, SDK parsing, and one conversation turn against a local stand-in model
+ * read by FLUJO's own conversation code. */
 export async function qualifyCodexUpdate(executable: string, home: string): Promise<CodexRuntimeCompatibility> {
   const compatibility = { cliVersion: await versionOf(executable, home), sdkVersion: await installedSdkVersion(),
     protocolContract: CODEX_APP_SERVER_CONTRACT };
-  const signal = AbortSignal.timeout(20000);
+  const signal = AbortSignal.timeout(30000);
   const owner = Object.freeze({});
   const child = await startOwnedCodexAppServer({
     executable, args: ['app-server', '--listen', 'stdio://'], cwd: home, env: codexUpdateEnvironment(home), owner,
@@ -173,8 +177,10 @@ export async function qualifyCodexUpdate(executable: string, home: string): Prom
     if (!rejected) throw new Error('Codex JSON-RPC error protocol changed');
     await qualifySdkExecution(executable, home, signal);
     signal.throwIfAborted();
-    return compatibility;
   } finally { await child.stop(); }
+  await qualifyCodexConversation({ executable, home, signal, environment: codexUpdateEnvironment });
+  signal.throwIfAborted();
+  return compatibility;
 }
 
 async function npmCli(): Promise<string> {

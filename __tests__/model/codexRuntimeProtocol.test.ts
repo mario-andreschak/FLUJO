@@ -5,7 +5,7 @@ import { bundledCodexExecutable } from '@/backend/services/model/adapters/codexR
 import { qualifyCodexUpdate, newerCodexVersion, codexUpdateEnvironment } from '@/backend/services/model/adapters/codexRuntimeUpdate';
 import { assertSupportedCodexServer, codexServerVersion, CodexRuntimeVersionError, describeCodexTurnError, MIN_ORDINARY_CODEX_CLI } from '@/backend/services/model/adapters/codexProtocol';
 
-it('qualifies the installed native CLI through real stdio with an empty isolated home and no inference', async () => {
+it('qualifies the installed native CLI through real stdio with an empty isolated home, one stand-in model turn and no account', async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-codex-protocol-'));
   try { await qualifyCodexUpdate(bundledCodexExecutable(), home); }
   finally {

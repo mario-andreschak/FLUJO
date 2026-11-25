@@ -20,7 +20,10 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => ({
   ...jest.requireActual('@/backend/services/model/adapters/codexAppServerProcess'),
   startOwnedCodexAppServer: jest.fn(), assertCodexOwnedProcessRegistration: jest.fn(),
 }));
+// The real conversation turn is qualified against the installed CLI in codexRuntimeProtocol.test.ts.
+jest.mock('@/backend/services/model/adapters/codexConversationQualification', () => ({ qualifyCodexConversation: jest.fn(async () => {}) }));
 import { resolveOrdinaryCodexExecutable, acquireOrdinaryCodexExecutable, qualifyCodexUpdate, readCodexRuntimeCompatibility } from '@/backend/services/model/adapters/codexRuntimeUpdate';
+import { qualifyCodexConversation } from '@/backend/services/model/adapters/codexConversationQualification';
 import { startOwnedCodexAppServer, CodexAppServerRpcError } from '@/backend/services/model/adapters/codexAppServerProcess';
 import { CODEX_APP_SERVER_CONTRACT } from '@/backend/services/model/adapters/codexProtocol';
 
@@ -188,6 +191,15 @@ it.each([
   expect(request.mock.calls.map(([method]) => method)).toEqual(['initialize']);
   expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toBe(mockBundled);
   await expect(fs.stat(path.join(mockWorkspace, 'db/codex-cli/current.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('keeps the working CLI when FLUJO cannot read a conversation turn from the candidate', async () => {
+  jest.mocked(qualifyCodexConversation).mockRejectedValueOnce(new Error('Codex conversation protocol changed'));
+  expect(await resolveOrdinaryCodexExecutable({ waitForUpdate: true })).toBe(mockBundled);
+  await expect(fs.stat(path.join(mockWorkspace, 'db/codex-cli/current.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  // The turn runs in its own process after the catalogue child has closed.
+  expect(stop.mock.invocationCallOrder[0]).toBeLessThan(jest.mocked(qualifyCodexConversation).mock.invocationCallOrder[0]);
+  expect(jest.mocked(qualifyCodexConversation).mock.calls[0][0]).toMatchObject({ executable: expect.stringContaining('release-0.163.0-') });
 });
 
 it('admits a candidate whose app-server reports the version it was installed as', async () => {

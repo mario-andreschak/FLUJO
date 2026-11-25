@@ -21,8 +21,11 @@ version, initialize over real stdio, return every catalogue page within bounded
 page/model counts, reject invalid parameters with the expected JSON-RPC error
 frame, and parse the installed public SDK's start/resume execution options. The
 SDK's `--experimental-json` spelling is checked even when it is a hidden CLI
-alias. These probes request no thread, turn or tool execution. The running
-app-server must also name the same version in its `initialize` answer.
+alias. The running app-server must also name the same version in its
+`initialize` answer. Last, the candidate runs one conversation turn in its own
+empty home against a small stand-in for the model service on 127.0.0.1, and
+FLUJO's own conversation code must read the reply and its token totals. This
+uses no login, account or real model, and runs no tools.
 
 FLUJO needs Codex 0.162.1 or newer for ordinary conversations (steering, fork,
 live text, token totals and questions). Every ordinary conversation reads the
