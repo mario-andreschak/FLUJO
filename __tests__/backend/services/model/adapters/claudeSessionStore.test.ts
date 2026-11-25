@@ -76,71 +76,71 @@ describe('claudeSessionStore (#154)', () => {
     const key = sessionKey('conv', 'node');
     const prefixHash = computePrefixHash('sys', ['t']);
 
-    it('returns undefined when nothing is recorded', () => {
-      expect(findReusableSession(key, prefixHash, history(5, 0), 0)).toBeUndefined();
+    it('returns undefined when nothing is recorded', async () => {
+      expect(await findReusableSession(key, prefixHash, history(5, 0), 0)).toBeUndefined();
     });
 
-    it('returns the session when prefix matches and history has not shrunk', () => {
-      recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
-      const found = findReusableSession(key, prefixHash, history(4, 1), 1);
+    it('returns the session when prefix matches and history has not shrunk', async () => {
+      await recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
+      const found = await findReusableSession(key, prefixHash, history(4, 1), 1);
       expect(found?.sessionId).toBe('sid-1');
       expect(found?.seenMessageCount).toBe(3);
     });
 
-    it('allows reuse when the message count is unchanged (equal to seen)', () => {
-      recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
-      expect(findReusableSession(key, prefixHash, history(3, 1), 1)?.sessionId).toBe('sid-1');
+    it('allows reuse when the message count is unchanged (equal to seen)', async () => {
+      await recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
+      expect((await findReusableSession(key, prefixHash, history(3, 1), 1))?.sessionId).toBe('sid-1');
     });
 
-    it('refuses reuse when the prefix hash changed (prompt/tools changed)', () => {
-      recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
+    it('refuses reuse when the prefix hash changed (prompt/tools changed)', async () => {
+      await recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
       const otherHash = computePrefixHash('sys', ['t', 'extra']);
-      expect(findReusableSession(key, otherHash, history(4, 1), 1)).toBeUndefined();
+      expect(await findReusableSession(key, otherHash, history(4, 1), 1)).toBeUndefined();
     });
 
-    it('refuses reuse when the conversation shrank (client-side pruning/divergence)', () => {
-      recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 10, leadingSystemMessageCount: 1 });
-      expect(findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
+    it('refuses reuse when the conversation shrank (client-side pruning/divergence)', async () => {
+      await recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 10, leadingSystemMessageCount: 1 });
+      expect(await findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
     });
 
-    it('refuses reuse when the leading system-message count increased or decreased', () => {
-      recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
-      expect(findReusableSession(key, prefixHash, history(4, 2), 2)).toBeUndefined();
-      expect(findReusableSession(key, prefixHash, history(4, 0), 0)).toBeUndefined();
+    it('refuses reuse when the leading system-message count increased or decreased', async () => {
+      await recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
+      expect(await findReusableSession(key, prefixHash, history(4, 2), 2)).toBeUndefined();
+      expect(await findReusableSession(key, prefixHash, history(4, 0), 0)).toBeUndefined();
     });
 
-    it('refuses stale entries that do not have leading-system metadata', () => {
-      recordSession(key, { sessionId: 'stale', prefixHash, seenMessageCount: 3 } as never);
-      expect(findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
+    it('refuses stale entries that do not have leading-system metadata', async () => {
+      await recordSession(key, { sessionId: 'stale', prefixHash, seenMessageCount: 3 } as never);
+      expect(await findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
     });
 
-    it('overwrites the entry in place on re-record', () => {
-      recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
-      recordSession(key, { sessionId: 'sid-2', prefixHash, seenMessageCount: 5, leadingSystemMessageCount: 1 });
-      expect(sessionCount()).toBe(1);
-      expect(findReusableSession(key, prefixHash, history(5, 1), 1)?.sessionId).toBe('sid-2');
+    it('overwrites the entry in place on re-record', async () => {
+      await recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
+      await recordSession(key, { sessionId: 'sid-2', prefixHash, seenMessageCount: 5, leadingSystemMessageCount: 1 });
+      expect(await sessionCount()).toBe(1);
+      expect((await findReusableSession(key, prefixHash, history(5, 1), 1))?.sessionId).toBe('sid-2');
     });
 
-    it('invalidate drops the session so it can no longer be reused', () => {
-      recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
-      invalidateSession(key);
-      expect(findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
-      expect(sessionCount()).toBe(0);
+    it('invalidate drops the session so it can no longer be reused', async () => {
+      await recordSession(key, { sessionId: 'sid-1', prefixHash, seenMessageCount: 3, leadingSystemMessageCount: 1 });
+      await invalidateSession(key);
+      expect(await findReusableSession(key, prefixHash, history(4, 1), 1)).toBeUndefined();
+      expect(await sessionCount()).toBe(0);
     });
 
-    it('invalidate is a no-op for an unknown key', () => {
-      expect(() => invalidateSession('missing::key')).not.toThrow();
-      expect(sessionCount()).toBe(0);
+    it('invalidate is a no-op for an unknown key', async () => {
+      await expect(invalidateSession('missing::key')).resolves.toBeUndefined();
+      expect(await sessionCount()).toBe(0);
     });
 
-    it('keeps sessions for different (conversation,node) keys independent', () => {
+    it('keeps sessions for different (conversation,node) keys independent', async () => {
       const keyA = sessionKey('conv', 'node-a');
       const keyB = sessionKey('conv', 'node-b');
-      recordSession(keyA, { sessionId: 'a', prefixHash, seenMessageCount: 1, leadingSystemMessageCount: 1 });
-      recordSession(keyB, { sessionId: 'b', prefixHash, seenMessageCount: 1, leadingSystemMessageCount: 1 });
-      invalidateSession(keyA);
-      expect(findReusableSession(keyA, prefixHash, history(1, 1), 1)).toBeUndefined();
-      expect(findReusableSession(keyB, prefixHash, history(1, 1), 1)?.sessionId).toBe('b');
+      await recordSession(keyA, { sessionId: 'a', prefixHash, seenMessageCount: 1, leadingSystemMessageCount: 1 });
+      await recordSession(keyB, { sessionId: 'b', prefixHash, seenMessageCount: 1, leadingSystemMessageCount: 1 });
+      await invalidateSession(keyA);
+      expect(await findReusableSession(keyA, prefixHash, history(1, 1), 1)).toBeUndefined();
+      expect((await findReusableSession(keyB, prefixHash, history(1, 1), 1))?.sessionId).toBe('b');
     });
   });
 });

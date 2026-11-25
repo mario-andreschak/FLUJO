@@ -193,7 +193,9 @@ it('still waits for the process to exit when the switch is off', async () => {
   queryMock.mockImplementation(() => stream);
   let settled = false;
   const running = new ClaudeSubscriptionAdapter().createCompletion(input()).finally(() => { settled = true; });
-  await new Promise(resolve => setTimeout(resolve, 50));
+  for (let waited = 0; !returned.mock.calls.length && waited < 5_000; waited += 10) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
   expect(returned).toHaveBeenCalledTimes(1);
   expect(settled).toBe(false);
   exited();

@@ -12,27 +12,27 @@ beforeEach(() => { process.env.FLUJO_TEST_CLAUDE_SESSION_DIR = root; _reloadClau
 afterEach(() => { delete process.env.FLUJO_TEST_CLAUDE_SESSION_DIR; _reloadClaudeSessionsForTests(); });
 afterAll(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-it('reads an ESM SDK identity from the selected installation without executing its entry', () => {
+it('reads an ESM SDK identity from the selected installation without executing its entry', async () => {
   const installation = path.join(root, 'relocated-installation');
   const sdk = path.join(installation, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
   fs.mkdirSync(sdk, { recursive: true });
   fs.writeFileSync(path.join(sdk, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk',
     type: 'module', version: '0.3.296-fixture', claudeCodeVersion: '2.1.296-fixture', exports: { '.': './sdk.mjs' } }));
   fs.writeFileSync(path.join(sdk, 'sdk.mjs'), 'throw new Error("SDK entry must not execute during identity lookup");');
-  expect(claudeSdkRuntimeIdentity(installation)).toEqual({ sdkVersion: '0.3.296-fixture', bundledRuntimeVersion: '2.1.296-fixture' });
+  await expect(claudeSdkRuntimeIdentity(installation)).resolves.toEqual({ sdkVersion: '0.3.296-fixture', bundledRuntimeVersion: '2.1.296-fixture' });
 });
 
-it('recovers metadata after a backend restart and rejects same-length edits', () => {
-  recordSession('conversation::node', { sessionId: 'session-1', prefixHash: prefix,
+it('recovers metadata after a backend restart and rejects same-length edits', async () => {
+  await recordSession('conversation::node', { sessionId: 'session-1', prefixHash: prefix,
     seenMessageCount: history.length, leadingSystemMessageCount: 1, historyHash: computeHistoryHash(history, 1),
     usageCheckpoint: { modelUsage: {} } });
   _reloadClaudeSessionsForTests();
-  expect(findReusableSession('conversation::node', prefix, [...history, { role: 'user', content: 'new' }], 1)?.sessionId).toBe('session-1');
-  expect(findReusableSession('conversation::node', prefix, history.map((message, index) => index === 1 ? { ...message, content: 'edited ticket' } : message), 1)).toBeUndefined();
-  expect(findReusableSession('conversation::node', prefix, history.slice(0, 2), 1)).toBeUndefined();
-  expect(findReusableSession('other::node', prefix, history, 1)).toBeUndefined();
-  invalidateSession('conversation::node'); _reloadClaudeSessionsForTests();
-  expect(findReusableSession('conversation::node', prefix, history, 1)).toBeUndefined();
+  expect((await findReusableSession('conversation::node', prefix, [...history, { role: 'user', content: 'new' }], 1))?.sessionId).toBe('session-1');
+  expect(await findReusableSession('conversation::node', prefix, history.map((message, index) => index === 1 ? { ...message, content: 'edited ticket' } : message), 1)).toBeUndefined();
+  expect(await findReusableSession('conversation::node', prefix, history.slice(0, 2), 1)).toBeUndefined();
+  expect(await findReusableSession('other::node', prefix, history, 1)).toBeUndefined();
+  await invalidateSession('conversation::node'); _reloadClaudeSessionsForTests();
+  expect(await findReusableSession('conversation::node', prefix, history, 1)).toBeUndefined();
 });
 
 it('allows prompt-only change under per-turn policy but rejects schema/configuration or stable-prompt changes', () => {
@@ -46,7 +46,7 @@ it('allows prompt-only change under per-turn policy but rejects schema/configura
 it('treats corrupt metadata and missing/truncated SDK transcripts as a fresh-session fallback', async () => {
   fs.mkdirSync(path.join(root, 'db', 'claude-sessions-v2'), { recursive: true });
   fs.writeFileSync(path.join(root, 'db', 'claude-sessions-v2', `${sessionValueHash('conversation::node')}.json`), '{bad-json'); _reloadClaudeSessionsForTests();
-  expect(findReusableSession('conversation::node', prefix, history, 1)).toBeUndefined();
+  expect(await findReusableSession('conversation::node', prefix, history, 1)).toBeUndefined();
   expect(await captureClaudeSessionTranscript(root, 'missing')).toBeUndefined();
   const project = path.join(root, 'projects', 'workspace'); fs.mkdirSync(project, { recursive: true });
   fs.writeFileSync(path.join(project, 'valid.jsonl'), '{"type":"user"}\n');
@@ -84,33 +84,32 @@ it('recovers a dead lease owner without permitting a second recoverer to remove 
     if (pid === 2147483647) throw Object.assign(new Error('dead owner'), { code: 'ESRCH' });
     return true;
   });
-  const originalUnlink = fs.unlinkSync;
-  const unlink = jest.spyOn(fs, 'unlinkSync').mockImplementationOnce(file => {
+  const controller = new AbortController();
+  const unlink = jest.spyOn(fs.promises, 'unlink').mockImplementationOnce(async file => {
     // Another recoverer won immediately after we read the old generation.
-    originalUnlink(file); fs.rmdirSync(lease); fs.mkdirSync(lease);
+    fs.unlinkSync(file); fs.rmdirSync(lease); fs.mkdirSync(lease);
     fs.writeFileSync(newFile, JSON.stringify({ pid: process.pid, nonce: newNonce }));
+    controller.abort();
     throw Object.assign(new Error('old generation already removed'), { code: 'ENOENT' });
   });
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25);
   try {
     await expect(acquireDurableClaudeSession('recovery', controller.signal)).rejects.toThrow('cancelled');
     expect(JSON.parse(fs.readFileSync(newFile, 'utf8')).nonce).toBe(newNonce);
   } finally {
-    clearTimeout(timer); unlink.mockRestore(); kill.mockRestore(); fs.rmSync(lease, { recursive: true });
+    unlink.mockRestore(); kill.mockRestore(); fs.rmSync(lease, { recursive: true });
   }
 });
 
 it('does not publish a lease when owner initialization fails and can recover an empty abandoned lease', async () => {
   const lease = path.join(root, 'db', 'claude-sessions-v2', 'leases', `${sessionValueHash('init-crash')}.lock`);
-  const write = jest.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => { throw new Error('initialization interrupted'); });
+  const write = jest.spyOn(fs.promises, 'writeFile').mockRejectedValueOnce(new Error('initialization interrupted'));
   try { await expect(acquireDurableClaudeSession('init-crash')).rejects.toThrow('initialization interrupted'); }
   finally { write.mockRestore(); }
   expect(fs.existsSync(lease)).toBe(false);
   fs.mkdirSync(lease);
   const release = await acquireDurableClaudeSession('init-crash');
   expect(fs.readdirSync(lease)).toHaveLength(1);
-  release();
+  await release();
   expect(fs.existsSync(lease)).toBe(false);
 });
 
@@ -118,12 +117,11 @@ it('releases successfully when a waiter publishes a new generation before the di
   const lease = path.join(root, 'db', 'claude-sessions-v2', 'leases', `${sessionValueHash('release-race')}.lock`);
   const release = await acquireDurableClaudeSession('release-race');
   const replacement = path.join(lease, `${process.pid}.00000000-0000-4000-8000-000000000003.json`);
-  const originalUnlink = fs.unlinkSync;
-  const unlink = jest.spyOn(fs, 'unlinkSync').mockImplementationOnce(file => {
-    originalUnlink(file);
+  const unlink = jest.spyOn(fs.promises, 'unlink').mockImplementationOnce(async file => {
+    fs.unlinkSync(file);
     fs.writeFileSync(replacement, JSON.stringify({ pid: process.pid, nonce: '00000000-0000-4000-8000-000000000003' }));
   });
-  try { expect(release).not.toThrow(); expect(fs.existsSync(replacement)).toBe(true); }
+  try { await expect(release()).resolves.toBeUndefined(); expect(fs.existsSync(replacement)).toBe(true); }
   finally { unlink.mockRestore(); fs.rmSync(lease, { recursive: true }); }
 });
 
@@ -132,9 +130,9 @@ it('serializes the same session, leaves other sessions independent, and does not
   const controller = new AbortController();
   const cancelled = acquireClaudeSession('same', controller.signal);
   controller.abort(); await expect(cancelled).rejects.toThrow('cancelled');
-  const other = await acquireClaudeSession('other'); other();
+  const other = await acquireClaudeSession('other'); await other();
   let acquired = false;
-  const third = acquireClaudeSession('same').then(release => { acquired = true; release(); });
+  const third = acquireClaudeSession('same').then(release => { acquired = true; return release(); });
   await Promise.resolve(); expect(acquired).toBe(false);
-  first(); await third; expect(acquired).toBe(true);
+  await first(); await third; expect(acquired).toBe(true);
 });

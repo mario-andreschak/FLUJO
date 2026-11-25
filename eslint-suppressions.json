@@ -264,11 +264,6 @@
       "count": 2
     }
   },
-  "src/backend/services/model/adapters/claudeSessionPersistence.ts": {
-    "flujo/no-sync-fs": {
-      "count": 30
-    }
-  },
   "src/backend/services/model/adapters/claudeSubscriptionAdapter.ts": {
     "flujo/no-double-cast": {
       "count": 4
