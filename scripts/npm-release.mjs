@@ -6,10 +6,14 @@ import { setTimeout } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { assertVerifiedRevision, verifyReleaseRevision } from './release-verification.mjs';
 import { PUBLIC_PACKAGES } from './release-packages.mjs';
-import { prepareReleaseEvidence, validateReleaseEvidence, verifyReleaseAttestations } from './release-evidence.mjs';
+import {
+  CHECKSUM_FILE, EVIDENCE_FILE, SBOM_FILE, prepareReleaseEvidence, validateReleaseEvidence, verifyReleaseAttestations,
+} from './release-evidence.mjs';
 
 export const REPOSITORY = 'mario-andreschak/FLUJO';
 export { PUBLIC_PACKAGES };
+/** Signed release inventory attached to every GitHub release next to the installer. */
+export const RELEASE_INVENTORY_ASSETS = Object.freeze([SBOM_FILE, EVIDENCE_FILE, CHECKSUM_FILE]);
 const REGISTRY = 'https://registry.npmjs.org';
 const PUBLISHED_INTEGRITY_ATTEMPTS = 91;
 const PUBLISHED_INTEGRITY_DELAY_MS = 10_000;
@@ -211,6 +215,11 @@ export async function finalizeCandidate({ run, directory, sha, version }) {
     dispatchAndFind(run, 'publish-image.yml', 'main', sha, ['-f', `expected_sha=${sha}`, '-f', `expected_version=${version}`]),
   ]);
   for (const id of runs) run('gh', ['run', 'watch', String(id), '--repo', REPOSITORY, '--exit-status', '--interval', '15'], { stdio: 'inherit', timeout: 5 * 60 * 60_000 });
+  // The installer run creates the GitHub release. Attach the dependency list
+  // (SBOM) and the signed evidence that covers it, so every release offers one
+  // downloadable inventory. Replacing same-named files keeps a resumed run safe.
+  run('gh', ['release', 'upload', tag, ...RELEASE_INVENTORY_ASSETS.map((file) => path.join(directory, file)),
+    '--repo', REPOSITORY, '--clobber']);
 }
 
 async function main() {

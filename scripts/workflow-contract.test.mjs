@@ -121,6 +121,39 @@ for (const [label, change] of [
   });
 }
 
+const releaseGateCases = [
+  ['image promotion without exact-commit verification', files => {
+    const step = files['publish-image.yml'].jobs.publish.steps.find(item => item.run?.includes('image-release.mjs promote'));
+    step.run = 'node scripts/image-release.mjs promote\n';
+  }],
+  ['npm signing before exact-commit verification', files => {
+    const steps = files['publish-npm.yml'].jobs.attest.steps;
+    const [gate] = steps.splice(steps.findIndex(step => step.run === 'node scripts/require-release-verification.mjs npm'), 1);
+    steps.push(gate);
+  }],
+  ['conditional npm publication verification', files => {
+    files['publish-npm.yml'].jobs.publish.steps.find(step => step.run === 'node scripts/require-release-verification.mjs npm').if = 'false';
+  }],
+  ['tolerated npm finalization verification', files => {
+    files['publish-npm.yml'].jobs.finalize.steps.find(step => step.run === 'node scripts/require-release-verification.mjs npm')['continue-on-error'] = true;
+  }],
+  ['new release workflow without verification', files => {
+    files['publish-extra.yml'] = { on: { workflow_dispatch: {} }, permissions: { contents: 'read' }, jobs: { release: {
+      'runs-on': 'ubuntu-24.04', permissions: { contents: 'write' },
+      steps: [{ uses: `softprops/action-gh-release@${'a'.repeat(40)}`, with: { files: 'x' } }],
+    } } };
+  }],
+  ['stale release gate exception', files => { delete files['pages.yml']; }],
+];
+
+for (const [label, change] of releaseGateCases) {
+  test(`release gate refuses ${label}`, () => {
+    const files = readWorkflows();
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), /exact-commit main verification|no longer matches a job/);
+  });
+}
+
 function journeyGitFixture(t) {
   const tempRoot = realpathSync.native(os.tmpdir());
   const root = realpathSync.native(mkdtempSync(path.join(tempRoot, 'flujo-journey-trust-')));

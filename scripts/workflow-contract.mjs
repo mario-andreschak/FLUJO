@@ -167,8 +167,54 @@ function assertInstallerProvenance(workflow) {
   }
 }
 
+// Write access that can publish, sign or tag something people download.
+const PUBLISHING_PERMISSIONS = ['contents', 'packages', 'id-token', 'attestations', 'artifact-metadata', 'pages'];
+const RELEASE_GATE = /^node scripts\/require-release-verification\.mjs (?:npm|image|installer)$/;
+const SIGNING_OR_PUBLISHING_ACTION = /^(?:actions\/attest|softprops\/action-gh-release|actions\/deploy-pages)@/;
+const SIGNING_OR_PUBLISHING_COMMAND = /scripts\/(?:npm-release\.mjs (?:publish|finalize)|image-release\.mjs (?:candidate|promote))\b|\b(?:docker push|npm publish|gh release (?:create|upload|edit))\b/;
+
+/**
+ * Jobs that hold publishing permissions but do not publish a release. This list
+ * may only shrink; every new entry needs a reason a reviewer can check.
+ */
+export const RELEASE_GATE_EXCEPTIONS = Object.freeze({
+  'pages.yml/deploy': 'Publishes the project website from main; it is not a downloadable release.',
+  'publish-cloud-worker.yml/publish': 'Advances the separate cloud-worker channel after smoke-testing the exact image it pushes; it is not a release.',
+  'publish-npm.yml/diagnose-oidc': 'Only checks the npm trusted-publisher token exchange; it never publishes.',
+});
+
+/**
+ * Every job that can publish or sign must first require the successful
+ * exact-commit main verification run, unconditionally, before its first
+ * publishing or signing step. A new release workflow that forgets this fails.
+ */
+export function assertReleaseVerificationGates(workflows) {
+  for (const key of Object.keys(RELEASE_GATE_EXCEPTIONS)) {
+    const [file, id] = key.split('/');
+    if (!workflows[file]?.jobs?.[id]) throw new Error(`Release gate exception ${key} no longer matches a job; remove it.`);
+  }
+  for (const [file, workflow] of Object.entries(workflows)) {
+    for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
+      const permissions = job.permissions ?? workflow.permissions ?? {};
+      const canPublish = typeof permissions === 'string'
+        ? permissions === 'write-all'
+        : PUBLISHING_PERMISSIONS.some((name) => permissions[name] === 'write');
+      if (!canPublish || Object.hasOwn(RELEASE_GATE_EXCEPTIONS, `${file}/${id}`)) continue;
+      const steps = job.steps ?? [];
+      const gate = steps.findIndex((step) => RELEASE_GATE.test(step.run?.trim().split('\n')[0] ?? ''));
+      const firstPublication = steps.findIndex((step) => SIGNING_OR_PUBLISHING_ACTION.test(step.uses ?? '')
+        || SIGNING_OR_PUBLISHING_COMMAND.test(step.run ?? ''));
+      if (gate < 0 || steps[gate].if !== undefined || steps[gate]['continue-on-error']
+          || (firstPublication >= 0 && firstPublication < gate)) {
+        throw new Error(`${file}/${id} can publish or sign without first requiring successful exact-commit main verification.`);
+      }
+    }
+  }
+}
+
 export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
+  assertReleaseVerificationGates(workflows);
   const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
   const installerDecisions = releaseSteps.find(step => step.name === 'Verify Windows installer decisions before publication');
   if (releaseSteps.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth'] !== 0

@@ -32,12 +32,29 @@ tag matching and original-run retries remain in force. npm trusted publishing
 [automatically generates npm provenance](https://docs.npmjs.com/generating-provenance-statements/)
 without introducing a long-lived write token.
 
+## Where each release's SBOM lives
+
+Every release has a dependency list (SBOM) and a signature for each download:
+
+| Download | SBOM | Signature (provenance) |
+| --- | --- | --- |
+| npm packages | `source-lock.sbom.cdx.json`, attached to the GitHub release and attested for every tarball | `release-evidence.json` and `SHA256SUMS`, attached to the GitHub release; every tarball attested |
+| Docker image | OS and installed-package SBOM attested on the exact image digest (`--predicate-type https://cyclonedx.org/bom`) | Provenance attested on the exact image digest |
+| Windows installer | The installer downloads the npm application above, so the release's `source-lock.sbom.cdx.json` lists what it installs | `installer-release-evidence.json` and `installer-SHA256SUMS`, attached to the GitHub release and attested |
+
+The npm finalization step attaches the three npm inventory files to the GitHub
+release after the installer and image workflows succeed. Releases published
+before this change keep their SBOM only in the attestation store and the
+30-day workflow artifact.
+
 ## Consumer verification
 
 Use the public source at the expected release SHA and retain the official
-release run ID, workflow path/ref and head SHA. Download that run's named
-`npm-release-<version>-<SHA>` artifact using GitHub CLI. The release archive must
-contain the full inventory above; merely receiving files proves no identity.
+release run ID, workflow path/ref and head SHA. Download the inventory from the
+release page (`gh release download v<version> --repo mario-andreschak/FLUJO
+--pattern source-lock.sbom.cdx.json --pattern release-evidence.json --pattern
+SHA256SUMS`), or that run's named `npm-release-<version>-<SHA>` artifact. The
+tarballs come from the npm registry. Merely receiving files proves no identity.
 
 Run the consistency check from that trusted source checkout:
 
@@ -52,8 +69,8 @@ Then verify each tarball, `manifest.json`, `release-evidence.json` and
 gh attestation verify <file> --repo mario-andreschak/FLUJO --predicate-type https://slsa.dev/provenance/v1 --signer-workflow mario-andreschak/FLUJO/.github/workflows/publish-npm.yml --source-digest <SHA> --signer-digest <SHA> --source-ref refs/heads/main --deny-self-hosted-runners
 ```
 
-For the tarballs' SBOM predicates, additionally use
-replace the provenance predicate with `--predicate-type https://cyclonedx.org/bom`. Retain verification stdout/stderr,
+For the tarballs' SBOM predicates, run the same command with
+`--predicate-type https://cyclonedx.org/bom` instead. Retain verification stdout/stderr,
 exit codes and all artifact SHA-256 values. Compare each npm registry version's
 `dist.integrity` with the tested manifest; verify the downloaded registry bytes,
 not just a package page's version label. Inspect the npm provenance's source
