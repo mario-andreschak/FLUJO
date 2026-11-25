@@ -110,6 +110,11 @@ export function getProcessRssLimitBytes(): number {
   return limits().maxRssBytes;
 }
 
+/** The largest run input admitted, as estimated in memory (strings count twice). */
+export function getRunInputLimitBytes(): number {
+  return limits().maxInputBytes;
+}
+
 function countRefusal(code: FlowRunPressureCode): void {
   if (code === 'FLOW_RUN_BUSY') runtime.rejectedBusy++;
   else if (code === 'FLOW_RUN_MEMORY') runtime.rejectedMemory++;

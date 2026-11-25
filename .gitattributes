@@ -10,3 +10,8 @@ public/avatar-audio-capture.js text eol=lf
 
 # Preserve the exact bytes extracted from the pinned Avatar SDK archive.
 packages/avatar-sdk/** -text
+
+# Chat attachment fixtures are byte-exact files (a PDF's offsets break if line
+# endings change); only the generator script is text.
+__tests__/fixtures/chat-attachments/** -text
+__tests__/fixtures/chat-attachments/generate.mjs text

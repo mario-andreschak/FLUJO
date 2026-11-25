@@ -1,5 +1,7 @@
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import { fenceFor, formatBytes } from '@/shared/chatAttachments/formats';
+import { isNameOnlyNote, type AttachmentNote } from '@/shared/chatAttachments/limits';
 
 export interface Attachment {
   id: string;
@@ -11,11 +13,72 @@ export interface Attachment {
   mimeType?: string;
   /** Optional text transcript retained alongside a raw audio attachment. */
   transcript?: string;
+  /** What the chip shows and the model is told about this file (#1224). */
+  note?: AttachmentNote;
+  /** Size of the original file in bytes. */
+  size?: number;
+  /** Short format name, e.g. "Word document". */
+  format?: string;
+  /** Code fence language of a text file. */
+  language?: string;
+  /** Still being read or converted; sending waits until it is ready. */
+  pending?: boolean;
 }
 
 export type ChatMessage = FlujoChatMessage & {
   attachments?: Attachment[];
 };
+
+const UNIT_WORDS: Record<string, string> = { page: 'pages', slide: 'slides', sheet: 'sheets', file: 'files', character: 'characters' };
+
+function shortenedText(note: AttachmentNote): string {
+  const shortened = note.shortened;
+  if (!shortened) return '';
+  if (shortened.unit === 'character') return `; shortened to the first ${shortened.kept} characters`;
+  return `; only the first ${shortened.kept}${shortened.total ? ` of ${shortened.total}` : ''} ${UNIT_WORDS[shortened.unit]} were read`;
+}
+
+function limitText(note: AttachmentNote): string {
+  const limit = Number(note.values?.limit);
+  return Number.isFinite(limit) && limit > 0 ? ` (limit ${formatBytes(limit)})` : '';
+}
+
+/** The line the model reads about an attachment added through the chat composer. */
+export function attachmentLabel(attachment: Attachment, note: AttachmentNote): string {
+  const name = attachment.originalName || 'attachment';
+  const facts = [attachment.format, attachment.size ? formatBytes(attachment.size) : undefined].filter(Boolean).join(', ');
+  const head = `Attached file "${name}"${facts ? ` (${facts})` : ''}`;
+  const pages = note.values?.pages ? `, ${note.values.pages} pages` : '';
+  switch (note.code) {
+    case 'text': return `[${head}${shortenedText(note)}]`;
+    case 'text-extracted': return `[${head}: text extracted${shortenedText(note)}]`;
+    case 'archive': return `[${head}: list of files and the text of readable files${shortenedText(note)}]`;
+    case 'pdf': return `[${head}${pages}]`;
+    case 'pdf-no-text': return `[${head}${pages}; it has no text layer, so a model that cannot read PDF files will not see it]`;
+    case 'pdf-as-text': return `[${head}${pages}: too large to send as a PDF, so its text was extracted${shortenedText(note)}]`;
+    case 'image-converted': return `[${head}: converted to an image format models can read]`;
+    case 'image-reduced': return `[${head}: made smaller so it fits in the message]`;
+    case 'image-original': return `[${head}: sent as it is; models that cannot read this format get a note instead]`;
+    case 'image':
+    case 'audio':
+    case 'video': return `[${head}]`;
+    case 'legacy-office': return `[${head}: not sent; this old Office format cannot be read. Ask for a .docx, .xlsx or .pptx copy if it matters]`;
+    case 'too-large': return `[${head}: not sent; larger than the chat file limit${limitText(note)}]`;
+    case 'too-large-to-send': return `[${head}: not sent; too large to send to a model${limitText(note)}]`;
+    case 'failed': return `[${head}: not sent; it could not be read${note.values?.reason === 'password' ? ' because it is protected with a password' : ''}]`;
+    case 'name-only':
+    default: return `[${head}: not sent; FLUJO cannot read this file type]`;
+  }
+}
+
+function documentBlock(attachment: Attachment, note: AttachmentNote): string {
+  const label = attachmentLabel(attachment, note);
+  if (note.code === 'text') {
+    const fence = fenceFor(attachment.content);
+    return `${label}\n${fence}${attachment.language ?? ''}\n${attachment.content}\n${fence}`;
+  }
+  return `${label}\n${attachment.content}\n[End of "${attachment.originalName || 'attachment'}"]`;
+}
 
 /**
  * Build the OpenAI-wire content for a message about to be sent to the API.
@@ -30,37 +93,32 @@ export function buildApiContent(
   }
 
   let text = typeof msg.content === 'string' ? msg.content : '';
-  const attachments = msg.attachments ?? [];
-  const textAttachments = attachments.filter(
-    attachment =>
-      attachment.type === 'document' &&
-      !attachment.content.startsWith('data:'),
-  );
-  const images = attachments.filter(attachment => attachment.type === 'image');
-  const binary = attachments.filter(
-    attachment =>
-      attachment.type !== 'image' &&
-      !textAttachments.includes(attachment),
-  );
-
-  if (textAttachments.length > 0) {
-    text += '\n\n' + textAttachments
-      .map(attachment => `[DOCUMENT]: ${attachment.content}`)
-      .join('\n\n');
+  const attachments = (msg.attachments ?? []).filter(attachment => !attachment.pending);
+  const textBlocks: string[] = [];
+  const media: Attachment[] = [];
+  for (const attachment of attachments) {
+    const note = attachment.note;
+    if (note && isNameOnlyNote(note)) textBlocks.push(attachmentLabel(attachment, note));
+    else if (attachment.type === 'document' && !attachment.content.startsWith('data:')) {
+      textBlocks.push(note ? documentBlock(attachment, note) : `[DOCUMENT]: ${attachment.content}`);
+    } else media.push(attachment);
   }
-  if (images.length === 0 && binary.length === 0) {
+
+  if (textBlocks.length > 0) {
+    text += (text ? '\n\n' : '') + textBlocks.join('\n\n');
+  }
+  if (media.length === 0) {
     return text;
   }
 
   const parts: Array<Record<string, unknown>> = [];
   if (text.trim()) parts.push({ type: 'text', text });
 
-  for (const image of images) {
-    parts.push({ type: 'image_url', image_url: { url: image.content } });
-  }
-
-  for (const attachment of binary) {
-    if (attachment.type === 'audio') {
+  for (const attachment of media) {
+    if (attachment.note) parts.push({ type: 'text', text: attachmentLabel(attachment, attachment.note) });
+    if (attachment.type === 'image') {
+      parts.push({ type: 'image_url', image_url: { url: attachment.content } });
+    } else if (attachment.type === 'audio') {
       const match = /^data:([^;,]+);base64,([\s\S]*)$/.exec(attachment.content);
       const mimeType = attachment.mimeType ?? match?.[1];
 

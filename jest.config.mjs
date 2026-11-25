@@ -21,6 +21,10 @@ const moduleNameMapper = {
   '^@flujo-ai/avatar-sdk/native-voice$': '<rootDir>/node_modules/@flujo-ai/avatar-sdk/dist/native-voice.js',
   "^@/(.*)$": "<rootDir>/src/$1",
   "^uuid$": "<rootDir>/__tests__/uuidJestAdapter.ts",
+  // unpdf's CommonJS entry loads PDF.js with a native import(), which Jest's
+  // CommonJS mode cannot run. Its ESM files are transformed like the others.
+  "^unpdf$": "<rootDir>/node_modules/unpdf/dist/index.mjs",
+  "^unpdf/pdfjs$": "<rootDir>/node_modules/unpdf/dist/pdfjs.mjs",
   // Direct backend compatibility tests retain their existing mocked policy
   // modules; subprocess tests still load the compiled standalone package.
   "^@flujo-ai/mcp-shared$": "<rootDir>/__tests__/mcp/mcpSharedJestAdapter.ts",
@@ -55,6 +59,7 @@ const esmOnlyTestPackages = [
   // SDK2's CommonJS client resolves this package's ESM browser build in jsdom.
   "pkce-challenge",
   "@modelcontextprotocol/ext-tasks",
+  "unpdf",
 ];
 
 function allowEsmOnlyPackages(patterns = []) {

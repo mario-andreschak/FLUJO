@@ -2,7 +2,7 @@
 
 Routes: `/settings`
 
-One page for everything that shapes the whole installation. Sections are grouped into "Data & security" (who can reach FLUJO, users and sign-in, model access, variables, encryption password, backup), "Experience" (look, language, voice input, the guided tour) and "System" (when tool servers start, updates, privacy, experimental features). The user picks a section on the left and changes it on the right. This is also where experimental features, including Harness Lab, are switched on.
+One page for everything that shapes the whole installation. Sections are grouped into "Data & security" (who can reach FLUJO, users and sign-in, model access, variables, encryption password, backup), "Experience" (look, language, voice input, chat files, the guided tour) and "System" (when tool servers start, updates, privacy, experimental features). The user picks a section on the left and changes it on the right. This is also where experimental features, including Harness Lab, are switched on.
 
 ## Sub-features
 
@@ -16,6 +16,7 @@ One page for everything that shapes the whole installation. Sections are grouped
 - `settings-appearance`: "Appearance": themes "Modern Light", "Modern Dark", "Legacy Light", "Legacy Dark", plus "Animated landscape" and "Automatically focus search fields".
 - `settings-language`: "Language" for the interface.
 - `settings-speech`: "Speech recognition" for voice input.
+- `settings-chat-files`: "Chat files": "Largest file (MB)" (default scales with the computer's memory), "Most pages, slides or sheets read from one document" (default 200) and "Most characters of text kept from one file" (default 400,000). Empty fields use the defaults; "Use defaults" clears all three.
 - `settings-onboarding`: "Onboarding" with "Replay guided tour".
 - `settings-tool-server-startup`: "Tool server startup": when tool servers start and which keep running.
 - `settings-updates`: "Updates": installed version and automatic update checks.

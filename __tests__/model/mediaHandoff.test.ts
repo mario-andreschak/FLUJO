@@ -181,7 +181,7 @@ describe('cross-provider media hydration', () => {
     }]);
   });
 
-  it('drops only explicitly unsupported media for text-only models', () => {
+  it('replaces only explicitly unsupported media with a note for text-only models', () => {
     const messages = [{
       role: 'user',
       content: [
@@ -193,13 +193,18 @@ describe('cross-provider media hydration', () => {
 
     expect(filterUnsupportedMediaInputs(messages, ['text'])).toEqual([{
       role: 'user',
-      content: [{ type: 'text', text: 'Continue.' }],
+      content: [
+        { type: 'text', text: 'Continue.' },
+        { type: 'text', text: '[Attachment not sent: this model cannot read images.]' },
+        { type: 'text', text: '[Attachment not sent: this model cannot read video.]' },
+      ],
     }]);
     expect(filterUnsupportedMediaInputs(messages, undefined)).toBe(messages);
     expect(filterUnsupportedMediaInputs(messages, ['text', 'video'])).toEqual([{
       role: 'user',
       content: [
         { type: 'text', text: 'Continue.' },
+        { type: 'text', text: '[Attachment not sent: this model cannot read images.]' },
         { type: 'video_url', video_url: { url: 'data:video/mp4;base64,VIDEO' } },
       ],
     }]);
