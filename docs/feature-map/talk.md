@@ -18,6 +18,7 @@ Here a user chats. They can talk to one of their saved agents, or start a Quick 
 - `talk-rename`: "Rename conversation" changes the chat title.
 - `talk-copy-link`: "Copy link to this chat" in the top bar, shown only while a conversation is open.
 - `talk-delete`: "Delete conversation" on a sidebar row, with a confirmation.
+- `talk-project-folder`: the folder chip under the message box shows the folder this chat's agents work in (project, branch, uncommitted changes), or "No project". Its menu changes the project, moves the chat into a worktree, switches or creates a branch, and copies the path. Each chat keeps its own folder. When the agents cannot use the folder, the chip turns orange with a warning sign and the menu says why: the folder "cannot be found" (deleted, renamed or its drive is not connected), or "Restrict MCP filesystem access to configured roots" is on and the folder is outside your projects. The menu then also offers "Add project".
 - `talk-cut-off-notice`: when a reply stops early because it reached the model's length limit, the reply stays and a grey note under it says "The answer was cut off because it hit the length limit. Ask it to continue." It is not an error banner.
 
 ## How to get to it (user POV)
@@ -37,6 +38,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. A fresh instanc
 - **Chat with an agent** (needs a model and an agent): `node scripts/flujo-drive.mjs steps /chat --file talk-send.json`. The steps: click button "New"; fill "Message"; click button "Send message"; expect-text for a word from the reply; then shot and aria.
 - **Attach files**: `steps /chat`: click button "New", upload `sample.docx`, `sample.xlsx`, `sample.pdf`, `sample.zip`, `sample.heic` and `sample.bin` from `__tests__/fixtures/chat-attachments/` into the "Attach files" file field, wait for "Reading…" to go, then shot and aria → one chip per file: "Text extracted" (twice), "PDF, 2 pages", "5 files listed, text read", "Converted to a common image format" and "Can’t be read: only the name is sent".
 - **Slash commands** (needs one agent chat with a few replies): in one `steps` run, open the chat by its link; fill "Message" with `/`; expect the listbox "Commands" with options `/compact`, `/new`, `/fork`, `/context`, `/status`, `/help` and no `/goal`; fill `/sta` and press Enter; expect-text "Chat status". Fill `/compact` and press Enter; expect-text "Summary requested" (or "Nothing to summarize yet" in a short chat), then send a normal message and check that the reply still arrives. In a Persona chat, fill `/goal Keep the notes tidy` and press Enter; expect-text "New goal"; then `/goal` alone lists it. Fill `/deploy now` and press Enter; the text is sent as a normal message.
+- **Project folder** (needs one chat): add a folder as a project from the sidebar's Projects panel, open the chat, click the folder chip (`data-chat-project-chip`) → a menu with "Project" and the folder path. Rename that folder on disk and wait about 15 seconds (or refocus the page) → the chip shows a warning, and its menu says the folder "cannot be found" and offers "Add project".
 - **Proof**: an ARIA snapshot and a screenshot of the conversation showing the sent message and the reply, or of the Quick Chat dialog when no model exists.
 
 ## Gotchas
@@ -50,4 +52,5 @@ Preconditions: a throwaway instance from the verify-flujo skill. A fresh instanc
 - To see the cut-off note, set a very small "Max output tokens" on the model (for example 20) and ask for a long answer. The note appears once the run has finished, under the reply (role `note`).
 - The guided tour starts on its own only on the home page `/`, so opening `/chat` directly avoids it.
 - `/compact` never changes the saved chat. It only shortens what the next replies send to the AI, so the visible conversation looks the same afterwards. It is turned off when summaries are off in Settings, and a Persona chat does not offer it.
+- Choosing a worktree outside your projects is refused while "Restrict MCP filesystem access to configured roots" is on; the menu shows the reason in red. Worktrees FLUJO creates sit in `<repo>.worktrees` and are always allowed.
 - The command list only opens while the message is a `/` and one word. Once a space follows, Enter runs the command with that text.

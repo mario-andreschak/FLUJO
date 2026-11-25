@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { stat } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -73,6 +74,30 @@ export function workingBaseDir(roots: readonly string[]): string {
   const projectDir = currentProjectDir();
   if (projectDir && roots.some((root) => isInside(root, projectDir))) return projectDir;
   return getDataDir();
+}
+
+/** What a tool says when the chat's project folder is gone. */
+export function missingProjectDirMessage(projectDir: string): string {
+  return `This chat's project folder "${projectDir}" cannot be found: it was deleted or renamed, `
+    + 'or its drive is not connected. Ask the user to pick another folder with the project button '
+    + 'under the chat input, or to reconnect the drive.';
+}
+
+/**
+ * Fail a tool call that would start in the chat's project folder when that
+ * folder is gone, naming the folder. Otherwise the call fails later on a side
+ * effect (`spawn powershell ENOENT`) or quietly works in the data dir.
+ */
+export async function assertProjectDirAvailable(): Promise<void> {
+  const projectDir = currentProjectDir();
+  if (!projectDir) return;
+  try {
+    if ((await stat(projectDir)).isDirectory()) return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') return;
+  }
+  throw new Error(missingProjectDirMessage(projectDir));
 }
 
 export function isInside(root: string, candidate: string): boolean {

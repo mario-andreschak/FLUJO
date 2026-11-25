@@ -56,6 +56,36 @@ describe('ChatProjectChip', () => {
     });
   });
 
+  it('warns that a missing folder cannot be used and offers to pick another one', async () => {
+    const missing = { ...state, chat: { ...state.chat, git: null, missing: true, agentsCanWork: true } };
+    fetchMock.mockImplementation(async () => ({ ok: true, json: async () => missing }));
+    render(<ChatProjectChip conversationId="chat-1" />);
+    fireEvent.click(await screen.findByText('app'));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/cannot be found.*pick another folder/i);
+    expect(screen.getByRole('menuitem', { name: /add project/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /^app/ })).toBeInTheDocument();
+  });
+
+  it('warns when folder restrictions keep the agents out of the chat folder', async () => {
+    const outside = {
+      ...state,
+      chat: { ...state.chat, path: 'C:\\agents\\other-tool', agentsCanWork: false, missing: false },
+    };
+    fetchMock.mockImplementation(async () => ({ ok: true, json: async () => outside }));
+    render(<ChatProjectChip conversationId="chat-1" />);
+    fireEvent.click(await screen.findByText('other-tool'));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/Restrict MCP filesystem access to configured roots/);
+  });
+
+  it('shows no warning while agents can use the folder', async () => {
+    render(<ChatProjectChip conversationId="chat-1" />);
+    fireEvent.click(await screen.findByText('app'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /add project/i })).not.toBeInTheDocument();
+  });
+
   it('folds away other tools\' worktrees and never offers to remove them', async () => {
     render(<ChatProjectChip conversationId="chat-1" />);
     fireEvent.click(await screen.findByText('app'));

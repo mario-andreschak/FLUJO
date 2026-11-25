@@ -19,6 +19,7 @@ import {
   resolveConversationProjectDir,
   setActiveProject,
 } from '@/backend/services/projects/projectStore';
+import { deleteChatProject } from '@/backend/services/projects/chatProjectBindings';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 import type { SharedState } from '@/backend/execution/flow/types';
@@ -29,6 +30,18 @@ describe('workspace projects', () => {
   let one: string;
   let two: string;
   const inWorkspace = <T>(fn: () => Promise<T>) => runWithWorkspace('side', fn);
+  const chatProjectsDir = () => path.join(dataRoot, 'workspaces', 'side', 'db', 'chat-projects');
+  const storedChatIds = async () => {
+    try {
+      return (await fs.readdir(chatProjectsDir()))
+        .filter(file => /^[A-Za-z0-9_-]+\.json$/.test(file))
+        .map(file => file.slice(0, -'.json'.length))
+        .sort();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  };
 
   beforeEach(async () => {
     priorDataDir = process.env.FLUJO_DATA_DIR;
@@ -80,16 +93,17 @@ describe('workspace projects', () => {
     await inWorkspace(() => addProject(one));
     await expect(inWorkspace(() => resolveConversationProjectDir('constructor'))).resolves.toBe(one);
     await expect(inWorkspace(() => getChatProject('toString'))).resolves.toBeUndefined();
-    expect(Object.keys((await readWorkspaceMetadata('side')).chatProjects as object)).toEqual(['constructor']);
+    await expect(storedChatIds()).resolves.toEqual(['constructor']);
   });
 
-  it('keeps project fields when the workspace editor rewrites the roots', async () => {
+  it('keeps each chat folder beside the chat, never in the shared workspace file', async () => {
     await inWorkspace(() => addProject(one));
     await inWorkspace(() => bindChatProject('chat-1', one));
     await updateWorkspaceRoots('side', [one, two]);
     const metadata = await readWorkspaceMetadata('side');
     expect(metadata).toMatchObject({ roots: [one, two], activeProject: one });
-    expect(metadata.chatProjects).toHaveProperty('chat-1');
+    expect(metadata).not.toHaveProperty('chatProjects');
+    await expect(inWorkspace(() => getChatProject('chat-1'))).resolves.toEqual({ project: one, path: one });
   });
 
   it('never re-pins a chat whose project was removed', async () => {
@@ -128,7 +142,7 @@ describe('workspace projects', () => {
     try {
       // The sidebar selects `two`, but the lane works where its chat works.
       await expect(inWorkspace(() => resolveConversationProjectDir('lane-1'))).resolves.toBe(worktree);
-      expect(Object.keys((await readWorkspaceMetadata('side')).chatProjects as object)).toEqual(['root-chat']);
+      await expect(storedChatIds()).resolves.toEqual(['root-chat']);
     } finally {
       states.delete('lane-1');
     }
@@ -154,10 +168,48 @@ describe('workspace projects', () => {
   });
 
   it('serializes concurrent metadata writes without losing updates', async () => {
+    await Promise.all([one, two].map(folder => inWorkspace(() => addProject(folder))));
+    await Promise.all(Array.from({ length: 12 }, (_, index) => inWorkspace(() => bindChatProject(`chat-${index}`, two))));
+    expect((await readWorkspaceMetadata('side')).roots).toEqual(expect.arrayContaining([one, two]));
+    await expect(storedChatIds()).resolves.toHaveLength(12);
+  });
+
+  it('keeps the folder of every chat, with no limit on how many chats a workspace has', async () => {
     await inWorkspace(() => addProject(one));
-    await Promise.all(Array.from({ length: 12 }, (_, index) => inWorkspace(() => bindChatProject(`chat-${index}`, one))));
-    const metadata = await readWorkspaceMetadata('side');
-    expect(Object.keys(metadata.chatProjects as object)).toHaveLength(12);
+    await inWorkspace(() => addProject(two));
+    // 2000 chats already keep a folder (written directly: the store's own
+    // writes are covered elsewhere), then one more chat picks one.
+    await fs.mkdir(chatProjectsDir(), { recursive: true });
+    const record = JSON.stringify({ version: 1, project: one, path: one });
+    await Promise.all(Array.from({ length: 2000 }, (_, index) =>
+      fs.writeFile(path.join(chatProjectsDir(), `chat-${index}.json`), record, 'utf8')));
+    await inWorkspace(() => bindChatProject('chat-2000', one));
+    // The oldest choice survives: the previous shared list dropped it past 2000 chats.
+    await expect(inWorkspace(() => resolveConversationProjectDir('chat-0'))).resolves.toBe(one);
+    await expect(inWorkspace(() => getChatProject('chat-2000'))).resolves.toEqual({ project: one, path: one });
+    await expect(storedChatIds()).resolves.toHaveLength(2001);
+  });
+
+  it('forgets the folder of a deleted chat', async () => {
+    await inWorkspace(() => addProject(one));
+    await inWorkspace(() => bindChatProject('chat-1', one));
+    await inWorkspace(() => bindChatProject('chat-2', one));
+    await inWorkspace(() => deleteChatProject('chat-1'));
+    await expect(storedChatIds()).resolves.toEqual(['chat-2']);
+    await expect(inWorkspace(() => getChatProject('chat-1'))).resolves.toBeUndefined();
+    // Deleting again, or a chat that never had a folder, is harmless.
+    await expect(inWorkspace(() => deleteChatProject('chat-1'))).resolves.toBeUndefined();
+  });
+
+  it('gives a chat whose folder record is unreadable no folder instead of moving it', async () => {
+    await inWorkspace(() => addProject(one));
+    await inWorkspace(() => addProject(two));
+    await inWorkspace(() => bindChatProject('chat-1', one));
+    await fs.writeFile(path.join(chatProjectsDir(), 'chat-1.json'), '{"project": ', 'utf8');
+    await expect(inWorkspace(() => resolveConversationProjectDir('chat-1'))).resolves.toBeUndefined();
+    // Picking a folder again repairs it.
+    await inWorkspace(() => bindChatProject('chat-1', two));
+    await expect(inWorkspace(() => resolveConversationProjectDir('chat-1'))).resolves.toBe(two);
   });
 
   it('exposes the active project first plus existing worktree folders as roots', async () => {

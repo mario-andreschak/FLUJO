@@ -20,7 +20,13 @@ export {
   type ProcessTreeTerminationResult,
 } from '../../mcp-servers/shared/src/index';
 
-export { currentProjectDir, projectDirOf, runWithProjectDir } from '../../mcp-servers/shared/src/index';
+export {
+  assertProjectDirAvailable,
+  currentProjectDir,
+  missingProjectDirMessage,
+  projectDirOf,
+  runWithProjectDir,
+} from '../../mcp-servers/shared/src/index';
 
 // Same choice as the package helper, with the backend data dir used above.
 export function workingBaseDir(roots: readonly string[]): string {

@@ -36,6 +36,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { spawn as spawnPty, type IPty } from '@lydell/node-pty';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
+  assertProjectDirAvailable,
   createLogger,
   getDataDir,
   isInside,
@@ -877,15 +878,28 @@ const BASH_ROOT_ENV_VARS = ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'];
  * confinement violation so callers surface a precise error (issue #175).
  */
 async function resolveCwd(input: unknown, roots: string[]): Promise<string> {
+  const raw = typeof input === 'string' ? input.trim() : '';
+  if (!raw || !path.isAbsolute(raw)) await assertProjectDirAvailable();
   // The chat's project folder when FLUJO sent one inside the roots, else the data dir.
   const base = workingBaseDir(roots);
-  const raw = typeof input === 'string' ? input.trim() : '';
   const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(base, raw)) : base;
 
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`cwd "${resolved}" is outside the configured bash roots.`);
   }
+  if (await folderIsMissing(resolved)) {
+    throw new Error(`The working folder "${resolved}" does not exist.`);
+  }
   return resolved;
+}
+
+async function folderIsMissing(folder: string): Promise<boolean> {
+  try {
+    return !(await fs.promises.stat(folder)).isDirectory();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+  }
 }
 
 /**

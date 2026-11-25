@@ -18,6 +18,7 @@ import { ConversationListItem } from '@/frontend/components/Chat'; // Import for
 import { buildContextInfo } from '@/backend/execution/flow/conversationContextInfo';
 import { isQuickChatFlowId, quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteRunResources } from '@/backend/services/runResources';
+import { deleteChatProject } from '@/backend/services/projects/chatProjectBindings';
 import { deleteModelTurnArchive } from '@/backend/execution/flow/modelTurnArchive';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { deleteCollectionItem } from '@/utils/storage/backend';
@@ -595,6 +596,7 @@ async function DELETE_handler(
     // the same conversation. A missing file is treated as already deleted.
     await deleteCollectionItem('conversations', conversationId);
     await deleteConversationSummary(conversationId);
+    await deleteChatProject(conversationId);
     log.info(`Deleted conversation state from storage`, { requestId, conversationId });
 
     // A Quick-Chat (issue #61) carried its flow as an in-memory snapshot compiled
