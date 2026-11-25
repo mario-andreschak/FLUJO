@@ -193,6 +193,13 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
   contextUsage?: import('./model/contextUsage').ModelContextUsage | null;
 
   /**
+   * Display-only: this reply is complete as far as it goes, but stopped early
+   * because it reached the model's output length limit. The chat shows a soft
+   * notice instead of an error; never sent to a model.
+   */
+  cutOff?: 'length';
+
+  /**
    * Trusted provenance for an inter-agent delivery. Its user role is a provider
    * transport detail, not a human sender. Persist this metadata for transcript
    * display; strip it from provider wire messages while retaining the textual

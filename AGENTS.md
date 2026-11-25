@@ -57,6 +57,7 @@ workaround.
 | Repository hygiene | `scripts/check-repo-hygiene.mjs` |
 | Tests run only on a Node.js version the app supports | `assertSupportedTestRuntime` in `scripts/local-test-dependencies.cjs`; `__tests__/scripts/localTestDependencies.test.ts` |
 | Every page has exactly one feature map entry | `scripts/check-feature-map.mjs` |
+| A reply that reaches the output length limit is a finished, cut-off reply (`finish_reason: 'length'` and a soft chat notice), never a run error | `__tests__/model/cutOffReply.test.ts`, `__tests__/model/geminiSdkContinuation.test.ts` |
 | Every API route has one multi-user kind (`workspace`, `host`, `admin`, `account`, `protocol`); routes that start programs are `host` or `admin` | `__tests__/accounts/routeCapabilities.test.ts` |
 | A workflow job that can publish or sign first requires the exact-commit `main` verification run | `assertReleaseVerificationGates` in `scripts/workflow-contract.mjs` (its exception list only shrinks) |
 | Every open security alert is fixed or has a written reason that expires | `npm run check:security-response` with `docs/security/alert-triage.json` |

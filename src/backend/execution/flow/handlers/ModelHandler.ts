@@ -1987,6 +1987,10 @@ export class ModelHandler {
     const completionToolCalls = requireFunctionToolCalls(
       modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
     );
+    // A reply that reached the output limit is still a reply: keep it and tell
+    // the user it was cut off, the same way for every adapter.
+    const cutOff = modelResponse.fullResponse?.choices?.[0]?.finish_reason === 'length'
+      ? { cutOff: 'length' as const } : {};
 
     if (modelResponse.transcript && modelResponse.transcript.length > 0) {
       // Self-orchestrating adapter (Claude subscription): the adapter already ran
@@ -2015,6 +2019,7 @@ export class ModelHandler {
           ...(transcriptMedia?.length ? { media: transcriptMedia } : {}),
           ...(isLast && usage ? { usage } : {}),
           ...(isLast && modelResponse.contextUsage !== undefined ? { contextUsage: modelResponse.contextUsage } : {}),
+          ...(isLast && msg.role === 'assistant' ? cutOff : {}),
         } as FlujoChatMessage);
       }
     } else {
@@ -2053,6 +2058,7 @@ export class ModelHandler {
         processNodeId: nodeId, // Attach the process node ID
         ...(usage ? { usage } : {}),
         ...(modelResponse.contextUsage !== undefined ? { contextUsage: modelResponse.contextUsage } : {}),
+        ...cutOff,
       } as unknown as FlujoChatMessage;
       finalMessages.push(assistantMessage);
     }
@@ -3603,7 +3609,9 @@ export class ModelHandler {
               success: false,
               error: createModelError(
                 'api_error',
-                `Model ended the response (finish_reason "${choice.finish_reason}") with an empty message, no media and no tool calls.`,
+                choice.finish_reason === 'length'
+                  ? 'The model reached its length limit before it wrote any answer. Raise "Max output tokens" or lower the "Thinking level" in the model settings, then retry.'
+                  : `Model ended the response (finish_reason "${choice.finish_reason}") with an empty message, no media and no tool calls.`,
                 modelId,
                 undefined,
                 { reason: choice.finish_reason === 'length' ? EMPTY_LENGTH_COMPLETION_REASON : EMPTY_STOP_COMPLETION_REASON, rawResponse: chatCompletion }

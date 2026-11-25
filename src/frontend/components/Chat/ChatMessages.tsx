@@ -56,6 +56,7 @@ import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handof
 import RestoreIcon from '@mui/icons-material/Restore';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import LinkRoundedIcon from '@mui/icons-material/LinkRounded';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { ChatMessage } from './index';
 import { magicLinkUrl } from '@/frontend/utils/magicLink';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
@@ -1650,6 +1651,17 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           </Box>
         )}
       </Paper>
+      {message.role === 'assistant' && message.cutOff === 'length' && (
+        <Typography
+          role="note"
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, maxWidth: '75vw' }}
+        >
+          <InfoOutlinedIcon fontSize="inherit" aria-hidden />
+          {t('chat.messages.cutOffLength')}
+        </Typography>
+      )}
     </Box>
   );
 });

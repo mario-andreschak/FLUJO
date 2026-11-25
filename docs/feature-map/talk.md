@@ -16,6 +16,7 @@ Here a user chats. They can talk to one of their saved agents, or start a Quick 
 - `talk-rename`: "Rename conversation" changes the chat title.
 - `talk-copy-link`: "Copy link to this chat" in the top bar, shown only while a conversation is open.
 - `talk-delete`: "Delete conversation" on a sidebar row, with a confirmation.
+- `talk-cut-off-notice`: when a reply stops early because it reached the model's length limit, the reply stays and a grey note under it says "The answer was cut off because it hit the length limit. Ask it to continue." It is not an error banner.
 
 ## How to get to it (user POV)
 
@@ -41,4 +42,5 @@ Preconditions: a throwaway instance from the verify-flujo skill. A fresh instanc
 - "New" with no saved agent does not create a chat. It shows the agent/Persona picker instead.
 - Each flujo-drive command is a fresh browser. Open a chat by its `?conversation=<id>` link, or do the whole thing in one `steps` run.
 - Replies stream in over time. Wait for text from the reply (expect-text) rather than taking a screenshot right after sending.
+- To see the cut-off note, set a very small "Max output tokens" on the model (for example 20) and ask for a long answer. The note appears once the run has finished, under the reply (role `note`).
 - The guided tour starts on its own only on the home page `/`, so opening `/chat` directly avoids it.
