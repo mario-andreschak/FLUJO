@@ -160,6 +160,23 @@ describe('headless approval policy (#115) — scheduler', () => {
     });
   });
 
+  it("saves a run whose flow has a Human step under 'auto', so the step can wait in the inbox (#1095)", async () => {
+    mockFlowForApproval = {
+      id: 'flow',
+      name: 'Review',
+      nodes: [{ id: 'review', type: 'human', data: { type: 'human', properties: { mode: 'approval', prompt: 'Send?' } } }],
+      edges: [],
+    };
+    runFlowMock.mockResolvedValue(completedResult);
+    const { execution } = await scheduler.create(input());
+
+    await scheduler.fire(execution!, { kind: 'schedule', summary: 'Schedule' });
+
+    const args = runFlowMock.mock.calls[0][0];
+    expect(args.onApprovalRequired).toBe('pause');
+    expect(args.mode).toBe('conversation');
+  });
+
   it("policy 'auto' (default) runs tools without a gate (legacy behavior)", async () => {
     runFlowMock.mockResolvedValue(completedResult);
     const { execution } = await scheduler.create(input());

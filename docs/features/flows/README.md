@@ -10,6 +10,7 @@ FlowBuilder flows follow execution edges between steps. App and resource connect
 | Resource | Shares a temporary result within a run or reads a resource exposed by an MCP server. | — |
 | Subflow | Runs another flow as a child step. | — |
 | Static | Injects authored messages or synthetic tool exchanges into a conversation. | [Static node](./static-node.md) |
+| Human step | Waits until a person approves, fills in answers or edits a result. | [Human step](./human-step.md) |
 | Finish | Ends a flow and returns its result. | — |
 | Signal | Emits a notification that can activate another automation. | — |
 | Trigger | Starts a flow on a configured schedule or event. | [Running agents](running-flows.md) |

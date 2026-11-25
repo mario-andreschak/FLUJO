@@ -190,9 +190,9 @@ describe('validTargetTypesFor', () => {
     // `signal` is a real intermediate flow-control target reachable from any
     // plain control-flow source; it is appended last by the `all` filter order
     // (process, finish, mcp, subflow, resource, signal).
-    expect(validTargetTypesFor('process', 'process-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static']);
-    expect(validTargetTypesFor('start', 'start-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static']);
-    expect(validTargetTypesFor('subflow', 'subflow-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static']);
+    expect(validTargetTypesFor('process', 'process-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static', 'human']);
+    expect(validTargetTypesFor('start', 'start-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static', 'human']);
+    expect(validTargetTypesFor('subflow', 'subflow-bottom')).toEqual(['process', 'finish', 'subflow', 'signal', 'static', 'human']);
     expect(validTargetTypesFor('finish', 'finish-top')).toEqual([]);
   });
 });

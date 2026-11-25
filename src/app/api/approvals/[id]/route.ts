@@ -11,7 +11,8 @@ import { persistConversationState } from '@/backend/execution/flow/persistConver
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
-import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
+import { applyApprovalDecision, refusedHumanStepAnswer } from '@/backend/execution/flow/resumeAfterApproval';
+import type { HumanAnswer } from '@/utils/shared/humanStep';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
@@ -50,6 +51,8 @@ interface ApprovalActionBody {
   answers?: string[][];
   /** Optional: resolve one specific pending tool call. Omit to resolve all. */
   toolCallId?: string;
+  /** A Human step's answer: the digest the person saw and the typed or changed value (#1095). */
+  human?: HumanAnswer;
 }
 
 function pendingToolCallsMeta(state: SharedState): Array<{ id: string; name: string }> {
@@ -108,6 +111,9 @@ async function POST_handler(
     if (!body || !valid.includes(body.action)) {
       throw new Error('Invalid request body. Required: action ("approve", "deny", "question-answer" or "question-decline").');
     }
+    if (body.human !== undefined && (!body.human || typeof body.human !== 'object' || Array.isArray(body.human))) {
+      throw new Error('human must be an object with the digest and the answer.');
+    }
   } catch (error) {
     if (error instanceof ConversationLogReadPressureError) throw error;
     return json(
@@ -145,6 +151,7 @@ async function POST_handler(
   }
 
   const mappedAction: 'approve' | 'reject' = body.action === 'approve' ? 'approve' : 'reject';
+  const humanContext = { answer: body.human, channel: 'approvals' as const };
   log.info('Resolving approval', { requestId, approvalId: id, action: body.action, toolCallId: body.toolCallId });
 
   try {
@@ -268,6 +275,10 @@ async function POST_handler(
       if (body.toolCallId && !state.pendingToolCalls.some((toolCall) => toolCall.id === body.toolCallId)) {
         return json({ error: `Pending tool call with ID ${body.toolCallId} not found` }, 404);
       }
+      for (const toolCallId of targetIds) {
+        const refused = refusedHumanStepAnswer(state, toolCallId, mappedAction, humanContext);
+        if (refused) return json({ error: refused.error, fieldErrors: refused.fieldErrors }, refused.status);
+      }
       const dispatch = await resumePersonaFlowDispatch({
         personaId,
         activityId,
@@ -289,6 +300,7 @@ async function POST_handler(
               state,
               toolCallId,
               mappedAction,
+              humanContext,
             );
             if (decision.outcome === 'tool_not_found') {
               if (body.toolCallId) {
@@ -296,6 +308,7 @@ async function POST_handler(
               }
               continue;
             }
+            if (decision.outcome === 'human_refused') throw new Error(decision.error);
             appendedMessages.push(...decision.appendedMessages);
             if (decision.outcome === 'ready') break;
           }
@@ -384,14 +397,22 @@ async function POST_handler(
       });
     }
 
+    for (const toolCallId of targetIds) {
+      // Check every Human step answer first, so a refusal leaves the whole batch untouched.
+      const refused = refusedHumanStepAnswer(state, toolCallId, mappedAction, humanContext);
+      if (refused) return json({ error: refused.error, fieldErrors: refused.fieldErrors }, refused.status);
+    }
     const appendedMessages: FlujoChatMessage[] = [];
     for (const toolCallId of targetIds) {
-      const decision = await applyApprovalDecision(state, toolCallId, mappedAction);
+      const decision = await applyApprovalDecision(state, toolCallId, mappedAction, humanContext);
       if (decision.outcome === 'tool_not_found') {
         if (body.toolCallId) {
           return json({ error: `Pending tool call with ID ${toolCallId} not found` }, 404);
         }
         continue; // snapshot drift — skip
+      }
+      if (decision.outcome === 'human_refused') {
+        return json({ error: decision.error, fieldErrors: decision.fieldErrors }, decision.status);
       }
       appendedMessages.push(...decision.appendedMessages);
       if (decision.outcome === 'ready') {

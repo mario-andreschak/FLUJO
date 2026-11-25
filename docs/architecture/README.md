@@ -45,6 +45,9 @@ Docker probes do not qualify an installed FLUJO artifact or shared/team deployme
 - [Persona run context contract](./persona-run-contract.md):
   Attributed instruction/snapshot decisions, caller ownership and ordered
   source-regression traces for incremental execution simplification (#571).
+- [Human step node](./human-step-node.md): a flow step that waits for a
+  person's approval, typed answers or edit, bound to a digest of what they saw,
+  saved across restarts and ended by a deadline (#1095).
 - [Single-gate tool approval proposal](./tool-approval-single-gate-proposal.md):
   Proposed conversation-scoped approval contract, workflow evidence, state and API
   requirements, verification matrix, and required stakeholder sign-off for issue #469.

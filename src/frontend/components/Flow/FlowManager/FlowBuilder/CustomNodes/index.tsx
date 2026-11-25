@@ -21,6 +21,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BoltIcon from '@mui/icons-material/Bolt';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
+import FrontHandRoundedIcon from '@mui/icons-material/FrontHandRounded';
 import BuildRoundedIcon from '@mui/icons-material/BuildRounded';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import type { NodeType } from '@/frontend/types/flow/flow';
@@ -43,6 +44,9 @@ export const TRIGGER_COLOR_LIGHT = flowNodeLightColors.trigger;
 export const STATIC_COLOR = flowNodeColors.light.static;
 export const STATIC_COLOR_LIGHT = flowNodeLightColors.static;
 
+export const HUMAN_COLOR = flowNodeColors.light.human;
+export const HUMAN_COLOR_LIGHT = flowNodeLightColors.human;
+
 // One authority for per-type node colors instead of five repeated ternary
 // chains. `main` styles borders/icons; `light` styles the header divider.
 const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: Theme) => string; light: (theme: Theme) => string }> = {
@@ -55,6 +59,7 @@ const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: Theme) => string; light
   signal: { main: () => SIGNAL_COLOR, light: () => SIGNAL_COLOR_LIGHT },
   trigger: { main: () => TRIGGER_COLOR, light: () => TRIGGER_COLOR_LIGHT },
   static: { main: () => STATIC_COLOR, light: () => STATIC_COLOR_LIGHT },
+  human: { main: () => HUMAN_COLOR, light: () => HUMAN_COLOR_LIGHT },
 };
 
 const nodeMainColor = (type: NodeType, theme: Theme) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).main(theme);
@@ -170,6 +175,7 @@ const QUICK_CONNECT_HANDLES: Record<NodeType, QuickConnectHandle[]> = {
     { handleId: 'static-left-mcp', side: 'left', anchor: '50%' },
     { handleId: 'static-right-mcp', side: 'right', anchor: '50%' },
   ],
+  human: [{ handleId: 'human-bottom', side: 'bottom' }],
 };
 
 const quickConnectRotation: Record<QuickConnectSide, number> = {
@@ -201,6 +207,8 @@ const getNodeIcon = (type: NodeType) => {
     case 'static':
       // Static node (issue #358): pre-authored conversation content.
       return <NoteAddIcon sx={{ color: STATIC_COLOR }} />;
+    case 'human':
+      return <FrontHandRoundedIcon sx={{ color: HUMAN_COLOR }} />;
     default:
       return <ChatIcon sx={{ color: '#7E889E' }} />;
   }
@@ -522,6 +530,23 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
           />
         </>
       );
+    } else if (nodeType === 'human') {
+      return (
+        <>
+          <Handle
+            id="human-top"
+            type="target"
+            position={Position.Top}
+            style={getProcessHandleStyle(theme)}
+          />
+          <Handle
+            id="human-bottom"
+            type="source"
+            position={Position.Bottom}
+            style={getProcessHandleStyle(theme)}
+          />
+        </>
+      );
     } else if (nodeType === 'trigger') {
       // Trigger nodes (issue #241) sit ABOVE the Start node. They have only a
       // bottom source handle — the edge flows Trigger → Start.
@@ -712,4 +737,8 @@ export const TriggerNode = memo(function TriggerNode(props: NodeProps) {
 
 export const StaticNode = memo(function StaticNode(props: NodeProps) {
   return <CustomNode {...props} nodeType="static" selected={props.selected} />;
+});
+
+export const HumanNode = memo(function HumanNode(props: NodeProps) {
+  return <CustomNode {...props} nodeType="human" selected={props.selected} />;
 });

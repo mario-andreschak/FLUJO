@@ -13,6 +13,7 @@ import type { ConversationChainsResponse } from '@/shared/types/conversationChai
 import type { WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import type { HumanAnswer } from '@/utils/shared/humanStep';
 import { readModelTurnInspection, type ModelTurnInspection } from './modelTurnInspection';
 
 // Create a logger instance for this file
@@ -448,14 +449,33 @@ class ChatService {
     id: string,
     action: 'approve' | 'reject',
     toolCallId: string,
+    human?: HumanAnswer,
   ): Promise<ChatApiResponse> {
     log.debug('respondToToolCall: Entering method', { conversationId: id, action, toolCallId });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/respond`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, toolCallId }),
+      body: JSON.stringify({ action, toolCallId, ...(human ? { human } : {}) }),
     });
     return parse<ChatApiResponse>(response);
+  }
+
+  /**
+   * POST /api/human-tasks/{requestId} — answer a waiting Human step (#1095). The server
+   * saves the answer and replies at once; the run then goes on in the background and
+   * reports through the conversation's event stream.
+   */
+  async answerHumanTask(
+    requestId: string,
+    action: 'approve' | 'reject',
+    human: HumanAnswer,
+  ): Promise<{ status: string; repeat?: boolean; conversationId?: string; receipt?: { decisionId: string; outcome: string } }> {
+    const response = await fetch(withWorkspaceUrl(`/api/human-tasks/${encodeURIComponent(requestId)}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...human }),
+    });
+    return parse(response);
   }
 
   /**

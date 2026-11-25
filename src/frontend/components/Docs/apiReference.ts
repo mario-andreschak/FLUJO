@@ -194,6 +194,21 @@ const CURATED_GROUPS: ApiGroup[] = [
         ],
       },
       {
+        method: 'GET',
+        path: '/api/human-tasks',
+        summary: 'List Human steps that wait for a person: ids, flow, step title, mode and times, never the content.',
+      },
+      {
+        method: 'GET',
+        path: '/api/human-tasks/{requestId}',
+        summary: 'Show one Human step: the question, what to check, the questions to fill in, its digest and deadline.',
+      },
+      {
+        method: 'POST',
+        path: '/api/human-tasks/{requestId}',
+        summary: 'Answer a Human step. The answer is checked and saved first; the run then goes on in the background.',
+      },
+      {
         method: 'POST',
         path: '/v1/chat/conversations/{conversationId}/cancel',
         summary: 'Request cancellation of an in-progress run (sets the isCancelled flag).',
@@ -681,7 +696,10 @@ const REFERENCE_DETAILS: Record<string, Partial<ApiEndpoint>> = {
   'GET /v1/roles': { paramsLabel: 'Query', params: [p('includeArchived', 'boolean', 'Include archived definitions.')], response: '{ roleDefinitions, roleVersions, roles: PublicRole[] }' },
   'POST /v1/roles': { paramsLabel: 'Body', params: [p('name', 'string', '1–160 characters.', true), p('prompt', 'string', '1–20000 characters.', true), p('id', 'string', 'Optional explicit id.'), p('suggestedApps', 'object[]', 'Up to 64 { mcpServerName }.')], response: '201 PublicRole { id, name, prompt, suggestedApps, behaviors, archived, currentVersionId, createdAt, updatedAt } · 400 · 409 exists' },
   'POST /v1/chat/conversations': { paramsLabel: 'Body', params: [p('id', 'string', 'Conversation id.', true), p('flowId', 'string', 'Agent id; exactly null for a Persona chat.', true), p('title', 'string', 'Title (a default is used when omitted).'), p('createdAt', 'number', 'Epoch ms (defaults to now).'), p('updatedAt', 'number', 'Epoch ms (defaults to now).'), p('flowSnapshot', 'object', 'Inline agent for a Quick Chat.'), p('personaTargetId', 'string', 'Persona to talk to.'), p('personaBehaviorSlotKey', 'string', "Persona role or Behavior (default 'primary').")], response: '201 { id, title, flowId, createdAt, updatedAt, status, source, personaId?, personaBehaviorSlotKey? } · 400 · 404 Persona · 409' },
-  'POST /v1/chat/conversations/{conversationId}/respond': { paramsLabel: 'Body', params: [p('action', "'approve' | 'reject' | 'elicitation-submit' | 'elicitation-cancel' | 'question-answer' | 'question-decline' | 'cancelToolCall'", 'What to answer.', true), p('toolCallId', 'string', 'Required for approve, reject and cancelToolCall.'), p('elicitationId', 'string', 'Required for elicitation-*.'), p('content', 'object', 'Form values for elicitation-submit.'), p('questionId', 'string', 'Required for question-*.'), p('answers', 'string[][]', 'Required for question-answer.')], response: '{ status, conversation_id, pendingToolCalls? } or, once every pending call is handled, the chat-completion result · 400 · 404 nothing pending · 409' },
+  'POST /v1/chat/conversations/{conversationId}/respond': { paramsLabel: 'Body', params: [p('action', "'approve' | 'reject' | 'elicitation-submit' | 'elicitation-cancel' | 'question-answer' | 'question-decline' | 'cancelToolCall'", 'What to answer.', true), p('toolCallId', 'string', 'Required for approve, reject and cancelToolCall.'), p('elicitationId', 'string', 'Required for elicitation-*.'), p('content', 'object', 'Form values for elicitation-submit.'), p('questionId', 'string', 'Required for question-*.'), p('answers', 'string[][]', 'Required for question-answer.'), p('human', 'object', 'For a Human step: { digest, value?, idempotencyKey? }. Approving needs the digest of what the person saw.')], response: '{ status, conversation_id, pendingToolCalls? } or, once every pending call is handled, the chat-completion result · 400 · 404 nothing pending · 409 · 410 too late · 422 wrong answer' },
+  'GET /api/human-tasks': { paramsLabel: 'Query', params: [p('include', "'finished'", 'Also list steps that finished in the last 7 days, with their outcome.')], response: '{ tasks: [{ requestId, conversationId, flowId, nodeId, title, mode, status, createdAt, expiresAt, outcome? }] }' },
+  'GET /api/human-tasks/{requestId}': { response: '{ requestId, mode, title, prompt, candidate?, fields?, digest, expiresAt, status, receipt? } · 403 · 404' },
+  'POST /api/human-tasks/{requestId}': { paramsLabel: 'Body', params: [p('action', "'approve' | 'submit' | 'reject' | 'decline'", 'The answer.', true), p('digest', 'string', 'From the GET; needed to approve or submit.'), p('value', 'object | string', 'The answers (Fill in) or the changed text (Review and edit).'), p('idempotencyKey', 'string', 'The same key and answer return the first receipt.')], response: '202 { status: "decided", repeat, receipt: { requestId, decisionId, outcome, decidedAt } } · 200 already used · 400 · 404 · 409 changed or answered · 410 too late · 422 wrong answer' },
   'POST /v1/chat/conversations/{conversationId}/cancel': { requestBody: 'none', response: '{ success, message } (an unknown conversation is treated as already cancelled) · Persona: 200/202 { success, message, dispatch_id, dispatch_state } · 409 · 500' },
   'PUT /v1/chat/conversations/{conversationId}/breakpoints': { paramsLabel: 'Body', params: [p('breakpoints', 'string[]', 'Node ids to pause before.', true)], response: '{ success, breakpoints } · 400 · 404 · 409' },
   'POST /v1/chat/conversations/{conversationId}/debug/step': { requestBody: 'none', response: "{ status: 'paused_debug', conversation_id, debugState } or the chat-completion result · 404 · 409 not paused · 500" },

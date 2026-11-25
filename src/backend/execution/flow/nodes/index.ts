@@ -6,3 +6,4 @@ export * from './SubflowNode';
 export * from './ResourceNode';
 export * from './SignalNode';
 export * from './StaticNode';
+export * from './HumanNode';

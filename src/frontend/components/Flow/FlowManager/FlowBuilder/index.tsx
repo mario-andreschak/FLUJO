@@ -78,6 +78,7 @@ import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
 import StaticNodePropertiesModal from './Modals/StaticNodePropertiesModal';
+import HumanNodePropertiesModal from './Modals/HumanNodePropertiesModal';
 import TriggerNodePropertiesModal from './Modals/TriggerNodePropertiesModal';
 import FlowVersionHistoryDialog from './Modals/FlowVersionHistoryDialog';
 import ConvertProcessToSubflowDialog from './Modals/ConvertProcessToSubflowDialog';
@@ -213,7 +214,15 @@ type DialogType = 'none' | 'duplicate' | 'rename' | 'unsaved';
 type SaveResult = 'saved' | 'invalid-name' | 'failed';
 type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
-const GUIDED_CONTROL_TYPES = new Set<NodeType>(['start', 'process', 'finish', 'subflow', 'signal']);
+const GUIDED_CONTROL_TYPES = new Set<NodeType>(['start', 'process', 'finish', 'subflow', 'signal', 'human']);
+const GUIDED_STEP_TYPES = ['process', 'subflow', 'signal', 'human'];
+const GUIDED_SOURCE_HANDLES: Partial<Record<NodeType, string>> = {
+  start: 'start-bottom',
+  process: 'process-bottom',
+  subflow: 'subflow-bottom',
+  signal: 'signal-bottom',
+  human: 'human-bottom',
+};
 const isPlaceholderGuidedName = (name: string, localizedUntitled?: string) => {
   const normalized = name.trim();
   return /^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(normalized)
@@ -365,6 +374,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [resourceModalOpen, setResourceModalOpen] = useState(false);
   const [signalModalOpen, setSignalModalOpen] = useState(false);
   const [staticModalOpen, setStaticModalOpen] = useState(false);
+  const [humanModalOpen, setHumanModalOpen] = useState(false);
   const [triggerModalOpen, setTriggerModalOpen] = useState(false);
   // Read-only technical details for the selected node (issue #412). Only the
   // node id is stored so the dialog always reflects the live node data.
@@ -1193,13 +1203,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     // When a control-flow step is selected, one-click Add means "append after
     // this step". Attachment nodes remain unconnected so their semantic MCP /
     // resource handle can be chosen deliberately.
-    const controlSources: Partial<Record<NodeType, string>> = {
-      start: 'start-bottom',
-      process: 'process-bottom',
-      subflow: 'subflow-bottom',
-      signal: 'signal-bottom',
-    };
-    const controlTargets: NodeType[] = ['process', 'finish', 'subflow', 'signal'];
+    const controlSources = GUIDED_SOURCE_HANDLES;
+    const controlTargets: NodeType[] = ['process', 'finish', 'subflow', 'signal', 'human'];
     const shouldAppend = !!selected && controlTargets.includes(nodeType);
     const preparedNode = flowService.createNode(nodeType, position);
 
@@ -1245,20 +1250,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       .filter((node): node is FlowNode => !!node);
     const source = [...orderedControls]
       .reverse()
-      .find(node => ['start', 'process', 'subflow', 'signal'].includes(node.data.type))
+      .find(node => ['start', ...GUIDED_STEP_TYPES].includes(node.data.type))
       ?? start;
     if (!source) {
       showBuilderNotice(t('flows.builder.missingStart'));
       return;
     }
 
-    const sourceHandles: Partial<Record<NodeType, string>> = {
-      start: 'start-bottom',
-      process: 'process-bottom',
-      subflow: 'subflow-bottom',
-      signal: 'signal-bottom',
-    };
-    const sourceHandle = sourceHandles[source.data.type as NodeType];
+    const sourceHandle = GUIDED_SOURCE_HANDLES[source.data.type as NodeType];
     if (!sourceHandle) {
       showBuilderNotice(t('flows.builder.addExpert'));
       return;
@@ -1408,6 +1407,91 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     markDirty,
     t,
   ]);
+
+  const handleAddGuidedHumanStep = useCallback(() => {
+    if (hasUnsafeGuidedGraph) {
+      showBuilderNotice(t('flows.builder.customWiring'));
+      return;
+    }
+    const existingFinish = nodes.find(node => node.data.type === 'finish');
+    const source = guidedGraph.orderedNodeIds
+      .map(nodeId => nodes.find(node => node.id === nodeId))
+      .filter((node): node is FlowNode => !!node)
+      .reverse()
+      .find(node => ['start', ...GUIDED_STEP_TYPES].includes(node.data.type))
+      ?? nodes.find(node => node.data.type === 'start');
+    const sourceHandle = source ? GUIDED_SOURCE_HANDLES[source.data.type as NodeType] : undefined;
+    if (!source || !sourceHandle) {
+      showBuilderNotice(t('flows.builder.missingStart'));
+      return;
+    }
+
+    const humanNode = flowService.createNode('human', {
+      x: source.position.x,
+      y: source.position.y + 180,
+    });
+    humanNode.data = {
+      ...humanNode.data,
+      label: t('flows.human.defaultLabel'),
+      properties: {
+        mode: 'approval',
+        prompt: t('flows.human.defaultPrompt'),
+      },
+    };
+    const finishNode = existingFinish ?? flowService.createNode('finish', {
+      x: source.position.x,
+      y: source.position.y + 360,
+    });
+    const nextNodes = [
+      ...nodes
+        .filter(node => node.id !== finishNode.id)
+        .map(node => ({ ...node, selected: false })),
+      { ...humanNode, selected: true },
+      {
+        ...finishNode,
+        position: { x: source.position.x, y: source.position.y + 360 },
+        selected: false,
+      },
+    ];
+    const remainingEdges = edges.filter(edge =>
+      !(existingFinish && edge.source === source.id && edge.target === existingFinish.id)
+    );
+    const nextEdges = [
+      ...remainingEdges,
+      createEdgeFromConnection({
+        source: source.id,
+        sourceHandle,
+        target: humanNode.id,
+        targetHandle: defaultTargetHandleFor('human', sourceHandle),
+      }, nextNodes),
+      createEdgeFromConnection({
+        source: humanNode.id,
+        sourceHandle: 'human-bottom',
+        target: finishNode.id,
+        targetHandle: defaultTargetHandleFor('finish', 'human-bottom'),
+      }, nextNodes),
+    ];
+    setNodes(source.data.type === 'process'
+      ? nextNodes.map((candidate) => candidate.id === source.id ? {
+          ...candidate,
+          data: {
+            ...candidate.data,
+            properties: {
+              ...(candidate.data.properties ?? {}),
+              promptTemplate: reconcileHandoffPromptForTopologyChange({
+                prompt: String(source.data.properties?.promptTemplate ?? ''),
+                nodeId: source.id,
+                previous: { nodes, edges },
+                next: { nodes: nextNodes, edges: nextEdges },
+              }),
+            },
+          },
+        } : candidate)
+      : nextNodes);
+    setEdges(nextEdges);
+    setNodeToEdit(humanNode);
+    setHumanModalOpen(true);
+  }, [nodes, edges, guidedGraph.orderedNodeIds, hasUnsafeGuidedGraph, showBuilderNotice, t]);
 
   const selectedNode = nodes.find(node => node.selected) ?? null;
 
@@ -1710,6 +1794,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setResourceModalOpen(false);
     setSignalModalOpen(false);
     setStaticModalOpen(false);
+    setHumanModalOpen(false);
     setTriggerModalOpen(false);
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
@@ -1968,6 +2053,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setSignalModalOpen(true);
     } else if (node.data.type === 'static') {
       setStaticModalOpen(true);
+    } else if (node.data.type === 'human') {
+      setHumanModalOpen(true);
     } else if (node.data.type === 'trigger') {
       setTriggerModalOpen(true);
     } else {
@@ -2042,7 +2129,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               <Typography data-ask-flujo-flow-field="name" variant="subtitle2" sx={{ fontWeight: 850 }} noWrap>{flowName}</Typography>
               <Typography variant="caption" color="text.secondary">
                 {authoringMode === 'guided'
-                  ? tp('flows.builder.step', nodes.filter(node => ['process', 'subflow', 'signal'].includes(node.data.type)).length)
+                  ? tp('flows.builder.step', nodes.filter(node => GUIDED_STEP_TYPES.includes(node.data.type)).length)
                   : `${tp('flows.builder.node', nodes.length)} · ${tp('flows.builder.connection', edges.length)}`}
               </Typography>
             </Box>
@@ -2340,6 +2427,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               onSelectNode={handleSelectGuidedNode}
               onOpenNode={(node) => openNodeProperties(node)}
               onAddTask={handleAddGuidedTask}
+              onAddHumanStep={handleAddGuidedHumanStep}
               onTry={onTry ? () => { void handleTry(); } : undefined}
               isSaving={saveStatus === 'saving'}
               hasAdvancedFeatures={hasUnsafeGuidedGraph}
@@ -2586,6 +2674,14 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         node={nodeToEdit}
         onClose={() => setStaticModalOpen(false)}
         onSave={handleStaticNodeUpdate}
+      />
+
+      <HumanNodePropertiesModal
+        open={humanModalOpen}
+        node={nodeToEdit}
+        onClose={() => setHumanModalOpen(false)}
+        onSave={handleNodeUpdate}
+        authoringMode={authoringMode}
       />
 
       <TriggerNodePropertiesModal

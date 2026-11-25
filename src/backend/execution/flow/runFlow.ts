@@ -32,6 +32,8 @@ import {
   requeueSteeringMessages,
 } from '@/backend/execution/flow/steeringInbox';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { HUMAN_STEP_TOOL_NAME } from '@/utils/shared/humanStep';
+import { putHumanTaskEntry, syncHumanTaskEntry, updateHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
 import { assertFlowExecutionCurrent } from '@/backend/execution/flow/executionAuthority';
 import { EmitFn, type RecoveryLaneIdentity, UsageTotals } from '@/shared/types/execution/events';
@@ -1092,6 +1094,20 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     sharedState.staticInjected = undefined;
   }
   if (userTurn) sharedState.modelsUsed = undefined;
+  if (userTurn && sharedState.humanTask) {
+    // A new message replaces a waiting Human step, as it does a Static node's wait.
+    const replaced = sharedState.humanTask;
+    sharedState.humanTask = undefined;
+    if (sharedState.status === 'awaiting_tool_approval') {
+      sharedState.status = 'running';
+      sharedState.pendingToolCalls = undefined;
+    }
+    if (!sharedState.ephemeral) {
+      await syncHumanTaskEntry(() => updateHumanTaskEntry(replaced.requestId, {
+        status: 'cancelled', finishedAt: new Date().toISOString(),
+      }), 'replaced by a new message');
+    }
+  }
   if (userTurn && sharedState.staticHold) {
     // A new message replaces an open wait. The dangling-call repair below answers the
     // waiting call, and the node asks again if the run reaches it again.
@@ -2226,7 +2242,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       // no interactive approver. Execute nothing.
       const toolName = heldCalls[0]?.function.name ?? 'unknown';
       const reason = sharedState.onApprovalRequired === 'fail' ? 'approvalPolicy: fail' : 'this run is not saved';
-      const message = `Headless run requires approval for tool "${toolName}" but no approver is available (${reason}).`;
+      const message = toolName === HUMAN_STEP_TOOL_NAME
+        ? `This flow has a Human step, but nobody can answer it in this run (${reason}). Start the flow from the chat, an automation or a saved API run.`
+        : `Headless run requires approval for tool "${toolName}" but no approver is available (${reason}).`;
       log.info(`[approval] Failing fast for tool "${toolName}" (conv ${effectiveConvId}): ${reason}`);
       sharedState.status = 'error';
       sharedState.pendingToolCalls = heldCalls;
@@ -2275,6 +2293,32 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       log.verbose(`Saved state before pausing for approval for conv ${effectiveConvId}`);
     } catch (error) {
       log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
+      const humanTask = sharedState.humanTask;
+      if (humanTask && heldCalls.some((call) => call.id === humanTask.toolCallId)) {
+        // A Human step promises a wait that survives a restart. One that was not
+        // saved cannot keep that promise, so say so instead of seeming to wait.
+        const message = 'The Human step could not be saved, so the run cannot wait for an answer. Nothing after it ran.';
+        sharedState.status = 'error';
+        sharedState.humanTask = undefined;
+        sharedState.pendingToolCalls = undefined;
+        sharedState.lastResponse = { success: false, error: message, errorDetails: { message, type: 'flow_error', code: 'human_step_not_saved' } };
+        currentAction = ERROR_ACTION;
+        return;
+      }
+    }
+    const waitingTask = sharedState.humanTask;
+    if (waitingTask && !waitingTask.decision && heldCalls.some((call) => call.id === waitingTask.toolCallId)) {
+      await syncHumanTaskEntry(() => putHumanTaskEntry({
+        requestId: waitingTask.requestId,
+        conversationId: effectiveConvId,
+        ...(sharedState.flowId ? { flowId: sharedState.flowId } : {}),
+        nodeId: waitingTask.nodeId,
+        title: waitingTask.title,
+        mode: waitingTask.mode,
+        createdAt: waitingTask.createdAt,
+        expiresAt: waitingTask.expiresAt,
+        status: 'waiting',
+      }), 'waiting');
     }
     emit({ type: 'run:awaiting_approval', pendingToolCalls: heldCalls });
   };

@@ -41,6 +41,7 @@ import { findBindings } from './mcpBinding';
 import { decisionRuleIssues, type DecisionRule } from './decisionRules';
 import { modelDecisionIssues, type DecisionQuestion } from './modelDecision';
 import { isValidRunVarName } from './resolveRunVars';
+import { humanStepIssues, type HumanStepProperties } from './humanStep';
 import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TARGETS, EdgeCondition, EdgeConditionTarget, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 
@@ -122,7 +123,53 @@ export interface FlowSpecServerRef {
   tools?: string[];
 }
 
-export interface FlowSpecNode {
+/**
+ * The Human step fields a spec node carries (#1095), in the same shape as the node's
+ * properties. `prompt` is the question; the rest sit beside it on the node.
+ */
+export type FlowSpecHumanFields = Omit<HumanStepProperties, 'name' | 'prompt'>;
+
+const HUMAN_STEP_KEYS = [
+  'mode', 'title', 'prompt', 'review', 'fields', 'outputVariable',
+  'timeoutMinutes', 'onReject', 'onTimeout', 'rejectedText', 'timedOutText',
+] as const;
+const HUMAN_TEXT_KEYS: ReadonlySet<string> = new Set(['title', 'prompt', 'rejectedText', 'timedOutText']);
+const HUMAN_REVIEW_KEYS = ['source', 'variable', 'format'] as const;
+const HUMAN_FIELD_KEYS = ['name', 'label', 'type', 'required', 'options', 'min', 'max', 'maxLength'] as const;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function pickDefined(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (source[key] !== undefined) picked[key] = source[key];
+  }
+  return picked;
+}
+
+/**
+ * Keep only the Human step fields of `source` (a spec node or a node's properties).
+ * Unknown keys are dropped at every level. Text that is not text is dropped; any other
+ * wrong value is kept so {@link humanStepIssues} reports it instead of hiding it.
+ */
+export function humanStepFields(source: unknown, omit: readonly string[] = []): HumanStepProperties {
+  if (!isPlainObject(source)) return {};
+  const picked: Record<string, unknown> = {};
+  for (const key of HUMAN_STEP_KEYS) {
+    const value = source[key];
+    if (value === undefined || omit.includes(key)) continue;
+    if (HUMAN_TEXT_KEYS.has(key) && typeof value !== 'string') continue;
+    if (key === 'review' && isPlainObject(value)) picked.review = pickDefined(value, HUMAN_REVIEW_KEYS);
+    else if (key === 'fields' && Array.isArray(value)) {
+      picked.fields = value.map((field) => (isPlainObject(field) ? pickDefined(field, HUMAN_FIELD_KEYS) : field));
+    } else picked[key] = value;
+  }
+  return picked as HumanStepProperties;
+}
+
+export interface FlowSpecNode extends FlowSpecHumanFields {
   /** Spec-local handle other nodes' edges refer to. Must be unique. */
   key: string;
   /**
@@ -145,12 +192,15 @@ export interface FlowSpecNode {
    * semantics fit in serializable `entries`/`injectOnce` properties, so it IS included —
    * omitting it silently dropped static nodes on flowToSpec (AI-Improve data loss), the
    * same class of bug previously fixed for 'signal' (#117) and 'resource'.
+   *
+   * 'human' (#1095) waits for a person and then goes on through ordinary edges. Its
+   * whole setup is the Human step fields ({@link FlowSpecHumanFields}) plus `prompt`.
    */
-  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal' | 'static';
+  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal' | 'static' | 'human';
   label?: string;
   /** Free-text description; lands on FlowNode.data.description (wins verbatim in handoff synthesis). */
   description?: string;
-  /** start: the flow's system-level prompt. process: the step prompt. subflow: isolated-mode prompt. */
+  /** start: the flow's system-level prompt. process: the step prompt. subflow: isolated-mode prompt. human: the question. */
   prompt?: string;
   /** process only: model id OR displayName/name — resolved against the context. */
   model?: string;
@@ -732,7 +782,7 @@ export function compileFlowSpec(
         );
         continue;
       }
-      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') {
+      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static' && type !== 'human') {
         error('unknown-node-type', `Node "${key}" has unknown type "${String(type)}".`, key);
         continue;
       }
@@ -1136,6 +1186,11 @@ export function compileFlowSpec(
           warn('static-invalid-injectonce', `Node \"${key}\": injectOnce must be a boolean; value ignored.`, key);
         }
         if (typeof specNode.outputTemplate === 'string') properties.outputTemplate = specNode.outputTemplate;
+      } else if (type === 'human') {
+        // A Human step that cannot run would let the flow promise a person it never asks,
+        // so every problem stops the compile.
+        Object.assign(properties, humanStepFields(specNode));
+        for (const issue of humanStepIssues(properties)) error(issue.code, `Node "${key}": ${issue.message}`, key);
       }
       // finish: no properties.
 
@@ -1291,7 +1346,7 @@ export function compileFlowSpec(
 
       // Tier 2b: deterministic edge condition. Sanitize here so a bad predicate
       // is dropped (warned) rather than carried into the runtime graph. Only
-      // process, start and static nodes route deterministically, so a condition on
+      // process, start, static and human nodes route deterministically, so a condition on
       // any other source is dropped with a warning (it would be silently ignored).
       let condition: EdgeCondition | undefined;
       const rawCond = specEdge.condition;
@@ -1310,7 +1365,7 @@ export function compileFlowSpec(
         } else if (!CONDITION_SOURCE_NODE_TYPES.includes(source.type ?? 'unknown')) {
           warn(
             'edge-condition-non-process',
-            `Edge "${fromKey}" -> "${toKey}" has a condition but leaves a ${source.type} node; conditions only route from process, start and static nodes and were dropped.`
+            `Edge "${fromKey}" -> "${toKey}" has a condition but leaves a ${source.type} node; conditions only route from process, start, static and human nodes and were dropped.`
           );
         } else if (!isValidConditionKind(rawCond.kind)) {
           warn(
@@ -1709,7 +1764,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
   for (const node of nodes) {
     if (node.type === 'mcp') continue; // folded into `servers`
     const type = node.type;
-    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') continue;
+    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static' && type !== 'human') continue;
     const props = (node.data?.properties ?? {}) as Record<string, unknown>;
     const specNode: FlowSpecNode = {
       key: node.id,
@@ -1821,6 +1876,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.decisionVariable === 'string' && props.decisionVariable) specNode.decisionVariable = props.decisionVariable;
       const servers = serversByConsumer.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
+    } else if (type === 'human') {
+      Object.assign(specNode, humanStepFields(props));
     }
     // finish: no properties to carry.
     specNodes.push(specNode);

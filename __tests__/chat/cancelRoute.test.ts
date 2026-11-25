@@ -54,6 +54,12 @@ jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
   cancelPersonaFlowDispatch: (...args: unknown[]) => cancelPersonaFlowDispatchMock(...args),
 }));
 
+const updateHumanTaskEntryMock = jest.fn(async () => undefined);
+jest.mock('@/backend/services/humanTasks/humanTaskIndex', () => ({
+  syncHumanTaskEntry: async (write: () => Promise<void>) => write(),
+  updateHumanTaskEntry: (...args: unknown[]) => updateHumanTaskEntryMock(...(args as [])),
+}));
+
 import { POST } from '@/app/v1/chat/conversations/[conversationId]/cancel/route';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import {
@@ -145,6 +151,24 @@ describe('cancel route', () => {
     expect(emitMock).toHaveBeenCalledWith(CONV_ID, { type: 'run:done', status: 'error' });
     expect(state.recovery).toMatchObject({ classification: 'cancelled' });
     expect(persistMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a waiting Human step, so neither a late answer nor its deadline can continue the run (#1095)', async () => {
+    const state = seedState({
+      status: 'awaiting_tool_approval',
+      pendingToolCalls: [toolCall('call_human_1')],
+      humanTask: {
+        requestId: 'req-1', toolCallId: 'call_human_1', nodeId: 'review', mode: 'approval', title: 'Check', prompt: 'Send?',
+        outputVariable: 'review', onReject: 'stop', onTimeout: 'stop', digest: 'sha256:x',
+        createdAt: '2026-01-01T00:00:00.000Z', expiresAt: '2026-01-08T00:00:00.000Z',
+      },
+    } as Partial<SharedState>);
+
+    await cancel();
+
+    expect(state.status).toBe('error');
+    expect(state.humanTask).toBeUndefined();
+    expect(updateHumanTaskEntryMock).toHaveBeenCalledWith('req-1', expect.objectContaining({ status: 'cancelled' }));
   });
 
   it('finalizes a parked paused_debug conversation', async () => {

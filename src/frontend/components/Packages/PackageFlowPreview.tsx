@@ -27,6 +27,7 @@ import {
   SignalNode,
   TriggerNode,
   StaticNode,
+  HumanNode,
 } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { CustomEdge, MCPEdge, ResourceEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -45,6 +46,7 @@ const nodeTypes = {
   signal: SignalNode,
   trigger: TriggerNode,
   static: StaticNode,
+  human: HumanNode,
 };
 
 const edgeTypes = {

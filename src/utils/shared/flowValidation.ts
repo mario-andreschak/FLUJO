@@ -22,6 +22,7 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 import { CONDITION_SOURCE_NODE_TYPES, EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { modelsOutsideBoundary, stepModelIds } from './flowModelBoundary';
 import { modelDecisionIssues } from './modelDecision';
+import { DEFAULT_HUMAN_OUTPUT_VARIABLE, humanStepIssues, type HumanStepProperties } from './humanStep';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
 import {
@@ -760,6 +761,27 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     });
   }
 
+  // --- Human steps (#1095): a step that cannot ask its question would never let the run go on ---
+  for (const node of nodes.filter((n) => getNodeType(n) === 'human')) {
+    const props = (node.data?.properties ?? {}) as HumanStepProperties;
+    for (const issue of humanStepIssues(props)) {
+      add('error', issue.code, `Human step "${getNodeLabel(node)}": ${issue.message}`, node);
+    }
+    const goesOnAfter = [
+      ...(props.onReject === 'continue' ? ['a no'] : []),
+      ...(props.onTimeout === 'continue' ? ['a time-out'] : []),
+    ];
+    const checksAnswer = edges.some((edge) => edge.source === node.id && !isAttachmentEdge(edge) && !!edge.data?.condition);
+    if (goesOnAfter.length > 0 && !checksAnswer) {
+      add(
+        'warning',
+        'human-continue-without-route',
+        `Human step "${getNodeLabel(node)}" goes on after ${goesOnAfter.join(' or ')}, but none of its connections checks the answer, so every answer takes the same path.`,
+        node
+      );
+    }
+  }
+
   // --- Connectivity / runnability ---
   if (startNodes.length > 0) {
     const adj = buildControlAdjacency(edges);
@@ -958,8 +980,8 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
 
   // --- Tier 2b: deterministic edge conditions ---
   // A condition lets the engine route on the last message (first matching
-  // outgoing edge wins, a bare edge is the fallback). Only process, start and
-  // static nodes route this way, so a condition anywhere else is an error; and a
+  // outgoing edge wins, a bare edge is the fallback). Only process, start,
+  // static and human nodes route this way, so a condition anywhere else is an error; and a
   // conditioned node with no bare fallback can dead-end when nothing matches
   // (advisory).
   {
@@ -976,7 +998,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         add(
           'error',
           'edge-condition-non-process',
-          `An edge leaving ${sourceType === 'unknown' ? 'an unknown' : `the ${sourceType}`} node "${sourceNode ? getNodeLabel(sourceNode) : edge.source}" has a routing condition, but only process, start and static nodes can route on a condition.`,
+          `An edge leaving ${sourceType === 'unknown' ? 'an unknown' : `the ${sourceType}`} node "${sourceNode ? getNodeLabel(sourceNode) : edge.source}" has a routing condition, but only process, start, static and human nodes can route on a condition.`,
           sourceNode ?? undefined
         );
         continue;
@@ -1056,6 +1078,10 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           }
         }
       }
+      if (getNodeType(node) === 'human') {
+        const output = node.data?.properties?.outputVariable;
+        capturedNames.add(typeof output === 'string' && output ? output : DEFAULT_HUMAN_OUTPUT_VARIABLE);
+      }
       const capture = node.data?.properties?.captureVariable;
       if (typeof capture === 'string' && capture.trim()) {
         const name = capture.trim();
@@ -1080,7 +1106,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         const text = (props as Record<string, unknown>)[field];
         if (typeof text !== 'string' || !text) continue;
         for (const name of referencedRunVars(text)) {
-          if (capturedNames.has(name)) continue;
+          if (capturedNames.has(name) || capturedNames.has(name.split('.')[0])) continue;
           const dedupeKey = `${node.id}:${name}`;
           if (warnedRefs.has(dedupeKey)) continue;
           warnedRefs.add(dedupeKey);

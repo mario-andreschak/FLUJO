@@ -88,7 +88,7 @@ export interface Flow {
   input?: NodeType;
 }
 
-export type NodeType = 'start' | 'process' | 'finish' | 'mcp' | 'subflow' | 'resource' | 'signal' | 'trigger' | 'static';
+export type NodeType = 'start' | 'process' | 'finish' | 'mcp' | 'subflow' | 'resource' | 'signal' | 'trigger' | 'static' | 'human';
 
 export interface FlowContextType {
   flows: Flow[];

@@ -71,6 +71,8 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/harness/comparisons': 'workspace',
   '/api/harness/comparisons/[id]': 'workspace',
   '/api/harness/profiles': 'workspace',
+  '/api/human-tasks': 'workspace',
+  '/api/human-tasks/[requestId]': 'workspace',
   '/api/init': 'workspace',
   '/api/local-models/capability': 'workspace',
   '/api/local-models/pull': 'host', // downloads a model onto the server

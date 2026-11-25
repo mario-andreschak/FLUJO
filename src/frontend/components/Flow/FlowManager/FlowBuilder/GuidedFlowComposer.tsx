@@ -21,6 +21,7 @@ import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import ArrowDownwardRoundedIcon from '@mui/icons-material/ArrowDownwardRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
+import FrontHandRoundedIcon from '@mui/icons-material/FrontHandRounded';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import type { Flow, FlowNode, NodeType } from '@/frontend/types/flow/flow';
@@ -43,6 +44,7 @@ interface GuidedFlowComposerProps {
   onSelectNode: (nodeId: string) => void;
   onOpenNode?: (node: FlowNode) => void;
   onAddTask: (prompt: string) => void;
+  onAddHumanStep?: () => void;
   onTry?: () => void;
   isSaving?: boolean;
   hasAdvancedFeatures?: boolean;
@@ -73,8 +75,16 @@ const technicalDefaultLabels = new Set([
   'Signal Node',
 ]);
 
+const humanModeLabel = (node: FlowNode, t: Translator) => {
+  const mode = node.data.properties?.mode;
+  if (mode === 'input') return t('flows.human.mode.input');
+  if (mode === 'edit') return t('flows.human.mode.edit');
+  return t('flows.human.mode.approval');
+};
+
 const friendlyType = (type: NodeType, t: Translator) => {
   if (type === 'subflow') return t('flows.guided.type.subflow');
+  if (type === 'human') return t('flows.guided.type.human');
   if (type === 'signal') return t('flows.guided.type.signal');
   return t('flows.guided.type.process');
 };
@@ -85,12 +95,16 @@ const friendlyTitle = (node: FlowNode, t: Translator) => {
     if (node.data.type === 'process') return t('flows.guided.default.process');
     if (node.data.type === 'subflow') return t('flows.guided.default.subflow');
     if (node.data.type === 'signal') return t('flows.guided.default.signal');
+    if (node.data.type === 'human') return t('flows.human.defaultLabel');
     return t('flows.guided.default.step');
   }
   return label;
 };
 
 const friendlySummary = (node: FlowNode, t: Translator) => {
+  if (node.data.type === 'human') {
+    return String(node.data.properties?.prompt ?? '').trim() || t('flows.guided.summary.human');
+  }
   const prompt = String(node.data.properties?.promptTemplate ?? '').trim();
   if (prompt) return prompt;
   if (node.data.description?.trim()) return node.data.description.trim();
@@ -133,6 +147,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
   onSelectNode,
   onOpenNode,
   onAddTask,
+  onAddHumanStep,
   onTry,
   isSaving = false,
   hasAdvancedFeatures = false,
@@ -163,7 +178,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
       const order = new Map(orderedStepIds.map((nodeId, index) => [nodeId, index]));
       return nodes
         .filter((node) =>
-          ['process', 'subflow', 'signal'].includes(node.data.type)
+          ['process', 'subflow', 'signal', 'human'].includes(node.data.type)
           && !subagentNodeIds?.has(node.id)
         )
         .sort((a, b) =>
@@ -370,9 +385,18 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                               {index + 1}
                             </Box>
                             <Box sx={{ minWidth: 0, flex: 1 }}>
-                              <Typography variant="overline" color="primary.main">
-                                {friendlyType(node.data.type as NodeType, t)}
-                              </Typography>
+                              {node.data.type === 'human' ? (
+                                <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+                                  <FrontHandRoundedIcon aria-hidden="true" color="primary" sx={{ fontSize: 16 }} />
+                                  <Typography variant="overline" color="primary.main">
+                                    {`${friendlyType('human', t)} · ${humanModeLabel(node, t)}`}
+                                  </Typography>
+                                </Stack>
+                              ) : (
+                                <Typography variant="overline" color="primary.main">
+                                  {friendlyType(node.data.type as NodeType, t)}
+                                </Typography>
+                              )}
                               <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
                                 {friendlyTitle(node, t)}
                               </Typography>
@@ -441,15 +465,27 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                         }
                       }}
                     />
-                    <Button
-                      variant="contained"
-                      startIcon={<AddRoundedIcon />}
-                      disabled={!canAdd}
-                      onClick={addTask}
-                      sx={{ minWidth: { sm: 150 } }}
-                    >
-                      {steps.length ? t('flows.guided.addStep') : t('flows.guided.createGoal')}
-                    </Button>
+                    <Stack spacing={1} sx={{ minWidth: { sm: 150 } }}>
+                      <Button
+                        variant="contained"
+                        startIcon={<AddRoundedIcon />}
+                        disabled={!canAdd}
+                        onClick={addTask}
+                        sx={{ flex: onAddHumanStep ? undefined : 1 }}
+                      >
+                        {steps.length ? t('flows.guided.addStep') : t('flows.guided.createGoal')}
+                      </Button>
+                      {onAddHumanStep && (
+                        <Button
+                          variant="outlined"
+                          startIcon={<FrontHandRoundedIcon />}
+                          disabled={hasAdvancedFeatures}
+                          onClick={onAddHumanStep}
+                        >
+                          {t('flows.guided.addHumanStep')}
+                        </Button>
+                      )}
+                    </Stack>
                   </Stack>
 
                   <ArrowDownwardRoundedIcon

@@ -6,6 +6,9 @@ import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace'
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import { applyToolRepeatGuard, TOOL_REPEAT_TEMPERATURE } from './toolRepeatGuard';
+import type { HumanAnswer } from '@/utils/shared/humanStep';
+import { approvalActionFor, decideHumanTask, type HumanTaskReceipt } from './humanTask';
+import type { HumanTaskDecision } from './types';
 
 const log = createLogger('backend/execution/flow/resumeAfterApproval');
 
@@ -33,7 +36,38 @@ export type ApprovalDecisionOutcome =
   /** Decision applied; other calls in the batch still need a decision. */
   | { outcome: 'awaiting'; appendedMessages: FlujoChatMessage[] }
   /** Decision applied and the batch is drained; the run is ready to resume. */
-  | { outcome: 'ready'; appendedMessages: FlujoChatMessage[] };
+  | { outcome: 'ready'; appendedMessages: FlujoChatMessage[] }
+  /** A Human step refused the answer; it keeps waiting. Reply with this status. */
+  | { outcome: 'human_refused'; status: 404 | 409 | 410 | 422; error: string; fieldErrors?: Record<string, string> };
+
+/** What a Human step's answer carries besides approve or reject (#1095). */
+export interface HumanDecisionContext {
+  answer?: HumanAnswer;
+  channel: HumanTaskDecision['channel'];
+}
+
+/**
+ * Check, and on success save, a person's answer to a waiting Human step. An answer
+ * that was already saved (for example by POST /api/human-tasks before a crash) is
+ * taken as it is when the action matches it.
+ */
+function recordHumanStepAnswer(
+  sharedState: Pick<SharedState, 'humanTask'>,
+  toolCallId: string,
+  action: 'approve' | 'reject',
+  human: HumanDecisionContext | undefined,
+): { refused?: Extract<ApprovalDecisionOutcome, { outcome: 'human_refused' }>; receipt?: HumanTaskReceipt } {
+  const task = sharedState.humanTask!;
+  if (task.decision && approvalActionFor(task.decision) === action) return {};
+  const result = decideHumanTask(sharedState, {
+    toolCallId, accept: action === 'approve', answer: human?.answer, channel: human?.channel ?? 'chat',
+  });
+  if (result.kind === 'refused') {
+    return { refused: { outcome: 'human_refused', status: result.status, error: result.error,
+      ...(result.fieldErrors ? { fieldErrors: result.fieldErrors } : {}) } };
+  }
+  return { receipt: result.receipt };
+}
 
 async function cancelledUiForToolCall(
   sharedState: SharedState,
@@ -61,10 +95,25 @@ async function cancelledUiForToolCall(
   return link ? { ...link, cancelledReason: reason, isError: true } : undefined;
 }
 
+/**
+ * Check a Human step answer without saving it, for callers that must refuse before
+ * they hand the run to someone else (a Persona dispatcher). Undefined means it fits.
+ */
+export function refusedHumanStepAnswer(
+  sharedState: Pick<SharedState, 'humanTask'>,
+  toolCallId: string,
+  action: 'approve' | 'reject',
+  human: HumanDecisionContext | undefined,
+): Extract<ApprovalDecisionOutcome, { outcome: 'human_refused' }> | undefined {
+  if (sharedState.humanTask?.toolCallId !== toolCallId) return undefined;
+  return recordHumanStepAnswer({ humanTask: structuredClone(sharedState.humanTask) }, toolCallId, action, human).refused;
+}
+
 export async function applyApprovalDecision(
   sharedState: SharedState,
   toolCallId: string,
   action: 'approve' | 'reject',
+  human?: HumanDecisionContext,
 ): Promise<ApprovalDecisionOutcome> {
   const pending = sharedState.pendingToolCalls ?? [];
   const toolCallToProcess = pending.find(tc => tc.id === toolCallId);
@@ -76,7 +125,13 @@ export async function applyApprovalDecision(
   // conversation log by the caller after the state is saved.
   const appendedMessages: FlujoChatMessage[] = [];
 
-  if (sharedState.staticHold?.toolCallId === toolCallId) {
+  if (sharedState.humanTask?.toolCallId === toolCallId) {
+    // A Human step applies the answer itself when it resumes, like a Static wait.
+    const { refused } = recordHumanStepAnswer(sharedState, toolCallId, action, human);
+    if (refused) return refused;
+    log.info(`Recording an answer for a Human step: ${action} ${toolCallId}`);
+    sharedState.pendingToolCalls = pending.filter(tc => tc.id !== toolCallId);
+  } else if (sharedState.staticHold?.toolCallId === toolCallId) {
     // A Static node acts on this itself when it resumes: it holds the capture, error
     // and routing rules for the entry, and it answers the waiting call.
     log.info(`Recording a decision for a Static node's wait: ${action} ${toolCallId}`);

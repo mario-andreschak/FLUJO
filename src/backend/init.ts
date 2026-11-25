@@ -56,6 +56,8 @@ declare global {
   // Next.js hot-reload / duplicate module instantiation can't arm it twice
   // (mirrors __flujo_run_resources / the scheduler singletons).
   var __flujo_retention_cron: Cron | undefined;
+  // Every-minute Human step sweep (#1095): deadlines and saved answers to pick up.
+  var __flujo_human_task_cron: Cron | undefined;
   var __flujo_subflow_task_retention_cron: Cron | undefined;
   // Hourly retention/expiry sweep for durable REMOTE MCP task records (#404).
   var __flujo_mcp_remote_task_retention_cron: Cron | undefined;
@@ -209,6 +211,17 @@ function setMemo(kind: 'init' | 'secret', promise: Promise<void> | undefined): v
  * retentionAgeDays <= 0, so this is safe to arm unconditionally.
  */
 function armRetentionSweep(): void {
+  // Human steps (#1095): a deadline must hold even when nobody looks, and a saved answer
+  // must not be lost when FLUJO stopped before the run went on. Once now, then every minute.
+  if (!global.__flujo_human_task_cron) {
+    const sweepHumanSteps = (full: boolean) => sweepEveryWorkspace('Human step', async () => {
+      const { sweepHumanTasks } = await import('@/backend/services/humanTasks/humanTaskSweep');
+      return sweepHumanTasks(new Date(), { full });
+    });
+    global.__flujo_human_task_cron = new Cron('* * * * *', { unref: true }, () => { void sweepHumanSteps(false); });
+    void sweepHumanSteps(true);
+    log.info('Armed Human step sweep (every minute)');
+  }
   if (!global.__flujo_retention_cron) {
     global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
       void sweepEveryWorkspace('run-resource', () => sweepOldRunResources());

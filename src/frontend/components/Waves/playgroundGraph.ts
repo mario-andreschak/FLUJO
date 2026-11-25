@@ -190,7 +190,7 @@ export function relationLabel(relation: AutomationMapRelation, copy: PlaygroundG
 
 function processLabels(entry: AutomationMapFlow): string[] {
   return entry.flow.nodes
-    .filter((node) => node.type === 'process' || node.type === 'static' || node.type === 'mcp' || node.type === 'resource')
+    .filter((node) => node.type === 'process' || node.type === 'static' || node.type === 'human' || node.type === 'mcp' || node.type === 'resource')
     .map((node) => String(node.data?.label || node.data?.description || node.type || 'Step'))
     .filter(Boolean);
 }

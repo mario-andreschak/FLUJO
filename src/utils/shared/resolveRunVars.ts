@@ -23,6 +23,8 @@
  * pills never interfere.
  */
 
+import { readConditionVariable } from './edgeConditions';
+
 /** The `${var:NAME}` pattern. NAME is everything up to the first `}`. */
 export const RUN_VAR_SCAN = /\$\{var:([^}]+)\}/g;
 /** Lightweight data-template form used by lane-scoped values such as session
@@ -31,7 +33,8 @@ export const RUN_VAR_SCAN = /\$\{var:([^}]+)\}/g;
 export const DATA_TEMPLATE_SCAN = /\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}/g;
 
 /**
- * Replace every `${var:NAME}` in `text` with `vars[NAME]`. An UNKNOWN name
+ * Replace every `${var:NAME}` in `text` with `vars[NAME]`. `NAME.path` reads into a
+ * variable that holds JSON (an object comes out as JSON text). An UNKNOWN name
  * resolves to '' (empty string), NOT the literal `${var:NAME}` — this avoids
  * leaking the raw token to a small model that would then parrot it; pair it with
  * the validation warning (flowValidation) so authors catch ordering/typo bugs.
@@ -48,6 +51,13 @@ export function resolveRunVars(text: string, vars: Record<string, string> | unde
     const name = rawName.trim();
     const value = map[name];
     if (typeof value === 'string') return value;
+    // A dotted name reads into a JSON variable, the same way an edge condition does,
+    // so `${var:review.value}` is the text a person approved in a Human step.
+    // A variable name never holds a dot, so this cannot shadow a real variable.
+    if (name.includes('.')) {
+      const nested = readConditionVariable(name, map);
+      if (nested !== null) return nested;
+    }
     // Unknown var: substitute empty string (documented) and warn so the author
     // can catch a typo or a step that captures too late.
     console.warn(`[resolveRunVars] unknown variable "${name}"; substituting empty string`);

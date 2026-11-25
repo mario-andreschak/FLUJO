@@ -19,6 +19,7 @@ import { clearSteeringInbox } from '@/backend/execution/flow/steeringInbox';
 import { commitRecoveryTransition } from '@/backend/execution/flow/recoveryCheckpoint';
 import { cancelPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { syncHumanTaskEntry, updateHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
 
@@ -196,6 +197,15 @@ async function POST_handler(
       sharedState.status = 'error';
       sharedState.pendingToolCalls = undefined;
       sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
+      // A cancelled run's Human step can no longer be answered, and a saved answer
+      // that was not used yet must never continue it.
+      const cancelledStep = sharedState.humanTask;
+      sharedState.humanTask = undefined;
+      if (cancelledStep) {
+        await syncHumanTaskEntry(() => updateHumanTaskEntry(cancelledStep.requestId, {
+          status: 'cancelled', finishedAt: new Date().toISOString(),
+        }), 'run cancelled');
+      }
       // Issue #256: clearing pendingToolCalls leaves the paused assistant
       // tool_calls turn unanswered in the transcript, which every provider 400s
       // on when the conversation is later continued. Synthesize a cancellation

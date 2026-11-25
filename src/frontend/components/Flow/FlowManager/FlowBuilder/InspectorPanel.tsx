@@ -120,6 +120,7 @@ const typeLabel = (node: FlowNode, beginnerMode: boolean, t: Translator) => {
       resource: t('flows.inspector.type.resource'),
       signal: t('flows.inspector.type.signal'),
       trigger: t('flows.inspector.type.trigger'),
+      human: t('flows.inspector.type.human'),
     };
     return friendlyTypes[type] ?? t('flows.inspector.type.step');
   }
