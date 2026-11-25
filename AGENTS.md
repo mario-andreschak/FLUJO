@@ -68,6 +68,9 @@ workaround.
 | A new user can still connect an AI, test a tool, build and run an agent and reuse it | `npm run journey:first-use` on a throwaway FLUJO (`scripts/first-journey/run.mjs`) |
 | Multi-user mode stays opt-in: without `accounts/accounts.json` no new file is read or created and no new check runs | `__tests__/accounts/optIn.test.ts` |
 | Code that starts a program on the server checks host access right before it starts (multi-user mode) | `__tests__/accounts/hostAccessStartPoints.test.ts` |
+| Copying into another workspace takes only listed fields; a new model, MCP server or flow field fails the type check until it is sorted as copy, scrub or drop, so no new secret field can travel | `satisfies Record<keyof …>` field lists in `src/backend/services/sharedItems/teamCopy.ts`; `__tests__/sharedItems/teamCopy.test.ts` |
+| A save never silently replaces someone else's newer save of a shared flow, model or MCP server (multi-user mode) | `checkBaseRevision` in `src/backend/services/sharedItems/guard.ts`; `__tests__/sharedItems/twoEditors.test.ts` |
+| Team roles give exactly their actions: owner all, member read/edit/run, viewer read; outsiders get "not found" | `__tests__/accounts/teamMatrix.test.ts` |
 | Persona runtime cleanup writes only with a grant from the rollout switches | `PersonaRuntimeRetentionWriteGrant` argument of the compactors in `compactRuntime.ts`; `personaRuntimeRetentionSweep.test.ts` |
 | The shareable diagnostic report holds only versions, counts and labels from fixed lists, never names, text, paths, addresses or keys | `normalizeDiagnosticReport` in `src/shared/types/diagnosticReport.ts`; `__tests__/diagnostics/diagnosticReport.test.ts` |
 | A subscription bar never shows a made-up 0% or 100%; every known provider answer has a fixture with the text and colour it must show | `__tests__/model/fixtures/claudeAllowanceFixtures.ts`; `__tests__/frontend/components/AllowanceFixtures.test.tsx` |

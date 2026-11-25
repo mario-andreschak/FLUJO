@@ -289,7 +289,10 @@ describe('copying a flow', () => {
     stores.get('sales-ws')!.flows.push({ id: 'f1', name: 'support', nodes: [], edges: [] });
     const result = await copy('flow', 'f1');
     expect(result.copied.id).not.toBe('f1');
-    expect(result.copied.name).toBe('Support (copy)');
+    expect(result.copied.name).toBe('Support copy');
+    // The real save refuses brackets in flow names.
+    const { validateFlowDisplayName } = jest.requireActual('@/utils/shared/flowNamePolicy');
+    expect(validateFlowDisplayName(result.copied.name)).toBeNull();
     expect(recordChange).toHaveBeenCalledWith(editor, expect.objectContaining({
       kind: 'flow', itemId: result.copied.id, action: 'copied-in', copiedFrom: { workspace: 'anna-ws', itemId: 'f1' },
     }));

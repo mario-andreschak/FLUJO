@@ -357,6 +357,9 @@ function uniqueName(base: string, taken: (candidate: string) => boolean, pattern
 }
 
 const copyName = (base: string) => (attempt: number) => attempt === 1 ? `${base} (copy)` : `${base} (copy ${attempt})`;
+/** Flow names allow only letters, digits, spaces, `_` and `-` (`validateFlowDisplayName`), so no brackets here. */
+const flowCopyName = (base: string) => (attempt: number) =>
+  `${base.slice(0, 140)} copy${attempt === 1 ? '' : ` ${attempt}`}`;
 
 /** What the target workspace has, read inside it. */
 interface TargetCatalog {
@@ -560,7 +563,7 @@ export async function copySharedItem(request: CopyRequest): Promise<TeamCopyResu
       const flowId = item.id && !target.flows.some(flow => flow.id === item.id) ? item.id : randomUUID();
       item.id = flowId;
       const base = item.name || 'Flow';
-      const name = uniqueName(base, candidate => target.flows.some(flow => flow.name.trim().toLowerCase() === candidate.trim().toLowerCase()), copyName(base));
+      const name = uniqueName(base, candidate => target.flows.some(flow => flow.name.trim().toLowerCase() === candidate.trim().toLowerCase()), flowCopyName(base));
       item.name = name;
       const result = await flowService.saveFlow(item as Flow);
       if (!result.success) throw new TeamCopyError(result.error || 'The flow could not be copied.');

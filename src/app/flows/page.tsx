@@ -385,11 +385,11 @@ const FlowsPage = () => {
 
       // A flow not yet in state is a create (POST); otherwise it's an update (PUT).
       const isNew = !flows.some(f => f.id === flow.id);
-      const result = isNew
+      const result: { success: boolean; error?: string; conflict?: EditConflict } = isNew
         ? await flowService.addFlow(flow)
         : await flowService.updateFlow(flow);
 
-      if (!result.success && 'conflict' in result && result.conflict) {
+      if (!result.success && result.conflict) {
         log.warn('Someone else saved this flow first', { flowId: flow.id });
         const conflict = result.conflict;
         return await new Promise<boolean>(resolve => {

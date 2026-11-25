@@ -15,20 +15,20 @@ export async function loadSharedItem(kind: SharedItemKind, itemId: string): Prom
   switch (kind) {
     case 'flow': {
       const flow = await flowService.getFlow(itemId);
-      return flow ? flow as unknown as Record<string, unknown> : null;
+      return flow ? { ...flow } : null;
     }
     case 'model': {
       const model: Model | null = await modelService.getModel(itemId);
       if (!model) return null;
       const masked = { ...model };
       if (masked.ApiKey && !masked.ApiKey.startsWith('${global:')) masked.ApiKey = MASKED_API_KEY;
-      return masked as unknown as Record<string, unknown>;
+      return masked;
     }
     case 'mcp-server': {
       const configs = await mcpService.loadServerConfigs();
       if (!Array.isArray(configs)) throw new Error(configs.error || 'Could not read the MCP servers.');
       const config: MCPServerConfig | undefined = configs.find(candidate => candidate.name === itemId);
-      return config ? config as unknown as Record<string, unknown> : null;
+      return config ? { ...config } : null;
     }
   }
 }

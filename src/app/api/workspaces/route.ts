@@ -178,7 +178,7 @@ export async function POST(request: Request) {
     // Multi-user mode (#575): `teamId` creates a workspace the team owns. Team
     // owners and admins may; anyone else is told the team does not exist.
     const teamId = person && typeof body.teamId === 'string' && body.teamId ? body.teamId : undefined;
-    if (teamId && !mayCreateWorkspaceFor(person.accounts, person.user, { ownerType: 'team', ownerId: teamId })) {
+    if (person && teamId && !mayCreateWorkspaceFor(person.accounts, person.user, { ownerType: 'team', ownerId: teamId })) {
       return NextResponse.json({ error: 'No such team, or you are not one of its owners.' }, { status: 404 });
     }
     const workspace = await createWorkspace(body.name as string);
