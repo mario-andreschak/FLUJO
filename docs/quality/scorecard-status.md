@@ -173,7 +173,10 @@ not kept current.
   [backup, upgrade and restore guide](../operations/production-operations.md),
   and a Windows upgrade and rollback drill on source builds (#1151).
 - **Missing:** the same checks on the npm package, the Windows installer, Linux
-  and the container (#570). Multi-user and team isolation (#573–#575): without it
+  and the container (#570). On the cleanup branch one harness now runs backup,
+  restart, upgrade and restore checks on the npm package (Linux and Windows),
+  the Windows installer and the Docker image in CI; its first CI runs and runs
+  on real installed machines are still pending. Multi-user and team isolation (#573–#575): without it
   the audit's "not a multi-user system" still holds. #212 is deferred by the
   owner, so this row cannot reach A− for shared use until that changes.
 
@@ -184,7 +187,7 @@ not kept current.
 | `scripts/flujo-drive.mjs` kept its state file in the shared temp folder, and `stop` deleted whatever folder that file named | Fixed on the cleanup branch: state and evidence now live in the user's own cache folder, and `stop` only deletes a data folder the tool created. Three high scanner alerts go away. |
 | Credentials and login are protected only when the owner opts in | Needs a new issue: protect the credential key with the operating system's per-user store by default (Windows DPAPI, macOS Keychain, a private key file outside the data folder on Linux), migrate existing installs with a backup, let the owner turn on login from Settings instead of environment variables, and consider login by default for new installs. |
 | The four hot-spot files grow with each feature | Suggested for #571: a size ratchet like the lint ratchet, added once parallel work has landed. |
-| Shell installers clone the full history, including an 80 MB website video | Suggested for #570/#571: a partial clone, or moving the video to release assets (the website uses it, so only with Mario's approval). |
+| Shell installers clone the full history, including an 80 MB website video | Fixed on the cleanup branch (#570): new installs use a partial clone and leave the website folder out, about 30 MB instead of about 370 MB. The video itself stays where the website needs it. |
 
 ## What only people can do
 

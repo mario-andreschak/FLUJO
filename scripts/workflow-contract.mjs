@@ -212,9 +212,39 @@ export function assertReleaseVerificationGates(workflows) {
   }
 }
 
+const PACKAGED_ACCEPTANCE = 'node scripts/packaged-acceptance.mjs ';
+
+/** Every shipped form runs the same backup, restart, upgrade and restore checks before it is published (#570). */
+export function assertPackagedAcceptance(workflows, { mainIntegration = false } = {}) {
+  const forms = [
+    ['publish-npm.yml', 'prepare', '--form npm --tarballs ', step => step.run === 'node scripts/npm-release.mjs prepare', step => step.uses?.startsWith('actions/upload-artifact@')],
+    ['publish-image.yml', 'candidate', '--form docker ', step => step.id === 'smoke', step => step.run === 'node scripts/image-release.mjs candidate'],
+    ['installer.yml', 'installer-acceptance', '--form checkout ', step => step.run?.startsWith('./scripts/verify-windows-install.ps1'), step => step.uses?.startsWith('actions/upload-artifact@')],
+    ...(mainIntegration ? [] : [['verify.yml', 'production-build', '--form npm --pack ', step => step.run?.includes('npm run smoke:mcp-artifacts'), step => step.name === 'Retain exact runtime measurements']]),
+  ];
+  for (const [file, id, form, isBefore, isAfter] of forms) {
+    const steps = workflows[file]?.jobs?.[id]?.steps ?? [];
+    const indexes = steps.flatMap((step, index) => step.run?.includes(PACKAGED_ACCEPTANCE) ? [index] : []);
+    const check = steps[indexes[0]];
+    const allowedCondition = file === 'verify.yml' ? [undefined, APPLICATION_CHANGED] : [undefined];
+    if (indexes.length !== 1 || !check.run.includes(form) || !/ --from (?:npm|image):\S+/.test(check.run)
+        || check['continue-on-error'] || !allowedCondition.includes(check.if)
+        || steps.findIndex(isBefore) < 0 || steps.findIndex(isBefore) > indexes[0]
+        || steps.findIndex(isAfter) < indexes[0]) {
+      throw new Error(`${file}/${id} must run the backup, restart, upgrade and restore checks on its shipped form after it is built and before it is kept or published.`);
+    }
+  }
+  const safety = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
+  const unit = safety.find(step => step.run === 'node --test scripts/packaged-acceptance.test.mjs');
+  if (!unit || unit.if !== undefined || unit['continue-on-error']) {
+    throw new Error('Release safety must run the packaged acceptance harness tests on both operating systems.');
+  }
+}
+
 export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
   assertReleaseVerificationGates(workflows);
+  assertPackagedAcceptance(workflows, { mainIntegration });
   const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
   const installerDecisions = releaseSteps.find(step => step.name === 'Verify Windows installer decisions before publication');
   if (releaseSteps.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth'] !== 0

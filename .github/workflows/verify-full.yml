@@ -130,6 +130,21 @@ jobs:
         run: |
           set -euo pipefail
           npm run smoke:mcp-artifacts
+      # Same checks as the release image and installer jobs (#570).
+      - name: Back up, restart, upgrade and restore the installed npm package
+        if: steps.application-change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/packaged-acceptance.mjs --form npm --pack --from npm:latest --report "$RUNNER_TEMP/packaged-acceptance/npm.json"
+      - name: Retain the packaged acceptance report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: packaged-acceptance-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/packaged-acceptance/
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Retain exact runtime measurements
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -230,6 +245,9 @@ jobs:
       - run: node --test scripts/release-evidence.test.mjs
       - name: Verify maintainer evidence boundaries
         run: node --test scripts/read-bounded-file.test.mjs scripts/maintainer-drill.test.mjs scripts/maintainer-installed-baseline.test.mjs scripts/maintainer-installed-recovery.test.mjs scripts/maintainer-installed-upgrade.test.mjs scripts/maintainer-npm-provenance.test.mjs scripts/maintainer-synthetic-state.test.mjs
+      - name: Verify the packaged-artifact backup, restart and restore checks
+        timeout-minutes: 10
+        run: node --test scripts/packaged-acceptance.test.mjs
       - name: Exercise disposable ownership prototype
         timeout-minutes: 3
         run: node scripts/ownership-prototype/run.cjs "${{ runner.temp }}/ownership-prototype.json"

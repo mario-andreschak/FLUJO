@@ -87,6 +87,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
+      # The previous release writes the data, these exact tarballs take it over.
+      - name: Back up, restart, upgrade and restore the exact release packages
+        run: node scripts/packaged-acceptance.mjs --form npm --tarballs "${{ runner.temp }}/flujo-npm-release" --from npm:latest
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         id: artifact
         with:

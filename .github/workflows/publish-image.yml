@@ -108,6 +108,11 @@ jobs:
           node scripts/smoke-mcp-artifacts.mjs --proxy-only http://127.0.0.1:4200
           echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
           mkdir -p "$IMAGE_EVIDENCE_DIR"
+      # The published image writes the data on a volume, the tested image takes it over.
+      - name: Back up, restart, upgrade and restore with the exact image
+        env:
+          TESTED_IMAGE_ID: ${{ steps.smoke.outputs.image_id }}
+        run: node scripts/packaged-acceptance.mjs --form docker --image "$TESTED_IMAGE_ID" --from image:ghcr.io/mario-andreschak/flujo:latest
       - name: Inventory OS and installed packages from the tested image
         id: sbom
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3

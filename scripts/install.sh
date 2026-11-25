@@ -68,6 +68,29 @@ validate_existing_repository() {
   [ "$INSTALL_CHANNEL" = stable ] || [ "$current" = "$BRANCH" ] || die 'Checkout is on a different branch. Select the intended branch yourself before updating.'
 }
 
+git_supports_partial_clone() {
+  local version
+  version="$(git --version 2>/dev/null)" || return 1
+  [[ "$version" =~ ([0-9]+)\.([0-9]+) ]] || return 1
+  [ "${BASH_REMATCH[1]}" -gt 2 ] || { [ "${BASH_REMATCH[1]}" -eq 2 ] && [ "${BASH_REMATCH[2]}" -ge 25 ]; }
+}
+
+# A new install downloads only the files of the chosen version, not the whole
+# history, and leaves out the website folder (githubpages/, mostly video and
+# audio) except the OAuth metadata the app builds in. The Docker image leaves
+# out the same files (.dockerignore). `git sparse-checkout disable` brings the
+# website back. Older Git without partial clone downloads the full history.
+clone_repository() {
+  local template="$MANIFEST_DIR/clone-template"
+  mkdir -p "$template/info"
+  printf '%s\n' '/*' '!/githubpages/' '/githubpages/oauth/client-metadata.json' > "$template/info/sparse-checkout"
+  if git_supports_partial_clone; then
+    run_stage repository git clone --filter=blob:none --template="$template" -c core.sparseCheckout=true -c core.sparseCheckoutCone=false -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  else
+    run_stage repository git clone --template="$template" -c core.sparseCheckout=true -c core.sparseCheckoutCone=false -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  fi
+}
+
 update_existing_repository() {
   validate_existing_repository
   run_stage repository git -C "$INSTALL_DIR" fetch origin "$BRANCH"
@@ -552,7 +575,7 @@ if [ -e "$INSTALL_DIR/.git" ]; then
   update_existing_repository
 else
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  run_stage repository git clone -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  clone_repository
 fi
 INSTALLED_REVISION="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
 ok "Installed source: $BRANCH at $INSTALLED_REVISION"
