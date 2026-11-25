@@ -19,6 +19,10 @@ import {
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
+  acquirePersonaRuntimeRetentionWriteGrant,
+  type PersonaRuntimeRetentionWriteGrant,
+} from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
+import {
   applyRetention,
   type RetentionPolicy,
 } from '@/backend/services/enduringAgents/retention';
@@ -124,6 +128,13 @@ function erroredActivityWithCoreSnapshot() {
     completedAt: 200,
   });
 }
+
+const ACTIVE_RETENTION = {
+  mode: 'active',
+  rolloutBasisPoints: 10_000,
+  cohortVersion: 'compact-runtime-test',
+  criticalPersonaIds: [],
+} as const;
 
 describe('Persona runtime compaction', () => {
   it('applies the approved per-kind retention windows and detailed rank caps', () => {
@@ -267,9 +278,13 @@ describe('Persona runtime compaction', () => {
         original.id,
         { ...original, workspaceId },
       );
-      const result = await withPersonaRuntimeLock(original.personaId, () => (
-        compactPersonaFlowDispatches(original.personaId, now)
-      ));
+      const result = await withPersonaRuntimeLock(original.personaId, async (lock) => {
+        const grant = await acquirePersonaRuntimeRetentionWriteGrant(original.personaId, lock, {
+          config: ACTIVE_RETENTION,
+        });
+        if (!grant) throw new Error('Active retention must issue a write grant.');
+        return compactPersonaFlowDispatches(grant, now);
+      });
       const stored = await loadCollectionItem<unknown | null>(
         ENDURING_AGENT_COLLECTIONS.flowDispatches,
         original.id,
@@ -293,6 +308,45 @@ describe('Persona runtime compaction', () => {
     const parsed = PersonaFlowDispatchRecordSchema.parse(stored);
     expect(parsed.compactedAt).toBe(now);
     expect(parsed.flowInput).toBeUndefined();
+  });
+
+  it('writes only with a grant issued for active retention', async () => {
+    const workspaceId = `compact-runtime-grant-${process.pid}`;
+    const original = completedDispatch();
+    const now = original.completedAt! + getFlowDispatchRetentionPolicy().retentionMs + 1;
+
+    const outcome = await runWithWorkspace(workspaceId, async () => {
+      await saveCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.flowDispatches,
+        original.id,
+        { ...original, workspaceId },
+      );
+      return withPersonaRuntimeLock(original.personaId, async (lock) => {
+        const shadowGrant = await acquirePersonaRuntimeRetentionWriteGrant(original.personaId, lock, {
+          config: { ...ACTIVE_RETENTION, mode: 'shadow' },
+        });
+        const forged: PersonaRuntimeRetentionWriteGrant = {
+          personaId: original.personaId,
+          cohortVersion: ACTIVE_RETENTION.cohortVersion,
+          authorize: async () => true,
+        };
+        const forgedError = await compactPersonaFlowDispatches(forged, now).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        const stored = await loadCollectionItem<PersonaFlowDispatchRecord | null>(
+          ENDURING_AGENT_COLLECTIONS.flowDispatches,
+          original.id,
+          null,
+        );
+        return { shadowGrant, forgedError, stored };
+      });
+    });
+
+    expect(outcome.shadowGrant).toBeNull();
+    expect(String(outcome.forgedError)).toContain('acquirePersonaRuntimeRetentionWriteGrant');
+    expect(outcome.stored?.compactedAt).toBeUndefined();
+    expect(outcome.stored?.flowInput).toEqual(original.flowInput);
   });
 
   it('rejects compacted non-terminal envelopes', () => {

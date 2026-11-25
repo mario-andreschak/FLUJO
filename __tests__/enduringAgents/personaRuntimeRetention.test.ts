@@ -1,6 +1,18 @@
+import { createHash } from 'crypto';
+
 import {
   readPersonaRuntimeRetentionConfig,
+  readPersonaRuntimeRetentionEnvironment,
+  type PersonaRuntimeRetentionMode,
 } from '@/config/features';
+import { canonicalJson } from '@/backend/services/enduringAgents/behaviorRevisions';
+import { getMailboxItemRetentionPolicy } from '@/backend/services/enduringAgents/compactRuntime';
+import {
+  isSamePersonaMailboxAdmission,
+  personaMailboxAdmission,
+} from '@/backend/services/enduringAgents/mailboxAdmission';
+import { resolvePersonaRuntimeRetentionControl } from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
+import type { PersonaMailboxItem } from '@/shared/types/enduringAgent';
 import {
   getPersonaRetentionCohort,
   getPersonaRetentionEligibility,
@@ -159,5 +171,99 @@ describe('Persona runtime retention rollout primitives', () => {
     expect(save).toHaveBeenCalledTimes(1);
     expect(result.compacted).toBe(1);
     expect(result.unauthorized).toBe(2);
+  });
+});
+
+describe('Persona runtime retention switches', () => {
+  const environment = (mode?: string) => readPersonaRuntimeRetentionEnvironment(
+    mode === undefined ? {} : { FLUJO_PERSONA_RUNTIME_RETENTION_MODE: mode },
+  );
+
+  it('measures every Persona when nobody configured anything', () => {
+    expect(readPersonaRuntimeRetentionConfig({})).toMatchObject({
+      mode: 'shadow',
+      rolloutBasisPoints: 10_000,
+    });
+  });
+
+  it.each<[boolean, PersonaRuntimeRetentionMode | null, string | undefined, string, string]>([
+    [true, null, undefined, 'shadow', 'default'],
+    [true, 'active', undefined, 'active', 'setting'],
+    [true, null, 'active', 'active', 'environment'],
+    [true, 'disabled', 'active', 'disabled', 'setting'],
+    [true, 'active', 'disabled', 'disabled', 'environment'],
+    [true, 'active', 'shadow', 'shadow', 'environment'],
+    [true, 'shadow', 'active', 'shadow', 'setting'],
+    [false, 'active', 'active', 'disabled', 'code-switch'],
+  ])(
+    'code switch %s, setting %s, environment %s resolves to %s from %s',
+    (codeSwitch, setting, environmentMode, mode, source) => {
+      expect(resolvePersonaRuntimeRetentionControl({
+        codeSwitch,
+        setting,
+        settingReadable: true,
+        environment: environment(environmentMode),
+      })).toMatchObject({ config: { mode }, source });
+    },
+  );
+
+  it('turns retention off when the environment is malformed or the setting is unreadable', () => {
+    expect(resolvePersonaRuntimeRetentionControl({
+      codeSwitch: true,
+      setting: 'active',
+      settingReadable: true,
+      environment: environment('Active'),
+    })).toMatchObject({ config: { mode: 'disabled' }, source: 'environment-invalid' });
+    expect(resolvePersonaRuntimeRetentionControl({
+      codeSwitch: true,
+      setting: null,
+      settingReadable: false,
+      environment: environment('active'),
+    })).toMatchObject({ config: { mode: 'disabled' }, source: 'setting-unreadable' });
+  });
+});
+
+describe('mailbox retries after compaction', () => {
+  const item: PersonaMailboxItem = {
+    schemaVersion: 1,
+    id: 'mailbox_1',
+    personaId: 'persona_1',
+    idempotencyKey: 'a'.repeat(64),
+    sequence: 1,
+    kind: 'assignment',
+    priority: 'normal',
+    status: 'completed',
+    source: { kind: 'assignment', sourceId: 'source_1' },
+    behaviorSlotKey: 'primary',
+    summary: 'Original request',
+    createdAt: 1,
+    updatedAt: 2,
+    completedAt: 2,
+  };
+  const request = personaMailboxAdmission(item);
+
+  it('matches the same request and rejects different work through the kept digest', () => {
+    const compacted = getMailboxItemRetentionPolicy().compact(item, 3);
+    expect(compacted.summary).toBeUndefined();
+    expect(isSamePersonaMailboxAdmission(compacted, request)).toBe(true);
+    expect(isSamePersonaMailboxAdmission(compacted, { ...request, summary: 'Other work' })).toBe(false);
+  });
+
+  it('still matches items compacted with the older digest on every field it kept', () => {
+    const olderDigest = createHash('sha256').update(canonicalJson({
+      idempotencyKey: item.idempotencyKey,
+      personaId: item.personaId,
+      status: item.status,
+      deliveredAt: item.deliveredAt,
+      completedAt: item.completedAt,
+    })).digest('hex');
+    const compacted: PersonaMailboxItem = {
+      ...item,
+      summary: undefined,
+      compactedAt: 3,
+      admissionDigest: olderDigest,
+    };
+    expect(isSamePersonaMailboxAdmission(compacted, request)).toBe(true);
+    expect(isSamePersonaMailboxAdmission(compacted, { ...request, kind: 'scheduled' })).toBe(false);
   });
 });

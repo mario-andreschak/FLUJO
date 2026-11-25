@@ -199,7 +199,9 @@ export async function executeRetentionPlan<T extends { id: string }>(
 }
 
 /**
- * Backward-compatible active compaction adapter used by completion hooks.
+ * Plan and write in one step for a single policy, without consulting the
+ * rollout switches. Runtime paths use the grant-checked compactors in
+ * compactRuntime.ts or the rollout sweep instead.
  */
 export async function applyRetention<T extends { id: string }>(
   records: readonly T[],

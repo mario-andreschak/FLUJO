@@ -42,6 +42,7 @@ import { canonicalJson } from './behaviorRevisions';
 import { resolveEffectiveBehaviorRevision } from './behaviorFlowResolver';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { saveIndexedCollectionItem } from './indexing';
+import { isSamePersonaMailboxAdmission } from './mailboxAdmission';
 import {
   hashPersonaInstructionContext,
   type PersonaActivitySnapshot,
@@ -479,22 +480,6 @@ function isTerminalActivity(activity: PersonaActivity): boolean {
   return activity.status === 'completed'
     || activity.status === 'cancelled'
     || activity.status === 'error';
-}
-
-function mailboxAdmission(record: PersonaMailboxItem): Record<string, unknown> {
-  return {
-    personaId: record.personaId,
-    idempotencyKey: record.idempotencyKey,
-    kind: record.kind,
-    priority: record.priority,
-    source: record.source,
-    behaviorSlotKey: record.behaviorSlotKey ?? null,
-    relationKey: record.relationKey ?? null,
-    relatedAction: record.relatedAction ?? null,
-    summary: record.summary ?? null,
-    payloadRef: record.payloadRef ?? null,
-    notBefore: record.notBefore ?? null,
-  };
 }
 
 function leaseMatchesFence(lease: PersonaLease, fence: PersonaLeaseFence): boolean {
@@ -1520,7 +1505,7 @@ async function admitPersonaMailboxItem(
 
   const existing = await getPersonaMailboxItem(input.personaId, id);
   if (existing) {
-    if (canonicalJson(mailboxAdmission(existing)) !== canonicalJson(requestedAdmission)) {
+    if (!isSamePersonaMailboxAdmission(existing, requestedAdmission)) {
       throw new PersonaMailboxConflictError(
         id,
         `Mailbox idempotency key for Persona ${JSON.stringify(input.personaId)} was reused `
