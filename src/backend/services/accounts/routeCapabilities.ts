@@ -41,6 +41,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/credential-transfer': 'workspace',
   '/api/credential-transfer/restore': 'workspace',
   '/api/cwd': 'host', // shows server folders
+  '/api/diagnostics/report': 'workspace',
   '/api/encryption/secure': 'workspace',
   '/api/env': 'workspace',
   '/api/factory-observatory': 'admin', // installation-wide FACTORY connection

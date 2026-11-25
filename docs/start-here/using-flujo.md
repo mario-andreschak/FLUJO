@@ -48,6 +48,6 @@ If **Triggers** cannot refresh, it keeps the last saved schedules and marks thei
 | Runtime command missing | Install its prerequisite and restart after PATH changes; [proxy help](proxy.md) |
 | Workspace is initializing | Let migration finish; retain data and inspect the error before attempting repair |
 
-For support, include your install method, OS, version/revision and a redacted error in a [GitHub issue](https://github.com/mario-andreschak/FLUJO/issues) or [Discord](https://discord.gg/KPyrjTSSat).
+For support, include your install method, OS, version/revision and a redacted error in a [GitHub issue](https://github.com/mario-andreschak/FLUJO/issues) or [Discord](https://discord.gg/KPyrjTSSat). **Settings → Privacy & usage → Diagnostic report → Create report** gathers versions, setup counts and error counts for you; it never holds names, content or keys, and FLUJO never sends it. Read it, then copy it into your message if you want.
 
 [Start here](README.md)
