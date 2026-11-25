@@ -2,6 +2,7 @@
 // Launches a throwaway FLUJO and drives it like a user, for agents verifying their own changes.
 // The how-to is .claude/skills/verify-flujo/SKILL.md; what to drive is docs/feature-map/.
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -21,14 +22,23 @@ export function defaultDriveHome(env = process.env, platform = process.platform,
 }
 
 export const HOME = defaultDriveHome();
-const STATE_FILE = path.join(HOME, 'instance.json');
+
+/** One state file per checkout, so "stop" in one worktree never stops another worktree's instance or deletes its data. */
+export function stateFileFor(root, home = HOME, platform = process.platform) {
+  const key = platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root);
+  return path.join(home, `instance-${createHash('sha256').update(key).digest('hex').slice(0, 12)}.json`);
+}
+
+const STATE_FILE = stateFileFor(ROOT);
+// Written by versions that kept one state file for every checkout.
+const SHARED_STATE_FILE = path.join(HOME, 'instance.json');
 export const EVIDENCE_DIR = path.join(HOME, 'evidence');
 const RESERVED_PORTS = new Set([4200]);
 const STEP_KINDS = new Set(['goto', 'click', 'fill', 'press', 'wait-for', 'expect-text', 'drop-file', 'choose-file', 'shot', 'aria']);
 
 export const USAGE = `Usage: node scripts/flujo-drive.mjs <command> [options]
 
-Instance (one at a time, never the instance on port 4200):
+Instance (one per checkout, never the instance on port 4200):
   launch [--port N] [--data-dir DIR] [--timeout SECONDS]
                       Start a throwaway FLUJO with an empty data folder; returns once a page renders.
   doctor              Read-only: is the instance this tool started alive, on its port, and serving pages?
@@ -121,12 +131,23 @@ export function stopPlan(state, tempDir = os.tmpdir()) {
   return { pid, dataDir };
 }
 
-export function readState() {
+function readJson(file) {
   try {
-    return JSON.parse(readFileSync(STATE_FILE, 'utf8'));
+    return JSON.parse(readFileSync(file, 'utf8'));
   } catch {
     return undefined;
   }
+}
+
+/** This checkout's state file, or the older shared one while it still names an instance started from this checkout. */
+function stateFile() {
+  if (existsSync(STATE_FILE)) return STATE_FILE;
+  const shared = readJson(SHARED_STATE_FILE);
+  return typeof shared?.root === 'string' && samePath(path.resolve(shared.root), ROOT) ? SHARED_STATE_FILE : STATE_FILE;
+}
+
+export function readState() {
+  return readJson(stateFile());
 }
 
 function isAlive(pid) {
@@ -254,7 +275,8 @@ async function warm(routes, options, log) {
 }
 
 function stop(log) {
-  const state = readState();
+  const file = stateFile();
+  const state = readJson(file);
   if (!state) {
     log('Nothing to stop: no instance started by this tool.');
     return 0;
@@ -270,7 +292,7 @@ function stop(log) {
   else if (state.ownsDataDir && typeof state.dataDir === 'string') {
     log(`! ${state.dataDir} is not a data folder this tool created in ${os.tmpdir()}, so it was left in place.`);
   }
-  rmSync(STATE_FILE, { force: true });
+  rmSync(file, { force: true });
   const stopped = pid === undefined ? 'Nothing stopped: the state file named no valid process' : `Stopped pid ${pid}`;
   log(`${stopped}${dataDir ? ' and removed its data folder' : ''}. Evidence stays in ${EVIDENCE_DIR}.`);
   return 0;

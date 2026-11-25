@@ -229,6 +229,12 @@ describe('deny-by-default coverage guard', () => {
       }
     }
 
-    expect(offenders).toEqual([]);
+    if (offenders.length > 0) {
+      throw new Error('These routes never call assertUnlocked, so they serve data while the workspace is locked:\n'
+        + `${offenders.join('\n')}\n`
+        + 'Start each handler with `const locked = await assertUnlocked(); if (locked) return locked;` '
+        + "(import { assertUnlocked } from '@/utils/encryption/lockGate'; pass { openai: true } under /v1). "
+        + 'Only a route that must work before unlock and returns no workspace data goes on ALLOWLIST above, with its reason.');
+    }
   });
 });

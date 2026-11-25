@@ -6,10 +6,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  defaultDriveHome, evidencePath, isOwnedDataDir, main, parseArgs, parseViewport, routeUrl, stopPlan, validateSteps,
+  defaultDriveHome, evidencePath, isOwnedDataDir, main, parseArgs, parseViewport, routeUrl, stateFileFor, stopPlan, validateSteps,
 } from './flujo-drive.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./flujo-drive.mjs', import.meta.url));
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('arguments split into command, positional values and options', () => {
   assert.deepEqual(parseArgs(['click', '/flows', '--role', 'button', '--name', 'New agent', '--full', '--viewport=360x800']), {
@@ -91,7 +92,7 @@ test('stop never deletes a folder it did not create, whatever the state file say
     mkdirSync(precious);
     writeFileSync(path.join(precious, 'keep.txt'), 'keep');
     const finished = spawnSync(process.execPath, ['-e', '']);
-    writeFileSync(path.join(home, 'instance.json'), JSON.stringify({ pid: finished.pid, dataDir: precious, ownsDataDir: true }));
+    writeFileSync(stateFileFor(ROOT, home), JSON.stringify({ pid: finished.pid, dataDir: precious, ownsDataDir: true }));
     const result = spawnSync(process.execPath, [SCRIPT, 'stop'], {
       env: { ...process.env, FLUJO_DRIVE_HOME: home },
       encoding: 'utf8',
@@ -99,6 +100,35 @@ test('stop never deletes a folder it did not create, whatever the state file say
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(path.join(precious, 'keep.txt')), true);
     assert.match(result.stdout, /precious is not a data folder this tool created.*left in place/);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('each checkout keeps its own state file', () => {
+  const home = path.join('/home', 'ana', '.cache', 'flujo-drive');
+  const one = stateFileFor('/work/flujo', home, 'linux');
+  assert.equal(path.dirname(one), home);
+  assert.equal(stateFileFor('/work/flujo/', home, 'linux'), one);
+  assert.notEqual(stateFileFor('/work/flujo-worktree', home, 'linux'), one);
+  assert.equal(stateFileFor('C:\\Work\\FLUJO', home, 'win32'), stateFileFor('c:\\work\\flujo', home, 'win32'));
+});
+
+test('stop in one checkout leaves an instance started from another checkout alone', () => {
+  const sandbox = mkdtempSync(path.join(os.tmpdir(), 'flujo-drive-test-'));
+  try {
+    const home = path.join(sandbox, 'home');
+    const theirs = path.join(sandbox, 'flujo-drive-data-abc123');
+    mkdirSync(home);
+    mkdirSync(theirs);
+    const shared = path.join(home, 'instance.json');
+    const finished = spawnSync(process.execPath, ['-e', '']);
+    writeFileSync(shared, JSON.stringify({ pid: finished.pid, dataDir: theirs, ownsDataDir: true, root: path.join(sandbox, 'other-checkout') }));
+    const result = spawnSync(process.execPath, [SCRIPT, 'stop'], { env: { ...process.env, FLUJO_DRIVE_HOME: home }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Nothing to stop/);
+    assert.equal(existsSync(shared), true);
+    assert.equal(existsSync(theirs), true);
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }

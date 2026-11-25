@@ -51,8 +51,16 @@ and `eslint-suppressions.json`. One case is a bug, not a pattern: fix it and sto
 
 ## 5. Record it
 
-Add a row to the table in AGENTS.md. If the check replaces a line of prose,
-delete that line.
+Add one file to `docs/corrections/` (the format is in its README.md): the rule
+as the heading, then "Enforced by:" with the lint rule, test or `npm run` script
+from step 3, each in backticks with its path from the repository root. Never add
+a table row to AGENTS.md; parallel branches all append there and conflict. If
+the check replaces a line of prose, delete that line.
+
+`npm run check:corrections` fails when the file names something that does not
+exist or a test CI never runs. A new `node --test` file goes into the
+`test:checks` script; a Jest test under `__tests__/` runs in CI by itself,
+except `__tests__/enduringAgents/`.
 
 ## 6. Verify
 
@@ -61,3 +69,9 @@ npm run lint:all
 npm run lint:ratchet
 npm run test:checks
 ```
+
+## Shared folders
+
+Other agents work on this machine at the same time. Delete only files you
+created, by their exact path; never clean temp, scratchpad or worktree folders
+with a wildcard or name pattern.
