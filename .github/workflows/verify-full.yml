@@ -512,6 +512,8 @@ jobs:
         run: npm run test:checks
       - run: npm run lint:all
       - run: npm run lint:ratchet
+      - name: Keep the biggest execution and MCP files shrinking, with no imports back into them
+        run: npm run check:hotspots && npm run check:boundaries
       - run: npm run check:repo-hygiene
       - run: npm run check:feature-map
       # Model-checks docs/formal with the pinned official TLA+ tools; the runner image has Java 17.

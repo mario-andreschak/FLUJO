@@ -1,0 +1,52 @@
+{
+  "about": "The three biggest execution and MCP files (#571). maxLines only goes down (npm run check:hotspots). Modules listed here were split out of the file and must not import it back, and nothing the file imports may import it back (node scripts/check-import-boundaries.cjs). See docs/architecture/execution-module-boundaries.md.",
+  "hotspots": [
+    {
+      "file": "src/backend/execution/flow/runFlow.ts",
+      "maxLines": 4048,
+      "modules": []
+    },
+    {
+      "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
+      "maxLines": 5279,
+      "modules": []
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "maxLines": 4294,
+      "modules": []
+    }
+  ],
+  "backImportDebt": [
+    {
+      "from": "src/backend/execution/extensions/index.ts",
+      "to": "src/backend/execution/flow/runFlow.ts",
+      "reason": "Type-only import of FlowRunInput. Import it from runFlowContract.ts once that module exists."
+    },
+    {
+      "from": "src/backend/execution/flow/handlers/behaviorToolInvocation.ts",
+      "to": "src/backend/execution/flow/runFlow.ts",
+      "reason": "Lazy import to run a behavior call as an ephemeral flow, while runFlow names its registry type inline. Moving FlowRunInput into runFlowContract.ts removes the reverse edge."
+    },
+    {
+      "from": "src/backend/execution/flow/subflowRecovery.ts",
+      "to": "src/backend/execution/flow/runFlow.ts",
+      "reason": "Lazy import to resume the parent run after a recovered subflow join. Remove when recovery receives runFlow as a parameter."
+    },
+    {
+      "from": "src/utils/workspace.ts",
+      "to": "src/backend/services/mcp/index.ts",
+      "reason": "Lazy import to disconnect every MCP server before a workspace is deleted. Remove when workspace deletion takes an MCP disconnect hook."
+    },
+    {
+      "from": "src/backend/services/mcp/tools.ts",
+      "to": "src/backend/services/mcp/index.ts",
+      "reason": "Lazy import to check and reacquire the live client while following an MCP Task. Remove when the task path receives a client lookup as a parameter."
+    },
+    {
+      "from": "src/backend/services/mcp/betaClient.ts",
+      "to": "src/backend/services/mcp/index.ts",
+      "reason": "Lazy import to check that the beta client is still the live client for MCP Tasks. Remove when the beta client receives a client lookup as a parameter."
+    }
+  ]
+}
