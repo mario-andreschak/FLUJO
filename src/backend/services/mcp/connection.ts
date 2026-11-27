@@ -1,4 +1,5 @@
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
+import { mcpAppsEnabled, mcpSkillsEnabled, mcpAppRuntimeBrokerEnabled } from '@/shared/utils/mcpClientFeatures';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { McpIsolationError } from '../security/isolatedMcp';
@@ -65,7 +66,7 @@ import {
   samplingConfigKey,
 } from "./sampling";
 import {
-  elicitationEnabled,
+  elicitationCapability,
   registerElicitationHandler,
   elicitationConfigKey,
 } from "./elicitation";
@@ -129,8 +130,8 @@ export function capabilityKey(config: MCPServerConfig): string {
   return [
     samplingConfigKey(config),
     elicitationConfigKey(config),
-    config.enableMcpApps === true ? "mcp-apps:on" : "mcp-apps:off",
-    config.enableMcpSkills === true ? "mcp-skills:on" : "mcp-skills:off",
+    mcpAppsEnabled(config) ? "mcp-apps:on" : "mcp-apps:off",
+    mcpSkillsEnabled(config) ? "mcp-skills:on" : "mcp-skills:off",
   ].join("|");
 }
 
@@ -490,15 +491,15 @@ export function createNewClient(config: MCPServerConfig): Client {
   // unconditional means roots changes never require a client rebuild; content changes
   // are announced via notifications/roots/list_changed instead. Sampling stays opt-in:
   // it is declared only when the server has an enabled sampling trust policy, so a
-  // server can't ask FLUJO to run LLM calls unless the user opted in. URL elicitation
-  // and mcp-stdio-oauth are declared for local stdio servers; the handler accepts a URL
-  // only inside an explicit user-started authorization request. MCP Apps is
-  // advertised only for a server whose explicit security opt-in is on.
+  // server can't ask FLUJO to run LLM calls unless the user opted in. Elicitation
+  // (forms and links), MCP Apps and Skills are on unless the user turned them off
+  // for this server (see mcpClientFeatures.ts). mcp-stdio-oauth and link mode are
+  // always declared for local stdio servers, for account sign-in.
   // Every configured server, including packages shipped with FLUJO, uses this
   // same client factory and handshake.
   const serverHasSampling = samplingEnabled(config);
-  const serverHasElicitation = elicitationEnabled(config);
-  const serverHasMcpApps = config.enableMcpApps === true;
+  const elicitation = elicitationCapability(config);
+  const serverHasMcpApps = mcpAppsEnabled(config);
   const serverHasStdioOAuth = config.transport === "stdio" && config.isolation === undefined;
   const client = new CompleteToolDiscoveryClient(
     {
@@ -510,16 +511,9 @@ export function createNewClient(config: MCPServerConfig): Client {
         experimental: {},
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
-        ...(serverHasStdioOAuth || serverHasElicitation
-          ? {
-              elicitation: {
-                ...(serverHasStdioOAuth ? { url: {} } : {}),
-                ...(serverHasElicitation ? { form: {} } : {}),
-              },
-            }
-          : {}),
+        ...(elicitation ? { elicitation } : {}),
         extensions: {
-          ...(config.enableMcpSkills === true
+          ...(mcpSkillsEnabled(config)
             ? { [MCP_SKILLS_EXTENSION_ID]: {} }
             : {}),
           ...(serverHasStdioOAuth
@@ -541,7 +535,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   if (serverHasSampling) {
     registerSamplingHandler(client, config);
   }
-  if (serverHasStdioOAuth || serverHasElicitation) {
+  if (elicitation) {
     registerElicitationHandler(client, config);
   }
   (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
@@ -1160,7 +1154,7 @@ export async function createStdioTransport(
   try {
     assertMcpRuntimeAuthorityRetired(config.name);
     workload = prepareBundledFlujoWorkload(config);
-    runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+    runtimeBroker = options?.enableRuntimeBroker && mcpAppRuntimeBrokerEnabled(config)
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
     const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
     const brokerEnv = runtimeBroker ? (config.trustedHost ? await trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {};

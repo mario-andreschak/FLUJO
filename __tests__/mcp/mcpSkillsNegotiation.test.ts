@@ -31,10 +31,10 @@ function declaredExtensions(client: Client): Record<string, unknown> | undefined
 }
 
 describe('MCP Skills negotiation', () => {
-  it('is disabled by default and does not advertise a client-side extension', () => {
-    expect(capabilityKey(config())).toContain('mcp-skills:off');
-    expect(declaredExtensions(createNewClient(config()))?.[MCP_SKILLS_EXTENSION_ID])
-      .toBeUndefined();
+  it('is on by default and off only when the user turned it off', () => {
+    expect(capabilityKey(config())).toContain('mcp-skills:on');
+    expect(declaredExtensions(createNewClient(config()))?.[MCP_SKILLS_EXTENSION_ID]).toEqual({});
+    expect(capabilityKey(config(false))).toContain('mcp-skills:off');
     expect(declaredExtensions(createNewClient(config(false)))?.[MCP_SKILLS_EXTENSION_ID])
       .toBeUndefined();
   });

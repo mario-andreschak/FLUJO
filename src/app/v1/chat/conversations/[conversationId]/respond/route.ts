@@ -15,6 +15,7 @@ import { isPersonaOwnedConversationState } from '@/backend/execution/flow/person
 import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { cancelToolCall } from '@/backend/execution/flow/toolCancelRegistry';
 import { resolveConversationElicitation, InvalidElicitationResponseError } from '@/backend/services/mcp/elicitationRegistry';
+import type { ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { resolvePendingQuestion, declinePendingQuestion, InvalidQuestionAnswerError } from '@/backend/services/questionRegistry';
 import { applyApprovalDecision, refusedHumanStepAnswer } from '@/backend/execution/flow/resumeAfterApproval';
 import type { HumanAnswer } from '@/utils/shared/humanStep';
@@ -63,10 +64,19 @@ async function personaResumeResponse(
   }, { status: dispatch.state === 'queued' || dispatch.state === 'running' ? 202 : 200 });
 }
 
+/**
+ * Answers to an MCP elicitation: `submit` sends a filled form, `done` says the
+ * person finished a link request, `decline` refuses, and `cancel` dismisses.
+ */
+const ELICITATION_ACTIONS = ['elicitation-submit', 'elicitation-done', 'elicitation-decline', 'elicitation-cancel'] as const;
+type ElicitationAction = typeof ELICITATION_ACTIONS[number];
+const isElicitationAction = (action: string): action is ElicitationAction =>
+  (ELICITATION_ACTIONS as readonly string[]).includes(action);
+
 type RespondRequestBody =
   | { action: 'approve' | 'reject'; toolCallId: string; human?: HumanAnswer }
   | { action: 'elicitation-submit'; elicitationId: string; content: Record<string, string | number | boolean | string[]> }
-  | { action: 'elicitation-cancel'; elicitationId: string }
+  | { action: 'elicitation-cancel' | 'elicitation-decline' | 'elicitation-done'; elicitationId: string }
   | { action: 'question-answer'; questionId: string; answers: string[][] }
   | { action: 'question-decline'; questionId: string }
   | { action: 'cancelToolCall'; toolCallId: string };
@@ -96,14 +106,14 @@ async function POST_handler(
   try {
     requestBody = await request.json();
     if (!requestBody || typeof requestBody !== 'object' || Array.isArray(requestBody)) throw new Error('An action object is required');
-    const validActions = ['approve', 'reject', 'elicitation-submit', 'elicitation-cancel', 'question-answer', 'question-decline', 'cancelToolCall'];
+    const validActions = ['approve', 'reject', ...ELICITATION_ACTIONS, 'question-answer', 'question-decline', 'cancelToolCall'];
     if (!requestBody.action || !validActions.includes(requestBody.action)) {
       throw new Error(`Invalid request body. action must be one of: ${validActions.join(', ')}`);
     }
     if ((requestBody.action === 'approve' || requestBody.action === 'reject' || requestBody.action === 'cancelToolCall') && !requestBody.toolCallId) {
       throw new Error('toolCallId is required for approve/reject/cancelToolCall actions');
     }
-    if ((requestBody.action === 'elicitation-submit' || requestBody.action === 'elicitation-cancel') && !requestBody.elicitationId) {
+    if (isElicitationAction(requestBody.action) && !('elicitationId' in requestBody && requestBody.elicitationId)) {
       throw new Error('elicitationId is required for elicitation actions');
     }
     if ((requestBody.action === 'question-answer' || requestBody.action === 'question-decline') && !requestBody.questionId) {
@@ -111,8 +121,7 @@ async function POST_handler(
     }
     const id = requestBody.action === 'question-answer' || requestBody.action === 'question-decline'
       ? requestBody.questionId
-      : requestBody.action === 'elicitation-submit' || requestBody.action === 'elicitation-cancel'
-        ? requestBody.elicitationId : requestBody.toolCallId;
+      : 'elicitationId' in requestBody ? requestBody.elicitationId : requestBody.toolCallId;
     if (typeof id !== 'string' || !id.trim() || id.length > 256) throw new Error('A valid input ID is required');
     if (requestBody.action === 'elicitation-submit' && (!requestBody.content
       || typeof requestBody.content !== 'object' || Array.isArray(requestBody.content))) throw new Error('Elicitation content must be an object');
@@ -163,19 +172,20 @@ async function POST_handler(
 
   // A finished run may briefly retain a mailbox until the external request
   // cancellation/timeout arrives. A late answer must not release its server.
-  if (['question-answer', 'question-decline', 'elicitation-submit', 'elicitation-cancel'].includes(requestBody.action)
+  if ((['question-answer', 'question-decline'].includes(requestBody.action) || isElicitationAction(requestBody.action))
     && ['completed', 'error', 'capped'].includes(responseState?.status ?? '')) {
     return NextResponse.json({ error: 'This conversation is no longer awaiting this input.' }, { status: 404 });
   }
 
   // --- Elicitation submit/cancel (in-request path: run is live, blocked in the handler) ---
-  if (requestBody.action === 'elicitation-submit' || requestBody.action === 'elicitation-cancel') {
+  if ('elicitationId' in requestBody) {
     const { action, elicitationId } = requestBody;
-    const resolve = () => action === 'elicitation-submit'
-      ? resolveConversationElicitation(conversationId, elicitationId, { action: 'accept', content: requestBody.content })
-      : resolveConversationElicitation(conversationId, elicitationId, { action: 'cancel' });
+    const answer: ElicitResult = action === 'elicitation-submit' ? { action: 'accept', content: requestBody.content }
+      : action === 'elicitation-done' ? { action: 'accept' }
+        : action === 'elicitation-decline' ? { action: 'decline' } : { action: 'cancel' };
+    const resolve = () => resolveConversationElicitation(conversationId, elicitationId, answer);
     let result: ReturnType<typeof resolve>;
-    if (action === 'elicitation-submit' && isPersonaOwnedConversationState(responseState)) {
+    if (answer.action === 'accept' && isPersonaOwnedConversationState(responseState)) {
       const authority = responseState?.executionAuthority;
       if (!authority?.commitWhileCurrent) {
         return NextResponse.json({

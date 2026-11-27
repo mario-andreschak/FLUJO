@@ -167,3 +167,22 @@ tester.run('single-tool-approval-gate', rules['single-tool-approval-gate'], {
     },
   ],
 });
+
+tester.run('mcp-feature-defaults', rules['mcp-feature-defaults'], {
+  valid: [
+    'const on = mcpAppsEnabled(config);',
+    'if (config.enableMcpApps === false) off();',
+    'const changed = detail.config?.enableMcpApps !== false;',
+    'if (config.enableMcpApps || config.elicitation?.enabled) refuse();',
+    {
+      code: 'export const on = (config) => config.enableMcpApps === true;',
+      filename: '/repo/src/shared/utils/mcpClientFeatures.ts',
+    },
+  ],
+  invalid: [
+    { code: 'const on = config.enableMcpApps === true;', errors: [{ messageId: 'compare', data: { name: 'enableMcpApps' } }] },
+    { code: 'if (config.enableMcpSkills !== true) return;', errors: [{ messageId: 'compare', data: { name: 'enableMcpSkills' } }] },
+    { code: 'const on = true === server?.enableMcpApps;', errors: [{ messageId: 'compare' }] },
+    { code: 'const on = config.elicitation?.enabled === true;', errors: [{ messageId: 'compare', data: { name: 'elicitation.enabled' } }] },
+  ],
+});

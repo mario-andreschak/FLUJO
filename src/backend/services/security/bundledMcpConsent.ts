@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { mcpAppRuntimeBrokerEnabled } from '@/shared/utils/mcpClientFeatures';
 import fs, { constants } from 'node:fs';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
@@ -147,7 +148,7 @@ export async function previewBundledHostConsent(serverName: string, options: { r
   }
   const environmentNames = [...Object.keys(environment),
     ...(options.runtimeHome === 'isolated' ? TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES : []),
-    ...(stored.enableMcpApps ? ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'] : []),
+    ...(mcpAppRuntimeBrokerEnabled(stored) ? ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'] : []),
     ...(descriptor.packageDirectory === 'flujo' ? ['FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN',
       'FLUJO_MCP_WORKLOAD_TOKEN', 'FLUJO_MCP_WORKLOAD_AUDIENCE'] : [])];
   const workload = descriptor.packageDirectory === 'flujo'

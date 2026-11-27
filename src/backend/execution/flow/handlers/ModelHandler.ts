@@ -118,6 +118,7 @@ import { isRunResourceToolName, executeRunResourceTool, nativeRunResourceResult,
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
 import { executeToolLoadingTool, isToolLoadingToolName, toolLoadingResultValue } from '../toolLoading/toolLoadingExecutors';
+import { isMcpSkillToolName, executeMcpSkillTool, LOAD_MCP_SKILL_TOOL_NAME } from './mcpSkillTools';
 import { isPersonaToolName, executePersonaTool } from './personaTools';
 import {
   executeMeetingTool,
@@ -1602,6 +1603,7 @@ export class ModelHandler {
     const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
     const hasQuestionTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isQuestionToolName(t.function.name));
     const hasTodoTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isTodoToolName(t.function.name));
+    const hasMcpSkillTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMcpSkillToolName(t.function.name));
     const personaToolCallNames = conversationId
       ? (tools ?? [])
           .filter((t) => t.type === 'function' && isPersonaToolName(t.function.name))
@@ -1649,7 +1651,7 @@ export class ModelHandler {
       .filter((t) => t.type === 'function' && isToolLoadingToolName(t.function.name))
       .map((t) => t.function.name);
     const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> | undefined =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool || hasBehaviorTool || hasDetachedSubflowTool || communicationToolNames.length > 0 || toolLoadingCallNames.length > 0)
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasMcpSkillTool || hasPersonaTool || hasMeetingTool || hasSubflowTool || hasBehaviorTool || hasDetachedSubflowTool || communicationToolNames.length > 0 || toolLoadingCallNames.length > 0)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -1709,6 +1711,14 @@ export class ModelHandler {
                 emit,
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'todo failed');
+              return outcome.data;
+            },
+            // load_mcp_skill: load a skill a bound MCP server offers (Skills over MCP).
+            [LOAD_MCP_SKILL_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
+              const outcome = await executeMcpSkillTool(args, {
+                conversationId, mcpNodes: mcpNodes ?? [], unattended: input.unattended, emit, node: runResourceNode,
+              });
+              if (!outcome.success) throw new Error(outcome.error ?? 'load_mcp_skill failed');
               return outcome.data;
             },
           }
@@ -4154,6 +4164,7 @@ export class ModelHandler {
         if (isQuestionToolName(toolName)) return LOCAL_GROUP;
         if (isTodoToolName(toolName)) return LOCAL_GROUP;
         if (isToolLoadingToolName(toolName)) return LOCAL_GROUP;
+        if (isMcpSkillToolName(toolName)) return LOCAL_GROUP;
         if (isPersonaToolName(toolName)) return LOCAL_GROUP;
         if (isMeetingToolName(toolName)) return LOCAL_GROUP;
         if (isSubflowToolName(toolName)) return LOCAL_GROUP;
@@ -4409,6 +4420,26 @@ export class ModelHandler {
               content: resultContent,
               timestamp: Date.now(),
             });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // load_mcp_skill: asks the person once, then returns the verified
+          // skill text as untrusted data (mcpSkillTools.ts).
+          if (isMcpSkillToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeMcpSkillTool(args, {
+              conversationId, mcpNodes: mcpNodes ?? [], unattended: input.unattended, emit, node,
+            });
+            const resultContent = outcome.success ? String(outcome.data) : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({ id: uuidv4(), role: 'tool', tool_call_id: id, content: resultContent, timestamp: Date.now() });
             processedToolCalls.push({ name, args, id, result: resultContent });
             return;
           }
@@ -5111,7 +5142,7 @@ export class ModelHandler {
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)
                 ? 'resource' as const
-                : isQuestionToolName(name) || isTodoToolName(name) || isToolLoadingToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name) || isBehaviorToolName(name) || isSubflowCommunicationTool(name) || name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX) || name === 'subflow_task_get' || name === 'subflow_task_cancel'
+                : isQuestionToolName(name) || isTodoToolName(name) || isToolLoadingToolName(name) || isMcpSkillToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name) || isBehaviorToolName(name) || isSubflowCommunicationTool(name) || name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX) || name === 'subflow_task_get' || name === 'subflow_task_cancel'
                   ? 'synthetic' as const
                   : decodedForUi
                     ? 'mcp' as const

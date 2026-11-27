@@ -299,9 +299,10 @@ export function declineExternalAuthorization(
 }
 
 /**
- * Captures URL-mode elicitation only while a user-started extension request is
- * pending. Every other URL elicitation is cancelled, so a background flow can
- * never make a browser prompt appear asynchronously.
+ * Captures URL-mode elicitation while a user-started account sign-in is
+ * pending. Any other link request is left (`undefined`) to the ordinary
+ * elicitation flow, which shows it only in the run that called the tool and
+ * never opens it by itself.
  */
 export async function captureExternalAuthorizationElicitation(
   serverName: string,
@@ -313,19 +314,13 @@ export async function captureExternalAuthorizationElicitation(
 ): Promise<ElicitResult | undefined> {
   if (params.mode !== "url") return undefined;
   const session = findPendingSession(serverName);
+  if (!session) return undefined;
 
   if (typeof params.url !== "string" || params.url.length === 0) {
-    if (session) {
-      session.rejectPrompt(
-        new Error("The MCP server supplied a malformed authorization URL."),
-      );
-      session.abortController.abort();
-    }
-    return { action: "cancel" };
-  }
-
-  if (!session) {
-    log.warn(`Rejected unsolicited URL elicitation from ${serverName}`);
+    session.rejectPrompt(
+      new Error("The MCP server supplied a malformed authorization URL."),
+    );
+    session.abortController.abort();
     return { action: "cancel" };
   }
 

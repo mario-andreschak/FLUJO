@@ -7,19 +7,18 @@ import { MCPElicitationPolicy } from '@/shared/types/mcp';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ElicitationManagerProps {
-  policy?: MCPElicitationPolicy;
+  /** The effective switch, read with mcpElicitationEnabled(). */
+  enabled: boolean;
   onChange: (policy: MCPElicitationPolicy) => void;
 }
 
 /**
- * Per-server elicitation opt-in toggle. MCP elicitation lets the server ask the
- * user for additional input during a tool call (elicitation/create, MCP spec
- * 2026-07-28). Opt-in: when off, FLUJO declares NO elicitation capability and
- * the server cannot request user input. Unattended/scheduled runs auto-cancel
- * elicitation requests. URL-mode elicitation is not yet supported.
+ * Per-server elicitation switch. MCP elicitation lets the server ask the user
+ * for a form answer or to open a link during a tool call (elicitation/create,
+ * MCP spec 2026-07-28). On unless the user turns it off; when off, FLUJO
+ * declares no form mode and the server cannot ask for input.
  */
-const ElicitationManager: React.FC<ElicitationManagerProps> = ({ policy, onChange }) => {
-  const enabled = !!policy?.enabled;
+const ElicitationManager: React.FC<ElicitationManagerProps> = ({ enabled, onChange }) => {
   const { t } = useI18n();
 
   return (

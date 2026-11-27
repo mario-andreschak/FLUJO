@@ -1,4 +1,5 @@
 import { registerTaskInputHandler, dispatchTaskInputRequest } from './taskInputHandlers';
+import { mcpAppsEnabled, mcpSkillsEnabled, mcpAppRuntimeBrokerEnabled } from '@/shared/utils/mcpClientFeatures';
 import { getCurrentWorkspace, bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { registerTasksExtensionClient } from './tasksExtensionSession';
 import { MCP_SKILLS_EXTENSION_ID } from '@/shared/types/mcp';
@@ -46,7 +47,7 @@ import { attachTrustedHost, trustedHostBrokerEnvironment } from './trustedHost';
 import { attachLocalHostLaunch } from './localHost';
 import { createRootsListHandler } from "./roots";
 import { samplingEnabled, createSamplingHandler } from "./sampling";
-import { elicitationEnabled, createElicitationHandler } from "./elicitation";
+import { elicitationCapability, createElicitationHandler, createElicitationCompleteHandler } from "./elicitation";
 import {
   MCP_APPS_EXTENSION_ID,
   MCP_APP_RESOURCE_MIME_TYPE,
@@ -132,8 +133,9 @@ export function createNewBetaClient(
   extensionNotifications: ExtensionNotificationHandlers = {},
 ): Client {
   const serverHasSampling = samplingEnabled(config);
-  const serverHasElicitation = elicitationEnabled(config);
-  const serverHasMcpApps = config.enableMcpApps === true;
+  const elicitation = elicitationCapability(config);
+  const serverHasElicitation = elicitation?.form !== undefined;
+  const serverHasMcpApps = mcpAppsEnabled(config);
   const serverHasStdioOAuth = config.transport === "stdio" && config.isolation === undefined;
   const clientInfo = {
       name: `flujo-${config.name}-client`,
@@ -142,16 +144,9 @@ export function createNewBetaClient(
   const clientCapabilities = {
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
-        ...(serverHasStdioOAuth || serverHasElicitation
-          ? {
-              elicitation: {
-                ...(serverHasStdioOAuth ? { url: {} } : {}),
-                ...(serverHasElicitation ? { form: {} } : {}),
-              },
-            }
-          : {}),
+        ...(elicitation ? { elicitation } : {}),
         extensions: {
-          ...(config.enableMcpSkills === true ? { [MCP_SKILLS_EXTENSION_ID]: {} } : {}),
+          ...(mcpSkillsEnabled(config) ? { [MCP_SKILLS_EXTENSION_ID]: {} } : {}),
           ...(serverHasStdioOAuth
             ? { [STDIO_OAUTH_EXTENSION_ID]: STDIO_OAUTH_EXTENSION_CAPABILITY }
             : {}),
@@ -186,7 +181,7 @@ export function createNewBetaClient(
 
   const rootsHandler = createRootsListHandler(config, client);
   const samplingHandler = serverHasSampling ? createSamplingHandler(config) : undefined;
-  const elicitationHandler = serverHasStdioOAuth || serverHasElicitation ? createElicitationHandler(config) : undefined;
+  const elicitationHandler = elicitation ? createElicitationHandler(config) : undefined;
   registerTaskInputHandler(client, 'roots/list', rootsHandler);
   if (samplingHandler) registerTaskInputHandler(client, 'sampling/createMessage', samplingHandler);
   if (elicitationHandler) registerTaskInputHandler(client, 'elicitation/create', elicitationHandler);
@@ -201,10 +196,11 @@ export function createNewBetaClient(
       samplingHandler!(request, { signal: context.mcpReq.signal }),
     );
   }
-  if (serverHasStdioOAuth || serverHasElicitation) {
+  if (elicitationHandler) {
     client.setRequestHandler("elicitation/create", async (request, context) =>
-      elicitationHandler!(request, { signal: context.mcpReq.signal }),
+      elicitationHandler(request, { signal: context.mcpReq.signal }),
     );
+    client.setNotificationHandler("notifications/elicitation/complete", createElicitationCompleteHandler(config.name));
   }
   registerExtensionNotifications(client, config.name, extensionNotifications);
 
@@ -393,7 +389,7 @@ export async function createBetaTransport(
   try {
     assertMcpRuntimeAuthorityRetired(config.name);
     workload = prepareBundledFlujoWorkload(config);
-    runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+    runtimeBroker = options?.enableRuntimeBroker && mcpAppRuntimeBrokerEnabled(config)
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
     const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
     const brokerEnv = runtimeBroker ? (config.trustedHost ? await trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {};

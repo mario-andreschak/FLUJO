@@ -21,14 +21,11 @@ import {
   Collapse,
   CircularProgress,
   TextField,
-  Select,
   Checkbox,
   Radio,
   RadioGroup,
   FormControl,
   FormLabel,
-  InputLabel,
-  FormHelperText,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -81,6 +78,7 @@ import {
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import SubflowLaneChip from './SubflowLaneChip';
 import HumanTaskCard, { type HumanTaskAnswerResult } from './HumanTaskCard';
+import { ElicitationCard, type PendingElicitation } from './ElicitationCard';
 import { parseHumanTaskCall, type HumanAnswer } from '@/utils/shared/humanStep';
 import { formatPartialJson } from '@/frontend/utils/partialJson';
 import {
@@ -124,12 +122,7 @@ const isImageUrlContentPart = (value: unknown): value is ImageUrlContentPart => 
 const MESSAGES_WINDOW_INITIAL = 50;
 const MESSAGES_WINDOW_STEP = 200;
 
-/** Shape of a pending elicitation request surfaced from the `run:awaiting_elicitation` SSE event. */
-export interface PendingElicitation {
-  elicitationId: string;
-  message: string;
-  requestedSchema: Record<string, unknown>;
-}
+export type { PendingElicitation };
 
 /** One prompt of a model-initiated `question` tool call (issue #258). */
 export interface PendingQuestionPrompt {
@@ -186,6 +179,10 @@ interface ChatMessagesProps {
   onCancelToolCall?: (toolCallId: string) => void; // Issue #357: cancel one in-flight tool call
   /** Submit elicitation form — called with the collected field values. */
   onSubmitElicitation?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
+  /** The person finished the page a link request opened. */
+  onDoneElicitation?: (elicitationId: string) => void;
+  /** Refuse the pending elicitation request. */
+  onDeclineElicitation?: (elicitationId: string) => void;
   /** Cancel the pending elicitation request. */
   onCancelElicitation?: (elicitationId: string) => void;
   /** Active model-initiated question (issue #258), if any. */
@@ -1670,153 +1667,6 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
 });
 
 // ---------------------------------------------------------------------------
-// ElicitationFormCard — renders a server-supplied elicitation form
-// ---------------------------------------------------------------------------
-
-type FieldSchema = {
-  type?: string;
-  title?: string;
-  description?: string;
-  enum?: string[];
-  enumNames?: string[];
-  minLength?: number;
-  maxLength?: number;
-  minimum?: number;
-  maximum?: number;
-  default?: unknown;
-};
-
-interface ElicitationFormCardProps {
-  elicitation: PendingElicitation;
-  onSubmit?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
-  onCancel?: (elicitationId: string) => void;
-}
-
-const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, onSubmit, onCancel }) => {
-  const { t } = useI18n();
-  const { elicitationId, message, requestedSchema } = elicitation;
-  const schemaProps = (requestedSchema?.properties ?? {}) as Record<string, FieldSchema>;
-  const fieldNames = Object.keys(schemaProps);
-
-  const initValues = () => {
-    const vals: Record<string, string | number | boolean | string[]> = {};
-    for (const key of fieldNames) {
-      const f = schemaProps[key];
-      if (f.default !== undefined) vals[key] = f.default as string | number | boolean | string[];
-      else if (f.type === 'boolean') vals[key] = false;
-      else if (f.type === 'number' || f.type === 'integer') vals[key] = 0;
-      else vals[key] = '';
-    }
-    return vals;
-  };
-
-  const [values, setValues] = useState<Record<string, string | number | boolean | string[]>>(initValues);
-
-  const patch = (key: string, val: string | number | boolean | string[]) => {
-    setValues(prev => ({ ...prev, [key]: val }));
-  };
-
-  const handleSubmit = () => {
-    if (onSubmit) onSubmit(elicitationId, values);
-  };
-
-  const handleCancel = () => {
-    if (onCancel) onCancel(elicitationId);
-  };
-
-  return (
-    <Paper
-      elevation={2}
-      sx={{ p: 2, mt: 2, bgcolor: 'info.light', border: '1px solid', borderColor: 'info.main', borderRadius: 2 }}
-    >
-      <Typography variant="h6" sx={{ mb: 1 }}>{t('chat.elicitation.title')}</Typography>
-      <Typography variant="body2" sx={{ mb: 2 }}>{message}</Typography>
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-        {fieldNames.map((key, fieldIndex) => {
-          const f = schemaProps[key];
-          const label = f.title || key;
-          const val = values[key];
-
-          if (f.type === 'boolean') {
-            return (
-              <FormControlLabel
-                key={key}
-                control={
-                  <Checkbox
-                    checked={!!val}
-                    onChange={(e) => patch(key, e.target.checked)}
-                    size="small"
-                  />
-                }
-                label={label}
-              />
-            );
-          }
-
-          if (f.enum && f.enum.length > 0) {
-            const selectId = `${elicitationId}-${fieldIndex}`;
-            return (
-              <FormControl key={key} size="small" sx={{ minWidth: 200 }}>
-                <InputLabel id={`${selectId}-label`}>{label}</InputLabel>
-                <Select
-                  id={selectId}
-                  labelId={`${selectId}-label`}
-                  label={label}
-                  value={String(val ?? '')}
-                  onChange={(e) => patch(key, e.target.value)}
-                >
-                  {f.enum.map((opt, i) => (
-                    <MenuItem key={opt} value={opt}>
-                      {f.enumNames?.[i] || opt}
-                    </MenuItem>
-                  ))}
-                </Select>
-                {f.description && <FormHelperText>{f.description}</FormHelperText>}
-              </FormControl>
-            );
-          }
-
-          // string / number / integer
-          const isNumeric = f.type === 'number' || f.type === 'integer';
-          return (
-            <TextField
-              key={key}
-              size="small"
-              label={label}
-              type={isNumeric ? 'number' : 'text'}
-              value={String(val ?? '')}
-              helperText={f.description}
-              slotProps={{ htmlInput: {
-                minLength: f.minLength,
-                maxLength: f.maxLength,
-                min: f.minimum,
-                max: f.maximum,
-              } }}
-              onChange={(e) => {
-                if (isNumeric) {
-                  const n = parseFloat(e.target.value);
-                  patch(key, isNaN(n) ? 0 : n);
-                } else {
-                  patch(key, e.target.value);
-                }
-              }}
-            />
-          );
-        })}
-      </Box>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 2 }}>
-        <Button variant="outlined" color="inherit" size="small" onClick={handleCancel} disabled={!onCancel}>
-          {t('common.cancel')}
-        </Button>
-        <Button variant="contained" color="primary" size="small" onClick={handleSubmit} disabled={!onSubmit}>
-          {t('chat.elicitation.submit')}
-        </Button>
-      </Box>
-    </Paper>
-  );
-};
-
-// ---------------------------------------------------------------------------
 // QuestionCard — renders a model-initiated multiple-choice question (issue #258)
 // ---------------------------------------------------------------------------
 
@@ -1966,6 +1816,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onAnswerHumanStep,
   onCancelToolCall, // Issue #357
   onSubmitElicitation,
+  onDoneElicitation,
+  onDeclineElicitation,
   onCancelElicitation,
   pendingQuestion,
   onAnswerQuestion,
@@ -2392,10 +2244,12 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
 
       {/* Display Pending Elicitation Form */}
       {pendingElicitation && (
-        <ElicitationFormCard
+        <ElicitationCard
           key={pendingElicitation.elicitationId}
           elicitation={pendingElicitation}
           onSubmit={onSubmitElicitation}
+          onDone={onDoneElicitation}
+          onDecline={onDeclineElicitation}
           onCancel={onCancelElicitation}
         />
       )}

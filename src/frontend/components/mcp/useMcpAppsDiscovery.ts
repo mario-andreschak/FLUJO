@@ -1,5 +1,6 @@
 'use client';
 
+import { mcpAppsEnabled } from '@/shared/utils/mcpClientFeatures';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
@@ -134,7 +135,7 @@ export function useMcpAppsDiscovery({
 
       const eligible = (configsResult as MCPServerConfig[]).filter((server) => (
         server.disabled !== true
-        && (includeAllServers || server.enableMcpApps === true)
+        && (includeAllServers || mcpAppsEnabled(server))
         && (!favoritesOnly || server.favorite === true)
       ));
 
@@ -142,7 +143,7 @@ export function useMcpAppsDiscovery({
         // Ordinary MCP servers are valid Persona/Role choices. They have no App
         // UI to discover, so keep their config without making unsupported
         // resources/list calls or describing that absence as an error.
-        if (server.enableMcpApps !== true) {
+        if (!mcpAppsEnabled(server)) {
           return { name: server.name, config: server, apps: [] };
         }
         if (refresh) {

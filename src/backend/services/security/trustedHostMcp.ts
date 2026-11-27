@@ -458,6 +458,7 @@ function consentInput(config: MCPStdioConfig, diagnostic = false): { consent: st
       domain: 'flujo:mcp:trusted-host-consent:v2', command, args, cwd, requestedEnvironment,
       policy: { ...policy, environmentNames: [...policy.environmentNames].sort() },
       capabilities: { roots, sampling: config.sampling ?? null, elicitation: config.elicitation ?? null,
+        // eslint-disable-next-line flujo/mcp-feature-defaults -- the signed consent records the stored switch; host-trusted servers treat unset as off
         apps: config.enableMcpApps === true, skills: config.enableMcpSkills === true, rootPath,
         runtimeHomeMode: config.runtimeHomeMode ?? null },
     });

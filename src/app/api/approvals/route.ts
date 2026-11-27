@@ -10,6 +10,7 @@ import {
 } from '@/backend/services/scheduler/pendingApprovals';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { listAllPendingQuestions } from '@/backend/services/questionRegistry';
+import { listAllPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -192,7 +193,12 @@ async function GET_handler(request: Request) {
       createdAt: q.createdAt,
     }));
 
-    return json({ approvals, questions }, 200);
+    // MCP elicitations (forms and links) waiting in any run, including
+    // background ones. Ids, server and kind only; the person answers in the
+    // conversation, where the full request is shown.
+    const elicitations = listAllPendingElicitations();
+
+    return json({ approvals, questions, elicitations }, 200);
   } catch (error) {
     if (error instanceof ConversationLogReadPressureError) throw error;
     log.error('Error handling GET /api/approvals', error);

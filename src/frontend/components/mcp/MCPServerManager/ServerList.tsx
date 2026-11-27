@@ -1,4 +1,5 @@
 import React from 'react';
+import { mcpAppsEnabled, mcpSkillsEnabled } from '@/shared/utils/mcpClientFeatures';
 import ServerCard from './ServerCard';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { MCPServerConfig, MCPServerState, MCPStreamableConfig } from '@/shared/types/';
@@ -118,8 +119,8 @@ const ServerList: React.FC<ServerListProps> = ({
               error={server.error}
               stderrOutput={server.stderrOutput}
               exposeAsMcpServer={server.exposeAsMcpServer}
-              enableMcpApps={server.enableMcpApps}
-              enableMcpSkills={server.enableMcpSkills}
+              enableMcpApps={mcpAppsEnabled(server)}
+              enableMcpSkills={mcpSkillsEnabled(server)}
               selectionMode={selectionMode}
               selected={selectedServers.has(server.name)}
               onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}

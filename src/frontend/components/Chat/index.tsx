@@ -550,6 +550,8 @@ const Chat: React.FC = () => {
     'question-answer': 'chat.page.inputResponseFailed',
     'question-decline': 'chat.page.inputDeclineFailed',
     'elicitation-submit': 'chat.page.inputSubmitFailed',
+    'elicitation-done': 'chat.page.inputDoneFailed',
+    'elicitation-decline': 'chat.page.inputRefuseFailed',
     'elicitation-cancel': 'chat.page.inputCancelFailed',
   } as const;
   const [pendingInputErrorRevision, setPendingInputErrorRevision] = useState(0);
@@ -2533,11 +2535,10 @@ const Chat: React.FC = () => {
         // Same bleed-prevention rule as awaiting_approval: only surface for the
         // viewed conversation.
         if (ownsPendingInputUpdate) {
-          setPendingElicitation({
-            elicitationId: event.elicitationId,
-            message: event.message,
-            requestedSchema: event.requestedSchema,
-          });
+          const base = { elicitationId: event.elicitationId, message: event.message, serverName: event.serverName };
+          setPendingElicitation(event.mode === 'url' && event.url
+            ? { ...base, mode: 'url', url: event.url }
+            : { ...base, mode: 'form', requestedSchema: event.requestedSchema ?? { type: 'object', properties: {} } });
         }
         break;
       case 'run:elicitation_cancelled':
@@ -4396,7 +4397,7 @@ const Chat: React.FC = () => {
   };
 
   const respondToPendingInput = async (body: {
-    action: 'elicitation-submit' | 'elicitation-cancel' | 'question-answer' | 'question-decline';
+    action: 'elicitation-submit' | 'elicitation-done' | 'elicitation-decline' | 'elicitation-cancel' | 'question-answer' | 'question-decline';
     elicitationId?: string;
     questionId?: string;
     content?: Record<string, string | number | boolean | string[]>;
@@ -4445,6 +4446,14 @@ const Chat: React.FC = () => {
 
   const handleCancelElicitation = async (elicitationId: string) => {
     await respondToPendingInput({ action: 'elicitation-cancel', elicitationId });
+  };
+
+  const handleDeclineElicitation = async (elicitationId: string) => {
+    await respondToPendingInput({ action: 'elicitation-decline', elicitationId });
+  };
+
+  const handleDoneElicitation = async (elicitationId: string) => {
+    await respondToPendingInput({ action: 'elicitation-done', elicitationId });
   };
 
   const handleAnswerQuestion = async (questionId: string, answers: string[][]) => {
@@ -5848,6 +5857,8 @@ const Chat: React.FC = () => {
                 onAnswerHumanStep={handleAnswerHumanStep}
                 onCancelToolCall={handleCancelToolCall}
                 onSubmitElicitation={handleSubmitElicitation}
+                onDoneElicitation={handleDoneElicitation}
+                onDeclineElicitation={handleDeclineElicitation}
                 onCancelElicitation={handleCancelElicitation}
                 pendingQuestion={pendingQuestion}
                 onAnswerQuestion={handleAnswerQuestion}
