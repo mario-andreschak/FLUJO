@@ -4,20 +4,36 @@ FLUJO's optional `io.modelcontextprotocol/skills` adapter is reconciled with
 [Final SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/b0a66b133ddfaf193a70b526a31bc2aa7172f28a/seps/2640-skills-extension.md).
 The retained methods, entries, digests, 512-file/16MiB limits, nested skill consent,
 and direct `skills/get` retrieval agree with the Final contract. SDK1 and split-SDK
-clients advertise the extension only under the server's explicit Skills opt-in.
-An empty/partial listing does not prevent direct URI retrieval. Browser and installed
+clients advertise the extension unless the user turned Skills off for the server.
+An empty/partial listing does not prevent direct URI retrieval. See the
+[scoreboard evidence](mcp-scoreboard/skills.md) for the client flow. Browser and installed
 qualification remain separate from source/fixture results; see
 [MCP conformance qualification](mcp-conformance-1093-2026-10-12.md).
 
 ## Enabling Skills
 
-Skills are disabled by default for every MCP server. Enable **MCP Skills** on an
-individual server card. FLUJO then reconnects that server, inspects its
-server-side extension capability, and calls `skills/list` or `skills/get`
-only when both the local opt-in and the advertised extension are present.
-When Skills are enabled for a server, FLUJO also advertises the client-side
+Skills are on for every MCP server unless the user turns **MCP Skills** off on
+the server card (#1448). A server under an isolation or host-trust policy keeps
+the switch as the person approved it, so there Skills stay off until switched
+on (`mcpSkillsEnabled` in `src/shared/utils/mcpClientFeatures.ts`). FLUJO
+inspects the server-side extension capability and calls `skills/list` or
+`skills/get` only when the switch is on and the server advertises the
+extension. FLUJO also advertises the client-side
 `io.modelcontextprotocol/skills` extension during initialization or on modern request metadata. Servers that
 require mutual extension negotiation can then accept its Skills requests.
+
+## Agents discover and load skills
+
+Every step whose bound MCP servers offer skills gets one tool,
+`load_mcp_skill` (`src/backend/execution/flow/handlers/mcpSkillTools.ts`). Its
+description lists each skill as `server:name`, its `skill://` URI and its
+description, straight from `skills/list` (following cursors, at most 64
+entries). No skill text is read until the agent calls the tool. Then FLUJO asks
+the person once per conversation and manifest digest ("Allow" / "Do not
+allow"), records the same approval the Skills tab records, reads every file of
+the skill through the size and SHA-256 verifier, and returns the text as a
+clearly marked untrusted-data tool result. A run nobody watches cannot approve a
+new skill; one already allowed in that conversation still loads.
 
 The server details dialog has a Skills tab. Discovery does not load or activate
 anything. **Load for this conversation** is a separate user action: the host

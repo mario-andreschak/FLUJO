@@ -66,8 +66,9 @@ it('validates the captured schema and cannot resolve another conversation or unb
   const metadata = form('input-one');
   const pending = registerPendingElicitation('form-1', undefined, metadata);
   metadata.requestedSchema.required = [];
-  const snapshot = listPendingElicitations('input-one');
-  snapshot[0].requestedSchema.required = [];
+  const [snapshot] = listPendingElicitations('input-one');
+  if (snapshot.mode !== 'form') throw new Error('Expected a form elicitation');
+  snapshot.requestedSchema.required = [];
   expect(resolveConversationElicitation('input-two', 'form-1', { action: 'accept', content: { name: 'A', amount: 2 } })).toBe(false);
   expect(resolveElicitation('form-1', { action: 'accept', content: { name: 'A', amount: 2 } })).toBe(false);
   expect(() => resolveConversationElicitation('input-one', 'form-1', { action: 'accept', content: { name: 'A' } })).toThrow(InvalidElicitationResponseError);

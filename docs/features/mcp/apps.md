@@ -4,7 +4,7 @@ FLUJO implements the stable MCP Apps extension revision `2026-01-26` for interac
 
 ## Enabling Apps
 
-MCP Apps support is opt-in for each MCP server. When enabled, FLUJO advertises the `io.modelcontextprotocol/ui` extension and the `text/html;profile=mcp-app` MIME type during initialization. Servers that do not negotiate Apps continue to behave as ordinary MCP servers, and UI-enabled tools must still return useful standard MCP content for text-only fallback.
+MCP Apps are on for every MCP server unless the user turns them off with "Render interactive apps" on the server card (#1448). FLUJO then advertises the `io.modelcontextprotocol/ui` extension and the `text/html;profile=mcp-app` MIME type during initialization. A server that runs under an isolation or host-trust policy keeps the switch exactly as the person approved it, so there Apps stay off until switched on. One function decides this (`mcpAppsEnabled` in `src/shared/utils/mcpClientFeatures.ts`), and the lint rule `flujo/mcp-feature-defaults` keeps other code from reading the switch as opt-in. Servers that do not negotiate Apps continue to behave as ordinary MCP servers, and UI-enabled tools must still return useful standard MCP content for text-only fallback.
 
 FLUJO renders only a `ui://` resource predeclared by the tool definition. It reads that exact resource through `resources/read`; a result cannot redirect rendering to another resource. Both nested `_meta.ui.resourceUri` metadata and the deprecated flat `_meta["ui/resourceUri"]` form are accepted for compatibility.
 
@@ -107,7 +107,8 @@ The App remains specification-compliant: its resource declares the resulting
 HTTPS origin in `_meta.ui.csp.frameDomains` (and any required connection/resource
 domains) in the normal way.
 
-For each managed stdio connection with MCP Apps enabled, FLUJO injects two
+For each managed stdio connection where MCP Apps were turned on by hand
+(`enableMcpApps: true`, not just left on by default), FLUJO injects two
 process-only variables:
 
 ```text

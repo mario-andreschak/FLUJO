@@ -2872,7 +2872,7 @@ export class MCPService {
   async isMcpAppAccessEnabled(serverName: string): Promise<boolean> {
     const config = await this.getServerConfig(serverName);
     if (config?.disabled === true) return false;
-    return config !== undefined && mcpAppsEnabled(config);
+    return !!config && mcpAppsEnabled(config);
   }
 
   private async checkMcpAppAccess(

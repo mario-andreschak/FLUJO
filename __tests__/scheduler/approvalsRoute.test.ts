@@ -144,7 +144,7 @@ describe('GET /api/approvals (#115)', () => {
     expect(res.status).toBe(200);
     // The inbox also surfaces model-initiated questions (issue #258), which is
     // empty here because no run is blocked on the question registry.
-    expect(await res.json()).toEqual({ approvals: [], questions: [] });
+    expect(await res.json()).toEqual({ approvals: [], questions: [], elicitations: [] });
   });
 
   it('lists a paused run with metadata only (no tool arguments / prompt)', async () => {
