@@ -134,11 +134,19 @@ describe('serializePackage / parsePackage round-trip', () => {
     const eventExecution = {
       ...plannedWebhook,
       id: 'event-execution',
-      trigger: { type: 'mcp-event' as const, serverName: 'chat', eventName: 'message.received', secret: 'whsec_super-secret-value' },
+      trigger: {
+        type: 'mcp-event' as const,
+        serverName: 'chat',
+        eventName: 'message.received',
+        secret: 'whsec_super-secret-value',
+        steerConversationId: 'local-conversation-1',
+      },
     };
     const { json, package: pkg } = serializePackage({ ...baseInput, plannedExecutions: [eventExecution] });
     expect(json).not.toContain('whsec_super-secret-value');
     expect((pkg.plannedExecutions[0].trigger as { secret?: string }).secret).toBeUndefined();
+    // A conversation id only means something on the installation that made it.
+    expect(json).not.toContain('local-conversation-1');
     expect(eventExecution.trigger.secret).toBe('whsec_super-secret-value');
   });
 
