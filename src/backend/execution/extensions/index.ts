@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { types } from 'node:util';
 import type { MCPServerConfig } from '@/shared/types/mcp';
-import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
+import type { FlowRunInput } from '@/backend/execution/flow/runFlowContract';
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
 import { isOwnerCredentialBoundModel, validateOwnerCredentialBinding, type Model } from '@/shared/types/model';

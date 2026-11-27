@@ -3,8 +3,10 @@
   "hotspots": [
     {
       "file": "src/backend/execution/flow/runFlow.ts",
-      "maxLines": 4048,
-      "modules": []
+      "maxLines": 3872,
+      "modules": [
+        "src/backend/execution/flow/runFlowContract.ts"
+      ]
     },
     {
       "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
@@ -18,16 +20,6 @@
     }
   ],
   "backImportDebt": [
-    {
-      "from": "src/backend/execution/extensions/index.ts",
-      "to": "src/backend/execution/flow/runFlow.ts",
-      "reason": "Type-only import of FlowRunInput. Import it from runFlowContract.ts once that module exists."
-    },
-    {
-      "from": "src/backend/execution/flow/handlers/behaviorToolInvocation.ts",
-      "to": "src/backend/execution/flow/runFlow.ts",
-      "reason": "Lazy import to run a behavior call as an ephemeral flow, while runFlow names its registry type inline. Moving FlowRunInput into runFlowContract.ts removes the reverse edge."
-    },
     {
       "from": "src/backend/execution/flow/subflowRecovery.ts",
       "to": "src/backend/execution/flow/runFlow.ts",
