@@ -10,6 +10,8 @@ import type { Model } from '@/shared/types/model';
 import { StorageKey } from '@/shared/types/storage';
 import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
 import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
+import { trustedHostMcpApproval } from '@/backend/services/security/trustedHostMcp';
+import { executionApprovalFailure } from '@/backend/services/mcp/executionApproval';
 
 let mockWorkspace = '';
 const mockConfigStorage = new Map<StorageKey, unknown>();
@@ -362,9 +364,54 @@ it('reports failed readiness without echoing remote credential-bearing errors', 
   connect.mockResolvedValue({ success: false, error: 'server printed private-token' });
   const result = await reinstallWorkspaceMcpServers(buildWorkspaceMcpTransferPlan([config], source));
   expect(result.ok).toBe(false);
-  expect(result.servers[0].status).toBe('failed');
+  expect(result.servers[0]).toMatchObject({ status: 'failed', reason: { code: 'CONNECT_FAILED' } });
   expect(JSON.stringify(result)).not.toContain('private-token');
 });
+
+it('names a real install failure without copying its secret-bearing error text', async () => {
+  const config = server();
+  loadConfigs.mockResolvedValue([config]);
+  prepareRegistry.mockRejectedValueOnce(new Error('GET https://user:sk-live-123@registry.example/pkg failed in C:\\Users\\private\\cache'));
+  const result = await reinstallWorkspaceMcpServers(buildWorkspaceMcpTransferPlan([config], source));
+  expect(result.ok).toBe(false);
+  expect(result.servers).toEqual([{ name: config.name, status: 'failed', error: 'Installing this server on the worker failed.',
+    reason: { code: 'INSTALL_FAILED', message: 'Installing this server on the worker failed.', action: expect.stringContaining('package registry') } }]);
+  expect(JSON.stringify(result)).not.toMatch(/sk-live|private|registry\.example/);
+  expect(connect).not.toHaveBeenCalled();
+});
+
+it('lets a fresh bundled server wait for owner approval with a clear reason', async () => {
+  const descriptor = SHIPPED_MCP_SERVERS.find(value => value.packageDirectory === 'filesystem')!;
+  await ensureShippedWorkspacePackages(mockWorkspace, undefined, [descriptor.packageDirectory]);
+  const config = { ...createShippedServerConfig(descriptor), disabled: false };
+  loadConfigs.mockResolvedValue([config]);
+  // The real launch gate and the real refusal shape the MCP service returns.
+  connect.mockImplementation(async (name: string) => {
+    const stored = mockPreparedConfigs.get(name);
+    try {
+      if (stored?.transport !== 'stdio') throw new Error('not a stdio server');
+      trustedHostMcpApproval(stored);
+      return { success: true };
+    } catch (error) { return executionApprovalFailure(error) ?? { success: false }; }
+  });
+  const saved = ['FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE'].map(name => [name, process.env[name]] as const);
+  for (const [name] of saved) delete process.env[name];
+  try {
+    const result = await reinstallWorkspaceMcpServers(buildWorkspaceMcpTransferPlan([config], mockWorkspace));
+    expect(result).toEqual({ ok: true, servers: [{ name: config.name, status: 'waiting',
+      error: 'This server needs the owner\'s approval before it can run on this worker.',
+      reason: expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }) }] });
+    const [report] = result.servers;
+    if (report.status !== 'waiting') throw new Error('Expected a waiting server.');
+    expect(report.reason.action).toContain(`/api/mcp/servers/${encodeURIComponent(config.name)}/host-consent`);
+    expect(report.reason.action).toContain('FLUJO_OWNER_AUTH_FILE');
+    expect(JSON.stringify(result)).not.toContain(path.basename(mockWorkspace));
+    // Preparation is kept, so the owner can review the worker's own launch.
+    expect(updateConfig).toHaveBeenCalledWith(config.name, expect.objectContaining({ name: config.name, disabled: false }));
+  } finally {
+    for (const [name, value] of saved) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
+}, 30_000);
 
 it('pins an unchanged workspace package and rejects source edits instead of silently discarding them', async () => {
   await ensureShippedWorkspacePackages(mockWorkspace, undefined, ['filesystem']);
@@ -385,6 +432,7 @@ it('refuses to replace a pinned workspace runtime with a different worker build'
   loadConfigs.mockResolvedValue([config]);
   const result = await reinstallWorkspaceMcpServers(plan);
   expect(result.ok).toBe(false);
+  expect(result.servers[0]).toMatchObject({ status: 'failed', reason: { code: 'RUNTIME_MISMATCH' } });
   expect(updateConfig).not.toHaveBeenCalled();
   expect(connect).not.toHaveBeenCalled();
 });
@@ -413,7 +461,9 @@ it('preserves genuine bundled approval on retry and refuses a revoked grant with
     await revokeBundledHostConsent(owner.request(config.name), config.name);
     updateConfig.mockClear();
     connect.mockClear();
-    expect(await reinstallWorkspaceMcpServers(plan)).toMatchObject({ ok: false, servers: [{ name: config.name, status: 'failed' }] });
+    // A revoked grant waits for a new approval instead of failing the worker.
+    expect(await reinstallWorkspaceMcpServers(plan)).toMatchObject({ ok: true,
+      servers: [{ name: config.name, status: 'waiting', reason: { code: 'HOST_CONSENT_REQUIRED' } }] });
     expect(updateConfig).not.toHaveBeenCalled();
     expect(connect).not.toHaveBeenCalled();
     expect(await loadServerConfigs()).toEqual(loaded);

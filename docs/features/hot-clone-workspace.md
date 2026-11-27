@@ -106,8 +106,8 @@ Bundled MCP servers resolve from the worker image. GitHub Node servers are rebui
 from the exact clean installed commit. Registry and explicit `npx`/`uvx` commands
 keep their package arguments; the worker regenerates host launcher/cwd/root paths.
 Remote servers retain transport, headers, environment, OAuth metadata and tool
-settings from the private workspace DB. All enabled servers must connect before
-worker readiness is reported.
+settings from the private workspace DB. Every enabled server must connect, or wait
+for the owner's approval, before worker readiness is reported.
 
 Successful runtime preparation is recorded per server on the worker. Restarting
 reconnects prepared runtimes without rerunning Git/Registry installs, so generated
@@ -191,6 +191,34 @@ It rebuilds the MCP dependencies, verifies connection status, and exposes
 `ready`, and `error`. Worker API/MCP ingress requires the worker bearer token;
 execution is rejected until ready. The shipped FLUJO MCP receives this token only
 in its child environment for its existing internal HTTP calls.
+
+### Why a server is not running
+
+`servers` in the status lists every MCP server as `ready`, `disabled`, `waiting`
+or `failed`. A server that is not running carries a `reason` with a fixed `code`,
+one plain sentence (`message`) and what to do (`action`). The same line goes to
+the worker log. Neither ever copies an error's own text, so no path, address,
+token or server output leaks.
+
+On a worker, the built-in servers (`flujo`, `filesystem`, `bash`, `browser`)
+start only with the owner's approval (see
+[MCP execution consent](../security/mcp-execution-consent-v1.md)). A fresh
+workspace therefore reports them as `waiting` with code `HOST_CONSENT_REQUIRED`.
+Waiting servers do not hold back the worker: it becomes `ready` and runs every
+flow that does not need them. A flow that calls a waiting server gets the
+"owner approval required" answer for that tool.
+
+Approve a server with the owner bearer (`GET`, then `POST`
+`/api/mcp/servers/<name>/host-consent`). The worker starts it right away, without
+a restart. It also checks waiting servers by itself, 15 seconds after start and
+then with a doubling wait of up to 5 minutes, so an approval added another way
+(for example a container approval in `FLUJO_MCP_ISOLATION_FILE`) or a Docker
+runtime that comes back is picked up too. To avoid the wait altogether, turn the
+built-in servers off in the source workspace before you take the snapshot.
+
+A real preparation failure (`INSTALL_FAILED`, `RUNTIME_MISMATCH`, `RECIPE_MISSING`,
+`CONFIG_CHANGED`, `CONNECT_FAILED`, `PREPARE_FAILED`) still keeps the worker in
+`error`; fix the cause, then call `/api/init` or restart the worker.
 
 The cloud bridge should bind a local loopback tunnel to a private worker with no
 public service allocation. Invoke existing flows with `/v1/chat/completions`, the

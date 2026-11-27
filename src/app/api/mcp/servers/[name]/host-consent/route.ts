@@ -49,6 +49,12 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
     if ((runtimeHome !== 'host' && runtimeHome !== 'isolated') || typeof reviewedDigest !== 'string' || typeof expiresAt !== 'number') return json({ error: 'Invalid consent request.' }, 400);
     const { name } = await params;
     const result = await approveBundledHostConsent(request, name, { runtimeHome, reviewedDigest, expiresAt });
+    // A worker starts the approved server now; /api/worker/status shows when it is running.
+    if (isWorkerMode()) {
+      void import('@/backend/services/workspace/workerMcpServers')
+        .then(worker => worker.startApprovedWorkerServer(name))
+        .catch(() => console.warn('[bundled-consent-approval] WORKER_PICKUP_UNAVAILABLE'));
+    }
     return json({ approved: true, serverName: name, policyDigest: result.policyDigest, expiresAt });
   } catch (error) {
     if (error instanceof BundledConsentError) return error.response;

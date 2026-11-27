@@ -17,6 +17,8 @@ import { prepareRegistryServerRuntime } from '@/backend/services/mcp/registryIns
 import { createShippedServerConfig, shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServers';
 import { ensureShippedWorkspacePackages, shippedWorkspacePackagePortableRuntimeDigest, shippedWorkspacePackageRuntimeDigest, shippedWorkspacePackageRuntimeDigests } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { assertLinkFreeFileParent, atomicWriteWithoutLinks } from '@/backend/services/workspace/backupRestoreFs';
+import type { WorkerMcpReasonCode, WorkerMcpServerReport } from '@/backend/services/workspace/workerMode';
+import { WorkerMcpPreparationError, workerMcpConnectReasonCode, workerMcpReasonCode, workerMcpServerReport } from '@/backend/services/workspace/workerMcpReason';
 
 export interface WorkspaceMcpTransferServer {
   name: string;
@@ -39,8 +41,9 @@ export interface WorkspaceMcpTransferPlan {
 }
 
 export interface WorkspaceMcpReinstallResult {
+  /** False only when a server really failed; servers waiting for approval do not count. */
   ok: boolean;
-  servers: Array<{ name: string; status: 'ready' | 'disabled' | 'failed'; error?: string }>;
+  servers: WorkerMcpServerReport[];
 }
 
 export interface WorkspaceFlowDependencySelection {
@@ -392,10 +395,10 @@ async function existingRuntime(
     const targetRoot = descriptor && path.join(getWorkspaceDataDir(), 'mcp-servers', descriptor.packageDirectory);
     if (!descriptor || !installation || installation.packageDirectory !== descriptor.packageDirectory
       || !targetRoot || canonical(verified.policy.sourceRoot) !== canonical(targetRoot)) {
-      throw new Error('The approved bundled runtime does not belong to this worker package.');
+      throw new WorkerMcpPreparationError('RUNTIME_MISMATCH', 'The approved bundled runtime does not belong to this worker package.');
     }
     if (await bundledRuntimeDiffers(entry, targetRoot)) {
-      throw new Error('The worker bundled package differs from the captured runtime. Use the matching application build.');
+      throw new WorkerMcpPreparationError('RUNTIME_MISMATCH', 'The worker bundled package differs from the captured runtime. Use the matching application build.');
     }
     // Read authoritative storage after the awaited provenance checks. A snapshot
     // marker cannot confer consent, and a concurrent edit must not be overwritten.
@@ -403,7 +406,7 @@ async function existingRuntime(
     const stored = Array.isArray(current) ? current.find(value => value.name === captured.name) : undefined;
     if (!stored || stored.transport !== 'stdio' || !sameTrustedHostConsent(captured, stored)
       || !isDeepStrictEqual(structuredClone(stored), captured)) {
-      throw new Error('The approved bundled configuration changed during worker preparation.');
+      throw new WorkerMcpPreparationError('CONFIG_CHANGED', 'The approved bundled configuration changed during worker preparation.');
     }
     return { config: captured, requiredFiles: [] };
   }
@@ -460,16 +463,16 @@ async function prepareConfig(
   const config = structuredClone(original);
   const requiredFiles: string[] = [];
   if (entry.kind === 'bundled') {
-    if (config.transport !== 'stdio') throw new Error('Bundled server transport changed.');
+    if (config.transport !== 'stdio') throw new WorkerMcpPreparationError('CONFIG_CHANGED', 'Bundled server transport changed.');
     const descriptor = shippedDescriptorForConfig(config);
-    if (!descriptor) throw new Error('The bundled MCP package is unavailable on this worker.');
+    if (!descriptor) throw new WorkerMcpPreparationError('RUNTIME_MISMATCH', 'The bundled MCP package is unavailable on this worker.');
     // Snapshots omit MCP checkouts: materialize the target distribution, not
     // the source machine's edited package or its dependency junction.
     await ensureShippedWorkspacePackages(targetWorkspaceRoot, undefined, [descriptor.packageDirectory]);
     if (entry.bundledRuntimeSha256 || entry.bundledPortableRuntimeSha256) {
       const restoredRoot = path.join(targetWorkspaceRoot, 'mcp-servers', descriptor.packageDirectory);
       if (await bundledRuntimeDiffers(entry, restoredRoot)) {
-        throw new Error('The worker bundled package differs from the captured runtime. Use the matching application build.');
+        throw new WorkerMcpPreparationError('RUNTIME_MISMATCH', 'The worker bundled package differs from the captured runtime. Use the matching application build.');
       }
     }
     const runtime = createShippedServerConfig(descriptor);
@@ -487,7 +490,7 @@ async function prepareConfig(
   }
   if (entry.kind === 'github') {
     const origin = entry.installOrigin;
-    if (!origin?.ref || config.transport !== 'stdio') throw new Error('Missing GitHub installation recipe.');
+    if (!origin?.ref || config.transport !== 'stdio') throw new WorkerMcpPreparationError('RECIPE_MISSING', 'Missing GitHub installation recipe.');
     const prepared = await prepareGithubServerRuntime({
       name: config.name, repositoryUrl: origin.ref, ref: origin.gitRef,
       subdirectory: origin.subdirectory, installCommand: origin.installCommand,
@@ -507,10 +510,10 @@ async function prepareConfig(
     config.cwd = prepared.config.rootPath;
     config.args = (config.args ?? []).map(arg => mapPath(arg, mappings));
   } else if (entry.kind === 'registry' || entry.kind === 'package-runner') {
-    if (config.transport !== 'stdio' || !runner(config)) throw new Error('Unsupported package runner.');
+    if (config.transport !== 'stdio' || !runner(config)) throw new WorkerMcpPreparationError('RECIPE_MISSING', 'Unsupported package runner.');
     if (entry.kind === 'registry') {
       const ref = entry.installOrigin?.ref;
-      if (!ref) throw new Error('Missing Registry installation recipe.');
+      if (!ref) throw new WorkerMcpPreparationError('RECIPE_MISSING', 'Missing Registry installation recipe.');
       const prepared = await prepareRegistryServerRuntime(ref,
         Object.fromEntries(Object.entries(config.env ?? {}).map(([name, raw]) => [name, typeof raw === 'string' ? raw : raw.value])),
         { preferredTransport: 'stdio' });
@@ -555,17 +558,23 @@ export async function reinstallWorkspaceMcpServers(plan: WorkspaceMcpTransferPla
   if (plan.servers.some(entry => !byName.has(entry.name))) {
     throw new Error('The MCP transfer plan does not match the restored server configurations.');
   }
-  const results: WorkspaceMcpReinstallResult['servers'] = [];
+  const results: WorkerMcpServerReport[] = [];
   for (const entry of plan.servers) {
+    // Errors can carry paths, URLs or server output. Only the step that failed
+    // and a fixed code reach the status.
+    let step: WorkerMcpReasonCode = 'PREPARE_FAILED';
     try {
       const original = byName.get(entry.name);
       if (!original) throw new Error('The restored MCP configuration is missing.');
       if (entry.kind === 'disabled') {
-        if (!original.disabled) throw new Error('An unsupported server became enabled after export.');
+        if (!original.disabled) throw new WorkerMcpPreparationError('CONFIG_CHANGED', 'An unsupported server became enabled after export.');
         results.push({ name: entry.name, status: 'disabled' });
         continue;
       }
-      const prepared = await existingRuntime(entry, original, plan) ?? await prepareConfig(entry, original, plan);
+      const existing = await existingRuntime(entry, original, plan);
+      step = 'INSTALL_FAILED';
+      const prepared = existing ?? await prepareConfig(entry, original, plan);
+      step = 'PREPARE_FAILED';
       const { config } = prepared;
       const saved = await mcpService.updateServerConfig(entry.name, config);
       if ('success' in saved && !saved.success) throw new Error('Could not save the restored MCP configuration.');
@@ -573,12 +582,16 @@ export async function reinstallWorkspaceMcpServers(plan: WorkspaceMcpTransferPla
       // connection independently so a transient server failure cannot replay installs.
       await recordPreparedRuntime(entry, prepared, plan);
       if (!config.disabled) {
+        step = 'CONNECT_FAILED';
         const connected = await mcpService.connectServer(entry.name);
-        if (!connected.success) throw new Error('MCP connection failed; inspect this server in the worker.');
+        if (!connected.success) {
+          results.push(workerMcpServerReport(entry.name, workerMcpConnectReasonCode(connected)));
+          continue;
+        }
       }
       results.push({ name: entry.name, status: config.disabled ? 'disabled' : 'ready' });
     } catch (error) {
-      results.push({ name: entry.name, status: 'failed', error: error instanceof Error ? error.message : 'MCP runtime preparation failed.' });
+      results.push(workerMcpServerReport(entry.name, workerMcpReasonCode(error, step)));
     }
   }
   return { ok: results.every(result => result.status !== 'failed'), servers: results };

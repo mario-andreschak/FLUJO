@@ -1,3 +1,35 @@
+/** Why an MCP server is not running on the worker. Built only by `workerMcpReason.ts`. */
+export type WorkerMcpReasonCode =
+  | 'HOST_CONSENT_REQUIRED' | 'HOST_SOURCE_CHANGED' | 'HOST_POLICY_INVALID'
+  | 'ISOLATION_RECONSENT_REQUIRED' | 'ISOLATION_POLICY_INVALID' | 'ISOLATION_UNAVAILABLE'
+  | 'RUNTIME_MISMATCH' | 'RECIPE_MISSING' | 'INSTALL_FAILED' | 'CONFIG_CHANGED'
+  | 'CONNECT_FAILED' | 'PREPARE_FAILED';
+
+export interface WorkerMcpReason {
+  code: WorkerMcpReasonCode;
+  /** One plain sentence from a fixed list; never an error's own text. */
+  message: string;
+  /** What the operator can do about it. */
+  action: string;
+}
+
+/**
+ * A server that is not running always says why. `waiting` servers do not block
+ * the worker and start by themselves once their approval or runtime appears.
+ */
+export type WorkerMcpServerReport =
+  | { name: string; status: 'ready' | 'disabled' }
+  | { name: string; status: 'waiting' | 'failed'; error: string; reason: WorkerMcpReason };
+
+declare const rebuiltFromFixedWording: unique symbol;
+
+/**
+ * The server list the status shows. Only `normalizeWorkerMcpServers` in
+ * `workerMcpReason.ts` makes one, so a hand-built entry with an error's own
+ * text cannot reach the status.
+ */
+export type PublishedWorkerMcpServers = readonly WorkerMcpServerReport[] & { readonly [rebuiltFromFixedWording]: true };
+
 /** Lightweight worker state shared by the startup graph and HTTP routes. */
 export interface WorkerBootstrapStatus {
   mode: 'local' | 'worker';
@@ -5,7 +37,7 @@ export interface WorkerBootstrapStatus {
   workspace?: string;
   archiveSha256?: string;
   error?: string;
-  servers?: Array<{ name: string; status: string; error?: string }>;
+  servers?: PublishedWorkerMcpServers;
 }
 
 declare global {

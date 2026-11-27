@@ -107,6 +107,11 @@ export function shutdownBackendServices(reason: string): Promise<void> {
   if (global.__flujo_shutdown_promise) return global.__flujo_shutdown_promise;
   const promise = (async () => {
     log.info(`Shutting down backend services (${reason})`);
+    if (isWorkerMode()) {
+      await import('@/backend/services/workspace/workerMcpServers')
+        .then(worker => worker.stopWorkerMcpRecheck())
+        .catch(error => log.warn('Could not stop worker MCP server checks:', error));
+    }
     let workspaces: string[];
     try {
       workspaces = (await listWorkspaces()).map(w => w.name);
@@ -588,29 +593,19 @@ async function startWorkerRuntime(): Promise<void> {
   if (!snapshot || snapshot.workspace !== getCurrentWorkspace()) throw new Error('Worker runtime workspace mismatch.');
   setWorkerBootstrapStatus({ state: 'installing', error: undefined });
   await verifyWorkerCodexAuth(snapshot);
+  const { collectWorkerMcpServers, publishWorkerMcpServers, scheduleWorkerMcpRecheck } = await import('@/backend/services/workspace/workerMcpServers');
   const installation = await reinstallWorkspaceMcpServers(snapshot.mcpTransfer);
-  const reports = installation.servers.map(server => ({
-    name: server.name, status: server.status,
-    ...(server.status === 'failed' ? { error: 'MCP dependency could not be prepared.' } : {}),
-  }));
-  setWorkerBootstrapStatus({ servers: reports });
+  publishWorkerMcpServers(installation.servers);
   if (!installation.ok) throw new Error('Worker MCP dependency preparation failed. Check the worker server status.');
   await mcpService.startEnabledServers();
-  const configs = await mcpService.loadServerConfigs();
-  if (!Array.isArray(configs)) throw new Error('Worker MCP configurations could not be loaded.');
-  const servers = await Promise.all(configs.map(async config => {
-    if (config.disabled) return { name: config.name, status: 'disabled' };
-    const status = await mcpService.getServerStatus(config.name);
-    return {
-      name: config.name, status: status.status === 'connected' ? 'ready' : 'failed',
-      ...(status.status !== 'connected' ? { error: 'MCP server did not connect.' } : {}),
-    };
-  }));
-  setWorkerBootstrapStatus({ servers });
+  const servers = await collectWorkerMcpServers(installation.servers);
+  publishWorkerMcpServers(servers);
   if (servers.some(server => server.status === 'failed')) {
-    throw new Error('Worker MCP startup failed. Every enabled server must connect before jobs are accepted.');
+    throw new Error('Worker MCP startup failed. Every enabled server must connect or wait for approval before jobs are accepted.');
   }
+  // Servers waiting for approval do not hold back the others; they start once approved.
   setWorkerBootstrapStatus({ state: 'ready', error: undefined });
+  scheduleWorkerMcpRecheck({ reset: true });
   // This entry point preserves snapshot/Persona suppression and admits only
   // separately enrolled installation-local ordinary schedule generations.
   const { isWorkerLocalRecoveryConfigured } = await import('@/backend/services/scheduler/workerLocalRecovery');

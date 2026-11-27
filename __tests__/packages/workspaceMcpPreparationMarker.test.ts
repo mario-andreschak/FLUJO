@@ -34,6 +34,10 @@ jest.mock('@/backend/services/mcp/registryInstall', () => ({
 jest.mock('@/backend/services/mcp/shippedServers', () => ({ createShippedServerConfig: jest.fn(), shippedDescriptorForConfig: jest.fn() }));
 jest.mock('@/backend/services/mcp/shippedWorkspacePackages', () => ({ ensureShippedWorkspacePackages: jest.fn(), shippedWorkspacePackageRuntimeDigest: jest.fn() }));
 import { reinstallWorkspaceMcpServers, type WorkspaceMcpTransferPlan } from '@/backend/services/packages/workspaceMcpTransfer';
+import { workerMcpServerReport } from '@/backend/services/workspace/workerMcpReason';
+
+/** A refused marker is reported with the fixed preparation reason, never the read error. */
+const markerRefusal = workerMcpServerReport('marker-fixture', 'PREPARE_FAILED');
 
 const sourceRoot = path.join(os.tmpdir(), 'flujo-marker-source');
 async function preparedFixture(disabled = false) {
@@ -131,9 +135,7 @@ it.each(['growth-in-place', 'oversized-replacement', 'hardlink-replacement'] as 
     });
     const result = await reinstallWorkspaceMcpServers(fixture.plan);
     expect(replaced).toBe(true);
-    expect(result).toEqual({ ok: false, servers: [{
-      name: 'marker-fixture', status: 'failed', error: 'Could not read the worker MCP preparation marker.',
-    }] });
+    expect(result).toEqual({ ok: false, servers: [markerRefusal] });
     expect(mockPrepareRegistry).not.toHaveBeenCalled();
     expect(mockUpdateConfig).not.toHaveBeenCalled();
     expect(mockConnect).not.toHaveBeenCalled();
@@ -189,9 +191,7 @@ it('refuses a marker link encountered during acquisition when open follows the l
   });
   const result = await reinstallWorkspaceMcpServers(fixture.plan);
   expect(linked).toBe(true);
-  expect(result).toEqual({ ok: false, servers: [{
-    name: 'marker-fixture', status: 'failed', error: 'Could not read the worker MCP preparation marker.',
-  }] });
+  expect(result).toEqual({ ok: false, servers: [markerRefusal] });
   expect(descriptorRead).not.toHaveBeenCalled();
   expect(pathnameRead).not.toHaveBeenCalled();
   expect(closed).toHaveBeenCalledTimes(1);
@@ -249,7 +249,7 @@ it('closes the marker descriptor after a read failure without disclosing the rea
     return handle;
   });
   const result = await reinstallWorkspaceMcpServers(fixture.plan);
-  expect(result.servers[0]).toEqual({ name: 'marker-fixture', status: 'failed', error: 'Could not read the worker MCP preparation marker.' });
+  expect(result.servers[0]).toEqual(markerRefusal);
   expect(JSON.stringify(result)).not.toContain('private-read-error-detail');
   expect(closed).toHaveBeenCalledTimes(1);
   expect(mockUpdateConfig).not.toHaveBeenCalled();
@@ -284,7 +284,7 @@ it('closes the descriptor when marker JSON is malformed and retains the fixed ca
   await fs.writeFile(fixture.marker, '{"unclosed":');
   const expectClosed = observeMarkerHandles(fixture.marker);
   const result = await reinstallWorkspaceMcpServers(fixture.plan);
-  expect(result.servers[0]).toEqual({ name: 'marker-fixture', status: 'failed', error: 'Could not read the worker MCP preparation marker.' });
+  expect(result.servers[0]).toEqual(markerRefusal);
   expect(mockUpdateConfig).not.toHaveBeenCalled();
   expect(mockConnect).not.toHaveBeenCalled();
   expectClosed();
