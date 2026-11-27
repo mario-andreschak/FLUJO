@@ -75,7 +75,7 @@ describe('pending question and form controls', () => {
   });
 
   it('retains a refreshed form draft and its named selector until the request changes', () => {
-    const form = { elicitationId: 'form-1', message: 'Choose the destination', requestedSchema: { properties: { destination: { type: 'string', title: 'Destination', enum: ['North', 'South'] }, note: { type: 'string', title: 'Note' } } } };
+    const form = { elicitationId: 'form-1', mode: 'form' as const, message: 'Choose the destination', requestedSchema: { properties: { destination: { type: 'string', title: 'Destination', enum: ['North', 'South'] }, note: { type: 'string', title: 'Note' } } } };
     const submit = jest.fn();
     const cancel = jest.fn();
     const view = render(<ChatMessages {...requiredProps} pendingElicitation={form} onSubmitElicitation={submit} onCancelElicitation={cancel} />);

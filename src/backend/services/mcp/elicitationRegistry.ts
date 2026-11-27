@@ -4,7 +4,8 @@ import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import type { EmitFn, NodeRef } from '@/shared/types/execution/events';
+import type { EmitFn, NodeRef, PendingElicitationPrompt } from '@/shared/types/execution/events';
+import { vetElicitationUrl } from '@/shared/utils/elicitationUrl';
 
 const log = createLogger('backend/services/mcp/elicitationRegistry');
 
@@ -20,16 +21,36 @@ const log = createLogger('backend/services/mcp/elicitationRegistry');
  * ExecutionEventBus (survives Next.js dev hot-reloads via globalThis).
  */
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+/** Signing in or paying on another site takes longer than filling in a form. */
+export const URL_ELICITATION_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_PENDING_PER_CONVERSATION = 8;
 const MAX_PENDING_PROCESS = 128;
 const MAX_PROMPT_BYTES = 32 * 1024;
 
-export interface PendingElicitationMetadata {
+interface PendingElicitationBase {
   conversationId: string;
   message: string;
-  requestedSchema: Record<string, unknown>;
+  /** Configured name of the MCP server that asks, shown on the card. */
+  serverName?: string;
   node?: NodeRef;
 }
+
+export interface PendingFormElicitation extends PendingElicitationBase {
+  mode?: 'form';
+  requestedSchema: Record<string, unknown>;
+}
+
+export interface PendingUrlElicitation extends PendingElicitationBase {
+  mode: 'url';
+  url: string;
+  /** The server's own id; `notifications/elicitation/complete` names it. */
+  serverElicitationId?: string;
+}
+
+export type PendingElicitationMetadata = PendingFormElicitation | PendingUrlElicitation;
+
+/** What a conversation snapshot shows: the prompt, never callbacks or answers. */
+export type PendingElicitationSnapshot = PendingElicitationPrompt;
 
 export class InvalidElicitationResponseError extends Error {
   constructor() { super('The response does not match the pending elicitation schema.'); }
@@ -67,6 +88,26 @@ function settle(key: string, pending: PendingElicitation, result: ElicitResult):
   return true;
 }
 
+function checkedMetadata(metadata: PendingElicitationMetadata): {
+  snapshot: PendingElicitationMetadata; validate?: JsonSchemaValidator<unknown>;
+} {
+  if (!metadata.conversationId || Buffer.byteLength(JSON.stringify(metadata)) > MAX_PROMPT_BYTES) {
+    throw new Error('Elicitation prompt exceeds the supported input limits.');
+  }
+  if (metadata.mode === 'url') {
+    const vetted = vetElicitationUrl(metadata.url);
+    if (!vetted) throw new Error('The MCP server asked to open a link FLUJO cannot offer safely.');
+    return { snapshot: { ...JSON.parse(JSON.stringify(metadata)) as PendingUrlElicitation, url: vetted.href } };
+  }
+  // Form elicitation permits a flat, primitive JSON Schema. Reject unsupported
+  // schemas before presenting a form that cannot safely be answered.
+  ElicitRequestSchema.parse({ method: 'elicitation/create', params: {
+    mode: 'form', message: metadata.message, requestedSchema: metadata.requestedSchema,
+  } });
+  const form = JSON.parse(JSON.stringify(metadata)) as PendingFormElicitation;
+  return { snapshot: form, validate: new AjvJsonSchemaValidator().getValidator(form.requestedSchema as JsonSchemaType) };
+}
+
 /**
  * Register a pending elicitation and return a promise that resolves when the
  * user submits or cancels the form. Auto-cancels after `timeoutMs` ms
@@ -83,22 +124,8 @@ export function registerPendingElicitation(
     || (metadata && listPendingElicitations(metadata.conversationId).length >= MAX_PENDING_PER_CONVERSATION)) {
     throw new Error('Too many pending elicitations or duplicate elicitation ID.');
   }
-  let snapshot: PendingElicitationMetadata | undefined;
-  let validate: JsonSchemaValidator<unknown> | undefined;
-  let emit: EmitFn | undefined;
-  if (metadata) {
-    if (!metadata.conversationId || Buffer.byteLength(JSON.stringify(metadata)) > MAX_PROMPT_BYTES) {
-      throw new Error('Elicitation prompt exceeds the supported input limits.');
-    }
-    // Form elicitation permits a flat, primitive JSON Schema. Reject unsupported
-    // schemas before presenting a form that cannot safely be answered.
-    ElicitRequestSchema.parse({ method: 'elicitation/create', params: {
-      mode: 'form', message: metadata.message, requestedSchema: metadata.requestedSchema,
-    } });
-    snapshot = JSON.parse(JSON.stringify(metadata)) as PendingElicitationMetadata;
-    validate = new AjvJsonSchemaValidator().getValidator(snapshot.requestedSchema as JsonSchemaType);
-    emit = executionEventBus.emitterFor(metadata.conversationId);
-  }
+  const checked = metadata ? checkedMetadata(metadata) : undefined;
+  const emit = metadata ? executionEventBus.emitterFor(metadata.conversationId) : undefined;
   return new Promise<ElicitResult>((resolve) => {
     const timer = setTimeout(() => {
       if (registry.get(key) === pending) {
@@ -107,7 +134,9 @@ export function registerPendingElicitation(
       }
     }, timeoutMs);
 
-    const pending: PendingElicitation = { workspace, elicitationId, metadata: snapshot, createdAt: Date.now(), emit, validate, resolve, timer };
+    const pending: PendingElicitation = {
+      workspace, elicitationId, metadata: checked?.snapshot, createdAt: Date.now(), emit, validate: checked?.validate, resolve, timer,
+    };
     registry.set(key, pending);
   });
 }
@@ -137,9 +166,16 @@ export function resolveConversationElicitation(
   const pending = registry.get(key);
   if (!pending || pending.metadata?.conversationId !== conversationId) return false;
   const parsed = ElicitResultSchema.safeParse(result);
-  if (!parsed.success || (result.action === 'accept'
+  if (!parsed.success) throw new InvalidElicitationResponseError();
+  if (pending.metadata.mode === 'url') {
+    // Accepting a link request means the person opened it and finished there.
+    // Only the decision goes back to the server.
+    if (result.action === 'accept' && result.content !== undefined) throw new InvalidElicitationResponseError();
+    return settle(key, pending, { action: result.action });
+  }
+  if (result.action === 'accept'
     && (Buffer.byteLength(JSON.stringify(result.content ?? {})) > MAX_PROMPT_BYTES
-      || !pending.validate?.(result.content ?? {}).valid))) throw new InvalidElicitationResponseError();
+      || !pending.validate?.(result.content ?? {}).valid)) throw new InvalidElicitationResponseError();
   return settle(key, pending, parsed.data);
 }
 
@@ -147,23 +183,62 @@ export function cancelConversationElicitation(conversationId: string, elicitatio
   return resolveConversationElicitation(conversationId, elicitationId, { action: 'cancel' });
 }
 
+/**
+ * The server says the person finished a link request
+ * (`notifications/elicitation/complete`). Unknown or already finished ids are
+ * ignored, as the specification requires.
+ */
+export function completeServerUrlElicitation(serverName: string, serverElicitationId: string): boolean {
+  const workspace = getCurrentWorkspace();
+  for (const [key, pending] of registry) {
+    const metadata = pending.metadata;
+    if (pending.workspace === workspace && metadata?.mode === 'url'
+      && metadata.serverName === serverName && metadata.serverElicitationId === serverElicitationId) {
+      return settle(key, pending, { action: 'accept' });
+    }
+  }
+  return false;
+}
+
 export function hasPendingElicitation(conversationId: string, elicitationId: string): boolean {
   return registry.get(keyOf(elicitationId, conversationId))?.metadata?.conversationId === conversationId;
 }
 
+function snapshotOf(pending: PendingElicitation, metadata: PendingElicitationMetadata): PendingElicitationSnapshot {
+  const base = {
+    elicitationId: pending.elicitationId,
+    message: metadata.message,
+    createdAt: pending.createdAt,
+    ...(metadata.serverName ? { serverName: metadata.serverName } : {}),
+    ...(metadata.node ? { node: { ...metadata.node } } : {}),
+  };
+  return metadata.mode === 'url'
+    ? { ...base, mode: 'url', url: metadata.url }
+    : { ...base, mode: 'form', requestedSchema: JSON.parse(JSON.stringify(metadata.requestedSchema)) as Record<string, unknown> };
+}
+
 /** Cloned, bounded prompt metadata, never callbacks or external authorization. */
-export function listPendingElicitations(conversationId: string): Array<{
-  elicitationId: string; message: string; requestedSchema: Record<string, unknown>; createdAt: number; node?: NodeRef;
+export function listPendingElicitations(conversationId: string): PendingElicitationSnapshot[] {
+  const workspace = getCurrentWorkspace();
+  return Array.from(registry.values()).flatMap(pending => pending.workspace === workspace
+    && pending.metadata?.conversationId === conversationId ? [snapshotOf(pending, pending.metadata)] : []);
+}
+
+/**
+ * Every prompt waiting in this workspace, for the approvals inbox. Ids, server
+ * and kind only: the question text and the link stay in the conversation.
+ */
+export function listAllPendingElicitations(): Array<{
+  conversationId: string; elicitationId: string; mode: 'form' | 'url'; serverName?: string; createdAt: number;
 }> {
   const workspace = getCurrentWorkspace();
-  return Array.from(registry.values()).filter(pending => pending.workspace === workspace
-    && pending.metadata?.conversationId === conversationId).map(pending => ({
+  return Array.from(registry.values()).flatMap(pending => pending.workspace === workspace && pending.metadata ? [{
+    conversationId: pending.metadata.conversationId,
     elicitationId: pending.elicitationId,
-    message: pending.metadata!.message,
-    requestedSchema: JSON.parse(JSON.stringify(pending.metadata!.requestedSchema)) as Record<string, unknown>,
+    mode: pending.metadata.mode === 'url' ? 'url' as const : 'form' as const,
+    ...(pending.metadata.serverName ? { serverName: pending.metadata.serverName } : {}),
     createdAt: pending.createdAt,
-    ...(pending.metadata!.node ? { node: { ...pending.metadata!.node } } : {}),
-  }));
+  }] : []);
 }
 
 /** Stop this conversation without cancelling other conversations or authorization. */

@@ -1,4 +1,5 @@
 import { loadServerConfigs } from '@/backend/services/mcp/config';
+import { mcpAppsEnabled } from '@/shared/utils/mcpClientFeatures';
 import {
   CreatePersonaAppGrantInputSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
@@ -87,7 +88,7 @@ async function requireSelectableMcpConfig(mcpServerName: string): Promise<MCPSer
 
 async function requireDirectAppConfig(mcpServerName: string): Promise<MCPServerConfig> {
   const config = await requireSelectableMcpConfig(mcpServerName);
-  if (config.enableMcpApps !== true) {
+  if (!mcpAppsEnabled(config)) {
     throw new PersonaDomainConflictError(
       `MCP Apps are not enabled for config ${JSON.stringify(mcpServerName)}.`,
     );

@@ -11,6 +11,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { ToolDefinition } from '../types';
 import { encodeToolName, hashSchema } from './toolNamespace';
 import { buildMCPResourceTools } from './mcpResourceTools';
+import { buildMcpSkillTools } from './mcpSkillTools';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import OpenAI from 'openai';
 import { hidePresetParameters, mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
@@ -360,6 +361,14 @@ export class ToolHandler {
           }
         } catch (resourceErr) {
           log.warn('processMCPNodes: buildMCPResourceTools failed, skipping resource tool', { resourceErr });
+        }
+        // Skills over MCP: the skill catalog of bound servers, loaded on demand.
+        try {
+          for (const skillTool of await buildMcpSkillTools(mcpNodes)) {
+            if (!allTools.some((t) => t.name === skillTool.name)) allTools.push(skillTool);
+          }
+        } catch (skillErr) {
+          log.warn('processMCPNodes: buildMcpSkillTools failed, skipping the skill tool', { skillErr });
         }
       }
 

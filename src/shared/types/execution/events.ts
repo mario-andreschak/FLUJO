@@ -230,8 +230,14 @@ export interface RunAwaitingElicitationEvent extends ExecutionEventBase {
   elicitationId: string;
   /** Human-readable prompt from the server. */
   message: string;
-  /** JSON Schema object subset describing the fields to collect. */
-  requestedSchema: Record<string, unknown>;
+  /** Configured name of the MCP server that asks. */
+  serverName?: string;
+  /** `form` (the default) collects fields; `url` asks the person to open a link. */
+  mode?: 'form' | 'url';
+  /** JSON Schema object subset describing the fields to collect (form mode). */
+  requestedSchema?: Record<string, unknown>;
+  /** The checked link to open (URL mode). */
+  url?: string;
 }
 /** One prompt of a model-initiated `question` tool call (issue #258). */
 export interface QuestionPrompt {
@@ -268,8 +274,16 @@ export interface PendingInputSnapshot {
   /** Next sequence observed with the synchronous mailbox snapshot. */
   nextSeq: number;
   questions: Array<{ questionId: string; questions: QuestionPrompt[]; createdAt: number; node?: NodeRef }>;
-  elicitations: Array<{ elicitationId: string; message: string; requestedSchema: Record<string, unknown>; createdAt: number; node?: NodeRef }>;
+  elicitations: PendingElicitationPrompt[];
 }
+/** A waiting MCP elicitation as a conversation snapshot shows it: a form or a link. */
+export type PendingElicitationPrompt = {
+  elicitationId: string;
+  message: string;
+  createdAt: number;
+  serverName?: string;
+  node?: NodeRef;
+} & ({ mode: 'form'; requestedSchema: Record<string, unknown> } | { mode: 'url'; url: string });
 export interface RunDoneEvent extends ExecutionEventBase {
   type: 'run:done';
   // 'capped' (issue #253): the run landed gracefully at a Process node's

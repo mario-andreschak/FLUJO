@@ -1,5 +1,6 @@
 "use client";
 
+import { mcpAppsEnabled } from '@/shared/utils/mcpClientFeatures';
 import React, {
   forwardRef,
   useCallback,
@@ -259,7 +260,7 @@ async function loadEnhancedHitlist(): Promise<{ suggestions: PromptReferenceSugg
   ]);
   const configs = Array.isArray(configsResult) ? configsResult : [];
   const discoveredApps = (await Promise.all(configs
-    .filter((config) => config.disabled !== true && config.enableMcpApps === true)
+    .filter((config) => config.disabled !== true && mcpAppsEnabled(config))
     .map(async (config) => {
       const [resourceResult, toolResult] = await Promise.all([
         mcpService.listServerResources(config.name).catch(() => ({ resources: [] })),

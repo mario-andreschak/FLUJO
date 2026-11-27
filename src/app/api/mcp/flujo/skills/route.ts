@@ -1,4 +1,5 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { mcpSkillsEnabled } from '@/shared/utils/mcpClientFeatures';
 import type { NextRequest } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { mcpService } from '@/backend/services/mcp';
@@ -25,7 +26,7 @@ async function GET_handler() {
 
   const skills = [];
   for (const config of configs) {
-    if (config.disabled || config.enableMcpSkills !== true) continue;
+    if (config.disabled || !mcpSkillsEnabled(config)) continue;
 
     let cursor: string | undefined;
     const seenCursors = new Set<string>();

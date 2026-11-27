@@ -1,5 +1,6 @@
 'use client';
 
+import { mcpElicitationEnabled } from '@/shared/utils/mcpClientFeatures';
 import React, { useEffect, useRef, useState } from 'react';
 import { TabProps, MessageState } from '../../types';
 import { MCPServerConfig, MCPStdioConfig, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp/mcp';
@@ -864,7 +865,7 @@ const ConfigureTab: React.FC<TabProps> = ({
 
                   <Box>
                     <ElicitationManager
-                      policy={localConfig.elicitation}
+                      enabled={mcpElicitationEnabled(localConfig)}
                       onChange={(elicitation) => setLocalConfig(prev => ({ ...prev, elicitation }))}
                     />
                   </Box>

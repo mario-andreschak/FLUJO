@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { mcpAppRuntimeBrokerEnabled } from '@/shared/utils/mcpClientFeatures';
 import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
@@ -112,7 +113,7 @@ export async function resolveTrustedHostLaunch(config: MCPStdioConfig) {
 export async function trustedHostBrokerEnvironment(config: MCPStdioConfig, broker: Record<string, string> | undefined): Promise<Record<string, string>> {
   if (!broker) return {};
   const { policy } = await trustedHostMcpApprovalAsync(config);
-  if (!config.enableMcpApps || Object.keys(broker).some(name => !BROKER_NAMES.includes(name) || !policy.environmentNames.includes(name))) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+  if (!mcpAppRuntimeBrokerEnabled(config) || Object.keys(broker).some(name => !BROKER_NAMES.includes(name) || !policy.environmentNames.includes(name))) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
   return { ...broker };
 }
 

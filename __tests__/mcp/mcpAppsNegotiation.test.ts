@@ -1,4 +1,6 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { MCP_SKILLS_EXTENSION_ID } from '@/shared/types/mcp';
+import { mcpAppsEnabled } from '@/shared/utils/mcpClientFeatures';
 import {
   capabilityKey,
   createNewClient,
@@ -68,11 +70,13 @@ describe('MCP Apps client capability negotiation', () => {
   it.each([
     ['stable v1', createNewClient],
     ['v2 beta', createNewBetaClient],
-  ])('advertises the stable UI extension for opted-in servers on %s clients', (_label, factory) => {
-    const capabilities = declaredCapabilities(factory(config(true)));
+  ])('advertises the stable UI extension unless Apps were turned off, on %s clients', (_label, factory) => {
+    const capabilities = declaredCapabilities(factory(config()));
 
+    expect(declaredCapabilities(factory(config(true))).extensions).toEqual(capabilities.extensions);
     expect(capabilities.extensions).toEqual({
       [STDIO_OAUTH_EXTENSION_ID]: STDIO_OAUTH_EXTENSION_CAPABILITY,
+      [MCP_SKILLS_EXTENSION_ID]: {},
       [MCP_APPS_EXTENSION_ID]: {
         mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE],
       },
@@ -82,13 +86,16 @@ describe('MCP Apps client capability negotiation', () => {
   it.each([
     ['stable v1', createNewClient],
     ['v2 beta', createNewBetaClient],
-  ])('does not advertise MCP Apps for an unopted server on %s clients', (_label, factory) => {
-    expect(
-      declaredCapabilities(factory(config())).extensions?.[MCP_APPS_EXTENSION_ID],
-    ).toBeUndefined();
+  ])('does not advertise MCP Apps when turned off, or unset on a host-trusted server, on %s clients', (_label, factory) => {
     expect(
       declaredCapabilities(factory(config(false))).extensions?.[MCP_APPS_EXTENSION_ID],
     ).toBeUndefined();
+    expect(
+      declaredCapabilities(factory(remoteConfig())).extensions?.[MCP_APPS_EXTENSION_ID],
+    ).toEqual({ mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE] });
+    expect(mcpAppsEnabled({ trustedHost: {} })).toBe(false);
+    expect(mcpAppsEnabled({ trustedHost: {}, enableMcpApps: true })).toBe(true);
+    expect(mcpAppsEnabled({ isolation: {} })).toBe(false);
   });
 
   it('includes the MCP Apps opt-in in the reconnect capability key', () => {

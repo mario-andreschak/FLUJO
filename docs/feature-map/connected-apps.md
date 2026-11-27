@@ -16,6 +16,7 @@ Here the user gives agents extra abilities by connecting apps (MCP tool servers)
 - `connected-apps-import-export`: "Import" and "Export" menus, each offering several config formats ("<name> format").
 - `connected-apps-bundle-install`: drop an MCP bundle file (`.mcpb`, or the older `.dxt`) anywhere on the page ("Drop the .mcpb file to install it"), or choose "Import" → "MCP bundle file (.mcpb)…". The dialog "Install an MCP bundle" (or "Update <name>" when that bundle is installed) shows the name, author, "What it will run", "Trust" (signature status and warnings), "Works on", "Tools it lists", "Name in FLUJO" and "Settings"; secret settings are password fields. Nothing is unpacked or started before "Install"/"Update". The bundle goes to `mcp-servers/mcpb/<name>` in the workspace; deleting the server deletes that folder.
 - `connected-apps-apps-dashboard`: "MCP Apps Dashboard" button (accessible name "Open MCP Apps Dashboard").
+- `connected-apps-client-features`: each card's switches "Render interactive apps" and "MCP Skills" are on unless turned off; "Edit server" → "Allow this tool to ask you questions" (elicitation: forms and links) is on too. Apps run in an isolated or host-trusted setup keep these off until switched on.
 - `connected-apps-journey`: first-run guide "Your first AI + app agent" with "Inspect and test tools" and "Hide this guide".
 
 ## How to get to it (user POV)

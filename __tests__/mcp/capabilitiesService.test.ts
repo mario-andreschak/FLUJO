@@ -112,7 +112,7 @@ describe('MCPService.getServerProxyCapabilities', () => {
       appsCapability: { mimeTypes: ['text/html;profile=mcp-app'] },
     });
     expect(connect).toHaveBeenCalledTimes(1);
-    loadServerConfigsMock.mockResolvedValue(configs);
+    loadServerConfigsMock.mockResolvedValue(configs.map(config => ({ ...config, enableMcpSkills: false })));
     expect((await svc.getServerProxyCapabilities('srv')).skillsCapability).toBeUndefined();
     connect.mockResolvedValue({ success: false, error: 'retired' });
     expect(await svc.getServerProxyCapabilities('srv')).toEqual({});

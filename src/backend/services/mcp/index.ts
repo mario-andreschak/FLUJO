@@ -1,4 +1,6 @@
 import { subscribeModernResource, retireModernSubscriptions } from './modernSubscriptions';
+import { completeRequiredUrlElicitations, requiredUrlElicitationsOf } from './elicitation';
+import { mcpAppsEnabled, mcpSkillsEnabled } from '@/shared/utils/mcpClientFeatures';
 import { getHarnessExecution, replayHarnessTool, harnessResourceSnapshot } from '@/backend/services/harness/executionScope';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { executionApprovalFailure } from './executionApproval';
@@ -331,6 +333,8 @@ type ToolArgs = Record<string, unknown>;
 
 // Create a logger instance for this file
 const log = createLogger("backend/services/mcp/index");
+/** A server may ask for links again after the first round; stop after this many. */
+const MAX_URL_ELICITATION_ROUNDS = 2;
 
 function transportForHostInspection(transport: unknown): unknown {
   let current = transport;
@@ -2737,7 +2741,7 @@ export class MCPService {
           errorType: 'mcp-isolation', statusCode: error instanceof McpIsolationError && error.code !== 'ISOLATION_UNAVAILABLE' ? 403 : 503 };
       }
       await assertBundledFlujoWorkloadEffectCurrent();
-      const result = await callToolFunction(
+      const dispatch = () => callToolFunction(
         client,
         serverName,
         toolName,
@@ -2753,6 +2757,16 @@ export class MCPService {
         trustedContext?.conversationId,
         projectDir,
       );
+      let result = await dispatch();
+      // URLElicitationRequiredError (-32042): the server needs the person to
+      // open a link first. Ask in the calling run, then try the call again.
+      for (let round = 0; round < MAX_URL_ELICITATION_ROUNDS && !protectedDispatch; round += 1) {
+        const links = requiredUrlElicitationsOf(result.protocolError);
+        const config = links ? await this.getServerConfig(serverName) : undefined;
+        if (!links || !config || !await completeRequiredUrlElicitations(config, links, signal)) break;
+        await assertBundledFlujoWorkloadEffectCurrent();
+        result = await dispatch();
+      }
       if (result.success && trustedTicketConversationId) {
         const ticketId = createdTicketIdFromMcpResult(result.data);
         if (ticketId) {
@@ -2849,16 +2863,16 @@ export class MCPService {
   }
 
   /**
-   * Treat the per-server MCP Apps opt-in as a live authorization predicate.
+   * Treat the per-server MCP Apps switch as a live authorization predicate.
    * Historical chat messages can outlive a config change, so a persisted
-   * `ui://` marker must not keep app-originated access after the user opts out.
-   * Every persisted config follows the same opt-in rule; shipped package records
-   * are provisioned with access off until the user explicitly enables it.
+   * `ui://` marker must not keep app-originated access after the user turns
+   * Apps off. An unset switch means on (mcpClientFeatures.ts); shipped package
+   * records store their own explicit value.
    */
   async isMcpAppAccessEnabled(serverName: string): Promise<boolean> {
     const config = await this.getServerConfig(serverName);
     if (config?.disabled === true) return false;
-    return config?.enableMcpApps === true;
+    return !!config && mcpAppsEnabled(config);
   }
 
   private async checkMcpAppAccess(
@@ -3026,7 +3040,7 @@ export class MCPService {
         errorType: "disabled",
       };
     }
-    if (config.enableMcpSkills !== true) {
+    if (!mcpSkillsEnabled(config)) {
       return {
         success: false,
         error: `MCP Skills are disabled for server '${serverName}'.`,
@@ -3069,7 +3083,7 @@ export class MCPService {
     // There is no asynchronous work between these metadata reads.
     const client = this.getClient(serverName);
     const skillsCapability = getMcpSkillsCapability(
-      client, config.enableMcpSkills === true && !isProtectedExecutionServer(serverName),
+      client, mcpSkillsEnabled(config) && !isProtectedExecutionServer(serverName),
     );
     const capabilities = client?.getServerCapabilities() as
       | { extensions?: Record<string, unknown> }
@@ -3093,7 +3107,7 @@ export class MCPService {
     cursor?: string,
   ): Promise<McpServerSkillsResult> {
     const config = await this.getServerConfig(serverName);
-    if (!config || config.disabled || config.enableMcpSkills !== true) {
+    if (!config || config.disabled || !mcpSkillsEnabled(config)) {
       return {
         resultType: "complete",
         skills: [],

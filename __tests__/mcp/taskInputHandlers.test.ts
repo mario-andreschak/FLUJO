@@ -16,7 +16,10 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 const request = { method: 'sampling/createMessage', params: { maxTokens: 20, messages: [{ role: 'user', content: { type: 'text', text: 'offline' } }] } };
 function clientFixture() {
   const inbound = new Map<unknown, (request: {params?:unknown}) => Promise<unknown>>();
-  const client = { setRequestHandler: (schema: unknown, handler: (request: {params?:unknown}) => Promise<unknown>) => inbound.set(schema, handler) } as unknown as Client;
+  const client = {
+    setRequestHandler: (schema: unknown, handler: (request: {params?:unknown}) => Promise<unknown>) => inbound.set(schema, handler),
+    setNotificationHandler: () => undefined,
+  } as unknown as Client;
   return { client, inbound };
 }
 beforeEach(() => { getModel.mockReset().mockResolvedValue({name:'offline',ApiKey:'offline',adapter:'openai'}); completion.mockReset().mockResolvedValue({completion:{choices:[{message:{content:'answer'}}]}}); emit.mockClear(); });

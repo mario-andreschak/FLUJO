@@ -178,22 +178,19 @@ describe("MCP external authorization extension", () => {
     expect(seen).toEqual(["decline"]);
   });
 
-  it("cancels unsolicited URL elicitation and never exposes it to UI", async () => {
+  it("leaves a link request without a pending sign-in to the ordinary elicitation flow", async () => {
     await expect(
       captureExternalAuthorizationElicitation("unsolicited-server", {
         mode: "url",
         url: "https://example.com/authorize",
       }),
-    ).resolves.toEqual({ action: "cancel" });
-  });
-
-  it("cancels malformed URL-mode elicitation instead of treating it as a form", async () => {
+    ).resolves.toBeUndefined();
     await expect(
       captureExternalAuthorizationElicitation("malformed-url-server", {
         mode: "url",
         url: "",
       }),
-    ).resolves.toEqual({ action: "cancel" });
+    ).resolves.toBeUndefined();
   });
 
   it("rejects insecure non-loopback authorization URLs", async () => {
