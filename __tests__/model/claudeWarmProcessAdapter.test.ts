@@ -108,6 +108,9 @@ it('reuses a parked process only for the same start-up options', async () => {
     expect(parkedOptions[name]).toEqual(coldOptions[name]);
   }
   expect((coldOptions.env as Record<string, string>).ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false');
+  // The same hook events, so a parked process also stops after a hand-off (#1414).
+  expect(Object.keys(coldOptions.hooks as object).sort()).toEqual(['PostToolBatch', 'PreToolUse']);
+  expect(Object.keys(parkedOptions.hooks as object).sort()).toEqual(['PostToolBatch', 'PreToolUse']);
   expect(parkedOptions.canUseTool).not.toBe(coldOptions.canUseTool);
   expect(parkedOptions.abortController).not.toBe(coldOptions.abortController);
   const parkedTool = sdkServers.at(-1)!.tools!.find(tool => tool.name === 'lookup')!;

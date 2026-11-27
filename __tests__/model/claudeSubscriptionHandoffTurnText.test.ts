@@ -152,3 +152,83 @@ describe('ClaudeSubscriptionAdapter — answer text in the handoff turn (#1412)'
     expect(JSON.stringify(transcript)).not.toContain(NARRATION);
   });
 });
+
+/**
+ * #1414: after a plain handoff, Claude Code stops by itself (PostToolBatch
+ * hook). The adapter must not stop it first, or Claude Code drops the hook's
+ * answer and asks the model for one more turn. The real process is covered by
+ * claudeHandoffModelRequests.test.ts; these cover the adapter's three ways out.
+ */
+describe('ClaudeSubscriptionAdapter — end after a plain handoff (#1414)', () => {
+  const streamEvent = (type: string) => ({ ...frame, type: 'stream_event', uuid: `s-${type}`, event: { type } });
+  /** The handoff turn, its tool result, then what Claude Code does next. */
+  function handoffThen(next: (signal: AbortSignal) => AsyncGenerator<Record<string, unknown>>) {
+    const seen = { abortedBeforeNext: false };
+    const implementation = ({ options }: { options: Record<string, unknown> }) => (async function* () {
+      const signal = (options.abortController as AbortController).signal;
+      yield assistantFrame('a1', 'msg_1', { type: 'text', text: ANSWER });
+      await runSdkTool(options, 'handoff_to_finish_node', 'toolu_handoff');
+      yield assistantFrame('a2', 'msg_1', { type: 'tool_use', id: 'toolu_handoff', name: 'mcp__flujo__handoff_to_finish_node', input: {} });
+      yield streamEvent('message_delta');
+      yield streamEvent('message_stop');
+      yield toolResultFrame('u1', 'toolu_handoff', 'Handing off.');
+      yield { ...frame, type: 'system', subtype: 'session_state_changed', state: 'running' };
+      seen.abortedBeforeNext = signal.aborted;
+      yield* next(signal);
+    })();
+    return { seen, implementation };
+  }
+  async function expectHandoffAnswer() {
+    const { completion, transcript } = await new ClaudeSubscriptionAdapter().createCompletion(input());
+    expect(completion.choices[0].message.content).toBe(ANSWER);
+    expect(completion.choices[0].message.tool_calls).toEqual([
+      expect.objectContaining({ id: 'toolu_handoff', function: expect.objectContaining({ name: 'handoff_to_finish_node' }) }),
+    ]);
+    expect(JSON.stringify(transcript)).not.toContain(NARRATION);
+  }
+
+  it('reads on to the result Claude Code sends when it stops by itself', async () => {
+    let readResult = false;
+    const { seen, implementation } = handoffThen(async function* () {
+      readResult = true;
+      yield { ...frame, type: 'result', subtype: 'success', is_error: false, result: '', terminal_reason: 'hook_stopped',
+        stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } };
+    });
+    queryMock.mockImplementation(implementation);
+
+    await expectHandoffAnswer();
+    expect(seen.abortedBeforeNext).toBe(false);
+    expect(readResult).toBe(true);
+  });
+
+  it('stops Claude Code at once when it starts another model turn anyway', async () => {
+    let abortedAtNewTurn: boolean | undefined;
+    const { implementation } = handoffThen(async function* (signal) {
+      try {
+        yield streamEvent('message_start');
+        yield assistantFrame('a3', 'msg_2', { type: 'text', text: NARRATION });
+      } finally {
+        abortedAtNewTurn = signal.aborted;
+      }
+    });
+    queryMock.mockImplementation(implementation);
+
+    await expectHandoffAnswer();
+    expect(abortedAtNewTurn).toBe(true);
+  });
+
+  it('stops Claude Code itself when no result comes after the handoff', async () => {
+    const startedAt = Date.now();
+    const { implementation } = handoffThen(async function* (signal) {
+      // Claude Code goes quiet; like the real SDK, the stream ends once it is stopped.
+      await new Promise<void>(resolve => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+    queryMock.mockImplementation(implementation);
+
+    await expectHandoffAnswer();
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(2_500);
+  }, 20_000);
+});

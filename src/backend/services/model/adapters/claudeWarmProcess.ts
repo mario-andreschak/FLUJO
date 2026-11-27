@@ -24,11 +24,12 @@ import { createLogger } from '@/utils/logger';
  * `prewarm()`/`claim()` and skips the start-up.
  *
  * Isolation: a spare serves exactly one request and then exits, so no history
- * or session state carries over. Its callbacks (tool handlers, PreToolUse
- * hook, canUseTool) are bound at claim time to the claiming request's own
- * handlers; before a claim and after the request they deny everything. A spare
- * is only ever claimed by a request whose key matches, so the account,
- * workspace home and tool set are the ones it was started with.
+ * or session state carries over. Its callbacks (tool handlers, PreToolUse and
+ * PostToolBatch hooks, canUseTool) are bound at claim time to the claiming
+ * request's own handlers; before a claim and after the request they deny
+ * everything (the batch hook stops Claude Code). A spare is only ever claimed
+ * by a request whose key matches, so the account, workspace home and tool set
+ * are the ones it was started with.
  *
  * Resilience: a spare that dies, is refused or is too slow to claim is simply
  * dropped and the request starts Claude Code as before. Spares idle for
@@ -45,6 +46,7 @@ type CanUseTool = NonNullable<Options['canUseTool']>;
 export interface ClaudeSpareBinding {
   canUseTool: CanUseTool;
   preToolUse: HookCallback;
+  postToolBatch: HookCallback;
   tools: ReadonlyMap<string, ToolHandler>;
 }
 
@@ -244,6 +246,7 @@ export function prepareClaudeSpare(params: {
     abortController: AbortController;
     canUseTool: CanUseTool;
     preToolUse: HookCallback;
+    postToolBatch: HookCallback;
     toolHandler: (name: string) => ToolHandler;
   }) => Options;
 }): void {
@@ -267,6 +270,9 @@ export function prepareClaudeSpare(params: {
         ? binding.current.preToolUse(input, toolUseId, opts)
         : Promise.resolve({ hookSpecificOutput: { hookEventName: 'PreToolUse' as const,
           permissionDecision: 'deny' as const, permissionDecisionReason: unbound } }),
+      postToolBatch: (input, toolUseId, opts) => binding.current
+        ? binding.current.postToolBatch(input, toolUseId, opts)
+        : Promise.resolve({ continue: false, stopReason: unbound }),
       toolHandler: name => (args, extra) => {
         const handler = binding.current?.tools.get(name);
         return handler ? handler(args, extra)
