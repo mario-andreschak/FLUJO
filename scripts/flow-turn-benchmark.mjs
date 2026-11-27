@@ -153,7 +153,7 @@ if (compareAt !== -1) {
     const old = before.series.find(item => item.mode === series.mode && item.scenario === series.scenario);
     if (!old) continue;
     out.push(`## ${series.mode} / ${series.scenario}`, '', '| step | cold before | cold after | warm before | warm after | warm change |', '|---|---:|---:|---:|---:|---:|');
-    const keys = ['total', 'before_model', 'first_token_from_send', 'first_token_pass', 'tool_roundtrip', 'after_model', 'flujo_own'];
+    const keys = ['total', 'before_model', 'first_token_from_send', 'first_token_pass', 'tool_roundtrip', 'after_model', 'flujo_own', 'cpu_ms'];
     const traceKeys = [...new Set([...old.runs, ...series.runs].flatMap(run => Object.keys(run.trace ?? {})))].map(key => `trace: ${key}`);
     for (const key of [...keys, ...traceKeys]) {
       const a = pick(old, key), b = pick(series, key);
