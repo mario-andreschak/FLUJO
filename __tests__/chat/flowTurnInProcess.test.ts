@@ -42,7 +42,7 @@ const RUNS = outFile ? Number(process.env.FLUJO_TURN_BENCH_RUNS ?? 12) : 2;
 const WARMUP = outFile ? Number(process.env.FLUJO_TURN_BENCH_WARMUP ?? 8) : 0;
 jest.setTimeout(outFile ? 900_000 : 120_000);
 
-const ENV = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_WRITER_LEASE_IDLE_MS'] as const;
+const ENV = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_WRITER_LEASE_IDLE_MS', 'FLUJO_LOW_LATENCY_SAVES'] as const;
 const STUB_KEY = 'bench-stub-key';
 const KNOWLEDGE_URI = 'bench://kb/faq';
 const KNOWLEDGE = Array.from({ length: 40 }, (_, index) =>
@@ -214,7 +214,7 @@ afterAll(async () => {
   await settle();
   const { runWithWorkspace } = await import('@/utils/workspace');
   const { mcpService } = await import('@/backend/services/mcp');
-  const { retireIdleWorkspaceWriterRegistration } = await import('@/backend/services/enduringAgents/runtimeLock');
+  const { retireIdleModelCatalogReader, retireIdleWorkspaceWriterRegistration } = await import('@/backend/services/enduringAgents/runtimeLock');
   const { flushStatisticsEvents } = await import('@/backend/services/statistics');
   await runWithWorkspace('default-workspace', () => mcpService.disconnectAll('test finished'));
   for (const transport of mcpSessions.values()) await transport.close().catch(() => undefined);
@@ -223,7 +223,10 @@ afterAll(async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
   await flushStatisticsEvents();
-  await runWithWorkspace('default-workspace', () => retireIdleWorkspaceWriterRegistration());
+  await runWithWorkspace('default-workspace', async () => {
+    await retireIdleModelCatalogReader();
+    await retireIdleWorkspaceWriterRegistration();
+  });
   ENV.forEach((name, index) => {
     if (previous[index] === undefined) delete process.env[name];
     else process.env[name] = previous[index];
@@ -348,4 +351,28 @@ it('answers flow turns with MCP tools and a bound resource through the real rout
     await fs.writeFile(outFile, JSON.stringify({ schemaVersion: 1, label: process.env.FLUJO_TURN_BENCH_LABEL ?? 'in-process',
       startedUtc: new Date().toISOString(), node: process.version, model: 'stub (in process)', runs: RUNS, series }, null, 2));
   }
+});
+
+it('keeps every finished turn on disk with fewer saves per turn (#1408)', async () => {
+  const before = process.env.FLUJO_LOW_LATENCY_SAVES;
+  process.env.FLUJO_LOW_LATENCY_SAVES = '1';
+  try {
+    const tool = await turn('stream', 'tool');
+    expect([tool.model_calls, tool.toolCalled]).toEqual([2, true]);
+    continued = undefined;
+    await turn('json', 'continue');
+    await turn('json', 'continue');
+  } finally {
+    if (before === undefined) delete process.env.FLUJO_LOW_LATENCY_SAVES;
+    else process.env.FLUJO_LOW_LATENCY_SAVES = before;
+  }
+  const { runWithWorkspace } = await import('@/utils/workspace');
+  const { loadItem } = await import('@/utils/storage/backend');
+  const stored = await runWithWorkspace('default-workspace', () =>
+    loadItem<{ status?: string; messages: Array<{ role: string; content?: unknown }>; recovery?: { classification?: string; currentCheckpoint?: { phase?: string } } }>(
+      `conversations/${continued}` as never, undefined as never));
+  expect(stored.status).toBe('completed');
+  expect(stored.recovery).toMatchObject({ classification: 'completed', currentCheckpoint: { phase: 'node:after' } });
+  const said = stored.messages.filter(message => message.role !== 'system').map(message => message.role);
+  expect(said).toEqual(['user', 'assistant', 'user', 'assistant']);
 });

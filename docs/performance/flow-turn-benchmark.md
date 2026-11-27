@@ -55,6 +55,8 @@ node scripts/flow-turn-benchmark.mjs --compare before.json after.json
 - `--mcp-list-cache`: turn on reuse of MCP tool and resource lists
   (`FLUJO_MCP_LIST_CACHE=1`, issue #1408) in the server under test. The stub
   server announces list changes, as most current servers do.
+- `--low-latency-saves`: save the conversation fewer times per turn
+  (`FLUJO_LOW_LATENCY_SAVES=1`, issue #1408) in the server under test.
 - `--scenarios direct`: a one-word classification sent straight to the model
   (`model-<name>`, no flow).
 - `--fs-probe`: count file-system calls per turn inside the server.
@@ -88,6 +90,19 @@ slowly than a built server, so that cold turn is only a rough guide. Its times
 are not the shipped server's (no owner sign-in, Jest instead of the Next.js
 build, stubs in the same process): compare its results only with each other.
 On a busy machine, run each side a few times, taking turns.
+
+### Switches that change the numbers
+
+Both are read when a turn runs, so set them before Jest starts or pass them to
+the server under test:
+
+| variable | effect |
+|---|---|
+| `FLUJO_LOW_LATENCY_SAVES=1` | "Fewer saves per turn" (Settings > Experimental > Flow execution). Off by default. |
+| `FLUJO_MODEL_CATALOG_READER_IDLE_MS=0` | Release the model catalog reader registration after every model call, as before #1408. By default it stays published for 30 seconds. |
+
+With `FLUJO_TURN_TRACE_FILE` set, `persist.snapshot` counts the full
+conversation saves and `lock.catalogAdmit` the catalog registrations of a turn.
 
 ## What the columns mean
 

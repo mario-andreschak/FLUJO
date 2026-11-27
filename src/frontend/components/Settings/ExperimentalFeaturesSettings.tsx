@@ -289,6 +289,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleLowLatencySavesChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Low-latency saves toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        lowLatencySaves: event.target.checked,
+      },
+    });
+  };
+
   const handleMcpListCacheChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`MCP list reuse toggled: ${event.target.checked}`);
     updateSettings({
@@ -538,6 +549,13 @@ export default function ExperimentalFeaturesSettings() {
             label={t('settings.experimental.flowGenerator')}
             name="flowBasedGenerator"
             onChange={handleFlowBasedGeneratorChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.lowLatencySaves ?? false}
+            description={t('settings.experimental.lowLatencySavesDescription')}
+            label={t('settings.experimental.lowLatencySaves')}
+            name="lowLatencySaves"
+            onChange={handleLowLatencySavesChange}
           />
         </ExperimentalSettingsGroup>
 

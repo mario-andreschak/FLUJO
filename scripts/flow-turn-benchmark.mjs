@@ -35,6 +35,8 @@
  *   --mcp-delay <ms> answer each MCP request this much later, like a remote server
  *   --mcp-list-cache turn on reuse of MCP tool and resource lists
  *                    (FLUJO_MCP_LIST_CACHE=1) in the server under test
+ *   --low-latency-saves  save the conversation fewer times per turn
+ *                    (FLUJO_LOW_LATENCY_SAVES=1) in the server under test
  *   --compare <before.json> <after.json>  print two --out files side by side and exit
  *   --real   use a real model instead of the stub. Reads FLUJO_BENCH_REAL_BASE_URL
  *            (default https://api.openai.com/v1), FLUJO_BENCH_REAL_MODEL
@@ -101,6 +103,7 @@ const claudeWarm = flag('claude-warm');
 const mcpDelayMs = Number(option('mcp-delay', '0'));
 assert.ok(Number.isFinite(mcpDelayMs) && mcpDelayMs >= 0 && mcpDelayMs <= 10_000, '--mcp-delay must be 0..10000 ms');
 const mcpListCache = flag('mcp-list-cache');
+const lowLatencySaves = flag('low-latency-saves');
 const pauseMs = Number(option('pause', '0'));
 assert.ok(Number.isFinite(pauseMs) && pauseMs >= 0 && pauseMs <= 60_000, '--pause must be 0..60000 ms');
 const realModel = real ? {
@@ -378,6 +381,7 @@ async function startServer() {
       FLUJO_TURN_TRACE_FILE: traceFile,
       ...(claudeWarm ? { FLUJO_CLAUDE_WARM_PROCESS: '1' } : {}),
       ...(mcpListCache ? { FLUJO_MCP_LIST_CACHE: '1' } : {}),
+      ...(lowLatencySaves ? { FLUJO_LOW_LATENCY_SAVES: '1' } : {}),
       ...(fsProbe ? { FLUJO_BENCH_FS_STATS: fsStatsBase } : {}),
       NODE_OPTIONS: [extraNodeOptions, profileDir ? '--inspect=127.0.0.1:0' : '',
         // NODE_OPTIONS treats backslashes inside quotes as escapes; use forward slashes.
@@ -653,7 +657,7 @@ const results = { schemaVersion: 1, label, application, startedUtc: new Date().t
   buildId: (await fs.readFile(path.join(application, '.next', 'BUILD_ID'), 'utf8')).trim(),
   model: real ? `real ${realModel.name}` : seedFrom ? `configured model ${seedModelId}`
     : claudeModel ? `Claude subscription ${claudeModel}${claudeToken ? '' : ' (placeholder token: start-up only)'}${claudeWarm ? ', warm process on' : ''}`
-    : `stub (token gap ${tokenGapMs} ms)`, mcp: `${mcpDelayMs ? `MCP answers after ${mcpDelayMs} ms` : 'local MCP'}${mcpListCache ? ', list reuse on' : ''}`,
+    : `stub (token gap ${tokenGapMs} ms)`, mcp: `${mcpDelayMs ? `MCP answers after ${mcpDelayMs} ms` : 'local MCP'}${mcpListCache ? ', list reuse on' : ''}${lowLatencySaves ? ', fewer saves per turn' : ''}`,
   runs, series: [] };
 try {
   for (const name of ['application', 'data', 'home', 'temp']) await fs.mkdir(path.join(root, name), { recursive: true });
