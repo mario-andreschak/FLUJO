@@ -62,6 +62,16 @@ FLUJO checks the model against this list before a run starts and again before ev
 
 The list limits which FLUJO models are used. It cannot see past a model entry: a router such as `openrouter/auto` picks a provider itself, so do not list one if the destination matters.
 
+## A run that reaches Finish always answers
+
+A model sometimes hands off to Finish after thinking only, without writing an answer. FLUJO then does not reply with empty text. In this order, it:
+
+1. uses the answer when the model put it into the hand-off call itself,
+2. asks the same step once more for its answer as plain text. That step offers none of its tools, only `read_resource` when the conversation points at a stored result. The person's chat shows just the answer,
+3. if the model still writes nothing, replies "The model finished without writing an answer. Please ask again." The chat shows the same note under the empty message, and the `/v1/chat/completions` response has `flujo_no_answer: true`, also in its streamed form.
+
+This costs one extra model request, and only for a hand-off to Finish without an answer. Some models answer with an empty reply instead. FLUJO retries that as it does for any model call, then reports an error.
+
 ## A step can only use the tools it offers
 
 A Process step offers the model the tools of its connected apps, its routes to other steps, and any built-in tools switched on for that step. FLUJO checks that same list again when the model calls a tool. A call to anything else returns an error to the model and does not run, including a tool that an earlier step of the same run was allowed to use.

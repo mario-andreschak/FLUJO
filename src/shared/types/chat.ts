@@ -200,6 +200,13 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
   cutOff?: 'length';
 
   /**
+   * Display-only: the model handed off to Finish and, asked once more, still
+   * wrote no answer (#1419). The chat shows a soft notice and the reply says
+   * so in words; never sent to a model.
+   */
+  noAnswer?: true;
+
+  /**
    * Trusted provenance for an inter-agent delivery. Its user role is a provider
    * transport detail, not a human sender. Persist this metadata for transcript
    * display; strip it from provider wire messages while retaining the textual

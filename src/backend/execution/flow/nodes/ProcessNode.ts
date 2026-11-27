@@ -27,6 +27,7 @@ import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { prepareModelInputMaterialization, finalizeModelInputMaterialization } from '../materializeModelInput';
 import { resolveFrozenSystemPrompt } from '../systemPromptFreeze';
 import { buildHandoffDescription } from '../buildHandoffDescription';
+import { FINISH_ANSWER_INSTRUCTION } from '../finishAnswer';
 import { buildHandoffToolNameMap, buildSubflowToolNameMap, HANDOFF_TOOL_PREFIX, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
@@ -1236,6 +1237,17 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         } as FlujoChatMessage);
       }
     }
+    // #1419: the step handed off to Finish without an answer. Ask for it last,
+    // on the wire only, so the person's transcript keeps just the answer.
+    const finishAnswerTurn = Boolean(node_params?.id) && sharedState.finishAnswerTurn?.nodeId === node_params?.id;
+    if (finishAnswerTurn) {
+      additionalWireMessages.push({
+        id: uuidv4(),
+        role: 'user',
+        content: FINISH_ANSWER_INSTRUCTION,
+        timestamp: Date.now(),
+      } as FlujoChatMessage);
+    }
     if (additionalWireMessages.length > 0) {
       materialized = finalizeModelInputMaterialization({
         ...materializationBase,
@@ -1295,6 +1307,11 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       log.info(`[ProcessNode ${prepResult.nodeId}] Forced summary turn: stripping all tools for graceful landing (#253).`);
       prepResult.availableTools = [];
       prepResult.forceSummaryTurn = true;
+    }
+    if (finishAnswerTurn) {
+      log.info(`[ProcessNode ${prepResult.nodeId}] Asking once more, without tools, for the answer it did not write before Finish (#1419).`);
+      prepResult.availableTools = [];
+      prepResult.finishAnswerTurn = true;
     }
 
     if (terminalRouting === 'tool-free' && prepResult.availableTools?.length) {
@@ -2043,6 +2060,14 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         stagedHandoff: handoffRequested && !!sharedState.handoffRequested,
       });
       return TOOL_CALL_ACTION;
+    }
+
+    // #1419: this step only fetched the answer of a hand-off to Finish that
+    // came without one (a tool it still had, such as read_resource, ran above).
+    // runFlow now follows that hand-off.
+    if (prepResult.finishAnswerTurn) {
+      log.info('Answer step before Finish done, returning FINAL_RESPONSE_ACTION');
+      return FINAL_RESPONSE_ACTION;
     }
 
     if (handoffRequested && sharedState.handoffRequested) {

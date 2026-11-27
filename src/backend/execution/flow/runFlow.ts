@@ -104,6 +104,7 @@ import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloa
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
 import { registerCancellableRun } from '@/backend/execution/flow/cancellationCoordinator';
 import { nodeAfterFinishStep } from '@/backend/execution/flow/finishReentry';
+import { answerFromHandoffArguments, lacksFinishAnswer, markNoAnswer, NO_ANSWER_TEXT } from '@/backend/execution/flow/finishAnswer';
 import {
   FlowSnapshotSchema,
   PersonaInstructionContextSchema,
@@ -702,6 +703,7 @@ function installPersonaActivitySnapshot(
   sharedState.chainDepth = undefined;
   sharedState.onApprovalRequired = undefined;
   sharedState.forceSummaryTurn = undefined;
+  sharedState.finishAnswerTurn = undefined;
   sharedState.capped = undefined;
   sharedState.cappedReason = undefined;
   sharedState.lastResponse = undefined;
@@ -2986,6 +2988,20 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           break;
         }
 
+        // #1419: the step that fetched a missing answer is done. Follow the
+        // hand-off to Finish it postponed; if the model still wrote nothing,
+        // the reply says so in words instead of being empty.
+        if (currentAction === FINAL_RESPONSE_ACTION && sharedState.finishAnswerTurn) {
+          const { edgeId, nodeId } = sharedState.finishAnswerTurn;
+          sharedState.finishAnswerTurn = undefined;
+          if (lacksFinishAnswer(sharedState.lastResponse, undefined, sharedState.messages)) {
+            log.warn(`[#1419] Model wrote no answer when asked again for conv ${effectiveConvId}; replying that it gave none.`);
+            markNoAnswer(sharedState.messages, nodeId);
+            sharedState.lastResponse = NO_ANSWER_TEXT;
+          }
+          currentAction = edgeId;
+        }
+
         if (currentAction === FINAL_RESPONSE_ACTION) {
           log.info(`[Action Handling] Step ${internalIterations}: Handling FINAL_RESPONSE_ACTION for conv ${effectiveConvId}`);
           log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
@@ -3495,6 +3511,37 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             };
             const handoffCallsForBoundary = isSubflowHandoff
               ? await withSubflowPreparationBudget(prepareHandoff) : await prepareHandoff();
+
+            // #1419: a hand-off to Finish with no answer would end the run with
+            // an empty reply. Take the answer from the call's arguments, or ask
+            // this step once more, without tools, before going to Finish.
+            if (
+              handoff.targetNodeType === 'finish'
+              && handoffCallsForBoundary?.length
+              && sharedState.currentNodeId
+              && !(sharedState.meetingParticipant && sharedState.meetingTurn)
+              && lacksFinishAnswer(sharedState.lastResponse, lastAssistantMsg, sharedState.messages)
+            ) {
+              const fromArguments = answerFromHandoffArguments(handoffCallsForBoundary);
+              if (fromArguments) {
+                log.info(`[#1419] Hand-off to Finish carried its answer as an argument for conv ${effectiveConvId}.`);
+                sharedState.messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: fromArguments,
+                  timestamp: Date.now(),
+                  processNodeId: sharedState.currentNodeId,
+                });
+                sharedState.lastResponse = fromArguments;
+              } else {
+                log.info(`[#1419] Hand-off to Finish without an answer for conv ${effectiveConvId}; asking node ${sharedState.currentNodeId} once more without tools.`);
+                sharedState.finishAnswerTurn = { nodeId: sharedState.currentNodeId, edgeId: currentAction };
+                sharedState.handoffRequested = undefined;
+                emitNewMessages();
+                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                continue;
+              }
+            }
 
             emitNewMessages();
             const fromNodeId = sharedState.currentNodeId;

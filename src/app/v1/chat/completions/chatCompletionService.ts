@@ -23,6 +23,7 @@ import { DIRECT_MODEL_CALLS_DISABLED_CODE, DIRECT_MODEL_CALLS_DISABLED_MESSAGE, 
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
+import { latestTurnHasNoAnswer, NO_ANSWER_TEXT } from '@/backend/execution/flow/finishAnswer';
 import { normalizeChatError, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { createHash } from 'crypto';
 import {
@@ -294,6 +295,8 @@ async function processChatCompletionInternal(
     // The caller named a flow, so `model` above cannot say which models answered.
     ...(result.modelsUsed?.length ? { flujo_models: result.modelsUsed } : {}),
     ...(result.decisions?.length ? { flujo_decisions: result.decisions } : {}),
+    // The model ended without an answer; `content` says so in words (#1419).
+    ...(latestTurnHasNoAnswer(result.messages) ? { flujo_no_answer: true } : {}),
   };
 
   log.info(`Returning success response for conv ${result.conversationId}`, { action: result.finalAction, status: responseData.status, flujo, requireApproval, flujodebug, finish_reason });
@@ -1084,6 +1087,11 @@ export function createStreamingResponse(
                   }
                 }
                 for (let index = start; index < currentState.messages.length; index++) sendAssistant(currentState.messages[index]);
+              }
+              // The model ended without an answer: say so, as the JSON reply does (#1419).
+              if (status === 'completed' && currentState && latestTurnHasNoAnswer(currentState.messages)) {
+                if (externalTurn) streamedText += NO_ANSWER_TEXT;
+                send(baseChunk({ content: NO_ANSWER_TEXT, flujo_no_answer: true }, null));
               }
               if (status === 'completed') {
                 void externalTurn?.remember(streamedText, conversationId, currentState?.messages.at(-1)?.id);
