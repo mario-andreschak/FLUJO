@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
+import { realpath } from '@/utils/realpath';
 import { TRANSIENT_FILE_ERROR_CODES, fileErrorCode, isTransientFileError, retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { ownerPolicySchema } from './ownerCredentials';
 import { windowsPrivateAuthorityStamp, windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
@@ -157,55 +158,6 @@ function readStableFile(filename: string, maximum: number, consume: (chunk: Buff
   } finally { fs.closeSync(fd); }
 }
 
-export function fingerprintTrustedHostExecutable(filename: string): string {
-  try {
-    const hash = createHash('sha256');
-    readStableFile(filename, MAX_EXECUTABLE_BYTES, chunk => hash.update(chunk));
-    return hash.digest('hex');
-  } catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
-}
-
-/** Fingerprint every admitted package member; never run package or inspection code. */
-export function fingerprintTrustedHostSource(sourceRoot: string, dependencyLinks: readonly { link: string; target: string }[] = []): string {
-  try {
-    const root = path.resolve(sourceRoot);
-    const packages = path.resolve(getWorkspaceDataDir(), 'mcp-servers');
-    const relative = path.relative(packages, root);
-    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error();
-    const tree = createHash('sha256').update('flujo:mcp:trusted-host-source:v1\0');
-    let members = 0;
-    let bytes = 0;
-    const visit = (directory: string): void => {
-      if (++members > MAX_MEMBERS) throw new Error();
-      assertLinkFree(directory);
-      const before = fs.lstatSync(directory, { bigint: true });
-      if (!before.isDirectory()) throw new Error();
-      const names = fs.readdirSync(directory).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-      tree.update(JSON.stringify(['directory', path.relative(root, directory).split(path.sep).join('/'), String(before.mode)]));
-      for (const name of names) {
-        const filename = path.join(directory, name);
-        const stat = fs.lstatSync(filename, { bigint: true });
-        if (stat.isSymbolicLink()) {
-          const admitted = dependencyLinks.find(item => canonical(item.link) === canonical(filename));
-          if (!admitted || canonical(fs.realpathSync(filename)) !== canonical(admitted.target)) throw new Error();
-          tree.update(JSON.stringify(['approved-dependency-link', path.relative(root, filename).split(path.sep).join('/'), canonical(admitted.target)]));
-          continue;
-        }
-        if (stat.isDirectory() && !stat.isSymbolicLink()) { visit(filename); continue; }
-        if (++members > MAX_MEMBERS || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== BigInt(1)) throw new Error();
-        const content = createHash('sha256');
-        const admitted = readStableFile(filename, MAX_SOURCE_BYTES - bytes, chunk => content.update(chunk));
-        bytes += Number(admitted.size);
-        tree.update(JSON.stringify(['file', path.relative(root, filename).split(path.sep).join('/'), String(admitted.mode), content.digest('hex')]));
-      }
-      assertLinkFree(directory);
-      if (!sameIdentity(before, fs.lstatSync(directory, { bigint: true }))) throw new Error();
-    };
-    visit(root);
-    return tree.digest('hex');
-  } catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
-}
-
 /** Shared local execution authority reader; callers translate profile-specific errors. */
 export function readPrivateApproval(filename: string | undefined): unknown {
   const before = process.platform === 'win32' && filename ? windowsPrivateAuthorityStamp(filename) : undefined;
@@ -328,17 +280,6 @@ function mayClearUp(failure: unknown, signal: AbortSignal | undefined): boolean 
   return phase === 'contents' && (error instanceof SyntaxError || error instanceof TypeError);
 }
 
-/**
- * For the synchronous final set, which keeps no step record: after anything but
- * cancellation, a fresh complete read may pass. A fixed refusal simply fails
- * again within the same short bound.
- */
-export function privateApprovalSetMayClearUp(error: unknown, signal?: AbortSignal): boolean {
-  if (signal?.aborted) return false;
-  return isTransientFileError(error) || ownDataValue(error, 'transient') === true || error instanceof TrustedHostMcpError
-    || error instanceof SyntaxError || error instanceof TypeError;
-}
-
 type PrivateApprovalTraceLabel = '[private-approval-set-reader]' | '[private-approval-reader]';
 
 function tracePrivateApproval(label: PrivateApprovalTraceLabel, event: 'retry' | 'refused', details: object): void {
@@ -390,18 +331,20 @@ async function readPrivateApprovalSetOnce(input: readonly (string | undefined)[]
         || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     const filenames = input as readonly string[];
     phase = 'identity-before';
-    const identities = filenames.map((filename, index) => { memberIndex = index; return fs.lstatSync(filename, { bigint: true }); });
+    const identities: BigIntStats[] = [];
+    for (const [index, filename] of filenames.entries()) { memberIndex = index; identities.push(await fs.promises.lstat(filename, { bigint: true })); }
     phase = 'native-before'; memberIndex = undefined;
     const before = process.platform === 'win32' ? await windowsPrivateAuthorityStampAsync(filenames, signal) : undefined;
     phase = 'contents';
-    const values = filenames.map((filename, index) => { memberIndex = index; return readPrivateApprovalContents(filename); });
+    const values: unknown[] = [];
+    for (const [index, filename] of filenames.entries()) { memberIndex = index; values.push(await readPrivateApprovalContentsAsync(filename)); }
     phase = 'native-after'; memberIndex = undefined;
     if (before !== undefined && await windowsPrivateAuthorityStampAsync(filenames, signal) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     phase = 'identity-after';
     for (const [index, filename] of filenames.entries()) {
       memberIndex = index;
-      assertLinkFree(filename);
-      if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      await assertLinkFreeAsync(filename);
+      if (!sameIdentity(identities[index], await fs.promises.lstat(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     }
     phase = 'signal-after'; memberIndex = undefined;
     if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
@@ -417,28 +360,8 @@ export async function readPrivateApprovalSetAsync(input: readonly string[], sign
   return readPrivateApprovalWithRetry('[private-approval-set-reader]', input, signal, roles);
 }
 
-/** Final synchronous witness set after every yielding verification phase. */
-export function readPrivateApprovalSet(input: readonly string[], signal?: AbortSignal): unknown[] {
-  if (!input.length || input.length > 4 || new Set(input).size !== input.length
-      || input.some(filename => typeof filename !== 'string' || !path.isAbsolute(filename) || filename.length > 2048 || filename.includes('\0'))
-      || signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  const filenames = [...input];
-  const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
-  const before = process.platform === 'win32' ? windowsPrivateAuthorityStamp(filenames) : undefined;
-  const values = filenames.map(filename => readPrivateApprovalContents(filename));
-  if (before !== undefined && windowsPrivateAuthorityStamp(filenames) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  for (const [index, filename] of filenames.entries()) {
-    assertLinkFree(filename);
-    if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  }
-  if (signal?.aborted) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  return values;
-}
-
 function readPrivateApprovalContents(filename: string | undefined): unknown {
-  if (!filename || !path.isAbsolute(filename)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  const relative = path.relative(path.resolve(getDataDir()), path.resolve(filename));
-  if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  assertPrivateFilename(filename);
   if (process.platform !== 'win32' && typeof process.getuid === 'function') {
     const uid = BigInt(process.getuid());
     let directory = path.dirname(path.resolve(filename));
@@ -453,10 +376,38 @@ function readPrivateApprovalContents(filename: string | undefined): unknown {
   }
   const chunks: Buffer[] = [];
   try {
-    const stat = readStableFile(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk)));
-    if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-    if (process.platform !== 'win32' && typeof process.getuid === 'function'
-        && stat.uid !== BigInt(process.getuid()) && stat.uid !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    assertPrivateOwner(readStableFile(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk))));
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+  }
+  finally { for (const chunk of chunks) chunk.fill(0); }
+}
+
+function assertPrivateFilename(filename: string | undefined): asserts filename is string {
+  if (!filename || !path.isAbsolute(filename)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const relative = path.relative(path.resolve(getDataDir()), path.resolve(filename));
+  if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+}
+
+function assertPrivateOwner(stat: BigIntStats): void {
+  if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  if (process.platform !== 'win32' && typeof process.getuid === 'function'
+      && stat.uid !== BigInt(process.getuid()) && stat.uid !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+}
+
+async function readPrivateApprovalContentsAsync(filename: string | undefined): Promise<unknown> {
+  assertPrivateFilename(filename);
+  if (process.platform !== 'win32' && typeof process.getuid === 'function') {
+    const uid = BigInt(process.getuid());
+    for (let directory = path.dirname(path.resolve(filename)); ; directory = path.dirname(directory)) {
+      const stat = await fs.promises.lstat(directory, { bigint: true });
+      if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== uid && stat.uid !== BigInt(0))
+          || ((stat.mode & BigInt(0o022)) !== BigInt(0) && (stat.mode & BigInt(0o1000)) === BigInt(0))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+      if (path.dirname(directory) === directory) break;
+    }
+  }
+  const chunks: Buffer[] = [];
+  try {
+    assertPrivateOwner(await readStableFileAsync(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk))));
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
   }
   finally { for (const chunk of chunks) chunk.fill(0); }
@@ -557,64 +508,6 @@ async function policyDigestAsync(config: MCPStdioConfig, signal: AbortSignal | u
   } finally { digest.fill(0); }
 }
 
-/** The config requests trust. Only a private owner-matched grant conveys it. */
-export function assertTrustedHostMcpAllowed(config: MCPStdioConfig): z.infer<typeof trustedHostMcpPolicySchema> {
-  if (config.trustedHost === undefined) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  try {
-    const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
-    const digest = trustedHostMcpPolicyDigest(config);
-    const approvals = approvalsSchema.parse(readPrivateApproval(process.env.FLUJO_MCP_TRUSTED_HOST_FILE));
-    const owner = ownerPolicySchema.parse(readPrivateApproval(process.env.FLUJO_OWNER_AUTH_FILE));
-    const grant = approvals.approvals.find(item => item.workspace === getCurrentWorkspace() && item.serverName === config.name);
-    if (approvals.ownerId !== owner.ownerId || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-    if (fingerprintTrustedHostExecutable(config.command) !== policy.executableDigest
-        || fingerprintTrustedHostSource(policy.sourceRoot) !== policy.sourceDigest) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-    if (policy.packageRunner) {
-      assertPackageRunnerResolution(policy.sourceRoot, policy.entryPoint, config.cwd!, policy.packageRunner, trustedHostPackageRunnerContext(config));
-      if (fingerprintTrustedHostExecutable(policy.packageRunner.shell) !== policy.packageRunner.shellDigest) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-    }
-    // Fingerprinting can take time. An approval that expired meanwhile cannot
-    // authorize a later effect, and changed owner/grant files must be reread.
-    const currentApprovals = approvalsSchema.parse(readPrivateApproval(process.env.FLUJO_MCP_TRUSTED_HOST_FILE));
-    const currentOwner = ownerPolicySchema.parse(readPrivateApproval(process.env.FLUJO_OWNER_AUTH_FILE));
-    const currentGrant = currentApprovals.approvals.find(item => item.workspace === getCurrentWorkspace() && item.serverName === config.name);
-    if (currentOwner.ownerId !== owner.ownerId || currentApprovals.ownerId !== owner.ownerId
-        || !currentGrant || currentGrant.expiresAt <= Date.now() || currentGrant.policyDigest !== digest) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-    return policy;
-  } catch (error) {
-    if (error instanceof TrustedHostMcpError) throw error;
-    throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  }
-}
-
-export function trustedHostMcpApproval(config: MCPStdioConfig) {
-  if (config.trustedHost === undefined) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  try {
-    const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
-    const digest = trustedHostMcpPolicyDigest(config);
-    const approvalFile = process.env.FLUJO_MCP_TRUSTED_HOST_FILE, ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
-    if (!approvalFile || !ownerFile) throw new Error();
-    const filenames = [approvalFile, ownerFile];
-    const identities = filenames.map(filename => fs.lstatSync(filename, { bigint: true }));
-    const before = process.platform === 'win32' ? windowsPrivateAuthorityStamp(filenames) : undefined;
-    const contents = filenames.map(filename => readPrivateApprovalContents(filename));
-    if (before !== undefined && windowsPrivateAuthorityStamp(filenames) !== before) throw new Error();
-    for (const [index, filename] of filenames.entries()) {
-      assertLinkFree(filename);
-      if (!sameIdentity(identities[index], fs.lstatSync(filename, { bigint: true }))) throw new Error();
-    }
-    if (approvalFile !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error();
-    const approvals = approvalsSchema.parse(contents[0]);
-    const owner = ownerPolicySchema.parse(contents[1]);
-    const grant = approvals.approvals.find(item => item.workspace === getCurrentWorkspace() && item.serverName === config.name);
-    if (owner.ownerId !== approvals.ownerId || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new Error();
-    return { policy, digest, ownerId: owner.ownerId, workspace: getCurrentWorkspace(), expiresAt: grant.expiresAt };
-  } catch (error) {
-    if (error instanceof TrustedHostMcpError) throw error;
-    throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  }
-}
-
 export async function trustedHostMcpApprovalAsync(config: MCPStdioConfig, signal?: AbortSignal) {
   try {
     const captured = structuredClone(config);
@@ -642,52 +535,60 @@ export async function trustedHostMcpApprovalAsync(config: MCPStdioConfig, signal
 
 async function assertLinkFreeAsync(filename: string): Promise<void> {
   const components: string[] = [];
-  let current = path.resolve(filename);
-  while (true) {
+  for (let current = path.resolve(filename); ; current = path.dirname(current)) {
     components.push(current);
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
+    if (path.dirname(current) === current) break;
   }
   // Inspect every component freshly, overlapping bounded independent metadata
   // reads. Drain each batch before refusal and resolve the canonical path last.
   for (let offset = 0; offset < components.length; offset += 8) {
     const results = await Promise.allSettled(components.slice(offset, offset + 8).map(component => fs.promises.lstat(component)));
-    if (results.some(result => result.status === 'rejected' || result.value.isSymbolicLink())) throw new Error();
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason;
+      if (result.value.isSymbolicLink()) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+    }
   }
-  if (canonical(await fs.promises.realpath(filename)) !== canonical(filename)) throw new Error();
+  if (canonical(await realpath(filename)) !== canonical(filename)) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
 }
 
-async function hashStableFileAsync(filename: string, maximum: number, signal?: AbortSignal, expected?: BigIntStats): Promise<{ digest: string; size: number }> {
-  if (signal?.aborted) throw new Error();
-  const handle = await retryTransientFileOperation(
-    () => fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)), { signal });
+async function readStableFileAsync(filename: string, maximum: number, consume: (chunk: Buffer) => void,
+  signal?: AbortSignal, expected?: BigIntStats): Promise<BigIntStats> {
+  if (signal?.aborted) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+  const handle = await fs.promises.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   let buffer: Buffer | undefined;
   try {
     const opened = await handle.stat({ bigint: true });
-    if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size > BigInt(maximum)) throw new Error();
-    if (expected && !sameIdentity(expected, opened)) throw new Error();
+    if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size > BigInt(maximum)
+        || (expected && !sameIdentity(expected, opened))) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
     await assertLinkFreeAsync(filename);
-    if (!sameIdentity(opened, await fs.promises.lstat(filename, { bigint: true }))) throw new Error();
-    const hash = createHash('sha256');
+    if (!sameIdentity(opened, await fs.promises.lstat(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
     // Large executables otherwise require thousands of serial read round trips
     // on every fresh guard. Keep small assets small and bound each held reader
     // to 1 MiB; byte limits, cancellation and all identity fences stay intact.
     buffer = Buffer.alloc(opened.size > BigInt(1024 * 1024) ? 1024 * 1024 : 64 * 1024);
     let length = 0;
     while (true) {
-      if (signal?.aborted) throw new Error();
+      if (signal?.aborted) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (!bytesRead) break;
       length += bytesRead;
-      if (length > maximum || BigInt(length) > opened.size) throw new Error();
-      hash.update(buffer.subarray(0, bytesRead));
+      if (length > maximum || BigInt(length) > opened.size) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+      consume(buffer.subarray(0, bytesRead));
     }
     await assertLinkFreeAsync(filename);
     if (BigInt(length) !== opened.size || !sameIdentity(opened, await handle.stat({ bigint: true }))
-        || !sameIdentity(opened, await fs.promises.lstat(filename, { bigint: true }))) throw new Error();
-    return { digest: hash.digest('hex'), size: length };
+        || !sameIdentity(opened, await fs.promises.lstat(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
+    return opened;
   } finally { buffer?.fill(0); await handle.close(); }
+}
+
+/** A file briefly held by antivirus or the indexer is read again from scratch; nothing from a failed read is kept. */
+async function hashStableFileAsync(filename: string, maximum: number, signal?: AbortSignal, expected?: BigIntStats): Promise<{ digest: string; size: number }> {
+  return retryTransientFileOperation(async () => {
+    const hash = createHash('sha256');
+    const opened = await readStableFileAsync(filename, maximum, chunk => hash.update(chunk), signal, expected);
+    return { digest: hash.digest('hex'), size: Number(opened.size) };
+  }, { signal });
 }
 
 async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, dependencyLinks: readonly { link: string; target: string }[] = []): Promise<string> {
@@ -728,7 +629,7 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, 
       if (stat.isSymbolicLink()) {
         await flush();
         const admitted = dependencyLinks.find(item => canonical(item.link) === canonical(filename));
-        if (!admitted || canonical(await fs.promises.realpath(filename)) !== canonical(admitted.target)) throw new Error();
+        if (!admitted || canonical(await realpath(filename)) !== canonical(admitted.target)) throw new Error();
         tree.update(JSON.stringify(['approved-dependency-link', path.relative(root, filename).split(path.sep).join('/'), canonical(admitted.target)]));
         continue;
       }
@@ -748,8 +649,9 @@ async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, 
 }
 
 /** Fresh, bounded inspection for owner previews as well as launch guards. */
-export async function fingerprintTrustedHostSourceAsync(sourceRoot: string, signal?: AbortSignal): Promise<string> {
-  try { return await fingerprintSourceAsync(sourceRoot, signal); }
+export async function fingerprintTrustedHostSourceAsync(sourceRoot: string, signal?: AbortSignal,
+  dependencyLinks: readonly { link: string; target: string }[] = []): Promise<string> {
+  try { return await fingerprintSourceAsync(sourceRoot, signal, dependencyLinks); }
   catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
 }
 
@@ -800,11 +702,11 @@ export async function verifyTrustedHostMcp(config: MCPStdioConfig, signal?: Abor
     check(source === before.policy.sourceDigest, 'source-digest');
     if (before.policy.packageRunner) {
       const runner = before.policy.packageRunner;
-      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner,
+      await assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner,
         { ...trustedHostPackageRunnerContext(captured), inspectClosure: false });
       const shell = await hashStableFileAsync(runner.shell, MAX_EXECUTABLE_BYTES, signal);
       check(shell.digest === runner.shellDigest, 'executable-digest');
-      assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner, trustedHostPackageRunnerContext(captured));
+      await assertPackageRunnerResolution(before.policy.sourceRoot, before.policy.entryPoint, captured.cwd!, runner, trustedHostPackageRunnerContext(captured));
     }
   } catch {
     try {

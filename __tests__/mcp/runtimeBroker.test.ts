@@ -150,7 +150,7 @@ describe('MCP App sidecar runtime broker', () => {
     const transports: Array<{ close(): Promise<void> }> = [];
     try {
 
-    const managed = createStdioTransport(config, { enableRuntimeBroker: true }) as unknown as {
+    const managed = (await createStdioTransport(config, { enableRuntimeBroker: true })) as unknown as {
       _serverParams?: { env?: Record<string, string> };
       __flujoRuntimeBrokerLeaseId?: string;
     };
@@ -164,7 +164,7 @@ describe('MCP App sidecar runtime broker', () => {
     expect(getMcpAppRuntimeBrokerSnapshot().capabilities).toHaveLength(1);
 
     resetMcpAppRuntimeBrokerForTests();
-    const probe = createStdioTransport(config) as unknown as {
+    const probe = (await createStdioTransport(config)) as unknown as {
       _serverParams?: { env?: Record<string, string> };
       __flujoRuntimeBrokerLeaseId?: string;
     };

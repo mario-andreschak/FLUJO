@@ -12,11 +12,11 @@ export const runtime = 'nodejs';
 
 const log = createLogger('app/api/accounts/mode');
 
-function ownerPolicy() {
+async function ownerPolicy() {
   const file = process.env.FLUJO_OWNER_AUTH_FILE?.trim();
   if (!file) return null;
   try {
-    return readOwnerPolicy(file);
+    return await readOwnerPolicy(file);
   } catch (error) {
     log.warn('Could not read the owner policy; its tokens are not copied to the first admin.', error);
     return null;
@@ -45,7 +45,7 @@ export async function POST(request: Request): Promise<Response> {
     if (current) return json({ mode: 'on', user: publicUser(current.user!) });
     const { createdAdmin: admin } = await enableMultiUser(body, {
       workspaces: (await listWorkspaces()).map(workspace => workspace.name),
-      ownerPolicy: ownerPolicy(),
+      ownerPolicy: await ownerPolicy(),
     });
     // Turned on again with the people from last time: they sign in as usual.
     if (!admin) return json({ mode: 'on', user: null });

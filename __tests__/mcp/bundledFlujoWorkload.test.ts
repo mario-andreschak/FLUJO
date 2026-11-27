@@ -245,7 +245,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       const callback = jest.fn(() => { throw original; });
       const controlled = { start: nativeStart, close: nativeClose, onclose: reason === 'onclose' ? callback : undefined };
       transport = controlled;
-      attachTrustedHost(controlled, approved.config, reason === 'explicit' ? callback : undefined, capsule);
+      await attachTrustedHost(controlled, approved.config, reason === 'explicit' ? callback : undefined, capsule);
       if (reason !== 'start-failed') await timed('diagnostic-guarded-start', () => controlled.start());
       const actualInfo = console.info;
       const observations: unknown[][] = [];
@@ -280,7 +280,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     }
     const start = jest.fn(async () => undefined), close = jest.fn(async () => undefined);
     transport = { start, close };
-    attachTrustedHost(transport, approved.config, undefined, capsule);
+    await attachTrustedHost(transport, approved.config, undefined, capsule);
     const key = createHash('sha256').update(token).digest('hex');
     let recordDescriptor: number | undefined;
     const actualOpen = fs.openSync;
@@ -344,16 +344,16 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     }
     if (mode === 'transient-private-reads') {
       // Issue #1050: every private read of the ledger in the resource-list guard
-      // (initial set, both approval pairs, final synchronous set) meets one
-      // short-lived lock and must recover instead of refusing the request.
+      // (initial set, both approval pairs, final set) meets one short-lived
+      // lock and must recover instead of refusing the request.
       const ledgerFile = path.resolve(process.env.FLUJO_MCP_TRUSTED_HOST_FILE!);
-      const actualOpenSync = fs.openSync;
+      const actualOpen = fs.promises.open.bind(fs.promises);
       let ledgerOpens = 0, injected = 0;
-      const busy = jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+      const busy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
         if (path.resolve(String(args[0])) === ledgerFile && ledgerOpens++ % 2 === 0) {
           injected += 1; throw Object.assign(new Error('Injected short-lived lock.'), { code: 'EBUSY', errno: -4082 });
         }
-        return Reflect.apply(actualOpenSync, fs, args) as number;
+        return actualOpen(...args);
       });
       const resourceRequest = new Request('http://127.0.0.1:4200/api/mcp/flujo/resources', {
         signal: cancellation.signal, headers: { host: '127.0.0.1:4200', 'x-flujo-workspace': getCurrentWorkspace(), authorization: `Bearer ${token}` },
@@ -414,7 +414,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
         expect(retireOwned).toThrow(McpRuntimeAuthorityRetirementError);
         expect(injected).toBe(1);
         expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).toThrow(McpRuntimeAuthorityRetirementError);
-        expect(() => createStdioTransport(approved.config)).toThrow(McpRuntimeAuthorityRetirementError);
+        await expect(createStdioTransport(approved.config)).rejects.toThrow(McpRuntimeAuthorityRetirementError);
         const unrelated = prepareBundledFlujoWorkload(approved.config);
         if (!unrelated) throw new Error('Genuine unrelated pending authority unavailable.');
         retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), unrelated, undefined);

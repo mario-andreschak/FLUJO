@@ -3,7 +3,7 @@ import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/std
 import { DEFAULT_INHERITED_ENV_VARS as BETA_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace } from '@/utils/workspace';
-import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpApprovalAsync, trustedHostMcpPolicySchema, sameTrustedHostConsent, verifyTrustedHostMcp, trustedHostPackageRunnerContext } from '../security/trustedHostMcp';
+import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApprovalAsync, trustedHostMcpPolicySchema, sameTrustedHostConsent, verifyTrustedHostMcp, trustedHostPackageRunnerContext } from '../security/trustedHostMcp';
 import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
 import { assertPackageRunnerResolution, packageRunnerArguments } from '../security/protectedPackageRunner';
 import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
@@ -70,8 +70,8 @@ export interface ManagedTrustedHost {
 }
 
 /** Fixed absolute launch parameters bypass legacy runner/wrapper transformations. */
-export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
-  const authority = trustedHostMcpApproval(config);
+export async function resolveTrustedHostLaunch(config: MCPStdioConfig) {
+  const authority = await trustedHostMcpApprovalAsync(config);
   const environment = new Map<string, string>();
   const names = new Set<string>();
   // Override the defaults of BOTH SDK generations, including inherited loaders.
@@ -96,7 +96,7 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
   for (const [name, value] of Object.entries(workerRuntimeCredentials(config))) environment.set(name, value);
   if (authority.policy.packageRunner) {
     const runner = authority.policy.packageRunner;
-    try { assertPackageRunnerResolution(authority.policy.sourceRoot, authority.policy.entryPoint, config.cwd!, runner,
+    try { await assertPackageRunnerResolution(authority.policy.sourceRoot, authority.policy.entryPoint, config.cwd!, runner,
       { ...trustedHostPackageRunnerContext(config), inspectClosure: false }); }
     catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
     const cache = [...environment].find(([name]) => name.toUpperCase() === 'NPM_CONFIG_CACHE')?.[1];
@@ -109,9 +109,9 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
 }
 
 /** Only runner-issued scoped broker values can supplement the declared environment. */
-export function trustedHostBrokerEnvironment(config: MCPStdioConfig, broker: Record<string, string> | undefined): Record<string, string> {
+export async function trustedHostBrokerEnvironment(config: MCPStdioConfig, broker: Record<string, string> | undefined): Promise<Record<string, string>> {
   if (!broker) return {};
-  const { policy } = trustedHostMcpApproval(config);
+  const { policy } = await trustedHostMcpApprovalAsync(config);
   if (!config.enableMcpApps || Object.keys(broker).some(name => !BROKER_NAMES.includes(name) || !policy.environmentNames.includes(name))) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
   return { ...broker };
 }
@@ -136,9 +136,9 @@ async function currentConfig(serverName: string): Promise<MCPStdioConfig> {
 }
 
 /** Capture the launched identity, not whatever later happens to be approved. */
-export function attachTrustedHost(transport: HostTransport, config: MCPStdioConfig, onRetire?: () => void, workload?: PendingBundledFlujoWorkload): void {
+export async function attachTrustedHost(transport: HostTransport, config: MCPStdioConfig, onRetire?: () => void, workload?: PendingBundledFlujoWorkload): Promise<void> {
   const captured = structuredClone(config);
-  const initial = trustedHostMcpApproval(captured);
+  const initial = await trustedHostMcpApprovalAsync(captured);
   const fixtureToken = resolveGoalEnduranceFixtureToken(captured);
   const workerCredentials = workerRuntimeCredentials(captured);
   if (process.env.FLUJO_WORKER_MODE !== '1' && initial.policy.bundledInstallation?.packageDirectory === 'flujo' && !workload) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
@@ -239,7 +239,7 @@ export function attachTrustedHost(transport: HostTransport, config: MCPStdioConf
         if (!sameTrustedHostConsent(finalConfig, captured)
             || await resolveRuntimeHomeIsolation(finalConfig) !== (initial.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
         checkLive();
-        try { assertPackageRunnerResolution(initial.policy.sourceRoot, initial.policy.entryPoint, captured.cwd!, initial.policy.packageRunner,
+        try { await assertPackageRunnerResolution(initial.policy.sourceRoot, initial.policy.entryPoint, captured.cwd!, initial.policy.packageRunner,
           { ...trustedHostPackageRunnerContext(captured), inspectClosure: false }); }
         catch { throw new TrustedHostMcpError('HOST_SOURCE_CHANGED'); }
       }

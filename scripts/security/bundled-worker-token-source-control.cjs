@@ -40,9 +40,9 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
   assert.equal((await store.saveConfig(new Map([[approved.name,approved]]))).success,true);
   process.env.FLUJO_WORKER_MODE='1';process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN='synthetic-runtime-only-worker-token';
   const host=require(path.join(sourceRoot,'src/backend/services/mcp/trustedHost.ts'));
-  const launch=host.resolveTrustedHostLaunch(approved);assert.equal(launch.env.FLUJO_SNAPSHOT_CONTROL_TOKEN,process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN);assert.equal(launch.env.FLUJO_WORKER_MODE,'1');assert.equal(launch.env.FLUJO_WORKSPACE,workspace.getCurrentWorkspace());
+  const launch=await host.resolveTrustedHostLaunch(approved);assert.equal(launch.env.FLUJO_SNAPSHOT_CONTROL_TOKEN,process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN);assert.equal(launch.env.FLUJO_WORKER_MODE,'1');assert.equal(launch.env.FLUJO_WORKSPACE,workspace.getCurrentWorkspace());
   assert.equal(Object.keys(approved.env).some(name=>name.toUpperCase()==='FLUJO_SNAPSHOT_CONTROL_TOKEN'),false);
-  const audience=process.env.FLUJO_BASE_URL;process.env.FLUJO_BASE_URL='http://127.0.0.1:2';try{assert.throws(()=>host.resolveTrustedHostLaunch(approved),error=>error.code==='HOST_POLICY_INVALID');}finally{process.env.FLUJO_BASE_URL=audience;}
+  const audience=process.env.FLUJO_BASE_URL;process.env.FLUJO_BASE_URL='http://127.0.0.1:2';try{await assert.rejects(host.resolveTrustedHostLaunch(approved),error=>error.code==='HOST_POLICY_INVALID');}finally{process.env.FLUJO_BASE_URL=audience;}
   const ordinary=require(path.join(sourceRoot,'src/backend/services/mcp/connection.ts')),beta=require(path.join(sourceRoot,'src/backend/services/mcp/betaClient.ts'));
   for(const era of['v1','beta']){
    // A fresh real grant for each SDK keeps the original short expiry intact.
@@ -51,7 +51,7 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
    await consent.approveBundledHostConsent(request,approved.name,{runtimeHome:'host',reviewedDigest:reviewed.policyDigest,expiresAt:Date.now()+120000});
    process.env.FLUJO_WORKER_MODE='1';
    const current=(await store.loadServerConfigs()).find(item=>item.name===approved.name);
-   transport=era==='v1'?ordinary.createStdioTransport(current):beta.createBetaTransport(current);
+   transport=await (era==='v1'?ordinary.createStdioTransport(current):beta.createBetaTransport(current));
    const client=era==='v1'?ordinary.createNewClient(current):beta.createNewBetaClient(current);await client.connect(transport);
    const token=process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN='synthetic-rotated-worker-token';
    try{await assert.rejects(host.getManagedTrustedHost(transport).assertCurrent(current),error=>error.code==='HOST_CONSENT_REQUIRED');}finally{process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN=token;}

@@ -18,9 +18,9 @@ import type { MCPServerConfig, MCPStreamableConfig } from '@/shared/types/mcp';
 import { createBetaTransport, createNewBetaClient } from '@/backend/services/mcp/betaClient';
 
 /** Build a live-ish client whose transport was created from `config`, as connectServer does. */
-function clientFor(config: MCPServerConfig) {
+async function clientFor(config: MCPServerConfig) {
   const client = createNewClient(config);
-  const transport = createTransport(config);
+  const transport = await createTransport(config);
   // Client.transport is a getter over the protected _transport field; connect() would set
   // it in production. Assign it directly so shouldRecreateClient sees the keyed transport.
   (client as unknown as { _transport: unknown })._transport = transport;
@@ -44,25 +44,25 @@ const sse = (auth: string): MCPServerConfig => ({
 } as unknown as MCPServerConfig);
 
 describe('shouldRecreateClient — HTTP auth-material change detection (issue #47)', () => {
-  it.each([false, true])('rebuilds the OAuth transport when only the trusted issuer changes (beta=%s)', beta => {
+  it.each([false, true])('rebuilds the OAuth transport when only the trusted issuer changes (beta=%s)', async beta => {
     const config = { ...streamable('TOKEN_OLD'), oauthClientId: 'synthetic-client',
       oauthIssuer: 'https://trusted.example.test' } as MCPStreamableConfig;
     const client = beta ? createNewBetaClient(config) : createNewClient(config);
-    (client as unknown as { _transport: unknown })._transport = beta ? createBetaTransport(config) : createTransport(config);
+    (client as unknown as { _transport: unknown })._transport = beta ? await createBetaTransport(config) : await createTransport(config);
     expect(shouldRecreateClient(client, config, beta).needsNewClient).toBe(false);
     expect(shouldRecreateClient(client, { ...config, oauthIssuer: 'https://changed.example.test' }, beta).needsNewClient).toBe(true);
   });
-  it('does NOT rebuild a streamable client when the config is byte-identical', () => {
+  it('does NOT rebuild a streamable client when the config is byte-identical', async () => {
     const config = streamable('TOKEN_OLD');
-    const client = clientFor(config);
+    const client = await clientFor(config);
 
     const result = shouldRecreateClient(client, streamable('TOKEN_OLD'));
 
     expect(result.needsNewClient).toBe(false);
   });
 
-  it('rebuilds a streamable client when only the PAT / Bearer token changed (same URL)', () => {
-    const client = clientFor(streamable('TOKEN_OLD'));
+  it('rebuilds a streamable client when only the PAT / Bearer token changed (same URL)', async () => {
+    const client = await clientFor(streamable('TOKEN_OLD'));
 
     const result = shouldRecreateClient(client, streamable('TOKEN_NEW'));
 
@@ -70,8 +70,8 @@ describe('shouldRecreateClient — HTTP auth-material change detection (issue #4
     expect(result.reason).toMatch(/auth|parameters/i);
   });
 
-  it('rebuilds an SSE client when only the PAT / Bearer token changed (same URL)', () => {
-    const client = clientFor(sse('TOKEN_OLD'));
+  it('rebuilds an SSE client when only the PAT / Bearer token changed (same URL)', async () => {
+    const client = await clientFor(sse('TOKEN_OLD'));
 
     const result = shouldRecreateClient(client, sse('TOKEN_NEW'));
 
@@ -79,8 +79,8 @@ describe('shouldRecreateClient — HTTP auth-material change detection (issue #4
     expect(result.reason).toMatch(/auth|parameters/i);
   });
 
-  it('does NOT rebuild an SSE client when the config is byte-identical', () => {
-    const client = clientFor(sse('TOKEN_OLD'));
+  it('does NOT rebuild an SSE client when the config is byte-identical', async () => {
+    const client = await clientFor(sse('TOKEN_OLD'));
 
     const result = shouldRecreateClient(client, sse('TOKEN_OLD'));
 

@@ -116,7 +116,7 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     const start = jest.fn(async () => undefined), close = jest.fn(async () => undefined);
     transport = { start, close };
-    attachTrustedHost(transport, approved.config, undefined, capsule);
+    await attachTrustedHost(transport, approved.config, undefined, capsule);
     await timed('start', () => transport!.start());
     expect(start).toHaveBeenCalledTimes(1);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('authorized');

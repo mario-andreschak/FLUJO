@@ -56,8 +56,8 @@ async function main() {
       const config = { name: `controlled-${era}`, transport: 'stdio', command: process.execPath, args: [entry], cwd: packageRoot,
         disabled: false, rootPath: '', roots: [], env, _buildCommand: '', _installCommand: '', source: { type: 'local' },
         trustedHost: { schemaVersion: 1, kind: 'trusted-host', privileges: 'owner-account', runtime: 'node', entryPoint: entry,
-          sourceRoot: packageRoot, sourceDigest: policy.fingerprintTrustedHostSource(packageRoot),
-          executableDigest: policy.fingerprintTrustedHostExecutable(process.execPath), environmentNames: Object.keys(env) } };
+          sourceRoot: packageRoot, sourceDigest: await policy.fingerprintTrustedHostSourceAsync(packageRoot),
+          executableDigest: await policy.fingerprintTrustedHostExecutableAsync(process.execPath), environmentNames: Object.keys(env) } };
       const grant = { schemaVersion: 1, ownerId: 'synthetic-owner', approvals: [{ workspace: workspace.getCurrentWorkspace(), serverName: config.name,
         policyDigest: policy.trustedHostMcpPolicyDigest(config), expiresAt: Date.now() + 120000 }] };
       fs.writeFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE, JSON.stringify(grant), { mode: 0o600 });
@@ -65,7 +65,7 @@ async function main() {
       const persisted = await stored.loadServerConfigs();
       assert.ok(Array.isArray(persisted));
       assert.equal(policy.trustedHostMcpPolicyDigest(persisted[0]), grant.approvals[0].policyDigest);
-      transport = era === 'v1' ? ordinary.createStdioTransport(config) : beta.createBetaTransport(config);
+      transport = await (era === 'v1' ? ordinary.createStdioTransport(config) : beta.createBetaTransport(config));
       const client = era === 'v1' ? ordinary.createNewClient(config) : beta.createNewBetaClient(config);
       await client.connect(transport);
       const deadline = Date.now() + 5000;
@@ -108,7 +108,7 @@ async function main() {
       } finally { release(); fs.promises.open = originalOpen; }
       assert.equal((await stored.saveConfig(new Map([[config.name, config]]))).success, true);
       fs.unlinkSync(witness);
-      transport = era === 'v1' ? ordinary.createStdioTransport(config) : beta.createBetaTransport(config);
+      transport = await (era === 'v1' ? ordinary.createStdioTransport(config) : beta.createBetaTransport(config));
       const replacement = era === 'v1' ? ordinary.createNewClient(config) : beta.createNewBetaClient(config);
       await replacement.connect(transport);
       const restartedDeadline = Date.now() + 5000;
@@ -129,7 +129,7 @@ async function main() {
       fs.writeFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE, JSON.stringify(grant), { mode: 0o600 });
       const ownedCapabilities = () => broker.getMcpAppRuntimeBrokerSnapshot().capabilities.filter(item => item.serverName === apps.name);
       assert.equal(ownedCapabilities().length, 0);
-      assert.throws(() => era === 'v1' ? ordinary.createStdioTransport(apps, { enableRuntimeBroker: true })
+      await assert.rejects(era === 'v1' ? ordinary.createStdioTransport(apps, { enableRuntimeBroker: true })
         : beta.createBetaTransport(apps, { enableRuntimeBroker: true }), error => error.code === 'HOST_POLICY_INVALID');
       assert.equal(ownedCapabilities().length, 0, 'Issued broker lease survived a refused environment');
       console.log(JSON.stringify({ sourceControl: 'trusted-host-owned-process', sdk: era, realApprovedChildStarted: true,

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getWorkspaceDataDir } from '@/utils/workspace';
-import { fingerprintTrustedHostExecutable } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutableAsync } from '@/backend/services/security/trustedHostMcp';
 import { readStableFile } from '@/utils/readStableFile';
 import { admitCodexDirectory, writeCodexRuntimeFile } from './codexRuntimeFiles';
 import { userCodexHome } from './codexAuth';
@@ -31,7 +31,7 @@ export async function qualifyNativeCodex(model:string,effort:string|undefined,si
   signal.throwIfAborted();await assertCurrent();
   const binary=options.executable??bundledCodexExecutable();
   if(!path.isAbsolute(binary))throw new Error('Native Codex qualification requires an absolute executable.');
-  const binaryDigest=fingerprintTrustedHostExecutable(binary);
+  const binaryDigest=await fingerprintTrustedHostExecutableAsync(binary);
   const source=JSON.parse((await readStableFile(options.catalogPath??path.join(userCodexHome(),'models_cache.json'),16*1024*1024,{allowSymbolicLink:true})).toString('utf8'));
   if(!Array.isArray(source.models))throw new Error('Native Codex requires a local model catalogue.');
   const models=source.models.filter((entry:{slug?:unknown})=>entry?.slug===model);

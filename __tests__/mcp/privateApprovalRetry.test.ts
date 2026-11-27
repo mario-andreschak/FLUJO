@@ -5,7 +5,7 @@ import fs, { type BigIntStats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  fingerprintTrustedHostExecutableAsync, PrivateApprovalReadError, privateApprovalSetMayClearUp, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
+  fingerprintTrustedHostExecutableAsync, PrivateApprovalReadError, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
   readPrivateApprovalSetAsync, TrustedHostMcpError, type PrivateApprovalFileRole,
 } from '@/backend/services/security/trustedHostMcp';
 import { WindowsAuthorityInspectionError, windowsPrivateAuthorityStampAsync } from '@/backend/services/security/windowsPrivateAuthority';
@@ -44,18 +44,25 @@ beforeEach(() => {
   jest.mocked(windowsPrivateAuthorityStampAsync).mockReset().mockResolvedValue('synthetic-authority');
   info = jest.spyOn(console, 'info').mockImplementation(() => undefined);
   warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-  let read = false;
   // These readers always request bigint stats; the mocks cover that overload only.
-  jest.spyOn(fs, 'lstatSync').mockImplementation((() => identity) as unknown as typeof fs.lstatSync);
-  jest.spyOn(fs, 'fstatSync').mockImplementation((() => identity) as unknown as typeof fs.fstatSync);
-  jest.spyOn(fs, 'realpathSync').mockImplementation((filename => String(filename)) as typeof fs.realpathSync);
-  jest.spyOn(fs, 'openSync').mockImplementation(() => { read = false; return 42; });
-  jest.spyOn(fs, 'closeSync').mockImplementation(() => undefined);
-  jest.spyOn(fs, 'readSync').mockImplementation(((_fd: number, buffer: Buffer) => {
-    if (read) return 0;
-    read = true; contents.copy(buffer); return contents.length;
-  }) as typeof fs.readSync);
+  jest.spyOn(fs.promises, 'lstat').mockImplementation((async () => identity) as unknown as typeof fs.promises.lstat);
+  jest.spyOn(fs, 'realpath').mockImplementation(((filename: fs.PathLike, callback: (error: null, resolved: string) => void) =>
+    callback(null, String(filename))) as typeof fs.realpath);
+  jest.spyOn(fs.promises, 'open').mockImplementation(async () => fakeHandle());
 });
+
+/** A private file handle whose first read returns `bytes` and whose next read ends the file. */
+function fakeHandle(bytes: Buffer = contents): fs.promises.FileHandle {
+  let read = false;
+  return {
+    stat: async () => identity,
+    read: async (buffer: Buffer) => {
+      if (read) return { bytesRead: 0, buffer };
+      read = true; bytes.copy(buffer); return { bytesRead: bytes.length, buffer };
+    },
+    close: async () => undefined,
+  } as unknown as fs.promises.FileHandle;
+}
 
 afterEach(() => {
   jest.restoreAllMocks();
@@ -65,11 +72,10 @@ afterEach(() => {
 });
 
 function failOpenOf(filename: string, failures: Array<() => never>) {
-  const open = jest.mocked(fs.openSync).getMockImplementation()!;
-  jest.mocked(fs.openSync).mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+  jest.mocked(fs.promises.open).mockImplementation(async (target: fs.PathLike | fs.promises.FileHandle) => {
     if (target === filename && failures.length) failures.shift()!();
-    return (open as (...args: unknown[]) => number)(target, ...rest);
-  }) as typeof fs.openSync);
+    return fakeHandle();
+  });
 }
 
 function expectNoSecrets(value: unknown) {
@@ -83,7 +89,7 @@ it.each([['EBUSY', -4082], ['EPERM', -4048], ['EACCES', -4092]] as const)(
   'reads the whole set again after one %s while opening a member', async (code, number) => {
     failOpenOf(members[3], [() => { throw errno(code, number); }]);
     await expect(readPrivateApprovalSetAsync(members, undefined, roles)).resolves.toEqual(values);
-    expect(fs.openSync).toHaveBeenCalledTimes(8);
+    expect(fs.promises.open).toHaveBeenCalledTimes(8);
     expect(windowsPrivateAuthorityStampAsync).toHaveBeenCalledTimes(3);
     expect(info).toHaveBeenCalledWith('[private-approval-set-reader]', 'retry', expect.objectContaining({
       phase: 'contents', role: 'ledger', errorKind: code, errno: number, attempts: 1, delayMs: expect.any(Number) }));
@@ -93,23 +99,19 @@ it.each([['EBUSY', -4082], ['EPERM', -4048], ['EACCES', -4092]] as const)(
 
 it('recovers when a lookup is briefly refused while a member is replaced', async () => {
   let failures = 1;
-  const lookup = jest.mocked(fs.lstatSync).getMockImplementation()!;
-  jest.mocked(fs.lstatSync).mockImplementation(((filename: fs.PathLike, options?: unknown) => {
+  jest.mocked(fs.promises.lstat).mockImplementation((async (filename: fs.PathLike) => {
     if (filename === members[1] && failures-- > 0) throw errno('EPERM', -4048);
-    return (lookup as (...args: unknown[]) => BigIntStats)(filename, options);
-  }) as unknown as typeof fs.lstatSync);
+    return identity;
+  }) as unknown as typeof fs.promises.lstat);
   await expect(readPrivateApprovalSetAsync(members, undefined, roles)).resolves.toEqual(values);
 });
 
 it('recovers from a short read during an atomic replace', async () => {
-  let shortReads = 1, read = false;
-  jest.mocked(fs.openSync).mockImplementation(() => { read = false; return 42; });
-  jest.mocked(fs.readSync).mockImplementation(((_fd: number, buffer: Buffer) => {
-    if (read) return 0;
-    read = true;
-    if (shortReads > 0) { shortReads -= 1; contents.copy(buffer, 0, 0, 5); return 5; }
-    contents.copy(buffer); return contents.length;
-  }) as typeof fs.readSync);
+  let shortReads = 1;
+  jest.mocked(fs.promises.open).mockImplementation(async () => {
+    if (shortReads > 0) { shortReads -= 1; return fakeHandle(contents.subarray(0, 5)); }
+    return fakeHandle();
+  });
   await expect(readPrivateApprovalSetAsync(members, undefined, roles)).resolves.toEqual(values);
   expect(info).toHaveBeenCalledWith('[private-approval-set-reader]', 'retry', expect.objectContaining({
     phase: 'contents', role: 'record', errorKind: 'HOST_SOURCE_CHANGED' }));
@@ -160,7 +162,7 @@ it('cancellation ends the wait at once and is never retried', async () => {
   expect(refused).toBeInstanceOf(PrivateApprovalReadError);
   expect(refused.refusal).toMatchObject({ phase: 'contents', role: 'record', cancelled: true, attempts: 1 });
   expect(refused.message).toContain('the request was cancelled');
-  expect(fs.openSync).toHaveBeenCalledTimes(1);
+  expect(fs.promises.open).toHaveBeenCalledTimes(1);
   expectNoSecrets(refused);
 });
 
@@ -171,16 +173,6 @@ it('the single and pair readers use the same bounded retry', async () => {
   expect(info).toHaveBeenCalledWith('[private-approval-reader]', 'retry', expect.objectContaining({ phase: 'contents', errorKind: 'EBUSY' }));
   await expect(readPrivateApprovalAsync(undefined)).rejects.toMatchObject({ refusal: { phase: 'input', attempts: 1 } });
   await expect(readPrivateApprovalPairAsync(members[2], undefined)).rejects.toBeInstanceOf(PrivateApprovalReadError);
-});
-
-it('the final synchronous set may be read again after anything but cancellation', () => {
-  const cancelled = new AbortController(); cancelled.abort();
-  expect(privateApprovalSetMayClearUp(errno('EBUSY', -4082))).toBe(true);
-  expect(privateApprovalSetMayClearUp(new TrustedHostMcpError('HOST_CONSENT_REQUIRED'))).toBe(true);
-  expect(privateApprovalSetMayClearUp(new WindowsAuthorityInspectionError('x', 'spawn'))).toBe(true);
-  expect(privateApprovalSetMayClearUp(new WindowsAuthorityInspectionError('x', 'refused'))).toBe(false);
-  expect(privateApprovalSetMayClearUp(errno('ENOENT', -4058))).toBe(false);
-  expect(privateApprovalSetMayClearUp(errno('EBUSY', -4082), cancelled.signal)).toBe(false);
 });
 
 describe('Windows permission helper failures say whether a fresh attempt may pass', () => {
@@ -228,6 +220,9 @@ describe('Windows permission helper failures say whether a fresh attempt may pas
 });
 
 it('package byte checks open a briefly locked file again, and a lasting lock stays a refusal', async () => {
+  jest.mocked(fs.promises.lstat).mockRestore();
+  jest.mocked(fs.realpath).mockRestore();
+  jest.mocked(fs.promises.open).mockRestore();
   const directory = await fs.promises.mkdtemp(path.join(path.resolve(os.tmpdir()), 'flujo-transient-open-'));
   try {
     const executable = path.join(directory, 'synthetic-executable');

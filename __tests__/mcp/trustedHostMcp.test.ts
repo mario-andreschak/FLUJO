@@ -5,9 +5,10 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { resolveTrustedHostLaunch } from '@/backend/services/mcp/trustedHost';
 import { getCurrentWorkspace, getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import {
-  assertTrustedHostMcpAllowed, fingerprintTrustedHostExecutable, readPrivateApprovalSet, readPrivateApprovalSetAsync,
-  fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp,
+  fingerprintTrustedHostSourceAsync, readPrivateApprovalSetAsync,
+  trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHostMcp,
 } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from './fixtures/trustedHostFingerprint';
 
 let root: string;
 let fixtureParent: string;
@@ -55,11 +56,11 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-it('requires a separate grant and accepts the matching explicit package revision', () => {
-  expect(assertTrustedHostMcpAllowed(config).kind).toBe('trusted-host');
+it('requires a separate grant and accepts the matching explicit package revision', async () => {
+  expect((await verifyTrustedHostMcp(config)).policy.kind).toBe('trusted-host');
   delete process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
-  expect(() => assertTrustedHostMcpAllowed(config)).toThrow('explicit owner consent');
-  expect(() => assertTrustedHostMcpAllowed({ ...config, trustedHost: undefined })).toThrow('explicit owner consent');
+  await expect(verifyTrustedHostMcp(config)).rejects.toThrow('explicit owner consent');
+  await expect(verifyTrustedHostMcp({ ...config, trustedHost: undefined })).rejects.toThrow('explicit owner consent');
 });
 
 it('overlaps eight actual sibling reads while preserving the synchronous ordered package digest', async () => {
@@ -105,44 +106,43 @@ it('overlaps eight actual sibling reads while preserving the synchronous ordered
   } finally { clearTimeout(timer); release(); await outcome; spy.mockRestore(); }
 }, 120_000);
 
-it.each(['sync', 'async'] as const)('fresh %s private sets never return a set torn by a mutation during a genuine held read', async mode => {
+it('fresh private sets never return a set torn by a mutation during a genuine held read', async () => {
   const first = path.join(root, 'set-first.json'), second = path.join(root, 'set-second.json');
   fs.writeFileSync(first, '{"value":"first"}', { mode: 0o600 });
   fs.writeFileSync(second, '{"value":"second"}', { mode: 0o600 });
   const members = [process.env.FLUJO_OWNER_AUTH_FILE!, process.env.FLUJO_MCP_TRUSTED_HOST_FILE!, first, second];
-  expect(mode === 'sync' ? readPrivateApprovalSet(members) : await readPrivateApprovalSetAsync(members)).toHaveLength(4);
-  const expected = fs.lstatSync(first, { bigint: true });
-  const actual = fs.readSync;
+  expect(await readPrivateApprovalSetAsync(members)).toHaveLength(4);
+  const open = fs.promises.open.bind(fs.promises);
   let changed = false;
-  const read = jest.spyOn(fs, 'readSync').mockImplementation((...args: Parameters<typeof fs.readSync>) => {
-    const count = Reflect.apply(actual, fs, args) as number;
-    if (!changed) {
-      const current = fs.fstatSync(args[0], { bigint: true });
-      if (current.dev === expected.dev && current.ino === expected.ino) {
-        changed = true; fs.writeFileSync(second, '{"value":"changed-during-other-held-read"}');
-      }
+  const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (String(args[0]) === first) {
+      const read = handle.read.bind(handle);
+      handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+        const result = await read(...readArgs);
+        if (result.bytesRead && !changed) {
+          changed = true; fs.writeFileSync(second, '{"value":"changed-during-other-held-read"}');
+        }
+        return result;
+      }) as typeof handle.read;
     }
-    return count;
+    return handle;
   });
   try {
-    // The synchronous final set refuses; its caller decides whether to wait and
-    // read again. The async reader reads the whole set again by itself and
-    // returns only the fresh, consistent version (issue #1050).
-    if (mode === 'sync') expect(() => readPrivateApprovalSet(members)).toThrow();
-    else await expect(readPrivateApprovalSetAsync(members)).resolves.toEqual([expect.anything(), expect.anything(),
+    // The reader reads the whole set again by itself and returns only the
+    // fresh, consistent version (issue #1050).
+    await expect(readPrivateApprovalSetAsync(members)).resolves.toEqual([expect.anything(), expect.anything(),
       { value: 'first' }, { value: 'changed-during-other-held-read' }]);
     expect(changed).toBe(true);
-  } finally { read.mockRestore(); }
+  } finally { spy.mockRestore(); }
 });
 
 it('bounded private sets refuse duplicate, relative and pre-aborted inputs', async () => {
   const file = process.env.FLUJO_OWNER_AUTH_FILE!;
   const abort = new AbortController(); abort.abort();
   for (const members of [[], [file, file], ['relative.json'], [file, file, file, file, file]]) {
-    expect(() => readPrivateApprovalSet(members)).toThrow();
     await expect(readPrivateApprovalSetAsync(members)).rejects.toThrow();
   }
-  expect(() => readPrivateApprovalSet([file], abort.signal)).toThrow();
   await expect(readPrivateApprovalSetAsync([file], abort.signal)).rejects.toThrow();
 });
 
@@ -157,94 +157,94 @@ it.each(['inherited', 'field-accessor', 'map-accessor'])('refuses %s environment
   expect(getter).not.toHaveBeenCalled();
 });
 
-it('preserves an explicitly approved own prototype-named environment value', () => {
+it('preserves an explicitly approved own prototype-named environment value', async () => {
   config.env = Object.fromEntries([['__proto__', 'literal'], ...(process.platform === 'win32' ? [['SystemRoot', process.env.SystemRoot!]] : [])]);
   config.trustedHost = { ...trustedHostMcpPolicySchema.parse(config.trustedHost), environmentNames: Object.keys(config.env) };
   approval.approvals[0].policyDigest = trustedHostMcpPolicyDigest(config);
   persist();
-  const environment = resolveTrustedHostLaunch(config).env;
+  const environment = (await resolveTrustedHostLaunch(config)).env;
   expect(Object.getPrototypeOf(environment)).toBeNull();
   expect(Object.getOwnPropertyDescriptor(environment, '__proto__')?.value).toBe('literal');
 });
 
-it.each(['owner', 'server', 'workspace', 'expiry', 'revocation'])('refuses a %s mismatch', mismatch => {
+it.each(['owner', 'server', 'workspace', 'expiry', 'revocation'])('refuses a %s mismatch', async mismatch => {
   if (mismatch === 'owner') approval.ownerId = 'different-owner';
   if (mismatch === 'server') approval.approvals[0].serverName = 'different-server';
   if (mismatch === 'workspace') approval.approvals[0].workspace = 'different-workspace';
   if (mismatch === 'expiry') approval.approvals[0].expiresAt = Date.now() - 1;
   if (mismatch === 'revocation') approval.approvals = [];
   persist();
-  expect(() => assertTrustedHostMcpAllowed(config)).toThrow('explicit owner consent');
+  await expect(verifyTrustedHostMcp(config)).rejects.toThrow('explicit owner consent');
 });
 
-it('requires re-consent for changed package bytes, including a nested dependency', () => {
+it('requires re-consent for changed package bytes, including a nested dependency', async () => {
   const policy = config.trustedHost as { sourceRoot: string };
   fs.mkdirSync(path.join(policy.sourceRoot, 'dependencies'));
   fs.writeFileSync(path.join(policy.sourceRoot, 'dependencies', 'changed.js'), 'new dependency revision');
-  expect(() => assertTrustedHostMcpAllowed(config)).toThrow('package revision changed');
+  await expect(verifyTrustedHostMcp(config)).rejects.toThrow('package revision changed');
 });
 
-it('refuses executable replacement even when the remaining package is unchanged', () => {
+it('refuses executable replacement even when the remaining package is unchanged', async () => {
   fs.writeFileSync(config.command, 'different executable revision');
-  expect(() => assertTrustedHostMcpAllowed(config)).toThrow('package revision changed');
+  await expect(verifyTrustedHostMcp(config)).rejects.toThrow('package revision changed');
 });
 
 it.each([
   { args: ['different-argument'] }, { enableMcpApps: true }, { enableMcpSkills: true },
   { sampling: { enabled: true } }, { roots: ['different-root'] },
-])('binds actual requested launch and broker capabilities (%j)', change => {
-  expect(() => assertTrustedHostMcpAllowed({ ...config, ...change })).toThrow('explicit owner consent');
+])('binds actual requested launch and broker capabilities (%j)', async change => {
+  await expect(verifyTrustedHostMcp({ ...config, ...change })).rejects.toThrow('explicit owner consent');
 });
 
-it('an imported approval flag cannot convey authority', () => {
+it('an imported approval flag cannot convey authority', async () => {
   const forged = { ...(config.trustedHost as object), approved: true };
-  expect(() => assertTrustedHostMcpAllowed({ ...config, trustedHost: forged })).toThrow();
+  await expect(verifyTrustedHostMcp({ ...config, trustedHost: forged })).rejects.toThrow();
 });
 
-it('refuses a source hard link without reading unrelated file contents', () => {
+it('refuses a source hard link without reading unrelated file contents', async () => {
   const policy = config.trustedHost as { sourceRoot: string };
   const outside = path.join(root, 'outside.txt');
   fs.writeFileSync(outside, 'synthetic outside canary');
   fs.linkSync(outside, path.join(policy.sourceRoot, 'linked.txt'));
-  expect(() => fingerprintTrustedHostSource(policy.sourceRoot)).toThrow('package revision changed');
+  await expect(fingerprintTrustedHostSourceAsync(policy.sourceRoot)).rejects.toThrow('package revision changed');
 });
 
-it('refuses a junction or symbolic link in the package tree', () => {
+it('refuses a junction or symbolic link in the package tree', async () => {
   const policy = config.trustedHost as { sourceRoot: string };
   const outside = path.join(root, 'outside');
   fs.mkdirSync(outside);
   fs.symlinkSync(outside, path.join(policy.sourceRoot, 'linked-directory'), 'junction');
-  expect(() => fingerprintTrustedHostSource(policy.sourceRoot)).toThrow('package revision changed');
+  await expect(fingerprintTrustedHostSourceAsync(policy.sourceRoot)).rejects.toThrow('package revision changed');
 });
 
-it('refuses approval stored alongside workspace data', () => {
+it('refuses approval stored alongside workspace data', async () => {
   process.env.FLUJO_MCP_TRUSTED_HOST_FILE = path.join(getWorkspaceDataDir(), 'consent.json');
   persist();
-  expect(() => assertTrustedHostMcpAllowed(config)).toThrow('explicit owner consent');
+  await expect(verifyTrustedHostMcp(config)).rejects.toThrow('explicit owner consent');
 });
 
 it('does not grant a different workspace the same server/package consent', async () => {
   await runWithWorkspace('foreign-workspace', async () => {
-    expect(() => assertTrustedHostMcpAllowed(config)).toThrow('explicit owner consent');
+    await expect(verifyTrustedHostMcp(config)).rejects.toThrow('explicit owner consent');
   });
 });
 
-it('refuses unresolved executable paths and leaves caller values out of errors', () => {
-  expect(() => assertTrustedHostMcpAllowed({ ...config, command: 'npx' })).toThrow('policy is invalid');
+it('refuses unresolved executable paths and leaves caller values out of errors', async () => {
+  await expect(verifyTrustedHostMcp({ ...config, command: 'npx' })).rejects.toThrow('policy is invalid');
   fs.writeFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE!, 'synthetic-private-malformed-canary');
   let message = '';
-  try { assertTrustedHostMcpAllowed(config); } catch (error) { message = (error as Error).message; }
+  try { await verifyTrustedHostMcp(config); } catch (error) { message = (error as Error).message; }
   expect(message).toContain('explicit owner consent');
   expect(message).not.toContain('synthetic-private-malformed-canary');
 });
 
 
-it('binds configured environment values and refuses loader injection', () => {
+it('binds configured environment values and refuses loader injection', async () => {
   const configured = { ...config, env: { STATIC_VALUE: 'approved' }, trustedHost: { ...(config.trustedHost as object), environmentNames: ['STATIC_VALUE'] } };
   approval.approvals[0].policyDigest = trustedHostMcpPolicyDigest(configured);
   persist();
-  expect(assertTrustedHostMcpAllowed(configured).kind).toBe('trusted-host');
-  expect(() => assertTrustedHostMcpAllowed({ ...configured, env: { STATIC_VALUE: 'changed' } })).toThrow('explicit owner consent');
+  expect((await verifyTrustedHostMcp(configured)).policy.kind).toBe('trusted-host');
+  await expect(verifyTrustedHostMcp({ ...configured, env: { STATIC_VALUE: 'changed' } })).rejects.toThrow('explicit owner consent');
   expect(() => trustedHostMcpPolicyDigest({ ...config, trustedHost: { ...(config.trustedHost as object), environmentNames: ['NODE_OPTIONS'] }, env: { NODE_OPTIONS: '--require=/outside.js' } })).toThrow('policy is invalid');
 });
 

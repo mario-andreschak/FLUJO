@@ -40,19 +40,19 @@ function request(bearer: string | null = token, route = '/api/avatar/remote/nati
   return new Request(`http://localhost:4200${route}`, { method, headers: bearer === null ? {} : { authorization: `Bearer ${bearer}` } });
 }
 
-function authorize() {
-  const result = resolveOwnerRequest(request(), ['avatar:voice'], { now: 2_000 });
+async function authorize() {
+  const result = await resolveOwnerRequest(request(), ['avatar:voice'], { now: 2_000 });
   if (!result.ok) throw new Error(`Unexpected denial ${result.response.status}`);
   return result.authorization;
 }
 
-test('resolves frozen authenticated identity and explicit workspace before body or storage use', () => {
+test('resolves frozen authenticated identity and explicit workspace before body or storage use', async () => {
   const req = request(token, '/api/avatar/remote/native-turn?workspace=attacker&ownerId=attacker');
   req.headers.set('x-flujo-owner', 'attacker');
   req.headers.set('x-flujo-workspace', 'attacker');
   req.headers.set('cookie', 'owner=attacker');
   const readBody = jest.spyOn(req, 'json');
-  const result = resolveOwnerRequest(req, ['avatar:voice'], { now: 2_000 });
+  const result = await resolveOwnerRequest(req, ['avatar:voice'], { now: 2_000 });
   expect(result.ok).toBe(true);
   if (!result.ok) return;
   const { principal } = result.authorization;
@@ -65,34 +65,34 @@ test('resolves frozen authenticated identity and explicit workspace before body 
   expect(readBody).not.toHaveBeenCalled();
   expect(JSON.stringify(result)).not.toContain(token);
   expect(JSON.stringify(result)).not.toContain(policy.credentials[0].digest);
-  expect(result.authorization.recheck(2_000)).toBeNull();
+  expect(await result.authorization.recheck(2_000)).toBeNull();
 });
 
-test.each([undefined, '', 'missing.json'])('strict resolver denies unavailable policy (%s)', configured => {
+test.each([undefined, '', 'missing.json'])('strict resolver denies unavailable policy (%s)', async configured => {
   if (configured === undefined) delete process.env.FLUJO_OWNER_AUTH_FILE;
   else process.env.FLUJO_OWNER_AUTH_FILE = configured;
-  const result = resolveOwnerRequest(request(), ['avatar:voice'], { now: 2_000 });
+  const result = await resolveOwnerRequest(request(), ['avatar:voice'], { now: 2_000 });
   expect(result.ok).toBe(false);
   if (!result.ok) expect(result.response.status).toBe(503);
 });
 
-test('resolver does not inherit callback or anonymous-local admission exceptions', () => {
-  const result = resolveOwnerRequest(request(null, '/api/oauth/callback', 'GET'), ['avatar:voice'], { now: 2_000 });
+test('resolver does not inherit callback or anonymous-local admission exceptions', async () => {
+  const result = await resolveOwnerRequest(request(null, '/api/oauth/callback', 'GET'), ['avatar:voice'], { now: 2_000 });
   expect(result.ok).toBe(false);
   if (!result.ok) expect(result.response.status).toBe(401);
 });
 
-test('voice authority requires an explicit workspace even when the caller requests otherwise', () => {
+test('voice authority requires an explicit workspace even when the caller requests otherwise', async () => {
   delete policy.credentials[0].workspaceId;
   persist();
-  const result = resolveOwnerRequest(request(), ['avatar:voice'], { now: 2_000, requireWorkspace: false });
+  const result = await resolveOwnerRequest(request(), ['avatar:voice'], { now: 2_000, requireWorkspace: false });
   expect(result.ok).toBe(false);
   if (!result.ok) expect(result.response.status).toBe(403);
 });
 
-test('voice-only scope cannot read secrets, control APIs, or execute OpenAI/MCP', () => {
+test('voice-only scope cannot read secrets, control APIs, or execute OpenAI/MCP', async () => {
   for (const scopes of [['secrets:read'], ['control:admin'], ['openai:execute'], ['mcp:access']] as const) {
-    const result = resolveOwnerRequest(request(), scopes, { now: 2_000 });
+    const result = await resolveOwnerRequest(request(), scopes, { now: 2_000 });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.response.status).toBe(403);
   }
@@ -122,40 +122,40 @@ test.each([
   ['owner change', () => { policy.ownerId = 'another-owner'; }],
   ['credential rotation with reused ID', () => { policy.credentials[0].digest = 'a'.repeat(64); }],
   ['removed credential', () => { policy.credentials = []; }],
-])('rechecks durable %s without accepting copied principal claims', (_description, change) => {
-  const witness = authorize();
-  expect(witness.recheck(2_000)).toBeNull();
+])('rechecks durable %s without accepting copied principal claims', async (_description, change) => {
+  const witness = await authorize();
+  expect(await witness.recheck(2_000)).toBeNull();
   change(); persist();
-  expect(witness.recheck(2_002)?.status).toBe(401);
+  expect((await witness.recheck(2_002))?.status).toBe(401);
 });
 
-test('witness expires at the exact boundary and rejects invalid time', () => {
-  const witness = authorize();
-  expect(witness.recheck(expiresAt - 1)).toBeNull();
-  expect(witness.recheck(expiresAt)?.status).toBe(401);
-  expect(witness.recheck(issuedAt - 1)?.status).toBe(401);
-  expect(witness.recheck(Number.NaN)?.status).toBe(401);
+test('witness expires at the exact boundary and rejects invalid time', async () => {
+  const witness = await authorize();
+  expect(await witness.recheck(expiresAt - 1)).toBeNull();
+  expect((await witness.recheck(expiresAt))?.status).toBe(401);
+  expect((await witness.recheck(issuedAt - 1))?.status).toBe(401);
+  expect((await witness.recheck(Number.NaN))?.status).toBe(401);
 });
 
-test('a new policy revision conservatively ends even an otherwise unchanged credential witness', () => {
-  const witness = authorize();
+test('a new policy revision conservatively ends even an otherwise unchanged credential witness', async () => {
+  const witness = await authorize();
   policy.credentials.push(issueOwnerCredential(['openai:read'], expiresAt, issuedAt).record);
   persist();
-  expect(witness.recheck(2_000)?.status).toBe(401);
-  expect(authorize().principal.policyRevision).not.toBe(witness.principal.policyRevision);
+  expect((await witness.recheck(2_000))?.status).toBe(401);
+  expect((await authorize()).principal.policyRevision).not.toBe(witness.principal.policyRevision);
 });
 
 test('witness fails closed on policy deletion/corruption/configuration switch', async () => {
-  const witness = authorize();
+  const witness = await authorize();
   fs.writeFileSync(filename, 'synthetic private malformed data');
-  const denial = witness.recheck(2_000)!;
+  const denial = (await witness.recheck(2_000))!;
   expect(denial.status).toBe(503);
   expect(await denial.text()).not.toContain('private');
   persist();
   delete process.env.FLUJO_OWNER_AUTH_FILE;
-  expect(witness.recheck(2_000)?.status).toBe(503);
+  expect((await witness.recheck(2_000))?.status).toBe(503);
   process.env.FLUJO_OWNER_AUTH_FILE = path.join(directory, 'another.json');
-  expect(witness.recheck(2_000)?.status).toBe(503);
+  expect((await witness.recheck(2_000))?.status).toBe(503);
 });
 
 test('workspace grants reject traversal, reserved device names, and mixed control authority', () => {
@@ -165,8 +165,8 @@ test('workspace grants reject traversal, reserved device names, and mixed contro
   expect(ownerPolicySchema.safeParse({ ...policy, credentials: [{ ...policy.credentials[0], scopes: ['avatar:voice', 'secrets:read'] }] }).success).toBe(false);
 });
 
-test('legacy anonymous admission remains separate from strict principal resolution', () => {
+test('legacy anonymous admission remains separate from strict principal resolution', async () => {
   delete process.env.FLUJO_OWNER_AUTH_FILE;
-  expect(assertOwnerRequest(request(null, '/api/storage', 'GET'))).toBeNull();
-  expect(resolveOwnerRequest(request(null)).ok).toBe(false);
+  expect(await assertOwnerRequest(request(null, '/api/storage', 'GET'))).toBeNull();
+  expect((await resolveOwnerRequest(request(null))).ok).toBe(false);
 });

@@ -43,15 +43,15 @@ it('refuses durable Codex sessions with a legacy projection, then reuses the cor
   expect(findReusableCodexSession('conversation::node', prefix, appended, replacement)).toBe(replacement);
 });
 
-it('refuses Claude sessions with a legacy projection, then reuses the corrected replacement', () => {
+it('refuses Claude sessions with a legacy projection, then reuses the corrected replacement', async () => {
   const prefix = computePrefixHash(instructions, []);
   const key = 'conversation::node';
-  recordSession(key, { sessionId: 'legacy-session', prefixHash: legacyClaudePrefix,
+  await recordSession(key, { sessionId: 'legacy-session', prefixHash: legacyClaudePrefix,
     seenMessageCount: previous.length, leadingSystemMessageCount: 0,
     historyHash: computeHistoryHash(previous as Array<{ role: string; [key: string]: unknown }>) });
-  expect(findReusableSession(key, prefix, appended as Array<{ role: string; [key: string]: unknown }>, 0)).toBeUndefined();
-  recordSession(key, { sessionId: 'corrected-session', prefixHash: prefix,
+  expect(await findReusableSession(key, prefix, appended as Array<{ role: string; [key: string]: unknown }>, 0)).toBeUndefined();
+  await recordSession(key, { sessionId: 'corrected-session', prefixHash: prefix,
     seenMessageCount: previous.length, leadingSystemMessageCount: 0,
     historyHash: computeHistoryHash(previous as Array<{ role: string; [key: string]: unknown }>) });
-  expect(findReusableSession(key, prefix, appended as Array<{ role: string; [key: string]: unknown }>, 0)?.sessionId).toBe('corrected-session');
+  expect((await findReusableSession(key, prefix, appended as Array<{ role: string; [key: string]: unknown }>, 0))?.sessionId).toBe('corrected-session');
 });

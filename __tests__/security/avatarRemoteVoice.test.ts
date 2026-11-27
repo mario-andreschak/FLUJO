@@ -23,7 +23,7 @@ jest.mock('@/app/api/_workspace', () => ({
       const { isWorkerMode } = jest.requireActual('@/backend/services/workspace/workerMode');
       const denied = isWorkerMode()
         ? jest.requireActual('@/backend/services/workspace/snapshotControlAuth').assertSnapshotBearer(request)
-        : jest.requireActual('@/backend/services/security/ownerAccess').assertOwnerRequest(request);
+        : await jest.requireActual('@/backend/services/security/ownerAccess').assertOwnerRequest(request);
       if (denied) return denied;
       const { runWithWorkspace } = jest.requireMock('@/utils/workspace');
       const workspace = new URL(request.url).searchParams.get('workspace') ?? request.headers.get('x-flujo-workspace');

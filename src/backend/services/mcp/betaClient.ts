@@ -277,13 +277,14 @@ function betaRequestInit(config: {
  * Websocket is NOT supported by the v2 SDK; callers must route websocket
  * configs to the v1 path (see connectServer).
  */
-export function createBetaTransport(
+export async function createBetaTransport(
   config: MCPServerConfig,
   options?: TransportCreationOptions,
-):
+): Promise<
   | BetaStdioClientTransport
   | BetaStreamableHTTPClientTransport
-  | BetaSSEClientTransport {
+  | BetaSSEClientTransport
+> {
   assertMcpTransport(config);
   if ((config.isolation !== undefined || config.trustedHost !== undefined) && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   if (config.transport === "websocket") {
@@ -353,7 +354,7 @@ export function createBetaTransport(
   }
 
   // Admission above leaves only explicit stdio after the remote branches.
-  const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
+  const { command, args, env, cwd, isolation } = await resolveStdioLaunch(config, options);
   let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
   let workload: PendingBundledFlujoWorkload | undefined;
   const workloadWorkspace = getCurrentWorkspace();
@@ -365,10 +366,11 @@ export function createBetaTransport(
     runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
     const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
+    const brokerEnv = runtimeBroker ? (config.trustedHost ? await trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {};
     const parameters = {
       command,
       args,
-      env: { ...env, ...(runtimeBroker ? (config.trustedHost ? trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {}), ...workloadEnv },
+      env: { ...env, ...brokerEnv, ...workloadEnv },
       cwd,
       stderr: isolation ? 'ignore' as const : 'pipe' as const,
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -381,7 +383,7 @@ export function createBetaTransport(
     transport = new BetaStdioClientTransport(parameters);
     if (!isolation) attachHostAccessCheck(transport);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
-    else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else if (config.trustedHost) await attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
     else {
       attachShippedWorkspaceReadiness(transport, config, cwd);
       attachLocalHostLaunch(transport, config, { isolateRuntimeHome: options?.isolateRuntimeHome === true });

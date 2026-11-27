@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
-import { fingerprintTrustedHostSource, trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostSource } from './fixtures/trustedHostFingerprint';
 import { createStdioTransport } from '@/backend/services/mcp/connection';
 import { getManagedTrustedHost } from '@/backend/services/mcp/trustedHost';
 
@@ -67,7 +68,7 @@ describe('owned endurance fixture through the real SDK transport', () => {
       saved = Object.fromEntries(Object.keys(bindings).map(name => [name, process.env[name]]));
       Object.assign(process.env, bindings);
         expect(JSON.stringify(config)).not.toContain(token);
-        const transport = createStdioTransport(config);
+        const transport = await createStdioTransport(config);
         await client.connect(transport);
         expect((await client.listTools()).tools.map(tool => tool.name)).toContain('research_page');
         const research = await client.callTool({ name: 'research_page', arguments: {} });

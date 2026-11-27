@@ -37,7 +37,7 @@ import {
 } from "@/backend/services/mcp/betaClient";
 import type { MCPServerConfig, MCPStdioConfig } from "@/shared/types/mcp";
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
-import { fingerprintTrustedHostExecutable } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable } from './fixtures/trustedHostFingerprint';
 
 let approvedHost: ReturnType<typeof installTrustedHostProfile>;
 const stdio = (command = "node"): MCPStdioConfig => {
@@ -89,11 +89,11 @@ describe("isMcpBetaProtocolEnabled", () => {
 });
 
 describe("shouldRecreateClient — beta toggle flips", () => {
-  it("rebuilds a v1 client when the beta protocol is enabled", () => {
+  it("rebuilds a v1 client when the beta protocol is enabled", async () => {
     const config = stdio();
     const client = withTransport(
       createNewClient(config),
-      createTransport(config),
+      await createTransport(config),
     );
 
     const result = shouldRecreateClient(client, config, true);
@@ -102,11 +102,11 @@ describe("shouldRecreateClient — beta toggle flips", () => {
     expect(result.reason).toBe("Beta MCP protocol enabled");
   });
 
-  it("rebuilds a beta client when the beta protocol is disabled again", () => {
+  it("rebuilds a beta client when the beta protocol is disabled again", async () => {
     const config = stdio();
     const client = withTransport(
       createNewBetaClient(config),
-      createBetaTransport(config),
+      await createBetaTransport(config),
     );
 
     const result = shouldRecreateClient(client, config, false);
@@ -131,11 +131,11 @@ describe("shouldRecreateClient — beta toggle flips", () => {
 });
 
 describe("shouldRecreateClient — stable beta connections", () => {
-  it("does NOT rebuild a beta stdio client for a byte-identical config", () => {
+  it("does NOT rebuild a beta stdio client for a byte-identical config", async () => {
     const config = stdio();
     const client = withTransport(
       createNewBetaClient(config),
-      createBetaTransport(config),
+      await createBetaTransport(config),
     );
 
     const result = shouldRecreateClient(client, stdio(), true);
@@ -143,10 +143,10 @@ describe("shouldRecreateClient — stable beta connections", () => {
     expect(result.needsNewClient).toBe(false);
   });
 
-  it("rebuilds a beta stdio client when the spawn parameters changed", () => {
+  it("rebuilds a beta stdio client when the spawn parameters changed", async () => {
     const client = withTransport(
       createNewBetaClient(stdio("node")),
-      createBetaTransport(stdio("node")),
+      await createBetaTransport(stdio("node")),
     );
 
     const result = shouldRecreateClient(client, stdio("deno"), true);
@@ -155,11 +155,11 @@ describe("shouldRecreateClient — stable beta connections", () => {
     expect(result.reason).toBe("Connection parameters changed");
   });
 
-  it("does NOT rebuild a beta streamable client for a byte-identical config", () => {
+  it("does NOT rebuild a beta streamable client for a byte-identical config", async () => {
     const config = streamable();
     const client = withTransport(
       createNewBetaClient(config),
-      createBetaTransport(config),
+      await createBetaTransport(config),
     );
 
     const result = shouldRecreateClient(client, streamable(), true);
@@ -167,11 +167,11 @@ describe("shouldRecreateClient — stable beta connections", () => {
     expect(result.needsNewClient).toBe(false);
   });
 
-  it("rebuilds a beta client when the transport type changed", () => {
+  it("rebuilds a beta client when the transport type changed", async () => {
     const config = stdio();
     const client = withTransport(
       createNewBetaClient(config),
-      createBetaTransport(config),
+      await createBetaTransport(config),
     );
 
     const result = shouldRecreateClient(client, streamable(), true);
@@ -187,13 +187,13 @@ describe("beta factories", () => {
     expect(isBetaClient(createNewClient(stdio()) as Client)).toBe(false);
   });
 
-  it("stashes the SAME stdio config key as the v1 transport factory", () => {
+  it("stashes the SAME stdio config key as the v1 transport factory", async () => {
     const config = stdio();
-    const beta = createBetaTransport(config) as unknown as {
+    const beta = (await createBetaTransport(config)) as unknown as {
       __flujoStdioKey?: string;
       __flujoKind?: string;
     };
-    const v1 = createTransport(config) as unknown as {
+    const v1 = (await createTransport(config)) as unknown as {
       __flujoStdioKey?: string;
     };
 
@@ -202,8 +202,8 @@ describe("beta factories", () => {
     expect(beta.__flujoStdioKey).toBe(v1.__flujoStdioKey);
   });
 
-  it("keeps the exact base stdio transport through negotiation and defers MRTR attachment", () => {
-    const beta = createBetaTransport(stdio()) as BetaStdioClientTransport & {
+  it("keeps the exact base stdio transport through negotiation and defers MRTR attachment", async () => {
+    const beta = (await createBetaTransport(stdio())) as BetaStdioClientTransport & {
       __flujoKind?: string;
     };
     const controller = getStdioOAuthMrtrController(beta);
@@ -225,20 +225,18 @@ describe("beta factories", () => {
     expect(getStdioOAuthMrtrController(beta)).toBe(controller);
   });
 
-  it("stashes kind + http key on streamable transports and refuses websocket", () => {
-    const beta = createBetaTransport(streamable()) as unknown as {
+  it("stashes kind + http key on streamable transports and refuses websocket", async () => {
+    const beta = (await createBetaTransport(streamable())) as unknown as {
       __flujoHttpKey?: string;
       __flujoKind?: string;
     };
     expect(beta.__flujoKind).toBe("streamable");
     expect(typeof beta.__flujoHttpKey).toBe("string");
 
-    expect(() =>
-      createBetaTransport({
+    await expect(createBetaTransport({
         name: "ws",
         transport: "websocket",
         websocketUrl: "ws://x",
-      } as unknown as MCPServerConfig),
-    ).toThrow(/websocket/i);
+      } as unknown as MCPServerConfig)).rejects.toThrow(/websocket/i);
   });
 });

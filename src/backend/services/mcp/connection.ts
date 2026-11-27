@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { McpIsolationError } from '../security/isolatedMcp';
 import { resolveTrustedHostLaunch, trustedHostBrokerEnvironment, attachTrustedHost } from './trustedHost';
-import { trustedHostMcpApproval, TrustedHostMcpError } from '../security/trustedHostMcp';
+import { trustedHostMcpApprovalAsync, TrustedHostMcpError } from '../security/trustedHostMcp';
 import { attachLocalHostLaunch } from './localHost';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
@@ -25,7 +25,7 @@ import {
   SSEClientTransport,
 } from "@modelcontextprotocol/sdk/client/sse.js";
 import { MCPSSEConfig } from "@/shared/types/mcp/mcp";
-import * as fs from "fs";
+import fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import { createHash, createHmac, randomBytes } from "node:crypto";
@@ -559,14 +559,15 @@ export interface TransportCreationOptions {
 /**
  * Create a transport for the MCP client
  */
-export function createTransport(
+export async function createTransport(
   config: MCPServerConfig,
   options?: TransportCreationOptions,
-):
+): Promise<
   | StdioClientTransport
   | WebSocketClientTransport
   | StreamableHTTPClientTransport
-  | SSEClientTransport {
+  | SSEClientTransport
+> {
   assertMcpTransport(config);
   log.debug("Entering createTransport method");
   if ((config.isolation !== undefined || config.trustedHost !== undefined) && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
@@ -758,24 +759,24 @@ interface IsolatedStdioRuntime {
   env: Record<string, string>;
 }
 
-export function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
+export async function isolatedStdioRuntime(serverName: string): Promise<IsolatedStdioRuntime> {
   const workspaceRoot = getWorkspaceDataDir();
   const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
 
   // Never create a workspace as a side effect of launching a child. The HTTP
   // boundary/startup migration has already validated and created this root.
-  const admission = new RuntimeDirectoryAdmission(workspaceRoot);
+  const admission = await RuntimeDirectoryAdmission.open(workspaceRoot);
 
   let current = workspaceRoot;
   for (const segment of ['userdata', 'mcp-runtime', serverKey]) {
     current = path.join(current, segment);
-    admission.admit(current, segment === serverKey);
+    await admission.admit(current, segment === serverKey);
   }
   const runtimeRoot = current;
   const home = path.join(runtimeRoot, 'home');
   const cwd = path.join(runtimeRoot, 'cwd');
-  admission.admit(home);
-  admission.admit(cwd);
+  await admission.admit(home);
+  await admission.admit(cwd);
 
   const directories = {
     appData: path.join(home, 'AppData', 'Roaming'),
@@ -795,7 +796,7 @@ export function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
     let cursor = home;
     for (const segment of relative.split(path.sep).filter(Boolean)) {
       cursor = path.join(cursor, segment);
-      admission.admit(cursor);
+      await admission.admit(cursor);
     }
   }
 
@@ -824,7 +825,7 @@ export function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
     result.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');
     result.HOMEPATH = home.slice(parsed.root.length - 1);
   }
-  admission.verify();
+  await admission.verify();
   return { cwd, env: result };
 }
 
@@ -873,28 +874,31 @@ function applyWindowsSpawnEssentials(env: Record<string, string>): void {
   }
 }
 
+const pathExists = (candidate: string): Promise<boolean> =>
+  fs.access(candidate).then(() => true, () => false);
+
 /**
  * Resolve a stdio config into concrete spawn parameters (see StdioLaunch).
  */
-export function resolveStdioLaunch(
+export async function resolveStdioLaunch(
   config: MCPStdioConfig,
   options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
-): StdioLaunch {
+): Promise<StdioLaunch> {
   if (config.transport !== 'stdio') throw new McpTransportError();
   if (config.isolation !== undefined) {
     if (config.trustedHost !== undefined) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
-    const isolation = prepareMcpIsolation(config, transformEnv(config.env));
+    const isolation = await prepareMcpIsolation(config, transformEnv(config.env));
     const { launch } = isolation;
     return { command: launch.command, args: [...launch.args], env: isolatedSdkEnvironment(launch), cwd: launch.cwd, isolation };
   }
-  assertHostMcpLaunchAllowed(config);
+  await assertHostMcpLaunchAllowed(config);
   if (config.trustedHost !== undefined) {
-    const launch = resolveTrustedHostLaunch(config);
-    const authority = trustedHostMcpApproval(config);
+    const launch = await resolveTrustedHostLaunch(config);
+    const authority = await trustedHostMcpApprovalAsync(config);
     const isolateHome = options?.isolateRuntimeHome === true;
     if (isolateHome !== (authority.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     if (isolateHome) {
-      const runtime = isolatedStdioRuntime(config.name);
+      const runtime = await isolatedStdioRuntime(config.name);
       if (authority.policy.packageRunner && path.resolve(config.cwd!) !== path.resolve(runtime.cwd)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
       for (const [name, value] of Object.entries(runtime.env)) {
         if (!authority.policy.environmentNames.includes(name)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
@@ -919,11 +923,11 @@ export function resolveStdioLaunch(
   const shippedDescriptor = shippedDescriptorForConfig(config);
   const isShipped = Boolean(shippedDescriptor);
   const isHostTerminal = shippedDescriptor?.defaultName === 'bash';
-  const remapMcpPath = (value: string): string => isShipped
+  const remapMcpPath = async (value: string): Promise<string> => isShipped
     ? value
     : remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
-  let command = remapMcpPath(config.command);
-  let args = config.args ? config.args.map(remapMcpPath) : [];
+  let command = await remapMcpPath(config.command);
+  let args = config.args ? await Promise.all(config.args.map(remapMcpPath)) : [];
   const serverDir = `${SERVER_DIR_PREFIX}/${config.name}`;
 
   log.info(`Creating stdio transport for server ${config.name}`);
@@ -950,7 +954,7 @@ export function resolveStdioLaunch(
       const fullPath = path.join(getWorkspaceDataDir(), serverDir, command);
       log.debug(`Checking if file exists at: ${fullPath}`);
 
-      const fileExists = fs.existsSync(fullPath);
+      const fileExists = await pathExists(fullPath);
       log.debug(`File exists: ${fileExists}`);
 
       if (fileExists) {
@@ -977,12 +981,12 @@ export function resolveStdioLaunch(
   // when FLUJO was launched outside a shell that initialized nvm (and thus inherited
   // a PATH without the nvm Node bin dir). Runs after the .bat rewrite above so
   // `cmd.exe` is left untouched.
-  const resolvedCommand = resolveNodeCommand(command, {
+  const resolvedCommand = await resolveNodeCommand(command, {
     execPath: process.execPath,
     platform: os.platform(),
     dirname: path.dirname,
     joinPath: path.join,
-    fileExists: fs.existsSync,
+    fileExists: pathExists,
   });
   if (resolvedCommand !== command) {
     log.debug(
@@ -994,13 +998,13 @@ export function resolveStdioLaunch(
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
   // Runtime-home isolation is opt-in. The caller resolves the process/server/
-  // workspace precedence before reaching this synchronous spawn boundary.
+  // workspace precedence before reaching this spawn boundary.
   // Bundled Bash remains attached to the host account regardless, because it
   // intentionally behaves like the user's terminal.
   const runtime = !isHostTerminal && options?.isolateRuntimeHome === true
-    ? isolatedStdioRuntime(config.name)
+    ? await isolatedStdioRuntime(config.name)
     : undefined;
-  const resolvedCwd = remapMcpPath(resolveServerCwd({
+  const resolvedCwd = await remapMcpPath(resolveServerCwd({
     // Use the original (pre-.bat-rewrite) command/args for runner detection so
     // e.g. `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
     command: config.command,
@@ -1025,7 +1029,7 @@ export function resolveStdioLaunch(
     : configuredEnv;
   if (!isShipped) {
     for (const [name, value] of Object.entries(transformedEnv)) {
-      transformedEnv[name] = remapMcpPath(value);
+      transformedEnv[name] = await remapMcpPath(value);
     }
   }
   // Third-party and non-terminal shipped servers keep private runtime homes.
@@ -1130,10 +1134,10 @@ export function attachHostAccessCheck(transport: { start: () => Promise<void> })
 }
 
 /** Create a stdio transport for the MCP client. */
-export function createStdioTransport(
+export async function createStdioTransport(
   config: MCPServerConfig,
   options?: TransportCreationOptions,
-): StdioClientTransport {
+): Promise<StdioClientTransport> {
   log.debug("Entering createStdioTransport method");
 
   // Ensure we're working with a stdio config
@@ -1141,7 +1145,7 @@ export function createStdioTransport(
     throw new Error("Cannot create stdio transport for non-stdio config");
   }
 
-  const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
+  const { command, args, env, cwd, isolation } = await resolveStdioLaunch(config, options);
   let runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined;
   let workload: PendingBundledFlujoWorkload | undefined;
   const workloadWorkspace = getCurrentWorkspace();
@@ -1159,10 +1163,11 @@ export function createStdioTransport(
     runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
     const workloadEnv = workload ? getPendingWorkloadEnvironment(config, workload) : {};
+    const brokerEnv = runtimeBroker ? (config.trustedHost ? await trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {};
     const transportoptions: StdioServerParameters = {
       command: command,
       args: args,
-      env: { ...env, ...(runtimeBroker ? (config.trustedHost ? trustedHostBrokerEnvironment(config, runtimeBroker.env) : runtimeBroker.env) : {}), ...workloadEnv },
+      env: { ...env, ...brokerEnv, ...workloadEnv },
       cwd: cwd,
       stderr: isolation ? 'ignore' : 'pipe',
       ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
@@ -1176,7 +1181,7 @@ export function createStdioTransport(
     transport = new StdioClientTransport(transportoptions);
     if (!isolation) attachHostAccessCheck(transport);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
-    else if (config.trustedHost) attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
+    else if (config.trustedHost) await attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
     else {
       attachShippedWorkspaceReadiness(transport, config, cwd);
       attachLocalHostLaunch(transport, config, { isolateRuntimeHome: options?.isolateRuntimeHome === true });

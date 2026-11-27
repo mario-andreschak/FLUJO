@@ -9,25 +9,25 @@ function response(body: unknown, status = 200, cookie?: string): Response {
   } });
 }
 
-export function POST(request: Request): Response {
+export async function POST(request: Request): Promise<Response> {
   if (!ownerBrowserRequestAllowed(request, true)) return response({ error: 'Forbidden' }, 403);
-  const admitted = resolveOwnerRequest(request, ['control:admin', 'secrets:read'], { requireBearer: true });
+  const admitted = await resolveOwnerRequest(request, ['control:admin', 'secrets:read'], { requireBearer: true });
   if (!admitted.ok) return admitted.response;
   try {
-    const denied = admitted.authorization.recheck();
+    const denied = await admitted.authorization.recheck();
     if (denied) return denied;
-    return response({ authenticated: true }, 200, createOwnerSession(request, admitted.authorization.principal));
+    return response({ authenticated: true }, 200, await createOwnerSession(request, admitted.authorization.principal));
   } catch { return response({ error: 'Owner authentication is unavailable.' }, 503); }
 }
 
-export function GET(request: Request): Response {
-  const admitted = resolveOwnerRequest(request, ['control:admin', 'secrets:read']);
+export async function GET(request: Request): Promise<Response> {
+  const admitted = await resolveOwnerRequest(request, ['control:admin', 'secrets:read']);
   return admitted.ok ? response({ authenticated: true, ownerId: admitted.authorization.principal.ownerId,
     expiresAt: admitted.authorization.principal.expiresAt }) : admitted.response;
 }
 
-export function DELETE(request: Request): Response {
+export async function DELETE(request: Request): Promise<Response> {
   if (!ownerBrowserRequestAllowed(request, true)) return response({ error: 'Forbidden' }, 403);
-  try { return response({ authenticated: false }, 200, revokeOwnerSession(request)); }
+  try { return response({ authenticated: false }, 200, await revokeOwnerSession(request)); }
   catch { return response({ error: 'Owner authentication is unavailable.' }, 503); }
 }

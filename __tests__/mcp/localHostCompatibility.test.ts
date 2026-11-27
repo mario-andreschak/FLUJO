@@ -30,19 +30,19 @@ afterEach(() => {
   }
 });
 
-it.each(['bash', 'browser', 'filesystem', 'flujo', 'installed-third-party'])('admits an existing local %s server', name => {
+it.each(['bash', 'browser', 'filesystem', 'flujo', 'installed-third-party'])('admits an existing local %s server', async name => {
   mockConfig.name = name;
-  expect(() => assertHostMcpLaunchAllowed(mockConfig)).not.toThrow();
+  await expect(assertHostMcpLaunchAllowed(mockConfig)).resolves.not.toThrow();
 });
 
 it.each([
   ['FLUJO_OWNER_AUTH_FILE', ''], ['FLUJO_MCP_TRUSTED_HOST_FILE', 'missing'],
   ['FLUJO_MCP_ISOLATION_FILE', 'missing'], ['FLUJO_WORKER_MODE', '1'],
   ['FLUJO_EXPOSURE_MODE', 'network'], ['FLUJO_EXPOSURE_MODE', 'public'],
-])('does not downgrade %s=%s to the local path', (name, value) => {
+])('does not downgrade %s=%s to the local path', async (name, value) => {
   process.env[name] = value;
   expect(localHostMcpAllowed(mockConfig)).toBe(false);
-  expect(() => assertHostMcpLaunchAllowed(mockConfig)).toThrow();
+  await expect(assertHostMcpLaunchAllowed(mockConfig)).rejects.toThrow();
 });
 
 it('does not downgrade an explicit server profile', () => {

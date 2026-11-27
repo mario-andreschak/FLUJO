@@ -23,6 +23,11 @@ let token: string;
 let saved: Record<string, string | undefined>;
 const origin = 'http://localhost:4200';
 const encode = (value: string) => new TextEncoder().encode(value);
+const { setImmediate: realTick } = jest.requireActual<typeof import('node:timers')>('node:timers');
+/** Lets real file reads finish while Jest fakes the clock. */
+async function settle(done: () => boolean) {
+  for (let turn = 0; turn < 10_000 && !done(); turn += 1) await new Promise(resolve => realTick(resolve));
+}
 beforeEach(() => {
   saved = { FLUJO_OWNER_AUTH_FILE: process.env.FLUJO_OWNER_AUTH_FILE,
     FLUJO_OWNER_BROWSER_ORIGIN: process.env.FLUJO_OWNER_BROWSER_ORIGIN };
@@ -47,19 +52,21 @@ function request(cookie?: string) {
   return new Request(`${origin}/api/events`, { headers: { host: 'localhost:4200', origin,
     ...(cookie ? { cookie } : { authorization: `Bearer ${token}` }) } });
 }
-function open(cookie?: string, signal = new AbortController().signal) {
-  const admission = resolveOwnerRequest(request(cookie));
+async function open(cookie?: string, signal = new AbortController().signal) {
+  const admission = await resolveOwnerRequest(request(cookie));
   if (!admission.ok) throw new Error('Fixture admission denied');
   let producer!: ReadableStreamDefaultController<Uint8Array>;
-  const cancel = jest.fn();
+  let cancelled!: () => void;
+  const canceled = new Promise<void>(resolve => { cancelled = resolve; });
+  const cancel = jest.fn(() => cancelled());
   const upstream = new ReadableStream<Uint8Array>({ start(value) { producer = value; }, cancel });
-  const response = bindOwnerStream(new Response(upstream, { headers: {
+  const response = await bindOwnerStream(new Response(upstream, { headers: {
     'Content-Type': 'text/event-stream; charset=utf-8', 'X-Fixture': 'preserved',
   } }), admission.authorization, signal);
-  return { response, producer, cancel };
+  return { response, producer, cancel, canceled };
 }
 test('preserves authorized bytes and headers and cancels the producer on consumer cancellation', async () => {
-  const { response, producer, cancel } = open();
+  const { response, producer, cancel } = await open();
   const reader = response.body!.getReader();
   producer.enqueue(encode('data: allowed\n\n'));
   expect(await reader.read()).toEqual({ value: encode('data: allowed\n\n'), done: false });
@@ -68,15 +75,15 @@ test('preserves authorized bytes and headers and cancels the producer on consume
   expect(cancel).toHaveBeenCalledTimes(1);
 });
 test('discards queued bytes after durable revocation and denies reconnection', async () => {
-  const { response, producer, cancel } = open();
+  const { response, producer, cancel } = await open();
   producer.enqueue(encode('data: private\n\n'));
   policy.credentials[0].revokedAt = Date.now(); persist();
   await expect(response.body!.getReader().read()).rejects.toThrow('Stream authorization ended.');
   expect(cancel).toHaveBeenCalledTimes(1);
-  expect(resolveOwnerRequest(request()).ok).toBe(false);
+  expect((await resolveOwnerRequest(request())).ok).toBe(false);
 });
 test('rechecks after a pending read resolves so racing output cannot disclose data', async () => {
-  const { response, producer, cancel } = open();
+  const { response, producer, cancel } = await open();
   const read = response.body!.getReader().read();
   await Promise.resolve();
   policy.credentials[0].revokedAt = Date.now(); persist();
@@ -86,34 +93,36 @@ test('rechecks after a pending read resolves so racing output cannot disclose da
 });
 test('revokes an idle backpressured stream without waiting for another event', async () => {
   jest.useFakeTimers();
-  const { response, cancel } = open();
+  const { response, cancel, canceled } = await open();
+  await settle(() => jest.getTimerCount() === 1);
   policy.credentials[0].revokedAt = Date.now(); persist();
   jest.advanceTimersByTime(1000);
+  await canceled;
   expect(cancel).toHaveBeenCalledTimes(1);
   await expect(response.body!.getReader().read()).rejects.toThrow('Stream authorization ended.');
   expect(jest.getTimerCount()).toBe(0);
 });
 test('logout revokes an already established cookie-authenticated stream', async () => {
-  const login = POST(new Request(`${origin}/api/owner/session`, { method: 'POST', headers: {
+  const login = await POST(new Request(`${origin}/api/owner/session`, { method: 'POST', headers: {
     host: 'localhost:4200', origin, authorization: `Bearer ${token}`,
   } }));
   const cookie = login.headers.get('set-cookie')!.split(';')[0];
-  const { response, producer, cancel } = open(cookie);
-  expect(DELETE(new Request(`${origin}/api/owner/session`, { method: 'DELETE', headers: {
+  const { response, producer, cancel } = await open(cookie);
+  expect((await DELETE(new Request(`${origin}/api/owner/session`, { method: 'DELETE', headers: {
     host: 'localhost:4200', origin, cookie,
-  } })).status).toBe(200);
+  } }))).status).toBe(200);
   producer.enqueue(encode('data: private\n\n'));
   await expect(response.body!.getReader().read()).rejects.toThrow('Stream authorization ended.');
   expect(cancel).toHaveBeenCalledTimes(1);
 });
 test('expiry and corrupt policy stop an established stream with generic errors', async () => {
   jest.useFakeTimers();
-  const first = open();
+  const first = await open();
   jest.setSystemTime(policy.credentials[0].expiresAt);
   jest.advanceTimersByTime(1000);
   await expect(first.response.body!.getReader().read()).rejects.toThrow('Stream authorization ended.');
   jest.useRealTimers();
-  const second = open();
+  const second = await open();
   fs.writeFileSync(filename, 'private-invalid-policy');
   second.producer.enqueue(encode('data: secret\n\n'));
   await expect(second.response.body!.getReader().read()).rejects.toThrow('Stream authorization ended.');
@@ -122,7 +131,9 @@ test('expiry and corrupt policy stop an established stream with generic errors',
 test('request abort cancels the producer and releases the revocation timer', async () => {
   jest.useFakeTimers();
   const controller = new AbortController();
-  const { response, cancel } = open(undefined, controller.signal);
+  const { response, cancel } = await open(undefined, controller.signal);
+  await settle(() => jest.getTimerCount() === 1);
+  expect(jest.getTimerCount()).toBe(1);
   controller.abort();
   expect(cancel).toHaveBeenCalledTimes(1);
   expect(jest.getTimerCount()).toBe(0);
@@ -130,7 +141,7 @@ test('request abort cancels the producer and releases the revocation timer', asy
 });
 test('normal completion releases the timer without canceling successful work', async () => {
   jest.useFakeTimers();
-  const { response, producer, cancel } = open();
+  const { response, producer, cancel } = await open();
   producer.close();
   expect(await response.body!.getReader().read()).toEqual({ done: true, value: undefined });
   expect(cancel).not.toHaveBeenCalled();

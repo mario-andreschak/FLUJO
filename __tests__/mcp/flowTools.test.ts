@@ -82,7 +82,7 @@ describe('flowToolsCallTool', () => {
     runFlowMock.mockResolvedValue({ status: 'completed', outputText: 'result' });
     const controller = new AbortController();
     let current = true;
-    const assertAuthorized = () => { if (!current) throw new Error('revoked'); };
+    const assertAuthorized = async () => { if (!current) throw new Error('revoked'); };
     const requestInput = jest.fn(async () => ({ confirmation: { action: 'accept' as const, content: { confirmed: true } } }));
     await flowToolsCallTool('web_research', { input: 'work', confirm: true }, {
       abortSignal: controller.signal, assertAuthorized, requestInput,
@@ -97,7 +97,7 @@ describe('flowToolsCallTool', () => {
   it('refuses a revoked or aborted confirmation before any flow effect', async () => {
     loadFlows.mockResolvedValue(flows);
     let current = true;
-    const assertAuthorized = () => { if (!current) throw new Error('revoked'); };
+    const assertAuthorized = async () => { if (!current) throw new Error('revoked'); };
     const requestInput = jest.fn(async () => { current = false; return { confirmation: { action: 'accept' as const, content: { confirmed: true } } }; });
     await expect(flowToolsCallTool('web_research', { input: 'work', confirm: true }, { assertAuthorized, requestInput })).rejects.toThrow('revoked');
     const controller = new AbortController(); controller.abort();

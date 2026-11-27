@@ -91,9 +91,6 @@
   "src/backend/execution/flow/handlers/nativeOriginalHost.ts": {
     "flujo/no-double-cast": {
       "count": 1
-    },
-    "flujo/no-sync-fs": {
-      "count": 8
     }
   },
   "src/backend/execution/flow/nodes/ProcessNode.ts": {
@@ -185,9 +182,6 @@
     "flujo/no-double-cast": {
       "count": 18
     },
-    "flujo/no-sync-fs": {
-      "count": 1
-    },
     "flujo/no-workaround-comment": {
       "count": 1
     }
@@ -242,16 +236,6 @@
       "count": 2
     }
   },
-  "src/backend/services/mcp/roots.ts": {
-    "flujo/no-sync-fs": {
-      "count": 1
-    }
-  },
-  "src/backend/services/mcp/runtimeDirectoryAdmission.ts": {
-    "flujo/no-sync-fs": {
-      "count": 8
-    }
-  },
   "src/backend/services/mcp/serverTasks.ts": {
     "flujo/no-double-cast": {
       "count": 1
@@ -275,11 +259,6 @@
   "src/backend/services/model/adapters/anthropicAdapter.ts": {
     "flujo/no-double-cast": {
       "count": 1
-    }
-  },
-  "src/backend/services/model/adapters/claudeSessionPersistence.ts": {
-    "flujo/no-sync-fs": {
-      "count": 30
     }
   },
   "src/backend/services/model/adapters/claudeSubscriptionAdapter.ts": {
@@ -352,11 +331,6 @@
       "count": 1
     }
   },
-  "src/backend/services/originalOwner/nativeToolEffects.ts": {
-    "flujo/no-sync-fs": {
-      "count": 4
-    }
-  },
   "src/backend/services/originalOwner/sender.ts": {
     "flujo/no-double-cast": {
       "count": 1
@@ -389,12 +363,7 @@
   },
   "src/backend/services/security/bundledFlujoWorkload.ts": {
     "flujo/no-sync-fs": {
-      "count": 55
-    }
-  },
-  "src/backend/services/security/bundledMcpDependencyGraph.ts": {
-    "flujo/no-sync-fs": {
-      "count": 2
+      "count": 34
     }
   },
   "src/backend/services/security/isolatedMcp.ts": {
@@ -402,29 +371,9 @@
       "count": 13
     }
   },
-  "src/backend/services/security/ownerBootstrap.ts": {
-    "flujo/no-sync-fs": {
-      "count": 14
-    }
-  },
-  "src/backend/services/security/ownerPolicy.ts": {
-    "flujo/no-sync-fs": {
-      "count": 9
-    }
-  },
-  "src/backend/services/security/ownerSession.ts": {
-    "flujo/no-sync-fs": {
-      "count": 14
-    }
-  },
-  "src/backend/services/security/protectedPackageRunner.ts": {
-    "flujo/no-sync-fs": {
-      "count": 16
-    }
-  },
   "src/backend/services/security/trustedHostMcp.ts": {
     "flujo/no-sync-fs": {
-      "count": 23
+      "count": 12
     }
   },
   "src/backend/services/security/windowsPrivateAuthority.ts": {
@@ -1456,11 +1405,6 @@
       "count": 4
     }
   },
-  "src/utils/encryption/operatorSecret.ts": {
-    "flujo/no-sync-fs": {
-      "count": 10
-    }
-  },
   "src/utils/logger/logger.ts": {
     "flujo/no-double-cast": {
       "count": 1
@@ -1469,9 +1413,6 @@
   "src/utils/mcp/utils.ts": {
     "flujo/no-double-cast": {
       "count": 3
-    },
-    "flujo/no-sync-fs": {
-      "count": 4
     }
   },
   "src/utils/shared/decisionRules.ts": {
@@ -1492,9 +1433,6 @@
   "src/utils/workspace.ts": {
     "flujo/no-double-cast": {
       "count": 1
-    },
-    "flujo/no-sync-fs": {
-      "count": 3
     }
   },
   "src/vendor/avatar/client/Eyes.tsx": {

@@ -33,24 +33,24 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   Object.assign(fixture.config,{rootPath:process.cwd(),source:{type:'local'}});
   Object.assign(process.env,{PERSONA_GOAL_ENDURANCE_PROFILE:'structured-tools',PERSONA_GOAL_ENDURANCE_FIXTURE_URL:'http://127.0.0.1:1',PERSONA_GOAL_ENDURANCE_AGENT_ROOT:'synthetic-agent-root',PERSONA_GOAL_ENDURANCE_RUN_ID:'synthetic-run',[binding.FIXTURE_ENTRY_ENV]:fixture.config.trustedHost.entryPoint,[binding.FIXTURE_SOURCE_DIGEST_ENV]:fixture.config.trustedHost.sourceDigest,[tokenName]:'synthetic-runtime-only-token'});
   fixture.approve();
-  assert.equal(host.resolveTrustedHostLaunch(fixture.config).env[tokenName],'synthetic-runtime-only-token');
+  assert.equal((await host.resolveTrustedHostLaunch(fixture.config)).env[tokenName],'synthetic-runtime-only-token');
   for(const key of [tokenName,tokenName.toLowerCase(),'FLUJO_SNAPSHOT_CONTROL_TOKEN','flujo_snapshot_control_token']){
    const forged={...fixture.config,env:{...fixture.config.env,[key]:'synthetic-persisted-forgery'},trustedHost:{...fixture.config.trustedHost,environmentNames:[...fixture.config.trustedHost.environmentNames.filter(name=>name.toUpperCase()!==key.toUpperCase()),key]}};
    fixture.approve(forged);
-   assert.throws(()=>host.resolveTrustedHostLaunch(forged),e=>e.code==='HOST_POLICY_INVALID');
+   await assert.rejects(host.resolveTrustedHostLaunch(forged),e=>e.code==='HOST_POLICY_INVALID');
   }
   fixture.approve();
   for(const key of [binding.FIXTURE_ENTRY_ENV,binding.FIXTURE_SOURCE_DIGEST_ENV,'PERSONA_GOAL_ENDURANCE_RUN_ID']){
    const previous=process.env[key];process.env[key]='unmatched-runner-binding';
-   assert.equal(host.resolveTrustedHostLaunch(fixture.config).env[tokenName],undefined);process.env[key]=previous;
+   assert.equal((await host.resolveTrustedHostLaunch(fixture.config)).env[tokenName],undefined);process.env[key]=previous;
   }
   const undeclared={...fixture.config,trustedHost:{...fixture.config.trustedHost,environmentNames:fixture.config.trustedHost.environmentNames.filter(name=>name!==tokenName)}};
-  fixture.approve(undeclared);assert.throws(()=>host.resolveTrustedHostLaunch(undeclared),e=>e.code==='HOST_POLICY_INVALID');fixture.approve();
+  fixture.approve(undeclared);await assert.rejects(host.resolveTrustedHostLaunch(undeclared),e=>e.code==='HOST_POLICY_INVALID');fixture.approve();
   const start=performance.now();let heartbeatDelay;
   const heartbeat=new Promise(resolve=>setImmediate(()=>{heartbeatDelay=performance.now()-start;resolve();}));
   const times=[];for(let i=0;i<5;i++){const before=performance.now();policy.trustedHostMcpPolicyDigest(fixture.config);times.push(performance.now()-before);}
   await heartbeat;
-  const before=performance.now();host.resolveTrustedHostLaunch(fixture.config);const launchAdmissionMs=performance.now()-before;
+  const before=performance.now();await host.resolveTrustedHostLaunch(fixture.config);const launchAdmissionMs=performance.now()-before;
   console.log(JSON.stringify({sourceControl:'trusted-host-runtime-token',actualPrivateGrantAccepted:true,stagedRunnerTokenOnly:true,persistedTokenCaseVariantsRefused:true,entryRevisionAudienceDriftWithheld:true,undeclaredRuntimeNameRefused:true,digestMs:times,eventLoopDelayMs:heartbeatDelay,launchAdmissionMs,scope:'Source transpilation/nonmatching SDK graph; no fixture execution, installed qualification, worker provenance or cancellation claim'}));
  }finally{for(const[name,value]of Object.entries(saved)){if(value===undefined)delete process.env[name];else process.env[name]=value;}fixture.restore();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -17,6 +17,7 @@ import { killProcessTree } from '@/utils/process/killProcessTree';
 import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
 import { assertMcpHostInstallationAllowed, createMcpInstallerEnvironment, McpHostInstallationError } from '@/backend/services/mcp/installerEnvironment';
 import { loadItem } from '@/utils/storage/backend';
+import { realpath } from '@/utils/realpath';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('app/api/git/route');
@@ -64,7 +65,7 @@ async function assertRepoHostInstallationAllowed(
   const stored = await loadItem<Record<string, StoredInstallerProfile>>(StorageKey.MCP_SERVERS, {});
   const canonicalPath = async (value: string) => {
     const absolute = path.isAbsolute(value) ? value : path.resolve(getWorkspaceDataDir(), value);
-    return fs.realpath(absolute).catch(() => absolute);
+    return realpath(absolute).catch(() => absolute);
   };
   const requested = typeof savePath === 'string' && savePath.trim()
     ? await canonicalPath(path.resolve(savePath)) : undefined;

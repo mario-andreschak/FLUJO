@@ -35,8 +35,8 @@ afterEach(() => {
   }
 });
 function persist() { fs.writeFileSync(filename, JSON.stringify(policy), { mode: 0o600 }); }
-test('keeps unconfigured loopback legacy startup available', () => {
-  expect(() => assertOwnerStartup(2000)).not.toThrow();
+test('keeps unconfigured loopback legacy startup available', async () => {
+  await expect(assertOwnerStartup(2000)).resolves.toBeUndefined();
 });
 test.each(['network', 'public'])('refuses unauthenticated %s startup before layout or services', async mode => {
   process.env.FLUJO_EXPOSURE_MODE = mode;
@@ -45,41 +45,41 @@ test.each(['network', 'public'])('refuses unauthenticated %s startup before layo
   const response = (await proxy(new NextRequest('http://localhost:4200/v1/models', { headers: { host: 'localhost:4200' } })));
   expect(response.status).toBe(503);
 });
-test.each(['network', 'public'])('admits %s with an active scoped policy at startup', mode => {
+test.each(['network', 'public'])('admits %s with an active scoped policy at startup', async mode => {
   process.env.FLUJO_EXPOSURE_MODE = mode;
   process.env.FLUJO_OWNER_AUTH_FILE = filename;
-  expect(() => assertOwnerStartup(2000)).not.toThrow();
+  await expect(assertOwnerStartup(2000)).resolves.toBeUndefined();
 });
 test.each(['localhost', 'network', 'public'])('missing configured %s policy explains authority recovery before any startup work', async mode => {
   process.env.FLUJO_EXPOSURE_MODE = mode;
   process.env.FLUJO_OWNER_AUTH_FILE = filename;
   fs.unlinkSync(filename);
   const recovery = 'Restore or repair the matching private owner policy at FLUJO_OWNER_AUTH_FILE';
-  expect(() => assertOwnerStartup(2000)).toThrow(recovery);
+  await expect(assertOwnerStartup(2000)).rejects.toThrow(recovery);
   await expect(initializeNodeRuntime()).rejects.toThrow(recovery);
   expect(mockLayout).not.toHaveBeenCalled();
-  try { assertOwnerStartup(2000); } catch (error) {
+  try { await assertOwnerStartup(2000); } catch (error) {
     expect(String(error)).not.toContain('Restart with FLUJO_EXPOSURE_MODE=localhost');
     expect(String(error)).not.toContain(filename);
     expect(String(error)).not.toContain(policy.credentials[0].digest);
   }
 });
-test.each(['corrupt', 'expired', 'revoked'])('configured localhost %s policy requires active authority and stays fail-closed', variant => {
+test.each(['corrupt', 'expired', 'revoked'])('configured localhost %s policy requires active authority and stays fail-closed', async variant => {
   process.env.FLUJO_EXPOSURE_MODE = 'localhost';
   process.env.FLUJO_OWNER_AUTH_FILE = filename;
   if (variant === 'revoked') policy.credentials[0].revokedAt = 1500;
   persist();
   if (variant === 'corrupt') fs.writeFileSync(filename, 'private-corrupt-policy-content');
   const now = variant === 'expired' ? 10_000 : 2000;
-  expect(() => assertOwnerStartup(now)).toThrow('with a current active owner credential');
-  try { assertOwnerStartup(now); } catch (error) {
+  await expect(assertOwnerStartup(now)).rejects.toThrow('with a current active owner credential');
+  try { await assertOwnerStartup(now); } catch (error) {
     expect(String(error)).not.toContain('Restart with FLUJO_EXPOSURE_MODE=localhost');
     expect(String(error)).not.toContain(filename);
     expect(String(error)).not.toContain('private-corrupt-policy-content');
     expect(String(error)).not.toContain(policy.credentials[0].digest);
   }
 });
-test.each(['empty', 'expired', 'future', 'revoked', 'corrupt', 'missing'])('refuses %s authority with a redacted recovery error', variant => {
+test.each(['empty', 'expired', 'future', 'revoked', 'corrupt', 'missing'])('refuses %s authority with a redacted recovery error', async variant => {
   process.env.FLUJO_EXPOSURE_MODE = 'public';
   process.env.FLUJO_OWNER_AUTH_FILE = filename;
   if (variant === 'empty') policy.credentials = [];
@@ -88,27 +88,27 @@ test.each(['empty', 'expired', 'future', 'revoked', 'corrupt', 'missing'])('refu
   if (variant === 'corrupt') fs.writeFileSync(filename, 'private-corrupt-policy-content');
   if (variant === 'missing') fs.unlinkSync(filename);
   const now = variant === 'expired' ? 10_000 : variant === 'future' ? 999 : 2000;
-  expect(() => assertOwnerStartup(now)).toThrow('Owner authentication is required');
-  try { assertOwnerStartup(now); } catch (error) {
+  await expect(assertOwnerStartup(now)).rejects.toThrow('Owner authentication is required');
+  try { await assertOwnerStartup(now); } catch (error) {
     expect(String(error)).not.toContain(filename);
     expect(String(error)).not.toContain('private-corrupt-policy-content');
     expect(String(error)).not.toContain(policy.credentials[0]?.digest ?? 'private-never-present');
   }
 });
-test('does not use anonymous loopback fallback for explicitly broken owner configuration', () => {
+test('does not use anonymous loopback fallback for explicitly broken owner configuration', async () => {
   process.env.FLUJO_EXPOSURE_MODE = 'localhost';
   process.env.FLUJO_OWNER_AUTH_FILE = '';
-  expect(() => assertOwnerStartup(2000)).toThrow('Owner authentication is required');
+  await expect(assertOwnerStartup(2000)).rejects.toThrow('Owner authentication is required');
 });
-test.each(['FLUJO_EXTRA_LOCAL_HOSTS', 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL', 'FLUJO_MCP_APP_HOST_ORIGINS'])('legacy exposure via %s cannot bypass startup authentication', key => {
+test.each(['FLUJO_EXTRA_LOCAL_HOSTS', 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL', 'FLUJO_MCP_APP_HOST_ORIGINS'])('legacy exposure via %s cannot bypass startup authentication', async key => {
   process.env[key] = key === 'FLUJO_EXTRA_LOCAL_HOSTS' ? 'host.example' : 'https://host.example';
-  expect(() => assertOwnerStartup(2000)).toThrow('Owner authentication is required');
+  await expect(assertOwnerStartup(2000)).rejects.toThrow('Owner authentication is required');
 });
-test('worker startup requires its distinct bearer and does not inherit owner authority', () => {
+test('worker startup requires its distinct bearer and does not inherit owner authority', async () => {
   process.env.FLUJO_WORKER_MODE = '1';
   process.env.FLUJO_OWNER_AUTH_FILE = filename;
-  expect(() => assertOwnerStartup(2000)).toThrow('Worker startup requires');
+  await expect(assertOwnerStartup(2000)).rejects.toThrow('Worker startup requires');
   process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'synthetic-worker-bearer';
   fs.writeFileSync(filename, 'broken-general-policy');
-  expect(() => assertOwnerStartup(2000)).not.toThrow();
+  await expect(assertOwnerStartup(2000)).resolves.toBeUndefined();
 });

@@ -89,9 +89,10 @@ function scopeFor(authorization: OwnerRequestAuthorization, origin: string, requ
   const controller = new AbortController();
   let checking: Promise<void> | undefined;
   const scope: Scope = { expiresAt: principal.expiresAt, controller, trusted: undefined as never };
-  const currentAuthority = () => {
+  const currentAuthority = async () => {
     if (controller.signal.aborted) throw controller.signal.reason;
-    const denied = authorization.recheck();
+    const denied = await authorization.recheck();
+    if (controller.signal.aborted) throw controller.signal.reason;
     if (denied) throw ended(denied.status);
     if (process.env.FLUJO_AVATAR_REMOTE_ORIGIN !== origin) throw ended();
     if (isWorkerMode() !== worker || worker && workerDigest() !== workerRevision) throw ended();
@@ -104,11 +105,10 @@ function scopeFor(authorization: OwnerRequestAuthorization, origin: string, requ
     const refusal = error instanceof PublicError ? error : ended(503);
     controller.abort(refusal); clearInterval(scope.timer); return refusal;
   };
-  const check = (): Promise<void> => {
+  const check = async (): Promise<void> => {
     // A slow filesystem read must not starve durable revocation polling.
-    try { currentAuthority(); } catch (error) { return Promise.reject(rejectScope(error)); }
-    if (checking) return checking;
-    checking = (async () => {
+    try { await currentAuthority(); } catch (error) { throw rejectScope(error); }
+    checking ??= (async () => {
       try {
         const exists = await new Promise<boolean>((resolve, reject) => {
           const abort = () => reject(controller.signal.reason);
@@ -119,7 +119,7 @@ function scopeFor(authorization: OwnerRequestAuthorization, origin: string, requ
         });
         if (!exists) throw ended(403);
         // Workspace checking can yield. Recheck durable authority before effect.
-        currentAuthority();
+        await currentAuthority();
       } catch (error) {
         throw rejectScope(error);
       }
@@ -198,7 +198,7 @@ export function withRemoteAvatarRoute<R extends unknown[]>(
       const denied = assertSnapshotBearer(request);
       if (denied) return denied;
     }
-    const resolved = resolveOwnerRequest(authenticationRequest(request), ['avatar:voice'], { requireWorkspace: true });
+    const resolved = await resolveOwnerRequest(authenticationRequest(request), ['avatar:voice'], { requireWorkspace: true });
     if (!resolved.ok) return resolved.response;
     const disconnect = new AbortController();
     try {

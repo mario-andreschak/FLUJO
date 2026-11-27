@@ -1,4 +1,4 @@
-import { constants, promises as fs, fstatSync, lstatSync, realpathSync, unlinkSync } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -9,6 +9,7 @@ import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import type { FlowExecutionAuthority } from '../types';
 import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
+import { realpath } from '@/utils/realpath';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { withWorkspaceRuntimeLock, probeRuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
 import { getPersonaActivity, getPersonaWorkItem } from '@/backend/services/enduringAgents/store';
@@ -163,27 +164,26 @@ async function withLedgerParent<T>(directory: string, task: (parent?: FileHandle
   } finally { await parent.close(); }
 }
 
-function cleanupOwnedTemporary(binding: Binding, temporary: string, fd: number,
-  directoryIdentity: { dev: bigint; ino: bigint }): void {
+async function cleanupOwnedTemporary(binding: Binding, temporary: string, handle: FileHandle,
+  directoryIdentity: { dev: bigint; ino: bigint }): Promise<void> {
   try {
     const base = getWorkspaceDataDir(binding.workspace);
     const directory = path.dirname(temporary);
     const normalize = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
     for (const part of [base, path.join(base, 'db'), path.dirname(directory), directory]) {
-      const stat = lstatSync(part);
-      if (!stat.isDirectory() || stat.isSymbolicLink() || normalize(realpathSync(part)) !== normalize(part)) return;
+      const stat = await fs.lstat(part);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || normalize(await realpath(part)) !== normalize(part)) return;
     }
-    const parent = lstatSync(directory, { bigint: true });
+    const parent = await fs.lstat(directory, { bigint: true });
     if (parent.dev !== directoryIdentity.dev || parent.ino !== directoryIdentity.ino) return;
-    const owned = fstatSync(fd, { bigint: true });
-    const current = lstatSync(temporary, { bigint: true });
+    const owned = await handle.stat({ bigint: true });
+    const current = await fs.lstat(temporary, { bigint: true });
     if (!owned.isFile() || !current.isFile() || current.isSymbolicLink()
       || owned.nlink !== BigInt(1) || current.nlink !== BigInt(1) || !privateOwner(owned) || !privateOwner(current)
       || current.dev !== owned.dev || current.ino !== owned.ino) return;
-    // No awaited operation separates the last path/FD comparison and unlink.
     // The workspace lock covers cooperating writers; this is not an OS-wide
     // conditional unlink guarantee against arbitrary external writers.
-    unlinkSync(temporary);
+    await fs.unlink(temporary);
   } catch { /* Refusal remains primary; foreign or uncertain paths are retained. */ }
 }
 
@@ -235,11 +235,11 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>,
         || currentTemporary.size !== BigInt(bytes.length) || !privateOwner(currentTemporary)) return held();
       await cap.assertCurrent();
       await lock.assertOwned();
-      const finalDirectory = lstatSync(directory, { bigint: true });
+      const finalDirectory = await fs.lstat(directory, { bigint: true });
       if (!finalDirectory.isDirectory() || finalDirectory.isSymbolicLink() || finalDirectory.dev !== directoryIdentity.dev
         || finalDirectory.ino !== directoryIdentity.ino || !privateOwner(finalDirectory)) return held();
       if (parent) {
-        const owned = fstatSync(parent.fd, { bigint: true });
+        const owned = await parent.stat({ bigint: true });
         if (!owned.isDirectory() || owned.dev !== directoryIdentity.dev || owned.ino !== directoryIdentity.ino) return held();
       }
       cap.assertActive();
@@ -250,7 +250,7 @@ async function mutate<T>(binding: Binding, task: (ledger: Ledger) => Promise<T>,
       await parent?.sync();
       return result;
     } finally {
-      if (!committed) cleanupOwnedTemporary(binding, temporary, handle.fd, directoryIdentity);
+      if (!committed) await cleanupOwnedTemporary(binding, temporary, handle, directoryIdentity);
       await handle.close();
     }
     });

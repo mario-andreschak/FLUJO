@@ -75,9 +75,9 @@ export interface SessionObservation {
 // clients map). One entry per (conversation, node); overwritten in place, so it
 // stays small. Entries are dropped on error/handoff/divergence (see below); a
 // broader end-of-conversation eviction is a Phase-1 follow-up.
-const sessionsByWorkspace = new Map<string, Map<string, StoredSession>>();
+const sessionsByWorkspace = new Map<string, Promise<Map<string, StoredSession>>>();
 
-function sessions(): Map<string, StoredSession> {
+function sessions(): Promise<Map<string, StoredSession>> {
   const workspace = getCurrentWorkspace();
   let value = sessionsByWorkspace.get(workspace);
   if (!value) {
@@ -133,17 +133,17 @@ export function computeHistoryHash(messages: readonly { role: string; [key: stri
  * `onMiss` learns why a stored session cannot be continued (#1096), so the
  * request record says why a turn started a new session.
  */
-export function findReusableSession(
+export async function findReusableSession(
   key: string,
   prefixHash: string,
   currentMessages: readonly { role: string; [key: string]: unknown }[],
   currentLeadingSystemMessageCount: number,
   onMiss?: (reason: SessionReuseMiss) => void,
-): StoredSession | undefined {
+): Promise<StoredSession | undefined> {
   const miss = (reason: SessionReuseMiss): undefined => { onMiss?.(reason); return undefined; };
-  const existing = sessions().get(key);
+  const existing = (await sessions()).get(key);
   if (!existing) return miss('no-session');
-  if (Date.now() - existing.updatedAt > CLAUDE_SESSION_TTL_MS) { invalidateSession(key); return miss('expired'); }
+  if (Date.now() - existing.updatedAt > CLAUDE_SESSION_TTL_MS) { await invalidateSession(key); return miss('expired'); }
   if (existing.prefixHash !== prefixHash) return miss('instructions-tools-or-settings-changed');
   if (existing.leadingSystemMessageCount === undefined) return miss('outdated-record');
   if (existing.leadingSystemMessageCount !== currentLeadingSystemMessageCount) return miss('leading-system-messages-changed');
@@ -161,25 +161,26 @@ export type SessionReuseMiss = 'no-session' | 'expired' | 'instructions-tools-or
   | 'leading-system-messages-changed' | 'history-shrank' | 'history-changed';
 
 /** Record (or refresh) the session for a key after a successful run. */
-export function recordSession(key: string, observation: SessionObservation): void {
-  sessions().set(key, { ...observation, updatedAt: Date.now() });
-  saveClaudeSession(key, sessions().get(key)!);
+export async function recordSession(key: string, observation: SessionObservation): Promise<void> {
+  const entry = { ...observation, updatedAt: Date.now() };
+  (await sessions()).set(key, entry);
+  await saveClaudeSession(key, entry);
 }
 
 /** Drop the session for a key (on error, handoff, or detected divergence). */
-export function invalidateSession(key: string): void {
-  sessions().delete(key);
-  removeClaudeSession(key);
+export async function invalidateSession(key: string): Promise<void> {
+  (await sessions()).delete(key);
+  await removeClaudeSession(key);
 }
 
 /** Current number of tracked sessions (diagnostics/tests). */
-export function sessionCount(): number {
-  return sessions().size;
+export async function sessionCount(): Promise<number> {
+  return (await sessions()).size;
 }
 
-/** Test-only: clear the whole registry between cases. */
+/** Test-only: start the current workspace with an empty registry. */
 export function _clearAllSessionsForTests(): void {
-  sessions().clear();
+  sessionsByWorkspace.set(getCurrentWorkspace(), Promise.resolve(new Map()));
 }
 
 /** Test-only restart simulation: forget memory without erasing durable metadata. */
@@ -187,7 +188,7 @@ export function _reloadClaudeSessionsForTests(): void { sessionsByWorkspace.clea
 
 const sessionTails = new Map<string, Promise<void>>();
 /** Serialize complete invocations, including prompt configuration and accounting. */
-export async function acquireClaudeSession(key: string, signal?: AbortSignal): Promise<() => void> {
+export async function acquireClaudeSession(key: string, signal?: AbortSignal): Promise<() => Promise<void>> {
   const scope = JSON.stringify([getCurrentWorkspace(), key]);
   const previous = sessionTails.get(scope) ?? Promise.resolve();
   let release!: () => void;
@@ -203,17 +204,17 @@ export async function acquireClaudeSession(key: string, signal?: AbortSignal): P
   try { await Promise.race([previous, cancelled]); }
   catch (error) { void previous.then(release); throw error; }
   finally { if (onAbort) signal?.removeEventListener('abort', onAbort); }
-  let releaseDurable: () => void;
+  let releaseDurable: () => Promise<void>;
   try { releaseDurable = await acquireDurableClaudeSession(key, signal); }
   catch (error) { release(); throw error; }
   // Refresh after obtaining the file lease, so another backend's successful
   // checkpoint cannot be shadowed by an older process-memory observation.
   if (process.env.NODE_ENV !== 'test' || process.env.FLUJO_TEST_CLAUDE_SESSION_DIR) sessionsByWorkspace.delete(getCurrentWorkspace());
   let released = false;
-  return () => {
+  return async () => {
     if (released) return;
     released = true;
-    try { releaseDurable(); } finally { release(); }
+    try { await releaseDurable(); } finally { release(); }
     void tail.then(() => { if (sessionTails.get(scope) === tail) sessionTails.delete(scope); });
   };
 }

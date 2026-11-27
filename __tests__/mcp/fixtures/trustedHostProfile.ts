@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicyDigest, TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from './trustedHostFingerprint';
 
 /** Real private grant/files for tests that model SDK effects; no code is executed. */
 export function installTrustedHostProfile(options: {

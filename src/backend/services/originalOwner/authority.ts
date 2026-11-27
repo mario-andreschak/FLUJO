@@ -113,7 +113,7 @@ function leaseEpoch(lease: PersonaLease) {
   return digest({ workspaceId: lease.workspaceId, personaId: lease.personaId, activityId: lease.activityId,
     leaseId: lease.id, holderId: lease.holderId, fencingToken: lease.fencingToken });
 }
-function assertRecords(enrollment: OriginalOwnerEnrollment | undefined, account: OriginalOwnerAccount | undefined,
+async function assertRecords(enrollment: OriginalOwnerEnrollment | undefined, account: OriginalOwnerAccount | undefined,
   workspace: string, personaId: string, taskId: string) {
   if (!enrollment || enrollment.state !== 'active' || enrollment.workspace !== workspace
     || enrollment.personaId !== personaId || enrollment.taskId !== taskId
@@ -122,8 +122,8 @@ function assertRecords(enrollment: OriginalOwnerEnrollment | undefined, account:
     || enrollment.approval.ownerId !== enrollment.ownerId || account.approval.ownerId !== account.ownerId) {
     refuse('original_owner_enrollment_changed');
   }
-  assertOriginalApproval(enrollment.approval);
-  assertOriginalApproval(account.approval);
+  await assertOriginalApproval(enrollment.approval);
+  await assertOriginalApproval(account.approval);
 }
 function assertSavedModel(model: Model | null | undefined, account: OriginalOwnerAccount) {
   if (!model || model.id !== account.modelId || model.fallbackPolicy || model.ApiKey !== ''
@@ -225,7 +225,7 @@ async function assertCaptured(captured: Captured): Promise<void> {
   ]);
   const enrollment = book.enrollments.find(item => item.id === captured.binding.enrollmentId);
   const account = book.accounts.find(item => item.id === captured.binding.accountId);
-  assertRecords(enrollment, account, captured.binding.workspace, captured.binding.personaId, captured.binding.taskId);
+  await assertRecords(enrollment, account, captured.binding.workspace, captured.binding.personaId, captured.binding.taskId);
   if (digest(enrollment) !== captured.binding.enrollmentDigest || digest(account) !== captured.binding.accountDigest
     || !sameLease(joined.lease, captured.lease) || joined.goal.id !== captured.binding.goalId
     || joined.goal.goal!.rounds !== captured.binding.round || digest(joined.revision) !== captured.revisionDigest
@@ -268,7 +268,7 @@ export async function bindOriginalOwnerAuthority(authority: FlowExecutionAuthori
   if (!matches.length) return;
   if (matches.length !== 1 || registry.roots.has(authority)) refuse('original_owner_capture_conflict');
   const enrollment = matches[0], account = book.accounts.find(item => item.id === enrollment.accountId);
-  assertRecords(enrollment, account, workspace, source.personaId, source.taskId);
+  await assertRecords(enrollment, account, workspace, source.personaId, source.taskId);
   const input = freezePlan(structuredClone(source));
   await authority.commitWhileCurrent(async () => {
     const joined = await readJoined(input);

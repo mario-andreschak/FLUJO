@@ -367,7 +367,7 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -390,6 +390,9 @@ jobs:
       - run: npm run lint:ratchet
       - run: npm run check:repo-hygiene
       - run: npm run check:feature-map
+      # Model-checks docs/formal with the pinned official TLA+ tools; the runner image has Java 17.
+      - name: Check that conversation saves always heal (TLA+ model)
+        run: npm run check:formal
 
   test:
     name: test

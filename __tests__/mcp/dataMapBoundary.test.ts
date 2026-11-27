@@ -58,14 +58,14 @@ test('header flattening does not mutate prototypes or lose a special-name header
   expect(JSON.parse(JSON.stringify(flattenCustomHeaders(headers)))).toEqual(strings());
 });
 
-test('normal stdio launch env keeps special-name values without inheriting unknown fields', () => {
+test('normal stdio launch env keeps special-name values without inheriting unknown fields', async () => {
   const approved = installTrustedHostProfile({ name: common.name, environment: strings() });
   try {
   const env = Object.create({ inheritedVariable: 'do-not-send' }, Object.getOwnPropertyDescriptors(strings()));
   Object.defineProperties(env, Object.getOwnPropertyDescriptors(approved.config.env));
   const config: MCPStdioConfig = { ...approved.config, env };
   approved.approve(config);
-  const launch = resolveStdioLaunch(config);
+  const launch = await resolveStdioLaunch(config);
   for (const name of names) expect(Object.prototype.hasOwnProperty.call(launch.env, name)).toBe(true);
   expect(JSON.parse(JSON.stringify(launch.env))).toMatchObject(strings());
   expect(launch.env).not.toHaveProperty('inheritedVariable');

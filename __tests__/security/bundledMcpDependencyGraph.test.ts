@@ -103,17 +103,13 @@ test('replacement after the final scan named observation but before canonical co
   }) as typeof fs.promises.realpath);
   jest.spyOn(fs.promises, 'lstat').mockImplementation((async (...args: Parameters<typeof fs.promises.lstat>) => {
     const result = await lstat(...args);
-    if (String(args[0]) === manifest && canonicalReads === 5) {
+    if (String(args[0]) === manifest && replacementIdentity) witnessedReplacement = result as fs.BigIntStats;
+    else if (String(args[0]) === manifest && canonicalReads === 5) {
       oldIdentity = result as fs.BigIntStats;
       observed();
     }
     return result;
   }) as typeof fs.promises.lstat);
-  jest.spyOn(fs, 'lstatSync').mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
-    const result = lstatSync(...args);
-    if (String(args[0]) === manifest && replacementIdentity) witnessedReplacement = result as fs.BigIntStats;
-    return result;
-  }) as typeof fs.lstatSync);
   const inspection = inspectBundledMcpDependencyGraph(root, [directory]);
   const outcome = inspection.then(() => undefined, error => error);
   try {

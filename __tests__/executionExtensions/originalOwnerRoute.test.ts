@@ -24,7 +24,7 @@ it.each([['GET', GET], ['POST', POST]] as const)('refuses %s before reading owne
 it('still requires owner authorization after encryption is unlocked', async () => {
   jest.mocked(assertUnlocked).mockResolvedValue(null);
   const denied = Response.json({ error: 'Unauthorized' }, { status: 401 });
-  jest.mocked(resolveOwnerRequest).mockReturnValue({ ok: false, response: denied } as never);
+  jest.mocked(resolveOwnerRequest).mockResolvedValue({ ok: false, response: denied } as never);
   expect(await GET(new Request('http://localhost/api/original-owner'))).toBe(denied);
   expect(listOriginalOwnerRecords).not.toHaveBeenCalled();
 });

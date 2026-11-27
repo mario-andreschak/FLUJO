@@ -184,6 +184,7 @@ export function createOriginalOwnerNativeParent(options: Options): OriginalOwner
         // spawned under them, but completion waits outside both owner locks.
         completion.catch(() => {});
         if (name !== 'worker_command') result = await completion;
+        else await effect.launched();
       });
       result ??= await completion!;
       await settle(item, ticket, 'completed');

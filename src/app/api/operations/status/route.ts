@@ -27,7 +27,7 @@ type Admission = { worker: true } | { worker: false; local: true }
 function localWithoutOwnerPolicy(): boolean {
   return process.env.FLUJO_OWNER_AUTH_FILE === undefined && getExposureMode() === 'localhost';
 }
-function recheckAdmission(request: Request, admission: Admission): Response | null {
+async function recheckAdmission(request: Request, admission: Admission): Promise<Response | null> {
   if (admission.worker) return assertSnapshotBearer(request);
   if (admission.local) return localWithoutOwnerPolicy() ? assertLocalRequest(request, { strictLoopback: true }) : Response.json(
     { error: 'Unauthorized' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
@@ -59,11 +59,11 @@ const GET_handler = async (request: Request, admission: Admission) => {
       workerRecovery: inspectWorkerRecovery, active: FlowExecutor.conversationStates.values(), mcp: listRuntimes(),
       memory: process.memoryUsage(), ...(budget === undefined ? {} : { rssBudgetBytes: Number(budget) }),
     });
+    const revoked = await recheckAdmission(request, admission);
     const relocked = await assertUnlocked();
     if (relocked) return relocked;
     if (isWorkerMode() !== admission.worker || getCurrentWorkspace() !== workspace) return Response.json({ error: 'Operations profile changed.' },
       { status: 409, headers: { 'Cache-Control': 'no-store' } });
-    const revoked = recheckAdmission(request, admission);
     if (revoked) return revoked;
     const unavailable = assertWorkerRequestReady(request, workspace);
     if (unavailable) return unavailable;
@@ -84,7 +84,7 @@ const GET_handler = async (request: Request, admission: Admission) => {
 const wrapped = withWorkspaceRoute(GET_handler);
 
 /** Authentication precedes workspace/storage selection, including direct handler imports. */
-export function GET(request: Request) {
+export async function GET(request: Request) {
   if (isWorkerMode()) {
     const unauthorized = assertSnapshotBearer(request);
     if (unauthorized) return unauthorized;
@@ -95,7 +95,7 @@ export function GET(request: Request) {
     if (notLocal) return notLocal;
     return wrapped(request, { worker: false, local: true });
   }
-  const resolved = resolveOwnerRequest(request, ['control:admin', 'secrets:read']);
+  const resolved = await resolveOwnerRequest(request, ['control:admin', 'secrets:read']);
   if (!resolved.ok) return resolved.response;
   return wrapped(request, { worker: false, authorization: resolved.authorization });
 }

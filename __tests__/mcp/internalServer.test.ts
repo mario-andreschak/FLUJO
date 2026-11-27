@@ -137,7 +137,7 @@ describe('persisted shipped server configs', () => {
 });
 
 describe('normal stdio delivery', () => {
-  it.each([undefined, '1'])('never logs configured or resolved env values in worker mode %s', (workerMode) => {
+  it.each([undefined, '1'])('never logs configured or resolved env values in worker mode %s', async (workerMode) => {
     const priorMode = process.env.FLUJO_WORKER_MODE;
     let approved: ReturnType<typeof installTrustedHostProfile> | undefined;
     try {
@@ -154,7 +154,7 @@ describe('normal stdio delivery', () => {
         },
       };
       approved.approve(config);
-      const launch = resolveStdioLaunch(config);
+      const launch = await resolveStdioLaunch(config);
       expect(launch.env.TOKEN).toBe('synthetic-wrapped-secret');
       expect(launch.env.LEGACY_TOKEN).toBe('synthetic-legacy-secret');
       const logs = JSON.stringify(logMock.mock.calls);
@@ -227,14 +227,14 @@ describe('normal stdio delivery', () => {
     });
     afterAll(() => { try { owner?.restore(); } finally { profile?.restore(); } });
 
-  it('persists direct package entrypoints and ordinary working directories', () => {
+  it('persists direct package entrypoints and ordinary working directories', async () => {
     for (const descriptor of SHIPPED_MCP_SERVERS) {
       const config = createShippedServerConfig(descriptor);
       expect(config.command).toBe('node');
       expect(config.args).toEqual(['./dist/index.js']);
       expect(config.cwd).toBe(path.join('mcp-servers', descriptor.packageDirectory));
       expect(config.rootPath).toBe(config.cwd);
-      const launch = resolveStdioLaunch(approved.get(descriptor.defaultName)!);
+      const launch = await resolveStdioLaunch(approved.get(descriptor.defaultName)!);
       expect(path.resolve(launch.cwd, launch.args[0])).toBe(
         path.join(getWorkspaceDataDir(), 'mcp-servers', descriptor.packageDirectory, 'dist', 'index.js'),
       );
@@ -245,17 +245,17 @@ describe('normal stdio delivery', () => {
     }
   });
 
-  it('uses the same launch resolver as an arbitrary stdio server', () => {
+  it('uses the same launch resolver as an arbitrary stdio server', async () => {
     const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'flujo')!;
     const config = createShippedServerConfig(descriptor);
     const admitted = approved.get(descriptor.defaultName)!;
-    const launch = resolveStdioLaunch(admitted);
+    const launch = await resolveStdioLaunch(admitted);
     expect(launch.cwd).toBe(path.join(getWorkspaceDataDir(), config.rootPath));
     expect(launch.args).toEqual(admitted.args);
     expect(launch.command).toBe(process.execPath);
   });
 
-  it('adds the worker HTTP bearer only to the live bundled FLUJO launch', () => {
+  it('adds the worker HTTP bearer only to the live bundled FLUJO launch', async () => {
     const mode = process.env.FLUJO_WORKER_MODE;
     const token = process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
     try {
@@ -264,11 +264,11 @@ describe('normal stdio delivery', () => {
       const flujo = approved.get('flujo')!;
       const filesystem = approved.get('filesystem')!;
       expect(flujo.env).not.toHaveProperty('FLUJO_SNAPSHOT_CONTROL_TOKEN');
-      expect(resolveStdioLaunch(flujo).env).toMatchObject({
+      expect((await resolveStdioLaunch(flujo)).env).toMatchObject({
         FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: 'synthetic-worker-token',
       });
       expect(flujo.env).not.toHaveProperty('FLUJO_SNAPSHOT_CONTROL_TOKEN');
-      expect(resolveStdioLaunch(filesystem).env).not.toHaveProperty('FLUJO_SNAPSHOT_CONTROL_TOKEN');
+      expect((await resolveStdioLaunch(filesystem)).env).not.toHaveProperty('FLUJO_SNAPSHOT_CONTROL_TOKEN');
     } finally {
       if (mode === undefined) delete process.env.FLUJO_WORKER_MODE;
       else process.env.FLUJO_WORKER_MODE = mode;

@@ -30,20 +30,20 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   const fixture=installTrustedHostProfile({name:'runtime-home-'+era,runtimeHome:'isolated',environment:{HOME:'approved-original-home'}});
   let transport;
   try {
-   transport=era==='v1'?ordinary.createStdioTransport(fixture.config,{isolateRuntimeHome:true}):beta.createBetaTransport(fixture.config,{isolateRuntimeHome:true});
+   transport=await (era==='v1'?ordinary.createStdioTransport(fixture.config,{isolateRuntimeHome:true}):beta.createBetaTransport(fixture.config,{isolateRuntimeHome:true}));
    const params=transport._serverParams;
    assert.notEqual(params.env.HOME,'approved-original-home');
    assert.equal(params.env.USERPROFILE,params.env.HOME);
    assert.equal(params.cwd,fixture.config.cwd);
    assert.equal(params.command,fixture.config.command);
    assert.equal(fs.statSync(params.env.HOME).isDirectory(),true);
-   assert.throws(()=>ordinary.resolveStdioLaunch(fixture.config,{isolateRuntimeHome:false}),e=>e.code==='HOST_POLICY_INVALID');
+   await assert.rejects(ordinary.resolveStdioLaunch(fixture.config,{isolateRuntimeHome:false}),e=>e.code==='HOST_POLICY_INVALID');
    const runtimeContainer=path.join(workspace.getWorkspaceDataDir(),'userdata','mcp-runtime');
    const deniedConfig={...fixture.config,name:fixture.config.name+'-occupied'};
    fixture.approve(deniedConfig);
    const anchor=path.join(runtimeContainer,require('node:crypto').createHash('sha256').update(deniedConfig.name).digest('hex').slice(0,24));
    fs.writeFileSync(anchor,'occupied-synthetic-anchor');
-   assert.throws(()=>ordinary.resolveStdioLaunch(deniedConfig,{isolateRuntimeHome:true}),e=>e.code==='UNSAFE_MCP_RUNTIME_DIRECTORY');
+   await assert.rejects(ordinary.resolveStdioLaunch(deniedConfig,{isolateRuntimeHome:true}),e=>e.code==='UNSAFE_MCP_RUNTIME_DIRECTORY');
    assert.equal(fs.readFileSync(anchor,'utf8'),'occupied-synthetic-anchor');
    const oldDigest=policy.trustedHostMcpPolicyDigest(deniedConfig);
    assert.notEqual(policy.trustedHostMcpPolicyDigest({...deniedConfig,runtimeHomeMode:'host'}),oldDigest);

@@ -16,9 +16,9 @@ it.each([undefined, null, false, 0, '', 'STDIO', 'unknown-secret', ['stdio']])(
       command: { get: readMaterial }, env: { get: readMaterial },
       headers: { get: readMaterial }, launch: { get: readMaterial },
     }) as MCPServerConfig;
-    expect(() => createTransport(config)).toThrow(MCP_TRANSPORT_INVALID);
-    expect(() => createBetaTransport(config)).toThrow(MCP_TRANSPORT_INVALID);
-    expect(() => resolveStdioLaunch(config as MCPStdioConfig)).toThrow(MCP_TRANSPORT_INVALID);
+    await expect(createTransport(config)).rejects.toThrow(MCP_TRANSPORT_INVALID);
+    await expect(createBetaTransport(config)).rejects.toThrow(MCP_TRANSPORT_INVALID);
+    await expect(resolveStdioLaunch(config as MCPStdioConfig)).rejects.toThrow(MCP_TRANSPORT_INVALID);
     await expect(resolveRuntimeHomeIsolation(config, { FLUJO_MCP_RUNTIME_HOME_ISOLATION: 'on' }))
       .rejects.toThrow(MCP_TRANSPORT_INVALID);
     expect(readMaterial).not.toHaveBeenCalled();

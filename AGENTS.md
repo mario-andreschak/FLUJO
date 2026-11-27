@@ -67,6 +67,8 @@ closed:
 - A failure must never block a conversation, workspace or slot until restart.
   Every fence, quarantine or counter must be released or healed automatically
   (on the next success, when its owner settles, or when its process is gone).
+  When you change how conversation saves wait, fence or release, update
+  `docs/formal/ConversationWriteHealing.tla` and run `npm run check:formal`.
 - Do not add a fixed limit without saying how it recovers without a restart and
   without the user knowing an environment variable. Scale memory limits with
   the machine.

@@ -13,7 +13,8 @@ import {
   runWithWorkspace,
 } from '@/utils/workspace';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
-import { fingerprintTrustedHostSource, trustedHostEnvironment, trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostEnvironment, trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostSource } from '../mcp/fixtures/trustedHostFingerprint';
 import { installTrustedHostProfile } from '../mcp/fixtures/trustedHostProfile';
 import { materializeProtectedPackageRunner } from '../mcp/fixtures/protectedPackageRunner';
 
@@ -74,7 +75,7 @@ const resolveIsolatedLaunch = (server: MCPStdioConfig) =>
 
 // These existing Node positives use a fixed real source and a private grant.
 // This helper does not authorize the distinct dynamic package-runner contract.
-function resolveApprovedFixedNode(server: MCPStdioConfig, isolated = false) {
+async function resolveApprovedFixedNode(server: MCPStdioConfig, isolated = false) {
   const sourceRoot = path.join(getWorkspaceDataDir(), server.rootPath || 'mcp-servers/runtime-home-fixture');
   const entryPoint = path.join(sourceRoot, 'runtime-home-fixture.cjs');
   syncFs.mkdirSync(sourceRoot, { recursive: true });
@@ -88,15 +89,15 @@ function resolveApprovedFixedNode(server: MCPStdioConfig, isolated = false) {
       cwd: sourceRoot, args: [entryPoint], trustedHost: { ...fixture.config.trustedHost!,
         entryPoint, sourceRoot, sourceDigest: fingerprintTrustedHostSource(sourceRoot) } };
     fixture.approve(approved);
-    return resolveStdioLaunch(approved, { isolateRuntimeHome: isolated });
+    return await resolveStdioLaunch(approved, { isolateRuntimeHome: isolated });
   } finally {
     fixture.restore();
   }
 }
 
 describe('stdio MCP runtime homes', () => {
-  it('does not isolate runtime homes unless the resolved policy opts in', () => {
-    const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(config));
+  it('does not isolate runtime homes unless the resolved policy opts in', async () => {
+    const launch = await runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(config));
 
     expect(launch.env.HOME).toBe(config.env.HOME);
     expect(launch.env.USERPROFILE).toBe(config.env.USERPROFILE);
@@ -104,12 +105,11 @@ describe('stdio MCP runtime homes', () => {
     expect(launch.cwd).not.toContain(`${path.sep}userdata${path.sep}mcp-runtime${path.sep}`);
   });
 
-  it('requires private consent before applying runtime-home launch policy', () => {
-    expect(() => runWithWorkspace('runtime-a', () => resolveStdioLaunch(config)))
-      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+  it('requires private consent before applying runtime-home launch policy', async () => {
+    await expect(runWithWorkspace('runtime-a', () => resolveStdioLaunch(config))).rejects.toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('rejects legacy bundled Bash redirects until its host launch is reviewed', () => {
+  it('rejects legacy bundled Bash redirects until its host launch is reviewed', async () => {
     const bash = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'bash')!;
     const tracked = ['HOME', 'USERPROFILE', 'APPDATA', 'GH_CONFIG_DIR', 'FLUJO_BASH_HOST_ENV_TEST'] as const;
     const previous = new Map(tracked.map(key => [key, process.env[key]]));
@@ -135,8 +135,7 @@ describe('stdio MCP runtime homes', () => {
         GH_CONFIG_DIR: path.join(dataRoot, 'stale-gh-config'),
       };
 
-      expect(() => runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(shipped)))
-        .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+      await expect(runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(shipped))).rejects.toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
     } finally {
       for (const key of tracked) {
         const value = previous.get(key);
@@ -146,9 +145,9 @@ describe('stdio MCP runtime homes', () => {
     }
   });
 
-  it('forces conventional home, config, cache, temp and FLUJO roots per workspace', () => {
-    const launchA = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(config, true));
-    const launchB = runWithWorkspace('runtime-b', () => resolveApprovedFixedNode(config, true));
+  it('forces conventional home, config, cache, temp and FLUJO roots per workspace', async () => {
+    const launchA = await runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(config, true));
+    const launchB = await runWithWorkspace('runtime-b', () => resolveApprovedFixedNode(config, true));
     const rootA = getWorkspaceDataDir('runtime-a');
     const rootB = getWorkspaceDataDir('runtime-b');
 
@@ -164,20 +163,20 @@ describe('stdio MCP runtime homes', () => {
     expect(launchA.env.HOME).not.toBe(launchB.env.HOME);
   });
 
-  it('keeps reviewed npx package runners in private runtime cwd outside their managed source roots', () => {
-    const resolveRunner = (name: string) => {
+  it('keeps reviewed npx package runners in private runtime cwd outside their managed source roots', async () => {
+    const resolveRunner = async (name: string) => {
       const fixture = installTrustedHostProfile({ name, runtimeHome: 'isolated' });
       try {
         process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
         process.env.FLUJO_DATA_DIR = dataRoot;
         const runner = materializeProtectedPackageRunner(name, 'process.exitCode = 0;\n');
         fixture.approve(runner);
-        return { runner, launch: resolveIsolatedLaunch(runner) };
+        return { runner, launch: await resolveIsolatedLaunch(runner) };
       } finally { fixture.restore(); }
     };
-    const first = runWithWorkspace('runtime-a', () => resolveRunner('weather-mcp'));
-    const second = runWithWorkspace('runtime-a', () => resolveRunner('search-mcp'));
-    const otherWorkspace = runWithWorkspace('runtime-b', () => resolveRunner('weather-mcp'));
+    const first = await runWithWorkspace('runtime-a', () => resolveRunner('weather-mcp'));
+    const second = await runWithWorkspace('runtime-a', () => resolveRunner('search-mcp'));
+    const otherWorkspace = await runWithWorkspace('runtime-b', () => resolveRunner('weather-mcp'));
     for (const { runner, launch } of [first, second, otherWorkspace]) {
       const policy = trustedHostMcpPolicySchema.parse(runner.trustedHost);
       expect(launch.command).toBe(process.execPath);
@@ -201,13 +200,13 @@ describe('stdio MCP runtime homes', () => {
   // ERR_INVALID_ARG_TYPE and no diagnostics.
   (process.platform === 'win32' ? it : it.skip)(
     'passes the Windows launch essentials a child needs to spawn its own tools',
-    () => {
+    async () => {
       const reviewed = { ...config, env: { ...config.env,
         ComSpec: process.env.ComSpec ?? process.env.COMSPEC!,
         SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT!,
         PATHEXT: process.env.PATHEXT!,
       } };
-      const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(reviewed, true));
+      const launch = await runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(reviewed, true));
       const comSpec = launch.env.ComSpec ?? launch.env.COMSPEC;
       expect(comSpec).toBeTruthy();
       expect(path.basename(comSpec!).toLowerCase()).toBe('cmd.exe');
@@ -220,31 +219,30 @@ describe('stdio MCP runtime homes', () => {
   // the ambient host environment before consent.
   (process.platform === 'win32' ? it : it.skip)(
     'rejects unreviewed blank Windows launch essentials',
-    () => {
+    async () => {
       const blanked: MCPStdioConfig = {
         ...config,
         name: 'server-with-blank-comspec',
         env: { ...config.env, COMSPEC: '', SYSTEMROOT: '   ' },
       };
       // Persisted values cannot gain ambient launch authority through backfill.
-      expect(() => runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(blanked)))
-        .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+      await expect(runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(blanked))).rejects.toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
     },
   );
 
-  it('keeps ordinary stdio commands in their configured server root', () => {
+  it('keeps ordinary stdio commands in their configured server root', async () => {
     const ordinary: MCPStdioConfig = {
       ...config,
       name: 'local-node-server',
       rootPath: 'mcp-servers/local-node-server',
     };
-    const launch = runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(ordinary, true));
+    const launch = await runWithWorkspace('runtime-a', () => resolveApprovedFixedNode(ordinary, true));
     expect(launch.cwd).toBe(
       path.join(getWorkspaceDataDir('runtime-a'), 'mcp-servers', 'local-node-server'),
     );
   });
 
-  it('rejects stale shipped-browser output paths before host consent', () => {
+  it('rejects stale shipped-browser output paths before host consent', async () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -261,11 +259,10 @@ describe('stdio MCP runtime homes', () => {
       FLUJO_BROWSER_RECORD_DIR: 'C:\\shared-recordings',
     };
 
-    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
-      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+    await expect(runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped))).rejects.toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('rejects an unreviewed host browser-binary cache', () => {
+  it('rejects an unreviewed host browser-binary cache', async () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -273,11 +270,10 @@ describe('stdio MCP runtime homes', () => {
     delete (shipped.env as Record<string, unknown>).PLAYWRIGHT_BROWSERS_PATH;
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'shared-browser-binaries');
 
-    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
-      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+    await expect(runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped))).rejects.toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
-  it('requires host consent even with an explicit workspace browser-binary path', () => {
+  it('requires host consent even with an explicit workspace browser-binary path', async () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {
       FLUJO_DATA_DIR: dataRoot,
@@ -285,8 +281,7 @@ describe('stdio MCP runtime homes', () => {
     });
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'host-browser-binaries');
 
-    expect(() => runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped)))
-      .toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
+    await expect(runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped))).rejects.toThrow(expect.objectContaining({ code: 'HOST_CONSENT_REQUIRED' }));
   });
 
   it('remaps only unambiguous absolute paths left by a legacy managed MCP clone', async () => {
@@ -294,23 +289,23 @@ describe('stdio MCP runtime homes', () => {
     const migratedOwner = path.join(getWorkspaceDataDir(), 'mcp-servers', 'legacy-clone');
     await fs.mkdir(path.join(migratedOwner, 'packages', 'server'), { recursive: true });
 
-    expect(remapLegacyDefaultWorkspacePath(legacy, 'mcp-servers')).toBe(
+    expect(await remapLegacyDefaultWorkspacePath(legacy, 'mcp-servers')).toBe(
       path.join(migratedOwner, 'packages', 'server'),
     );
-    expect(runWithWorkspace('runtime-a', () =>
+    expect(await runWithWorkspace('runtime-a', () =>
       remapLegacyDefaultWorkspacePath(legacy, 'mcp-servers'))).toBe(legacy);
 
     // Copy-only EBUSY/EXDEV migrations intentionally leave an empty mount root;
     // it is safe to remap because the populated workspace owner is authoritative.
     await fs.mkdir(path.join(dataRoot, 'mcp-servers', 'legacy-clone'), { recursive: true });
-    expect(remapLegacyDefaultWorkspacePath(legacy, 'mcp-servers')).toBe(
+    expect(await remapLegacyDefaultWorkspacePath(legacy, 'mcp-servers')).toBe(
       path.join(migratedOwner, 'packages', 'server'),
     );
 
     // A non-empty original owner may be an explicit operator path or shipped
     // package. Ambiguity always preserves the configured value.
     await fs.writeFile(path.join(dataRoot, 'mcp-servers', 'legacy-clone', 'keep.txt'), 'legacy', 'utf8');
-    expect(remapLegacyDefaultWorkspacePath(legacy, 'mcp-servers')).toBe(legacy);
+    expect(await remapLegacyDefaultWorkspacePath(legacy, 'mcp-servers')).toBe(legacy);
   });
 
   it('remaps file URLs and flag-assignment argv references to a migrated clone', async () => {
@@ -319,13 +314,13 @@ describe('stdio MCP runtime homes', () => {
     await fs.mkdir(path.dirname(migrated), { recursive: true });
     await fs.writeFile(migrated, '{}', 'utf8');
 
-    expect(remapLegacyDefaultWorkspaceReference(pathToFileURL(legacy).href, 'mcp-servers'))
+    expect(await remapLegacyDefaultWorkspaceReference(pathToFileURL(legacy).href, 'mcp-servers'))
       .toBe(pathToFileURL(migrated).href);
-    expect(remapLegacyDefaultWorkspaceReference(`--config=${legacy}`, 'mcp-servers'))
+    expect(await remapLegacyDefaultWorkspaceReference(`--config=${legacy}`, 'mcp-servers'))
       .toBe(`--config=${migrated}`);
-    expect(remapLegacyDefaultWorkspaceReference(`--config="${legacy}"`, 'mcp-servers'))
+    expect(await remapLegacyDefaultWorkspaceReference(`--config="${legacy}"`, 'mcp-servers'))
       .toBe(`--config="${migrated}"`);
-    expect(runWithWorkspace('runtime-a', () =>
+    expect(await runWithWorkspace('runtime-a', () =>
       remapLegacyDefaultWorkspaceReference(`--config=${legacy}`, 'mcp-servers')))
       .toBe(`--config=${legacy}`);
   });

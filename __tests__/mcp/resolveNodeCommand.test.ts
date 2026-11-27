@@ -10,7 +10,7 @@ const posixDeps = (existing: string[] = []): ResolveNodeCommandDeps => ({
   platform: 'linux',
   dirname: (p) => p.slice(0, p.lastIndexOf('/')),
   joinPath: (...parts) => parts.join('/'),
-  fileExists: (p) => existing.includes(p),
+  fileExists: async (p) => existing.includes(p),
 });
 
 const winDeps = (existing: string[] = []): ResolveNodeCommandDeps => ({
@@ -18,55 +18,55 @@ const winDeps = (existing: string[] = []): ResolveNodeCommandDeps => ({
   platform: 'win32',
   dirname: (p) => p.slice(0, p.lastIndexOf('\\')),
   joinPath: (...parts) => parts.join('\\'),
-  fileExists: (p) => existing.includes(p),
+  fileExists: async (p) => existing.includes(p),
 });
 
 describe('resolveNodeCommand (#36)', () => {
-  it('resolves bare `node` to process.execPath (nvm path)', () => {
-    expect(resolveNodeCommand('node', posixDeps())).toBe(
+  it('resolves bare `node` to process.execPath (nvm path)', async () => {
+    await expect(resolveNodeCommand('node', posixDeps())).resolves.toBe(
       '/home/user/.nvm/versions/node/v20.11.0/bin/node'
     );
   });
 
-  it('resolves bare `npx` to the sibling of the node binary (unix)', () => {
+  it('resolves bare `npx` to the sibling of the node binary (unix)', async () => {
     const npx = '/home/user/.nvm/versions/node/v20.11.0/bin/npx';
-    expect(resolveNodeCommand('npx', posixDeps([npx]))).toBe(npx);
+    await expect(resolveNodeCommand('npx', posixDeps([npx]))).resolves.toBe(npx);
   });
 
-  it('resolves bare `npm` to the sibling of the node binary (unix)', () => {
+  it('resolves bare `npm` to the sibling of the node binary (unix)', async () => {
     const npm = '/home/user/.nvm/versions/node/v20.11.0/bin/npm';
-    expect(resolveNodeCommand('npm', posixDeps([npm]))).toBe(npm);
+    await expect(resolveNodeCommand('npm', posixDeps([npm]))).resolves.toBe(npm);
   });
 
-  it('prefers the .cmd shim for npx on Windows', () => {
+  it('prefers the .cmd shim for npx on Windows', async () => {
     const npxCmd = 'C:\\Program Files\\nodejs\\npx.cmd';
-    expect(resolveNodeCommand('npx', winDeps([npxCmd]))).toBe(npxCmd);
+    await expect(resolveNodeCommand('npx', winDeps([npxCmd]))).resolves.toBe(npxCmd);
   });
 
-  it('resolves `node` to node.exe on Windows', () => {
-    expect(resolveNodeCommand('node', winDeps())).toBe('C:\\Program Files\\nodejs\\node.exe');
+  it('resolves `node` to node.exe on Windows', async () => {
+    await expect(resolveNodeCommand('node', winDeps())).resolves.toBe('C:\\Program Files\\nodejs\\node.exe');
   });
 
-  it('falls back to the bare command when no sibling npx exists', () => {
+  it('falls back to the bare command when no sibling npx exists', async () => {
     // node resolves, but npx is not found next to it -> leave bare for PATH lookup.
-    expect(resolveNodeCommand('npx', posixDeps([]))).toBe('npx');
+    await expect(resolveNodeCommand('npx', posixDeps([]))).resolves.toBe('npx');
   });
 
-  it('leaves an explicit path command untouched', () => {
-    expect(resolveNodeCommand('/usr/local/bin/node', posixDeps())).toBe('/usr/local/bin/node');
-    expect(resolveNodeCommand('./dist/server.js', posixDeps())).toBe('./dist/server.js');
-    expect(resolveNodeCommand('C:\\tools\\node.exe', winDeps())).toBe('C:\\tools\\node.exe');
+  it('leaves an explicit path command untouched', async () => {
+    await expect(resolveNodeCommand('/usr/local/bin/node', posixDeps())).resolves.toBe('/usr/local/bin/node');
+    await expect(resolveNodeCommand('./dist/server.js', posixDeps())).resolves.toBe('./dist/server.js');
+    await expect(resolveNodeCommand('C:\\tools\\node.exe', winDeps())).resolves.toBe('C:\\tools\\node.exe');
   });
 
-  it('leaves non-Node commands untouched', () => {
-    expect(resolveNodeCommand('python', posixDeps())).toBe('python');
-    expect(resolveNodeCommand('uvx', posixDeps())).toBe('uvx');
-    expect(resolveNodeCommand('cmd.exe', winDeps())).toBe('cmd.exe');
-    expect(resolveNodeCommand('', posixDeps())).toBe('');
+  it('leaves non-Node commands untouched', async () => {
+    await expect(resolveNodeCommand('python', posixDeps())).resolves.toBe('python');
+    await expect(resolveNodeCommand('uvx', posixDeps())).resolves.toBe('uvx');
+    await expect(resolveNodeCommand('cmd.exe', winDeps())).resolves.toBe('cmd.exe');
+    await expect(resolveNodeCommand('', posixDeps())).resolves.toBe('');
   });
 
-  it('is case-insensitive for the bin name but returns a real binary', () => {
+  it('is case-insensitive for the bin name but returns a real binary', async () => {
     // Windows configs sometimes carry "Node"; still resolve it.
-    expect(resolveNodeCommand('Node', winDeps())).toBe('C:\\Program Files\\nodejs\\node.exe');
+    await expect(resolveNodeCommand('Node', winDeps())).resolves.toBe('C:\\Program Files\\nodejs\\node.exe');
   });
 });

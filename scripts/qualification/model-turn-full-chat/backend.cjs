@@ -44,7 +44,7 @@ let server,secure,ownerAccess,token,session,archive,budget;
     const request=new NextRequest(url,{method:req.method,headers,body,signal:controller.signal});
     try{
       if(url.pathname.startsWith('/fixture/')){
-        const denied=ownerAccess.assertOwnerRequest(request);if(denied){res.statusCode=denied.status;res.end();return;}
+        const denied=await ownerAccess.assertOwnerRequest(request);if(denied){res.statusCode=denied.status;res.end();return;}
         if(url.pathname==='/fixture/diagnostics'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(budget.getModelTurnArchiveReadDiagnostics()));return;}
         if(url.pathname==='/fixture/arm-close-failure'){
           const originalOpen=fs.promises.open;let armed=true;
@@ -75,9 +75,9 @@ let server,secure,ownerAccess,token,session,archive,budget;
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const origin='http://localhost:'+server.address().port;process.env.FLUJO_OWNER_BROWSER_ORIGIN=origin;
   const login=new NextRequest(origin+'/fixture/login',{method:'POST',headers:{host:new URL(origin).host,origin,authorization:'Bearer '+token}});
-  const resolved=ownerAccess.resolveOwnerRequest(login);if(!resolved.ok)throw Error('Fixture owner authorization failed');
+  const resolved=await ownerAccess.resolveOwnerRequest(login);if(!resolved.ok)throw Error('Fixture owner authorization failed');
   if(!session.ownerBrowserRequestAllowed(login,true))console.error(JSON.stringify({url:login.url,host:login.headers.get('host'),origin:login.headers.get('origin'),configured:process.env.FLUJO_OWNER_BROWSER_ORIGIN}));
-  const cookie=session.createOwnerSession(login,resolved.authorization.principal);
+  const cookie=await session.createOwnerSession(login,resolved.authorization.principal);
   process.send({ready:true,origin,cookie,memory:process.memoryUsage()});
   process.on('message',async message=>{
     if(message==='stop'){await new Promise(resolve=>server.close(resolve));process.send({stopped:true,diagnostics:budget.getModelTurnArchiveReadDiagnostics()});process.exit(0);}

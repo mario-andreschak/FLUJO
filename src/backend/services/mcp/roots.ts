@@ -1,5 +1,5 @@
 import { registerTaskInputHandler } from './taskInputHandlers';
-import fs from 'fs';
+import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -31,20 +31,18 @@ export function mcpRootsRestrictionEnabled(settings: Settings | undefined): bool
  * Filesystem roots exposed when the user has not opted into MCP roots
  * confinement. Windows needs one entry per mounted drive; POSIX has one root.
  */
-export function unrestrictedHostRoots(): Root[] {
+export async function unrestrictedHostRoots(): Promise<Root[]> {
   if (process.platform !== 'win32') {
     return [{ uri: pathToFileURL('/').href, name: '/' }];
   }
 
-  const roots: Root[] = [];
-  for (let code = 65; code <= 90; code += 1) {
-    const drive = `${String.fromCharCode(code)}:\\`;
-    try {
-      if (fs.existsSync(drive)) roots.push({ uri: pathToFileURL(drive).href, name: drive });
-    } catch {
-      // An inaccessible removable/network drive should not break roots/list.
-    }
-  }
+  // Probe every drive at once: a disconnected network drive can take seconds
+  // to answer, and an inaccessible one must not break roots/list.
+  const drives = Array.from({ length: 26 }, (_, index) => `${String.fromCharCode(65 + index)}:\\`);
+  const mounted = await Promise.all(drives.map(drive => fs.access(drive).then(() => true, () => false)));
+  const roots: Root[] = drives
+    .filter((_, index) => mounted[index])
+    .map(drive => ({ uri: pathToFileURL(drive).href, name: drive }));
   if (roots.length > 0) return roots;
 
   const fallback = path.parse(process.cwd()).root || 'C:\\';
@@ -336,7 +334,7 @@ export function createRootsListHandler(config: MCPServerConfig,
       }
     }
     if (current.transport === 'stdio') {
-      try { assertHostMcpLaunchAllowed(current); }
+      try { await assertHostMcpLaunchAllowed(current); }
       catch { return { roots: [] }; }
     }
     const [restricted, workspaceRoots] = await Promise.all([
@@ -347,7 +345,7 @@ export function createRootsListHandler(config: MCPServerConfig,
     // boundary only when the user explicitly enables roots confinement.
     const roots = restricted
       ? await resolveServerRoots(current, workspaceRoots)
-      : unrestrictedHostRoots();
+      : await unrestrictedHostRoots();
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
     return { roots };
   });

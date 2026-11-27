@@ -30,7 +30,7 @@ jest.mock('@/backend/execution/extensions', () => ({
 }));
 
 type RpcBody = { id?: number; result?: Record<string, unknown>; error?: { code: number; message: string } };
-type RunOptions = { abortSignal: AbortSignal; assertAuthorized: () => void;
+type RunOptions = { abortSignal: AbortSignal; assertAuthorized: () => Promise<void>;
   requestInput?: (requests: Record<string, unknown>) => Promise<Record<string, unknown>> };
 const mockRun = flowToolsCallTool as jest.Mock;
 const scopes = ['mcp:access', 'control:admin', 'secrets:read'] as const;
@@ -64,9 +64,17 @@ async function dispatch(method: string, params: Record<string, unknown> = {}, op
   const body = JSON.parse(await response.text()) as RpcBody;
   return { status: response.status, body };
 }
-function persist() {
+/** Replaces the policy the way an operator tool must on Windows: a rename over a file
+ * that a reader holds open is refused briefly, so retry it. */
+async function persist() {
   fs.writeFileSync(`${policyPath}.new`, JSON.stringify(policy), { mode: 0o600 });
-  fs.renameSync(`${policyPath}.new`, policyPath);
+  for (let attempt = 1; ; attempt += 1) {
+    try { fs.renameSync(`${policyPath}.new`, policyPath); return; }
+    catch (error) {
+      if (attempt >= 50 || !['EPERM', 'EBUSY', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
 }
 async function waitFor(taskId: string, status: string, form = false): Promise<Record<string, unknown>> {
   const until = Date.now() + 7000;
@@ -93,7 +101,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
     const issued = issueOwnerCredential(scopes, Date.now() + 3600000);
     token = issued.token;
     policy = { schemaVersion: 1, ownerId: 'test-owner', credentials: [issued.record] };
-    persist();
+    await persist();
     process.env.FLUJO_OWNER_AUTH_FILE = policyPath;
     delete process.env.FLUJO_WORKER_MODE;
     process.env.FLUJO_MCP_TASKS_SERVER = 'true';
@@ -101,15 +109,15 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
     jest.mocked(executionExtensionAdapter).mockReturnValue(undefined);
     jest.mocked(hasExecutionExtensionContext).mockReturnValue(false);
     mockRun.mockReset().mockImplementation(async (_name, _args, options: RunOptions) => {
-      options.assertAuthorized();
+      await options.assertAuthorized();
       return { content: [{ type: 'text', text: 'Flow result.' }] };
     });
   });
   afterEach(async () => {
     // Restore the exact original policy only to drain this test's owned jobs.
     for (const record of policy.credentials) record.revokedAt = null;
-    persist();
-    const resolved = resolveOwnerRequest(request('ping'), scopes, { requireBearer: true });
+    await persist();
+    const resolved = await resolveOwnerRequest(request('ping'), scopes, { requireBearer: true });
     if (resolved.ok) for (const taskId of createdIds) {
       await runWithWorkspace(workspace, () => serverTaskStore.cancel(resolved.authorization, workspace, taskId)).catch(() => undefined);
     }
@@ -144,7 +152,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
     expect((await handleModernFlowsMcpRequest(incoming)).status).toBe(401);
     expect(text).not.toHaveBeenCalled(); expect(json).not.toHaveBeenCalled();
     const limited = issueOwnerCredential(['openai:execute'], Date.now() + 60000);
-    policy.credentials.push(limited.record); persist();
+    policy.credentials.push(limited.record); await persist();
     expect((await dispatch('tools/call', { name: 'owned_flow' }, { bearer: limited.token })).status).toBe(403);
     expect(mockRun).not.toHaveBeenCalled();
   });
@@ -227,7 +235,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
   it('survives creation request close and returns a durable terminal payload on later HTTP requests', async () => {
     const gate = deferred<void>();
     mockRun.mockImplementation(async (_name, _args, options: RunOptions) => {
-      await gate.promise; options.assertAuthorized();
+      await gate.promise; await options.assertAuthorized();
       return { content: [{ type: 'text', text: 'private detached result' }] };
     });
     const creation = new AbortController();
@@ -246,7 +254,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
 
   it('denies another credential and another selected workspace without disclosing a task result', async () => {
     const second = issueOwnerCredential(scopes, Date.now() + 3600000);
-    policy.credentials.push(second.record); persist();
+    policy.credentials.push(second.record); await persist();
     const task = await create(); await waitFor(task.taskId, 'completed');
     const otherCredential = await dispatch('tasks/get', { taskId: task.taskId }, { tasks: true, bearer: second.token });
     expect(otherCredential.body.error?.message).toBe('Task is unavailable.');
@@ -258,7 +266,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
   it('cooperatively cancels once and does not publish a late result', async () => {
     const gate = deferred<void>();
     mockRun.mockImplementation(async (_name, _args, options: RunOptions) => {
-      await gate.promise; options.assertAuthorized(); return { content: [{ type: 'text', text: 'late' }] };
+      await gate.promise; await options.assertAuthorized(); return { content: [{ type: 'text', text: 'late' }] };
     });
     const task = await create();
     expect((await dispatch('tasks/cancel', { taskId: task.taskId }, { tasks: true })).body.result?.resultType).toBe('complete');
@@ -273,7 +281,7 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
       const responses = await options.requestInput!({ approval: { method: 'elicitation/create', params: {
         mode: 'form', message: 'Approve test work', requestedSchema: { type: 'object', properties: {} },
       } } });
-      options.assertAuthorized();
+      await options.assertAuthorized();
       return { content: [{ type: 'text', text: String((responses.approval as { action: string }).action) }] };
     });
     const task = await create(undefined, true);
@@ -296,10 +304,10 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
   it('revokes detached authority and refuses later HTTP access', async () => {
     const gate = deferred<void>(); let ranEffect = false;
     mockRun.mockImplementation(async (_name, _args, options: RunOptions) => {
-      await gate.promise; options.assertAuthorized(); ranEffect = true; return { content: [] };
+      await gate.promise; await options.assertAuthorized(); ranEffect = true; return { content: [] };
     });
     const task = await create();
-    policy.credentials[0].revokedAt = Date.now(); persist();
+    policy.credentials[0].revokedAt = Date.now(); await persist();
     expect((await dispatch('tasks/get', { taskId: task.taskId }, { tasks: true })).status).toBe(401);
     gate.resolve(); await new Promise(resolve => setTimeout(resolve, 150));
     expect(ranEffect).toBe(false);

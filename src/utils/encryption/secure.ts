@@ -132,7 +132,7 @@ async function metadataOrInitialize(): Promise<EncryptionMetadata> {
     const file = await findStoredCiphertext({ fresh: true });
     if (file) throw new EncryptionLockedError(missingMetadataMessage(file));
   }
-  const secret = readOperatorSecret();
+  const secret = await readOperatorSecret();
   // A custom password is optional. Explicit operator provisioning still fails
   // closed in readOperatorSecret; ordinary local use keeps default encryption.
   return secret ? persist(newKeyring(), 'user', secret, 'operator-file', true)
@@ -184,7 +184,7 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
       const metadata = await readMetadata();
       if (!metadata) return false;
       if (metadata.encryption_version === 2 && metadata.encryption_type !== 'user') throw new CredentialMigrationRequiredError();
-      const password = metadata.key_protection === 'operator-file' ? readOperatorSecret()
+      const password = metadata.key_protection === 'operator-file' ? await readOperatorSecret()
         : metadata.encryption_type === 'user' ? oldPassword : DEFAULT_PASSWORD;
       if (!password) return false;
       const ring = metadata.encryption_version === 2 ? await unwrapKeyring(metadata, password)

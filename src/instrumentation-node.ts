@@ -14,7 +14,7 @@ import { assertOwnerStartup } from '@/backend/services/security/ownerStartup';
 const log = createLogger('instrumentation');
 
 export async function initializeNodeRuntime(): Promise<void> {
-  assertOwnerStartup();
+  await assertOwnerStartup();
   // Refuse startup when a configured integration was not included in this build.
   const { executionExtensionAdapter } = await import('@/backend/execution/extensions');
   executionExtensionAdapter();

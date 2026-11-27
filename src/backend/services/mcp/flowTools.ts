@@ -88,7 +88,7 @@ function extractInput(args: Record<string, unknown>): string {
  */
 export interface FlowToolExecutionOptions {
   abortSignal?: AbortSignal;
-  assertAuthorized?: () => void;
+  assertAuthorized?: () => Promise<void>;
   requestInput?: (requests: InputRequestsV2) => Promise<InputResponsesV2>;
 }
 
@@ -97,13 +97,14 @@ export async function flowToolsCallTool(
   args: Record<string, unknown>,
   options: FlowToolExecutionOptions = {},
 ): Promise<CallToolResult> {
-  const assertCurrent = () => {
+  const assertCurrent = async () => {
     options.abortSignal?.throwIfAborted();
-    options.assertAuthorized?.();
+    await options.assertAuthorized?.();
+    options.abortSignal?.throwIfAborted();
   };
-  assertCurrent();
+  await assertCurrent();
   const flows = await flowService.loadFlows();
-  assertCurrent();
+  await assertCurrent();
   const nameMap = buildFlowToolNameMap(flows.map((f) => ({ id: f.id, name: f.name })));
 
   let flowId: string | undefined;
@@ -138,13 +139,13 @@ export async function flowToolsCallTool(
           }, required: ['confirmed'] },
         },
       } });
-      assertCurrent();
+      await assertCurrent();
       const response = ElicitResultV2Schema.parse(responses.confirmation);
       if (response.action !== 'accept' || response.content?.confirmed !== true) return {
         content: [{ type: 'text', text: 'Flow execution declined.' }],
       };
     }
-    assertCurrent();
+    await assertCurrent();
     const result = await runFlow({
       flowId,
       prompt: input,
@@ -155,10 +156,10 @@ export async function flowToolsCallTool(
       ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
       ...(options.assertAuthorized ? { executionAuthority: {
         signal: options.abortSignal ?? new AbortController().signal,
-        assertCurrent: async () => { assertCurrent(); },
+        assertCurrent,
       } } : {}),
     });
-    assertCurrent();
+    await assertCurrent();
 
     if (result.flowNotFound) {
       return {
@@ -180,7 +181,7 @@ export async function flowToolsCallTool(
     };
   } catch (err) {
     // Authority loss/cancellation must retire the job, never look like success.
-    assertCurrent();
+    await assertCurrent();
     log.error('flowToolsCallTool failed', { toolName, flowId, err });
     return {
       content: [{ type: 'text', text: `Error running flow: ${err instanceof Error ? err.message : String(err)}` }],

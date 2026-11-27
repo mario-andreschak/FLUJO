@@ -109,8 +109,8 @@ describe('opt-in roots confinement', () => {
     } as any)).toBe(true);
   });
 
-  it('advertises at least one absolute host filesystem root when unrestricted', () => {
-    const roots = unrestrictedHostRoots();
+  it('advertises at least one absolute host filesystem root when unrestricted', async () => {
+    const roots = await unrestrictedHostRoots();
     expect(roots.length).toBeGreaterThan(0);
     expect(roots.every((root) => root.uri.startsWith('file://'))).toBe(true);
   });

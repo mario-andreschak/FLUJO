@@ -13,9 +13,8 @@ import { assertMcpIsolationDispatch } from '@/backend/services/mcp/isolation';
 import { stdioLaunchForm } from '@/backend/services/mcp/launchForm';
 import { createRootsListHandler } from '@/backend/services/mcp/roots';
 import { callTool } from '@/backend/services/mcp/tools';
-import {
-  fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trustedHostMcpPolicyDigest, trustedHostMcpPreviewDigestAsync,
-} from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpPolicyDigest, trustedHostMcpPreviewDigestAsync } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from './fixtures/trustedHostFingerprint';
 
 // Issue #1337: a server whose env holds a secret was launched with the
 // decrypted value but checked against the saved, encrypted text, so its first
@@ -52,7 +51,7 @@ function setEnv(config: Omit<MCPStdioConfig, 'env'>, env: Record<string, unknown
 
 async function launch(era: 'v1' | 'beta') {
   const launched = await stdioLaunchForm(stored);
-  const transport = era === 'v1' ? createStdioTransport(launched) : createBetaTransport(launched);
+  const transport = era === 'v1' ? await createStdioTransport(launched) : await createBetaTransport(launched);
   const close = jest.fn(async () => { await transport.close(); });
   return { transport, close, client: { transport, close } as unknown as Client };
 }
@@ -137,7 +136,7 @@ describe('a local server in localhost mode', () => {
           dispatch: jest.requireActual<typeof import('@/backend/services/mcp/isolation')>('@/backend/services/mcp/isolation').assertMcpIsolationDispatch,
         };
       });
-      const transport = restarted.factory(await stdioLaunchForm(stored));
+      const transport = await restarted.factory(await stdioLaunchForm(stored));
       await expect(restarted.dispatch({ transport, close: jest.fn() } as unknown as Client, stored.name)).resolves.toBeUndefined();
       await expect(restarted.dispatch(before, stored.name)).rejects.toMatchObject({ code: 'HOST_CONSENT_REQUIRED' });
     } finally {

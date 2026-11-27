@@ -3,8 +3,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getWorkspaceDataDir } from '@/utils/workspace';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource,
-  TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES } from '@/backend/services/security/trustedHostMcp';
+import { TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES } from '@/backend/services/security/trustedHostMcp';
+import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource } from './trustedHostFingerprint';
 
 // The publisher installs npm globally, which adds POSIX .bin symlinks. Some
 // supported Node cpSync implementations retain those links even with

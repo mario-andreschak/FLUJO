@@ -11,11 +11,11 @@ import { resolveOwnerRequest, type OwnerRequestAuthorization } from './ownerAcce
 import { ownerPolicySchema } from './ownerCredentials';
 import { previewPackageRunnerConsent } from './packageRunnerConsent';
 import { trustedHostMcpPolicySchema } from './trustedHostMcp';
-import { consentDiagnosticStage, consentDiagnosticStageSync, BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
+import { consentDiagnosticStage, BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
 import { BUNDLED_FLUJO_WORKLOAD_PURPOSE, computeBundledFlujoWorkloadInventory } from '../mcp/bundledFlujoWorkloadInventory';
 import { withPrivateApprovalLedgerLock } from './privateApprovalLedgerLock';
 import { createOwnedPrivateApprovalStage } from './ownedPrivateApprovalStage';
-import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
+import { fingerprintTrustedHostExecutableAsync, fingerprintTrustedHostSourceAsync, readPrivateApprovalAsync, readPrivateApprovalPairAsync,
   trustedHostApprovalsSchema, trustedHostEnvironment, trustedHostMcpPreviewDigestAsync,
   TRUSTED_HOST_RUNTIME_HOME_ENVIRONMENT_NAMES, sameTrustedHostConsent } from './trustedHostMcp';
 
@@ -52,7 +52,7 @@ async function initializePrivateLedger(filename: string, request: Request, autho
       throw error;
     }
   });
-  const revoked = authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
+  const revoked = await authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
   if (owner.ownerId !== authorization.principal.ownerId || request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
   let handle: fs.promises.FileHandle;
   try { handle = await fs.promises.open(resolved, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600); }
@@ -82,7 +82,7 @@ async function initializePrivateLedger(filename: string, request: Request, autho
     const current = await handle.stat({ bigint: true }), named = await fs.promises.lstat(resolved, { bigint: true });
     if (!stable(current) || !stable(named) || observed.ownerId !== owner.ownerId || observed.approvals.length) throw new Error('Created approval ledger changed.');
     await consentDiagnosticStage('APPROVAL_SEED_IDENTITY', assertExactSeed);
-    const finalOwner = authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
+    const finalOwner = await authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
     if (request.signal.aborted || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval initialization retired.');
     initialized = true;
   } catch (error) { failure = error; throw error; }
@@ -155,8 +155,8 @@ export async function previewBundledHostConsent(serverName: string, options: { r
   const config: MCPStdioConfig = { ...stored, command: process.execPath, args: [entryPoint, ...originalArgs.slice(1)],
     cwd: revision.sourceRoot, rootPath: revision.sourceRoot, env: environment, runtimeHomeMode: options.runtimeHome,
     trustedHost: { schemaVersion: 1, kind: 'trusted-host', privileges: 'owner-account', runtime: 'node', runtimeHome: options.runtimeHome,
-      entryPoint, sourceRoot: revision.sourceRoot, sourceDigest: consentDiagnosticStageSync('SOURCE_FINGERPRINT', () => fingerprintTrustedHostSource(revision.sourceRoot, revision.dependencyLinks)),
-      executableDigest: consentDiagnosticStageSync('EXEC_FINGERPRINT', () => fingerprintTrustedHostExecutable(process.execPath)), environmentNames: [...new Set(environmentNames)],
+      entryPoint, sourceRoot: revision.sourceRoot, sourceDigest: await consentDiagnosticStage('SOURCE_FINGERPRINT', () => fingerprintTrustedHostSourceAsync(revision.sourceRoot, undefined, revision.dependencyLinks)),
+      executableDigest: await consentDiagnosticStage('EXEC_FINGERPRINT', () => fingerprintTrustedHostExecutableAsync(process.execPath)), environmentNames: [...new Set(environmentNames)],
       bundledInstallation: { packageDirectory: descriptor.packageDirectory as 'flujo' | 'filesystem' | 'bash' | 'browser',
         installationRoot: revision.installation, dependencyNamespaceRoot: revision.dependencyNamespaceRoot,
         assetDigest: revision.assetDigest, dependencyGraphDigest: revision.dependencyGraph.digest,
@@ -169,7 +169,7 @@ export async function previewBundledHostConsent(serverName: string, options: { r
 /** An actual private owner bearer approves a recomputed exact proposal, never an imported attestation. */
 export async function approveBundledHostConsent(request: Request, serverName: string,
   options: { runtimeHome: 'host' | 'isolated'; reviewedDigest: string; expiresAt: number }) {
-  const owner = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
+  const owner = await resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
   if (!owner.ok) throw new BundledConsentError(owner.response);
   const filename = process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
   if (!filename) throw new Error('A protected approval file is required.');
@@ -177,8 +177,8 @@ export async function approveBundledHostConsent(request: Request, serverName: st
   try {
     await initializePrivateLedger(filename, request, owner.authorization);
     diagnostic = 'APPROVAL_LOCK';
-    return await withPrivateApprovalLedgerLock(filename, request.signal, () => {
-      const revoked = owner.authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
+    return await withPrivateApprovalLedgerLock(filename, request.signal, async () => {
+      const revoked = await owner.authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
       if (filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Captured approval ledger changed.');
       return approveBundledHostConsentLocked(request, serverName, options, filename);
     });
@@ -192,7 +192,7 @@ async function approveBundledHostConsentLocked(request: Request, serverName: str
   options: { runtimeHome: 'host' | 'isolated'; reviewedDigest: string; expiresAt: number }, filename: string) {
   let diagnostic: ConsentDiagnosticStage = 'APPROVAL_REQUEST';
   try {
-    const resolution = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
+    const resolution = await resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
     if (!resolution.ok) throw new BundledConsentError(resolution.response);
     const authorization = resolution.authorization;
     const workspace = getCurrentWorkspace();
@@ -217,7 +217,7 @@ async function approveBundledHostConsentLocked(request: Request, serverName: str
     let failed = false;
     try {
       diagnostic = 'APPROVAL_RECHECK';
-      const revoked = authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
+      const revoked = await authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
       if (request.signal.aborted || workspace !== getCurrentWorkspace()) throw new Error('Consent request retired.');
       const finalProposal = await previewBundledHostConsent(serverName, options);
       if (!sameTrustedHostConsent(finalProposal.config, proposal.config) || finalProposal.policyDigest !== proposal.policyDigest) throw new Error('The installed revision changed.');
@@ -227,17 +227,17 @@ async function approveBundledHostConsentLocked(request: Request, serverName: str
       const configs = await loadServerConfigs();
       if (!Array.isArray(configs)) throw new Error('Authoritative MCP configuration unavailable.');
       if (JSON.stringify(configs.find(item => item.name === serverName)) !== JSON.stringify(proposal.storedConfig)) throw new Error('Stored configuration changed before approval.');
-      const beforeSave = authorization.recheck(); if (beforeSave) throw new BundledConsentError(beforeSave);
+      const beforeSave = await authorization.recheck(); if (beforeSave) throw new BundledConsentError(beforeSave);
       diagnostic = 'APPROVAL_SAVE';
       const result = await saveConfig(new Map(configs.map(item => [item.name, item.name === serverName ? proposal.config : item])));
       if (!result.success) throw new Error('Approved configuration could not be saved.');
       diagnostic = 'APPROVAL_PUBLICATION';
       const beforePublication = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(filename, request.signal));
       if (JSON.stringify(beforePublication) !== JSON.stringify(previous)) throw new Error('Approval ledger changed before publication.');
-      const beforePublish = authorization.recheck(); if (beforePublish) throw new BundledConsentError(beforePublish);
+      const beforePublish = await authorization.recheck(); if (beforePublish) throw new BundledConsentError(beforePublish);
       if (request.signal.aborted || workspace !== getCurrentWorkspace()) throw new Error('Consent request retired.');
-      await stage.publish(filename, () => {
-        const finalOwner = authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
+      await stage.publish(filename, async () => {
+        const finalOwner = await authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
         if (workspace !== getCurrentWorkspace() || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
       });
       return proposal;
@@ -259,7 +259,7 @@ async function approveBundledHostConsentLocked(request: Request, serverName: str
 }
 
 export async function revokeBundledHostConsent(request: Request, serverName: string) {
-  const resolution = resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
+  const resolution = await resolveOwnerRequest(request, ['control:admin', 'mcp:access', 'secrets:read'], { requireBearer: true });
   if (!resolution.ok) throw new BundledConsentError(resolution.response);
   const filename = process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
   if (!filename) throw new Error('A protected approval file is required.');
@@ -274,10 +274,10 @@ export async function revokeBundledHostConsent(request: Request, serverName: str
     try {
       const current = trustedHostApprovalsSchema.parse(await readPrivateApprovalAsync(filename, request.signal));
       if (JSON.stringify(current) !== JSON.stringify(previous)) throw new Error('Approval ledger changed.');
-      const revoked = resolution.authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
+      const revoked = await resolution.authorization.recheck(); if (revoked) throw new BundledConsentError(revoked);
       if (request.signal.aborted || workspace !== getCurrentWorkspace() || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Revocation retired.');
-      await stage.publish(filename, () => {
-        const finalOwner = resolution.authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
+      await stage.publish(filename, async () => {
+        const finalOwner = await resolution.authorization.recheck(); if (finalOwner) throw new BundledConsentError(finalOwner);
         if (workspace !== getCurrentWorkspace() || filename !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE) throw new Error('Approval authority changed.');
       });
       return { revoked: true, serverName, workspace };

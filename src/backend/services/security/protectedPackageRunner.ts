@@ -1,7 +1,9 @@
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
+import { realpath } from '../../../utils/realpath';
 
 // Resolve through Node's public native API. Test runners can replace imported
 // createRequire with their project resolver, which is not the child process's
@@ -52,69 +54,66 @@ export function assertPackageRunnerDeclaration(input: {
   if (selected('PATH') !== expectedPath) throw new Error('Declare only the reviewed package and Node binary paths');
 }
 
-function readJson(filename: string): Record<string, unknown> {
-  const assertPath = () => {
+async function readJson(filename: string): Promise<Record<string, unknown>> {
+  const assertPath = async () => {
     for (let current = path.resolve(filename); ; current = path.dirname(current)) {
-      if (fs.lstatSync(current).isSymbolicLink()) throw new Error('Linked package manifest path');
+      if ((await fs.lstat(current)).isSymbolicLink()) throw new Error('Linked package manifest path');
       if (path.dirname(current) === current) break;
     }
-    if (!equal(fs.realpathSync(filename), filename)) throw new Error('Retargeted package manifest');
+    if (!equal(await realpath(filename), filename)) throw new Error('Retargeted package manifest');
   };
-  assertPath();
-  const descriptor = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  await assertPath();
+  const handle = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   let bytes: Buffer | undefined;
   try {
-    const before = fs.fstatSync(descriptor, { bigint: true });
+    const before = await handle.stat({ bigint: true });
     if (!before.isFile() || before.nlink !== BigInt(1) || before.size > BigInt(1024 * 1024)) throw new Error('Invalid package manifest');
     bytes = Buffer.alloc(Number(before.size) + 1);
     let offset = 0;
     while (offset < bytes.length) {
-      const count = fs.readSync(descriptor, bytes, offset, bytes.length - offset, null);
-      if (!count) break;
-      offset += count;
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, null);
+      if (!bytesRead) break;
+      offset += bytesRead;
     }
     if (BigInt(offset) !== before.size) throw new Error('Manifest changed while reading');
-    const after = fs.fstatSync(descriptor, { bigint: true });
-    const current = fs.lstatSync(filename, { bigint: true });
-    assertPath();
+    const after = await handle.stat({ bigint: true });
+    const current = await fs.lstat(filename, { bigint: true });
+    await assertPath();
     if (current.isSymbolicLink() || !current.isFile()
         || !(['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const)
           .every(field => before[field] === after[field] && before[field] === current[field])) throw new Error('Manifest changed');
     const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, offset)));
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid package manifest');
     return value as Record<string, unknown>;
-  } finally { bytes?.fill(0); fs.closeSync(descriptor); }
+  } finally { bytes?.fill(0); await handle.close(); }
 }
 
 /** npm prepends the working directory and EVERY ancestor's .bin to PATH.
  * --prefix does not fence these candidates. They must stay absent at admission.
  * This is host consent and fresh resolution checking, not an OS containment claim. */
-export function assertPackageRunnerResolution(sourceRoot: string, entryPoint: string, cwd: string, runner: ProtectedPackageRunner,
+export async function assertPackageRunnerResolution(sourceRoot: string, entryPoint: string, cwd: string, runner: ProtectedPackageRunner,
   runtime?: { command: string; home: string; inspectClosure?: boolean }) {
   for (let current = path.resolve(cwd); ; current = path.dirname(current)) {
-    if (fs.lstatSync(current).isSymbolicLink() || !equal(fs.realpathSync(current), current)) throw new Error('Unsafe package runner working directory');
-    for (const candidate of [path.join(current, 'node_modules', '.bin')]) {
-      try { fs.lstatSync(candidate); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
-      throw new Error('Unreviewed npm ancestor resolution candidate');
-    }
+    if ((await fs.lstat(current)).isSymbolicLink() || !equal(await realpath(current), current)) throw new Error('Unsafe package runner working directory');
+    if (await exists(path.join(current, 'node_modules', '.bin'))) throw new Error('Unreviewed npm ancestor resolution candidate');
     if (path.dirname(current) === current) break;
   }
-  const npm = readJson(path.join(path.dirname(path.dirname(entryPoint)), 'package.json'));
+  const npm = await readJson(path.join(path.dirname(path.dirname(entryPoint)), 'package.json'));
   if (npm.name !== 'npm' || npm.version !== runner.npmVersion) throw new Error('npm revision changed');
   const projectConfig = path.join(runner.packageDirectory, '.npmrc');
   try {
-    const stat = fs.lstatSync(projectConfig);
+    const stat = await fs.lstat(projectConfig);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size !== 0) throw new Error('Unreviewed project npm configuration');
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   for (const config of ['runner-user.npmrc', 'runner-global.npmrc']) {
     const file = path.join(sourceRoot, config);
-    const stat = fs.lstatSync(file);
+    const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size !== 0) throw new Error('npm control file changed');
   }
   const packageRoot = path.join(runner.packageDirectory, 'node_modules', ...runner.packageName.split('/'));
-  const project = readJson(path.join(runner.packageDirectory, 'package.json'));
+  const project = await readJson(path.join(runner.packageDirectory, 'package.json'));
   if (project.bin !== undefined || project.workspaces !== undefined) throw new Error('Installation project may not redirect npm binary selection');
-  const manifest = readJson(path.join(packageRoot, 'package.json'));
+  const manifest = await readJson(path.join(packageRoot, 'package.json'));
   if (manifest.name !== runner.packageName || manifest.version !== runner.packageVersion) throw new Error('Package revision changed');
   const bins = manifest.bin;
   const bin = typeof bins === 'string' && runner.binaryName === runner.packageName.split('/').at(-1) ? bins
@@ -126,7 +125,8 @@ export function assertPackageRunnerResolution(sourceRoot: string, entryPoint: st
     : normalizedBins[runner.packageName.split('/').at(-1)!] ? runner.packageName.split('/').at(-1) : undefined;
   if (selectedBin !== runner.binaryName) throw new Error('npm binary selection differs from the reviewed binary');
   const file = path.join(runner.packageDirectory, 'node_modules', '.bin', runner.binaryName + (process.platform === 'win32' ? '.cmd' : ''));
-  if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw new Error('Materialize the reviewed package binary shim');
+  const shim = await fs.lstat(file);
+  if (!shim.isFile() || shim.isSymbolicLink()) throw new Error('Materialize the reviewed package binary shim');
   return runtime?.inspectClosure === false ? undefined
     : assertPackageRuntimeClosure(sourceRoot, [path.dirname(path.dirname(entryPoint)), runner.packageDirectory], runtime);
 }
@@ -147,31 +147,34 @@ function dependencyLookupPaths(filename: string, runtime?: { command: string; ho
 
 /** Inspect declarations without requiring package code. A complete byte tree
  * cannot substitute for a complete local runtime dependency graph. */
-function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtime?: { command: string; home: string }) {
+async function exists(filename: string): Promise<boolean> {
+  try { await fs.lstat(filename); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+}
+
+async function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtime?: { command: string; home: string }) {
   const manifests = new Map<string, Record<string, unknown>>();
   const visited = new Set<string>();
   const inventory: Array<{ directory: string; name: string; version: string; dependencies: Array<{
     name: string; target: string; optional: boolean; directory: string | null;
   }> }> = [];
   let edges = 0;
-  const manifestAt = (directory: string) => {
+  const manifestAt = async (directory: string) => {
     let manifest = manifests.get(directory);
     if (!manifest) {
       if (manifests.size >= 1024) throw new Error('Package graph exceeds inspection bounds');
-      manifest = readJson(path.join(directory, 'package.json'));
+      manifest = await readJson(path.join(directory, 'package.json'));
       if (typeof manifest.name !== 'string' || manifest.name.length > 214 || !exactVersion.safeParse(manifest.version).success) throw new Error('Package graph revision unavailable');
       manifests.set(directory, manifest);
     }
     return manifest;
   };
-  const exists = (filename: string) => {
-    try { fs.lstatSync(filename); return true; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
-  };
-  const visit = (directory: string): void => {
+  const anyExists = async (candidate: string, extensions: readonly string[]) =>
+    (await Promise.all(extensions.map(extension => exists(candidate + extension)))).some(Boolean);
+  const visit = async (directory: string): Promise<void> => {
     if (visited.has(directory)) return;
     visited.add(directory);
-    const manifest = manifestAt(directory);
+    const manifest = await manifestAt(directory);
     const node = { directory: path.relative(sourceRoot, directory).split(path.sep).join('/'),
       name: manifest.name as string, version: manifest.version as string,
       dependencies: [] as Array<{ name: string; target: string; optional: boolean; directory: string | null }> };
@@ -200,11 +203,11 @@ function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtim
       for (const candidateRoot of lookupPaths) {
         const candidate = path.join(candidateRoot, ...name.split('/'));
         if (!contained(sourceRoot, candidateRoot)) {
-          if (['', '.js', '.json', '.node'].some(extension => exists(candidate + extension))) throw new Error('Ambient Node dependency candidate');
+          if (await anyExists(candidate, ['', '.js', '.json', '.node'])) throw new Error('Ambient Node dependency candidate');
           continue;
         }
-        if (['.js', '.json', '.node'].some(extension => exists(candidate + extension))) throw new Error('Package dependency redirected to an unreviewed file');
-        if (!exists(candidate)) continue;
+        if (await anyExists(candidate, ['.js', '.json', '.node'])) throw new Error('Package dependency redirected to an unreviewed file');
+        if (!await exists(candidate)) continue;
         selected = candidate;
         break;
       }
@@ -213,12 +216,12 @@ function assertPackageRuntimeClosure(sourceRoot: string, roots: string[], runtim
         node.dependencies.push({ name, ...declaration, directory: null });
         continue;
       }
-      if (manifestAt(selected).name !== declaration.target) throw new Error('Package dependency identity differs from its declaration');
+      if ((await manifestAt(selected)).name !== declaration.target) throw new Error('Package dependency identity differs from its declaration');
       node.dependencies.push({ name, ...declaration, directory: path.relative(sourceRoot, selected).split(path.sep).join('/') });
-      visit(selected);
+      await visit(selected);
     }
   };
-  for (const directory of roots) visit(directory);
+  for (const directory of roots) await visit(directory);
   inventory.sort((a, b) => a.directory < b.directory ? -1 : a.directory > b.directory ? 1 : 0);
   for (const node of inventory) node.dependencies.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   return { inventory, digest: createHash('sha256').update('flujo:mcp:local-npx-dependencies:v1\0').update(JSON.stringify(inventory)).digest('hex') };
