@@ -13,6 +13,72 @@ export const CI_NODE_PROFILES = Object.freeze({
 const manifestPath = new URL('./ci-node-binaries.json', import.meta.url);
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 
+/**
+ * The Node versions FLUJO ships (#1408): the private runtime the installers
+ * set up and the container base. Each is an exact supported CI profile with
+ * signed evidence. A container that stays on another Node line than the
+ * installers must say why in `containerBehind`, and that note must go as soon
+ * as both ship the same line, so the two cannot drift apart unnoticed.
+ */
+export function shippedNodeRuntimes(binaries = manifest) {
+  const shipped = binaries.shipped ?? {};
+  const supported = new Set(Object.entries(CI_NODE_PROFILES)
+    .filter(([name]) => name !== 'historicalBuild').map(([, version]) => version));
+  for (const kind of ['installer', 'container']) {
+    if (!supported.has(shipped[kind])) throw new Error(`The shipped ${kind} Node must be an exact supported CI profile.`);
+  }
+  const sameLine = shipped.installer.split('.')[0] === shipped.container.split('.')[0];
+  const behind = typeof shipped.containerBehind === 'string' && shipped.containerBehind.trim() !== '';
+  if (!sameLine && !behind) {
+    throw new Error('The container ships another Node line than the installers: move the container base, or say why in "containerBehind".');
+  }
+  if (sameLine && shipped.containerBehind !== undefined) {
+    throw new Error('Remove "containerBehind": the container and the installers ship the same Node line.');
+  }
+  if (!binaries.containerBase?.reference?.includes(`/node:${shipped.container}-bookworm-slim@sha256:`)) {
+    throw new Error('The pinned container base must be the shipped container Node.');
+  }
+  return { installer: shipped.installer, container: shipped.container };
+}
+
+/**
+ * Every installer path sets up the shipped installer Node line: the Windows
+ * private runtime (exact version; returns its archive checksums for the signed
+ * evidence check), NodeSource, Homebrew, zypper and pacman on Linux and macOS,
+ * and the CI checks that look for the Windows runtime folder.
+ */
+export function assertShippedInstallerSources({ installPs1, installSh, installerWorkflow, windowsInstallCheck }, binaries = manifest) {
+  const { installer } = shippedNodeRuntimes(binaries);
+  const major = installer.split('.')[0];
+  const windows = [
+    /\$folder = "node-v(\d+\.\d+\.\d+)-win-\$arch"/.exec(installPs1)?.[1],
+    /Url = "https:\/\/nodejs\.org\/dist\/v(\d+\.\d+\.\d+)\/\$folder\.zip"/.exec(installPs1)?.[1],
+    /Downloading verified Node\.js (\d+\.\d+\.\d+) /.exec(installPs1)?.[1],
+  ];
+  const hashes = {
+    x64: /^\s*x64 = '([a-f0-9]{64})'\r?$/m.exec(installPs1)?.[1],
+    arm64: /^\s*arm64 = '([a-f0-9]{64})'\r?$/m.exec(installPs1)?.[1],
+  };
+  if (windows.some((version) => version !== installer) || !hashes.x64 || !hashes.arm64) {
+    throw new Error(`The Windows installer must download the shipped Node ${installer} with pinned checksums.`);
+  }
+  const nodesource = [...installSh.matchAll(/nodesource\.com\/setup_(\d+)\.x/g)].map((match) => match[1]);
+  const brew = [...installSh.matchAll(/node@(\d+)/g)].map((match) => match[1]);
+  const zypper = /zypper\) pm_install nodejs(\d+) /.exec(installSh)?.[1];
+  const pacman = /pacman\) pm_install nodejs-lts-([a-z]+) /.exec(installSh)?.[1];
+  if (nodesource.length !== 2 || brew.length === 0 || [...nodesource, ...brew, zypper].some((value) => value !== major)
+      || pacman !== binaries.runtimes?.[installer]?.lts?.toLowerCase()) {
+    throw new Error(`The Unix installer must install the shipped Node ${major} line on every package manager.`);
+  }
+  for (const [name, source] of [['installer workflow', installerWorkflow], ['Windows install check', windowsInstallCheck]]) {
+    const folders = [...source.matchAll(/node-v(\d+\.\d+\.\d+)-win-x64/g)].map((match) => match[1]);
+    if (!folders.length || folders.some((version) => version !== installer)) {
+      throw new Error(`The ${name} must expect the shipped Node ${installer} runtime.`);
+    }
+  }
+  return hashes;
+}
+
 export function assertCiContainerContract(source) {
   source = source.replaceAll('\r\n', '\n');
   const stages = source.split(/^FROM /m).slice(1);
@@ -20,7 +86,7 @@ export function assertCiContainerContract(source) {
       || !stages[1].startsWith(`${manifest.containerBase.reference} AS runtime\n`)) {
     throw new Error('Both container stages must use the exact observed current patched Node base digest.');
   }
-  const command = `RUN node scripts/verify-ci-node.mjs ${CI_NODE_PROFILES.current22} --binary-only\n`;
+  const command = `RUN node scripts/verify-ci-node.mjs ${shippedNodeRuntimes().container} --binary-only\n`;
   for (const stage of stages) {
     if (stage.split(command).length !== 2) throw new Error('Each container stage must verify its official Node binary.');
   }

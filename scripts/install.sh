@@ -453,7 +453,7 @@ else
   case "$PM" in
     apt)
       disable_cdrom_apt_source
-      if curl -fsSL https://deb.nodesource.com/setup_22.x | ${SUDO:+$SUDO -E} bash -; then
+      if curl -fsSL https://deb.nodesource.com/setup_24.x | ${SUDO:+$SUDO -E} bash -; then
         $SUDO apt-get install -y nodejs
       else
         warn "NodeSource setup failed; falling back to the distro nodejs package."
@@ -461,12 +461,12 @@ else
       fi
       ;;
     dnf|yum)
-      curl -fsSL https://rpm.nodesource.com/setup_22.x | $SUDO bash -
+      curl -fsSL https://rpm.nodesource.com/setup_24.x | $SUDO bash -
       pm_install nodejs
       ;;
     pacman) pm_install nodejs-lts-krypton npm ;;
     apk)    pm_install nodejs npm ;;
-    zypper) pm_install nodejs22 npm22 || pm_install nodejs npm ;;
+    zypper) pm_install nodejs24 npm24 || pm_install nodejs22 npm22 || pm_install nodejs npm ;;
     brew)
       brew install node@24
       step "Activating the installed Node.js 24 LTS formula on Homebrew's PATH"

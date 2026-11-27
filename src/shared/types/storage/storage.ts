@@ -336,6 +336,14 @@ export interface ExperimentalSettings {
    */
   mcpListCache?: boolean;
   /**
+   * When true, a flow turn saves the conversation fewer times (issue #1408):
+   * step boundaries without tool effects and the successful end of a run are
+   * written with the run's next full save instead of at once. Checkpoints
+   * around tools that may change something are always saved at once. Off by
+   * default; FLUJO_LOW_LATENCY_SAVES=1 turns it on without the setting.
+   */
+  lowLatencySaves?: boolean;
+  /**
    * Make workspace-managed HOME/config/cache directories the default for stdio
    * MCP servers whose per-server runtime-home mode is `inherit`. Opt-in: a
    * missing value is false. An operator process override remains authoritative.

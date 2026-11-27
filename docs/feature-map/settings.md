@@ -24,6 +24,7 @@ One page for everything that shapes the whole installation. Sections are grouped
 - `settings-privacy`: "Privacy & usage": which anonymous usage signals may be shared.
 - `settings-diagnostic-report`: under "Privacy & usage", "Diagnostic report" → "Create report" shows a read-only "Report (read it before you share it)" with "Copy" and "Save as file". It holds versions, counts and error counts only and is never sent (`GET /api/diagnostics/report`). Testers in the user pilot share it by hand (`docs/pilots/product-fit/tester-guide.md`).
 - `settings-experimental`: "Experimental features" with "Enable experimental features", "Enable Harness Lab", "Show models without tool capabilities", "Continue the Antigravity CLI conversation across turns (reduce token usage)" and more switches grouped by topic.
+- `settings-experimental` → "Flow execution": "Fewer saves per turn (faster replies)" (off by default; issue #1408). With it on, a flow turn writes its step boundaries with the next full save; checkpoints around tools that may change something are still saved at once.
 - `settings-tool-result-limit`: under "Experimental features" → "Context management", "Move large tool results to a resource" (off by default) with "Size limit": "Automatic (based on the model)" or "Custom size", the fields "Size limit (KB)" and "Line limit", and "Save limits". It works without "Enable experimental features". Stored per workspace through `GET`/`PATCH /api/tool-result-limit`; see `docs/features/tool-result-size-limit.md`.
 
 ## How to get to it (user POV)

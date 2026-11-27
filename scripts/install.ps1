@@ -437,11 +437,11 @@ function Get-ManagedNodeSpec {
         default { throw "FLUJO requires 64-bit Windows; unsupported architecture: $Architecture" }
     }
     $hashes = @{
-        x64 = 'cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20'
-        arm64 = 'a8b8cd79cbbb3062435f449591d98dd63730bbbf30ce2d7cc3a6376c236cb111'
+        x64 = 'd2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5'
+        arm64 = 'a0c807319fede24c4a0d8f84564c82a619bd313b16b10c007c383c2609e99171'
     }
-    $folder = "node-v22.23.4-win-$arch"
-    return [PSCustomObject]@{ Folder = $folder; Sha256 = $hashes[$arch]; Url = "https://nodejs.org/dist/v22.23.4/$folder.zip" }
+    $folder = "node-v24.22.1-win-$arch"
+    return [PSCustomObject]@{ Folder = $folder; Sha256 = $hashes[$arch]; Url = "https://nodejs.org/dist/v24.22.1/$folder.zip" }
 }
 
 function Install-ManagedNode {
@@ -454,7 +454,7 @@ function Install-ManagedNode {
     New-Item -ItemType Directory -Path $staging | Out-Null
     $archive = Join-Path $staging 'node.zip'
     try {
-        Write-Step 'Downloading verified Node.js 22.23.4 (includes npm)'
+        Write-Step 'Downloading verified Node.js 24.22.1 (includes npm)'
         $download = @{ Uri = $spec.Url; OutFile = $archive; UseBasicParsing = $true }
         if ($installerEnvironment['HTTPS_PROXY']) { $download.Proxy = $installerEnvironment['HTTPS_PROXY'] }
         Invoke-WebRequest @download

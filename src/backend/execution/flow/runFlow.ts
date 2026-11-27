@@ -2816,13 +2816,16 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
         // 2a. Execute one step of the flow. Recovery checkpoints deliberately
         // order journal append before snapshot persistence, so a restart can
-        // always select the latest fully committed safe boundary.
+        // always select the latest fully committed safe boundary. With
+        // low-latency saves on, step boundaries reach disk with the next full
+        // save; tool checkpoints never wait (see RecoveryDurability).
         const checkpointNodeId = await FlowExecutor.peekNextNodeId(sharedState)
           ?? sharedState.currentNodeId;
         await commitRecoveryCheckpoint(storageKey, sharedState, {
           phase: 'node:before',
           nodeId: checkpointNodeId,
           safe: true,
+          durability: 'untilNextSave',
         }, recoveryEmit);
         const assistantMessageIdBeforeStep = [...sharedState.messages].reverse().find(
           message => message.role === 'assistant',
@@ -2842,6 +2845,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             phase: 'node:after',
             nodeId: checkpointNodeId,
             safe: true,
+            durability: 'untilNextSave',
           }, recoveryEmit);
         }
         sharedState.updatedAt = Date.now();
@@ -3694,9 +3698,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         cancellationRequestedAt: sharedState.recovery?.cancellationRequestedAt ?? Date.now(),
       }, terminalRecoveryEmit);
     } else if (finalStatus === 'completed') {
-      await commitRecoveryTransition(storageKey, sharedState, 'completed', {}, terminalRecoveryEmit);
+      // The final save below writes it; markConversationTerminal retries that save.
+      await commitRecoveryTransition(storageKey, sharedState, 'completed', { durability: 'untilNextSave' }, terminalRecoveryEmit);
     } else if (finalStatus === 'capped') {
-      await commitRecoveryTransition(storageKey, sharedState, 'capped', {}, terminalRecoveryEmit);
+      await commitRecoveryTransition(storageKey, sharedState, 'capped', { durability: 'untilNextSave' }, terminalRecoveryEmit);
     } else if (finalStatus === 'awaiting_tool_approval' || finalStatus === 'paused_debug') {
       await commitRecoveryTransition(storageKey, sharedState, 'paused', {}, terminalRecoveryEmit);
     } else if (finalStatus === 'error') {

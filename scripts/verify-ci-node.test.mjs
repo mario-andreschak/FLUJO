@@ -15,7 +15,9 @@ function readHistoricalInput(url, encoding) {
   const bytes = readArchivedFixture(path);
   return encoding ? bytes.toString(encoding) : bytes;
 }
-import { CI_NODE_PROFILES, assertCiContainerContract, verifyCiNode } from './verify-ci-node.mjs';
+import {
+  CI_NODE_PROFILES, assertCiContainerContract, assertShippedInstallerSources, shippedNodeRuntimes, verifyCiNode,
+} from './verify-ci-node.mjs';
 
 function fixture(t) {
   const temp = realpathSync.native(os.tmpdir());
@@ -175,6 +177,38 @@ test('container packaging retains pinned bases, official binary checks and canon
   assert.throws(() => assertCiContainerContract(source.replace(/node:22\.23\.4-bookworm-slim@sha256:[a-f0-9]{64}/g, 'node:22-bookworm-slim')), /exact observed/);
   assert.throws(() => assertCiContainerContract(source.replace('COPY --from=builder /app/bin ./bin', '# omitted canonical guard')), /ship the canonical guard/);
   assert.throws(() => assertCiContainerContract(source.replace('RUN node scripts/verify-ci-node.mjs 22.23.4 --binary-only', '# omitted binary verification')), /verify its official Node binary/);
+});
+
+test('installers and the container ship the declared Node runtimes from signed archives (#1408)', () => {
+  const root = new URL('../', import.meta.url);
+  const read = (file) => readFileSync(new URL(file, root), 'utf8');
+  const manifest = JSON.parse(read('scripts/ci-node-binaries.json'));
+  const sources = {
+    installPs1: read('scripts/install.ps1'),
+    installSh: read('scripts/install.sh'),
+    installerWorkflow: read('.github/workflows/installer.yml'),
+    windowsInstallCheck: read('scripts/verify-windows-install.ps1'),
+  };
+  const hashes = assertShippedInstallerSources(sources);
+  const { installer } = shippedNodeRuntimes();
+  const entry = manifest.runtimes[installer];
+  const checksums = readHistoricalInput(new URL(`v${installer}/SHASUMS256.txt`, new URL('./', new URL(entry.evidence, root))));
+  assert.equal(createHash('sha256').update(checksums).digest('hex'), entry.signedChecksumsSha256);
+  const lines = checksums.toString('utf8').split(/\r?\n/);
+  for (const arch of ['x64', 'arm64']) assert.ok(lines.includes(`${hashes[arch]}  node-v${installer}-win-${arch}.zip`), arch);
+
+  const drift = (file, from, to) => ({ ...sources, [file]: sources[file].replace(from, to) });
+  assert.throws(() => assertShippedInstallerSources(drift('installSh', 'setup_24.x', 'setup_22.x')), /Unix installer/);
+  assert.throws(() => assertShippedInstallerSources(drift('installSh', 'node@24', 'node@22')), /Unix installer/);
+  assert.throws(() => assertShippedInstallerSources(drift('installPs1', `dist/v${installer}/`, 'dist/v22.23.4/')), /Windows installer/);
+  assert.throws(() => assertShippedInstallerSources(drift('installerWorkflow', `node-v${installer}-win-x64`, 'node-v22.23.4-win-x64')), /installer workflow/);
+  const { containerBehind, ...inStep } = manifest.shipped;
+  assert.ok(containerBehind === undefined || containerBehind.length > 0);
+  if (inStep.installer.split('.')[0] !== inStep.container.split('.')[0]) {
+    assert.throws(() => shippedNodeRuntimes({ ...manifest, shipped: inStep }), /containerBehind/);
+  }
+  assert.throws(() => shippedNodeRuntimes({ ...manifest, shipped: { installer: '24.22.1', container: '24.22.1', containerBehind: 'stale note' } }), /Remove "containerBehind"/);
+  assert.throws(() => shippedNodeRuntimes({ ...manifest, shipped: { ...manifest.shipped, installer: '24' } }), /exact supported CI profile/);
 });
 
 test('binary-only measurement cannot turn the historical runtime into container acceptance', () => {

@@ -15,6 +15,7 @@ import type {
 import type { SharedState } from './types';
 import { appendRawForState, flushConversationLog } from './conversationLog';
 import { persistConversationState } from './persistConversationState';
+import { mayDeferConversationSave } from './lowLatencySaves';
 import { parseRetryAfterMs } from './retryAfter';
 import { traceSpan } from './turnTrace';
 
@@ -151,6 +152,20 @@ export function fingerprintRecoveryInput(state: SharedState, nodeId?: string): s
     .digest('hex');
 }
 
+/**
+ * When a recovery record reaches disk.
+ *
+ * - `durable` (default): the event log is flushed and the conversation saved
+ *   before the commit returns.
+ * - `untilNextSave`: with low-latency saves on (see lowLatencySaves.ts) the
+ *   record stays in memory and in the not yet flushed event log, and the next
+ *   full save of the run writes it. Only a safe step boundary without tool
+ *   effects and a successful end of a run accept it, because the run's final
+ *   save always follows them. Every other commit ignores it and saves at once,
+ *   so a tool's side effect is always on disk before the next step acts on it.
+ */
+export type RecoveryDurability = 'durable' | 'untilNextSave';
+
 type RecoveryPublicationOperation = <T>(operation: () => T | Promise<T>) => Promise<T>;
 type RecoveryEmitFn = (event: RawExecutionEvent) => void | Promise<void>;
 async function persistRecoveryEvent(
@@ -159,17 +174,20 @@ async function persistRecoveryEvent(
   raw: RawExecutionEvent,
   emit?: RecoveryEmitFn,
   publication: RecoveryPublicationOperation = async operation => operation(),
+  untilNextSave = false,
 ): Promise<void> {
   return traceSpan(raw.type, async () => {
     if (emit) {
       // Terminal cleanup may supply an async admission-aware emitter. Await its
       // acceptance before flushing, then retry the snapshot independently.
       await emit(raw);
+      if (untilNextSave) return;
       if (state.conversationId && !state.ephemeral) {
         await flushConversationLog(state.conversationId);
       }
     } else {
       await publication(() => appendRawForState(state, [raw]));
+      if (untilNextSave) return;
     }
     await publication(() => persistConversationState(storageKey, state));
   });
@@ -185,6 +203,7 @@ export async function commitRecoveryCheckpoint(
     safe: boolean;
     effectStatus?: RecoveryCheckpointRef['effectStatus'];
     tools?: RecoveryToolEffect[];
+    durability?: RecoveryDurability;
   },
   emit?: EmitFn,
 ): Promise<RecoveryCheckpointRef | undefined> {
@@ -215,7 +234,10 @@ export async function commitRecoveryCheckpoint(
     recovery.sideEffectWarning = UNKNOWN_TOOL_EFFECT_WARNING;
   }
   state.recovery = recovery;
-  await persistRecoveryEvent(storageKey, state, { type: 'recovery:checkpoint', checkpoint }, emit);
+  const untilNextSave = input.durability === 'untilNextSave' && checkpoint.safe
+    && checkpoint.effectStatus === 'none' && !checkpoint.tools?.length
+    && await mayDeferConversationSave(state);
+  await persistRecoveryEvent(storageKey, state, { type: 'recovery:checkpoint', checkpoint }, emit, undefined, untilNextSave);
   return checkpoint;
 }
 
@@ -294,12 +316,16 @@ export async function commitRecoveryTransition(
   storageKey: StorageKey,
   state: SharedState,
   classification: RecoveryClassification,
-  options: Parameters<typeof setRecoveryTransition>[2] = {},
+  options: Parameters<typeof setRecoveryTransition>[2] & { durability?: RecoveryDurability } = {},
   emit?: RecoveryEmitFn,
   publication?: RecoveryPublicationOperation,
 ): Promise<RecoveryRecord> {
   const recovery = setRecoveryTransition(state, classification, options);
-  await persistRecoveryEvent(storageKey, state, { type: 'recovery:transition', recovery: { ...recovery } }, emit, publication);
+  const untilNextSave = options.durability === 'untilNextSave'
+    && (classification === 'completed' || classification === 'capped')
+    && !recovery.manualActionRequired
+    && await mayDeferConversationSave(state);
+  await persistRecoveryEvent(storageKey, state, { type: 'recovery:transition', recovery: { ...recovery } }, emit, publication, untilNextSave);
   return recovery;
 }
 
