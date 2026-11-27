@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
-import { assertFullWorkflowContract, assertWorkflowContract } from './workflow-contract.mjs';
+import { assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertWorkflowContract } from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
 const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file) && file !== 'verify.yml')
@@ -126,6 +126,20 @@ for (const [label, change] of [
     const files = readWorkflows();
     change(files);
     assert.throws(() => assertFullWorkflowContract(files));
+  });
+}
+
+for (const [label, change] of [
+  ['can push code', (sweep) => { sweep.jobs.sweep.permissions.contents = 'write'; }],
+  ['can open pull requests', (sweep) => { sweep.jobs.report.permissions['pull-requests'] = 'write'; }],
+  ['has a job without its own permissions', (sweep) => { delete sweep.jobs.sweep.permissions; }],
+  ['runs FLUJO where it can file issues', (sweep) => { sweep.jobs.report.steps.push({ run: 'npm ci --include=dev' }); }],
+]) {
+  test(`the release sweep stays report-only: refuses a sweep that ${label}`, () => {
+    const files = readWorkflows();
+    assertReleaseSweepReportsOnly(files['release-sweep.yml']);
+    change(files['release-sweep.yml']);
+    assert.throws(() => assertFullWorkflowContract(files), /release-sweep\.yml\/(?:sweep|report) /);
   });
 }
 

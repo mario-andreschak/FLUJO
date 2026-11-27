@@ -241,8 +241,29 @@ export function assertPackagedAcceptance(workflows, { mainIntegration = false } 
   }
 }
 
+/**
+ * The release sweep only reports (docs/release-sweep.md): its jobs may file issues but never push code,
+ * open pull requests or publish, and the job that can file issues never installs or runs FLUJO.
+ */
+export function assertReleaseSweepReportsOnly(workflow) {
+  if (!workflow) return;
+  for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
+    const permissions = job.permissions;
+    if (!permissions || typeof permissions !== 'object'
+        || Object.entries(permissions).some(([name, value]) => value === 'write' && name !== 'issues')) {
+      throw new Error(`release-sweep.yml/${id} must declare its own permissions and may write nothing but issues: `
+        + 'the sweep reports problems; it never pushes code, opens pull requests or publishes.');
+    }
+    if (permissions.issues === 'write' && (job.steps ?? []).some((step) => /\bnpm (?:ci|install)\b|\bnpx\b|release-sweep\/run\.mjs/.test(step.run ?? ''))) {
+      throw new Error(`release-sweep.yml/${id} can file issues, so it must not install or run FLUJO. `
+        + 'Run the sweep in a read-only job and pass its report on as an artifact.');
+    }
+  }
+}
+
 export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
+  assertReleaseSweepReportsOnly(workflows['release-sweep.yml']);
   assertReleaseVerificationGates(workflows);
   assertPackagedAcceptance(workflows, { mainIntegration });
   const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];

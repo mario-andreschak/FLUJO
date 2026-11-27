@@ -81,6 +81,11 @@ journey. It brings its own free stub model, so the reply steps can pass:
 npm run journey:first-use                       # add --viewport 390x844 for the phone layout
 ```
 
+For a broad "did anything break" pass over every page, run the release sweep
+(`npm run release:sweep`, `docs/release-sweep.md`): it walks every feature map
+step it can run on the launched instance and writes one report with proof of
+each failure.
+
 Step kinds are `goto`, `click`, `fill`, `press`, `wait-for`, `expect-text`,
 `drop-file`, `choose-file`, `shot` and `aria`. `click`, `fill` and `wait-for` find visible elements by
 ARIA role and English name (part of the name is enough). `drop-file` drags the

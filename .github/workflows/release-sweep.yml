@@ -1,0 +1,131 @@
+name: Release sweep
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Release sweep {0}', inputs.version) || format('Release sweep after {0}', github.event.workflow_run.display_title) }}
+
+# After each npm release, use the released FLUJO like a person would, page by page from the feature
+# map, and report what breaks. Report only: it never changes code or opens pull requests.
+# Off until the RELEASE_SWEEP repository variable is set; see docs/release-sweep.md.
+
+on:
+  workflow_run:
+    workflows: [Publish npm release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published FLUJO version to sweep (x.y.z)
+        type: string
+        required: true
+      file_issues:
+        description: File GitHub issues for the problems found (otherwise only plan them)
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-sweep
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || ((vars.RELEASE_SWEEP == 'report' || vars.RELEASE_SWEEP == 'file-issues')
+          && github.event.workflow_run.conclusion == 'success'
+          && startsWith(github.event.workflow_run.display_title, 'Release FLUJO '))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      code: ${{ steps.sweep.outputs.code }}
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - name: Pick the released version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_TITLE: ${{ github.event.workflow_run.display_title }}
+        run: |
+          version="${INPUT_VERSION:-$(sed -nE 's/^Release FLUJO ([0-9]+\.[0-9]+\.[0-9]+) at .*/\1/p' <<<"$RUN_TITLE")}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: npm ci --include=dev
+      - run: npx playwright install --with-deps chromium
+      - name: Use the feature map of the released version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          map="$GITHUB_WORKSPACE/docs/feature-map"
+          if git cat-file -e "v$VERSION:docs/feature-map/README.md" 2>/dev/null; then
+            mkdir -p "$RUNNER_TEMP/release-map"
+            git archive "v$VERSION" docs/feature-map | tar -x -C "$RUNNER_TEMP/release-map"
+            map="$RUNNER_TEMP/release-map/docs/feature-map"
+          fi
+          echo "SWEEP_MAP=$map" >> "$GITHUB_ENV"
+      - name: Walk the feature map on the released version
+        id: sweep
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set +e
+          node scripts/release-sweep/run.mjs --release "$VERSION" --map "$SWEEP_MAP" --out "$RUNNER_TEMP/release-sweep" --startup-timeout 300
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          test -f "$RUNNER_TEMP/release-sweep/report.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: release-sweep-${{ steps.version.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-sweep/
+          if-no-files-found: error
+          retention-days: 30
+
+  report:
+    needs: sweep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-sweep-${{ needs.sweep.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-sweep
+      - name: Plan or file one issue per problem
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILE_ISSUES: ${{ (github.event_name == 'workflow_dispatch' && inputs.file_issues) || (github.event_name == 'workflow_run' && vars.RELEASE_SWEEP == 'file-issues') }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          file_flag=()
+          if [ "$FILE_ISSUES" = "true" ]; then file_flag=(--file); fi
+          node scripts/release-sweep/report-issues.mjs --report "$RUNNER_TEMP/release-sweep/report.json" \
+            --repo "$GITHUB_REPOSITORY" --run-url "$RUN_URL" "${file_flag[@]}"
+          cat "$RUNNER_TEMP/release-sweep/report.md" "$RUNNER_TEMP/release-sweep/issues-plan.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Show the run as failed when the sweep found problems
+        env:
+          SWEEP_CODE: ${{ needs.sweep.outputs.code }}
+        run: test "$SWEEP_CODE" = 0

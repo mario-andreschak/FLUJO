@@ -150,7 +150,7 @@ export function readState() {
   return readJson(stateFile());
 }
 
-function isAlive(pid) {
+export function isAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
@@ -159,7 +159,7 @@ function isAlive(pid) {
   }
 }
 
-async function freePort() {
+export async function freePort() {
   for (;;) {
     const port = await new Promise((resolve, reject) => {
       const server = net.createServer();
@@ -174,7 +174,7 @@ async function freePort() {
 }
 
 // Dev mode drops pages it has not served for a while and compiles them again on the next visit.
-async function probe(baseUrl, apiTimeoutMs = 5_000) {
+export async function probe(baseUrl, apiTimeoutMs = 5_000) {
   const result = { api: false, page: false };
   try {
     const response = await fetch(new URL('/api/cwd', baseUrl), { redirect: 'error', signal: AbortSignal.timeout(apiTimeoutMs) });
@@ -187,7 +187,7 @@ async function probe(baseUrl, apiTimeoutMs = 5_000) {
   return result;
 }
 
-function tail(file, lines = 25) {
+export function tail(file, lines = 25) {
   try {
     return readFileSync(file, 'utf8').split(/\r?\n/).slice(-lines).join('\n');
   } catch {
