@@ -31,6 +31,34 @@ explains how to launch a throwaway FLUJO and drive these steps.
   POV), Driving it with flujo-drive, Gotchas. `npm run check:feature-map`
   enforces this, and that every page in `src/app` has exactly one entry.
 
+## Steps the release sweep can run
+
+The release sweep (`npm run release:sweep`, see `docs/release-sweep.md`) runs
+every "Driving it" bullet written like this, page by page in the order of the
+feature list below, each in a fresh browser session on one throwaway instance.
+Other bullets are listed as manual in its report. `npm run check:feature-map`
+fails when an entry has no bullet the sweep can run.
+
+- A command: `` `node scripts/flujo-drive.mjs open <route>` `` (also `text`,
+  `aria`, `shot`), `click <route> --role ROLE --name "NAME"` or
+  `fill <route> --label "LABEL" --value "TEXT"`.
+- A steps list: `` `steps /route` `` (or `` `steps` on `/route` ``, or
+  `` `steps` `` alone for the entry's first route), then `:` and items split by
+  `,` or `;`, ending at the first full stop. Items: `click <role> "Name"` (role
+  is button, link, tab, radio, switch, checkbox, menu item, option or
+  combobox), `fill "Label"` with an optional `` with `value` `` (without it the
+  sweep types "Release sweep check"), `expect-text "Text"`, `press Enter`, and
+  `shot` or `aria`, which the sweep skips because it saves its own proof. A
+  `steps` command with `--file` puts the list after "The steps:".
+- `click switch "X"` and `click checkbox "X"` mean "make sure it is on", so
+  walking several entries in a row never turns it off again.
+- After `→`, a leading `heading "X"`, `dialog "X"` or `"quoted text"` is
+  checked. Put conditional alternatives in parentheses after it.
+- `(needs …)` right after the bold label, or a `<placeholder>` in a route or
+  value, marks a bullet a fresh instance cannot run.
+- The sweep never presses "Send", "Update now", "Delete permanently", the
+  sign-in or encryption password switches, or "Public" / "Local Network".
+
 ## First-use journey
 
 `npm run journey:first-use` walks the path a new user takes, in one browser

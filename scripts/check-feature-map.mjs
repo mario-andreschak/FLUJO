@@ -3,6 +3,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseEntryChecks } from './release-sweep/steps.mjs';
 
 export const MAP_DIR = 'docs/feature-map';
 export const SECTIONS = ['Sub-features', 'How to get to it (user POV)', 'Driving it with flujo-drive', 'Gotchas'];
@@ -54,6 +55,14 @@ export function checkFeatureMap(routes, entries, index) {
   return problems;
 }
 
+/** Every entry keeps at least one step the release sweep can run, so the sweep never skips a page without anyone noticing. */
+export function checkSweepCoverage(entries) {
+  return entries
+    .filter(({ name, content }) => !parseEntryChecks(name, content).checks.some((check) => check.status === 'auto'))
+    .map(({ name }) => `${MAP_DIR}/${name}: the release sweep cannot run any of its driving steps. Write at least one as `
+      + `\`node scripts/flujo-drive.mjs open <route>\` (see "Steps the release sweep can run" in ${MAP_DIR}/README.md).`);
+}
+
 export function findPages(directory, prefix = '') {
   const found = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -69,7 +78,7 @@ export function run({ cwd = process.cwd(), log = console.log, error = console.er
   const mapDir = path.join(cwd, MAP_DIR);
   const names = readdirSync(mapDir).filter((name) => name.endsWith('.md') && name !== 'README.md').sort();
   const entries = names.map((name) => ({ name, content: readFileSync(path.join(mapDir, name), 'utf8') }));
-  const problems = checkFeatureMap(routes, entries, readFileSync(path.join(mapDir, 'README.md'), 'utf8'));
+  const problems = [...checkFeatureMap(routes, entries, readFileSync(path.join(mapDir, 'README.md'), 'utf8')), ...checkSweepCoverage(entries)];
   if (problems.length) {
     error(['The feature map is out of step with the app:', ...problems.map((problem) => `  ${problem}`)].join('\n'));
     return 1;
