@@ -13,7 +13,7 @@ import {
 import { FEATURES } from '@/config/features';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { isLocalRequest } from '@/utils/http/localRequest';
-import { resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
+import { isOwnerPolicyConfigured, resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { executionExtensionAdapter, hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
@@ -34,10 +34,22 @@ function ordinaryTaskProfile(): boolean {
     && getAuthorizedBundledFlujoWorkloadToolNames() === undefined;
 }
 
-async function admitted(auth: OwnerRequestAuthorization, workspace: string): Promise<void> {
-  if (workspace !== getCurrentWorkspace() || await auth.recheck()) {
+async function admitted(auth: OwnerRequestAuthorization | undefined, workspace: string): Promise<void> {
+  if (workspace !== getCurrentWorkspace() || await auth?.recheck()) {
     throw new ServerTaskError('TASK_ACCESS_DENIED');
   }
+}
+
+/**
+ * With owner sign-in configured, every modern request needs the owner bearer.
+ * Without it the route already admitted this local request exactly as it admits
+ * a legacy one, so ordinary tools are served and Tasks, which belong to an
+ * owner, are not offered.
+ */
+async function resolveModernOwner(request: Request): Promise<{ auth?: OwnerRequestAuthorization; denied?: Response }> {
+  const resolved = await resolveOwnerRequest(request, OWNER_SCOPES, { requireBearer: true });
+  if (resolved.ok) return { auth: resolved.authorization };
+  return isOwnerPolicyConfigured() ? { denied: resolved.response } : {};
 }
 
 function taskCapability(ctx: ServerContext): boolean {
@@ -75,16 +87,16 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
   if (!isLocalRequest(request.headers.get('host'), request.headers.get('origin'))) {
     return Response.json({ error: 'Forbidden.' }, { status: 403 });
   }
-  const resolved = await resolveOwnerRequest(request, OWNER_SCOPES, { requireBearer: true });
-  if (!resolved.ok) return resolved.response;
-  const auth = resolved.authorization;
+  const { auth, denied } = await resolveModernOwner(request);
+  if (denied) return denied;
   const workspace = getCurrentWorkspace();
   const assertAuthorized = () => admitted(auth, workspace);
-  const enabled = FEATURES.ENABLE_MCP_TASKS_SERVER === true && ordinaryTaskProfile();
-  const assertTasks = async (ctx: ServerContext) => {
+  const enabled = auth !== undefined && FEATURES.ENABLE_MCP_TASKS_SERVER === true && ordinaryTaskProfile();
+  const assertTasks = async (ctx: ServerContext): Promise<OwnerRequestAuthorization> => {
     await assertAuthorized();
-    if (!enabled || FEATURES.ENABLE_MCP_TASKS_SERVER !== true || !ordinaryTaskProfile()
+    if (!auth || !enabled || FEATURES.ENABLE_MCP_TASKS_SERVER !== true || !ordinaryTaskProfile()
         || !taskCapability(ctx)) throw new ServerTaskError('TASK_ACCESS_DENIED');
+    return auth;
   };
 
   const handler = createMcpHandler(async () => {
@@ -104,9 +116,12 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
       return result.value;
     });
 
-    // Public fallback is restricted to tools/call. A registered core handler
-    // validates only synchronous results and cannot return extension task types.
-    server.fallbackRequestHandler = async (rpc, ctx): Promise<Result> => {
+    // tools/call goes through the fallback because a registered core handler
+    // validates only synchronous results and cannot return extension task
+    // types. Other requests get no fallback, so an unknown method keeps the
+    // SDK's 404. The SDK rejects a routing header that disagrees with the body.
+    const callsTool = request.headers.get('mcp-method')?.trim() === 'tools/call';
+    if (callsTool) server.fallbackRequestHandler = async (rpc, ctx): Promise<Result> => {
       if (rpc.method !== 'tools/call') throw new ProtocolError(ProtocolErrorCode.MethodNotFound, 'Method not found');
       await assertAuthorized();
       const parsed = await specTypeSchemas.CallToolRequestParams['~standard'].validate(rpc.params);
@@ -126,12 +141,12 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
       const knownFlow = listed.tools.some(tool => tool.name === name);
       if (enabled && knownFlow && taskCapability(ctx)) {
         try {
-          await assertTasks(ctx);
+          const owner = await assertTasks(ctx);
           if (args.confirm === true && !formCapability(ctx)) return {
             resultType: 'complete', isError: true,
             content: [{ type: 'text', text: 'Confirmation requires negotiated form elicitation.' }],
           };
-          const task = await serverTaskStore.create(auth, workspace, {
+          const task = await serverTaskStore.create(owner, workspace, {
             run: async (execution) => {
               const assertTaskAuthorized = async () => {
                 await execution.assertAuthorized();
@@ -168,8 +183,8 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
     if (enabled) {
       server.setRequestHandler('tasks/get', { params: GetTaskRequestV2Schema.shape.params }, async (params, ctx) => {
         try {
-          await assertTasks(ctx);
-          const task = await serverTaskStore.get(auth, workspace, params.taskId);
+          const owner = await assertTasks(ctx);
+          const task = await serverTaskStore.get(owner, workspace, params.taskId);
           await assertTasks(ctx);
           if (task.status === 'input_required' && task.inputRequests && !formCapability(ctx)) {
             throw new ProtocolError(ProtocolErrorCode.MissingRequiredClientCapability,
@@ -184,22 +199,22 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
         params: UpdateTaskRequestV2Schema.shape.params.omit({ inputResponses: true }),
       }, async (params, ctx) => {
         try {
-          await assertTasks(ctx);
+          const owner = await assertTasks(ctx);
           const input = UpdateTaskRequestV2Schema.shape.params.safeParse({
             ...params, inputResponses: ctx.mcpReq.inputResponses,
           });
           if (!input.success || ctx.mcpReq.droppedInputResponseKeys?.length) {
             throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Invalid task input.');
           }
-          const result = await serverTaskStore.update(auth, workspace, input.data.taskId, input.data.inputResponses);
+          const result = await serverTaskStore.update(owner, workspace, input.data.taskId, input.data.inputResponses);
           await assertTasks(ctx);
           return UpdateTaskResultV2Schema.parse(result);
         } catch (error) { return taskFailure(error); }
       });
       server.setRequestHandler('tasks/cancel', { params: CancelTaskRequestV2Schema.shape.params }, async (params, ctx) => {
         try {
-          await assertTasks(ctx);
-          const result = await serverTaskStore.cancel(auth, workspace, params.taskId);
+          const owner = await assertTasks(ctx);
+          const result = await serverTaskStore.cancel(owner, workspace, params.taskId);
           await assertTasks(ctx);
           return CancelTaskResultV2Schema.parse(result);
         } catch (error) { return taskFailure(error); }
@@ -210,8 +225,8 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
   try {
     await assertAuthorized();
     const response = await handler.fetch(request);
-    const denied = await auth.recheck();
-    if (denied) { await response.body?.cancel().catch(() => undefined); return denied; }
+    const revoked = await auth?.recheck();
+    if (revoked) { await response.body?.cancel().catch(() => undefined); return revoked; }
     return response;
   } finally {
     // Per-request SDK state is disposable. Durable jobs own separate signals.

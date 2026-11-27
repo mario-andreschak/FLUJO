@@ -98,9 +98,11 @@ test.each(['v1', 'beta'])('%s factory selects only the isolated attach command a
   expect(close).toHaveBeenCalled();
 });
 
-test('beta client uses documented legacy mode instead of cloning a disposable sibling for the same CID', () => {
+test('beta client probes server/discover inside the same container instead of cloning a sibling for the CID', async () => {
   const client = createNewBetaClient(config);
-  expect((client as unknown as { _versionNegotiation: unknown })._versionNegotiation).toEqual({ mode: 'legacy' });
+  expect((client as unknown as { _versionNegotiation: unknown })._versionNegotiation).toEqual({ mode: 'auto', probe: { timeoutMs: 20_000 } });
+  const transport = await createBetaTransport(config);
+  expect(Object.prototype.hasOwnProperty.call(Object.getPrototypeOf(transport), '_dispose')).toBe(false);
 });
 
 test.each(['v1', 'beta'])('%s valid isolated factory ignores the broker option without requiring host approval', async era => {

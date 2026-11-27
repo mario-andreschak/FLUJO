@@ -341,17 +341,25 @@ export async function callTool(
       const serverIdentity = persist
         ? dispatchIdentity ?? await resolveServerIdentity(serverName)
         : "unnegotiated";
-      const assertCurrent = async () => {
-        await assertMcpIsolationDispatch(client, serverName);
+      const assertCurrent = async (current: Client) => {
+        await assertMcpIsolationDispatch(current, serverName);
         await assertBundledFlujoWorkloadEffectCurrent();
         if (persist) {
           const { mcpService } = await import('@/backend/services/mcp');
-          if (serverIdentity === 'unknown' || mcpService.getClient(serverName) !== client || await resolveServerIdentity(serverName) !== serverIdentity) throw new Error('MCP task server connection identity changed');
+          if (serverIdentity === 'unknown' || mcpService.getClient(serverName) !== current || await resolveServerIdentity(serverName) !== serverIdentity) throw new Error('MCP task server connection identity changed');
         }
         if (originatingInputContext && getElicitationContext(serverName) !== originatingInputContext) throw new Error('MCP task originating run is no longer current');
       };
+      // Only a durably recorded task with a known server identity may be
+      // followed onto a replacement connection of that same server.
+      const reacquireClient = persist && serverIdentity !== 'unknown' ? async () => {
+        const { mcpService } = await import('@/backend/services/mcp');
+        const current = mcpService.getClient(serverName);
+        return current && await resolveServerIdentity(serverName) === serverIdentity ? current : undefined;
+      } : undefined;
       const taskResult = await runRemoteTaskLifecycle({
         client,
+        ...(reacquireClient ? { reacquireClient } : {}),
         serverName,
         serverIdentity,
         toolName,

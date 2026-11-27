@@ -208,6 +208,7 @@ import {
 } from "./skills";
 import { getApprovedMcpSkill } from "./skillApprovalRegistry";
 import { resolveRuntimeHomeIsolation } from "./runtimeHomeIsolation";
+import { noteStdioConnectFailure, takeClassicHandshakeRetry } from "./stdioNegotiation";
 import {
   MCPResource,
   MCPResourceTemplate,
@@ -331,6 +332,7 @@ type ToolArgs = Record<string, unknown>;
 
 // Create a logger instance for this file
 const log = createLogger("backend/services/mcp/index");
+const RETRY_WITH_CLASSIC_HANDSHAKE = Symbol("retry with the classic MCP handshake");
 
 function transportForHostInspection(transport: unknown): unknown {
   let current = transport;
@@ -975,11 +977,15 @@ export class MCPService {
       const previousClient = this.getClient(serverName);
       // Keep the legacy instance-local map populated: existing tests and
       // status/diagnostic call sites still read it.
-      const attempt = this.connectServerInternal(configOrName, executionExtensionContext).finally(() => {
-        this.inFlightConnects.delete(serverName);
-      });
-      this.inFlightConnects.set(serverName, attempt);
-      const result = await attempt;
+      const runAttempt = () => {
+        const attempt = this.connectServerInternal(configOrName, executionExtensionContext).finally(() => {
+          this.inFlightConnects.delete(serverName);
+        });
+        this.inFlightConnects.set(serverName, attempt);
+        return attempt;
+      };
+      let result = await runAttempt();
+      if (!result.success && takeClassicHandshakeRetry(serverName)) result = await runAttempt();
       if (result.success) {
         // Revalidation still checks current authority/configuration, but a
         // healthy reused client must not invalidate another caller's lease.
@@ -1564,6 +1570,7 @@ export class MCPService {
       // failed. Never leave that browser route pointing at a dead/reused port.
       if (config.transport === 'stdio') {
         revokeMcpAppRuntimeBrokerForServer(config.name);
+        noteStdioConnectFailure(config, error);
       }
       const approvalFailure = executionApprovalFailure(error);
       if (approvalFailure) {
@@ -1702,6 +1709,17 @@ export class MCPService {
     onOutput?: (event: TestConnectionEvent) => void,
     options?: { storedName?: string },
   ): Promise<MCPServiceResponse> {
+    const result = await this.testConnectionAttempt(config, onOutput, options);
+    if (result !== RETRY_WITH_CLASSIC_HANDSHAKE) return result;
+    const retried = await this.testConnectionAttempt(config, onOutput, options);
+    return retried === RETRY_WITH_CLASSIC_HANDSHAKE ? { success: false, error: "MCP server quit during startup." } : retried;
+  }
+
+  private async testConnectionAttempt(
+    config: MCPServerConfig,
+    onOutput?: (event: TestConnectionEvent) => void,
+    options?: { storedName?: string },
+  ): Promise<MCPServiceResponse | typeof RETRY_WITH_CLASSIC_HANDSHAKE> {
     if (!isMcpTransport(config.transport)) {
       return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
     }
@@ -1896,6 +1914,10 @@ export class MCPService {
     } catch (error) {
       if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
       finishDiagnostics();
+      if (config.transport === "stdio") {
+        noteStdioConnectFailure(config, error);
+        if (takeClassicHandshakeRetry(config.name)) return RETRY_WITH_CLASSIC_HANDSHAKE;
+      }
       const approvalFailure = executionApprovalFailure(error);
       if (approvalFailure) {
         emit({ type: 'result', success: false, error: approvalFailure.error });

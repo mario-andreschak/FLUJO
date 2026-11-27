@@ -7,10 +7,12 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
  * mcp-inspector, ...). One downstream server per path → no name collisions, so
  * tool names pass through unchanged.
  *
- * Inbound transport: the official Web-standard streamable HTTP transport in
+ * Inbound transport: the official Web-standard streamable HTTP transports in
  * STATELESS mode (fresh Server+transport per request; the SDK does all protocol
- * work directly with Next.js's Web `Request`/`Response`). Forwarding lives in
- * `proxyForward.ts` so it stays transport-agnostic and testable.
+ * work directly with Next.js's Web `Request`/`Response`). Both generations are
+ * served: 2026-07-28 requests go to `proxyModernServer.ts`, older clients keep
+ * the v1 server below. Forwarding lives in `proxyForward.ts` so it stays
+ * transport-agnostic and testable.
  *
  * Posture (single-user/localhost): a localhost guard blocks the DNS-rebinding
  * vector; no bearer token in v1 (see the design plan / future security pass).
@@ -44,6 +46,9 @@ import {
   type McpSkillsExtensionCapability,
 } from '@/shared/types/mcp';
 import { handleStatelessMcpRequest } from '@/backend/services/mcp/statelessHttpTransport';
+import { handleModernProxyMcpRequest } from '@/backend/services/mcp/proxyModernServer';
+import { classifyMcpHttpRequest } from '@/backend/services/mcp/mcpEraRouting';
+import { isMcpBetaProtocolEnabled } from '@/backend/services/mcp/betaClient';
 import { createLogger } from '@/utils/logger';
 import { MCP_APPS_EXTENSION_ID } from '@/backend/services/mcp/appsProtocol';
 
@@ -60,8 +65,8 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
-// This endpoint serves the legacy sessionless protocol. Modern routing headers
-// are mandatory on modern HTTP; ignoring them here does not confer modern support.
+// Older clients get this sessionless v1 server; 2026-07-28 requests are served
+// by proxyModernServer.ts with mandatory routing headers.
 function buildProxyServer(
   serverName: string,
   skillsCapability?: McpSkillsExtensionCapability,
@@ -139,8 +144,21 @@ async function handle(request: Request, serverName: string): Promise<Response> {
     return jsonError(404, `MCP server '${serverName}' is not found or not exposed.`);
   }
 
+  const modernEnabled = await isMcpBetaProtocolEnabled();
+  const era = modernEnabled ? await classifyMcpHttpRequest(request) : 'legacy';
+  if (era === 'too-large') return jsonError(413, 'MCP request body exceeds the limit.');
+
   // One freshly authorized connection supplies both negotiated extensions.
-  const { skillsCapability, appsCapability } = await getProxyCapabilities(serverName);
+  const capabilities = await getProxyCapabilities(serverName);
+  if (era === 'modern') {
+    try {
+      return await handleModernProxyMcpRequest(request, serverName, PROXY_VERSION, capabilities);
+    } catch (error) {
+      log.error('Modern proxy request failed', { serverName, error });
+      return jsonError(500, 'Internal proxy error.');
+    }
+  }
+  const { skillsCapability, appsCapability } = capabilities;
   const server = buildProxyServer(serverName, skillsCapability, appsCapability, request.signal);
 
   try {

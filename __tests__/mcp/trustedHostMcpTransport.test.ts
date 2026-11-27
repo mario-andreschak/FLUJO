@@ -224,9 +224,11 @@ test('roots disclose only approved literal entries and reject newly approved sta
   expect(resolveGlobalVars).not.toHaveBeenCalled();
 });
 
-test('beta local client refuses automatic sibling-process negotiation', () => {
+test('beta local client negotiates on its own process, never on an untracked sibling', async () => {
   const client = createNewBetaClient(config);
-  expect((client as unknown as { _versionNegotiation: unknown })._versionNegotiation).toEqual({ mode: 'legacy' });
+  expect((client as unknown as { _versionNegotiation: unknown })._versionNegotiation).toEqual({ mode: 'auto', probe: { timeoutMs: 20_000 } });
+  const transport = await createBetaTransport(config);
+  expect(Object.prototype.hasOwnProperty.call(Object.getPrototypeOf(transport), '_dispose')).toBe(false);
 });
 
 test('natural close preserves SDK callbacks and refuses reuse of the retired generation', async () => {

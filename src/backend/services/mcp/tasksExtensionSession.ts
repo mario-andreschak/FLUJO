@@ -194,6 +194,11 @@ class RawTasksChannel {
         options.signal?.removeEventListener('abort', onAbort);
         // Retire a per-request HTTP stream as soon as its answer is observed.
         controller.abort();
+        // stdio has no per-request stream to close, so an abandoned request is
+        // cancelled by notice (2026-07-28 basic/transports/stdio, Cancellation).
+        if (!response && !this.retired && 'pid' in this.transport) {
+          void this.client.notification({ method: 'notifications/cancelled', params: { requestId: id } }).catch(() => {});
+        }
         if (!response && !this.retired && request.method === 'tools/call') {
           for (const [key, expires] of this.lateCreations) if (expires <= Date.now()) this.lateCreations.delete(key);
           while (this.lateCreations.size >= 32) this.lateCreations.delete(this.lateCreations.keys().next().value!);

@@ -18,6 +18,7 @@ import {
 import { StdioClientTransport as BetaStdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { z } from "zod";
 import { createLogger } from "@/utils/logger";
+import { InPlaceProbeStdioClientTransport, stdioVersionNegotiation } from "./stdioNegotiation";
 import { assertMcpTransport } from './transportAdmission';
 import { loadItem } from "@/utils/storage/backend";
 import { StorageKey } from "@/shared/types/storage";
@@ -65,14 +66,14 @@ import {
 // ---------------------------------------------------------------------------
 // Split SDK MCP protocol support (spec revision 2026-07-28).
 //
-// When the `mcpBetaProtocol` experimental setting is on, connections are built
-// on `@modelcontextprotocol/client` (the stable v2 SDK, pinned in package.json)
-// instead of `@modelcontextprotocol/sdk` v1. The v2 client is created with
-// `versionNegotiation: { mode: 'auto' }`: it probes each server with
-// `server/discover` and speaks the new stateless 2026-07-28 protocol when the
-// server supports it, transparently falling back to the classic `initialize`
-// handshake for every existing (2025-era) server — so turning the toggle on
-// must never break a working server.
+// By default connections are built on `@modelcontextprotocol/client` (the
+// stable v2 SDK, pinned in package.json) instead of `@modelcontextprotocol/sdk`
+// v1. The v2 client asks each server `server/discover` and speaks the stateless
+// 2026-07-28 protocol when the server supports it, falling back to the classic
+// `initialize` handshake for every older server. Remote servers use the SDK's
+// `auto` mode; stdio servers are asked on their own process (stdioNegotiation.ts).
+// The owner can force the classic handshake everywhere in Settings or with
+// FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy.
 //
 // The v2 Client is method-compatible with every call FLUJO makes on a v1
 // Client (connect/listTools/callTool/listResources/readResource/
@@ -88,23 +89,25 @@ import {
 const log = createLogger("backend/services/mcp/betaClient");
 
 /**
- * Read the experimental `mcpBetaProtocol` flag from the persisted Settings
- * blob. Mirrors ModelHandler.isClaudeSessionResumeEnabled: in-process backend
- * read, best-effort — any failure (or a missing value) reads as disabled, so
- * connections keep the proven v1 SDK path.
+ * Whether connections negotiate the 2026-07-28 protocol (with the classic
+ * handshake as fallback). On unless the owner switched "Modern MCP protocol"
+ * off in Settings (`experimental.mcpBetaProtocol === false`) or set
+ * FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy. A settings read failure keeps the
+ * default, because negotiation always falls back for older servers.
  */
 export async function isMcpBetaProtocolEnabled(): Promise<boolean> {
+  if (process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION?.trim().toLowerCase() === "legacy") return false;
   try {
     const settings = await loadItem<Settings | undefined>(
       StorageKey.SPEECH_SETTINGS,
       undefined,
     );
-    return Boolean(settings?.experimental?.mcpBetaProtocol);
+    return settings?.experimental?.mcpBetaProtocol !== false;
   } catch (err) {
-    log.warn("Failed to read mcpBetaProtocol setting; defaulting to disabled", {
+    log.warn("Failed to read the MCP protocol setting; negotiating the modern protocol", {
       err,
     });
-    return false;
+    return true;
   }
 }
 
@@ -173,14 +176,8 @@ export function createNewBetaClient(
         prompts: { autoRefresh: false, onChanged: () => {} },
         resources: { autoRefresh: false, onChanged: () => onResourcesChanged?.() },
       },
-      // 'auto': probe for a 2026-07-28 server, fall back to the classic
-      // initialize handshake on anything else. Never 'pin' — FLUJO must keep
-      // working against every existing server.
-      // An isolated v1 image uses the classic handshake. The SDK's auto mode
-      // clones stdio spawn parameters for a sibling; that cannot share one CID.
-      // Auto negotiation may clone a stdio transport and spawn an untracked
-      // sibling. Every local process must use the profile-owned generation.
-      versionNegotiation: { mode: config.transport === 'stdio' ? "legacy" : "auto" },
+      // Never 'pin': FLUJO must keep working against every existing server.
+      versionNegotiation: config.transport === "stdio" ? stdioVersionNegotiation(config) : { mode: "auto" },
     },
   );
 
@@ -208,35 +205,33 @@ export function createNewBetaClient(
   }
   registerExtensionNotifications(client, config.name, extensionNotifications);
 
-  // Register the declared host identity before discovery. Only negotiated
-  // modern remote connections can later create the raw extension channel.
-  if (config.transport !== 'stdio' && config.isolation === undefined && config.trustedHost === undefined) {
-    const isAuthorityCurrent = bindToCurrentWorkspace(async () => {
-      if (!FEATURES.ENABLE_MCP_TASKS_CLIENT) return false;
-      const { mcpService } = await import('@/backend/services/mcp');
-      return mcpService.getClient(config.name) === (client as unknown as Client);
-    });
-    registerTasksExtensionClient(client, {
-      endpointId: workspaceCacheKey(config.name), clientInfo, clientCapabilities,
-      authorizeLateTaskCancellation: isAuthorityCurrent,
-      isAuthorityCurrent,
-      handleInputRequest: bindToCurrentWorkspace(async (request, signal, expectedConversationId) => {
-        const assertCurrent = async () => {
-          signal?.throwIfAborted();
-          if (!await isAuthorityCurrent()) throw new Error('MCP Tasks input connection is no longer current');
-          const context = getElicitationContext(config.name);
-          if (expectedConversationId !== undefined && (!context || context.conversationId !== expectedConversationId || context.getUnattended())) {
-            throw new Error('MCP Tasks input owner is no longer attended');
-          }
-        };
-        await assertCurrent();
-        if (request.method === 'elicitation/create' && !serverHasElicitation) throw new Error('The requested MCP Tasks input capability is disabled');
-        const response = await dispatchTaskInputRequest(client, request, { signal, assertCurrent, expectedConversationId });
-        await assertCurrent();
-        return InputResponseV2Schema.parse(response);
-      }),
-    });
-  }
+  // Register the declared host identity before discovery. Only connections
+  // that negotiated 2026-07-28 can later create the raw extension channel.
+  const isAuthorityCurrent = bindToCurrentWorkspace(async () => {
+    if (!FEATURES.ENABLE_MCP_TASKS_CLIENT) return false;
+    const { mcpService } = await import('@/backend/services/mcp');
+    return mcpService.getClient(config.name) === (client as unknown as Client);
+  });
+  registerTasksExtensionClient(client, {
+    endpointId: workspaceCacheKey(config.name), clientInfo, clientCapabilities,
+    authorizeLateTaskCancellation: isAuthorityCurrent,
+    isAuthorityCurrent,
+    handleInputRequest: bindToCurrentWorkspace(async (request, signal, expectedConversationId) => {
+      const assertCurrent = async () => {
+        signal?.throwIfAborted();
+        if (!await isAuthorityCurrent()) throw new Error('MCP Tasks input connection is no longer current');
+        const context = getElicitationContext(config.name);
+        if (expectedConversationId !== undefined && (!context || context.conversationId !== expectedConversationId || context.getUnattended())) {
+          throw new Error('MCP Tasks input owner is no longer attended');
+        }
+      };
+      await assertCurrent();
+      if (request.method === 'elicitation/create' && !serverHasElicitation) throw new Error('The requested MCP Tasks input capability is disabled');
+      const response = await dispatchTaskInputRequest(client, request, { signal, assertCurrent, expectedConversationId });
+      await assertCurrent();
+      return InputResponseV2Schema.parse(response);
+    }),
+  });
 
   (client as unknown as ClientWithBetaMarker).__flujoBeta = true;
   // Same capability key the v1 factory stamps (see connection.ts ClientWithCapKey):
@@ -245,7 +240,7 @@ export function createNewBetaClient(
   (client as unknown as { __flujoCapKey?: string }).__flujoCapKey =
     capabilityKey(config);
   log.info(
-    `Created split-SDK MCP client for ${config.name} (version negotiation: ${config.transport === 'stdio' ? 'legacy' : 'auto'})`,
+    `Created split-SDK MCP client for ${config.name} (version negotiation: ${config.transport === "stdio" ? stdioVersionNegotiation(config).mode : "auto"})`,
   );
   return client as unknown as Client;
 }
@@ -410,7 +405,7 @@ export async function createBetaTransport(
       Object.freeze(parameters.env);
       Object.freeze(parameters);
     }
-    transport = new BetaStdioClientTransport(parameters);
+    transport = new InPlaceProbeStdioClientTransport(parameters);
     if (!isolation) attachHostAccessCheck(transport);
     if (isolation) attachMcpIsolation(transport, config, isolation, retireRuntimeAuthority);
     else if (config.trustedHost) await attachTrustedHost(transport, config, retireRuntimeAuthority, workload);
@@ -453,9 +448,8 @@ export function getStdioOAuthMrtrController(
 
 /**
  * Attach the extension retry interceptor only after the SDK has completed era
- * negotiation and the MCP handshake. Keeping the exact base stdio transport
- * through connect is required for the SDK's disposable sibling probe and
- * legacy fallback.
+ * negotiation and the MCP handshake, so the `server/discover` probe and the
+ * classic fallback reach the plain transport.
  */
 export function activateStdioOAuthMrtrController(transport: unknown): void {
   const stdioTransport = transport as BetaStdioClientTransport;

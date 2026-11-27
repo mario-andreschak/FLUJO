@@ -73,6 +73,7 @@
     "validate:persona-goal-endurance": "node scripts/validate-persona-goal-endurance.mjs",
     "validate:mcp-release": "node scripts/validate-mcp-release.mjs",
     "smoke:mcp-artifacts": "node scripts/smoke-mcp-artifacts.mjs",
+    "conformance:mcp": "node scripts/mcp-conformance.mjs",
     "start": "node scripts/launch-next.mjs start",
     "demo:migration-ui": "node scripts/migration-landscape-demo.mjs",
     "check:parallel-mcp:no-oauth": "node scripts/check-parallel-mcp-no-oauth.mjs",

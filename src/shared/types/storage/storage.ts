@@ -315,15 +315,14 @@ export interface ExperimentalSettings {
   /** @deprecated Ignored. Subflow capabilities are available automatically. */
   subflowSessions?: boolean;
   /**
-   * When true, MCP client connections are built on the v2 beta SDK
-   * (`@modelcontextprotocol/client`, spec revision 2026-07-28) with automatic
-   * version negotiation: the client probes each server and speaks the new
-   * stateless protocol when the server supports it, transparently falling back
-   * to the classic `initialize` handshake for every existing server. Off by
-   * default: the beta SDK's public API may still change before its stable
-   * release, so connections stay on the proven v1 SDK unless the user opts in.
-   * Websocket transports always stay on v1 (the v2 SDK has no websocket
-   * transport). A missing value is treated as disabled.
+   * "Modern MCP protocol". Unless false, MCP client connections are built on
+   * the v2 SDK (`@modelcontextprotocol/client`, spec revision 2026-07-28):
+   * FLUJO asks each server `server/discover`, speaks the stateless protocol
+   * when the server supports it and falls back to the classic `initialize`
+   * handshake for every older server. FLUJO's own MCP endpoints serve both
+   * generations. False forces the classic handshake everywhere. Websocket
+   * transports always stay on v1 (the v2 SDK has no websocket transport).
+   * A missing value means on.
    */
   mcpBetaProtocol?: boolean;
   /**
