@@ -3,9 +3,14 @@
   "hotspots": [
     {
       "file": "src/backend/execution/flow/runFlow.ts",
-      "maxLines": 3872,
+      "maxLines": 3433,
       "modules": [
-        "src/backend/execution/flow/runFlowContract.ts"
+        "src/backend/execution/flow/runFlowContract.ts",
+        "src/backend/execution/flow/runFlowEvents.ts",
+        "src/backend/execution/flow/runFlowResult.ts",
+        "src/backend/execution/flow/unattendedDriveForward.ts",
+        "src/backend/execution/flow/stagedHandoff.ts",
+        "src/backend/execution/flow/personaActivityState.ts"
       ]
     },
     {
