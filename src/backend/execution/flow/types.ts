@@ -220,6 +220,14 @@ export interface ProcessNodeProperties {
      *  visit. The list is re-injected into the system prompt each turn and shown
      *  live in the UI. Off by default (undefined/false = off). */
     enableTodoTool?: boolean;
+    /** #1448: how MCP tool descriptions reach the model. 'auto' (default) sends
+     *  names first and loads full descriptions on demand once they would fill
+     *  a noticeable share of the context window; 'on-demand' always does;
+     *  'up-front' sends every description each turn. */
+    toolLoading?: import('@/shared/types/flow/toolLoading').ToolLoadingMode;
+    /** #1448: offer `run_tool_script` (code mode). 'auto' (default) offers it
+     *  together with on-demand descriptions; 'on' always; 'off' never. */
+    codeMode?: import('@/shared/types/flow/toolLoading').CodeModeSetting;
     /** Issue #415: explicit native Persona tools authored for this Process. */
     personaTools?: PersonaNativeAbilityId[];
     boundModel?: string;
@@ -1231,6 +1239,19 @@ export interface SharedState extends DebuggerStateView {
      */
     armedSyntheticTools?: string[];
     /**
+     * Deferred MCP tools the model loaded with `search_tools` or ran with
+     * `call_tool` (#1448), by model-facing name, sorted. Once loaded a tool
+     * keeps its full description for the rest of the conversation, so the tool
+     * block only grows (prompt cache). Plain string[] so it persists.
+     */
+    loadedDeferredTools?: string[];
+    /**
+     * Runtime-only: the current step's deferred-tool and code-mode catalog,
+     * set by ProcessNode.prep as a non-enumerable property so it is never
+     * persisted or cloned. Missing after a restart; the executors rebuild it.
+     */
+    stepToolCatalog?: import('./toolLoading/toolLoadingExecutors').StepToolCatalog;
+    /**
      * Frozen system-prompt string per process node, captured on first render of
      * a conversation and re-sent byte-identically thereafter (#249). Keyed by
      * nodeId because one run can visit multiple process nodes via handoffs.
@@ -1722,6 +1743,10 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     takeModelStepOrdinal?: () => number;
     /** Records a fallback policy member as it is tried. Not enumerable, like the ordinal. */
     recordModelUsed?: (modelId: string) => void;
+    /** Non-enumerable: the step's deferred-tool and code-mode catalog (#1448). */
+    toolCatalog?: import('./toolLoading/toolLoadingExecutors').StepToolCatalog;
+    /** Non-enumerable: records deferred tools the model loaded (#1448). */
+    markToolsLoaded?: (names: readonly string[]) => void;
     /** Runtime-only run cancellation forwarded to the in-flight model call. */
     abortSignal?: AbortSignal;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */

@@ -192,7 +192,16 @@ function people(context: FlujoSystemPromptContext, find: Finder): string[] {
 }
 
 function flujoTools(find: Finder): string[] {
+  const search = find.own('search_tools');
+  const callTool = find.own('call_tool');
+  const script = find.own('run_tool_script');
   const lines = bullets([
+    search
+      ? `- Some of your tools are listed by name only. Read a tool's description with ${code(search)} before you use it${callTool ? `, then run it with ${code(callTool)}` : ''}.`
+      : undefined,
+    script
+      ? `- To chain several tool calls, loop over items or filter a large result, write a short program with ${code(script)}. Only what it returns comes back to you.`
+      : undefined,
     toolLine('Missing a tool', [
       [find.served('discover_capabilities'), 'searches all servers and flows'],
       [find.served('list_mcp_server_tools'), 'lists a server\'s tools'],
@@ -340,6 +349,9 @@ export function estimateFlujoSystemPromptContext(flow: FlowGraphLike | null | un
       : []),
     ...(properties.allowQuestion === true ? ['question'] : []),
     ...(mcpNodes.length > 0 || resourceNodes.length > 0 ? ['read_resource'] : []),
+    // `auto` depends on the tools a server lists at run time, so only explicit settings show here.
+    ...(mcpNodes.length > 0 && properties.toolLoading === 'on-demand' ? ['search_tools'] : []),
+    ...(mcpNodes.length > 0 && properties.codeMode === 'on' ? ['run_tool_script'] : []),
   ];
   return {
     tools: [

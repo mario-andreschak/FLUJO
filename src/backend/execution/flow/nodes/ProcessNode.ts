@@ -70,6 +70,7 @@ import { ExecutionExtensionError, assertExecutionExtensionCurrent, assertExecuti
 import { combineAbortSignals } from '../combineAbortSignals';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
+import { addLoadedDeferredTools, attachRuntimeOnly, planStepTools } from '../toolLoading/planStepTools';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -814,9 +815,25 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       }
     }
 
+    // #1448: large MCP tool sets reach the model as a short catalog first, with
+    // full descriptions loaded on demand, and code mode may be offered. Every
+    // filtered tool stays in toolNameMap, so dispatch and approval are unchanged.
+    const stepToolsForPrompt = availableTools;
+    const stepTools = planStepTools({
+      tools: availableTools,
+      nodeId,
+      toolLoading: node_params?.properties?.toolLoading,
+      codeMode: node_params?.properties?.codeMode,
+      loadedNames: sharedState.loadedDeferredTools,
+      model: admission.model ?? undefined,
+      restricted: Boolean(executionExtensionContext) || terminalRouting === 'tool-free',
+    });
+    availableTools = stepTools.tools;
+    attachRuntimeOnly(sharedState, 'stepToolCatalog', stepTools.catalog);
+
     // read_resource is armed from what this step has before any stored-result
     // link exists (see below), so the prompt can already describe it.
-    const hasMcpTools = availableTools.some((t) => !!t.server);
+    const hasMcpTools = stepTools.catalog.tools.length > 0;
     const hasWriteResource = availableTools.some((t) => t.name === WRITE_RESOURCE_TOOL_NAME);
     const hasResourceNodes = resourceNodes.length > 0;
     const hasNativeResources = availableTools.some(
@@ -828,10 +845,14 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     const offersReadResource = armsReadResourceAtPrep || (
       !executionExtensionContext && (sharedState.armedSyntheticTools ?? []).includes(READ_RESOURCE_TOOL_NAME)
     );
+    const promptTools = [
+      ...stepToolsForPrompt,
+      ...availableTools.filter((tool) => !tool.server && !stepToolsForPrompt.includes(tool)),
+    ];
     completePrompt = fillFlujoSystemSections(completePrompt, buildFlujoSystemPrompt({
-      tools: offersReadResource && !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)
-        ? [...availableTools, { name: READ_RESOURCE_TOOL_NAME }]
-        : availableTools,
+      tools: offersReadResource && !promptTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)
+        ? [...promptTools, { name: READ_RESOURCE_TOOL_NAME }]
+        : promptTools,
       handoffs: availableTools
         .filter((tool) => !tool.server && tool.name.startsWith(HANDOFF_TOOL_PREFIX))
         .map((tool) => ({
@@ -901,6 +922,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     writable: false,
     configurable: false,
   });
+  attachRuntimeOnly(prepResult, 'toolCatalog', stepTools.catalog);
+  attachRuntimeOnly(prepResult, 'markToolsLoaded', (names: readonly string[]) => addLoadedDeferredTools(sharedState, names));
   Object.defineProperty(prepResult, 'takeModelStepOrdinal', {
     value: () => takeExecutionModelStepOrdinal(sharedState, nodeId, prepResult.runId),
     enumerable: false,
@@ -1279,7 +1302,11 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     }
     // Written last so it reflects every late change above, such as sticky synthetic
     // tools or the forced summary turn that strips all tools.
-    sharedState.offeredToolNames = (prepResult.availableTools ?? []).map((tool) => tool.name);
+    // Deferred tools are offered too, only not described yet (#1448).
+    sharedState.offeredToolNames = [
+      ...(prepResult.availableTools ?? []).map((tool) => tool.name),
+      ...(prepResult.availableTools?.length ? stepTools.deferredNames : []),
+    ];
     log.info('prep() completed', {
       completePromptLength: completePrompt.length,
       boundModel,
@@ -1328,7 +1355,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       // (mirrors prep()'s SharedState.toolNameMap) so adapters that run their own
       // agentic tool loop (Claude subscription) can dispatch calls to mcpService.
       const toolNameMap: Record<string, DecodedTool> = {};
-      for (const t of prepResult.availableTools ?? []) {
+      // Deferred tools (#1448) are still the step's tools: `call_tool` and
+      // code mode dispatch them through this map.
+      const mappedTools = prepResult.availableTools?.length
+        ? [...prepResult.availableTools, ...(prepResult.toolCatalog?.tools ?? [])]
+        : [];
+      for (const t of mappedTools) {
         if (t.server && t.originalName) {
           // Issue #255: preserve the identity token for the adapter dispatch path too.
           toolNameMap[t.name] = {
@@ -1438,6 +1470,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             nodeId: prepResult.nodeId, // Pass the node ID
             takeModelStepOrdinal,
             toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
+            toolCatalog: prepResult.toolCatalog,
+            markToolsLoaded: prepResult.markToolsLoaded,
             conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
             runId: prepResult.runId,
             codexSession: prepResult.codexSession,

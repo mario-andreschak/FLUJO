@@ -53,6 +53,21 @@ tester.run('no-double-cast', rules['no-double-cast'], {
   ],
 });
 
+tester.run('no-node-vm', rules['no-node-vm'], {
+  valid: [
+    "import { runToolScript } from '@/backend/execution/flow/codeMode/sandbox';",
+    "import { Worker } from 'node:worker_threads';",
+    'const run = Function.prototype.call;',
+  ],
+  invalid: [
+    { code: "import vm from 'node:vm';", errors: [{ messageId: 'notSandbox' }] },
+    { code: "import { runInNewContext } from 'vm';", errors: [{ messageId: 'notSandbox' }] },
+    { code: "const vm = require('vm');", errors: [{ messageId: 'notSandbox' }] },
+    { code: "const vm = await import('node:vm');", errors: [{ messageId: 'notSandbox' }] },
+    { code: 'const run = new Function("return 1");', errors: [{ messageId: 'notSandbox' }] },
+  ],
+});
+
 tester.run('no-raw-timers', rules['no-raw-timers'], {
   valid: [
     'useTimeout(() => setOpen(false), 2000);',

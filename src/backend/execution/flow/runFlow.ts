@@ -54,6 +54,7 @@ import {
 import cloneDeep from 'lodash/cloneDeep';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { requireApprovalOf, waitForLiveToolDecision } from './toolApprovalGate';
+import { addLoadedDeferredTools } from './toolLoading/planStepTools';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
@@ -645,6 +646,7 @@ function installPersonaActivitySnapshot(
   sharedState.currentMCPNodes = undefined;
   delete sharedState.personaCoreAppRefs;
   sharedState.armedSyntheticTools = undefined;
+  sharedState.loadedDeferredTools = undefined;
   sharedState.toolNameMap = undefined;
   sharedState.offeredToolNames = undefined;
   sharedState.allowedToolNames = undefined;
@@ -2112,6 +2114,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         executionAuthority: sharedState.executionAuthority,
         executionExtensionContext: sharedState.executionExtensionContext,
         personaAttribution: sharedState.personaAttribution,
+        // #1448: deferred tool descriptions and code mode.
+        toolCatalog: sharedState.stepToolCatalog,
+        markToolsLoaded: (names) => addLoadedDeferredTools(sharedState, names),
+        requireToolApproval: requireApproval,
+        onApprovalRequired: sharedState.onApprovalRequired,
+        approvalConversationId: sharedState.approvalConversationId,
       });
     } catch (error) {
       await markUnknown();

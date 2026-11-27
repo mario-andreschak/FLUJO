@@ -45,6 +45,7 @@ import { humanStepIssues, type HumanStepProperties } from './humanStep';
 import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TARGETS, EdgeCondition, EdgeConditionTarget, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 import { normalizeExcludedSystemPromptSections } from '@/shared/utils/flujoSystemPrompt';
+import { CODE_MODE_SETTINGS, TOOL_LOADING_MODES, normalizeCodeModeSetting, normalizeToolLoadingMode, type CodeModeSetting, type ToolLoadingMode } from '@/shared/types/flow/toolLoading';
 
 // ---------------------------------------------------------------------------
 // Recursion bounds (issue #94) — token/latency + loop guards
@@ -224,6 +225,10 @@ export interface FlowSpecNode extends FlowSpecHumanFields {
   requireApprovalFor?: string[];
   /** process and static: every MCP tool in this step not marked read-only waits for a person. */
   requireApprovalForWrites?: boolean;
+  /** process only (#1448): how MCP tool descriptions reach the model. */
+  toolLoading?: ToolLoadingMode;
+  /** process only (#1448): offer `run_tool_script`. */
+  codeMode?: CodeModeSetting;
   /** process only: drop the bound model's base/system prompt from the rendered prompt. */
   excludeModelPrompt?: boolean;
   /** process only: drop the start node's prompt from this step's rendered prompt. */
@@ -1013,6 +1018,23 @@ export function compileFlowSpec(
           }
         }
       }
+      // #1448: only a choice that differs from the default `auto` is stored.
+      if (type === 'process') {
+        if (specNode.toolLoading !== undefined) {
+          if (TOOL_LOADING_MODES.includes(specNode.toolLoading)) {
+            if (specNode.toolLoading !== 'auto') properties.toolLoading = specNode.toolLoading;
+          } else {
+            warn('invalid-tool-loading', `Node "${key}": toolLoading must be one of ${TOOL_LOADING_MODES.join(', ')}; using auto.`, key);
+          }
+        }
+        if (specNode.codeMode !== undefined) {
+          if (CODE_MODE_SETTINGS.includes(specNode.codeMode)) {
+            if (specNode.codeMode !== 'auto') properties.codeMode = specNode.codeMode;
+          } else {
+            warn('invalid-code-mode', `Node "${key}": codeMode must be one of ${CODE_MODE_SETTINGS.join(', ')}; using auto.`, key);
+          }
+        }
+      }
       if (type === 'signal') {
         // Signal node (issue #117): a pass-through that emits {topic, payload}.
         const topic = typeof specNode.topic === 'string' ? specNode.topic.trim() : '';
@@ -1794,6 +1816,10 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (props.terminalRouting === 'tool-free') specNode.terminalRouting = 'tool-free';
       if (Array.isArray(props.requireApprovalFor) && props.requireApprovalFor.length > 0) specNode.requireApprovalFor = props.requireApprovalFor as string[];
       if (props.requireApprovalForWrites === true) specNode.requireApprovalForWrites = true;
+      const toolLoading = normalizeToolLoadingMode(props.toolLoading);
+      if (toolLoading !== 'auto') specNode.toolLoading = toolLoading;
+      const codeMode = normalizeCodeModeSetting(props.codeMode);
+      if (codeMode !== 'auto') specNode.codeMode = codeMode;
       if (props.excludeModelPrompt === true) specNode.excludeModelPrompt = true;
       if (props.excludeStartNodePrompt === true) specNode.excludeStartNodePrompt = true;
       if (props.excludeSystemPrompt === true) specNode.excludeSystemPrompt = true;

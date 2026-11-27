@@ -51,6 +51,8 @@ export interface ProcessNodeProperties extends Record<string, unknown> {
     allowCallerPrompt?: boolean;
     outputMode?: 'full-conversation' | 'latest-message';
     enableTodoTool?: boolean;
+    toolLoading?: import('@/shared/types/flow/toolLoading').ToolLoadingMode;
+    codeMode?: import('@/shared/types/flow/toolLoading').CodeModeSetting;
     requireApprovalFor?: string[];
     requireApprovalForWrites?: boolean;
     personaTools?: unknown;

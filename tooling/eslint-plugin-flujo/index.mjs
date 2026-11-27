@@ -3,6 +3,7 @@
 import disableNeedsReason from './rules/disable-needs-reason.mjs';
 import noAdhocStartupErrorMatch from './rules/no-adhoc-startup-error-match.mjs';
 import noDoubleCast from './rules/no-double-cast.mjs';
+import noNodeVm from './rules/no-node-vm.mjs';
 import noRawTimers from './rules/no-raw-timers.mjs';
 import noSyncFs from './rules/no-sync-fs.mjs';
 import noWorkaroundComment from './rules/no-workaround-comment.mjs';
@@ -14,6 +15,7 @@ export default {
     'disable-needs-reason': disableNeedsReason,
     'no-adhoc-startup-error-match': noAdhocStartupErrorMatch,
     'no-double-cast': noDoubleCast,
+    'no-node-vm': noNodeVm,
     'no-raw-timers': noRawTimers,
     'no-sync-fs': noSyncFs,
     'no-workaround-comment': noWorkaroundComment,

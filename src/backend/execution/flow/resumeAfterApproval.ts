@@ -10,6 +10,7 @@ import type { HumanAnswer } from '@/utils/shared/humanStep';
 import { approvalActionFor, decideHumanTask, type HumanTaskReceipt } from './humanTask';
 import type { HumanTaskDecision } from './types';
 import { commitToolCheckpoint } from './recoveryCheckpoint';
+import { addLoadedDeferredTools } from './toolLoading/planStepTools';
 import type { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('backend/execution/flow/resumeAfterApproval');
@@ -186,6 +187,12 @@ export async function applyApprovalDecision(
         executionAuthority: sharedState.executionAuthority,
         executionExtensionContext: sharedState.executionExtensionContext,
         personaAttribution: sharedState.personaAttribution,
+        // #1448: an approved program still asks for each tool it calls.
+        toolCatalog: sharedState.stepToolCatalog,
+        markToolsLoaded: (names) => addLoadedDeferredTools(sharedState, names),
+        requireToolApproval: sharedState.requireApproval,
+        onApprovalRequired: sharedState.onApprovalRequired,
+        approvalConversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
       });
     } catch (error) {
       if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'unknown');

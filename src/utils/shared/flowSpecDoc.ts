@@ -40,6 +40,8 @@ NODE TYPES:
     "terminalRouting": "tool-free",                                   // optional; sole unconditioned Process -> Finish only. No FLUJO graph tools; engine routes the answer. Native CLI capabilities remain governed by its existing adapter/profile. Absent preserves model-selected handoffs
     "requireApprovalFor": ["tool_a"],                                  // optional; calls to these tools in this step always wait for a person, even if the run did not ask for approval
     "requireApprovalForWrites": true,                                  // optional; the same for every tool in this step that its server does not mark read-only
+    "toolLoading": "auto" | "on-demand" | "up-front",               // optional, default auto; on-demand gives the model tool names first and a search_tools tool that loads full descriptions; auto does that once the descriptions would fill a noticeable share of the context window
+    "codeMode": "auto" | "on" | "off",                               // optional, default auto (on together with on-demand descriptions); on adds run_tool_script, where the model writes a short JavaScript program that calls the step's tools and only its result returns
     "allowedTools": ["tool_a"],                                        // optional; step-level tool allowlist (independent of servers[].tools)
     "captureVariable": "NAME",                                         // optional; save this step's output into a run variable other steps inject with \${var:NAME}
     "captureKv": "NAME",                                               // optional; ALSO save this step's output to a PERSISTENT cross-run key other steps inject with \${kv:NAME} (see rule 9d)

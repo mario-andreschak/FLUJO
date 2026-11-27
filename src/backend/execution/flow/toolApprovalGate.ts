@@ -5,6 +5,7 @@ import {
   registerPendingApproval,
   withdrawPendingApproval,
 } from '@/backend/execution/flow/toolApprovalRegistry';
+import { CALL_TOOL_TOOL_NAME } from '@/backend/execution/flow/toolLoading/deferredTools';
 
 /**
  * FLUJO's one tool-approval gate (#1284, docs/architecture/tool-approval-single-gate-proposal.md).
@@ -126,6 +127,10 @@ export function createLiveToolApproval(
 ): ((call: ToolApprovalCall) => Promise<boolean>) | undefined {
   if (!options.requireApproval && !options.stepRequiresApproval) return undefined;
   return async (call) => {
+    // `call_tool` only forwards to a step tool, and that call asks this gate
+    // itself with the real tool name and arguments (#1448). Asking twice would
+    // show the person the wrapper instead of the tool.
+    if (call.name === CALL_TOOL_TOOL_NAME) return true;
     if (!options.requireApproval && !options.stepRequiresApproval?.(call.name)) return true;
     if (options.onApprovalRequired === 'fail') {
       throw new ToolApprovalUnavailableError(call.name, 'approvalPolicy: fail');

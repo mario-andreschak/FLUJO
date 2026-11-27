@@ -38,6 +38,8 @@ import ModelBinding from './ProcessNodePropertiesModal/ModelBinding/index'; // A
 import ServerTools from './ProcessNodePropertiesModal/ServerTools/ServerTools'; // Adjusted path
 import ServerResources from './ProcessNodePropertiesModal/ServerTools/ServerResources'; // Adjusted path
 import WiredResources, { WiredResource } from './ProcessNodePropertiesModal/ServerTools/WiredResources';
+import ToolLoadingControls from './ProcessNodePropertiesModal/ToolLoadingControls';
+import { normalizeCodeModeSetting, normalizeToolLoadingMode, type CodeModeSetting, type ToolLoadingMode } from '@/shared/types/flow/toolLoading';
 import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; // Adjusted path
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
 import PromptIOControls from './ProcessNodePropertiesModal/PromptIOControls';
@@ -141,6 +143,9 @@ export const ProcessNodePropertiesModal = ({
   const [outputMode, setOutputMode] = useState<'full-conversation' | 'latest-message'>('full-conversation');
   // Issue #259: opt in to the synthetic `todo` tool for this node.
   const [enableTodoTool, setEnableTodoTool] = useState(false);
+  // #1448: deferred MCP tool descriptions and code mode.
+  const [toolLoading, setToolLoading] = useState<ToolLoadingMode>('auto');
+  const [codeMode, setCodeMode] = useState<CodeModeSetting>('auto');
   const [requireApprovalForWrites, setRequireApprovalForWrites] = useState(false);
   const [personaAbilities, setPersonaAbilities] = useState<PersonaAbilityId[]>([]);
   // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
@@ -398,6 +403,8 @@ export const ProcessNodePropertiesModal = ({
       setAllowCallerPrompt(properties.allowCallerPrompt !== false);
       setOutputMode(properties.outputMode ?? 'full-conversation');
       setEnableTodoTool(properties.enableTodoTool ?? false);
+      setToolLoading(normalizeToolLoadingMode(properties.toolLoading));
+      setCodeMode(normalizeCodeModeSetting(properties.codeMode));
       setRequireApprovalForWrites(properties.requireApprovalForWrites === true);
       setPersonaAbilities(normalizePersonaAbilities(properties.personaTools));
 
@@ -590,6 +597,9 @@ export const ProcessNodePropertiesModal = ({
         // Issue #259: only persist enableTodoTool when ON, so flows that don't use
         // it stay byte-identical (same delete-when-false convention as captureX).
         if (enableTodoTool) properties.enableTodoTool = true; else delete properties.enableTodoTool;
+        // #1448: store only a choice that differs from the default `auto`.
+        if (toolLoading !== 'auto') properties.toolLoading = toolLoading; else delete properties.toolLoading;
+        if (codeMode !== 'auto') properties.codeMode = codeMode; else delete properties.codeMode;
         if (excludeSystemPromptSections.length > 0) {
           properties.excludeSystemPromptSections = excludeSystemPromptSections;
         } else {
@@ -827,6 +837,12 @@ export const ProcessNodePropertiesModal = ({
               isModelBound={isModelBound}
               models={models}
               nodeData={nodeData}
+            />
+            <ToolLoadingControls
+              toolLoading={toolLoading}
+              setToolLoading={setToolLoading}
+              codeMode={codeMode}
+              setCodeMode={setCodeMode}
             />
             {/* Issue #259: opt in to the run-scoped `todo` task list. */}
             <FormControlLabel

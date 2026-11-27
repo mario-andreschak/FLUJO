@@ -114,6 +114,7 @@ export default defineConfig([
       'flujo/no-workaround-comment': 'error',
       'flujo/disable-needs-reason': 'error',
       'flujo/no-double-cast': 'error',
+      'flujo/no-node-vm': 'error',
       'flujo/no-sync-fs': 'error',
       'flujo/single-tool-approval-gate': 'error',
       '@typescript-eslint/ban-ts-comment': ['error', {
