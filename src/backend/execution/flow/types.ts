@@ -1324,6 +1324,11 @@ export interface SharedState extends DebuggerStateView {
     // fires: the next ProcessNode.prep strips all tools so the model can only
     // produce a text summary. Cleared once the summary turn completes.
     forceSummaryTurn?: boolean;
+    // #1419: the Process node handed off to Finish without an answer. Its next
+    // step runs once more with no tools and asks for the answer as text; then
+    // the run follows `edgeId` to Finish. Cleared when that step ends, and at
+    // the start of every run, so it can never outlive one request.
+    finishAnswerTurn?: { nodeId: string; edgeId: string };
     // True once the run landed at the turn cap; carried onto the run result.
     capped?: boolean;
     // Why the run was capped (currently only 'maxTurns').
@@ -1715,6 +1720,10 @@ export interface ProcessNodePrepResult extends BasePrepResult {
      *  the turn cap fired. When true, execCore sends NO tools so the model can
      *  only produce a final text summary. */
     forceSummaryTurn?: boolean;
+    /** #1419: set from SharedState.finishAnswerTurn. The step sends no tools,
+     *  ends with FINISH_ANSWER_INSTRUCTION on the wire and returns
+     *  FINAL_RESPONSE_ACTION, so runFlow can go on to Finish. */
+    finishAnswerTurn?: boolean;
     /** Debugger model-input visualization (issue #153). Computed in prep (where
     *  the threaded/folded/scoped views are all in scope) and promoted onto the
     *  DebugStep by FlowExecutor. Populated only when the run is in debug mode /

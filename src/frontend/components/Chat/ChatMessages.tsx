@@ -1662,6 +1662,17 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           {t('chat.messages.cutOffLength')}
         </Typography>
       )}
+      {message.role === 'assistant' && message.noAnswer && (
+        <Typography
+          role="note"
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, maxWidth: '75vw' }}
+        >
+          <InfoOutlinedIcon fontSize="inherit" aria-hidden />
+          {t('chat.messages.noAnswer')}
+        </Typography>
+      )}
     </Box>
   );
 });

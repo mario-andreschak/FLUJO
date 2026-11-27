@@ -181,6 +181,7 @@ function restoreChatSuffix(
   state.pendingSubflowReturn = undefined;
   state.handoffInput = undefined;
   state.forceSummaryTurn = undefined;
+  state.finishAnswerTurn = undefined;
   state.capped = undefined;
   state.cappedReason = undefined;
   state.isCancelled = false;

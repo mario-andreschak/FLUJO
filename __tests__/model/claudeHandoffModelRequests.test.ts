@@ -12,15 +12,12 @@
  * the stop relies on the SDK's PostToolBatch hook and its `continue: false`,
  * so each test also checks what that hook was asked and answered.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
 import type OpenAI from 'openai';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
+import { createClaudeSdkRelay, startClaudeModelStandIn, type ClaudeModelStandIn, type StandInBlock, type StandInScript } from './fixtures/claudeSdkStandIn';
 
 const queryMock = jest.fn();
 jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -42,9 +39,8 @@ import { _clearAllSessionsForTests } from '@/backend/services/model/adapters/cla
 
 jest.setTimeout(120_000);
 
-type Block = { type: 'text'; text: string } | { type: 'tool_use'; name: string; input: Record<string, unknown> };
-/** What the stand-in model answers to its n-th request (0-based) of a test. */
-type Script = (request: number) => Block[];
+type Block = StandInBlock;
+type Script = StandInScript;
 
 const ANSWER = 'The pharmacy is open from 8:00 to 18:00.';
 const EXTRA = 'An extra model turn after the hand-off.';
@@ -53,181 +49,37 @@ const tool = (name: string, input: Record<string, unknown> = {}): Block => ({ ty
 const text = (value: string): Block => ({ type: 'text', text: value });
 
 let root: string;
-let server: http.Server;
-let baseUrl: string;
-let script: Script;
+let standIn: ClaudeModelStandIn;
 /** Each model request's messages, as JSON. */
 let requests: string[];
 /** The tool-use ids of each PostToolBatch call and what the adapter answered. */
 let batches: Array<{ toolUseIds: string[]; answer: unknown }>;
 /** Why each Claude Code run ended, from its result message. */
 let endings: Array<string | undefined>;
-const bridges: Array<Promise<void>> = [];
+const relay = createClaudeSdkRelay({
+  baseUrl: () => standIn.baseUrl,
+  home: () => mockClaude.home,
+  onResult: reason => endings.push(reason),
+  onToolBatch: batch => batches.push(batch),
+});
 
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-claude-handoff-'));
-  server = http.createServer((request, response) => {
-    if (request.method !== 'POST' || !request.url?.startsWith('/v1/messages') || request.url.includes('count_tokens')) {
-      request.resume();
-      response.writeHead(404).end('{}');
-      return;
-    }
-    // Counted as soon as Claude Code sends it, even if it is stopped right after.
-    const index = requests.length;
-    requests.push('');
-    let body = '';
-    request.on('data', chunk => { body += chunk; });
-    request.on('end', () => {
-      const sent = JSON.parse(body) as { model: string; messages: unknown[] };
-      requests[index] = JSON.stringify(sent.messages);
-      const blocks = script(index);
-      const events: Array<[string, unknown]> = [
-        ['message_start', { type: 'message_start', message: { id: `msg_${index + 1}`, type: 'message', role: 'assistant',
-          model: sent.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } }],
-      ];
-      blocks.forEach((block, position) => {
-        if (block.type === 'text') {
-          events.push(['content_block_start', { type: 'content_block_start', index: position, content_block: { type: 'text', text: '' } }]);
-          events.push(['content_block_delta', { type: 'content_block_delta', index: position, delta: { type: 'text_delta', text: block.text } }]);
-        } else {
-          events.push(['content_block_start', { type: 'content_block_start', index: position,
-            content_block: { type: 'tool_use', id: `toolu_${index + 1}_${position}`, name: block.name, input: {} } }]);
-          events.push(['content_block_delta', { type: 'content_block_delta', index: position,
-            delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } }]);
-        }
-        events.push(['content_block_stop', { type: 'content_block_stop', index: position }]);
-      });
-      const stopReason = blocks.some(block => block.type === 'tool_use') ? 'tool_use' : 'end_turn';
-      events.push(['message_delta', { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null },
-        usage: { output_tokens: OUTPUT_TOKENS } }]);
-      events.push(['message_stop', { type: 'message_stop' }]);
-      response.writeHead(200, { 'content-type': 'text/event-stream' });
-      for (const [event, data] of events) response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      response.end();
-    });
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  standIn = await startClaudeModelStandIn(OUTPUT_TOKENS);
 });
 afterAll(async () => {
-  await Promise.all(bridges);
-  await new Promise<void>(resolve => server.close(() => resolve()));
+  await relay.settled();
+  await standIn.close();
   await fs.rm(root, { recursive: true, force: true });
 });
 beforeEach(async () => {
   _clearAllSessionsForTests();
-  requests = [];
+  standIn.requests = requests = [];
   batches = [];
   endings = [];
   mockClaude.home = await fs.mkdtemp(path.join(root, 'home-'));
-  queryMock.mockReset().mockImplementation(relayQuery);
+  queryMock.mockReset().mockImplementation(relay.relayQuery);
 });
-
-type Callback = (...args: unknown[]) => Promise<unknown>;
-interface AdapterOptions {
-  cwd: string;
-  env: Record<string, string | undefined>;
-  abortController: AbortController;
-  canUseTool?: Callback;
-  hooks?: Record<string, Array<{ hooks: Callback[] }>>;
-  mcpServers?: Record<string, { __server: { tools: Array<{ name: string; description: string; shape: Record<string, unknown>; handler: Callback }> } }>;
-}
-
-/**
- * The SDK's `query()` as the adapter sees it: the installed SDK runs the
- * bundled Claude Code in a bridge process; its frames stream back as they
- * arrive and every callback is answered by the adapter's own.
- */
-function relayQuery({ prompt, options }: { prompt: AsyncIterable<unknown>; options: AdapterOptions }) {
-  const { env, cwd: _cwd, abortController, canUseTool, hooks = {}, mcpServers = {}, ...plain } = options;
-  const frames: unknown[] = [];
-  let wake: (() => void) | undefined;
-  let ended = false;
-  let failure: Error | undefined;
-  let bridge: ChildProcessWithoutNullStreams | undefined;
-  const send = (line: unknown) => { if (bridge?.stdin.writable) bridge.stdin.write(`${JSON.stringify(line)}\n`); };
-  const stop = () => send({ type: 'abort' });
-  abortController.signal.addEventListener('abort', stop, { once: true });
-  const flatHooks = Object.fromEntries(Object.entries(hooks).map(([event, matchers]) =>
-    [event, matchers.flatMap(matcher => matcher.hooks)]));
-  const tools = Object.fromEntries(Object.entries(mcpServers).map(([name, config]) => [name, config.__server.tools]));
-  const answer = async (call: { target: string; event?: string; index?: number; server?: string; name?: string; args: unknown[] }) => {
-    const signal = new AbortController().signal;
-    if (call.target === 'canUseTool') {
-      const [name, input, opts] = call.args as [string, unknown, Record<string, unknown>];
-      return canUseTool!(name, input, { ...opts, signal });
-    }
-    if (call.target === 'hook') {
-      const result = await flatHooks[call.event!][call.index!](call.args[0], call.args[1], { signal });
-      if (call.event === 'PostToolBatch') {
-        const input = call.args[0] as { tool_calls: Array<{ tool_use_id: string }> };
-        batches.push({ toolUseIds: input.tool_calls.map(entry => entry.tool_use_id), answer: result });
-      }
-      return result;
-    }
-    return tools[call.server!].find(definition => definition.name === call.name)!.handler(call.args[0], {});
-  };
-
-  async function* run() {
-    const first = await prompt[Symbol.asyncIterator]().next();
-    const cwd = String(options.cwd);
-    await fs.mkdir(cwd, { recursive: true });
-    const { CLAUDE_CODE_OAUTH_TOKEN: _token, ...adapterEnv } = env;
-    const config = {
-      prompt: first.value,
-      options: plain,
-      runtime: { cwd, env: { ...adapterEnv,
-        HOME: mockClaude.home, USERPROFILE: mockClaude.home, CLAUDE_CONFIG_DIR: mockClaude.home,
-        ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_API_KEY: 'offline-stand-in-not-a-secret',
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' } },
-      callbacks: {
-        canUseTool: typeof canUseTool === 'function',
-        hooks: Object.fromEntries(Object.entries(flatHooks).map(([event, list]) => [event, list.length])),
-        mcpServers: Object.fromEntries(Object.entries(tools).map(([name, list]) => [name, list.map(definition => ({
-          name: definition.name, description: definition.description, properties: Object.keys(definition.shape ?? {}),
-        }))])),
-      },
-    };
-    const child = spawn(process.execPath, [path.join(__dirname, 'fixtures', 'claudeRelaySdkBridge.mjs')], {
-      cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-      env: { NODE_ENV: 'test', PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP },
-    });
-    bridge = child;
-    child.stdin.on('error', () => undefined);
-    const stderr: Buffer[] = [];
-    child.stderr.on('data', chunk => stderr.push(Buffer.from(chunk)));
-    bridges.push(new Promise<void>(resolve => child.once('close', (code) => {
-      if (code !== 0 && !abortController.signal.aborted) failure = new Error(`SDK bridge exit ${code}: ${Buffer.concat(stderr).toString().slice(0, 2000)}`);
-      ended = true;
-      wake?.();
-      resolve();
-    })));
-    createInterface({ input: child.stdout }).on('line', line => {
-      const parsed = JSON.parse(line) as { type: string; id?: number; message?: unknown; target: string; args: unknown[] };
-      if (parsed.type === 'frame') {
-        const result = parsed.message as { type?: string; terminal_reason?: string };
-        if (result.type === 'result') endings.push(result.terminal_reason);
-        frames.push(parsed.message);
-        wake?.();
-        return;
-      }
-      answer(parsed).then(
-        result => send({ type: 'reply', id: parsed.id, result: result ?? {} }),
-        (error: unknown) => send({ type: 'reply', id: parsed.id, error: error instanceof Error ? error.message : String(error) }),
-      );
-    });
-    child.stdin.write(`${JSON.stringify(config)}\n`);
-    if (abortController.signal.aborted) stop();
-    for (;;) {
-      if (frames.length) { yield frames.shift(); continue; }
-      if (ended) break;
-      await new Promise<void>(resolve => { wake = resolve; });
-      wake = undefined;
-    }
-    if (failure) throw failure;
-  }
-  return Object.assign(run(), { close: stop });
-}
 
 const tools: OpenAI.ChatCompletionFunctionTool[] = [
   { type: 'function', function: { name: 'lookup', description: 'Look up the opening hours',
@@ -239,7 +91,7 @@ const tools: OpenAI.ChatCompletionFunctionTool[] = [
 ];
 
 async function runTurn(answer: Script, extra: Partial<CompletionInput> = {}) {
-  script = answer;
+  standIn.script = answer;
   const lookups: number[] = [];
   const result = await new ClaudeSubscriptionAdapter().createCompletion({
     model: { id: 'm1', name: 'sonnet', provider: 'claude-subscription', ApiKey: '' },
@@ -253,7 +105,7 @@ async function runTurn(answer: Script, extra: Partial<CompletionInput> = {}) {
     ...extra,
   } as CompletionInput);
   // Every Claude Code process of the turn has exited: no request can still come.
-  await Promise.all(bridges);
+  await relay.settled();
   const message = result.completion.choices[0].message;
   return { result, message, handoffs: (message.tool_calls ?? []).map(call =>
     [(call as OpenAI.ChatCompletionMessageFunctionToolCall).function.name,
@@ -337,7 +189,7 @@ describe('Claude subscription hand-off with the bundled Claude Code and a stand-
     expect(requests).toHaveLength(1);
     expect(endings).toEqual(['hook_stopped']);
 
-    requests = [];
+    standIn.requests = requests = [];
     const handoffId = first.result.completion.choices[0].message.tool_calls![0].id;
     const second = await runTurn(afterRequests([text('You are welcome.')]), { ...step, messages: [
       question, ...first.result.transcript as OpenAI.ChatCompletionMessageParam[],
