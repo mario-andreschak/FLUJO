@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
-import { mcpEventSource, type McpEventTriggerConfig, type TriggerConfig } from '@/shared/types/plannedExecution';
+import { mcpEventDelivery, mcpEventSource, type McpEventTriggerConfig, type TriggerConfig } from '@/shared/types/plannedExecution';
 import { DEFAULT_WORKSPACE } from '@/utils/workspace';
 import type { ArmedTrigger } from './types';
 
@@ -49,7 +49,7 @@ export function mcpEventFingerprint(trigger: Pick<McpEventTriggerConfig, 'server
  * arguments), or null when the trigger holds no subscription.
  */
 export function mcpEventSubscriptionKey(trigger: TriggerConfig | undefined): string | null {
-  if (trigger?.type !== 'mcp-event' || mcpEventSource(trigger) !== 'events') return null;
+  if (trigger?.type !== 'mcp-event' || mcpEventSource(trigger) !== 'events' || mcpEventDelivery(trigger) !== 'webhook') return null;
   return mcpEventFingerprint(trigger);
 }
 

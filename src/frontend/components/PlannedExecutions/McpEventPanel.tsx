@@ -12,7 +12,15 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { McpEventTriggerConfig, mcpEventSource, type McpEventSource } from '@/shared/types/plannedExecution';
+import {
+  McpEventTriggerConfig,
+  mcpEventDelivery,
+  mcpEventDeliveryModes,
+  mcpEventSource,
+  preferredMcpEventDelivery,
+  type McpEventDeliveryMode,
+  type McpEventSource,
+} from '@/shared/types/plannedExecution';
 import { mcpService, type McpEventEntry } from '@/frontend/services/mcp';
 import SchemaParamsForm from '@/frontend/components/shared/SchemaParamsForm';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -27,6 +35,12 @@ export function conversationIdFromInput(value: string): string {
     return text;
   }
 }
+
+const DELIVERY_LABELS = {
+  push: 'automations.event.deliveryPush',
+  poll: 'automations.event.deliveryPoll',
+  webhook: 'automations.event.deliveryWebhook',
+} as const satisfies Record<McpEventDeliveryMode, string>;
 
 interface McpEventPanelProps {
   config: McpEventTriggerConfig;
@@ -77,6 +91,8 @@ const McpEventPanel = ({ config, onChange }: McpEventPanelProps) => {
   }, [config.serverName]);
 
   const selected = events.find(event => event.name === config.eventName);
+  const deliveryModes = selected ? mcpEventDeliveryModes(selected.delivery) : [];
+  const delivery = mcpEventDelivery(config);
 
   return (
     <Box sx={{ mt: 1 }}>
@@ -88,7 +104,7 @@ const McpEventPanel = ({ config, onChange }: McpEventPanelProps) => {
           value={source}
           onChange={(e) => {
             const next = e.target.value as McpEventSource;
-            onChange({ ...config, source: next === 'events' ? undefined : next, eventName: '', arguments: {} });
+            onChange({ ...config, source: next === 'events' ? undefined : next, eventName: '', arguments: {}, delivery: undefined });
           }}
         >
           <MenuItem value="events">{t('automations.event.sourceEvents')}</MenuItem>
@@ -102,7 +118,7 @@ const McpEventPanel = ({ config, onChange }: McpEventPanelProps) => {
             labelId="mcp-event-server-label"
             label={t('automations.tool.server')}
             value={servers.includes(config.serverName) ? config.serverName : ''}
-            onChange={(e) => onChange({ ...config, serverName: e.target.value, eventName: '', arguments: {} })}
+            onChange={(e) => onChange({ ...config, serverName: e.target.value, eventName: '', arguments: {}, delivery: undefined })}
           >
             {servers.map(name => <MenuItem key={name} value={name}>{name}</MenuItem>)}
           </Select>
@@ -114,7 +130,10 @@ const McpEventPanel = ({ config, onChange }: McpEventPanelProps) => {
               labelId="mcp-event-name-label"
               label={t('automations.event.event')}
               value={selected ? config.eventName : ''}
-              onChange={(e) => onChange({ ...config, eventName: e.target.value, arguments: {} })}
+              onChange={(e) => {
+                const descriptor = events.find(event => event.name === e.target.value);
+                onChange({ ...config, eventName: e.target.value, arguments: {}, delivery: preferredMcpEventDelivery(descriptor?.delivery) });
+              }}
             >
               {events.map(event => <MenuItem key={event.name} value={event.name}>{event.name}</MenuItem>)}
             </Select>
@@ -136,6 +155,23 @@ const McpEventPanel = ({ config, onChange }: McpEventPanelProps) => {
       )}
       {!isChannel && selected?.description && (
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{selected.description}</Typography>
+      )}
+      {!isChannel && deliveryModes.length > 0 && (
+        <FormControl fullWidth margin="normal">
+          <InputLabel id="mcp-event-delivery-label">{t('automations.event.deliveryLabel')}</InputLabel>
+          <Select
+            labelId="mcp-event-delivery-label"
+            label={t('automations.event.deliveryLabel')}
+            value={deliveryModes.includes(delivery) ? delivery : ''}
+            onChange={(e) => onChange({ ...config, delivery: e.target.value as McpEventDeliveryMode })}
+            inputProps={{ 'data-testid': 'mcp-event-delivery' }}
+          >
+            {deliveryModes.map(mode => (
+              <MenuItem key={mode} value={mode}>{t(DELIVERY_LABELS[mode])}</MenuItem>
+            ))}
+          </Select>
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>{t('automations.event.deliveryHelp')}</Typography>
+        </FormControl>
       )}
       {!isChannel && selected?.inputSchema && (
         <Box sx={{ my: 1.5 }}>

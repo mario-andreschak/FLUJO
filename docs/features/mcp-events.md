@@ -7,34 +7,91 @@ Choose **A tool server reports an event** in the automation editor, then pick a 
 and one of its events. Servers that do not report events show a note, and "Watch a tool"
 remains the alternative for them.
 
-## How it works
-
-1. When the automation is armed, FLUJO calls `events/subscribe` on the server with a local
-   URL (`/api/webhooks/mcp/{id}`), a generated signing secret and the cursor of the last
-   event it accepted. It repeats this every few minutes, which keeps the subscription alive
-   and tells the server FLUJO is reachable. Each grant asks for at most one day.
-2. If the server first checks the URL, FLUJO answers its challenge.
-3. The server posts each event as a signed webhook.
-4. FLUJO checks the signature and starts the flow or Persona. The event reaches it as
-   untrusted trigger data.
-5. When the automation is deleted, switched off or pointed at another event, FLUJO calls
-   `events/unsubscribe`. Pausing all automations keeps the subscription, so events wait.
-
-The wire format follows the webhook part of the
-[MCP events extension](https://github.com/modelcontextprotocol/ext-events)
-(`io.modelcontextprotocol/events`, SEP-3415, Beta) and
-[Standard Webhooks](https://www.standardwebhooks.com/) signing. The extension can still
-change, so everything that knows its format is in `src/backend/services/mcp/serverEvents.ts`
-and `receiveMcpEvent`. A server opts in by declaring the extension in
+FLUJO follows the [MCP events extension](https://github.com/modelcontextprotocol/ext-events)
+(`io.modelcontextprotocol/events`, defined by
+[SEP-3415](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/3415-events-extension.md),
+Beta since 2026-11-19). A server opts in by declaring the extension in
 `capabilities.extensions`, or, as earlier drafts did, `events` top-level or under
 `experimental`. FLUJO declares itself as an events client in each request's `_meta`.
 
 `events/*` are protocol requests rather than tools on purpose: a model can call a tool, but
 it cannot create a subscription.
 
-## Delivery guarantees
+## How events arrive
 
-The sender owns reliability. FLUJO never holds an unstarted event in memory:
+The extension has three delivery modes. Each event lists the ones it offers, and the
+editor shows them under **How events arrive**. FLUJO picks the first one the event offers
+in this order:
+
+| Mode | How it works | Why this place in the order |
+|---|---|---|
+| **Push** | FLUJO keeps one `events/stream` request open on the MCP connection. Events arrive as notifications the moment they happen. | No address to reach, works with local and remote servers, no delay. |
+| **Poll** | FLUJO calls `events/poll` at the pace the server asks for (`nextPollMs`, never more than once a second). | Works with every server; events arrive a little later. |
+| **Webhook** | The server posts signed requests to `http://127.0.0.1:<port>/api/webhooks/mcp/{id}`. | The spec asks for `https` callback URLs and lets servers refuse this computer's address, so only local servers that allow it can use it. |
+
+An event that lists no modes comes from an earlier draft, which only knew webhooks.
+Automations saved before push and poll existed keep using webhooks until you pick another
+mode.
+
+All three modes:
+
+- go through the same steps once an event arrives: the "already seen" list (by `eventId`),
+  steering into a running conversation, the Persona mailbox, and the labelled untrusted
+  data block a run gets;
+- save the server's `cursor` once an event is accepted and send it when they start again,
+  so a restart of FLUJO or of the server carries on where FLUJO stopped. A cursor is only
+  sent to the subscription (server, event, filter) it came from;
+- keep the server running while the automation is on (it is pinned, so it is not closed for
+  being idle);
+- show a note on the automation card when the server reports skipped events (`truncated` or
+  a `gap`), when the connection is lost, or when the server ends the subscription, and clear
+  it on the next success. They keep trying with growing waits and never give up for good.
+
+On Streamable HTTP with the newer client, every `events/*` request except `events/list`
+carries `Mcp-Name` and one `Mcp-Param-*` header per argument marked `x-mcp-header`, as the
+spec asks. An event whose `x-mcp-header` marks break the transport's rules is left out of
+the list.
+
+### Push
+
+1. When the automation is armed, FLUJO sends `events/stream` with the event name, the
+   filter and the saved cursor (none the first time, which means "from now").
+2. The server confirms with `notifications/events/active`. Then events, heartbeats and
+   errors follow as notifications that carry the request's id, so several streams can share
+   one connection.
+3. Events that arrive within a quarter of a second become one run (`data.event` for one,
+   `data.events` for several).
+4. While the automation is busy, events wait in memory, bounded by count and by a budget that
+   scales with the machine. When that is full and the server can replay (its cursor is not
+   `null`), FLUJO closes the stream, forgets the waiting events and opens it again from the
+   saved cursor once it caught up. Nothing is lost and memory stays bounded. For an event
+   type without replay the oldest waiting events are dropped and the card says so.
+5. Heartbeats move the saved cursor forward while nothing waits. No message for three
+   heartbeats means the stream is dead; FLUJO opens a new one. Every reconnect waits a short
+   random moment first, as the spec asks.
+6. When the automation is switched off, changed or deleted, FLUJO cancels the stream.
+
+### Poll
+
+1. The first poll sends no cursor ("from now"); later polls send the saved one.
+2. A poll answer with events becomes one run. While the automation is busy, FLUJO keeps
+   that batch and tries again; it does not poll further, so nothing piles up.
+3. The cursor is saved only after the batch was accepted. `hasMore` drains a backlog at
+   once; otherwise the next poll waits `nextPollMs`, at least one second.
+
+### Webhook
+
+1. When the automation is armed, FLUJO calls `events/subscribe` with its local URL, a
+   generated signing secret and the saved cursor. It repeats this every few minutes, which
+   keeps the subscription alive; each grant asks for at most one day. The answer's cursor is
+   saved too, so a quiet subscription does not fall behind the server's history.
+2. If the server first checks the URL, FLUJO answers its challenge.
+3. The server posts each event as a signed webhook
+   ([Standard Webhooks](https://www.standardwebhooks.com/)). FLUJO checks the signature and
+   starts the flow or Persona.
+4. When the automation is deleted, switched off, pointed at another event or moved to
+   another mode, FLUJO calls `events/unsubscribe`. Pausing all automations keeps the
+   subscription, so events wait.
 
 | FLUJO answers | Meaning | The sender |
 |---|---|---|
@@ -43,34 +100,17 @@ The sender owns reliability. FLUJO never holds an unstarted event in memory:
 | `200` + `{"challenge": …}` | The answer to a `verification` message | Activates delivery |
 | `200` | A `gap` or `terminated` notice; the automation card shows a note | Moves on |
 | `503` + `Retry-After` | A run is going, automations are paused, or the steered conversation has not reached a safe point yet | Tries the same event again |
-| `410` | Automation deleted, disabled or changed | Drops this delivery |
+| `410` | Automation deleted, disabled, changed or moved to push or poll | Drops this delivery |
 | `401` | Bad signature | Retries with backoff |
 | `413` | Over 256 KB | Skips the event |
 
+The spec suggests a sender retries for only 10 to 15 minutes. An event that stays busy
+longer can be dropped by the sender; the saved cursor brings it back only when the server
+honours it. The endpoint only accepts calls from this computer.
+
 Events are processed one at a time unless the automation allows parallel runs. The `skip`
 overlap setting does not apply to this trigger, because a skipped event would be lost after
-the sender was told it arrived.
-
-FLUJO saves the server's `cursor` from each accepted event (and from a `gap` notice) and
-sends it with every subscribe. A subscription that expired while FLUJO was off starts again
-from there instead of "from now". Repeats from such a replay are recognised by `eventId`.
-
-The current draft suggests a sender retries for only 10 to 15 minutes. An event that stays
-busy longer (a run that takes longer than that while the next event waits) can be dropped
-by the sender. The saved cursor helps only when the server honours it.
-
-While the automation is armed, FLUJO pins the server so it is not closed for being idle.
-
-The endpoint only accepts calls from this computer.
-
-### Known gap: `https` callback URLs
-
-The current draft says servers must refuse callback URLs that are not `https`, and should
-refuse loopback addresses unless configured to allow them. FLUJO's URL is
-`http://127.0.0.1:<port>/…`, so it works with servers that allow local delivery
-(`mcp-whatsapp-web` does), but a strict server will refuse the subscription and the card
-shows its error. The draft's `events/stream` push mode, over the MCP connection itself,
-would avoid this for local servers; it is not built yet.
+it was accepted.
 
 ## Claude channel messages (no delivery guarantee)
 
@@ -114,9 +154,9 @@ the automation starts a run as usual.
 - It takes the same path as a message typed into a running chat, so every model picks it up
   at its next safe point. Like those messages, it is kept word for word when a long chat is
   summarized, so its "untrusted" label is never lost in a summary.
-- The event counts as delivered only once it is part of the conversation. Until then FLUJO
-  answers `503` and the event stays queued in the conversation; the sender's retry is told
-  `200` once it landed. Each event has a fixed message id, so retries never add it twice.
+- The event counts as delivered only once it is part of the conversation. Until then it
+  waits (push and poll hold it; a webhook sender is told `503`). Each event has a fixed
+  message id, so a second try never adds it twice.
 - If the conversation stops before the event landed, FLUJO takes the waiting copy back and
   starts a run instead.
 - Persona conversations take the event through the Persona's durable mailbox.
@@ -130,8 +170,19 @@ still a research preview, a custom channel only loads with
 Agent SDK), and organisations can switch channels off. The design itself still fits the
 current Claude Code docs (stdio, `experimental['claude/channel']`, `content` plus `meta`).
 
+## Not covered yet
+
+- `notifications/events/list_changed` arrives only on a `subscriptions/listen` stream that
+  asks for `eventsListChanged`. FLUJO does not ask for it; the editor reads `events/list`
+  each time it opens, and a removed or changed event ends its subscription with a
+  `terminated` notice, which the card shows.
+- `maxAgeMs` is not sent: after a long break FLUJO replays everything the server still keeps
+  instead of skipping old events. Bursts still become a few runs.
+
 ## Writing a server
 
-Declare the extension and implement `events/list`, `events/subscribe` and
-`events/unsubscribe`. Keep the events durably and retry until a `2xx`. Put an `eventId` and,
-if you can, a `cursor` on every event. `mcp-whatsapp-web` is a complete example.
+Declare the extension and implement `events/list` plus at least one mode: `events/stream`
+(push), `events/poll`, or `events/subscribe` and `events/unsubscribe` (webhook). Put an
+`eventId` and, if you can, a `cursor` on every event. `mcp-whatsapp-web` is a complete
+webhook example; `__tests__/mcp/mcpEventsPushPoll.test.ts` has a small push and poll server
+built on the official SDK.

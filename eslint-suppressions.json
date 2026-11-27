@@ -217,11 +217,6 @@
       "count": 1
     }
   },
-  "src/backend/services/mcp/index.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
   "src/backend/services/mcp/internalTools.ts": {
     "flujo/no-double-cast": {
       "count": 1

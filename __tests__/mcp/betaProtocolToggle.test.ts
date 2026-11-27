@@ -20,6 +20,8 @@ jest.mock("@/utils/storage/backend", () => ({
 }));
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { InMemoryTransport as BetaInMemoryTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport as BetaStdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import {
   createNewClient,
@@ -182,6 +184,30 @@ describe("shouldRecreateClient — stable beta connections", () => {
 });
 
 describe("beta factories", () => {
+  it("delivers resource, Claude channel and MCP events notifications to the handlers it was built with", async () => {
+    const seen: Array<[string, unknown]> = [];
+    const methods = [
+      "notifications/resources/updated",
+      "notifications/claude/channel",
+      "notifications/events/event",
+    ];
+    const handlers = Object.fromEntries(methods.map(method => [method, (params: unknown) => { seen.push([method, params]); }]));
+    const client = createNewBetaClient(stdio(), undefined, undefined, handlers);
+    const server = new Server({ name: "srv", version: "1" }, { capabilities: { resources: { subscribe: true } } });
+    const [clientSide, serverSide] = BetaInMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverSide), client.connect(clientSide as never)]);
+    await server.notification({ method: "notifications/resources/updated", params: { uri: "file:///a" } });
+    await server.notification({ method: "notifications/claude/channel", params: { content: "hi" } });
+    await server.notification({ method: "notifications/events/event", params: { eventId: "e", name: "n" } });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(seen).toEqual([
+      ["notifications/resources/updated", expect.objectContaining({ uri: "file:///a" })],
+      ["notifications/claude/channel", expect.objectContaining({ content: "hi" })],
+      ["notifications/events/event", expect.objectContaining({ eventId: "e" })],
+    ]);
+    await client.close();
+  });
+
   it("marks beta clients and leaves v1 clients unmarked", () => {
     expect(isBetaClient(createNewBetaClient(stdio()))).toBe(true);
     expect(isBetaClient(createNewClient(stdio()) as Client)).toBe(false);

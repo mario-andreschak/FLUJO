@@ -16,6 +16,7 @@ import {
   type OAuthClientProvider as BetaOAuthClientProvider,
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport as BetaStdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { z } from "zod";
 import { createLogger } from "@/utils/logger";
 import { assertMcpTransport } from './transportAdmission';
 import { loadItem } from "@/utils/storage/backend";
@@ -124,7 +125,12 @@ export function isBetaClient(client: Client): boolean {
  * Returned typed as the v1 Client so it can live in the shared connection map;
  * see the module comment for why that cast is sound.
  */
-export function createNewBetaClient(config: MCPServerConfig, onResourcesChanged?: () => void, onToolsChanged?: () => void): Client {
+export function createNewBetaClient(
+  config: MCPServerConfig,
+  onResourcesChanged?: () => void,
+  onToolsChanged?: () => void,
+  extensionNotifications: ExtensionNotificationHandlers = {},
+): Client {
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
@@ -200,6 +206,7 @@ export function createNewBetaClient(config: MCPServerConfig, onResourcesChanged?
       elicitationHandler!(request, { signal: context.mcpReq.signal }),
     );
   }
+  registerExtensionNotifications(client, config.name, extensionNotifications);
 
   // Register the declared host identity before discovery. Only negotiated
   // modern remote connections can later create the raw extension channel.
@@ -241,6 +248,29 @@ export function createNewBetaClient(config: MCPServerConfig, onResourcesChanged?
     `Created split-SDK MCP client for ${config.name} (version negotiation: ${config.transport === 'stdio' ? 'legacy' : 'auto'})`,
   );
   return client as unknown as Client;
+}
+
+/** Handlers for notifications outside the core protocol, by method. */
+export type ExtensionNotificationHandlers = Record<string, (params: unknown) => void>;
+
+const ExtensionNotificationParams = z.object({}).passthrough();
+
+/**
+ * The newer client only takes a handler for a non-core notification together
+ * with a schema; without one it throws while the connection is being built.
+ */
+export function registerExtensionNotifications(
+  client: Pick<BetaClient, 'setNotificationHandler'>,
+  serverName: string,
+  handlers: ExtensionNotificationHandlers,
+): void {
+  for (const [method, handler] of Object.entries(handlers)) {
+    try {
+      client.setNotificationHandler(method, { params: ExtensionNotificationParams }, params => handler(params));
+    } catch (error) {
+      log.warn(`Could not listen for ${method} from ${serverName}`, error);
+    }
+  }
 }
 
 /** Merge resolved custom headers into a RequestInit, like connection.ts does for v1. */

@@ -10,6 +10,8 @@ import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
   isPersonaControlledPlannedExecution,
+  MCP_EVENT_DELIVERY_MODES,
+  mcpEventDelivery,
   mcpEventSource,
   validateAutomationAiGate,
   withoutLegacyAiGate,
@@ -42,6 +44,10 @@ import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll } from './triggers/mcpPoll';
 import { armMcpEvent, mcpEventDeliveryUrl, mcpEventSubscriptionKey, newMcpEventSecret } from './triggers/mcpEvent';
 import { armClaudeChannel } from './triggers/claudeChannel';
+import { armMcpEventStream } from './triggers/mcpEventStream';
+import { armMcpEventPoll } from './triggers/mcpEventPoll';
+import type { McpEventOccurrence } from '@/backend/services/mcp/serverEvents';
+import type { McpEventStreamHandlers } from '@/backend/services/mcp/serverEventStream';
 import { subscribeInboundEvents } from '@/backend/services/mcp/inboundEvents';
 import { composeTriggerPrompt } from './triggerPrompt';
 import { intervalMsToCron } from '@/utils/shared/cron';
@@ -113,6 +119,8 @@ const log = createLogger('backend/services/scheduler/index');
 
 /** Final assistant output is truncated to this many chars in run history. */
 const MAX_STORED_OUTPUT_CHARS = 4096;
+/** Events per poll; a larger backlog arrives in the next polls at once. */
+const MCP_EVENT_POLL_BATCH = 50;
 
 const EMPTY_FILE: PlannedExecutionsFile = { version: 1, paused: false, executions: [] };
 const CONFIG_MUTATION_LOCK_ID = 'scheduler_planned_executions';
@@ -773,21 +781,104 @@ export class SchedulerService {
           );
           break;
         }
+        const eventPin = {
+          pin: this.bindToWorkspace(async () => {
+            const { mcpService } = await import('@/backend/services/mcp');
+            mcpService.pinServer(trigger.serverName, pin);
+          }),
+          unpin: this.bindToWorkspace(async () => {
+            const { mcpService } = await import('@/backend/services/mcp');
+            mcpService.unpinServer(trigger.serverName, pin);
+          }),
+        };
+        const eventCursor = {
+          loadCursor: this.bindToWorkspace(async () => {
+            const { resumeCursor } = await import('./mcpEventDelivery');
+            return resumeCursor(await loadExecutionState(execution.id), trigger);
+          }),
+          saveCursor: this.bindToWorkspace(async (cursor: string) => {
+            const { withEventCursor } = await import('./mcpEventDelivery');
+            await updateExecutionState(execution.id, current => withEventCursor(current, trigger, cursor),
+              () => this.assertCurrentSchedule(execution));
+          }),
+        };
+        const deliverOccurrences = (delivery: 'push' | 'poll') => this.bindToWorkspace(async (batch: McpEventOccurrence[]) => {
+          const [{ deliverMcpEventOccurrences }, { steerEventWithRuntime }] = await Promise.all([
+            import('./mcpEventDelivery'),
+            import('./eventSteering'),
+          ]);
+          return deliverMcpEventOccurrences({
+            scheduler: this,
+            loadState: loadExecutionState,
+            updateState: (executionId, update) => updateExecutionState(executionId, update),
+            steer: steerEventWithRuntime,
+            onBackgroundError: (message, error) => log.warn(`${message} for ${execution.id}:`, error),
+          }, execution.id, delivery, batch);
+        });
+        const delivery = mcpEventDelivery(trigger);
+        if (delivery === 'push') {
+          this.armed.set(
+            execution.id,
+            armMcpEventStream({
+              open: this.bindToWorkspace(async (cursor: string | null, handlers: McpEventStreamHandlers) => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before opening the event stream');
+                return mcpService.openServerEventStream(trigger.serverName, {
+                  name: trigger.eventName,
+                  arguments: trigger.arguments,
+                  cursor,
+                }, handlers);
+              }),
+              ...eventCursor,
+              deliver: deliverOccurrences('push'),
+              ...eventPin,
+              onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
+              onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
+            })
+          );
+          break;
+        }
+        if (delivery === 'poll') {
+          this.armed.set(
+            execution.id,
+            armMcpEventPoll({
+              poll: this.bindToWorkspace(async (cursor: string | null) => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before polling');
+                return mcpService.pollServerEvent(trigger.serverName, {
+                  name: trigger.eventName,
+                  arguments: trigger.arguments,
+                  cursor,
+                  maxEvents: MCP_EVENT_POLL_BATCH,
+                });
+              }),
+              ...eventCursor,
+              deliver: deliverOccurrences('poll'),
+              ...eventPin,
+              onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
+              onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
+            })
+          );
+          break;
+        }
         this.armed.set(
           execution.id,
           armMcpEvent({
             subscribe: this.bindToWorkspace(async (ttlMs: number) => {
               const { mcpService } = await import('@/backend/services/mcp');
               if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before subscribing');
-              const { eventCursor } = await loadExecutionState(execution.id);
-              return mcpService.subscribeServerEvent(trigger.serverName, {
+              const granted = await mcpService.subscribeServerEvent(trigger.serverName, {
                 name: trigger.eventName,
                 arguments: trigger.arguments,
                 url: mcpEventDeliveryUrl(execution.id, trigger, getCurrentWorkspace()),
                 secret: trigger.secret,
                 ttlMs,
-                cursor: eventCursor ?? null,
+                cursor: await eventCursor.loadCursor(),
               });
+              // The answer carries a safe resume point, so a quiet subscription
+              // does not fall behind the server's history.
+              if (granted.cursor) await eventCursor.saveCursor(granted.cursor);
+              return granted;
             }),
             unsubscribe: this.bindToWorkspace(async () => {
               const { mcpService } = await import('@/backend/services/mcp');
@@ -797,14 +888,7 @@ export class SchedulerService {
                 url: mcpEventDeliveryUrl(execution.id, trigger, getCurrentWorkspace()),
               });
             }),
-            pin: this.bindToWorkspace(async () => {
-              const { mcpService } = await import('@/backend/services/mcp');
-              mcpService.pinServer(trigger.serverName, pin);
-            }),
-            unpin: this.bindToWorkspace(async () => {
-              const { mcpService } = await import('@/backend/services/mcp');
-              mcpService.unpinServer(trigger.serverName, pin);
-            }),
+            ...eventPin,
             onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
             onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
           })
@@ -1529,6 +1613,9 @@ export class SchedulerService {
         if (!trigger.serverName) return 'A server is required';
         if (mcpEventSource(trigger) === 'events' && !trigger.eventName) {
           return 'A server and event are required';
+        }
+        if (trigger.delivery !== undefined && !MCP_EVENT_DELIVERY_MODES.includes(trigger.delivery)) {
+          return 'Events arrive by push, poll or webhook';
         }
         if (trigger.steerConversationId !== undefined
           && (typeof trigger.steerConversationId !== 'string'

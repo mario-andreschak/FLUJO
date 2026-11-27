@@ -197,6 +197,9 @@ describe('events extension requests', () => {
   }
   const sent = (request: jest.Mock, index = 0) =>
     request.mock.calls[index][0] as { method: string; params: Record<string, unknown> };
+  // Requests other than events/list first look up the event once, for the routing headers.
+  const sentTo = (request: jest.Mock, method: string) =>
+    request.mock.calls.map(([body]) => body as { method: string; params: Record<string, unknown> }).find(body => body.method === method)!;
 
   it.each([
     ['the current extensions key', { extensions: { 'io.modelcontextprotocol/events': {} } }, true],
@@ -208,9 +211,9 @@ describe('events extension requests', () => {
   });
 
   it('subscribes with the saved cursor and declares itself as an events client', async () => {
-    const { client, request } = fakeClient({}, [{ id: 's1', refreshBefore: null }]);
+    const { client, request } = fakeClient({}, [{ events: [] }, { id: 's1', refreshBefore: null }]);
     await subscribeMcpEvent(client, { name: 'message.received', url: 'http://127.0.0.1/x', secret: SECRET, ttlMs: 1, cursor: 'c-7' });
-    expect(sent(request)).toMatchObject({
+    expect(sentTo(request, 'events/subscribe')).toMatchObject({
       method: 'events/subscribe',
       params: {
         name: 'message.received',
@@ -222,9 +225,9 @@ describe('events extension requests', () => {
   });
 
   it('starts from now when nothing was accepted yet', async () => {
-    const { client, request } = fakeClient({}, [{ id: 's1', refreshBefore: null }]);
+    const { client, request } = fakeClient({}, [{ events: [] }, { id: 's1', refreshBefore: null }]);
     await subscribeMcpEvent(client, { name: 'message.received', url: 'http://127.0.0.1/x', secret: SECRET });
-    expect(sent(request).params.cursor).toBeNull();
+    expect(sentTo(request, 'events/subscribe').params.cursor).toBeNull();
   });
 
   it('reads every page of the event list', async () => {
@@ -237,9 +240,9 @@ describe('events extension requests', () => {
   });
 
   it('unsubscribes by name, arguments and URL', async () => {
-    const { client, request } = fakeClient({}, [{}]);
+    const { client, request } = fakeClient({}, [{ events: [] }, {}]);
     await unsubscribeMcpEvent(client, { name: 'message.received', arguments: { chat_ids: ['a'] }, url: 'http://127.0.0.1/x' });
-    expect(sent(request)).toMatchObject({
+    expect(sentTo(request, 'events/unsubscribe')).toMatchObject({
       method: 'events/unsubscribe',
       params: { name: 'message.received', arguments: { chat_ids: ['a'] }, delivery: { url: 'http://127.0.0.1/x' } },
     });

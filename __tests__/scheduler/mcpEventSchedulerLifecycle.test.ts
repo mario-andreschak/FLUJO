@@ -36,6 +36,11 @@ jest.mock('@/backend/services/mcp', () => ({
     subscribeServerEvent: jest.fn(async () => ({ id: 'sub', refreshBefore: null })),
     unsubscribeServerEvent: jest.fn(async () => undefined),
     connectClaudeChannel: jest.fn(async () => true),
+    openServerEventStream: jest.fn(async (_server: string, _request: unknown, handlers: { onActive(info: unknown): void }) => {
+      handlers.onActive({ cursor: 'stream-1', truncated: false });
+      return { ended: new Promise(() => undefined), close: jest.fn() };
+    }),
+    pollServerEvent: jest.fn(async () => ({ events: [], malformed: 0, cursor: 'poll-1', truncated: false, hasMore: false, nextPollMs: 60_000 })),
   },
 }));
 
@@ -57,7 +62,7 @@ jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
 }));
 
 const mocked = mcpService as unknown as Record<
-  'subscribeServerEvent' | 'unsubscribeServerEvent' | 'connectClaudeChannel' | 'pinServer' | 'unpinServer',
+  'subscribeServerEvent' | 'unsubscribeServerEvent' | 'connectClaudeChannel' | 'pinServer' | 'unpinServer' | 'openServerEventStream' | 'pollServerEvent',
   jest.Mock
 >;
 
@@ -147,9 +152,45 @@ describe('event trigger lifecycle in the scheduler', () => {
     expect(mocked.subscribeServerEvent).not.toHaveBeenCalled();
   });
 
+  it('saves the resume point from the subscribe answer, tied to this subscription', async () => {
+    mocked.subscribeServerEvent.mockResolvedValueOnce({ id: 'sub', refreshBefore: null, cursor: 'w-5' });
+    const { execution } = await scheduler.create(input());
+    await settle();
+    expect(store.get(`planned-execution-state/${execution!.id}`)).toMatchObject({ eventCursor: 'w-5', eventCursorFor: expect.any(String) });
+  });
+
+  it('arms push delivery with a stream, pinned, resuming from the saved cursor', async () => {
+    const { execution } = await scheduler.create(input({ trigger: { ...eventTrigger, delivery: 'push' } }));
+    await settle();
+    expect(mocked.subscribeServerEvent).not.toHaveBeenCalled();
+    expect(mocked.pinServer).toHaveBeenCalledWith('chat', `trigger:${execution!.id}`);
+    expect(mocked.openServerEventStream).toHaveBeenCalledWith('chat', {
+      name: 'message.received', arguments: { chat_ids: ['a'] }, cursor: null,
+    }, expect.any(Object));
+    expect(store.get(`planned-execution-state/${execution!.id}`)).toMatchObject({ eventCursor: 'stream-1' });
+  });
+
+  it('arms poll delivery with events/poll and saves the cursor it gets', async () => {
+    const { execution } = await scheduler.create(input({ trigger: { ...eventTrigger, delivery: 'poll' } }));
+    await settle();
+    expect(mocked.pollServerEvent).toHaveBeenCalledWith('chat', expect.objectContaining({ name: 'message.received', cursor: null, maxEvents: 50 }));
+    expect(store.get(`planned-execution-state/${execution!.id}`)).toMatchObject({ eventCursor: 'poll-1' });
+  });
+
+  it('ends the webhook subscription when the automation switches to push', async () => {
+    const { execution } = await scheduler.create(input());
+    await settle();
+    const secret = execution!.trigger.type === 'mcp-event' ? execution!.trigger.secret : '';
+    await scheduler.update(execution!.id, { trigger: { ...eventTrigger, secret, delivery: 'push' } });
+    await settle();
+    expect(mocked.unsubscribeServerEvent).toHaveBeenCalledTimes(1);
+    expect(mocked.openServerEventStream).toHaveBeenCalledTimes(1);
+  });
+
   it('validates the source and the conversation to steer', async () => {
     const off = { enabled: false };
     expect((await scheduler.create(input({ ...off, trigger: { ...eventTrigger, source: 'pigeon' } }))).error).toMatch(/Unknown event source/);
+    expect((await scheduler.create(input({ ...off, trigger: { ...eventTrigger, delivery: 'pigeon' } }))).error).toMatch(/push, poll or webhook/);
     expect((await scheduler.create(input({ ...off, trigger: { ...eventTrigger, steerConversationId: '../etc' } }))).error)
       .toMatch(/conversation id/);
     const cleared = await scheduler.create(input({ ...off, trigger: { ...eventTrigger, steerConversationId: '  ' } }));
