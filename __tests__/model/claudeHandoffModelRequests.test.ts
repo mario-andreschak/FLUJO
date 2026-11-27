@@ -8,7 +8,9 @@
  * bundled Claude Code (in their own processes, as Jest cannot load the SDK's
  * ESM build). The adapter's own hooks, permission callback and tool handlers
  * answer Claude Code through a relay, and a stand-in model service on this
- * machine counts every model request. Re-check on every Agent SDK upgrade.
+ * machine counts every model request. Re-check on every Agent SDK upgrade:
+ * the stop relies on the SDK's PostToolBatch hook and its `continue: false`,
+ * so each test also checks what that hook was asked and answered.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -56,6 +58,10 @@ let baseUrl: string;
 let script: Script;
 /** Each model request's messages, as JSON. */
 let requests: string[];
+/** The tool-use ids of each PostToolBatch call and what the adapter answered. */
+let batches: Array<{ toolUseIds: string[]; answer: unknown }>;
+/** Why each Claude Code run ended, from its result message. */
+let endings: Array<string | undefined>;
 const bridges: Array<Promise<void>> = [];
 
 beforeAll(async () => {
@@ -111,6 +117,8 @@ afterAll(async () => {
 beforeEach(async () => {
   _clearAllSessionsForTests();
   requests = [];
+  batches = [];
+  endings = [];
   mockClaude.home = await fs.mkdtemp(path.join(root, 'home-'));
   queryMock.mockReset().mockImplementation(relayQuery);
 });
@@ -149,7 +157,14 @@ function relayQuery({ prompt, options }: { prompt: AsyncIterable<unknown>; optio
       const [name, input, opts] = call.args as [string, unknown, Record<string, unknown>];
       return canUseTool!(name, input, { ...opts, signal });
     }
-    if (call.target === 'hook') return flatHooks[call.event!][call.index!](call.args[0], call.args[1], { signal });
+    if (call.target === 'hook') {
+      const result = await flatHooks[call.event!][call.index!](call.args[0], call.args[1], { signal });
+      if (call.event === 'PostToolBatch') {
+        const input = call.args[0] as { tool_calls: Array<{ tool_use_id: string }> };
+        batches.push({ toolUseIds: input.tool_calls.map(entry => entry.tool_use_id), answer: result });
+      }
+      return result;
+    }
     return tools[call.server!].find(definition => definition.name === call.name)!.handler(call.args[0], {});
   };
 
@@ -190,6 +205,8 @@ function relayQuery({ prompt, options }: { prompt: AsyncIterable<unknown>; optio
     createInterface({ input: child.stdout }).on('line', line => {
       const parsed = JSON.parse(line) as { type: string; id?: number; message?: unknown; target: string; args: unknown[] };
       if (parsed.type === 'frame') {
+        const result = parsed.message as { type?: string; terminal_reason?: string };
+        if (result.type === 'result') endings.push(result.terminal_reason);
         frames.push(parsed.message);
         wake?.();
         return;
@@ -244,12 +261,19 @@ async function runTurn(answer: Script, extra: Partial<CompletionInput> = {}) {
 }
 
 const afterRequests = (...turns: Block[][]): Script => request => turns[request] ?? [text(EXTRA)];
+/** The stand-in's id for the tool call at `position` of its `request`-th answer (1-based). */
+const useId = (request: number, position: number) => `toolu_${request}_${position}`;
+const STOP = { continue: false, stopReason: expect.any(String) };
 
 describe('Claude subscription hand-off with the bundled Claude Code and a stand-in model service (#1414)', () => {
   it('sends no further model request after a plain hand-off', async () => {
     const { message, handoffs, result } = await runTurn(afterRequests([text(ANSWER), tool('handoff_to_finish_node')]));
 
     expect(requests).toHaveLength(1);
+    // Stopped by the hook, not by luck: an SDK upgrade that stops asking
+    // PostToolBatch for FLUJO's tools, or ignores its answer, fails here.
+    expect(batches).toEqual([{ toolUseIds: [useId(1, 1)], answer: STOP }]);
+    expect(endings).toEqual(['hook_stopped']);
     expect(message.content).toBe(ANSWER);
     expect(handoffs).toEqual([['handoff_to_finish_node', {}]]);
     expect(result.completion.usage).toMatchObject({ completion_tokens: OUTPUT_TOKENS });
@@ -265,9 +289,21 @@ describe('Claude subscription hand-off with the bundled Claude Code and a stand-
     expect(lookups).toEqual([1]);
     expect(requests).toHaveLength(2);
     expect(requests[1]).toContain('opening hours: 8-18');
+    expect(batches).toEqual([{ toolUseIds: [useId(1, 0)], answer: {} }, { toolUseIds: [useId(2, 1)], answer: STOP }]);
+    expect(endings).toEqual(['hook_stopped']);
     expect(message.content).toBe(ANSWER);
     expect(handoffs).toEqual([['handoff_to_finish_node', {}]]);
     expect(result.completion.usage).toMatchObject({ completion_tokens: 2 * OUTPUT_TOKENS });
+  });
+
+  it('lets a tool called beside the hand-off finish, then sends no further model request', async () => {
+    const { handoffs, lookups } = await runTurn(afterRequests([tool('lookup'), tool('handoff_to_finish_node')]));
+
+    expect(lookups).toEqual([1]);
+    expect(requests).toHaveLength(1);
+    expect(batches).toEqual([{ toolUseIds: [useId(1, 0), useId(1, 1)], answer: STOP }]);
+    expect(endings).toEqual(['hook_stopped']);
+    expect(handoffs).toEqual([['handoff_to_finish_node', {}]]);
   });
 
   it('leaves a turn without a hand-off unchanged', async () => {
@@ -275,6 +311,8 @@ describe('Claude subscription hand-off with the bundled Claude Code and a stand-
 
     expect(lookups).toEqual([1]);
     expect(requests).toHaveLength(2);
+    expect(batches).toEqual([{ toolUseIds: [useId(1, 0)], answer: {} }]);
+    expect(endings).toEqual(['completed']);
     expect(message.content).toBe(ANSWER);
     expect(handoffs).toEqual([]);
     expect(result.completion.usage).toMatchObject({ completion_tokens: 2 * OUTPUT_TOKENS });
@@ -288,6 +326,7 @@ describe('Claude subscription hand-off with the bundled Claude Code and a stand-
     ));
 
     expect(requests).toHaveLength(3);
+    expect(batches).toEqual([{ toolUseIds: [useId(1, 0)], answer: {} }, { toolUseIds: [useId(2, 0)], answer: {} }]);
     expect(handoffs).toEqual([['handoff_to_worker', { task: 'first' }], ['handoff_to_worker', { task: 'second' }]]);
   });
 
@@ -296,6 +335,7 @@ describe('Claude subscription hand-off with the bundled Claude Code and a stand-
     const question: OpenAI.ChatCompletionMessageParam = { role: 'user', content: 'When are you open?' };
     const first = await runTurn(afterRequests([text(ANSWER), tool('handoff_to_finish_node')]), { ...step, messages: [question] });
     expect(requests).toHaveLength(1);
+    expect(endings).toEqual(['hook_stopped']);
 
     requests = [];
     const handoffId = first.result.completion.choices[0].message.tool_calls![0].id;

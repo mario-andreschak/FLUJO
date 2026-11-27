@@ -79,7 +79,7 @@ function binding(): ClaudeSpareBinding & { toolSpy: jest.Mock } {
     toolSpy,
     canUseTool: jest.fn(async (_name, input) => ({ behavior: 'allow' as const, updatedInput: input })),
     preToolUse: jest.fn(async () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse' as const } })),
-    postToolUse: jest.fn(async () => ({})),
+    postToolBatch: jest.fn(async () => ({})),
     tools: new Map([['lookup', toolSpy]]),
   };
 }
@@ -169,7 +169,7 @@ describe('claude warm process isolation', () => {
     await expect(d.canUseTool('mcp__flujo__lookup', {}, permissionContext())).resolves.toMatchObject({ behavior: 'deny' });
     await expect(d.preToolUse({ hook_event_name: 'PreToolUse' } as never, 'tool-1', { signal: new AbortController().signal }))
       .resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
-    await expect(d.postToolUse({ hook_event_name: 'PostToolUse' } as never, 'tool-1', { signal: new AbortController().signal }))
+    await expect(d.postToolBatch({ hook_event_name: 'PostToolBatch', tool_calls: [] } as never, undefined, { signal: new AbortController().signal }))
       .resolves.toMatchObject({ continue: false });
     await expect(d.toolHandler('lookup')({}, {})).resolves.toMatchObject({ isError: true });
 
@@ -190,9 +190,9 @@ describe('claude warm process isolation', () => {
     await expect(d.canUseTool('mcp__flujo__lookup', { q: 1 }, permissionContext())).resolves.toMatchObject({ behavior: 'allow' });
     await expect(d.toolHandler('lookup')({ q: 1 }, {})).resolves.toMatchObject({ content: [{ text: 'tool ran for the request' }] });
     expect(bound.toolSpy).toHaveBeenCalledWith({ q: 1 }, {});
-    await expect(d.postToolUse({ hook_event_name: 'PostToolUse' } as never, 'tool-1', { signal: new AbortController().signal }))
+    await expect(d.postToolBatch({ hook_event_name: 'PostToolBatch', tool_calls: [] } as never, undefined, { signal: new AbortController().signal }))
       .resolves.toEqual({});
-    expect(bound.postToolUse).toHaveBeenCalledTimes(1);
+    expect(bound.postToolBatch).toHaveBeenCalledTimes(1);
     await expect(d.toolHandler('refund')({}, {})).resolves.toMatchObject({ isError: true });
 
     releaseClaudeSpare(spare);
