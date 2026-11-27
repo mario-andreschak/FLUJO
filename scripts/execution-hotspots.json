@@ -15,7 +15,7 @@
     },
     {
       "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
-      "maxLines": 3025,
+      "maxLines": 2785,
       "modules": [
         "src/backend/execution/flow/handlers/toolCallProcessing.ts",
         "src/backend/execution/flow/handlers/modelMedia.ts",
@@ -24,7 +24,8 @@
         "src/backend/execution/flow/handlers/modelHandlerSettings.ts",
         "src/backend/execution/flow/handlers/streamedAssistantMessages.ts",
         "src/backend/execution/flow/handlers/modelCompletionContract.ts",
-        "src/backend/execution/flow/handlers/wireCompaction.ts"
+        "src/backend/execution/flow/handlers/wireCompaction.ts",
+        "src/backend/execution/flow/handlers/selfOrchestratedToolExecutors.ts"
       ]
     },
     {
