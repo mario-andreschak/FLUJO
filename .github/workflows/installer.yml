@@ -288,7 +288,7 @@ jobs:
       - name: Back up, restart, upgrade and restore with the installed application
         shell: pwsh
         run: |
-          $runtime = Join-Path $env:LOCALAPPDATA 'FLUJO-cli\runtime\node-v22.23.4-win-x64\node.exe'
+          $runtime = Join-Path $env:LOCALAPPDATA 'FLUJO-cli\runtime\node-v24.22.1-win-x64\node.exe'
           $runtimeArguments = if (Test-Path -LiteralPath $runtime) { @('--node', $runtime) } else { @() }
           $appRoot = Join-Path $env:RUNNER_TEMP 'FLUJO fresh install'
           $report = Join-Path $env:RUNNER_TEMP 'flujo-install-evidence\packaged-acceptance.json'

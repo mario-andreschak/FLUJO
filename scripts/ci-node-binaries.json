@@ -52,6 +52,11 @@
       "evidenceSha256": "c6e9fc89ce1094870fe91007e19d21547fdc0e3e3700a0f1e9929ea8d50e48bb"
     }
   },
+  "shipped": {
+    "installer": "24.22.1",
+    "container": "22.23.4",
+    "containerBehind": "Moving the image to Node 24 needs the registry metadata of node:24.22.1-bookworm-slim recorded as archived evidence in a commit on main, and a container build and acceptance run (docs/operations/ci-node-runtime-verification.md, section Shipped runtimes)."
+  },
   "containerBase": {
     "reference": "mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d",
     "metadataUrl": "https://hub.docker.com/v2/repositories/library/node/tags/22.23.4-bookworm-slim",

@@ -109,9 +109,9 @@ try {
     if (-not (Test-Path -LiteralPath $launcher)) { throw 'Global launcher was not created.' }
     $browserNode = 'node'
     if ($requiresPrivateNode) {
-        $browserNode = Join-Path $cli 'runtime\node-v22.23.4-win-x64\node.exe'
+        $browserNode = Join-Path $cli 'runtime\node-v24.22.1-win-x64\node.exe'
         $result.bootstrappedNodeVersion = & $browserNode --version
-        if ($LASTEXITCODE -ne 0 -or $result.bootstrappedNodeVersion -cne 'v22.23.4') { throw 'Private Node bootstrap did not install the qualified runtime.' }
+        if ($LASTEXITCODE -ne 0 -or $result.bootstrappedNodeVersion -cne 'v24.22.1') { throw 'Private Node bootstrap did not install the qualified runtime.' }
         if ($manifest.prerequisites | Where-Object command -eq 'node') { throw 'Private Node runtime was incorrectly registered for shared WinGet removal.' }
         $result.nodeBootstrapPassed = $true
     }

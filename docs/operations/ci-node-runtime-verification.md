@@ -14,6 +14,28 @@ Minimum and current profiles coincide on each supported line. Historical Node
 22.13.1 is restricted to its original build comparison and is not supported for
 a new installation or release.
 
+## Shipped runtimes
+
+`shipped` in `scripts/ci-node-binaries.json` names the Node version FLUJO
+ships, once for the installers and once for the container image:
+
+| | Node | Where |
+|---|---|---|
+| Installers | 24.22.1 | private Windows runtime in `scripts/install.ps1`; NodeSource, Homebrew, zypper and pacman in `scripts/install.sh` |
+| Container image | 22.23.4 | both stages of `Dockerfile` |
+
+`scripts/verify-ci-node.test.mjs` fails when one of these files names another
+version or Node line, when the Windows archives' checksums are not in the
+signed checksum file of that version, or when the container ships another Node
+line than the installers without a reason in `containerBehind` (and when that
+reason stays after both match).
+
+The image stays on Node 22 for now. Moving it needs, in this order, on `main`:
+the Docker Hub metadata of `node:24.22.1-bookworm-slim` recorded as archived
+evidence (as for the 22.23.4 base), `containerBase` pointing at its digest,
+`shipped.container` set to 24.22.1 and `containerBehind` removed, then a
+container build and acceptance run. Node 22 is supported until April 2027.
+
 ## Verify the executable before running build tools
 
 Every direct CI Node setup must be immediately followed by the mandatory
