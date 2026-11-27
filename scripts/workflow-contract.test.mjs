@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
-import { assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertWorkflowContract } from './workflow-contract.mjs';
+import { assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract } from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
 const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file) && file !== 'verify.yml')
@@ -140,6 +140,45 @@ for (const [label, change] of [
     assertReleaseSweepReportsOnly(files['release-sweep.yml']);
     change(files['release-sweep.yml']);
     assert.throws(() => assertFullWorkflowContract(files), /release-sweep\.yml\/(?:sweep|report) /);
+  });
+}
+
+test('the release sweep workflow is strict YAML and needs only the built-in token with issues: write', () => {
+  const text = readFileSync(new URL('release-sweep.yml', directory), 'utf8');
+  const document = YAML.parseDocument(text, { strict: true, uniqueKeys: true, prettyErrors: true });
+  assert.deepEqual([...document.errors, ...document.warnings].map(String), []);
+  const sweep = document.toJS();
+  assertReleaseSweepRunsByDefault(sweep);
+  assert.deepEqual(sweep.permissions, { contents: 'read' });
+  assert.deepEqual(Object.fromEntries(Object.entries(sweep.jobs).map(([id, job]) => [id, job.permissions])),
+    { sweep: { contents: 'read' }, report: { contents: 'read', issues: 'write' } });
+  const tokens = [...text.matchAll(/\$\{\{\s*([^}]*?(?:token|secrets)[^}]*?)\s*\}\}/g)].map((match) => match[1]);
+  assert.deepEqual(tokens, ['github.token']);
+  assert.ok(!/RELEASE_SWEEP/.test(text), 'the RELEASE_SWEEP switch is gone for good');
+});
+
+for (const [label, change] of [
+  ['waits for a repository variable', (sweep) => { sweep.jobs.sweep.if = `vars.RELEASE_SWEEP == 'report' && ${sweep.jobs.sweep.if}`; }],
+  ['files only when a variable says so', (sweep) => { sweep.jobs.report.steps.find((step) => step.name === 'File one issue per real problem').env.FILE_ISSUES = '${{ vars.RELEASE_SWEEP }}'; }],
+  ['needs a secret', (sweep) => { sweep.jobs.report.steps.find((step) => step.name === 'File one issue per real problem').env.GH_TOKEN = '${{ secrets.SWEEP_PAT }}'; }],
+  ['files only on request', (sweep) => { sweep.jobs.report.steps.find((step) => step.name === 'File one issue per real problem').if = "github.event_name == 'workflow_dispatch'"; }],
+  ['only plans issues', (sweep) => {
+    const step = sweep.jobs.report.steps.find((item) => item.name === 'File one issue per real problem');
+    step.run = step.run.replace(' --file', '');
+  }],
+  ['has a job without a time limit', (sweep) => { delete sweep.jobs.sweep['timeout-minutes']; }],
+  ['has a job that may run for hours', (sweep) => { sweep.jobs.report['timeout-minutes'] = 360; }],
+  ['does not bound the sweep itself', (sweep) => {
+    const step = sweep.jobs.sweep.steps.find((item) => item.id === 'sweep');
+    step.run = step.run.replace(/ --total-timeout \d+/, '');
+  }],
+  ['is not started by releases', (sweep) => { delete sweep.on.workflow_run; }],
+]) {
+  test(`the release sweep runs after every release by default: refuses a sweep that ${label}`, () => {
+    const files = readWorkflows();
+    assertReleaseSweepRunsByDefault(files['release-sweep.yml']);
+    change(files['release-sweep.yml']);
+    assert.throws(() => assertFullWorkflowContract(files), /release-sweep\.yml/);
   });
 }
 

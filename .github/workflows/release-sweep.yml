@@ -1,9 +1,9 @@
 name: Release sweep
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('Release sweep {0}', inputs.version) || format('Release sweep after {0}', github.event.workflow_run.display_title) }}
 
-# After each npm release, use the released FLUJO like a person would, page by page from the feature
-# map, and report what breaks. Report only: it never changes code or opens pull requests.
-# Off until the RELEASE_SWEEP repository variable is set; see docs/release-sweep.md.
+# After every published npm release, use the released FLUJO like a person would, page by page from the
+# feature map, and file one issue per real problem. It always runs, needs nothing but the built-in token,
+# and never changes code or opens pull requests. How it works and why it is safe: docs/release-sweep.md.
 
 on:
   workflow_run:
@@ -12,13 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Published FLUJO version to sweep (x.y.z)
+        description: Published FLUJO version to sweep again (x.y.z)
         type: string
         required: true
-      file_issues:
-        description: File GitHub issues for the problems found (otherwise only plan them)
-        type: boolean
-        default: false
 
 concurrency:
   group: release-sweep
@@ -31,16 +27,16 @@ jobs:
   sweep:
     if: >-
       github.event_name == 'workflow_dispatch'
-      || ((vars.RELEASE_SWEEP == 'report' || vars.RELEASE_SWEEP == 'file-issues')
-          && github.event.workflow_run.conclusion == 'success'
+      || (github.event.workflow_run.conclusion == 'success'
           && startsWith(github.event.workflow_run.display_title, 'Release FLUJO '))
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       code: ${{ steps.sweep.outputs.code }}
+      evidence-url: ${{ steps.evidence.outputs.artifact-url }}
     env:
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
@@ -62,8 +58,14 @@ jobs:
           version="${INPUT_VERSION:-$(sed -nE 's/^Release FLUJO ([0-9]+\.[0-9]+\.[0-9]+) at .*/\1/p' <<<"$RUN_TITLE")}"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - run: npm ci --include=dev
-      - run: npx playwright install --with-deps chromium
+      - name: Install the sweep's tools, trying again after network failures
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci --include=dev && npx playwright install --with-deps chromium; then exit 0; fi
+            echo "::warning::Installing the sweep's tools failed (try $attempt of 3); trying again."
+            sleep $((attempt * 30))
+          done
+          exit 1
       - name: Use the feature map of the released version
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -81,23 +83,25 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set +e
-          node scripts/release-sweep/run.mjs --release "$VERSION" --map "$SWEEP_MAP" --out "$RUNNER_TEMP/release-sweep" --startup-timeout 300
+          node scripts/release-sweep/run.mjs --release "$VERSION" --map "$SWEEP_MAP" --out "$RUNNER_TEMP/release-sweep" \
+            --startup-timeout 300 --total-timeout 3600
           code=$?
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
           test -f "$RUNNER_TEMP/release-sweep/report.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: evidence
         if: always()
         with:
           name: release-sweep-${{ steps.version.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-sweep/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
   report:
     needs: sweep
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
       issues: write
@@ -114,17 +118,17 @@ jobs:
         with:
           name: release-sweep-${{ needs.sweep.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-sweep
-      - name: Plan or file one issue per problem
+      - name: File one issue per real problem
         env:
           GH_TOKEN: ${{ github.token }}
-          FILE_ISSUES: ${{ (github.event_name == 'workflow_dispatch' && inputs.file_issues) || (github.event_name == 'workflow_run' && vars.RELEASE_SWEEP == 'file-issues') }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVIDENCE_URL: ${{ needs.sweep.outputs.evidence-url }}
         run: |
-          file_flag=()
-          if [ "$FILE_ISSUES" = "true" ]; then file_flag=(--file); fi
+          status=0
           node scripts/release-sweep/report-issues.mjs --report "$RUNNER_TEMP/release-sweep/report.json" \
-            --repo "$GITHUB_REPOSITORY" --run-url "$RUN_URL" "${file_flag[@]}"
-          cat "$RUNNER_TEMP/release-sweep/report.md" "$RUNNER_TEMP/release-sweep/issues-plan.md" >> "$GITHUB_STEP_SUMMARY"
+            --repo "$GITHUB_REPOSITORY" --run-url "$RUN_URL" --evidence-url "$EVIDENCE_URL" --file || status=$?
+          cat "$RUNNER_TEMP/release-sweep/report.md" "$RUNNER_TEMP/release-sweep/issues-plan.md" >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$status"
       - name: Show the run as failed when the sweep found problems
         env:
           SWEEP_CODE: ${{ needs.sweep.outputs.code }}
