@@ -80,9 +80,12 @@ afterAll(async () => {
   await new Promise<void>(resolve => server.close(() => resolve()));
   const { flushStatisticsEvents } = await import('@/backend/services/statistics');
   await flushStatisticsEvents();
-  const { retireIdleWorkspaceWriterRegistration } = await import('@/backend/services/enduringAgents/runtimeLock');
+  const { retireIdleModelCatalogReader, retireIdleWorkspaceWriterRegistration } = await import('@/backend/services/enduringAgents/runtimeLock');
   const { runWithWorkspace } = await import('@/utils/workspace');
-  await runWithWorkspace('default-workspace', () => retireIdleWorkspaceWriterRegistration());
+  await runWithWorkspace('default-workspace', async () => {
+    await retireIdleModelCatalogReader();
+    await retireIdleWorkspaceWriterRegistration();
+  });
   ENV.forEach((name, index) => {
     if (previous[index] === undefined) delete process.env[name];
     else process.env[name] = previous[index];

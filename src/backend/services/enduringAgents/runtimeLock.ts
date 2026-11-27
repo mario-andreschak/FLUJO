@@ -86,14 +86,10 @@ declare global {
   var __flujo_enduring_agent_deferred_lock_cleanups: Set<string> | undefined;
   var __flujo_workspace_writer_admission_chains: Map<string, Promise<void>> | undefined;
   var __flujo_shared_workspace_writer_leases: Map<string, SharedWriterLease> | undefined;
-  var __flujo_shared_model_catalog_readers: Map<string, SharedCatalogReader> | undefined;
+  var __flujo_shared_model_catalog_readers_v2: Map<string, SharedCatalogReader> | undefined;
+  var __flujo_pending_model_catalog_writers: Map<string, number> | undefined;
   var __flujo_pending_workspace_captures: Map<string, number> | undefined;
-  var __flujo_model_catalog_lease_scope: AsyncLocalStorage<{
-    lock: PersonaRuntimeLock;
-    workspace: string;
-    writer: boolean;
-    readerId?: string;
-  }> | undefined;
+  var __flujo_model_catalog_lease_scope: AsyncLocalStorage<ModelCatalogLeaseStore> | undefined;
 }
 
 const PROCESS_INSTANCE_ID = global.__flujo_enduring_agent_process_instance_id ??= randomUUID();
@@ -102,8 +98,16 @@ const ISSUED_RUNTIME_LOCKS = global.__flujo_enduring_agent_issued_runtime_lock_s
   ??= new WeakMap<object, IssuedRuntimeLockScope>();
 const DEFERRED_CLEANUP_KEYS = global.__flujo_enduring_agent_deferred_lock_cleanups
   ??= new Set<string>();
+interface ModelCatalogLeaseStore {
+  lock: PersonaRuntimeLock;
+  workspace: string;
+  writer: boolean;
+  readerId?: string;
+  /** Absent for writers and for stores of older bundles. */
+  call?: CatalogReaderCall;
+}
 const modelCatalogLeaseScope = global.__flujo_model_catalog_lease_scope
-  ??= new AsyncLocalStorage<{ lock: PersonaRuntimeLock; workspace: string; writer: boolean; readerId?: string }>();
+  ??= new AsyncLocalStorage<ModelCatalogLeaseStore>();
 const processBirthCache = new Map<number, { checkedAt: number; marker: string | null }>();
 const processBirthInFlight = new Map<number, Promise<string | null>>();
 
@@ -1243,10 +1247,11 @@ export function withWorkspaceRuntimeLock<T>(
 /**
  * Cross-process shared readers / exclusive writer for the whole models file.
  * A reader registers a unique owned lock under a short admission gate, then
- * releases the gate during prompt preparation or a provider call. Concurrent
- * readers of one process share that registration (SharedCatalogReader). A writer
- * closes admission and refuses the edit if any live reader remains before
- * replacing models.json.
+ * releases the gate during prompt preparation or a provider call. Model calls
+ * of one process share that registration (SharedCatalogReader), and it stays
+ * published for a while after the last call, so the next call joins it. A
+ * writer closes admission, waits a bounded time for live readers to leave and
+ * refuses the edit if one remains before replacing models.json.
  * None of this enters the workspace mutation gate: preparation can still write
  * run resources while a workspace snapshot is pending.
  */
@@ -1254,56 +1259,88 @@ const MODEL_CATALOG_LOCK = '.model-catalog-admission';
 const MODEL_CATALOG_READER_PREFIX = '.model-catalog-reader-';
 const MODEL_CATALOG_READER_LOCK = /^\.model-catalog-reader-[0-9a-f-]{36}\.lock$/;
 const MODEL_CATALOG_WAIT_MS = 120_000;
+const MODEL_CATALOG_READER_IDLE_MS = 30_000;
+const MODEL_CATALOG_READER_WATCH_MS = 250;
+const MODEL_CATALOG_WRITER_WAIT_MS = 2_000;
+const MODEL_CATALOG_WRITER_POLL_MS = 50;
+
+function nonNegativeMsFromEnv(name: string, fallback: number, max: number): number {
+  const configured = process.env[name];
+  const value = configured === undefined || configured.trim() === '' ? NaN : Number(configured);
+  return Number.isFinite(value) && value >= 0 ? Math.min(value, max) : fallback;
+}
+
+/** FLUJO_MODEL_CATALOG_READER_IDLE_MS=0 releases the registration after every model call again. */
+function catalogReaderIdleMs(): number {
+  return nonNegativeMsFromEnv('FLUJO_MODEL_CATALOG_READER_IDLE_MS', MODEL_CATALOG_READER_IDLE_MS, 300_000);
+}
+
+/** How long a catalog edit waits for running model calls before it is refused. */
+function catalogWriterWaitMs(): number {
+  return nonNegativeMsFromEnv('FLUJO_MODEL_CATALOG_WRITER_WAIT_MS', MODEL_CATALOG_WRITER_WAIT_MS, 60_000);
+}
+
+/** One model call's use of a reader registration; children it admitted drain before it ends. */
+interface CatalogReaderCall {
+  open: boolean;
+  children: number;
+  drained: Set<() => void>;
+}
 
 async function withModelCatalogPhysicalLease<T>(
   task: () => Promise<T>,
   writer: boolean,
 ): Promise<T> {
   const inherited = modelCatalogLeaseScope.getStore();
-  // Deferred callbacks keep their ALS store after the physical lease retires.
-  // Only a still-issued, non-closing lease can admit a nested operation; later
-  // work must acquire a fresh lease. Already admitted children still drain.
+  // Deferred callbacks keep their ALS store after their call ended. Only a
+  // still-issued, non-closing lease of a call that is still running can admit
+  // a nested operation; later work must join or acquire a lease itself.
+  // Already admitted children still drain.
   const issued = inherited && ISSUED_RUNTIME_LOCKS.get(inherited.lock);
-  if (inherited?.workspace === getCurrentWorkspace() && issued && !issued.closing) {
+  const call = inherited?.call;
+  if (inherited?.workspace === getCurrentWorkspace() && issued && !issued.closing && call?.open !== false) {
     // An agentic model call can synchronously start a child Process. It shares
     // the parent's lease rather than waiting on its own physical lock. Editing
     // the catalog inside that call would invalidate its admitted snapshot.
     if (writer) throw new ModelCatalogBusyError();
     if (inherited.writer) throw new Error('Cannot prepare a model during a model catalog edit.');
-    return withIssuedPersonaRuntimeLockOperation(
-      inherited.lock,
-      inherited.writer ? MODEL_CATALOG_LOCK : inherited.readerId!,
-      task,
-    );
-  }
-  return systemLockTime.run(true, async () => {
-    if (writer) {
-      const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
-      try {
-        const root = await ensureRuntimeLockRoot();
-        await admission.lock.assertOwned();
-        const readers = (await fs.readdir(root)).filter(name => MODEL_CATALOG_READER_LOCK.test(name));
-        for (const name of readers) {
-          const readerPath = path.join(root, name);
-          const owner = await readOwner(readerPath);
-          if (!owner) continue;
-          if (owner.workspace !== getCurrentWorkspace()) throw new Error('Model catalog reader has foreign ownership.');
-          const abandoned = await listAbandonedOwnerIds(root, readerPath);
-          if (await isOwnerProcessAlive(owner, abandoned)) throw new ModelCatalogBusyError();
-          const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
-          await retired.release();
-        }
-        await admission.lock.assertOwned();
-        return await modelCatalogLeaseScope.run(
-          { lock: admission.lock, workspace: getCurrentWorkspace(), writer: true },
-          task,
-        );
-      } finally {
-        await admission.release();
+    if (call) call.children += 1;
+    try {
+      return await withIssuedPersonaRuntimeLockOperation(inherited.lock, inherited.readerId!, task);
+    } finally {
+      if (call && --call.children === 0) {
+        for (const resolve of call.drained) resolve();
+        call.drained.clear();
       }
     }
+  }
+  return systemLockTime.run(true, async () => {
     const key = getWorkspaceDbDir();
+    if (writer) {
+      // Stop this process's model calls from joining the shared registration
+      // and retire an idle one before admission closes; see SharedCatalogReader.
+      PENDING_LOCAL_CATALOG_WRITERS.set(key, (PENDING_LOCAL_CATALOG_WRITERS.get(key) ?? 0) + 1);
+      try {
+        await retireIdleCatalogReader(key);
+        const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
+        try {
+          await waitForCatalogReaders(admission.lock);
+          await admission.lock.assertOwned();
+          return await modelCatalogLeaseScope.run(
+            { lock: admission.lock, workspace: getCurrentWorkspace(), writer: true },
+            task,
+          );
+        } finally {
+          await admission.release();
+        }
+      } finally {
+        const remaining = (PENDING_LOCAL_CATALOG_WRITERS.get(key) ?? 1) - 1;
+        if (remaining > 0) PENDING_LOCAL_CATALOG_WRITERS.set(key, remaining);
+        else PENDING_LOCAL_CATALOG_WRITERS.delete(key);
+      }
+    }
     const shared = await enterCatalogReader(key);
+    const readerCall: CatalogReaderCall = { open: true, children: 0, drained: new Set() };
     try {
       const reader = await shared.registered;
       try {
@@ -1314,22 +1351,69 @@ async function withModelCatalogPhysicalLease<T>(
         throw error;
       }
       return await modelCatalogLeaseScope.run(
-        { lock: reader.lock, workspace: getCurrentWorkspace(), writer: false, readerId: shared.readerId },
+        { lock: reader.lock, workspace: getCurrentWorkspace(), writer: false, readerId: shared.readerId, call: readerCall },
         task,
       );
     } finally {
+      if (readerCall.children > 0) await new Promise<void>(resolve => readerCall.drained.add(resolve));
+      readerCall.open = false;
       await leaveCatalogReader(key, shared);
     }
   });
 }
 
 /**
- * One published reader registration covering every concurrent model call of
- * this process (issue #757). Each call used to register its own reader under
- * the exclusive admission lock, so a burst of runs queued on that lock one
- * by one. Now the first call registers and the others join while it is open.
- * A writer still sees a live reader for as long as any of them runs, and the
- * registration retires as soon as the last one leaves, as a private one did.
+ * Wait until no live reader of another call remains, or refuse the edit with
+ * ModelCatalogBusyError after catalogWriterWaitMs. New readers cannot register
+ * meanwhile (this writer holds admission) and no reader joins a shared
+ * registration while a writer waits, so the wait cannot be starved. Readers of
+ * a crashed process are retired through the usual liveness protocol.
+ */
+async function waitForCatalogReaders(admission: PersonaRuntimeLock): Promise<void> {
+  const deadline = clockForLock().monotonicNow() + catalogWriterWaitMs();
+  const root = await ensureRuntimeLockRoot();
+  while (true) {
+    await admission.assertOwned();
+    let live = false;
+    const readers = (await fs.readdir(root)).filter(name => MODEL_CATALOG_READER_LOCK.test(name));
+    for (const name of readers) {
+      const readerPath = path.join(root, name);
+      const owner = await readOwner(readerPath);
+      if (!owner) continue;
+      if (owner.workspace !== getCurrentWorkspace()) throw new Error('Model catalog reader has foreign ownership.');
+      const abandoned = await listAbandonedOwnerIds(root, readerPath);
+      if (await isOwnerProcessAlive(owner, abandoned)) {
+        live = true;
+        continue;
+      }
+      const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
+      await retired.release();
+    }
+    if (!live) return;
+    if (clockForLock().monotonicNow() >= deadline) throw new ModelCatalogBusyError();
+    await clockForLock().sleep(MODEL_CATALOG_WRITER_POLL_MS);
+  }
+}
+
+/**
+ * One published reader registration covering the model calls of this process
+ * (issues #757 and #1408). Registering takes the exclusive admission lock and
+ * two lock files with a flush to disk each, about 30 ms per model call. The
+ * first call registers and the others join while it is published:
+ *
+ * - A writer sees a live reader for as long as the registration exists, so it
+ *   never replaces the catalog under a running call.
+ * - After the last call leaves, the registration stays published for
+ *   catalogReaderIdleMs, so the next model call (the next turn of a voice
+ *   conversation) joins it instead of registering again.
+ * - A call joins only while no writer waits: never while a writer of this
+ *   process is pending and never while the admission lock exists. A waiting
+ *   writer holds that lock, so calls stop joining as soon as it starts.
+ * - An idle registration retires at once when a writer of this process starts,
+ *   and checks every MODEL_CATALOG_READER_WATCH_MS for a writer of another
+ *   process, so such a writer waits at most about that long for it.
+ * - A crashed process leaves a reader lock that writers retire through the
+ *   existing liveness protocol.
  */
 interface SharedCatalogReader {
   readonly readerId: string;
@@ -1338,10 +1422,31 @@ interface SharedCatalogReader {
   readonly inContext: <R>(fn: () => R) => R;
   users: number;
   closing: boolean;
+  idleTimer?: PersonaRuntimeTimer;
+  /** Changes whenever a call joins, so a stale idle check stops. */
+  idleGeneration: number;
+  retiring?: Promise<void>;
 }
 
-const SHARED_CATALOG_READERS = global.__flujo_shared_model_catalog_readers
+const SHARED_CATALOG_READERS = global.__flujo_shared_model_catalog_readers_v2
   ??= new Map<string, SharedCatalogReader>();
+const PENDING_LOCAL_CATALOG_WRITERS = global.__flujo_pending_model_catalog_writers
+  ??= new Map<string, number>();
+
+function catalogWriterWaiting(key: string): boolean {
+  return (PENDING_LOCAL_CATALOG_WRITERS.get(key) ?? 0) > 0;
+}
+
+async function catalogAdmissionPresent(shared: SharedCatalogReader): Promise<boolean> {
+  const reader = await shared.registered;
+  try {
+    await fs.lstat(path.join(reader.lockRoot, `${MODEL_CATALOG_LOCK}.lock`));
+    return true;
+  } catch (error) {
+    // Only a definite absence admits a join; uncertainty registers normally.
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
 
 async function registerCatalogReader(readerId: string): Promise<Awaited<ReturnType<typeof acquireFilesystemLock>>> {
   let reader: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
@@ -1362,19 +1467,31 @@ async function registerCatalogReader(readerId: string): Promise<Awaited<ReturnTy
   return reader!;
 }
 
-/** Join this process's open registration, or start one that later callers join. */
+/** Join this process's published registration, or start one that later callers join. */
 async function enterCatalogReader(key: string): Promise<SharedCatalogReader> {
   const open = SHARED_CATALOG_READERS.get(key);
-  if (open && !open.closing) {
+  if (open && !open.closing && !catalogWriterWaiting(key)) {
     // Pin before awaiting so the registration cannot retire under this call.
     open.users += 1;
+    open.idleGeneration += 1;
+    open.idleTimer?.clear();
+    open.idleTimer = undefined;
+    let joined = false;
     try {
-      await traceSpan('lock.catalogJoin', () => open.registered);
+      await traceSpan('lock.catalogJoin', async () => {
+        await open.registered;
+        joined = !await catalogAdmissionPresent(open) && !catalogWriterWaiting(key) && !open.closing;
+      });
     } catch (error) {
       open.users -= 1;
+      if (open.users === 0 && !open.closing) closeCatalogReader(key, open);
       throw error;
     }
-    return open;
+    if (joined) return open;
+    // A writer waits: admit no further calls and register behind it. A failed
+    // release of the old registration belongs to it, not to this call.
+    closeCatalogReader(key, open);
+    await leaveCatalogReader(key, open).catch(() => undefined);
   }
   const readerId = `${MODEL_CATALOG_READER_PREFIX}${randomUUID()}`;
   const shared: SharedCatalogReader = {
@@ -1383,8 +1500,13 @@ async function enterCatalogReader(key: string): Promise<SharedCatalogReader> {
     inContext: AsyncLocalStorage.snapshot(),
     users: 1,
     closing: false,
+    idleGeneration: 0,
   };
+  const replaced = SHARED_CATALOG_READERS.get(key);
   SHARED_CATALOG_READERS.set(key, shared);
+  // Concurrent first calls each register; the newest is the shared one and an
+  // idle older one retires now instead of when it would have expired.
+  if (replaced && replaced !== shared && replaced.users === 0) void retireCatalogReader(key, replaced).catch(() => undefined);
   try {
     await shared.registered;
   } catch (error) {
@@ -1400,12 +1522,66 @@ function closeCatalogReader(key: string, shared: SharedCatalogReader): void {
   if (SHARED_CATALOG_READERS.get(key) === shared) SHARED_CATALOG_READERS.delete(key);
 }
 
+function retireCatalogReader(key: string, shared: SharedCatalogReader): Promise<void> {
+  if (shared.retiring) return shared.retiring;
+  closeCatalogReader(key, shared);
+  shared.idleTimer?.clear();
+  shared.idleTimer = undefined;
+  shared.retiring = shared.registered.then(reader =>
+    traceSpan('lock.catalogRelease', () => shared.inContext(() => reader.release())));
+  return shared.retiring;
+}
+
 async function leaveCatalogReader(key: string, shared: SharedCatalogReader): Promise<void> {
   shared.users -= 1;
   if (shared.users > 0) return;
-  closeCatalogReader(key, shared);
-  const reader = await shared.registered;
-  await traceSpan('lock.catalogRelease', () => shared.inContext(() => reader.release()));
+  let retire = shared.closing || catalogWriterWaiting(key) || catalogReaderIdleMs() === 0
+    || SHARED_CATALOG_READERS.get(key) !== shared;
+  if (!retire) retire = await catalogAdmissionPresent(shared);
+  // A call may have joined while that check ran; its own departure decides.
+  if (shared.users > 0) return;
+  if (retire || shared.closing) {
+    await retireCatalogReader(key, shared);
+    return;
+  }
+  watchIdleCatalogReader(key, shared, systemClock.monotonicNow() + catalogReaderIdleMs());
+}
+
+/** Keep an idle registration until its idle time ends or a writer waits. */
+function watchIdleCatalogReader(key: string, shared: SharedCatalogReader, retireAt: number): void {
+  const generation = shared.idleGeneration;
+  const wait = Math.max(0, Math.min(MODEL_CATALOG_READER_WATCH_MS, retireAt - systemClock.monotonicNow()));
+  const timer = systemClock.setTimer(() => {
+    if (shared.idleTimer !== timer) return;
+    shared.idleTimer = undefined;
+    void (async () => {
+      const stale = () => shared.users > 0 || shared.closing || shared.idleGeneration !== generation;
+      if (stale()) return;
+      const retire = systemClock.monotonicNow() >= retireAt || catalogWriterWaiting(key)
+        || await catalogAdmissionPresent(shared);
+      if (stale()) return;
+      if (retire) await retireCatalogReader(key, shared);
+      else watchIdleCatalogReader(key, shared, retireAt);
+    })().catch(() => undefined);
+  }, wait);
+  timer.unref();
+  shared.idleTimer?.clear();
+  shared.idleTimer = timer;
+}
+
+/** Retire this process's idle shared reader registration for a workspace. */
+async function retireIdleCatalogReader(key: string): Promise<void> {
+  const shared = SHARED_CATALOG_READERS.get(key);
+  if (shared && shared.users === 0) await retireCatalogReader(key, shared).catch(() => undefined);
+}
+
+/**
+ * Release this process's idle model catalog reader registration for a
+ * workspace, so a reader of the workspace files sees the lock directory
+ * without it while no model call runs.
+ */
+export async function retireIdleModelCatalogReader(workspace?: string): Promise<void> {
+  await retireIdleCatalogReader(getWorkspaceDbDir(workspace));
 }
 
 export function withModelCatalogFilesystemLease<T>(task: () => Promise<T>): Promise<T> {
@@ -1419,7 +1595,7 @@ export function withModelCatalogFilesystemWriteLease<T>(task: () => Promise<T>):
 export async function assertModelCatalogFilesystemLeaseOwned(): Promise<void> {
   const inherited = modelCatalogLeaseScope.getStore();
   if (!inherited || inherited.workspace !== getCurrentWorkspace()
-      || !ISSUED_RUNTIME_LOCKS.has(inherited.lock)) {
+      || !ISSUED_RUNTIME_LOCKS.has(inherited.lock) || inherited.call?.open === false) {
     throw new Error('Model catalog lease is missing.');
   }
   await traceSpan('lock.catalogAssert', () => inherited.lock.assertOwned());
@@ -1591,9 +1767,7 @@ const PENDING_LOCAL_CAPTURES = global.__flujo_pending_workspace_captures
 
 /** FLUJO_WRITER_LEASE_IDLE_MS=0 registers every write separately again. */
 function writerLeaseIdleMs(): number {
-  const configured = process.env.FLUJO_WRITER_LEASE_IDLE_MS;
-  const value = configured === undefined || configured.trim() === '' ? NaN : Number(configured);
-  return Number.isFinite(value) && value >= 0 ? Math.min(value, 10_000) : WRITER_LEASE_IDLE_MS;
+  return nonNegativeMsFromEnv('FLUJO_WRITER_LEASE_IDLE_MS', WRITER_LEASE_IDLE_MS, 10_000);
 }
 
 function localCaptureWaiting(key: string): boolean {

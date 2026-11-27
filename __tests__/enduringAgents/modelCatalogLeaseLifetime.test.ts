@@ -5,6 +5,7 @@ import path from 'path';
 import {
   assertModelCatalogFilesystemLeaseOwned,
   ModelCatalogBusyError,
+  retireIdleModelCatalogReader,
   withModelCatalogFilesystemLease,
   withModelCatalogFilesystemWriteLease,
 } from '@/backend/services/enduringAgents/runtimeLock';
@@ -31,13 +32,25 @@ function deferred() {
 async function locks() {
   return fs.readdir(path.join(mockDbDir, '.runtime-locks', 'enduring-agents'));
 }
+async function readers() {
+  return (await locks()).filter(name => name.startsWith('.model-catalog-reader-'));
+}
+const ENV = ['FLUJO_MODEL_CATALOG_READER_IDLE_MS', 'FLUJO_MODEL_CATALOG_WRITER_WAIT_MS'] as const;
+let savedEnv: Array<string | undefined>;
 
 beforeEach(async () => {
+  savedEnv = ENV.map(name => process.env[name]);
+  for (const name of ENV) delete process.env[name];
   mockDbDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-catalog-lease-lifetime-'));
   savedIdentity = global.__flujo_enduring_agent_process_birth_marker_v2;
   global.__flujo_enduring_agent_process_birth_marker_v2 = Promise.resolve('win32-v2:638927322190000000');
 });
 afterEach(async () => {
+  await retireIdleModelCatalogReader();
+  ENV.forEach((name, index) => {
+    if (savedEnv[index] === undefined) delete process.env[name];
+    else process.env[name] = savedEnv[index];
+  });
   global.__flujo_enduring_agent_process_birth_marker_v2 = savedIdentity;
   if (path.dirname(path.resolve(mockDbDir)) !== path.resolve(os.tmpdir())
       || !path.basename(mockDbDir).startsWith('flujo-catalog-lease-lifetime-')) throw new Error('Unexpected test directory.');
@@ -60,7 +73,9 @@ describe('model catalog lease dynamic lifetime', () => {
         await writerLease(async () => { await assertModelCatalogFilesystemLeaseOwned(); });
       });
     });
-    expect(await locks()).toEqual([]);
+    // A reader's registration stays published for the next model call.
+    expect(await readers()).toHaveLength(kind === 'reader' ? 1 : 0);
+    expect((await locks()).length).toBe(kind === 'reader' ? 1 : 0);
     gate.resolve();
     await continuation;
     expect(await locks()).toEqual([]);
@@ -87,6 +102,9 @@ describe('model catalog lease dynamic lifetime', () => {
         await expect(writerLease(async () => undefined)).rejects.toBeInstanceOf(ModelCatalogBusyError);
       });
     });
+    expect(await readers()).toHaveLength(1);
+    // A catalog edit of this process retires the idle registration at once.
+    await expect(writerLease(async () => 'edited')).resolves.toBe('edited');
     expect(await locks()).toEqual([]);
   });
 
@@ -100,12 +118,16 @@ describe('model catalog lease dynamic lifetime', () => {
       await assertModelCatalogFilesystemLeaseOwned();
     }));
     await inside.promise;
-    expect((await locks()).filter(name => name.startsWith('.model-catalog-reader-'))).toHaveLength(1);
-    await expect(writerLease(async () => undefined)).rejects.toBeInstanceOf(ModelCatalogBusyError);
+    expect(await readers()).toHaveLength(1);
+    // An edit waits for the running calls instead of being refused at once.
+    let edited = false;
+    const edit = writerLease(async () => { edited = true; return 'edited'; });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(edited).toBe(false);
     finish.resolve();
     await Promise.all(calls);
+    await expect(edit).resolves.toBe('edited');
     expect(await locks()).toEqual([]);
-    await expect(writerLease(async () => 'edited')).resolves.toBe('edited');
   });
 
   it('drains an already admitted child before releasing its physical reader', async () => {
@@ -126,7 +148,7 @@ describe('model catalog lease dynamic lifetime', () => {
     expect(parentFinished).toBe(false);
     finish.resolve();
     await Promise.all([parent, child]);
-    expect(await locks()).toEqual([]);
+    expect(await readers()).toHaveLength(1);
   });
 
   it('does not treat a lost active reader as an expired context to reacquire', async () => {
@@ -143,5 +165,63 @@ describe('model catalog lease dynamic lifetime', () => {
         expect(task).not.toHaveBeenCalled();
       } finally { spy.mockRestore(); }
     });
+  });
+
+  it('keeps one reader registration for model calls that follow each other (#1408)', async () => {
+    const seen: string[][] = [];
+    for (let call = 0; call < 3; call++) {
+      await readerLease(async () => {
+        await assertModelCatalogFilesystemLeaseOwned();
+        seen.push(await readers());
+      });
+    }
+    expect(seen[0]).toHaveLength(1);
+    expect(seen).toEqual([seen[0], seen[0], seen[0]]);
+    expect(await readers()).toEqual(seen[0]);
+  });
+
+  it('releases the registration after every call when its idle time is 0', async () => {
+    process.env.FLUJO_MODEL_CATALOG_READER_IDLE_MS = '0';
+    await readerLease(async () => { expect(await readers()).toHaveLength(1); });
+    expect(await locks()).toEqual([]);
+  });
+
+  it('retires an idle registration when its idle time ends', async () => {
+    process.env.FLUJO_MODEL_CATALOG_READER_IDLE_MS = '60';
+    await readerLease(async () => undefined);
+    expect(await readers()).toHaveLength(1);
+    for (let wait = 0; wait < 100 && (await readers()).length; wait++) await new Promise(resolve => setTimeout(resolve, 20));
+    expect(await locks()).toEqual([]);
+  });
+
+  it('retires an idle registration while another process waits to edit the catalog', async () => {
+    await readerLease(async () => undefined);
+    expect(await readers()).toHaveLength(1);
+    // Another process's writer holds the admission lock while it waits for readers.
+    const admission = path.join(mockDbDir, '.runtime-locks', 'enduring-agents', '.model-catalog-admission.lock');
+    await fs.writeFile(admission, '{}');
+    try {
+      for (let wait = 0; wait < 100 && (await readers()).length; wait++) await new Promise(resolve => setTimeout(resolve, 20));
+      expect(await readers()).toEqual([]);
+    } finally {
+      await fs.rm(admission, { force: true });
+    }
+  });
+
+  it('refuses an edit when a model call outlasts the bounded wait, and admits calls again', async () => {
+    process.env.FLUJO_MODEL_CATALOG_WRITER_WAIT_MS = '100';
+    const inside = deferred();
+    const finish = deferred();
+    const call = readerLease(async () => {
+      inside.resolve();
+      await finish.promise;
+      await assertModelCatalogFilesystemLeaseOwned();
+    });
+    await inside.promise;
+    await expect(writerLease(async () => 'edited')).rejects.toBeInstanceOf(ModelCatalogBusyError);
+    finish.resolve();
+    await call;
+    await expect(readerLease(async () => 'next call')).resolves.toBe('next call');
+    await expect(writerLease(async () => 'edited')).resolves.toBe('edited');
   });
 });

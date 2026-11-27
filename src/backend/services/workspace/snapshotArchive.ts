@@ -18,7 +18,7 @@ import { getOperatorWorkerBootstrapKey, getSystemKeyWorkerBootstrapKey } from '@
 import type { EncryptionMetadata } from '@/utils/encryption/format';
 import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
 import { CREDENTIAL_TRANSFER_STORES, transformCredentialValues } from './credentialTransfer';
-import { retireIdleWorkspaceWriterRegistration } from '@/backend/services/enduringAgents/runtimeLock';
+import { retireIdleModelCatalogReader, retireIdleWorkspaceWriterRegistration } from '@/backend/services/enduringAgents/runtimeLock';
 import { StorageKey } from '@/shared/types/storage';
 import { getServerDek } from '@/utils/encryption/session';
 import type { MCPServerConfig } from '@/shared/types/mcp';
@@ -222,8 +222,10 @@ export async function captureWorkspaceSnapshot(
   }
 
   // A capture normally retires this process's idle shared writer registration
-  // before admission; a direct capture must not archive its lock file either.
+  // before admission; a direct capture must not archive its lock file either,
+  // nor the idle model catalog reader registration.
   await retireIdleWorkspaceWriterRegistration(workspace);
+  await retireIdleModelCatalogReader(workspace);
 
   const limits = getSnapshotLimits();
   const maxFileBytes = limits.maxFileBytes;
