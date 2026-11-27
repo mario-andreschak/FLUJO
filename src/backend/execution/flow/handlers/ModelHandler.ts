@@ -32,7 +32,7 @@ import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrig
 import { assertNativeOriginalProcessHost, assertNativeOriginalExecutionContext, createProcessNativeOriginalHost, type NativeOriginalProcessHost } from './nativeOriginalHost';
 import { NATIVE_HANDOFF_PROTOCOL, CODEX_NATIVE_HANDOFF_PROTOCOL } from './nativeHandoffProtocol';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
-import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
+import { compactForWire, couldCompact } from './compactForWire';
 import {
   emergencyRefitMessages,
   EMERGENCY_CONTEXT_REFIT_MARKER,
@@ -52,7 +52,7 @@ import {
 import { adaptMediaInputsForModel } from '@/backend/services/chatAttachments/modelInput';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
-import { estimateWireInputTokens, imageTokens } from './wireTokenEstimate';
+import { imageTokens } from './wireTokenEstimate';
 import { prepareImageInput } from './prepareImageInput';
 import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './resolveEffectiveCompaction';
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
@@ -81,7 +81,6 @@ import {
   refitCodexMessagesForInputLimit,
 } from '@/backend/services/model/adapters/codexInputCompaction';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
-import { isContextOverflowText } from '@/backend/services/model/adapters/contextOverflow';
 import { archiveContextForRefit } from './archiveContextForRefit';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
@@ -100,7 +99,7 @@ import {
   writeRunResource,
   listRunResources,
 } from '@/backend/services/runResources';
-import { isRunResourceToolName, executeRunResourceTool, nativeRunResourceResult, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
+import { isRunResourceToolName, executeRunResourceTool, nativeRunResourceResult, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
 import { executeToolLoadingTool, isToolLoadingToolName, toolLoadingResultValue } from '../toolLoading/toolLoadingExecutors';
@@ -132,7 +131,7 @@ import {
   readNativeModelTurnSnapshot,
   updateModelDispatchOutcome,
 } from '@/backend/execution/flow/modelTurnArchive';
-import { appendRawForState, flushConversationLog } from '@/backend/execution/flow/conversationLog';
+import { flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import {
   assertFlowExecutionCurrent,
   commitFlowDurableMutation,
@@ -142,8 +141,7 @@ import {
 } from '@/backend/execution/flow/executionAuthority';
 import { createLiveToolApproval, requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
-import { loadItem } from '@/utils/storage/backend';
-import { StorageKey, type Settings } from '@/shared/types/storage/storage';
+import { StorageKey } from '@/shared/types/storage/storage';
 import { normaliseOllamaRoot, withOllamaLock, getLoadedModel, setLoadedModel } from '@/backend/services/ollama/modelRegistry';
 import { unloadModel } from '@/backend/services/ollama';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
@@ -160,6 +158,10 @@ import {
 } from '@/backend/services/statistics/metadata';
 import { persistModelMedia, type GeneratedImagePart } from './modelMedia';
 import { processToolCallsAdmitted, resolveToolUiLink } from './toolCallProcessing';
+import { getCompactionGlobalSettings, historyKeepRecentMessages, isAutoUnloadOllamaEnabled, isExperimentalFlagEnabled, toolDescriptionCap } from './modelHandlerSettings';
+import { isStreamedAssistantProse, persistStreamedMessage, removeFailedStreamedAssistantProse } from './streamedAssistantMessages';
+import { buildRunResourceMarkers, captureOversizedToolResultsForRefit, ensureReadResourceArmed, estimateOutgoingInputTokens, isContextOverflowError, OVERFLOW_TOOL_RESULT_HEAD_CHARS, resolveOutgoingInputBudget } from './contextWindowFit';
+import { extractProviderErrorDetails, shapeCompletionError } from './providerErrorShape';
 
 export { extractGeneratedImageParts } from './modelMedia';
 
@@ -218,108 +220,6 @@ export class ModelHandler {
   }
 
   /**
-   * Normalize a provider error body into a detailed, human-readable message
-   * plus structured detail fields.
-   *
-   * The same provider error shape reaches us two ways: when the provider
-   * returns HTTP 200 with an `error` object in the body, and when the SDK
-   * throws an `OpenAI.APIError` (whose `.error` is that same body). Both paths
-   * call this so the extraction stays consistent. OpenRouter in particular
-   * nests the real upstream reason under `metadata` — `raw` is usually a plain
-   * human-readable string (occasionally a JSON string), and `provider_name` /
-   * `retry_after_seconds` are the actionable bits. Requesty tags every error
-   * body with `origin` ("router" = its own validation, "provider" = a relayed
-   * upstream error) — surfaced in the message because it decides whether the
-   * request was actually malformed or the upstream backend just rejected it.
-   *
-   * @param body       The provider error object (chatCompletion.error or APIError.error).
-   * @param baseMessage Optional prefix (e.g. the SDK's "429 ..." message) to build on.
-   */
-  private static extractProviderErrorDetails(
-    body: unknown,
-    baseMessage?: string
-  ): {
-    message: string;
-    code?: unknown;
-    type?: unknown;
-    param?: unknown;
-    retryAfter?: string;
-    providerError?: unknown;
-  } {
-    const errorBody = body && typeof body === 'object'
-      ? body as Record<string, unknown>
-      : {};
-    let message =
-      baseMessage
-      || (typeof errorBody.message === 'string' ? errorBody.message : undefined)
-      || 'Provider returned an unspecified error in the response body.';
-
-    // When a base message is supplied (SDK path), append the body's own message
-    // if it adds something beyond the prefix.
-    if (
-      baseMessage &&
-      typeof errorBody.message === 'string' &&
-      errorBody.message &&
-      errorBody.message !== baseMessage
-    ) {
-      message = `${baseMessage} - ${errorBody.message}`;
-    }
-
-    const meta = errorBody.metadata && typeof errorBody.metadata === 'object'
-      ? errorBody.metadata as Record<string, unknown>
-      : undefined;
-    if (meta) {
-      let rawMsg: string | undefined;
-      if (typeof meta.raw === 'string') {
-        try {
-          const parsed = JSON.parse(meta.raw);
-          const parsedRecord = parsed && typeof parsed === 'object'
-            ? parsed as Record<string, unknown>
-            : {};
-          const parsedError = parsedRecord.error && typeof parsedRecord.error === 'object'
-            ? parsedRecord.error as Record<string, unknown>
-            : undefined;
-          rawMsg = typeof parsedError?.message === 'string'
-            ? parsedError.message
-            : typeof parsedRecord.message === 'string'
-              ? parsedRecord.message
-              : meta.raw;
-        } catch {
-          rawMsg = meta.raw; // not JSON — use the string as-is
-        }
-      } else if (meta.raw && typeof meta.raw === 'object') {
-        const raw = meta.raw as Record<string, unknown>;
-        const nestedError = raw.error && typeof raw.error === 'object'
-          ? raw.error as Record<string, unknown>
-          : undefined;
-        rawMsg = typeof nestedError?.message === 'string'
-          ? nestedError.message
-          : typeof raw.message === 'string' ? raw.message : undefined;
-      }
-      const upstreamParts: string[] = [];
-      if (meta.provider_name) upstreamParts.push(String(meta.provider_name));
-      if (rawMsg) upstreamParts.push(rawMsg);
-      if (upstreamParts.length > 0) {
-        message = `${message} (upstream: ${upstreamParts.join(': ')})`;
-      }
-    }
-
-    // Requesty's origin tag: "router" vs "provider" (see doc comment above).
-    if (typeof errorBody.origin === 'string' && errorBody.origin) {
-      message = `${message} (origin: ${errorBody.origin})`;
-    }
-
-    return {
-      message,
-      code: errorBody.code,
-      type: errorBody.type,
-      param: errorBody.param,
-      retryAfter: meta?.retry_after_seconds != null ? String(meta.retry_after_seconds) : undefined,
-      providerError: body,
-    };
-  }
-
-  /**
    * Whether the conversation (or any ancestor, for subflow children) has been
    * cancelled. Read from the live in-memory states — the same source the run
    * loop's own guard uses — via lazy requires to avoid the static import cycle
@@ -343,17 +243,7 @@ export class ModelHandler {
    * disabled, so the adapter keeps its always-correct full-flatten behaviour.
    */
   static async isClaudeSessionResumeEnabled(): Promise<boolean> {
-    return ModelHandler.isExperimentalFlagEnabled('claudeSessionResume');
-  }
-
-  private static async isExperimentalFlagEnabled(name: 'claudeSessionResume'): Promise<boolean> {
-    try {
-      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      return Boolean(settings?.experimental?.[name]);
-    } catch (err) {
-      log.warn(`Failed to read ${name} setting; defaulting to disabled`, { err });
-      return false;
-    }
+    return isExperimentalFlagEnabled('claudeSessionResume');
   }
 
   /**
@@ -419,38 +309,6 @@ export class ModelHandler {
   }
 
   /**
-   * Read the experimental summarizing-compaction settings (issue #248) from the
-   * persisted Settings blob. Best-effort: any failure reads as disabled, so the
-   * completion path keeps its existing (wire-only) behaviour.
-   */
-  private static async getCompactionGlobalSettings(): Promise<{
-    compactionEnabled?: boolean;
-    compactionBufferTokens?: number;
-    compactionKeepTokens?: number;
-    compactionThresholdPercent?: number;
-    visualCompactionEnabled?: boolean;
-    visualCompactionToolResultsOnly?: boolean;
-    visualCompactionEvaluationMode?: boolean;
-  }> {
-    try {
-      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      const exp = settings?.experimental;
-      return {
-        compactionEnabled: exp?.compactionEnabled,
-        compactionBufferTokens: exp?.compactionBufferTokens,
-        compactionKeepTokens: exp?.compactionKeepTokens,
-        compactionThresholdPercent: exp?.compactionThresholdPercent,
-        visualCompactionEnabled: exp?.visualCompactionEnabled,
-        visualCompactionToolResultsOnly: exp?.visualCompactionToolResultsOnly,
-        visualCompactionEvaluationMode: exp?.visualCompactionEvaluationMode,
-      };
-    } catch (err) {
-      log.warn('Failed to read compaction settings; defaulting to disabled', { err });
-      return { compactionEnabled: false, visualCompactionEnabled: false };
-    }
-  }
-
-  /**
    * Build summarizing compaction strictly as a provider-facing projection.
    * Canonical SharedState.messages and the append-only conversation log are
    * never reconciled or replaced here. Artifact metadata is persisted beside
@@ -482,13 +340,13 @@ export class ModelHandler {
       }
       if (source.length < 4) return null;
 
-      const global = await ModelHandler.getCompactionGlobalSettings();
+      const global = await getCompactionGlobalSettings();
       const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
       if (!eff.enabled) return null;
 
       // Previous usage excludes newly appended observations, instructions and
       // tool schemas. Budget the current provider projection every time.
-      const estimate = ModelHandler.estimateOutgoingInputTokens(toApiMessages(source), tools,
+      const estimate = estimateOutgoingInputTokens(toApiMessages(source), tools,
         model.provider ? { provider: model.provider, adapter: model.adapter, name: model.name ?? '' } : undefined);
       // Some CLI/provider catalogues do not publish a context window. The
       // opt-in summarizer must still be useful for them, so use a conservative
@@ -651,7 +509,7 @@ export class ModelHandler {
       const result = await compactHistory(source, {
         keepTokens: eff.keepTokens,
         inputBudgetTokens: Math.min(
-          ModelHandler.resolveOutgoingInputBudget(model.contextWindow, effectiveMaxTokens) ?? 96_000,
+          resolveOutgoingInputBudget(model.contextWindow, effectiveMaxTokens) ?? 96_000,
           model.adapter === 'codex-cli' ? 220_000 : Number.MAX_SAFE_INTEGER,
         ),
         nodeId,
@@ -708,457 +566,6 @@ export class ModelHandler {
   }
 
   /**
-   * Read the `autoUnloadOllamaModels` flag from persisted settings.
-   * Best-effort: any failure returns false (disabled).
-   */
-  private static async isAutoUnloadOllamaEnabled(): Promise<boolean> {
-    try {
-      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      return Boolean(settings?.experimental?.autoUnloadOllamaModels);
-    } catch (err) {
-      log.warn('Failed to read autoUnloadOllamaModels setting; defaulting to disabled', { err });
-      return false;
-    }
-  }
-
-  /**
-   * Read the opt-in `toolDescriptionMaxChars` cap from the persisted Settings
-   * blob. Best-effort like the flag above: any failure (or a missing value) reads
-   * as 0, which leaves every tool description intact and keeps only the lossless
-   * trimming tier active.
-   */
-  private static async toolDescriptionCap(): Promise<number> {
-    try {
-      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      const cap = settings?.experimental?.toolDescriptionMaxChars;
-      return typeof cap === 'number' && cap > 0 ? cap : 0;
-    } catch (err) {
-      log.warn('Failed to read toolDescriptionMaxChars setting; leaving descriptions intact', { err });
-      return 0;
-    }
-  }
-
-  /**
-   * Read the opt-in `historyKeepRecentMessages` compaction window from persisted
-   * Settings (issue #286). Missing/invalid reads as 12 (the historical
-   * `compactForWire` default), so behaviour is unchanged unless the user lowers
-   * it to let short-but-tool-heavy conversations be compacted. Clamped to >= 2 so
-   * a tail can never be too small to hold a tool_calls/tool pair verbatim.
-   */
-  private static async historyKeepRecentMessages(): Promise<number> {
-    try {
-      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      const keep = settings?.experimental?.historyKeepRecentMessages;
-      if (typeof keep === 'number' && Number.isFinite(keep)) {
-        return Math.max(2, Math.floor(keep));
-      }
-      return 6;  // Reduced from 12 to 6 to enable wire compaction for short-but-tool-heavy conversations
-    } catch (err) {
-      log.warn('Failed to read historyKeepRecentMessages setting; using default 6', { err });
-      return 6;
-    }
-  }
-
-  /**
-   * Fold a message streamed from a self-orchestrating adapter (Claude
-   * subscription) into the conversation's live in-memory SharedState AS it is
-   * produced (keyed by id, so it is idempotent w.r.t. the same message being
-   * materialized again at end-of-run).
-   *
-   * Crash/error safety no longer needs a full-file state write here: the
-   * caller emits the same message on the event bus immediately before this
-   * call, and the bus tap APPENDS it to the conversation log — if the run
-   * dies mid-loop, tool calls/results that already executed (SAP objects
-   * created, tickets opened, ...) are recovered from the log when the
-   * snapshot is next loaded (recoverMessagesFromLog). Dropping the write
-   * removed the per-streamed-message O(file size) rewrite on long agentic
-   * runs (execution-core v2 Phase 3).
-   *
-   * Best-effort: it must never throw into (or block) the streaming path.
-   */
-  private static persistStreamedMessage(conversationId: string, message: FlujoChatMessage): void {
-    try {
-      const state = getConversationStates().get(conversationId);
-      if (!state || !Array.isArray(state.messages)) {
-        // Conversation not tracked in memory yet; the normal end-of-run save covers it.
-        return;
-      }
-      upsertMessageById(state.messages, message);
-      state.updatedAt = Date.now();
-    } catch (err) {
-      log.warn(`Failed to fold streamed message into conversation ${conversationId}`, { err });
-    }
-  }
-
-  /** A live Claude transcript assistant message is prose only when it has text
-   * and is not the assistant half of a tool-call pair. */
-  private static isStreamedAssistantProse(message: FlujoChatMessage): boolean {
-    const assistant = message as Extract<FlujoChatMessage, { role: 'assistant' }>;
-    return assistant.role === 'assistant'
-      && typeof assistant.content === 'string'
-      && assistant.content.length > 0
-      && !assistant.tool_calls?.length;
-  }
-
-  /**
-   * Compensate a failed self-orchestrating model attempt. Streamed prose has
-   * already reached the append-only log, so remove it from the live projection
-   * and append matching log-only removals. Tool calls/results are deliberately
-   * never tracked here and therefore survive a failed attempt.
-   */
-  private static async removeFailedStreamedAssistantProse(
-    conversationId: string | undefined,
-    messageIds: ReadonlySet<string>
-  ): Promise<void> {
-    if (!conversationId || messageIds.size === 0) return;
-    try {
-      // The dependency-free registry avoids the FlowExecutor -> ProcessNode ->
-      // ModelHandler import cycle (a lazy require failed in production, #1319).
-      const state = getConversationStates().get(conversationId);
-      if (!state || !Array.isArray(state.messages)) return;
-
-      // Only compensate messages still present. This makes repeated failure
-      // handling idempotent: after the first pass neither state nor log changes.
-      const removals = [...messageIds].filter((id) =>
-        state.messages.some((message: FlujoChatMessage) => message.id === id)
-      );
-      if (removals.length === 0) return;
-      const removalSet = new Set(removals);
-      for (let index = state.messages.length - 1; index >= 0; index--) {
-        if (removalSet.has(state.messages[index].id)) state.messages.splice(index, 1);
-      }
-      state.updatedAt = Date.now();
-      await appendRawForState(state, removals.map((messageId) => ({ type: 'message:removed', messageId })));
-    } catch (err) {
-      log.warn(`Failed to compensate streamed prose for failed conversation ${conversationId}`, { err });
-    }
-  }
-
-  /**
-   * Build the resource-aware truncation-marker lookup (issue #168): captured
-   * run resources for oversized PRIOR tool results/args, keyed by the producing
-   * tool_call_id. Only `tool-result` / `tool-args` captures carry a toolCallId
-   * and are relevant here. Best-effort — any failure yields `undefined` and the
-   * adapter falls back to plain truncation. The store index is cached, so this
-   * is cheap per call.
-   */
-  private static async buildRunResourceMarkers(
-    conversationId: string
-  ): Promise<Map<string, ToolResourceMarker> | undefined> {
-    try {
-      const entries = await listRunResources(conversationId);
-      let markers: Map<string, ToolResourceMarker> | undefined;
-      for (const entry of entries) {
-        const id = entry.producedBy?.toolCallId;
-        if (!id) continue;
-        const source = entry.producedBy.source;
-        if (source !== 'tool-result' && source !== 'tool-args') continue;
-        if (!markers) markers = new Map();
-        const slot = markers.get(id) ?? {};
-        if (source === 'tool-result') slot.result = entry;
-        else slot.args = entry;
-        markers.set(id, slot);
-      }
-      return markers;
-    } catch (error) {
-      log.warn(`Failed to build run-resource markers for conversation ${conversationId}`, error);
-      return undefined;
-    }
-  }
-
-  /**
-   * Head chars kept when an oversized tool result is shrunk on the emergency
-   * context-overflow retry (see generateCompletion). Also the threshold above
-   * which a result is considered "oversized" for on-the-fly capture, so the two
-   * stay consistent: anything the refit will truncate is first made recoverable.
-   */
-  private static readonly OVERFLOW_TOOL_RESULT_HEAD_CHARS = 2000;
-
-  /**
-   * Guardrail reserved from advertised context windows for provider framing and
-   * tokenizer-estimation variance. This is not a tokenizer: payload estimates
-   * below are deliberately conservative character-based approximations.
-   */
-  private static readonly OUTGOING_INPUT_SAFETY_TOKENS = 4096;
-
-  /**
-   * Output caps are optional for some adapters. When a model advertises a
-   * context window but no cap is configured, reserve this conservative amount
-   * instead of assuming that the provider will generate no output.
-   */
-  private static readonly UNSPECIFIED_OUTPUT_TOKEN_RESERVE = 8192;
-
-  private static resolveOutgoingInputBudget(
-    contextWindow: number | undefined,
-    maxTokens: number | undefined
-  ): number | undefined {
-    if (!Number.isFinite(contextWindow) || (contextWindow ?? 0) <= 0) return undefined;
-
-    const outputReserve = normalizeMaxTokens(maxTokens)
-      ?? Math.min(ModelHandler.UNSPECIFIED_OUTPUT_TOKEN_RESERVE, Math.floor(contextWindow! / 4));
-    const safety = Math.min(ModelHandler.OUTGOING_INPUT_SAFETY_TOKENS, Math.floor(contextWindow! / 20));
-    const budget = Math.floor(
-      (contextWindow as number) - outputReserve - safety
-    );
-    // A configured window is a hard bound. An impossible output reservation
-    // must fail closed, never turn into the "unknown/unbounded" fast path.
-    return Math.max(0, budget);
-  }
-
-  /** Estimate the complete provider payload using the same conservative
-   * character-based convention as summarizing compaction. */
-  private static estimateOutgoingInputTokens(
-    messages: readonly OpenAI.ChatCompletionMessageParam[],
-    tools?: OpenAI.ChatCompletionFunctionTool[],
-    model?: Pick<Model, 'provider' | 'adapter' | 'name'>
-  ): number {
-    return estimateWireInputTokens(messages, tools, model);
-  }
-
-  /**
-   * True when a provider error is a context-window overflow (the request had
-   * more prompt tokens than the model accepts), as opposed to any other API
-   * failure. Matches the several wordings providers use ("maximum context
-   * length", OpenAI's `context_length_exceeded`, OpenRouter's "reduce the
-   * length", etc.) across the message, the error code/type, and the raw
-   * provider body. Deliberately conservative: only these overflow-specific
-   * phrases, so a generic 400 never triggers the (lossy) refit retry.
-   */
-  private static isContextOverflowError(error?: ExecutionError): boolean {
-    if (!error || error.type !== 'model') return false;
-    const details = (error.details ?? {}) as Record<string, unknown>;
-    let providerText = '';
-    try {
-      providerText = JSON.stringify(details.providerError ?? '');
-    } catch {
-      /* circular/huge body — the message + code below are enough to decide */
-    }
-    return isContextOverflowText(
-      `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`,
-    );
-  }
-
-  /**
-   * Arm the synthetic `read_resource` tool when the wire references a run
-   * resource URI but the offered tools don't yet expose read_resource — so a
-   * `flujo://run/...` marker introduced by compaction is actually
-   * dereferenceable. Dispatch is by-name (processToolCalls), so a late-added
-   * tool still executes. The tool block is re-sorted by name to stay byte-stable
-   * turn to turn (prefix cache, #89). Returns the tools unchanged when no arming
-   * is needed.
-   *
-   * SAFETY NET ONLY as of the prefix-cache work: ProcessNode.prep now arms
-   * read_resource up front for any step that could ever mint a run-resource URI
-   * (MCP tools present, write_resource offered, resource nodes wired, native
-   * resources exposed), so by the time compaction can produce a marker the tool
-   * is already in the block and this is a no-op. It stays as a backstop for
-   * non-ProcessNode callers and for conversations resumed from before that
-   * change — but note that when it DOES fire it reshapes the tool block
-   * mid-conversation and costs a full prefix-cache miss on that turn.
-   */
-  private static ensureReadResourceArmed(
-    apiMessages: OpenAI.ChatCompletionMessageParam[],
-    tools: OpenAI.ChatCompletionFunctionTool[] | undefined
-  ): OpenAI.ChatCompletionFunctionTool[] | undefined {
-    if (
-      !wireHasRunResourceUri(apiMessages) ||
-      (tools ?? []).some((t) => t.type === 'function' && t.function.name === READ_RESOURCE_TOOL_NAME)
-    ) {
-      return tools;
-    }
-    const def = buildReadResourceTool();
-    const readTool: OpenAI.ChatCompletionFunctionTool = {
-      type: 'function',
-      function: {
-        name: def.name,
-        description: def.description || `Tool: ${def.name}`,
-        parameters: def.inputSchema as Record<string, unknown>,
-      },
-    };
-    return [...(tools ?? []), readTool].sort((a, b) =>
-      a.type === 'function' && b.type === 'function'
-        ? a.function.name < b.function.name
-          ? -1
-          : a.function.name > b.function.name
-            ? 1
-            : 0
-        : 0
-    );
-  }
-
-  /**
-   * Emergency context-overflow recovery: make every oversized tool result on
-   * the wire recoverable so it can be shrunk to a dereferenceable
-   * `flujo://run/...` URI on the retry. Any oversized result whose tool_call_id
-   * is NOT already backed by a captured resource is written to the run-resource
-   * store on the fly and added to a fresh (augmented) markers map — so it can be
-   * read back with `read_resource` instead of being lossily discarded. This
-   * covers results that auto-capture missed (disabled, or produced before the
-   * setting was on). Best-effort: any store failure just leaves that result
-   * unmarked (it will be lossily truncated). Returns the markers map to use for
-   * the refit.
-   */
-  private static async captureOversizedToolResultsForRefit(
-    conversationId: string,
-    apiMessages: OpenAI.ChatCompletionMessageParam[],
-    existing: Map<string, ToolResourceMarker> | undefined,
-    nodeId?: string,
-    durableContext: FlowDurableMutationContext = {},
-  ): Promise<Map<string, ToolResourceMarker> | undefined> {
-    let markers: Map<string, ToolResourceMarker> | undefined = existing ? new Map(existing) : undefined;
-    for (const msg of apiMessages) {
-      if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
-      if (msg.content.length <= ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS) continue;
-      const callId = msg.tool_call_id;
-      if (markers?.get(callId)?.result?.uri) continue; // already recoverable
-      const content = msg.content;
-      try {
-        const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
-            conversationId,
-            mimeType: 'text/plain',
-            kind: 'text',
-            data: { text: content },
-            producedBy: { source: 'tool-result', nodeId, toolCallId: callId },
-          }),
-        );
-        if ('skipped' in written) {
-          log.warn(`Emergency capture of oversized tool result skipped (${written.skipped}); it will be lossily truncated`);
-          continue;
-        }
-        if (!markers) markers = new Map();
-        const slot = markers.get(callId) ?? {};
-        slot.result = written;
-        markers.set(callId, slot);
-      } catch (error) {
-        rethrowFlowExecutionAuthorityError(error);
-        log.warn('Emergency capture of oversized tool result failed; it will be lossily truncated', error);
-      }
-    }
-    return markers;
-  }
-
-  /**
-   * Shape a thrown provider/SDK error into a standardized error Result. Shared
-   * by every attempt of a completion call and the setup path, so cancellation,
-   * OpenAI.APIError bodies, and unknown errors are all reported identically no
-   * matter which attempt threw. `aborted` = the shared AbortController fired
-   * (user Stop), reported as a clean cancellation rather than a provider failure.
-   */
-  private static shapeCompletionError(
-    error: unknown,
-    modelId: string,
-    aborted: boolean
-  ): Result<ModelCallResult> {
-    // A user cancellation aborted the in-flight call: whatever error shape the
-    // SDK threw (OpenAI APIUserAbortError, DOMException AbortError, the Agent
-    // SDK's teardown error, ...), report it as a clean cancellation — not a
-    // provider failure.
-    if (aborted) {
-      log.info('Provider call aborted by user cancellation.', { modelId });
-      return {
-        success: false,
-        error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
-      };
-    }
-
-    rethrowFlowExecutionAuthorityError(error);
-    if (isConversationDurabilityError(error)) {
-      return { success: false, error: createModelError(error.code, error.message, modelId,
-        undefined, { status: error.status }) };
-    }
-    if (error instanceof ModelTurnArchiveMemoryError) {
-      return { success: false, error: createModelError(error.code, error.message, modelId,
-        undefined, { status: error.status, providerError: error.diagnostic }) };
-    }
-    if (error instanceof CodexInputLimitError) {
-      return { success: false, error: createModelError(error.code, error.message, modelId,
-        undefined, { inputCharacters: error.inputCharacters }) };
-    }
-
-    // Error diagnostics are deliberately metadata-only. Provider bodies,
-    // messages, request URLs, headers, and stacks may contain credentials or
-    // execution content and must never be passed to the logger.
-    log.error('Provider completion failed', {
-      modelId,
-      errorClass: classifyStatisticsError(error),
-      status: error instanceof OpenAI.APIError ? error.status : undefined,
-      type: error instanceof OpenAI.APIError ? error.type : undefined,
-      code: error instanceof OpenAI.APIError ? error.code : undefined,
-    });
-
-    // Handle API errors
-    if (error instanceof OpenAI.APIError) {
-      // The SDK's APIError.message is often terse (e.g. "429 Provider returned
-      // error"). The real reason lives in the parsed response body
-      // (error.error); extractProviderErrorDetails digs it out so the user
-      // sees something actionable instead of a generic line.
-      const body = 'error' in error ? error.error : undefined;
-      const extracted = ModelHandler.extractProviderErrorDetails(body, error.message);
-
-      // Prefer the response header retry-after; fall back to the body's
-      // metadata.retry_after_seconds (already surfaced by the helper).
-      const headers = (error.headers || {}) as Record<string, unknown>;
-      const headerRetryAfter = headers['retry-after'] ?? headers['Retry-After'];
-      const retryAfter =
-        headerRetryAfter !== undefined ? String(headerRetryAfter) : extracted.retryAfter;
-      const rateLimitReset =
-        headers['x-ratelimit-reset'] ?? headers['x-ratelimit-reset-requests'];
-
-      const errorResult: Result<ModelCallResult> = {
-        success: false,
-        error: createModelError(
-          'api_error',
-          extracted.message,
-          modelId,
-          undefined,
-          {
-            status: error.status,
-            // Prefer the body's values; fall back to the SDK's.
-            type: extracted.type ?? error.type,
-            code: extracted.code ?? error.code,
-            param: extracted.param ?? error.param,
-            retryAfter,
-            rateLimitReset: rateLimitReset !== undefined ? String(rateLimitReset) : undefined,
-            // The full parsed provider body is the richest source of truth.
-            providerError: extracted.providerError,
-            // Include stack trace if available
-            stack: error.stack
-          }
-        )
-      };
-
-      log.warn('Provider request failed', {
-        modelId,
-        status: error.status,
-        code: extracted.code ?? error.code,
-        type: extracted.type ?? error.type,
-      });
-      return errorResult;
-    }
-
-    // Handle other errors
-    const errorResult: Result<ModelCallResult> = {
-      success: false,
-      error: createModelError(
-        'unknown_error',
-        error instanceof Error ? error.message : String(error),
-        modelId,
-        undefined,
-        {
-          // Include stack trace if available
-          stack: error instanceof Error ? error.stack : undefined
-        }
-      )
-    };
-
-    log.warn('Provider request failed with an unclassified error', {
-      modelId,
-      errorClass: error instanceof Error ? error.name : typeof error,
-    });
-    return errorResult;
-  }
-
-  /**
    * Call model with tool support - performs a SINGLE API call.
    * Does NOT handle tool execution loops internally.
    */
@@ -1177,7 +584,7 @@ export class ModelHandler {
         return this.callModelCore(input);
       });
     } catch (error) {
-      return this.shapeCompletionError(error, input.modelId, false);
+      return shapeCompletionError(error, input.modelId, false);
     }
   }
 
@@ -1345,7 +752,7 @@ export class ModelHandler {
             emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
             // Fold under the SAME authority as the event.  The bus append is
             // independently fenced by conversationLog when it reaches disk.
-            if (conversationId) ModelHandler.persistStreamedMessage(conversationId, withNode);
+            if (conversationId) persistStreamedMessage(conversationId, withNode);
           }));
         }
       : undefined;
@@ -1684,7 +1091,7 @@ export class ModelHandler {
     // Built once here (cheap — the store index is cached) and passed to the
     // adapter; request/response adapters ignore it.
     const runResourceMarkers = conversationId
-      ? await ModelHandler.buildRunResourceMarkers(conversationId)
+      ? await buildRunResourceMarkers(conversationId)
       : undefined;
 
     // Summarization is applied after ProcessNode's node/output/input projection
@@ -1709,7 +1116,7 @@ export class ModelHandler {
     const effectiveMessages = compaction ? withExactSourceRecall({
       source: projectedMessages, wire: compaction.wireMessages,
       sourceEndId: compaction.artifact.sourceEndId, resourceUri: compaction.artifact.summaryResourceUri,
-      inputBudget: ModelHandler.resolveOutgoingInputBudget(modelContextWindow, effectiveMaxTokens) ?? 96_000,
+      inputBudget: resolveOutgoingInputBudget(modelContextWindow, effectiveMaxTokens) ?? 96_000,
     }) : projectedMessages;
     const effectiveModelInput = cloneModelInputSnapshot(input.modelInputForArchive);
     if (compaction) {
@@ -2033,7 +1440,7 @@ export class ModelHandler {
         return traceSpan('model.generate', () => this.generateCompletionCore(...args));
       });
     } catch (error) {
-      return ModelHandler.shapeCompletionError(error, args[0], false);
+      return shapeCompletionError(error, args[0], false);
     }
   }
 
@@ -2312,7 +1719,7 @@ export class ModelHandler {
       // source is stashed in run resources before a complete old range is
       // replaced, and unsupported/unknown capability, secrets, poor density,
       // failed estimates, or non-positive savings remain on the text route.
-      const compactionGlobals = await ModelHandler.getCompactionGlobalSettings();
+      const compactionGlobals = await getCompactionGlobalSettings();
       const visualConfig: EffectiveVisualCompaction = resolveEffectiveVisualCompaction(compactionGlobals);
       if (opts?.executionExtensionContext) visualConfig.enabled = false;
       const visual = await compactMessagesVisually({
@@ -2348,7 +1755,7 @@ export class ModelHandler {
           undefined,
           ...apiSourceIds.slice(candidate.endIndex),
         ];
-        if (!opts?.executionExtensionContext) effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+        if (!opts?.executionExtensionContext) effectiveTools = ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Wire-only history compaction for request/response adapters. Agentic loops
@@ -2359,7 +1766,7 @@ export class ModelHandler {
       // dropping a message (tool-pair integrity + prefix-cache stability). It
       // runs for every adapter; self-orchestrating adapters flatten this safer
       // generic wire afterward and still benefit from the bounded content.
-      const keepRecentMessages = await ModelHandler.historyKeepRecentMessages();
+      const keepRecentMessages = await historyKeepRecentMessages();
       const codexMayResume = model.adapter === 'codex-cli' && opts?.sessionResume && opts.codexSession;
       if (!codexMayResume && !opts?.executionExtensionContext && couldCompact(apiMessages, { keepRecentMessages })) {
         const beforeLosslessRefit = apiMessages;
@@ -2396,7 +1803,7 @@ export class ModelHandler {
         // scanning the PRE-compaction wire, so a URI first surfaced HERE would be
         // undereferenceable. Arm it now if compaction introduced a run-resource
         // reference the offered tools don't yet cover.
-        effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+        effectiveTools = ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Codex Exec has a hard aggregate stdin ceiling independent of a model's
@@ -2411,7 +1818,7 @@ export class ModelHandler {
         if (codexRefit.capacityExceeded && opts?.conversationId && !opts.executionExtensionContext) {
           // A recent, uncaptured tool result is recoverable once its exact bytes
           // are persisted. The old transport guard ran before this recovery path.
-          const markers = await ModelHandler.captureOversizedToolResultsForRefit(
+          const markers = await captureOversizedToolResultsForRefit(
             opts.conversationId, apiMessages, opts.runResourceMarkers, opts.nodeId, opts.durableContext,
           );
           opts.runResourceMarkers = markers;
@@ -2419,13 +1826,13 @@ export class ModelHandler {
           // normalizer about a marker would leave read_resource unarmed.
           const capturedMessages = compactForWire(apiMessages, {
             resourceMarkers: markers, canUseTools: true, compactRecentToolResults: true,
-            allowLossyTruncation: false, toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
+            allowLossyTruncation: false, toolResultHeadChars: OVERFLOW_TOOL_RESULT_HEAD_CHARS,
           });
           markModelInputMessages(modelInputForArchive, capturedMessages.flatMap((message, index) =>
             message === apiMessages[index] ? [] : [apiSourceIds[index]]), 'content-truncated',
           'Oversized tool content was stored exactly and replaced with a resource-backed excerpt before Codex dispatch.');
           apiMessages = capturedMessages;
-          effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+          effectiveTools = ensureReadResourceArmed(apiMessages, effectiveTools);
           codexRefit = refitCodexMessagesForInputLimit(apiMessages, { resourceMarkers: markers, keepRecentMessages });
         }
         if (codexRefit.capacityExceeded) {
@@ -2461,7 +1868,7 @@ export class ModelHandler {
           apiSourceIds = codexRefit.sourceMessageIndexes.map(index => (
             index === undefined ? undefined : priorSourceIds[index]
           ));
-          effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+          effectiveTools = ensureReadResourceArmed(apiMessages, effectiveTools);
           log.warn('Refitted Codex input before the CLI hard character limit', {
             modelId,
             beforeCharacters: codexRefit.originalCharacters,
@@ -2499,7 +1906,7 @@ export class ModelHandler {
       // applied only when the user opted in via `toolDescriptionMaxChars`. Pure
       // function of its input, so the block stays byte-stable turn to turn (#89).
       if (sanitizedTools && sanitizedTools.length > 0) {
-        const descriptionMaxChars = await ModelHandler.toolDescriptionCap();
+        const descriptionMaxChars = await toolDescriptionCap();
         const { tools: trimmed, beforeChars, afterChars } = trimTools(sanitizedTools, {
           descriptionMaxChars,
         });
@@ -2517,14 +1924,14 @@ export class ModelHandler {
       // waiting for the provider to reject it. Only wire messages are refitted;
       // the persisted conversation remains unchanged. Models without usable
       // context metadata keep the historical reactive-overflow behavior.
-      const inputBudget = ModelHandler.resolveOutgoingInputBudget(
+      const inputBudget = resolveOutgoingInputBudget(
         model.contextWindow,
         opts?.maxTokens
       );
       const hasImages = apiMessages.some(message => Array.isArray(message.content)
         && message.content.some(part => part.type === 'image_url'));
       if (hasImages && !opts?.executionExtensionContext) {
-        sanitizedTools = ModelHandler.ensureReadResourceArmed([
+        sanitizedTools = ensureReadResourceArmed([
           ...apiMessages, { role: 'user', content: 'flujo://run/image/original' },
         ], sanitizedTools);
       }
@@ -2555,7 +1962,7 @@ export class ModelHandler {
         });
       };
       apiMessages = await prepareImages(apiMessages);
-      if (!opts?.executionExtensionContext) sanitizedTools = ModelHandler.ensureReadResourceArmed(apiMessages, sanitizedTools);
+      if (!opts?.executionExtensionContext) sanitizedTools = ensureReadResourceArmed(apiMessages, sanitizedTools);
       // A persisted Codex thread owns its accumulated context and native
       // compaction. Its adapter validates the compatible delta (or full fresh
       // fallback); measuring the entire transcript here rejects valid resumes.
@@ -2565,7 +1972,7 @@ export class ModelHandler {
           error: createModelError('context_budget_exceeded',
             'The configured output limit leaves no room for input in the context window. Lower the output-token limit.', modelId),
         };
-        let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model);
+        let estimatedInputTokens = estimateOutgoingInputTokens(apiMessages, sanitizedTools, model);
         if (estimatedInputTokens > inputBudget) {
           // A constrained private run cannot introduce resource tools or persist
           // model content while recovering from an oversized provider request.
@@ -2578,7 +1985,7 @@ export class ModelHandler {
           }
           let budgetMarkers = opts?.runResourceMarkers;
           if (opts?.conversationId) {
-            budgetMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
+            budgetMarkers = await captureOversizedToolResultsForRefit(
               opts.conversationId,
               apiMessages,
               budgetMarkers,
@@ -2595,7 +2002,7 @@ export class ModelHandler {
             // the URI and make the refit silently unrecoverable (#338).
             canUseTools: true,
             compactRecentToolResults: true,
-            toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
+            toolResultHeadChars: OVERFLOW_TOOL_RESULT_HEAD_CHARS,
           });
           const refitChangedIndexes = refittedMessages
             .map((message, index) => JSON.stringify(message) === JSON.stringify(apiMessages[index]) ? -1 : index)
@@ -2616,8 +2023,8 @@ export class ModelHandler {
               injectedMarker: '[truncated',
             });
           }
-          const refittedTools = ModelHandler.ensureReadResourceArmed(refittedMessages, sanitizedTools);
-          estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools, model);
+          const refittedTools = ensureReadResourceArmed(refittedMessages, sanitizedTools);
+          estimatedInputTokens = estimateOutgoingInputTokens(refittedMessages, refittedTools, model);
 
           if (estimatedInputTokens <= inputBudget) {
             log.warn('Refitted outgoing model request to its advertised input budget', {
@@ -2631,7 +2038,7 @@ export class ModelHandler {
             const priorSourceIds = apiSourceIds;
             let emergency = emergencyRefitMessages(refittedMessages, {
               target: inputBudget,
-              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools, model),
+              measure: candidate => estimateOutgoingInputTokens(candidate, refittedTools, model),
               keepRecentMessages,
               resourceMarkers: budgetMarkers,
             });
@@ -2640,10 +2047,10 @@ export class ModelHandler {
             // Shed bulky optional schemas while retaining the resource reader
             // needed to recover every archived observation on this wire.
             if (emergency.after > inputBudget && (emergencyTools?.length ?? 0) > 0) {
-              emergencyTools = ModelHandler.ensureReadResourceArmed(emergency.messages, undefined);
+              emergencyTools = ensureReadResourceArmed(emergency.messages, undefined);
               emergency = emergencyRefitMessages(refittedMessages, {
                 target: inputBudget,
-                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, emergencyTools, model),
+                measure: candidate => estimateOutgoingInputTokens(candidate, emergencyTools, model),
                 keepRecentMessages,
                 resourceMarkers: budgetMarkers,
               });
@@ -2762,7 +2169,7 @@ export class ModelHandler {
       // attempt closure captures them.  The lock is per root URL so parallel
       // fan-out lanes that target DIFFERENT servers are not serialised. ---
       const autoUnloadOllama = (!ownerBound && model.provider === 'ollama' && Boolean(model.baseUrl))
-        ? await ModelHandler.isAutoUnloadOllamaEnabled()
+        ? await isAutoUnloadOllamaEnabled()
         : false;
       const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
         ? normaliseOllamaRoot(model.baseUrl)
@@ -2922,7 +2329,7 @@ export class ModelHandler {
           // Anything the adapter already materialized is observable output: this
           // attempt is no longer safe to replay automatically (issue #400).
           attemptProducedOutput = true;
-          if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
+          if (isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
           if (archiveCanonicalMessages) {
             const nextBytes = estimateArchiveSnapshotBytes(message);
             const difference = nextBytes - (archivedMessageBytes.get(message.id) ?? 0);
@@ -3420,7 +2827,7 @@ export class ModelHandler {
             attemptError = errorObj;
 
             // Shape the message + details consistently with the thrown-error path.
-            const extracted = ModelHandler.extractProviderErrorDetails(errorObj);
+            const extracted = extractProviderErrorDetails(errorObj);
 
             const errorResult: Result<ModelCallResult> = {
                 success: false,
@@ -3555,7 +2962,7 @@ export class ModelHandler {
           if (model.adapter === 'claude-cli' && !abortController.signal.aborted) {
             try {
               await opts?.flushTranscriptProjection?.();
-              await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
+              await removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
             } catch (cleanupError) {
               log.warn('Failed to clean up streamed prose while retaining the primary model failure', { cleanupError });
             }
@@ -3567,7 +2974,7 @@ export class ModelHandler {
             // Preflight failures without a receipt retain their typed throw.
             return { success: false, error: createModelError(error.code, error.message, modelId) };
           }
-          return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
+          return shapeCompletionError(error, modelId, abortController.signal.aborted);
         } finally {
           if (nativeReceipt && !nativeTerminal) {
             await holdNativeInvocation(nativeReceipt).catch(() => undefined);
@@ -3768,13 +3175,13 @@ export class ModelHandler {
         !opts?.nativeBrokerAuthority &&
         !attemptProducedOutput && !abortController.signal.aborted &&
         !result.success &&
-        ModelHandler.isContextOverflowError(result.error)
+        isContextOverflowError(result.error)
       ) {
         const beforeChars = JSON.stringify(apiMessages).length;
         let refitMarkers = opts?.runResourceMarkers;
         if (opts?.conversationId) {
           await assertFlowExecutionCurrent(opts.durableContext ?? {});
-          refitMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
+          refitMarkers = await captureOversizedToolResultsForRefit(
             opts.conversationId,
             apiMessages,
             refitMarkers,
@@ -3790,7 +3197,7 @@ export class ModelHandler {
           canUseTools: true,
           compactRecentToolResults: true,
           allowLossyTruncation: false,
-          toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
+          toolResultHeadChars: OVERFLOW_TOOL_RESULT_HEAD_CHARS,
         });
         const reactiveChangedIndexes = refitMessages
           .map((message, index) => JSON.stringify(message) === JSON.stringify(apiMessages[index]) ? -1 : index)
@@ -3805,7 +3212,7 @@ export class ModelHandler {
           recordContextCompaction(modelInputForArchive, {
             kind: 'content-truncation',
             reason: 'One automatic retry after provider context rejection.',
-            before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model),
+            before: estimateOutgoingInputTokens(apiMessages, sanitizedTools, model),
             unit: 'tokens',
             truncatedMessages: reactiveChangedIndexes.length,
             injectedMarker: '[truncated',
@@ -3820,14 +3227,14 @@ export class ModelHandler {
         const retryImageTokens = rejectedImageCosts.length
           ? Math.max(1, Math.floor(rejectedImageCosts.reduce((least, cost) => Math.min(least, cost), 16384) / 2)) : 8192;
         let retryMessages = await prepareImages(refitMessages, retryImageTokens);
-        let retryTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
+        let retryTools = ensureReadResourceArmed(refitMessages, sanitizedTools);
         // The provider has just said the request is too long, so the retry must
         // be materially smaller even when the catalogue window says it fits.
         const retryTarget = Math.min(inputBudget ?? Infinity, Math.max(
           1,
-          Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools, model) * 0.7),
+          Math.floor(estimateOutgoingInputTokens(apiMessages, sanitizedTools, model) * 0.7),
         ));
-        let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools, model);
+        let retryEstimate = estimateOutgoingInputTokens(retryMessages, retryTools, model);
         const priorSourceIds = apiSourceIds;
         let retrySourceIds = apiSourceIds;
         if (retryEstimate > retryTarget) {
@@ -3843,20 +3250,20 @@ export class ModelHandler {
             log.warn('Could not archive the rejected request before the smaller retry; retrying without it', { error });
           }
           if (sourceArchiveUri) {
-            retryTools = ModelHandler.ensureReadResourceArmed([{ role: 'assistant', content: sourceArchiveUri }], retryTools);
+            retryTools = ensureReadResourceArmed([{ role: 'assistant', content: sourceArchiveUri }], retryTools);
           }
           let emergency = emergencyRefitMessages(retryMessages, {
             target: retryTarget,
-            measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
+            measure: candidate => estimateOutgoingInputTokens(candidate, retryTools, model),
             keepRecentMessages,
             resourceMarkers: refitMarkers,
             sourceArchiveUri,
           });
           if (emergency.after > retryTarget && (retryTools?.length ?? 0) > 0) {
-            retryTools = ModelHandler.ensureReadResourceArmed(emergency.messages, undefined);
+            retryTools = ensureReadResourceArmed(emergency.messages, undefined);
             emergency = emergencyRefitMessages(retryMessages, {
               target: retryTarget,
-              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools, model),
+              measure: candidate => estimateOutgoingInputTokens(candidate, retryTools, model),
               keepRecentMessages,
               resourceMarkers: refitMarkers,
               sourceArchiveUri,
@@ -3878,7 +3285,7 @@ export class ModelHandler {
             recordContextCompaction(modelInputForArchive, {
               kind: 'emergency-refit',
               reason: 'One automatic retry after a provider context-length rejection.',
-              before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools),
+              before: estimateOutgoingInputTokens(apiMessages, sanitizedTools),
               after: emergency.after,
               unit: 'tokens',
               omittedMessages: emergency.omittedMessageIndexes.length,
@@ -3919,7 +3326,7 @@ export class ModelHandler {
     } catch (error) {
       // Setup (model fetch / key decrypt / compaction) threw — attempts shape
       // their own errors and never throw out.
-      return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
+      return shapeCompletionError(error, modelId, abortController.signal.aborted);
     } finally {
       // A native attempt keeps Stop polling through terminal persistence. Every
       // outer return path, including a held invocation, must then release it.

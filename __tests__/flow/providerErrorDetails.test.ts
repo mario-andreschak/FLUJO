@@ -1,23 +1,14 @@
 /**
- * Tests for ModelHandler.extractProviderErrorDetails — the single helper both
+ * Tests for extractProviderErrorDetails — the single helper both
  * provider-error paths share (HTTP 200 with an error body, and a thrown
  * OpenAI.APIError). It must surface OpenRouter's nested upstream reason
  * (metadata.provider_name / raw) and retry_after_seconds consistently,
  * including when metadata.raw is a plain (non-JSON) string.
  */
-import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { extractProviderErrorDetails as extract } from '@/backend/execution/flow/handlers/providerErrorShape';
 import { normalizeChatError } from '@/backend/execution/flow/normalizeError';
 
-// The method is private; call it through a typed-loose handle.
-const extract = (body: unknown, base?: string) =>
-  (ModelHandler as any).extractProviderErrorDetails(body, base) as {
-    message: string;
-    code?: unknown;
-    retryAfter?: string;
-    providerError?: unknown;
-  };
-
-describe('ModelHandler.extractProviderErrorDetails', () => {
+describe('extractProviderErrorDetails', () => {
   it('surfaces a plain-string upstream reason + provider name (200-error-body path)', () => {
     const body = {
       message: 'Provider returned error',

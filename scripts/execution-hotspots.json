@@ -15,10 +15,14 @@
     },
     {
       "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
-      "maxLines": 3955,
+      "maxLines": 3362,
       "modules": [
         "src/backend/execution/flow/handlers/toolCallProcessing.ts",
-        "src/backend/execution/flow/handlers/modelMedia.ts"
+        "src/backend/execution/flow/handlers/modelMedia.ts",
+        "src/backend/execution/flow/handlers/providerErrorShape.ts",
+        "src/backend/execution/flow/handlers/contextWindowFit.ts",
+        "src/backend/execution/flow/handlers/modelHandlerSettings.ts",
+        "src/backend/execution/flow/handlers/streamedAssistantMessages.ts"
       ]
     },
     {
