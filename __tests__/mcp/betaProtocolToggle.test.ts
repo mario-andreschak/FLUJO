@@ -72,9 +72,15 @@ beforeEach(() => {
 afterEach(() => approvedHost.restore());
 
 describe("isMcpBetaProtocolEnabled", () => {
-  it("is disabled when the settings blob has no experimental section", async () => {
+  const savedNegotiation = process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION;
+  afterEach(() => {
+    if (savedNegotiation === undefined) delete process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION;
+    else process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION = savedNegotiation;
+  });
+
+  it("negotiates the modern protocol when the owner never changed the setting", async () => {
     loadItemMock.mockResolvedValue({ speech: { enabled: false } });
-    expect(await isMcpBetaProtocolEnabled()).toBe(false);
+    expect(await isMcpBetaProtocolEnabled()).toBe(true);
   });
 
   it("is enabled when the flag is set", async () => {
@@ -84,9 +90,22 @@ describe("isMcpBetaProtocolEnabled", () => {
     expect(await isMcpBetaProtocolEnabled()).toBe(true);
   });
 
-  it("is disabled when storage fails (best-effort read)", async () => {
-    loadItemMock.mockRejectedValue(new Error("disk gone"));
+  it("uses the classic handshake when the owner switched it off", async () => {
+    loadItemMock.mockResolvedValue({
+      experimental: { enabled: true, mcpBetaProtocol: false },
+    });
     expect(await isMcpBetaProtocolEnabled()).toBe(false);
+  });
+
+  it("uses the classic handshake when FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy", async () => {
+    process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION = "legacy";
+    loadItemMock.mockResolvedValue({ experimental: { mcpBetaProtocol: true } });
+    expect(await isMcpBetaProtocolEnabled()).toBe(false);
+  });
+
+  it("keeps the default when storage fails, because negotiation always falls back", async () => {
+    loadItemMock.mockRejectedValue(new Error("disk gone"));
+    expect(await isMcpBetaProtocolEnabled()).toBe(true);
   });
 });
 
@@ -228,7 +247,7 @@ describe("beta factories", () => {
     expect(beta.__flujoStdioKey).toBe(v1.__flujoStdioKey);
   });
 
-  it("keeps the exact base stdio transport through negotiation and defers MRTR attachment", async () => {
+  it("hands the SDK a stdio subclass, so the server/discover probe runs on FLUJO's own process, and defers MRTR attachment", async () => {
     const beta = (await createBetaTransport(stdio())) as BetaStdioClientTransport & {
       __flujoKind?: string;
     };
@@ -236,19 +255,24 @@ describe("beta factories", () => {
 
     expect(beta.__flujoKind).toBe("stdio");
     expect(beta).toBeInstanceOf(BetaStdioClientTransport);
-    expect(Object.getPrototypeOf(beta)).toBe(
-      BetaStdioClientTransport.prototype,
-    );
+    // The SDK clones only its exact base class into a hidden probe process.
+    expect(Object.getPrototypeOf(beta)).not.toBe(BetaStdioClientTransport.prototype);
+    expect(Object.prototype.hasOwnProperty.call(Object.getPrototypeOf(beta), "_dispose")).toBe(false);
     expect(controller).toBeDefined();
     expect(controller).not.toBe(beta);
 
     // connect() installs the SDK callbacks before FLUJO activates the adapter.
+    const prototype = Object.getPrototypeOf(beta);
     beta.onmessage = jest.fn();
     activateStdioOAuthMrtrController(beta);
-    expect(Object.getPrototypeOf(beta)).toBe(
-      BetaStdioClientTransport.prototype,
-    );
+    expect(Object.getPrototypeOf(beta)).toBe(prototype);
     expect(getStdioOAuthMrtrController(beta)).toBe(controller);
+  });
+
+  it("asks stdio servers server/discover with a bounded probe, remote servers in auto mode", () => {
+    const negotiation = (client: unknown) => (client as { _versionNegotiation: unknown })._versionNegotiation;
+    expect(negotiation(createNewBetaClient(stdio()))).toEqual({ mode: "auto", probe: { timeoutMs: 20_000 } });
+    expect(negotiation(createNewBetaClient(streamable()))).toEqual({ mode: "auto" });
   });
 
   it("stashes kind + http key on streamable transports and refuses websocket", async () => {

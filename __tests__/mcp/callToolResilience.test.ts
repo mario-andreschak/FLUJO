@@ -12,6 +12,11 @@
  * double-execute a tool that already ran.
  */
 
+// These tests fake the classic SDK client factories, so they pin the classic handshake.
+jest.mock('@/backend/services/mcp/betaClient', () => ({
+  ...jest.requireActual('@/backend/services/mcp/betaClient'),
+  isMcpBetaProtocolEnabled: jest.fn(async () => false),
+}));
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   resolveGlobalVars: jest.fn(async (v: unknown) => v),
 }));

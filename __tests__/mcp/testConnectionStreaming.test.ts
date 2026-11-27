@@ -13,6 +13,11 @@ import type { CommandStreamEvent } from '@/shared/types/streaming';
 
 // A stdio transport stand-in that is an `instanceof` the (mocked) StdioClientTransport,
 // so testConnection's `transport instanceof StdioClientTransport` stderr branch runs.
+// These tests fake the classic SDK client factories, so they pin the classic handshake.
+jest.mock('@/backend/services/mcp/betaClient', () => ({
+  ...jest.requireActual('@/backend/services/mcp/betaClient'),
+  isMcpBetaProtocolEnabled: jest.fn(async () => false),
+}));
 jest.mock('@modelcontextprotocol/sdk/client/stdio.js', () => {
   class StdioClientTransport {
     public stderr = new EventEmitter();

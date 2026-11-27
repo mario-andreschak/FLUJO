@@ -14,6 +14,8 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
  * work directly with Next.js's Web `Request`/`Response`). The tool logic lives in
  * `backend/services/mcp/flowTools.ts` so it stays transport-agnostic and testable.
  *
+ * Both protocol generations are served: 2026-07-28 requests go to the modern
+ * handler (flowsTasksServer.ts), older clients keep this stateless v1 server.
  * The route wrapper enforces the configured owner policy. The localhost guard
  * also blocks DNS rebinding; durable Tasks require an explicit owner bearer.
  */
@@ -28,8 +30,8 @@ import {
   isAuthoringTool,
 } from '@/backend/services/mcp/flowAuthoringTools';
 import { createLogger } from '@/utils/logger';
-import { mcpTasksServerEnabled } from '@/backend/services/mcp/tasksProtocol';
-import { handleModernFlowsMcpRequest, isLegacyFlowsMcpRequest } from '@/backend/services/mcp/flowsTasksServer';
+import { handleModernFlowsMcpRequest } from '@/backend/services/mcp/flowsTasksServer';
+import { classifyMcpHttpRequest } from '@/backend/services/mcp/mcpEraRouting';
 
 // Flow execution and MCP services use Node APIs — never the edge runtime.
 export const runtime = 'nodejs';
@@ -44,33 +46,8 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
-/** Bound the public SDK's body-primary era probe before it clones/parses JSON. */
-async function classificationBodyFits(request: Request): Promise<boolean> {
-  const limit = 256 * 1024;
-  const length = request.headers.get('content-length');
-  if (length && Number(length) > limit) return false;
-  if (!request.body) return true;
-  const reader = request.clone().body!.getReader();
-  let bytes = 0;
-  try {
-    while (true) {
-      request.signal.throwIfAborted();
-      const chunk = await reader.read();
-      if (chunk.done) return true;
-      bytes += chunk.value.byteLength;
-      if (bytes > limit) {
-        // Cancelling one tee branch alone waits for the other. Retire both,
-        // without delaying the rejection on an uncooperative source stream.
-        void reader.cancel().catch(() => undefined);
-        void request.body.cancel().catch(() => undefined);
-        return false;
-      }
-    }
-  } finally { reader.releaseLock(); }
-}
-
-// This server retains legacy framing. Modern requests use the strict split-SDK
-// handler below, independently of optional Tasks, with mandatory routing headers.
+// This server keeps legacy framing for older clients. Modern requests use the
+// split-SDK handler, independently of optional Tasks, with mandatory routing headers.
 function buildFlowsServer(): Server {
   const server = new Server(
     { name: 'flujo-flows', version: SERVER_VERSION },
@@ -110,9 +87,10 @@ async function handle(request: Request): Promise<Response> {
     return jsonError(403, 'Forbidden: this endpoint only accepts local requests.');
   }
 
-  if (mcpTasksServerEnabled() || await isMcpBetaProtocolEnabled()) {
-    if (!await classificationBodyFits(request)) return jsonError(413, 'MCP request body exceeds the limit.');
-    if (!await isLegacyFlowsMcpRequest(request)) return handleModernFlowsMcpRequest(request);
+  if (await isMcpBetaProtocolEnabled()) {
+    const era = await classifyMcpHttpRequest(request);
+    if (era === 'too-large') return jsonError(413, 'MCP request body exceeds the limit.');
+    if (era === 'modern') return handleModernFlowsMcpRequest(request);
   }
 
   const server = buildFlowsServer();

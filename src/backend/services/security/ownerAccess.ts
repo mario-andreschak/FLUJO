@@ -140,6 +140,11 @@ async function authorize(request: Request, policy: OwnerPolicy, filename: string
  * Call before reading a body or selecting storage. The handler must additionally
  * validate workspace existence, allowed Origin, and its own provider/effect fences.
  */
+/** Owner sign-in is set up for this installation (FLUJO_OWNER_AUTH_FILE is set, even if empty). */
+export function isOwnerPolicyConfigured(): boolean {
+  return process.env.FLUJO_OWNER_AUTH_FILE !== undefined;
+}
+
 export async function resolveOwnerRequest(request: Request, scopes: readonly OwnerScope[] = requiredOwnerScopes(request),
   options: { requireWorkspace?: boolean; requireBearer?: boolean; now?: number } = {}): Promise<OwnerRequestResolution> {
   const configured = process.env.FLUJO_OWNER_AUTH_FILE;

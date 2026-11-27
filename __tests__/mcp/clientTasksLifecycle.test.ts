@@ -9,7 +9,7 @@ jest.mock('@/utils/logger', () => ({ createLogger: () => ({ info: jest.fn(), war
 jest.mock('@/backend/services/mcp/remoteTaskStore', () => ({
   acquirePollSlot: jest.fn(), createRemoteTaskRecord: jest.fn(), getMcpRemoteTaskSettings: jest.fn(), patchRemoteTaskRecord: jest.fn(),
 }));
-jest.mock('@/backend/services/mcp/tasksProtocol', () => ({ cancelRemoteTask: jest.fn(), fetchTaskPayload: jest.fn(), fetchTaskStatus: jest.fn(), updateRemoteTask: jest.fn(async (client, taskId, responses, options) => {
+jest.mock('@/backend/services/mcp/tasksProtocol', () => ({ cancelRemoteTask: jest.fn(), fetchTaskPayload: jest.fn(), fetchTaskStatus: jest.fn(), getTaskNegotiation: jest.fn(() => ({ generation: '2026-07-28' })), updateRemoteTask: jest.fn(async (client, taskId, responses, options) => {
   const session = jest.requireMock('@/backend/services/mcp/tasksExtensionSession').getTasksExtensionSession(client);
   return session.updateTask(taskId, responses, { signal: options.signal, context: { requestTimeoutMs: options.timeout } });
 }) }));
@@ -254,4 +254,33 @@ test('restart output validation rejects a schema mismatch while retaining remote
   expect(answer).toMatchObject({ success: false, errorType: 'task-protocol-invalid', statusCode: 502 });
   expect(patchRemoteTaskRecord).toHaveBeenLastCalledWith('record', expect.objectContaining({ resultRetrieved: false, diagnostic: 'protocol-invalid' }));
   expect(cancelRemoteTask).not.toHaveBeenCalled();
+});
+
+test('follows the same task on the replacement connection after a disconnect and delivers its result', async () => {
+  const replacement = { transport: {}, listTools: client.listTools } as unknown as Client;
+  jest.mocked(fetchTaskStatus)
+    .mockImplementationOnce(async () => { Object.assign(client, { transport: undefined }); throw new Error('connection closed'); })
+    .mockResolvedValueOnce({ ok: true, task: { ...baseTask, status: 'completed', result } });
+  const reacquireClient = jest.fn().mockResolvedValueOnce(undefined).mockResolvedValue(replacement);
+  const assertCurrent = jest.fn();
+  const done = run(baseTask, { reacquireClient, assertCurrent });
+  for (let step = 0; step < 20; step++) await advance();
+  expect(await done).toMatchObject({ success: true, data: result, progressToken: 'remote-task' });
+  expect(jest.mocked(fetchTaskStatus).mock.calls[1][0]).toBe(replacement);
+  expect(jest.mocked(fetchTaskStatus).mock.calls[1][1]).toBe('remote-task');
+  expect(assertCurrent).toHaveBeenLastCalledWith(replacement);
+  expect(cancelRemoteTask).not.toHaveBeenCalled();
+});
+
+test('without a replacement connection within the task lifetime the task stays recoverable and is not cancelled', async () => {
+  jest.mocked(fetchTaskStatus).mockImplementationOnce(async () => {
+    Object.assign(client, { transport: undefined }); throw new Error('connection closed');
+  });
+  const reacquireClient = jest.fn().mockResolvedValue(undefined);
+  const done = run(baseTask, { reacquireClient, timeoutMs: 400 });
+  for (let step = 0; step < 20; step++) await advance();
+  expect(await done).toMatchObject({ success: false, errorType: 'task-transport-error' });
+  expect(reacquireClient).toHaveBeenCalled();
+  expect(cancelRemoteTask).not.toHaveBeenCalled();
+  expect(patchRemoteTaskRecord).not.toHaveBeenCalledWith('record', expect.objectContaining({ status: 'failed' }));
 });

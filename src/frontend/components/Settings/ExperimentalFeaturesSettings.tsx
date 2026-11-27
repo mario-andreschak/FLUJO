@@ -279,7 +279,7 @@ export default function ExperimentalFeaturesSettings() {
   };
 
   const handleMcpBetaProtocolChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`MCP beta protocol toggled: ${event.target.checked}`);
+    log.debug(`Modern MCP protocol toggled: ${event.target.checked}`);
     updateSettings({
       ...settings,
       experimental: {
@@ -564,7 +564,7 @@ export default function ExperimentalFeaturesSettings() {
           title={t('settings.experimental.group.mcpAndApps')}
         >
           <ExperimentalToggle
-            checked={experimental.mcpBetaProtocol ?? false}
+            checked={experimental.mcpBetaProtocol !== false}
             description={t('settings.experimental.mcpBetaDescription')}
             label={t('settings.experimental.mcpBeta')}
             name="mcpBetaProtocol"

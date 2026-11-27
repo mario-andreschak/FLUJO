@@ -177,22 +177,24 @@ creating a poll storm. An hourly cron sweeps expiry and retention per workspace.
 
 `src/config/features.ts`:
 
-- `ENABLE_MCP_TASKS_CLIENT` (default `false`) — governs negotiation **and**
-  durable record creation, so FLUJO never claims partial support. With the flag
-  off FLUJO never requests task augmentation; if a server returns a schema-valid
-  task handle anyway it is still handled correctly (never misread as a tool
-  result), just without durable-compliance claims.
-- `ENABLE_MCP_TASKS_SERVER` (default `false`) — see below.
+- `ENABLE_MCP_TASKS_CLIENT` (default `true`; `FLUJO_MCP_TASKS_CLIENT=false`
+  turns it off) — governs negotiation **and** durable record creation, so FLUJO
+  never claims partial support. With the flag off FLUJO never requests task
+  augmentation; if a server returns a schema-valid task handle anyway it is
+  still handled correctly (never misread as a tool result), just without
+  durable-compliance claims.
+- `ENABLE_MCP_TASKS_SERVER` (default `true`; `FLUJO_MCP_TASKS_SERVER=false`
+  turns it off) — see below.
 
 ## Server-side status
 
 The modern `/mcp-flows` handler supports caller/workspace-bound durable Tasks
-for saved flows when `FLUJO_MCP_TASKS_SERVER=true`. It requires the configured
+for saved flows unless `FLUJO_MCP_TASKS_SERVER=false`. It requires the configured
 owner policy and an explicit authorized bearer, rechecks authority before
 execution and each lifecycle operation, and retains encrypted results across
 restart without replaying interrupted work. Task IDs alone grant no access.
-The feature defaults to off. The legacy `/mcp-flows` handler and `/mcp-proxy`
-remain synchronous. See [MCP Tasks 2026](mcp-tasks-2026.md) for supported profiles,
+Without owner sign-in the modern handler serves ordinary tools and offers no
+Tasks. The legacy `/mcp-flows` handler and `/mcp-proxy` remain synchronous. See [MCP Tasks 2026](mcp-tasks-2026.md) for supported profiles,
 bounds, protocol migration and the production smoke command.
 
 ## Observability

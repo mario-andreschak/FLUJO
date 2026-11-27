@@ -52,7 +52,7 @@ import {
   getMcpRemoteTaskSettings,
   patchRemoteTaskRecord,
 } from './remoteTaskStore';
-import { cancelRemoteTask, fetchTaskPayload, fetchTaskStatus, updateRemoteTask } from './tasksProtocol';
+import { cancelRemoteTask, fetchTaskPayload, fetchTaskStatus, getTaskNegotiation, updateRemoteTask } from './tasksProtocol';
 import { getElicitationContext, type ElicitationRunContext } from './elicitationContext';
 import {
   clearTaskInputState,
@@ -71,7 +71,14 @@ export interface ToolCallProgressLike {
 
 export interface RemoteTaskLifecycleOptions {
   generation?: McpTaskGeneration;
-  assertCurrent?: () => void | Promise<void>;
+  /** Checks that `client` is still the server's current, authorized connection. */
+  assertCurrent?: (client: Client) => void | Promise<void>;
+  /**
+   * The server's current connection when it differs from the one the task
+   * started on, or undefined. Lets polling continue after a reconnect: task
+   * IDs outlive connections, so the same task is followed on the new one.
+   */
+  reacquireClient?: () => Promise<Client | undefined>;
   handleInputRequest?: (request: McpTaskInputRequest, options: { signal: AbortSignal; assertCurrent: () => Promise<void> }) => Promise<unknown>;
   client: Client;
   serverName: string;
@@ -125,8 +132,8 @@ function terminalResponseFor(
 export async function runRemoteTaskLifecycle(
   options: RemoteTaskLifecycleOptions,
 ): Promise<MCPServiceResponse> {
+  let { client } = options;
   const {
-    client,
     serverName,
     serverIdentity,
     toolName,
@@ -140,12 +147,12 @@ export async function runRemoteTaskLifecycle(
 
   const generation = options.generation ?? initialTask.generation ?? '2025-11-25';
   const assertCurrent = async () => {
-    await options.assertCurrent?.();
+    await options.assertCurrent?.(client);
     if (initialTask.generation && initialTask.generation !== generation) throw new Error('Remote task protocol generation changed');
   };
   const settings = await getMcpRemoteTaskSettings();
   const startedAt = Date.now();
-  const taskTransport = client.transport;
+  let taskTransport = client.transport;
   const basePollMs = clampPollIntervalMs(initialTask.pollInterval, {
     minMs: settings.minPollIntervalMs,
     maxMs: settings.maxPollIntervalMs,
@@ -236,8 +243,31 @@ export async function runRemoteTaskLifecycle(
   const lifetimeMs = Math.min(timeoutMs, expiresAt === undefined ? Infinity : Math.max(0, expiresAt - startedAt));
   const deadlineTimer = Number.isFinite(lifetimeMs) && lifetimeMs < 2_147_483_647
     ? setTimeout(() => deadlineController.abort(), lifetimeMs) : undefined;
-  const connectionSignal = initialTask.generation === '2026-07-28' ? getTasksExtensionSession(client)?.signal : undefined;
-  const pollSignal = AbortSignal.any([deadlineController.signal, ...(signal ? [signal] : []), ...(connectionSignal ? [connectionSignal] : [])]);
+  const callerSignals = [deadlineController.signal, ...(signal ? [signal] : [])];
+  const connectionSignalFor = (current: Client) => initialTask.generation === '2026-07-28' ? getTasksExtensionSession(current)?.signal : undefined;
+  let connectionSignal = connectionSignalFor(client);
+  let pollSignal = AbortSignal.any([...callerSignals, ...(connectionSignal ? [connectionSignal] : [])]);
+  const followOnNewConnection = async (): Promise<boolean> => {
+    if (!options.reacquireClient) return false;
+    let waitMs = settings.minPollIntervalMs;
+    const callerSignal = AbortSignal.any(callerSignals);
+    while (!callerSignal.aborted) {
+      const next = await options.reacquireClient().catch(() => undefined);
+      if (next && next !== client && next.transport && getTaskNegotiation(next).generation === generation) {
+        client = next;
+        taskTransport = next.transport;
+        connectionSignal = connectionSignalFor(next);
+        pollSignal = AbortSignal.any([...callerSignals, ...(connectionSignal ? [connectionSignal] : [])]);
+        log.info(`Following task ${initialTask.taskId} on the new connection to ${serverName}`);
+        return true;
+      }
+      try { await waitForPoll(waitMs, callerSignal); } catch { return false; }
+      waitMs = clampPollIntervalMs(waitMs * 2, {
+        minMs: settings.minPollIntervalMs, maxMs: settings.maxPollIntervalMs, defaultMs: settings.defaultPollIntervalMs,
+      });
+    }
+    return false;
+  };
   const answeredInputKeys = new Map<string, string>();
 
   try {
@@ -269,9 +299,10 @@ export async function runRemoteTaskLifecycle(
         };
       }
       if (connectionSignal?.aborted || (taskTransport && client.transport !== taskTransport)) {
-        // An unobserved remote outcome remains recoverable after a deliberate
-        // reconnect. Do not mark it terminal or cancel through new authority.
         await patch({ diagnostic: 'transport-error', lastPolledAt: Date.now() });
+        if (await followOnNewConnection()) { transientFailures = 0; continue; }
+        // Without a matching connection within the task's lifetime the outcome
+        // stays recoverable at startup. Do not mark it terminal or cancel it.
         return { success: false, error: `The connection to '${serverName}' retired while task ${currentTask.taskId} was pending.`,
           errorType: 'task-transport-error', progressToken: currentTask.taskId, toolName };
       }
@@ -387,7 +418,7 @@ export async function runRemoteTaskLifecycle(
         transientFailures = 0;
         pollMs = basePollMs;
       } catch (error) {
-        if (pollSignal.aborted) continue;
+        if (pollSignal.aborted || (taskTransport && client.transport !== taskTransport)) continue;
         // Transient transport/reconnect failure: bounded exponential backoff,
         // then fail closed WITHOUT losing the durable record.
         transientFailures++;

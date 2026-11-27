@@ -157,6 +157,25 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
     expect(mockRun).not.toHaveBeenCalled();
   });
 
+  it('serves ordinary modern tools without owner sign-in on a localhost install, without offering Tasks', async () => {
+    delete process.env.FLUJO_OWNER_AUTH_FILE;
+    const discover = await dispatch('server/discover', {}, { bearer: null });
+    expect(discover.status).toBe(200);
+    expect(discover.body.result?.supportedVersions).toContain('2026-07-28');
+    expect((discover.body.result?.capabilities as { extensions?: unknown }).extensions).toBeUndefined();
+    const listed = await dispatch('tools/list', {}, { bearer: null });
+    expect((listed.body.result?.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual(['validate_flow_spec', 'owned_flow']);
+    const called = await dispatch('tools/call', { name: 'owned_flow', arguments: { input: 'sync' } }, { tasks: true, bearer: null });
+    expect(CallToolResultV2Schema.parse(called.body.result).resultType).toBe('complete');
+    expect(called.body.result).not.toHaveProperty('taskId');
+    const task = await dispatch('tasks/get', { taskId: 'anything' }, { tasks: true, bearer: null });
+    expect(task).toMatchObject({ status: 404, body: { error: { code: -32601 } } });
+  });
+
+  it('answers an unknown method with HTTP 404 and Method not found, as 2026-07-28 HTTP requires', async () => {
+    expect(await dispatch('acme/unknown')).toMatchObject({ status: 404, body: { error: { code: -32601 } } });
+  });
+
   it('advertises only enabled ordinary Tasks and leaves synchronous results intact', async () => {
     const discover = await dispatch('server/discover');
     expect((discover.body.result?.capabilities as { extensions: Record<string, unknown> }).extensions)

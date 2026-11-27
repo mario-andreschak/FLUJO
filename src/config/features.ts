@@ -226,25 +226,26 @@ export const FEATURES = {
   ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS: false,
 
   /**
-   * MCP Tasks extension (issue #404), CLIENT side.
+   * MCP Tasks extension (issue #404), CLIENT side, on every transport.
    *
-   * Deployment opt-in enables modern per-request extension negotiation and the
-   * retained 2025 per-tool augmentation. Governs negotiation and durable record
-   * creation together. Input remains attended and server-policy controlled.
-   * Default off; FLUJO_MCP_TASKS_CLIENT=true enables the backend lifecycle.
+   * Governs modern per-request extension negotiation, the retained 2025
+   * per-tool augmentation and durable task records together. FLUJO only asks
+   * for a task when the server advertises Tasks. Input remains attended and
+   * server-policy controlled. On by default; FLUJO_MCP_TASKS_CLIENT=false
+   * turns it off.
    */
   get ENABLE_MCP_TASKS_CLIENT(): boolean {
-    return process.env.FLUJO_MCP_TASKS_CLIENT === 'true';
+    return process.env.FLUJO_MCP_TASKS_CLIENT?.trim().toLowerCase() !== 'false';
   },
 
   /**
    * MCP Tasks extension, SERVER side (/mcp-flows endpoint).
-   * Requires configured owner bearer authorization and
-   * the modern protocol. Legacy/proxy/private worker profiles stay synchronous.
-   * Default off; deployment opt-in does not change the owner access policy.
+   * Offered only to a modern client that presents the owner bearer, because a
+   * task belongs to that owner. Proxy and private worker profiles stay
+   * synchronous. On by default; FLUJO_MCP_TASKS_SERVER=false turns it off.
    */
   get ENABLE_MCP_TASKS_SERVER(): boolean {
-    return process.env.FLUJO_MCP_TASKS_SERVER === 'true';
+    return process.env.FLUJO_MCP_TASKS_SERVER?.trim().toLowerCase() !== 'false';
   },
 
   /** Enable automatic expiry of untouched memory candidates (issue #452). */

@@ -18,6 +18,11 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 import { MCP_HEADER_DESTINATION_CHANGED } from '@/utils/mcp/headerDestination';
 
 // stdio transport stand-in (not used by the streamable path, but connection.ts imports it).
+// These tests fake the classic SDK client factories, so they pin the classic handshake.
+jest.mock('@/backend/services/mcp/betaClient', () => ({
+  ...jest.requireActual('@/backend/services/mcp/betaClient'),
+  isMcpBetaProtocolEnabled: jest.fn(async () => false),
+}));
 jest.mock('@modelcontextprotocol/sdk/client/stdio.js', () => {
   class StdioClientTransport {
     public stderr = new EventEmitter();

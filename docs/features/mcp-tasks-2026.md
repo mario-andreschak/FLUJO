@@ -1,7 +1,8 @@
 # MCP Tasks: modern extension and retained legacy adapter
 
-FLUJO supports the official Tasks extension on negotiated `2026-07-28` remote
-connections, with `@modelcontextprotocol/ext-tasks` pinned to **0.2.2** and the
+FLUJO supports the official Tasks extension on every negotiated `2026-07-28`
+connection, remote (Streamable HTTP, SSE) and local (stdio), with
+`@modelcontextprotocol/ext-tasks` pinned to **0.2.2** and the
 split client/server/core SDKs at **2.4.0**. The existing SDK1 adapter remains available
 for 2025-era servers. Task creation is never retried after an ambiguous failure.
 
@@ -13,13 +14,15 @@ while ordinary SDK requests continue on the same connection.
 
 ## Enable
 
-Both deployment switches default to off. Set `FLUJO_MCP_TASKS_CLIENT=true` for
-outbound task calls and `FLUJO_MCP_TASKS_SERVER=true` for inbound Tasks at
-`/mcp-flows`. Changes require no source edits. For outbound modern negotiation,
-also enable the existing **MCP beta protocol** experimental setting; its saved
-setting name is retained for compatibility, although the split SDK is stable.
-HTTP connections negotiate automatically. Stdio deliberately uses legacy
-negotiation so one owned process cannot become an untracked probe sibling.
+Both switches are on by default. `FLUJO_MCP_TASKS_CLIENT=false` turns off
+outbound task calls and `FLUJO_MCP_TASKS_SERVER=false` turns off inbound Tasks
+at `/mcp-flows`. FLUJO only asks for a task when the server advertises Tasks.
+Modern negotiation follows the **Modern MCP protocol** setting (on by default;
+saved as `experimental.mcpBetaProtocol` for compatibility) and
+`FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy`. HTTP and stdio connections negotiate
+automatically; stdio asks `server/discover` on the server's own process, never
+on an extra probe process. Evidence: [Tasks](mcp-scoreboard/tasks.md) and
+[stateless spec](mcp-scoreboard/stateless-spec.md).
 
 Server Tasks require a configured private `FLUJO_OWNER_AUTH_FILE` policy and an
 unexpired owner bearer carrying `mcp:access`, `control:admin`, and `secrets:read`.
@@ -46,7 +49,8 @@ and `input_required` carries keyed `inputRequests`. `tasks/update` accepts
 correlated `inputResponses`; it and `tasks/cancel` return acknowledgements.
 Unknown/already answered input keys are ignored and acknowledged. A key cannot
 be reused to change an accepted answer. Optional task notifications/subscriptions
-are not required: FLUJO uses bounded polling.
+are not required: FLUJO uses bounded polling, the documented default. On stdio,
+an abandoned Tasks request is cancelled with `notifications/cancelled`.
 
 Authoring tools stay synchronous. Unknown tools and clients without Tasks opt-in
 retain synchronous tool results. `/mcp-proxy` and the legacy `/mcp-flows` path do
@@ -113,7 +117,10 @@ protocol generation, status and bounded diagnostics. They store neither input
 nor result payloads. Polling has global/per-server concurrency limits, clamped
 intervals, transient-failure backoff, caller timeout and TTL bounds. Restart
 resumes observability only when the connection identity and protocol generation
-match; it cannot deliver a result to a lost originating run. Existing legacy
+match; it cannot deliver a result to a lost originating run. A disconnect during
+a run does not end the call: polling continues on the server's replacement
+connection when its identity and protocol generation match, until the task's own
+lifetime ends. Existing legacy
 argument hashes and connection fingerprint limitations are not retroactively
 remediated by new task records.
 
@@ -150,10 +157,10 @@ JSON schema, including scalar/array JSON. The creation generation retains a vali
 restart retrieval checks the currently authorized catalog before publishing. Invalid
 completed output retains remote completion and records a protocol-invalid retrieval.
 
-Modern Flows HTTP can be enabled through the existing protocol-beta setting without
-turning on optional Tasks. The same strict owner bearer/workspace admission remains
-in front of parsing and effects. Stdio stays on its process-owned legacy negotiation;
-modern-only stdio rollout needs its own lifecycle and release qualification.
+Modern Flows HTTP is served without optional Tasks. Since November 27 it is on by
+default, ordinary tools need only the route's own admission (as for older
+clients), and Tasks still need the owner bearer. Stdio now negotiates on the
+server's own process; see [stateless spec](mcp-scoreboard/stateless-spec.md).
 
 See [support and qualification matrix](mcp-conformance-1093-2026-10-12.md). These
 source/focused checks do not replace durable restart/revocation, installed or genuine
